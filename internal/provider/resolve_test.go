@@ -140,6 +140,42 @@ func TestResolveTaskParams_DiskPlannerFailureFailsOverallNoPartialResult(t *test
 	}
 }
 
+// TestResolveTaskParams_ByHookDiskPolicy_DiskPrimaryKeyOmittedNotEmpty 锁住
+// by-hook 磁盘策略与同步编排器组合时的行为：by-hook 契约上返回
+// len(Selected)==1 但 Disk 是零值（不做服务端决策，选盘逻辑推到 %pre 阶段
+// 的 hook，SPEC §5.6）。编排器必须整体成功（这不是失败，是「没有服务端
+// 决策」这一种合法结果），但绝不能把 LOBER_DISK_PRIMARY 写成空字符串——
+// 空字符串会被 %pre 里的 hook 脚本当成「存在但是空路径」误用，而完全不
+// 写入这个键则能让 `[ -n "$LOBER_DISK_PRIMARY" ]` 之类的判断正确探测到
+// 「没有服务端决策」。这条修复对应 verifier 发现的真实缺陷：修复前
+// resolved_params 里会出现 LOBER_DISK_PRIMARY=""。
+func TestResolveTaskParams_ByHookDiskPolicy_DiskPrimaryKeyOmittedNotEmpty(t *testing.T) {
+	resolver := failingResolver{ref: contract.TemplateRef{TemplateID: "tpl-1"}}
+	diskPlanner := diskPlannerByHook{}
+
+	orchestrator := NewTaskParamsResolver(resolver, diskPlanner, contract.DiskIntent{Policy: "by-hook"})
+	params, err := orchestrator.Resolve(context.Background(), validFormData(), validFacts())
+
+	if err != nil {
+		t.Fatalf("by-hook 策略不是失败，编排器不应报错: %v", err)
+	}
+	if params == nil {
+		t.Fatal("by-hook 策略下编排器应正常产出参数（不是失败路径）")
+	}
+	if v, ok := params[model.FactDiskPrimary]; ok {
+		t.Fatalf("by-hook 策略下不应写入 %s 键（无服务端决策结果可写），"+
+			"got 键存在且值=%q——这会让 %%pre 的 hook 脚本把空字符串误当成"+
+			"一个真实但为空的盘路径使用", model.FactDiskPrimary, v)
+	}
+	// 其余键（IPAM/模板解析产出的部分）应照常存在，证明这不是整体失败。
+	if params[model.FactBizIP] != "10.0.1.5" {
+		t.Errorf("biz_ip got %q, want 10.0.1.5", params[model.FactBizIP])
+	}
+	if params["template_id"] != "tpl-1" {
+		t.Errorf("template_id got %q, want tpl-1", params["template_id"])
+	}
+}
+
 // failingIPAM 是可控失败的 IPAMProviderV1 测试替身。
 type failingIPAM struct {
 	err error

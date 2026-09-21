@@ -115,13 +115,28 @@ func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]st
 	}
 
 	resolved := map[string]string{
-		model.FactHostname:    formData[model.FactHostname],
-		model.FactBizIP:       allocResult.IP,
-		model.FactBizGW:       allocResult.Gateway,
-		model.FactBizMask:     allocResult.Mask,
-		model.FactDiskPrimary: layout.Selected[0].Disk.ByIDPath,
-		"template_id":         templateRef.TemplateID,
-		"template_version":    strconv.Itoa(templateRef.TemplateVersion),
+		model.FactHostname: formData[model.FactHostname],
+		model.FactBizIP:    allocResult.IP,
+		model.FactBizGW:    allocResult.Gateway,
+		model.FactBizMask:  allocResult.Mask,
+		"template_id":      templateRef.TemplateID,
+		"template_version": strconv.Itoa(templateRef.TemplateVersion),
+	}
+
+	// by-hook 策略（diskplanner.go 的 diskPlannerByHook）契约上会返回
+	// len(Selected)==1 但 Disk 是零值——它不做服务端决策，选盘逻辑推到
+	// %pre 阶段的 hook 动态计算（SPEC §5.6：「也可在 %pre 中动态计算磁盘，
+	// 但那把逻辑推到机器上」）。这种情况下没有「服务端决策结果」可写
+	// （SPEC §5.4 把 LOBER_DISK_PRIMARY 明确标注为「服务端决策结果」），
+	// 若仍然写入空字符串，%pre 里的 hook 脚本读到的是一个看起来存在、
+	// 实际为空的路径变量（如 `parted "$LOBER_DISK_PRIMARY" ...` 会用空
+	// 路径调用而不是明确报错）——这比完全不注入这个键更危险：完全不注入
+	// 时 `[ -n "$LOBER_DISK_PRIMARY" ]` 之类的判断能正确探测到「没有服务端
+	// 决策」，注入空字符串则不能。因此这里不是遗漏一个 else 分支，而是
+	// 刻意选择「宁可键缺失，也不要键存在但值是误导性的空字符串」——与本
+	// 计划贯穿的「错误优先于静默退化」是同一个方向。
+	if primary := layout.Selected[0].Disk.ByIDPath; primary != "" {
+		resolved[model.FactDiskPrimary] = primary
 	}
 
 	return resolved, nil
