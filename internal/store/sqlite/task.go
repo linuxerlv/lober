@@ -437,27 +437,23 @@ func joinSetClauses(clauses []string) string {
 // 超时扫描（计划任务 5，SPEC §3.3）
 // ---------------------------------------------------------------------------
 
-// terminalTaskStates 是终态集合，供 SQL 里的 "state NOT IN (...)" 排除
-// 终态任务用。与 model.TaskState.IsTerminal() 的判据保持同步——这里没有
-// 直接调用 IsTerminal（它是一个按值判断的方法，不是可枚举的集合），而是
-// 手写与其等价的两个值；ListTimedOutTasks 的测试
-// （testTimeoutScanNeverReturnsPending 的姊妹断言，即 conformance 套件里
-// 「确认扫描逻辑本身工作」的那部分）会在 model 新增终态值但这里漏改时
-// 失败，因为多出来的终态会被误当非终态查出来。
-var terminalTaskStates = []model.TaskState{model.TaskStateDone, model.TaskStateFailed}
-
 // ListTimedOutTasks 返回超时扫描应判失败的任务：当前阶段的
 // phase_entered_at + 该阶段预算 < asOf 的非终态任务。
 //
-// 取出全部非终态任务后在 Go 里用 model.PhaseBudget 过滤（计划任务 5
-// 「超时扫描的实现方式」推荐项）：预算值只有一个来源（model 的预算表），
-// 不在 SQL 里另存一份 CASE 表达式，避免两处定义漂移。pending 阶段
-// PhaseBudget 返回 ok=false，天然被跳过——不需要在 SQL 或 Go 里单独
-// 硬编码「排除 pending」，这条约束是 model.PhaseBudget 自身的契约
-// （无预算的阶段就是没有「超时」这件事）。
+// 取出全部任务后在 Go 里用 model.TaskState.IsTerminal() 与
+// model.PhaseBudget 过滤（计划任务 5「超时扫描的实现方式」推荐项的延伸）：
+// 终态判据与预算值都必须只有一个来源——都在 model 包，不在 SQL 里另存一份
+// "state NOT IN (...)" 或 CASE 表达式，避免两处定义漂移。修复记录：本方法
+// 最初在 SQL 侧手写了一份 "state NOT IN ('done', 'failed')"，与
+// model.TaskState.IsTerminal() 各自维护、只靠注释保证同步——这正是计划
+// 「预算值必须只有一个来源」原则本该防止的那类重复，改为 Go 侧调用
+// IsTerminal() 后此风险不复存在（model 新增终态值时这里自动感知，不需要
+// 记得回来改 SQL）。pending 阶段 PhaseBudget 返回 ok=false，天然被跳过——
+// 不需要在 SQL 或 Go 里单独硬编码「排除 pending」，这条约束是
+// model.PhaseBudget 自身的契约（无预算的阶段就是没有「超时」这件事）。
 func (s *Store) ListTimedOutTasks(ctx context.Context, asOf int64) ([]model.Task, error) {
-	query := fmt.Sprintf(`SELECT %s FROM tasks WHERE state NOT IN (?, ?)`, taskColumns)
-	rows, err := s.db.QueryContext(ctx, query, terminalTaskStates[0], terminalTaskStates[1])
+	query := fmt.Sprintf(`SELECT %s FROM tasks`, taskColumns)
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, translateConstraintErr(err, "ListTimedOutTasks")
 	}
@@ -468,6 +464,9 @@ func (s *Store) ListTimedOutTasks(ctx context.Context, asOf int64) ([]model.Task
 		tk, err := scanTaskRow(rows)
 		if err != nil {
 			return nil, translateConstraintErr(err, "ListTimedOutTasks")
+		}
+		if tk.State.IsTerminal() {
+			continue // 终态任务不参与超时扫描
 		}
 		budget, ok := model.PhaseBudget(tk.CurrentPhase)
 		if !ok {

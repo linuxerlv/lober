@@ -183,6 +183,13 @@ func (s *Store) UpdateTemplateState(ctx context.Context, id string, version int,
 // DeleteTemplate 删除模板。若存在引用该模板的非终态 task，返回
 // contract.ErrStillReferenced（§2.7）。判定看任务表而不是看模板状态
 // （计划任务 7）。
+//
+// 下方 COUNT 查询里的 'done'/'failed' 字面量与
+// model.TaskState.IsTerminal() 的判据必须保持一致（该方法只判定终态是
+// done 与 failed 两个值）；这是一个纯聚合查询，不像 ListTimedOutTasks
+// 那样已经把整表取到 Go 侧再过滤，改成「取全部引用任务到 Go 里用
+// IsTerminal() 过滤再数数」是一次没有 conformance 覆盖、无法验证的行为
+// 改动，故此处保留 SQL 字面量，只用本注释显式标记同步关系。
 func (s *Store) DeleteTemplate(ctx context.Context, id string, version int) error {
 	var exists int
 	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM templates WHERE id = ? AND version = ?`, id, version).Scan(&exists)
