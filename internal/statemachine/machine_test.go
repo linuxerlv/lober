@@ -12,7 +12,7 @@ import (
 	"github.com/lober/lober/internal/core/model"
 )
 
-func newTestMachine(store contract.TaskStore, clock contract.Clock) *Machine {
+func newTestMachine(store contract.Store, clock contract.Clock) *Machine {
 	return New(store, clock, nil, nil, nil, nil)
 }
 

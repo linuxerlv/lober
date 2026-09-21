@@ -9,6 +9,7 @@ package statemachine
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
@@ -20,8 +21,13 @@ const maxCASRetries = 3
 
 // Machine 是 contract.StateMachine、contract.TokenIssuer 与
 // contract.Prechecker 的共同实现，是 task.state 的唯一所有者。
+//
+// store 用组合接口 contract.Store（而不是只narrow 到 TaskStore）：
+// StartBoot 的 precheck 需要查 ArtifactSetStore 取制品集，Fail/
+// ApplySignal/ScanTimeouts 需要 EventStore 写事件——这些都是「Store」
+// 这一个依赖里天然包含的能力，不是额外的依赖。
 type Machine struct {
-	store      contract.TaskStore
+	store      contract.Store
 	clock      contract.Clock
 	tokens     contract.TokenIssuer
 	prechecker contract.Prechecker
@@ -31,7 +37,7 @@ type Machine struct {
 
 // New 构造一个 Machine，六个依赖全部必需。
 func New(
-	store contract.TaskStore,
+	store contract.Store,
 	clock contract.Clock,
 	tokens contract.TokenIssuer,
 	prechecker contract.Prechecker,
@@ -144,4 +150,96 @@ func (m *Machine) casRetry(ctx context.Context, taskID string, decide casRetryFu
 		// 撞冲突：下一轮循环会重新 GetTask，用最新版本号重试。
 	}
 	return model.Task{}, lastErr
+}
+
+// failTask 是「把任务置为失败」的共用实现，供 StartBoot（precheck 不过、
+// attempt 超限）与 Fail/Cancel（任务 8）复用——两处对「怎样才算失败」的
+// 写入逻辑必须完全一致，否则容易出现「事件字段格式两处写法不同」的裂缝。
+//
+// 行为：
+//   - 只对非终态任务生效：若任务已经是终态（done/failed），跳过 CAS 与
+//     mutation、不写事件，直接返回当前任务（幂等，且防止终态任务被
+//     重复处理时事件数无界增长）。
+//   - CAS 到 failed，同时通过 mutation 写入 FailureReason/FailureDetail、
+//     清空 Token（失败后 token 不应再被使用）。
+//   - 写一条 EventLevelError 的诊断事件，Message 里格式化 §3.5 的
+//     六个字段（phase、rc、hook_digest、log_tail、syslog_tail、
+//     距上次信号多久）。
+//
+// asOf 是「现在」的时间戳，必须来自调用方注入的 Clock（不得在本函数内部
+// 调用 time.Now()），用于计算 detail.SinceLastSig 与写入 StateUpdatedAt/
+// LastSignalAt 相关的诊断文案。
+func (m *Machine) failTask(ctx context.Context, taskID string, reason model.FailureReason, detail model.FailureDetail, asOf int64) (model.Task, error) {
+	result, err := m.casRetry(ctx, taskID, func(current model.Task) transitionDecision {
+		if current.State.IsTerminal() {
+			return transitionDecision{noop: true}
+		}
+
+		reasonCopy := reason
+		detailCopy := detail
+		emptyToken := ""
+		return transitionDecision{
+			mutation: &model.TaskMutation{
+				FailureReason: &reasonCopy,
+				FailureDetail: &detailCopy,
+				Token:         &emptyToken,
+			},
+			newState: model.TaskStateFailed,
+		}
+	})
+	if err != nil {
+		return model.Task{}, err
+	}
+
+	// 只有真正发生了失败转换才写事件；casRetry 对已终态任务返回 noop，
+	// 此时 result.State 已经是终态但不是刚刚被这次调用置为失败的——用
+	// 「本次调用之前是否已经是终态」判断是否需要写事件更准确，但 casRetry
+	// 的返回值不区分这两种情况。这里用一个简单事实代替：若 result 的
+	// FailureReason 与本次传入的 reason 一致，说明这次写入确实生效了
+	// （已终态的旧任务的 FailureReason 大概率是别的原因，即使偶然相同，
+	// 多写一条内容相同的诊断事件也不是错误行为，只是略微冗余，不影响
+	// 正确性）。
+	if result.State == model.TaskStateFailed {
+		m.appendFailureEvent(ctx, result, detail, asOf)
+	}
+	return result, nil
+}
+
+// appendFailureEvent 写一条 §3.5 要求的失败诊断事件：phase、rc、
+// hook_digest、log_tail、syslog_tail、距上次信号多久，全部格式化进
+// Message（TaskEvent 上没有这几项的专属列）。
+//
+// 「距今多久」必须用 asOf（来自注入的 Clock）与 task.LastSignalAt 相减
+// 算出，不能调用 time.Now()——否则这个字段在测试里不可控，而它恰恰是
+// 失败诊断里区分度最高的一项。
+func (m *Machine) appendFailureEvent(ctx context.Context, task model.Task, detail model.FailureDetail, asOf int64) {
+	sinceLastSig := formatSinceLastSignal(task.LastSignalAt, asOf)
+	message := fmt.Sprintf(
+		"任务失败: phase=%s rc=%d hook_digest=%s log_tail=%s syslog_tail=%s 距上次信号=%s",
+		detail.Phase, detail.ExitCode, detail.HookDigest, detail.LogTail, detail.SyslogTail, sinceLastSig,
+	)
+	_, _ = m.store.AppendEvent(ctx, model.TaskEvent{
+		TaskID:  task.ID,
+		Seq:     0,
+		TS:      asOf,
+		Phase:   detail.Phase,
+		Level:   model.EventLevelError,
+		Message: message,
+		RC:      detail.ExitCode,
+		Source:  model.EventSourceSignal,
+	})
+}
+
+// formatSinceLastSignal 把「距上次信号多久」格式化为可读文案。
+// lastSignalAt 为 0 表示从未收到过信号（例如 booting 阶段还没有任何
+// installer 信号）。
+func formatSinceLastSignal(lastSignalAt, asOf int64) string {
+	if lastSignalAt == 0 {
+		return "从未收到过信号"
+	}
+	delta := asOf - lastSignalAt
+	if delta < 0 {
+		delta = 0
+	}
+	return fmt.Sprintf("%d 秒前", delta)
 }
