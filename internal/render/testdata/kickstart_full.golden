@@ -1,0 +1,284 @@
+lang en_US.UTF-8
+keyboard us
+timezone UTC --utc
+bootloader --location=mbr
+clearpart --all --drives=/dev/disk/by-id/wwn-0x5000c500fixed0001
+part / --fstype=xfs --grow --ondisk=/dev/disk/by-id/wwn-0x5000c500fixed0001
+network --bootproto=dhcp --activate
+rootpw --lock
+sshkey --username=root "ssh-ed25519 REPLACE-ME-lober-has-no-contract-field-for-this-key placeholder@lober"
+logging --host=10.10.0.1 --port=514 --level=info
+%packages
+@core
+%end
+
+%pre
+LOBER_CONTRACT_VERSION=''
+LOBER_TASK_ID='42'
+LOBER_SN='SN-FIXED-0001'
+LOBER_MAC=''
+LOBER_UUID=''
+LOBER_HOSTNAME='web-01'
+LOBER_OS_FAMILY='rhel'
+LOBER_OS_VERSION=''
+LOBER_ARCH=''
+LOBER_DISKS=''
+LOBER_DISK_PRIMARY='/dev/disk/by-id/wwn-0x5000c500fixed0001'
+LOBER_NICS=''
+LOBER_RAM_MB=''
+LOBER_CPU_CORES=''
+LOBER_VENDOR=''
+LOBER_PRODUCT=''
+LOBER_BIZ_IP='10.20.0.15'
+LOBER_BIZ_GW=''
+LOBER_BIZ_MASK=''
+LOBER_ARTIFACT_BASE='http://ng.internal/artifacts'
+LOBER_GATEWAY_BASE='http://gw.internal'
+LOBER_RACK=''
+LOBER_ROW=''
+LOBER_DC=''
+# 用户 hook 从这里开始
+GW='http://gw.internal'
+ART='http://ng.internal/artifacts'
+TASK='42'
+TOKEN='install-tok-fixed-0000000000000000'
+SEQ=0
+
+signal() {
+  local phase="$1" rc="${2:-0}" log="${3:-/dev/null}" digest="${4:-}"
+  SEQ=$((SEQ+1))
+  local q="$GW/v1/signal/$TASK/$TOKEN/$phase?rc=$rc&seq=$SEQ"
+  if [ -n "$digest" ]; then
+    q="$q&digest=$digest"
+  fi
+  for i in 1 2 3; do
+    curl -fsS -m 10 -X POST "$q" \
+      -H 'Content-Type: text/plain' --data-binary "@$log" && return 0
+    sleep $((i*3))
+  done
+  logger -t lober "signal failed: $phase rc=$rc"
+  return 0
+}
+
+run_hook() {
+  local digest="$1" required="$2" timeout_sec="$3"
+  curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
+  echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
+  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  local rc=${PIPESTATUS[0]}
+  signal "hook-report" "$rc" /tmp/h.log "$digest"
+  [ "$rc" -eq 0 ] || [ "$required" != "true" ]
+}
+%end
+%pre
+GW='http://gw.internal'
+ART='http://ng.internal/artifacts'
+TASK='42'
+TOKEN='install-tok-fixed-0000000000000000'
+SEQ=0
+
+signal() {
+  local phase="$1" rc="${2:-0}" log="${3:-/dev/null}" digest="${4:-}"
+  SEQ=$((SEQ+1))
+  local q="$GW/v1/signal/$TASK/$TOKEN/$phase?rc=$rc&seq=$SEQ"
+  if [ -n "$digest" ]; then
+    q="$q&digest=$digest"
+  fi
+  for i in 1 2 3; do
+    curl -fsS -m 10 -X POST "$q" \
+      -H 'Content-Type: text/plain' --data-binary "@$log" && return 0
+    sleep $((i*3))
+  done
+  logger -t lober "signal failed: $phase rc=$rc"
+  return 0
+}
+
+run_hook() {
+  local digest="$1" required="$2" timeout_sec="$3"
+  curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
+  echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
+  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  local rc=${PIPESTATUS[0]}
+  signal "hook-report" "$rc" /tmp/h.log "$digest"
+  [ "$rc" -eq 0 ] || [ "$required" != "true" ]
+}
+run_hook 'aaaa1111pre' 'true' '300' || exit 1
+%end
+%post --nochroot
+GW='http://gw.internal'
+ART='http://ng.internal/artifacts'
+TASK='42'
+TOKEN='install-tok-fixed-0000000000000000'
+SEQ=0
+
+signal() {
+  local phase="$1" rc="${2:-0}" log="${3:-/dev/null}" digest="${4:-}"
+  SEQ=$((SEQ+1))
+  local q="$GW/v1/signal/$TASK/$TOKEN/$phase?rc=$rc&seq=$SEQ"
+  if [ -n "$digest" ]; then
+    q="$q&digest=$digest"
+  fi
+  for i in 1 2 3; do
+    curl -fsS -m 10 -X POST "$q" \
+      -H 'Content-Type: text/plain' --data-binary "@$log" && return 0
+    sleep $((i*3))
+  done
+  logger -t lober "signal failed: $phase rc=$rc"
+  return 0
+}
+
+run_hook() {
+  local digest="$1" required="$2" timeout_sec="$3"
+  curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
+  echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
+  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  local rc=${PIPESTATUS[0]}
+  signal "hook-report" "$rc" /tmp/h.log "$digest"
+  [ "$rc" -eq 0 ] || [ "$required" != "true" ]
+}
+run_hook 'bbbb2222nochroot' 'false' '300' || exit 1
+%end
+%post
+GW='http://gw.internal'
+ART='http://ng.internal/artifacts'
+TASK='42'
+TOKEN='install-tok-fixed-0000000000000000'
+SEQ=0
+
+signal() {
+  local phase="$1" rc="${2:-0}" log="${3:-/dev/null}" digest="${4:-}"
+  SEQ=$((SEQ+1))
+  local q="$GW/v1/signal/$TASK/$TOKEN/$phase?rc=$rc&seq=$SEQ"
+  if [ -n "$digest" ]; then
+    q="$q&digest=$digest"
+  fi
+  for i in 1 2 3; do
+    curl -fsS -m 10 -X POST "$q" \
+      -H 'Content-Type: text/plain' --data-binary "@$log" && return 0
+    sleep $((i*3))
+  done
+  logger -t lober "signal failed: $phase rc=$rc"
+  return 0
+}
+
+run_hook() {
+  local digest="$1" required="$2" timeout_sec="$3"
+  curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
+  echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
+  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  local rc=${PIPESTATUS[0]}
+  signal "hook-report" "$rc" /tmp/h.log "$digest"
+  [ "$rc" -eq 0 ] || [ "$required" != "true" ]
+}
+run_hook 'cccc3333post' 'true' '300' || exit 1
+%end
+%post
+mkdir -p /var/lib/lober /var/lib/lober/hooks
+
+install -m 600 /dev/null /var/lib/lober/finalize.token
+echo 'finalize-tok-fixed-0000000000000000' > /var/lib/lober/finalize.token
+
+install -m 600 /dev/null /var/lib/lober/params.env
+cat > /var/lib/lober/params.env <<'LOBER_PARAMS_EOF'
+LOBER_CONTRACT_VERSION=''
+LOBER_TASK_ID='42'
+LOBER_SN='SN-FIXED-0001'
+LOBER_MAC=''
+LOBER_UUID=''
+LOBER_HOSTNAME='web-01'
+LOBER_OS_FAMILY='rhel'
+LOBER_OS_VERSION=''
+LOBER_ARCH=''
+LOBER_DISKS=''
+LOBER_DISK_PRIMARY='/dev/disk/by-id/wwn-0x5000c500fixed0001'
+LOBER_NICS=''
+LOBER_RAM_MB=''
+LOBER_CPU_CORES=''
+LOBER_VENDOR=''
+LOBER_PRODUCT=''
+LOBER_BIZ_IP='10.20.0.15'
+LOBER_BIZ_GW=''
+LOBER_BIZ_MASK=''
+LOBER_ARTIFACT_BASE='http://ng.internal/artifacts'
+LOBER_GATEWAY_BASE='http://gw.internal'
+LOBER_RACK=''
+LOBER_ROW=''
+LOBER_DC=''
+LOBER_PARAMS_EOF
+
+cat > /var/lib/lober/hooks/manifest <<'LOBER_MANIFEST_EOF'
+010-dddd4444firstboot.sh digest=dddd4444firstboot required=true order=10
+LOBER_MANIFEST_EOF
+
+curl -fsS -o /var/lib/lober/hooks/010-dddd4444firstboot.sh 'http://ng.internal/artifacts/hooks/dddd4444firstboot/script.sh'
+echo 'dddd4444firstboot  /var/lib/lober/hooks/010-dddd4444firstboot.sh' | sha256sum -c -
+chmod 700 /var/lib/lober/hooks/010-dddd4444firstboot.sh
+
+cat > /usr/local/sbin/lober-init.sh <<'LOBER_INIT_EOF'
+#!/bin/bash
+. /var/lib/lober/params.env
+
+GW='http://gw.internal'
+ART='http://ng.internal/artifacts'
+TASK='42'
+TOKEN='install-tok-fixed-0000000000000000'
+SEQ=0
+
+signal() {
+  local phase="$1" rc="${2:-0}" log="${3:-/dev/null}" digest="${4:-}"
+  SEQ=$((SEQ+1))
+  local q="$GW/v1/signal/$TASK/$TOKEN/$phase?rc=$rc&seq=$SEQ"
+  if [ -n "$digest" ]; then
+    q="$q&digest=$digest"
+  fi
+  for i in 1 2 3; do
+    curl -fsS -m 10 -X POST "$q" \
+      -H 'Content-Type: text/plain' --data-binary "@$log" && return 0
+    sleep $((i*3))
+  done
+  logger -t lober "signal failed: $phase rc=$rc"
+  return 0
+}
+
+run_hook() {
+  local digest="$1" required="$2" timeout_sec="$3"
+  curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
+  echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
+  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  local rc=${PIPESTATUS[0]}
+  signal "hook-report" "$rc" /tmp/h.log "$digest"
+  [ "$rc" -eq 0 ] || [ "$required" != "true" ]
+}
+
+signal "booted" 0
+signal "init-start" 0
+
+bash /var/lib/lober/hooks/010-dddd4444firstboot.sh > /tmp/fb-dddd4444firstboot.log 2>&1
+signal "hook-report" "$?" /tmp/fb-dddd4444firstboot.log "dddd4444firstboot"
+
+signal "init-done" 0
+signal "ready" 0
+
+shred -u /var/lib/lober/params.env /var/lib/lober/finalize.token
+rm -f /var/lib/lober/init.pending
+sed -i '/rootpw\|--iscrypted\|inst.ks=/d' /root/anaconda-ks.cfg 2>/dev/null
+LOBER_INIT_EOF
+chmod 755 /usr/local/sbin/lober-init.sh
+
+cat > /etc/systemd/system/lober-init.service <<'LOBER_UNIT_EOF'
+[Unit]
+Description=Lober OS init
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/var/lib/lober/init.pending
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lober-init.sh
+StandardOutput=journal+console
+[Install]
+WantedBy=multi-user.target
+LOBER_UNIT_EOF
+
+systemctl enable lober-init.service
+touch /var/lib/lober/init.pending
+%end
