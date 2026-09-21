@@ -1,0 +1,202 @@
+# 部署前必跑的校验命令（写完改完这份文件后必须跑，不是可选步骤）：
+#   go run ./cmd/lober -config deploy/lober.yaml.example -check
+#（若 cmd/lober 尚未在你所在分支落地，见本文件末尾的「校验方法二」，用一个
+#  临时 Go 程序直接调用 internal/config 的 Parse/Validate 达到同等效果——
+#  这两条路径最终都是同一个 Validate() 函数，任选其一）
+#
+# Lober 配置样例。字段与 internal/config/config.go 的 Config 结构体逐字段
+# 对应——改这份文件前先读那个文件，它是配置结构的权威定义。
+#
+# 依据：docs/superpowers/plans/2026-09-20-lober-mvp-09-integration.md 任务 8、
+#       SPEC.md §1.4（nginx/监听地址）、§1.6（反代陷阱）、§9.4（权限分级）、
+#       §12.5（角色与权限码）、internal/config/config.go（Validate 的四类校验）
+#
+# ===========================================================================
+# 三处必改项（部署前必须替换，否则的后果各不相同，见对应字段的注释）：
+#   1. gateway.listen / gateway.syslog_listen / console.listen 三个监听 IP
+#   2. gateway.gateway_base / gateway.artifact_base 的域名
+#   3. console.token_secret 的密钥
+# 下面每一项在注释里都重复了一遍后果，因为这是本文件里唯一「配错了也不
+# 报错、只在特定条件下才暴露」的一类字段，值得反复强调。
+# ===========================================================================
+
+# --- 网关（机器面，装机 VLAN）---------------------------------------------
+gateway:
+  # CHANGE-ME：网关 HTTP 监听地址，必须是具体 IP:port，不能写 0.0.0.0:port
+  # 或 [::]:port（Validate 会拒绝通配地址，见 config.go 的 validateListenAddr）。
+  #
+  # 后果说明：写成通配地址时，Validate 目前会直接报错拒绝启动（config.go
+  # 已把这条从「静默隐患」升级为「启动即拒绝」）。之所以仍要在这里反复强调，
+  # 是因为这份注释也是给运维看的操作提示——如果有人绕过 Validate（例如
+  # 未来改动放宽了校验），后果是装机 VLAN 上的裸机能直接打到网关端口，
+  # 而网关本身设计为无认证（机器侧协议不带凭据），这不是"泄露"而是"网关
+  # 端点原本就该只对装机 VLAN 可达"这条设计前提被破坏。
+  #
+  # 建议部署形态：Go 进程绑到 nginx 所在主机的某个内部地址（如 127.0.0.1
+  # 或专用内部网卡），由 nginx 做唯一对外入口（SPEC §1.4）。下面这个占位值
+  # 不是任何真实网段，必须改成你的部署环境里网关实际应绑定的地址。
+  listen: "203.0.113.10:8080"
+
+  # CHANGE-ME：基址 URL 的域名部分。用域名而不是裸 IP——将来给这个地址签
+  # TLS 证书时，证书的 CN/SAN 要能对上这里写的名字（Phase 4 才做 TLS，
+  # 但域名这条约定从 MVP 起就该遵守，省得将来签证书时发现所有引导脚本里
+  # 内嵌的 URL 都是裸 IP，要跟着改一遍）。
+  #
+  # 这两个字段供渲染器拼接 iPXE 脚本与应答文件里的完整 URL（对应
+  # model.BaseURLs）。留空的后果：Validate 会拒绝（非空是硬性要求，
+  # 见 config.go 的报错文案："空值会产出形如 /artifacts/... 的相对 URL，
+  # iPXE 对它的解析行为不确定"）。
+  gateway_base: "http://lober-gateway.CHANGE-ME.internal:8080"
+  artifact_base: "http://lober-gateway.CHANGE-ME.internal:8080"
+
+  # CHANGE-ME：syslog UDP 监听地址，同样必须是具体 IP。省略端口时默认补
+  # 514（config.go 的 applyDefaults / hasPort），标准 syslog 端口，systemd
+  # 单元里已为此配置 CAP_NET_BIND_SERVICE（见 deploy/systemd/lober.service）。
+  syslog_listen: "203.0.113.10:514"
+
+  # 可选。若部署有集中式日志系统，把网关收到的机器侧 syslog 转发过去。
+  # 留空表示不转发（仅落盘到 store.log_path）。这是出站地址，不受
+  # 「必须具体 IP」约束——可以写域名。
+  syslog_target: ""
+
+# --- 控制台（人面，管理网）------------------------------------------------
+console:
+  # CHANGE-ME：控制台 HTTP 监听地址，必须是具体 IP，且不应与网关共用同一
+  # 网段——两者刻意分开监听是为了让装机 VLAN 与管理网的信任域物理隔离
+  # （SPEC §1.4）。下面这个占位值同样不是任何真实网段。
+  listen: "198.51.100.10:8443"
+
+  # CHANGE-ME（本文件唯一一处"留空也能启动但后果最隐蔽"的字段）：
+  # 控制台 access token 的签发密钥。
+  #
+  # 后果说明：留空时，Go 进程会在**每次启动**生成一个随机密钥（这是
+  # 实现约定的兜底行为，不是本文件能控制的部分）——意味着**每次重启
+  # 服务，全部已登录用户的 token 立即失效，需要重新登录**。对一个
+  # 装机服务而言，这在运维手动重启、systemd 自动重启（Restart=on-failure）
+  # 或滚动升级后都会发生，若正好有人在盯着任务详情页的 SSE 实时日志，
+  # 连接会断。生产部署必须显式填一个固定的随机密钥并妥善保管（例如用
+  # `openssl rand -base64 32` 生成），且不要提交进版本控制。
+  token_secret: "CHANGE-ME-generate-with-openssl-rand-base64-32"
+
+  # 控制台 token 有效期，默认 12 小时（省略此字段等价于写 12h）。
+  token_ttl: 12h
+
+# --- 存储（三个可写路径，逐条对应 docs/contracts/filesystem.md）----------
+store:
+  # 仅 Go 进程读写，nginx worker 无权访问（含 task 的敏感字段，见
+  # filesystem.md「约定：权限」）。
+  db_path: "/var/lib/lober/db/lober.db"
+
+  # Go 进程写入（导入/注册落盘），nginx worker 需要读权限——nginx 按
+  # SPEC §1.4 直接 alias 发盘，不经 Go 反代。两个系统用户建议加入同一个
+  # 组，目录权限 750 加组可读（filesystem.md「部署期核对项」）。
+  artifact_path: "/srv/lober/artifacts"
+
+  # 仅 Go 进程读写。任务日志正文（syslog 落盘 + 各阶段安装日志）落在这里，
+  # 可能含安装期敏感信息回显，与数据库同等对待。
+  log_path: "/var/lib/lober/log"
+
+# --- 超时扫描循环 -----------------------------------------------------------
+scan:
+  # 默认 30 秒（SPEC §3.3）。独立于请求路径的周期扫描，判定 phase 超时。
+  interval: 30s
+
+# --- 认证：用户列表 ---------------------------------------------------------
+#
+# 装机系统的操作员数量是个位数（SPEC §9.4），因此不做用户管理界面，用户
+# 直接写在配置文件里，改配置后重启生效。bcrypt_hash 用
+# scripts/mkuser 生成，不要手写或用其它工具生成的哈希（cost 参数不一致
+# 会导致验证变慢或变快，进而改变离线爆破成本的设计预期，见 scripts/mkuser
+# 的说明）。
+#
+# 生成一条哈希（交互式，推荐用于生产账号）：
+#   go run ./scripts/mkuser --user admin
+# 非交互（仅供自动化测试造用户，见工具内注释为何默认不这么做）：
+#   echo "your-password" | go run ./scripts/mkuser --user admin --stdin
+#
+# 五个角色与各自权限码（SPEC §9.4 权限分级 + §12.5 角色/权限码表，运维
+# 配用户时按需组合，一个用户可以有多个角色）：
+#
+#   角色            权限码                                   说明
+#   -------------- ---------------------------------------- --------------------------------
+#   viewer          （无）                                   全部页面只读，SPEC §9.4 未单独
+#                                                            列出此角色对应的破坏性操作，
+#                                                            因为它没有任何写权限
+#   operator        task:create task:retry task:cancel      建任务=授权装机（§3.2）：这一
+#                                                            个动作能让目标机器下次网络
+#                                                            启动时被擦盘，不是"只是填表"
+#   hook-author     hook:write                               创建/编辑 hook；hook 以 root
+#                                                            身份在分区之前运行，能力等同
+#                                                            "擦掉这台机器所有盘"，与建
+#                                                            任务分开授权
+#   hook-approver   hook:approve                             批准 hook 从 draft 进入
+#                                                            review/active；pre 阶段 hook
+#                                                            能碰分区，激活需审批
+#   admin           provider:write artifact:import          最高权限，另加 viewer/operator/
+#                   （以及以上全部角色的权限码）              hook-author/hook-approver 的
+#                                                            全部权限码。provider 配置需
+#                                                            走代码评审（§9.4：provider 跑
+#                                                            在服务端、读凭据、决定哪台
+#                                                            机器装什么，影响面是全部
+#                                                            机器而非一台）
+#
+# config 包本身只校验 roles 非空，不校验角色名拼写是否在这五个值之内——
+# 角色码的权威定义在控制台模块（M6），此处列出仅为运维参考。
+auth:
+  users:
+    # CHANGE-ME：下面是示例用户，name 与 bcrypt_hash 都必须替换成用
+    # scripts/mkuser 为你的真实账号生成的值，不要直接使用此占位哈希
+    # ——它对应的明文密码已随本文件公开，等同于没有认证。
+    - name: "CHANGE-ME-admin-username"
+      bcrypt_hash: "$2a$12$CHANGEMECHANGEMECHANGEMECHANGEMECHANGEMECHANGEMECHANG"
+      roles: ["admin"]
+
+# --- Provider 选择与参数 -----------------------------------------------------
+provider:
+  # IPAM/DNS/resolver 目前各只有单一内置实现，config 阶段不做白名单校验
+  # （见 config.go 的字段注释：合法值由 M7 的实现集合决定）。MVP 阶段
+  # 保持这三个默认值即可。
+  ipam: "static"
+  dns: "noop"
+  resolver: "rule-based"
+
+  # 磁盘策略，五选一（SPEC §2.3）：first / largest / by-model / raid1-ssd /
+  # by-hook。默认 largest。若选 by-model，必须同时填 disk_model，否则
+  # Validate 拒绝启动（不填的运行期表现是"所有机器的磁盘规划都失败"，
+  # 不如启动就拒绝）。
+  disk_policy: "largest"
+  disk_model: ""
+
+  # 心跳模式：tcp / icmp / off。默认 tcp——icmp 需要特权套接字（root /
+  # CAP_NET_RAW），心跳只是辅助通道（SPEC §6.6），不值得为它给整个进程
+  # 提权。心跳间隔默认 60 秒。
+  heartbeat_mode: "tcp"
+  heartbeat_interval: 60s
+
+# ===========================================================================
+# 校验方法二（若 cmd/lober 尚未在你所在分支落地，用这个替代 -check flag）：
+# 在仓库根目录临时建一个 Go 程序，跑完立刻删除该临时文件：
+#
+#   cat > .tmp_verify_config.go <<'EOF'
+#   package main
+#
+#   import (
+#       "fmt"
+#       "os"
+#
+#       "github.com/lober/lober/internal/config"
+#   )
+#
+#   func main() {
+#       f, err := os.Open("deploy/lober.yaml.example")
+#       if err != nil { panic(err) }
+#       defer f.Close()
+#       cfg, err := config.Parse(f)
+#       if err != nil { panic(fmt.Errorf("parse: %w", err)) }
+#       if err := cfg.Validate(); err != nil { panic(fmt.Errorf("validate: %w", err)) }
+#       fmt.Println("OK: 配置样例通过 Parse 与 Validate")
+#   }
+#   EOF
+#   go run .tmp_verify_config.go
+#   rm .tmp_verify_config.go
+# ===========================================================================
