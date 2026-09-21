@@ -1,0 +1,21 @@
+<!doctype html>
+<!--
+  这是占位文件，不是真实前端产物。
+
+  真实的 dist 由 web/apps/web-ele 的前端构建产生（vite build，outDir 指向
+  本目录），构建产物会整体覆盖这个目录下的全部文件，包括本文件。
+
+  本占位文件存在的唯一目的：让 internal/console/ui/embed.go 的
+  `//go:embed all:dist` 指令在没有真实前端产物时也能编译通过——go:embed
+  要求匹配的目录里至少有一个文件，没有占位文件这个包就编译不过，
+  M9 的 cmd/lober 也就无法装配（见 M8 计划任务 14）。
+-->
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Lober 控制台（占位）</title>
+  </head>
+  <body>
+    <div id="app">占位页面：真实控制台由前端构建产物提供。</div>
+  </body>
+</html>

@@ -9,3 +9,17 @@
 *.db-shm
 node_modules/
 internal/console/ui/dist/
+# 例外：占位 dist 的最小产物需要入库（M8 计划任务 14）。
+# 真实前端构建产物会覆盖这些文件，不影响后续 pnpm build 的产出流程——
+# vite build 会先清空 outDir 再写入。
+#
+# 目录本身被上面那条规则忽略后，Git 默认不会再进入该目录检查里面的文件是否
+# 被排除在忽略之外（gitignore 的已知行为：父目录被排除时，子路径的否定规则
+# 不生效，除非先把目录本身也否定掉）。因此这里先否定目录，再否定目录内的
+# 具体子路径。
+!internal/console/ui/dist/
+!internal/console/ui/dist/index.html
+!internal/console/ui/dist/assets/
+!internal/console/ui/dist/assets/index-placeholder0a1b2c3d.js
+!internal/console/ui/dist/_app/
+!internal/console/ui/dist/_app/config-placeholder.js
