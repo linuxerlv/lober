@@ -228,6 +228,46 @@ func TestBootGrant_AttemptExceeded_ReturnsNoTaskPayload(t *testing.T) {
 // 网关只需要看到非 nil error 就统一转换成 no_task 响应）。
 var errAttemptExceededInTest = &stubError{"stub: attempt 超限"}
 
+// TestBootGrant_PrecheckFails_EchoUsesProbeSNNotTaskHostSN 锁住：命中路径
+// 内的三处 no_task 载荷（precheck 失败、attempt 超限、渲染失败）回显的
+// serial 必须是本次请求机器实际上报的 sn（probe.sn），不能是任务记录的
+// task.HostSN——这与 handleBoot 里另外三处 no_task 调用点（查不到任务、
+// MAC 双因子不符、arch/plat 无法识别）保持一致的来源。
+//
+// 这条测试之所以必须通过 uuid 命中任务、把 query 里的 sn 留空来构造，是
+// 因为 fake.Store.identityMatches 一旦 query 的 sn 非空就只按 sn 精确比较
+// 不回退到 mac/uuid——sn 若照抄任务记录值，probe.sn 与 task.HostSN 恰好
+// 相等，测试测不出两者被换用的差异。只有 sn 为空、靠 uuid 回退命中时，
+// probe.sn（空串）与 task.HostSN（非空）才会不同，才能证伪「内部换用了
+// 错误的来源」这类 bug（本模块曾经在 handleBootGrant 的三处 no_task 调用
+// 点误用 task.HostSN，被这条测试发现并修正）。
+func TestBootGrant_PrecheckFails_EchoUsesProbeSNNotTaskHostSN(t *testing.T) {
+	fx := newGrantFixture(t) // task.HostSN = "SN-1"
+	sm := newStateMachineStub()
+	sm.startBootFn = func(ctx context.Context, taskID string, actualArch model.Arch, actualFirmware model.FirmwareMode) (model.Task, error) {
+		return model.Task{}, &contract.PrecheckError{Failure: contract.PrecheckFailureArch, Detail: "arch 不符"}
+	}
+	fx.deps.StateMachine = sm
+
+	q := url.Values{
+		"sn":   {""}, // 白牌机场景：本次上报 sn 为空，靠 uuid 命中任务
+		"mac":  {"aa:bb:cc:dd:ee:ff"},
+		"uuid": {"uuid-1"},
+		"arch": {"x86_64"}, "plat": {"efi"},
+	}
+	body, status := doBoot(t, fx.deps, q)
+	if status != http.StatusOK {
+		t.Fatalf("状态码 = %d, want 200（约定 1：始终 200）", status)
+	}
+
+	want := contract.NoTaskScript("") // probe.sn，不是 task.HostSN="SN-1"
+	if body != want {
+		t.Errorf("precheck 失败时 no_task 载荷 = %q, want %q（回显的 serial 必须来自"+
+			"本次请求的 probe.sn，不能是任务记录的 task.HostSN——否则同一份约定 2 载荷"+
+			"会随失败原因在两个不同来源的序列号之间跳变）", body, want)
+	}
+}
+
 // TestBootGrant_RenderContextFieldsPopulated 锁住：渲染上下文的字段完整。
 // 用渲染器桩记录的入参断言各字段非空。
 func TestBootGrant_RenderContextFieldsPopulated(t *testing.T) {

@@ -113,7 +113,7 @@ func (s *Server) handleBoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.handleBootGrant(w, r, task, actualArch, actualFirmware)
+	s.handleBootGrant(w, r, task, probe.sn, actualArch, actualFirmware)
 }
 
 // writeNoTaskScript 写出「约定 2」冻结的 no_task 载荷：HTTP 200、
@@ -135,7 +135,17 @@ func writeNoTaskScript(w http.ResponseWriter, serial string) {
 // 接收 *http.Request（而不是只接收 context.Context）是为了取得本次请求的
 // clientIP，供 syslog.go 的进程内「客户端 IP → 任务」映射更新使用——见
 // syslog.go 文件头注释的契约缺口说明。
-func (s *Server) handleBootGrant(w http.ResponseWriter, r *http.Request, task model.Task, actualArch model.Arch, actualFirmware model.FirmwareMode) {
+//
+// probeSN 是本次请求机器实际上报的 sn（可能为空——白牌机场景，也可能与
+// task.HostSN 不同——命中路径可能是靠 MAC/UUID 回退匹配到的，此时任务
+// 记录的 HostSN 与机器这次实际带来的 sn 是两个不同的值）。no_task 载荷的
+// echo 行必须统一使用 probeSN，不能改用 task.HostSN——handleBoot 里另外
+// 三处 no_task 调用点（查不到任务、MAC 双因子不符、arch/plat 无法识别）
+// 都用 probe.sn，这里若换成 task.HostSN 会出现「同一份约定 2 载荷，不同
+// 失败原因回显不同来源的序列号」这种内部不一致：机器控制台上看到的
+// echo 值会随失败原因在「自己刚发出的 sn」与「服务端库里记录的 HostSN」
+// 之间跳变，而 §4.2 的四种失败情形本应共享完全相同形态的载荷。
+func (s *Server) handleBootGrant(w http.ResponseWriter, r *http.Request, task model.Task, probeSN string, actualArch model.Arch, actualFirmware model.FirmwareMode) {
 	ctx := r.Context()
 	updated, err := s.deps.StateMachine.StartBoot(ctx, task.ID, actualArch, actualFirmware)
 	if err != nil {
@@ -145,7 +155,7 @@ func (s *Server) handleBootGrant(w http.ResponseWriter, r *http.Request, task mo
 		// 需要再区分错误的具体类型（计划任务 5「失败则按类型处置：
 		// precheck 错误与 attempt 超限都回 no_task 载荷，任务已被状态机
 		// 置 failed」）。
-		writeNoTaskScript(w, task.HostSN)
+		writeNoTaskScript(w, probeSN)
 		return
 	}
 
@@ -169,13 +179,13 @@ func (s *Server) handleBootGrant(w http.ResponseWriter, r *http.Request, task mo
 		// 渲染上下文构造失败（模板/制品/主机查不到等基础设施性问题）：
 		// 约定 1 要求始终 200，即使装配数据本身不完整，也必须给出机器能
 		// 消费的合法脚本，不能让机器停在非 200 上等人。
-		writeNoTaskScript(w, task.HostSN)
+		writeNoTaskScript(w, probeSN)
 		return
 	}
 
 	menu, err := s.deps.Renderer.RenderMenu(renderCtx)
 	if err != nil {
-		writeNoTaskScript(w, task.HostSN)
+		writeNoTaskScript(w, probeSN)
 		return
 	}
 
