@@ -15,20 +15,24 @@ import (
 	"github.com/lober/lober/internal/core/model"
 )
 
-// Deps 是 Server 的依赖结构体，把六个接缝（Store 的三个窄接口、状态机、
-// 渲染器、日志存储、时钟、基址配置）都列出来。用结构体传入而不是长参数
-// 列表——将来加接缝时不改调用点（计划任务 1「Server 的依赖结构要把六个
-// 接缝都列出来」）。
+// Deps 是 Server 的依赖结构体，把全部接缝（Store 的窄接口、状态机、渲染器、
+// 日志存储、时钟、基址配置）都列出来。用结构体传入而不是长参数列表——
+// 将来加接缝时不改调用点（计划任务 1「Server 的依赖结构要把六个接缝都
+// 列出来」）。
 //
-// Store 拆成三个窄接口字段（TaskStore/FactStore/EventStore）而不是嵌入
-// 组合的 contract.Store：网关只用到任务查找与 token 校验、facts 读写、
-// 信号事件追加这三类操作，窄依赖让测试桩（内存 Store 本身已经满足这三个
-// 接口）与未来的实现更容易看清网关真正用到了什么（依据 contract/store.go
-// 「各模块应依赖上面的窄接口」的设计说明）。
+// Store 拆成六个窄接口字段而不是嵌入组合的 contract.Store：网关用到任务
+// 查找与 token 校验（TaskStore）、facts 读写（FactStore）、信号事件追加
+// （EventStore）、渲染上下文取模板/制品集/主机（TemplateStore/
+// ArtifactSetStore/HostStore）——窄依赖让测试桩（内存 Store 本身已经满足
+// 这些接口）与未来的实现更容易看清网关真正用到了什么（依据
+// contract/store.go「各模块应依赖上面的窄接口」的设计说明）。
 type Deps struct {
-	TaskStore  contract.TaskStore
-	FactStore  contract.FactStore
-	EventStore contract.EventStore
+	TaskStore        contract.TaskStore
+	FactStore        contract.FactStore
+	EventStore       contract.EventStore
+	TemplateStore    contract.TemplateStore
+	ArtifactSetStore contract.ArtifactSetStore
+	HostStore        contract.HostStore
 
 	StateMachine contract.StateMachine
 	Renderer     contract.Renderer

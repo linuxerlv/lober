@@ -40,6 +40,12 @@ type stateMachineStub struct {
 	// 没有自己修改 attempt」——网关只应调用一次 StartBoot，不应在调用前后
 	// 自行读写 AttemptCount（计划任务 5 测试要点）。
 	startBootCalls []stateMachineStartBootCall
+
+	// issueFinalizeTokenCalls 记录 IssueFinalizeToken 每次被调用时的
+	// taskID，供测试断言「finalize token 在引导命中路径这一步签发」
+	// （计划任务 5：因为它要被写进 %post，必须在 /v1/boot 成功渲染菜单
+	// 之前就已存在，供 /v1/answer 渲染时可用）。
+	issueFinalizeTokenCalls []string
 }
 
 // stateMachineStartBootCall 记录一次 StartBoot 调用的入参快照。
@@ -124,6 +130,7 @@ func (s *stateMachineStub) ApplySignal(ctx context.Context, taskID string, signa
 }
 
 func (s *stateMachineStub) IssueFinalizeToken(ctx context.Context, taskID string) (model.Task, error) {
+	s.issueFinalizeTokenCalls = append(s.issueFinalizeTokenCalls, taskID)
 	return s.issueFinalizeTokenFn(ctx, taskID)
 }
 

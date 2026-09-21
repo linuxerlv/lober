@@ -15,13 +15,16 @@ import (
 func newTestDeps() Deps {
 	store := fake.NewStore()
 	return Deps{
-		TaskStore:    store,
-		FactStore:    store,
-		EventStore:   store,
-		StateMachine: newStateMachineStub(),
-		Renderer:     newRendererStub(),
-		LogStore:     newLogStoreStub(),
-		Clock:        fake.NewClock(),
+		TaskStore:        store,
+		FactStore:        store,
+		EventStore:       store,
+		TemplateStore:    store,
+		ArtifactSetStore: store,
+		HostStore:        store,
+		StateMachine:     newStateMachineStub(),
+		Renderer:         newRendererStub(),
+		LogStore:         newLogStoreStub(),
+		Clock:            fake.NewClock(),
 		Bases: model.BaseURLs{
 			GatewayBase:  "http://gw.example.test",
 			ArtifactBase: "http://artifacts.example.test",
