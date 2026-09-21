@@ -74,8 +74,11 @@ func RenderStageSection(ctx model.RenderContext, stage model.HookStage) string {
 		return ""
 	}
 
-	refs := hooksForStage(ctx.Hooks, stage)
-	if len(refs) == 0 {
+	// 骨架生成器（skeleton.go）返回结构化的 hook 调用行列表，本函数只负责
+	// 决定"怎么把这些行嵌进 kickstart 的段落语法"——内容与嵌入方式的分离，
+	// 是 phase2-01 任务 1 抽出共用骨架的设计要点。
+	lines := StageHookCallLines(ctx.Hooks, stage)
+	if len(lines) == 0 {
 		return ""
 	}
 
@@ -83,8 +86,8 @@ func RenderStageSection(ctx model.RenderContext, stage model.HookStage) string {
 	b.WriteString(header)
 	b.WriteString("\n")
 	b.WriteString(ClientLib(ctx))
-	for _, ref := range refs {
-		b.WriteString(runHookCall(ref))
+	for _, line := range lines {
+		b.WriteString(line)
 	}
 	b.WriteString("%end\n")
 	return b.String()
@@ -95,6 +98,12 @@ func RenderStageSection(ctx model.RenderContext, stage model.HookStage) string {
 // 已经排过一遍，RenderContext.Hooks 的构造方在两者之间可能引入乱序（例如
 // 合并了多个来源），渲染器自己的输出顺序不应依赖外部调用约定，否则同一份
 // 输入换一个调用方就可能产出不同的 golden file。
+//
+// phase2-01：本函数现在是 skeleton.go 里 StageHookCallLines 的内部实现
+// 细节（保持未导出，避免包内出现两套"筛选+排序"逻辑）；kickstart.go 的
+// RenderStageSection 改为直接调用 StageHookCallLines，不再直接调用本函数，
+// 但函数体本身原样保留（RHEL 的 golden file 逐字节不变的前提是排序与筛选
+// 规则一字不改）。
 func hooksForStage(hooks []model.HookRef, stage model.HookStage) []model.HookRef {
 	var matched []model.HookRef
 	for _, h := range hooks {
