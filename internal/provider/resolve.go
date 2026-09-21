@@ -139,7 +139,70 @@ func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]st
 		resolved[model.FactDiskPrimary] = primary
 	}
 
+	// 新增步骤（P2-02 计划任务 3）：网卡决策。刻意放在磁盘规划步骤之后、
+	// 作为编排顺序的第四步追加，不改动前三步（模板解析 → IPAM → 磁盘
+	// 规划）任何既有行为——铁律第 3 条明确要求"不改既有函数行为，只加新
+	// 分支/新函数"。
+	//
+	// 与前三步的失败语义不同：模板解析/IPAM/磁盘规划任一失败都会让整体
+	// Resolve 提前返回错误（本方法开头的三个 if err != nil 分支）。网卡
+	// 决策失败（没有采集到网卡事实，或采集到了但全部 link down 且无 MAC
+	// 匹配）刻意不让整体 Resolve 失败——理由：
+	//
+	//  1. 这是本次改动新增的步骤，若让它的失败传染到整体编排，等价于
+	//     悄悄改变了"建任务时编排失败"的既有语义（哪些失败会阻塞建任务），
+	//     这正是铁律第 3 条要防止的"不改既有步骤行为"（虽然网卡决策本身
+	//     是新步骤，但让新步骤获得与模板解析/IPAM/磁盘规划同等的阻塞
+	//     地位是一个需要走契约评审的决定，不应该在本次改动里悄悄引入）。
+	//  2. "决策失败时机器该怎么办"是 P2-02 计划任务 4 的职责（同步等待
+	//     决策结果、读不到决策键时中止安装），任务 4 涉及
+	//     internal/gateway/facts.go，不在本文件（也不在本 agent 的文件
+	//     归属）范围内——本步骤只负责"有网卡事实时尽力决策，没有依据时
+	//     不写决策键"，把"没有决策键时机器要不要继续分区"这个判断完全
+	//     留给持有 gateway/facts.go 的实现者。
+	//
+	// 与磁盘 by-hook 策略同一方向的处理：宁可键缺失，也不要键存在但值
+	// 是误导性的空字符串（decideAndAppendInstallNICMAC 内部保证这一点）。
+	decideAndAppendInstallNICMAC(facts, resolved)
+
 	return resolved, nil
+}
+
+// nicInstallMACParamKey 是网卡决策结果（装机网卡 MAC）在 Resolve 返回的
+// resolved_params 中使用的键名。
+//
+// 契约缺口：SPEC §5.4 冻结的 24 个 LOBER_ 键里没有对应"网卡决策结果"的
+// 键（对比磁盘决策有 LOBER_DISK_PRIMARY）；model/facts.go 是冻结契约，
+// 不在本 agent 的文件归属内，不能在此新增常量。因此这里用一个与
+// "template_id"/"template_version"同一先例的非冻结临时键名（本文件已有
+// 的这两个键同样不属于 FactKeysV1，是编排器自行追加进 resolved_params 的
+// 附加信息）。正解是走契约变更流程，在 model/facts.go 新增一个
+// LOBER_NIC_INSTALL_MAC 之类的冻结键，届时把这里的字面量换成那个常量
+// 即可，不需要改动本文件的其它逻辑。
+const nicInstallMACParamKey = "nic_install_mac"
+
+// decideAndAppendInstallNICMAC 尝试从 facts 中解析网卡采集事实并决策装机
+// 网卡，成功时把结果写入 resolved（原地修改）。
+//
+// 两种"不写入"的情形，都不算错误：
+//  1. facts 中没有任何网卡采集键（ParseHWNICs 返回空切片）——上游尚未
+//     采集，是正常的中间状态，与磁盘规划面对空磁盘清单时"由 DiskPlanner
+//     自己报错"不同：网卡决策在本文件中不是强制步骤（不在 taskParamsResolver
+//     构造时传入的三个 provider 之列），没有数据就跳过。
+//  2. PlanInstallNIC 因为找不到依据而报错（全部 link down 且无 MAC 匹配）
+//     ——记录不下决策结果，但不让调用方的 Resolve 因此失败（见调用处的
+//     详细说明）。
+func decideAndAppendInstallNICMAC(facts map[string]string, resolved map[string]string) {
+	nics, err := ParseHWNICs(facts)
+	if err != nil || len(nics) == 0 {
+		return
+	}
+
+	decision, err := PlanInstallNIC(nics, NICIntent{})
+	if err != nil {
+		return
+	}
+	resolved[nicInstallMACParamKey] = decision.MAC
 }
 
 // decodeDisksFromFacts 从 facts KV 解析出结构化的磁盘清单。
