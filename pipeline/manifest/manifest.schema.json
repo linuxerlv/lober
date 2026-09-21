@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "镜像直写通道清单文件的结构定义。对应 pipeline/README.md 第 2.2 节。这是 JSON Schema 描述文档，本身不是可执行代码；manifest.yaml 是 YAML 格式（与 model.ArtifactSet 其它字段的序列化习惯一致），本 schema 用于生成/校验该 YAML 内容的结构（校验工具可选 yajsv/ajv 等，不在本任务范围内选定）。部署前必跑：用目标校验工具对一份真实 manifest.yaml 跑一次 schema 校验，确认字段名与类型匹配（见 pipeline/README.md 第 6 节）。",
+  "title": "LoberImageManifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "image_sha256",
+    "image_uncompressed_sha256",
+    "image_size_bytes",
+    "partition_layout",
+    "package_list_sha256",
+    "packages"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "本 schema 的版本号。字段结构变更时递增，供导入侧（任务 3）识别不兼容的旧清单。"
+    },
+    "image_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "压缩后镜像文件（image.raw.zst）的 sha256，64 位十六进制小写。导入时校验对象，见 README 第 4 节。不是解压后镜像的校验值——见下一字段。"
+    },
+    "image_uncompressed_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "解压后原始镜像（写到目标盘的最终字节）的 sha256。写盘端（计划任务 4 第 3 步）回读校验的比对对象，不是本任务的导入时校验对象。两者不可混用，理由见 README 第 2.2 节。"
+    },
+    "image_size_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "压缩后镜像文件大小（字节）。供任务 4 预估下载/写盘耗时，供任务 5 记录两条通道的耗时对比数据。"
+    },
+    "image_uncompressed_size_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "解压后镜像大小（字节），即目标盘上镜像本体占用的空间，用于任务 4 判断目标盘容量是否足够、以及分区扩展时的起始边界。"
+    },
+    "partition_layout": {
+      "type": "object",
+      "description": "镜像内部的分区结构描述，供任务 4 第 4 步（按此描述扩展分区）使用。本 schema 只占位字段名与顶层结构，具体子字段由任务 4 的实现者定义（README openQuestions 第 2 条）——提前设计扩展分区算法要用的具体数据形状容易设计错，应由消费者驱动。",
+      "required": ["table_type", "partitions"],
+      "properties": {
+        "table_type": {
+          "type": "string",
+          "enum": ["gpt", "mbr"],
+          "description": "分区表类型。mkosi 产出的镜像固定是 gpt（legacy-free，见 README 第 1 节核实结论），此字段仍显式记录，不假设消费者知道这条约束。"
+        },
+        "partitions": {
+          "type": "array",
+          "description": "分区列表，具体每个分区对象的字段（编号/文件系统/是否为待扩展的根分区等）留给任务 4 定义，此处不预先约束 items 的 schema。",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "package_list_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "对 packages 字段（排序后的「包名+版本」列表拼接）算出的 sha256，用于可重现性验证（README 第 5 节）：两次独立封装比对此字段，相等即视为可重现。不是对整份 manifest.yaml 文件算的 sha256，因为文件里还含 packaged_at 等预期会变化的字段。"
+    },
+    "packages": {
+      "type": "array",
+      "description": "封装进镜像的软件包清单，元素为「包名==版本」形式的字符串（如 rocky-release==9.4-1.el9），生成时按包名排序后再算 package_list_sha256，保证同一组包不因枚举顺序不同产生不同的哈希。",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

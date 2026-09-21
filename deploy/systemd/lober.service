@@ -1,0 +1,120 @@
+# 部署前必跑的校验命令（本机若有 systemd）：
+#   systemd-analyze verify deploy/systemd/lober.service
+# 本仓库的开发机是 Windows，没有 systemd，这条命令在这里跑不了——已在
+# M9 任务 8 的返回值 verifyOutcome 里注明，需在目标 Linux 主机上补做。
+#
+# 部署后确认服务按预期方式启动：
+#   systemctl daemon-reload && systemctl start lober && systemctl status lober
+#
+# 依据：
+#   docs/superpowers/plans/2026-09-20-lober-mvp-09-integration.md 任务 8
+#   docs/contracts/filesystem.md（三个可写路径）
+#   SPEC.md §1.6（nginx 启动顺序陷阱）、§3.3（超时扫描）、cmd/lober 任务 4/5（未来实现）
+#
+# ---------------------------------------------------------------------------
+# 占位值说明（务必修改，见下方 [Service] 段落里的注释）：
+#   User=/Group=、ExecStart 的二进制路径与 -config 路径都是占位形式，
+#   不是可直接使用的值——按实际部署的用户名与安装路径改。
+# ---------------------------------------------------------------------------
+
+[Unit]
+Description=Lober 装机服务（网关 + 控制台 + syslog 接收，单二进制两 listener）
+Documentation=https://github.com/lober/lober
+
+# 本单元只声明自己的依赖关系；nginx 一侧对本服务的启动顺序依赖见同目录下
+# nginx.service.d/after-lober.conf（该文件负责让 nginx 晚于本服务启动，
+# 避免 nginx 先起时对机器面/人面请求返回 502——SPEC §1.6）。
+After=network-online.target
+Wants=network-online.target
+
+# 要点 6（续）：StartLimitIntervalSec/StartLimitBurst 是 [Unit] 段的键
+#（虽然它们描述的是重启行为，容易被错放进 [Service]——systemd-analyze verify
+# 对此只给一条静默降级的 "Unknown key ... ignoring" 警告，不会让配置直接
+# 失败，因此这条错误不写代码也测不出来，必须实测才能发现）。语义：
+# 300 秒窗口内失败重启超过 5 次，systemd 停止自动重启，需要人工
+# `systemctl reset-failed` 后再起——持续失败时不该无限重试。
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+
+# --- 占位值：按实际部署环境改 -----------------------------------------
+# CHANGE-ME：运行本服务的专用系统用户/组，不要用 root。
+# 该用户需要对 filesystem.md 定义的三个可写路径有读写权限：
+#   /var/lib/lober/db/、/var/lib/lober/log/（仅本用户）
+#   /srv/lober/（本用户可写，nginx worker 用户需可读——见 filesystem.md
+#   「约定：权限」一节，典型做法是两个系统用户加入同一个组）
+User=CHANGE-ME-lober-user
+Group=CHANGE-ME-lober-group
+
+# CHANGE-ME：二进制与配置文件的实际安装路径，按部署环境改这两处绝对路径。
+#
+# 注意：ExecStart=/ExecStartPre= 里必须写死绝对路径字面量，不能像 shell
+# 脚本那样定义 Environment=FOO=... 再在命令行里用 ${FOO} 引用——systemd
+# 不会把 Environment= 里的变量插值进 ExecStart= 的命令行解析过程，那只是
+# 传给被执行进程自己的环境变量。曾经这样写过，用
+# `systemd-analyze verify` 实测发现命令解析成了字面量字符串
+# "${LOBER_BIN}" 本身（报错 "Command ${LOBER_BIN} is not executable:
+# No such file or directory"，即便真实路径下的二进制确实存在也一样报错）
+# ——这是本任务里唯一必须靠实测才能发现、光看文档容易想当然的坑。
+ExecStartPre=/opt/lober/bin/lober -config /etc/lober/lober.yaml -check
+ExecStart=/opt/lober/bin/lober -config /etc/lober/lober.yaml
+
+# 要点 2：TimeoutStopSec 必须长于装配点（cmd/lober 任务 4 server.go）的优雅
+# 关闭宽限期，否则 systemd 会在收尾完成前强杀进程，导致在途的机器侧请求
+# （引导脚本获取、应答文件获取、信号上报）被硬中断。
+#
+# 本文件写作时 cmd/lober/server.go 尚未在本 worktree 实现（七个模块的代码
+# 在其它并行分支上），无法读到该宽限期的实际常量值。这里取 30 秒作为
+# 保守上限（一般优雅关闭宽限期设计在个位数到十几秒之间），并要求：
+# ExecStart 装配点实现落地后，运维/评审需核对该常量 < 30，否则调大本值。
+TimeoutStopSec=30
+
+# 要点 6：失败自动重启，但要有重启间隔，避免配置错误或依赖不可用时
+# systemd 疯狂重启拖垂主机（例如数据库路径不可写、schema 迁移失败）。
+# RestartSec 是两次重启之间的等待；速率限制的时间窗与次数上限见
+# [Unit] 段的 StartLimitIntervalSec/StartLimitBurst（systemd 要求这两个
+# 键写在 [Unit] 里，写在 [Service] 里会被静默忽略——已实测确认，见文件
+# 顶部校验命令的输出）。
+Restart=on-failure
+RestartSec=5s
+
+# 要点 3：需要绑定特权端口（syslog UDP :514，见 internal/config 的
+# Gateway.SyslogListen 默认端口），但只给这一项能力，不给 root。
+# CAP_NET_BIND_SERVICE 允许非 root 用户绑定 1024 以下端口；AmbientCapabilities
+# 与 CapabilityBoundingSet 都要设置——前者实际赋予能力，后者限制进程能
+# 拥有的能力上限为仅此一项，即便进程后续被攻破也无法通过 setuid 等方式
+# 提权到其它特权操作。
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+# 要点 4：文件系统加固。ProtectSystem=strict 让整个文件系统只读（除下方
+# ReadWritePaths 显式放开的路径）；PrivateTmp 给独立的 /tmp 命名空间；
+# ProtectHome 禁止访问 /home、/root、/run/user。
+#
+# ReadWritePaths 必须覆盖 filesystem.md 定义的全部三个可写路径——
+# 数据库、日志、制品各一处，漏一处的表现不是启动失败，而是运行到那一
+# 功能第一次被触发时才失败（例如漏了日志路径，服务能起来、能响应引导
+# 请求，但第一次写任务日志正文时才报错）。
+ProtectSystem=strict
+PrivateTmp=true
+ProtectHome=true
+ReadWritePaths=/var/lib/lober/db /var/lib/lober/log /srv/lober
+
+# 额外加固（与文件系统加固同一精神，SPEC §9 安全一节的自然延伸）：
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+# 要点 5：日志交给 journald，不自行管理轮转文件。
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lober
+
+[Install]
+WantedBy=multi-user.target
