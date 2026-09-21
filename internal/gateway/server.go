@@ -10,6 +10,7 @@ package gateway
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
@@ -53,6 +54,14 @@ type Deps struct {
 type Server struct {
 	deps Deps
 	mux  *http.ServeMux
+
+	// clientTaskMu/clientTaskMap 是进程内的「客户端 IP → 任务」归档映射，
+	// 只服务于 syslog 接收器（见 syslog.go 文件头注释里的契约缺口说明：
+	// model.Task 没有「当前客户端 IP」字段，Store 契约也没有按 IP 反查
+	// 任务的方法，本映射是网关自己维护的最保守绕法）。零值可用（nil map
+	// 只读安全，写入前 rememberClientTask 会惰性初始化）。
+	clientTaskMu  sync.RWMutex
+	clientTaskMap map[string]clientTaskEntry
 }
 
 // NewServer 构造一个 Server 并注册全部路由。deps 的字段均不做 nil 校验——

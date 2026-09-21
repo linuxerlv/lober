@@ -7,7 +7,6 @@
 package gateway
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/lober/lober/internal/core/contract"
@@ -114,7 +113,7 @@ func (s *Server) handleBoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.handleBootGrant(ctx, w, task, actualArch, actualFirmware)
+	s.handleBootGrant(w, r, task, actualArch, actualFirmware)
 }
 
 // writeNoTaskScript 写出「约定 2」冻结的 no_task 载荷：HTTP 200、
@@ -132,7 +131,12 @@ func writeNoTaskScript(w http.ResponseWriter, serial string) {
 // handleBootGrant 处理命中任务且 MAC 双因子通过之后的推进（计划任务 5）：
 // 调状态机的 StartBoot（它内部做 precheck、attempt 计数、签 token、状态
 // 转换），失败则按类型处置，成功则构造渲染上下文、调渲染器出菜单。
-func (s *Server) handleBootGrant(ctx context.Context, w http.ResponseWriter, task model.Task, actualArch model.Arch, actualFirmware model.FirmwareMode) {
+//
+// 接收 *http.Request（而不是只接收 context.Context）是为了取得本次请求的
+// clientIP，供 syslog.go 的进程内「客户端 IP → 任务」映射更新使用——见
+// syslog.go 文件头注释的契约缺口说明。
+func (s *Server) handleBootGrant(w http.ResponseWriter, r *http.Request, task model.Task, actualArch model.Arch, actualFirmware model.FirmwareMode) {
+	ctx := r.Context()
 	updated, err := s.deps.StateMachine.StartBoot(ctx, task.ID, actualArch, actualFirmware)
 	if err != nil {
 		// StartBoot 内部已经把 precheck 错误、attempt 超限都处理成状态机
@@ -174,6 +178,11 @@ func (s *Server) handleBootGrant(ctx context.Context, w http.ResponseWriter, tas
 		writeNoTaskScript(w, task.HostSN)
 		return
 	}
+
+	// 记录本次请求的客户端 IP 与任务的关联，供 syslog 接收器归档使用
+	// （见 syslog.go 文件头注释）。装机阶段机器还在装机 VLAN，此时的
+	// clientIP 大概率就是稍后 installer 发 syslog 时的源 IP。
+	s.rememberClientTask(clientIP(r), updated.ID, updated.CurrentPhase)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)

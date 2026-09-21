@@ -171,6 +171,14 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	// 返回值与错误——契约文档明确无论信号是否被接受都回 200。
 	_, _ = s.deps.StateMachine.ApplySignal(ctx, task.ID, phase, seq)
 
+	// 记录本次请求的客户端 IP 与任务的关联，供 syslog 接收器归档使用
+	// （见 syslog.go 文件头注释）。已知限制：booted 之后信号源 IP 会变
+	// （业务网生效，§5.7），此时这里记的关联对 booted 及之后阶段的 syslog
+	// 归档没有帮助——这是接受的限制，不是本调用需要规避的错误，重启前
+	// installer 阶段发出的信号仍会正确更新映射，那才是 syslog 通道价值
+	// 集中的地方。
+	s.rememberClientTask(clientIP(r), task.ID, entry.Phase)
+
 	// 返回 200，无论信号是否被接受——机器侧的 signal() 会重试三次，序号
 	// 重复是正常现象而不是错误路径。
 	w.WriteHeader(http.StatusOK)

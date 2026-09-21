@@ -104,6 +104,10 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 记录本次请求的客户端 IP 与任务的关联，供 syslog 接收器归档使用
+	// （见 syslog.go 文件头注释）。
+	s.rememberClientTask(clientIP(r), task.ID, task.CurrentPhase)
+
 	w.Header().Set("Content-Type", answerFileContentType(renderCtx.Artifact.OSFamily))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(content))
