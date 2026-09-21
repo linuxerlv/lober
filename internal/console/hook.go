@@ -1,0 +1,513 @@
+// 本文件实现 hook 六个端点：创建、列表、更新（建新版本）、校验、列版本、
+// 审批。对应实现计划任务 4，依据 docs/contracts/http-console.md §4、
+// SPEC §2.2、§7.5、§9.4、§12.7。
+package console
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"os/exec"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/lober/lober/internal/apierr"
+	"github.com/lober/lober/internal/core/model"
+)
+
+// routesHook 注册 hook 六个端点。
+func (s *Server) routesHook() {
+	s.handleFunc("POST", "/hooks", codeHookWrite, "hook.create", s.handleCreateHook)
+	s.handleFunc("GET", "/hooks", "", "", s.handleListHooks)
+	s.handleFunc("PUT", "/hooks/{id}", codeHookWrite, "hook.update", s.handleUpdateHook)
+	s.handleFunc("POST", "/hooks/{id}/validate", codeHookWrite, "hook.validate", s.handleValidateHook)
+	s.handleFunc("GET", "/hooks/{id}/versions", "", "", s.handleHookVersions)
+	// approve 的权限细分在 handler 内部按当前状态判断（draft→review 允许
+	// 作者自己发起，review→active 需要 hook:approve 且审批人不能等于
+	// 作者），不在路由层用单一权限码卡死。
+	s.handleFunc("POST", "/hooks/{id}/approve", "", "hook.approve", s.handleApproveHook)
+}
+
+// hookItem 是响应形态，字段名与 model.Hook 对应。
+type hookItem struct {
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	Description  string           `json:"description"`
+	Stage        string           `json:"stage"`
+	OSFamilies   []string         `json:"osFamilies"`
+	Interpreter  string           `json:"interpreter"`
+	Body         string           `json:"body"`
+	BodySHA256   string           `json:"bodySha256"`
+	ParamsSchema string           `json:"paramsSchema"`
+	Requires     hookRequiresItem `json:"requires"`
+	Required     bool             `json:"required"`
+	TimeoutSec   int              `json:"timeoutSec"`
+	Version      int              `json:"version"`
+	State        string           `json:"state"`
+	Author       string           `json:"author"`
+	Approver     string           `json:"approver"`
+	ApprovedAt   int64            `json:"approvedAt"`
+}
+
+type hookRequiresItem struct {
+	ContractVersion string   `json:"contractVersion"`
+	Facts           []string `json:"facts"`
+	Capabilities    []string `json:"capabilities"`
+}
+
+func toHookItem(h model.Hook) hookItem {
+	families := make([]string, 0, len(h.OSFamilies))
+	for _, f := range h.OSFamilies {
+		families = append(families, string(f))
+	}
+	facts := h.Requires.Facts
+	if facts == nil {
+		facts = []string{}
+	}
+	caps := h.Requires.Capabilities
+	if caps == nil {
+		caps = []string{}
+	}
+	return hookItem{
+		ID:           h.ID,
+		Name:         h.Name,
+		Description:  h.Description,
+		Stage:        string(h.Stage),
+		OSFamilies:   families,
+		Interpreter:  h.Interpreter,
+		Body:         h.Body,
+		BodySHA256:   h.BodySHA256,
+		ParamsSchema: h.ParamsSchema,
+		Requires: hookRequiresItem{
+			ContractVersion: h.Requires.ContractVersion,
+			Facts:           facts,
+			Capabilities:    caps,
+		},
+		Required:   h.Required,
+		TimeoutSec: h.TimeoutSec,
+		Version:    h.Version,
+		State:      string(h.State),
+		Author:     h.Author,
+		Approver:   h.Approver,
+		ApprovedAt: h.ApprovedAt,
+	}
+}
+
+// hookWriteRequest 是 POST /hooks 与 PUT /hooks/{id} 共用的入参形态
+// （契约：除 id/bodySha256/version/state/approver/approvedAt 外的全部
+// 字段）。
+type hookWriteRequest struct {
+	Name         string              `json:"name"`
+	Description  string              `json:"description"`
+	Stage        string              `json:"stage"`
+	OSFamilies   []string            `json:"osFamilies"`
+	Interpreter  string              `json:"interpreter"`
+	Body         string              `json:"body"`
+	ParamsSchema string              `json:"paramsSchema"`
+	Requires     hookRequiresRequest `json:"requires"`
+	Required     bool                `json:"required"`
+	TimeoutSec   int                 `json:"timeoutSec"`
+}
+
+type hookRequiresRequest struct {
+	ContractVersion string   `json:"contractVersion"`
+	Facts           []string `json:"facts"`
+	Capabilities    []string `json:"capabilities"`
+}
+
+// registrationValidate 执行计划任务 4 的四项注册期校验，把运行时意外
+// 提前为注册时错误（§2.2、§7.5）：
+//  1. 阶段是白名单内的值
+//  2. requires 声明的 fact 键都在 v1 契约内
+//  3. contract 版本要求能被满足
+//  4. params_schema 在 §12.7 的子集内
+//
+// 返回 *apierr.Error，可直接传给 apierr.WriteError。
+func registrationValidate(req hookWriteRequest) *apierr.Error {
+	if strings.TrimSpace(req.Name) == "" {
+		return apierr.New(http.StatusOK, apierr.CodeBadRequest, "name 不能为空")
+	}
+	if !model.HookStage(req.Stage).Valid() {
+		return apierr.New(http.StatusOK, apierr.CodeValidationFailed,
+			fmt.Sprintf("stage 取值 %q 不合法，必须是 pre/post-nochroot/post/firstboot 之一", req.Stage))
+	}
+	for _, f := range req.Requires.Facts {
+		if !model.IsFactV1(f) {
+			return apierr.New(http.StatusOK, apierr.CodeValidationFailed,
+				fmt.Sprintf("requires.facts 声明了不存在的 fact 键 %q（v1 契约不承诺这个键，"+
+					"该 hook 运行时会读到空值）", f))
+		}
+	}
+	if err := checkContractVersion(req.Requires.ContractVersion, model.FactContractVersion); err != nil {
+		return apierr.New(http.StatusOK, apierr.CodeValidationFailed, err.Error())
+	}
+	if err := validateParamsSchemaSubset(req.ParamsSchema); err != nil {
+		return apierr.New(http.StatusOK, apierr.CodeValidationFailed,
+			"params_schema 超出 §12.7 定义的 JSON Schema 子集: "+err.Error())
+	}
+	return nil
+}
+
+// handleCreateHook 处理 POST /hooks。
+func (s *Server) handleCreateHook(w http.ResponseWriter, r *http.Request) {
+	var req hookWriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "请求体不是合法的 JSON"))
+		return
+	}
+	if verr := registrationValidate(req); verr != nil {
+		apierr.WriteError(w, verr)
+		return
+	}
+
+	user, _ := userFromContext(r.Context())
+	families := make([]model.OSFamily, 0, len(req.OSFamilies))
+	for _, f := range req.OSFamilies {
+		families = append(families, model.OSFamily(f))
+	}
+
+	hook := model.Hook{
+		ID:           uuid.NewString(),
+		Name:         req.Name,
+		Description:  req.Description,
+		Stage:        model.HookStage(req.Stage),
+		OSFamilies:   families,
+		Interpreter:  req.Interpreter,
+		Body:         req.Body,
+		BodySHA256:   model.HookDigest(req.Body),
+		ParamsSchema: req.ParamsSchema,
+		Requires: model.HookRequires{
+			ContractVersion: req.Requires.ContractVersion,
+			Facts:           req.Requires.Facts,
+			Capabilities:    req.Requires.Capabilities,
+		},
+		Required:   req.Required,
+		TimeoutSec: req.TimeoutSec,
+		Version:    1,
+		State:      model.HookStateDraft,
+		Author:     user.Username,
+	}
+
+	created, err := s.deps.Hooks.CreateHook(r.Context(), hook)
+	if err != nil {
+		writeInternal(w, err)
+		return
+	}
+	apierr.WriteOK(w, toHookItem(created))
+}
+
+// handleListHooks 处理 GET /hooks?stage=&os_family=，均为精确匹配过滤
+// （不做子串搜索）。os_family 匹配 osFamilies 数组包含该值，或该 hook 的
+// osFamilies 为空（model.Hook.SupportsFamily 语义）。
+func (s *Server) handleListHooks(w http.ResponseWriter, r *http.Request) {
+	hooks, err := s.deps.Hooks.ListHooks(r.Context())
+	if err != nil {
+		writeInternal(w, err)
+		return
+	}
+
+	stage := r.URL.Query().Get("stage")
+	osFamily := r.URL.Query().Get("os_family")
+
+	items := make([]hookItem, 0, len(hooks))
+	for _, h := range hooks {
+		if stage != "" && string(h.Stage) != stage {
+			continue
+		}
+		if osFamily != "" && !h.SupportsFamily(model.OSFamily(osFamily)) {
+			continue
+		}
+		items = append(items, toHookItem(h))
+	}
+	apierr.WriteOK(w, items)
+}
+
+// handleUpdateHook 处理 PUT /hooks/{id}：建新版本，不改旧版本（hook 正文
+// 不可变，§2.2、§9.4）。
+func (s *Server) handleUpdateHook(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	current, err := s.deps.Hooks.GetHook(r.Context(), id, 0)
+	if err != nil {
+		writeInternal(w, err)
+		return
+	}
+
+	var req hookWriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "请求体不是合法的 JSON"))
+		return
+	}
+	if verr := registrationValidate(req); verr != nil {
+		apierr.WriteError(w, verr)
+		return
+	}
+
+	user, _ := userFromContext(r.Context())
+	families := make([]model.OSFamily, 0, len(req.OSFamilies))
+	for _, f := range req.OSFamilies {
+		families = append(families, model.OSFamily(f))
+	}
+
+	next := model.Hook{
+		ID:           id,
+		Name:         req.Name,
+		Description:  req.Description,
+		Stage:        model.HookStage(req.Stage),
+		OSFamilies:   families,
+		Interpreter:  req.Interpreter,
+		Body:         req.Body,
+		BodySHA256:   model.HookDigest(req.Body),
+		ParamsSchema: req.ParamsSchema,
+		Requires: model.HookRequires{
+			ContractVersion: req.Requires.ContractVersion,
+			Facts:           req.Requires.Facts,
+			Capabilities:    req.Requires.Capabilities,
+		},
+		Required:   req.Required,
+		TimeoutSec: req.TimeoutSec,
+		Version:    current.Version + 1,
+		State:      model.HookStateDraft,
+		Author:     user.Username,
+	}
+
+	created, err := s.deps.Hooks.CreateHook(r.Context(), next)
+	if err != nil {
+		writeInternal(w, err)
+		return
+	}
+	apierr.WriteOK(w, toHookItem(created))
+}
+
+// handleHookVersions 处理 GET /hooks/{id}/versions：该 id 对应 hook 的
+// 全部历史版本，按 version 升序。
+//
+// contract.HookStore 没有「按 id 列出全部版本」的方法（ListHooks 返回
+// 全部 hook 的全部版本，GetHook 按单个 version 查）——本 handler 用
+// ListHooks 取回后在 Go 里过滤，规模是十位数量级的 hook、每个 hook 版本
+// 数是个位数，遍历代价可忽略。
+func (s *Server) handleHookVersions(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	all, err := s.deps.Hooks.ListHooks(r.Context())
+	if err != nil {
+		writeInternal(w, err)
+		return
+	}
+	var versions []model.Hook
+	for _, h := range all {
+		if h.ID == id {
+			versions = append(versions, h)
+		}
+	}
+	sort.Slice(versions, func(i, j int) bool { return versions[i].Version < versions[j].Version })
+
+	items := make([]hookItem, 0, len(versions))
+	for _, h := range versions {
+		items = append(items, toHookItem(h))
+	}
+	apierr.WriteOK(w, items)
+}
+
+// hookValidateResult 是 POST /hooks/{id}/validate 的响应形态。
+type hookValidateResult struct {
+	Passed bool        `json:"passed"`
+	Issues []hookIssue `json:"issues"`
+}
+
+type hookIssue struct {
+	Level   string `json:"level"`
+	Message string `json:"message"`
+}
+
+// syntaxCheckTimeout 是 bash -n 子进程调用的超时保护（计划任务 4 明确
+// 要求「要设超时」）——语法检查是运维在等待响应的同步调用，卡住的子
+// 进程不能无限期占用请求。
+const syntaxCheckTimeout = 5 * time.Second
+
+// lober 变量名的正则：匹配 $LOBER_XXX 或 ${LOBER_XXX} 形式。
+var loberVarPattern = regexp.MustCompile(`\$\{?(LOBER_[A-Z0-9_]+)\}?`)
+
+// handleValidateHook 处理 POST /hooks/{id}/validate。
+//
+// 校验内容（计划任务 4、SPEC §2.2）：
+//   - bash -n（或对应 interpreter 的语法检查）；PowerShell 与 ash 在
+//     MVP 下跳过，响应里说明原因
+//   - requires.facts 是否为 model.IsFactV1 承诺的键
+//   - paramsSchema 是否落在 §12.7 子集内
+//   - 静态检查：脚本引用了某个 LOBER_ 变量但既不在 schema 也不在 fact
+//     命名空间中 → 警告
+func (s *Server) handleValidateHook(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	hook, err := s.deps.Hooks.GetHook(r.Context(), id, 0)
+	if err != nil {
+		writeInternal(w, err)
+		return
+	}
+
+	var issues []hookIssue
+
+	for _, f := range hook.Requires.Facts {
+		if !model.IsFactV1(f) {
+			issues = append(issues, hookIssue{Level: "error",
+				Message: fmt.Sprintf("requires.facts 声明了不存在的 fact 键 %q", f)})
+		}
+	}
+
+	if err := validateParamsSchemaSubset(hook.ParamsSchema); err != nil {
+		issues = append(issues, hookIssue{Level: "error",
+			Message: "params_schema 超出 §12.7 子集: " + err.Error()})
+	}
+
+	switch hook.Interpreter {
+	case "bash":
+		if msg, ok := bashSyntaxCheck(r.Context(), hook.Body); !ok {
+			issues = append(issues, hookIssue{Level: "error", Message: "bash -n 语法检查未通过: " + msg})
+		}
+	case "powershell", "ash":
+		issues = append(issues, hookIssue{Level: "warn",
+			Message: fmt.Sprintf("interpreter=%s 在 MVP 阶段跳过语法检查（未实现对应检查器），"+
+				"本结果不代表脚本语法已确认无误", hook.Interpreter)})
+	default:
+		issues = append(issues, hookIssue{Level: "warn",
+			Message: fmt.Sprintf("未知 interpreter %q，跳过语法检查", hook.Interpreter)})
+	}
+
+	// 静态变量名检查（产出警告，不阻止注册/校验通过）。
+	schemaFields, err := parseParamsSchemaFields(hook.ParamsSchema)
+	if err != nil {
+		// schema 本身解析失败已经在上面的 validateParamsSchemaSubset 报过
+		// 错误，这里静默跳过静态检查（避免重复报告同一处问题）。
+		schemaFields = map[string]json.RawMessage{}
+	}
+	for _, name := range referencedLoberVars(hook.Body) {
+		if name == model.FactContractVersionKey {
+			continue
+		}
+		_, inSchema := schemaFields[strings.TrimPrefix(strings.ToLower(name), "lober_")]
+		inFacts := model.IsFactV1(name)
+		if !inSchema && !inFacts {
+			issues = append(issues, hookIssue{Level: "warn",
+				Message: fmt.Sprintf("脚本引用了 $%s，但它既不在 params_schema 中声明，"+
+					"也不是 fact 命名空间内的键——可能是拼写错误", name)})
+		}
+	}
+
+	passed := true
+	for _, iss := range issues {
+		if iss.Level == "error" {
+			passed = false
+			break
+		}
+	}
+	if issues == nil {
+		issues = []hookIssue{}
+	}
+	apierr.WriteOK(w, hookValidateResult{Passed: passed, Issues: issues})
+}
+
+// bashSyntaxCheck 用 `bash -n` 检查脚本正文语法，带超时保护。ok 为 false
+// 时 msg 携带具体的语法错误信息（stderr 内容）。
+//
+// 找不到 bash 可执行文件（如在没有 bash 的纯 Windows 环境测试运行）时，
+// 也返回 ok=false 并在消息里说明原因——不能把「环境没有 bash」误报成
+// 「脚本语法有误」，但两者对调用方（hook 作者）的处置是一样的：这条校验
+// 现在给不出确定结论。
+func bashSyntaxCheck(ctx context.Context, body string) (msg string, ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, syntaxCheckTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "bash", "-n", "-c", body)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() != nil {
+			return "语法检查超时（" + syntaxCheckTimeout.String() + "），可能是脚本内容异常或环境问题", false
+		}
+		var execErr *exec.Error
+		if errors.As(err, &execErr) {
+			return "本环境找不到 bash 可执行文件，无法确认语法（不代表脚本有误）", false
+		}
+		return strings.TrimSpace(string(out)), false
+	}
+	return "", true
+}
+
+// referencedLoberVars 扫描脚本正文，返回全部被引用的 LOBER_ 前缀变量名
+// （去重，不含前导 $ 或花括号）。
+func referencedLoberVars(body string) []string {
+	matches := loberVarPattern.FindAllStringSubmatch(body, -1)
+	seen := make(map[string]bool)
+	var out []string
+	for _, m := range matches {
+		name := m[1]
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// handleApproveHook 处理 POST /hooks/{id}/approve：draft → review →
+// active 单向流转，每次调用推进一步（不能跳步）。
+//
+// 权限细分（§9.4、http-console.md）：draft→review 允许 hook-author 自己
+// 发起；review→active 必须 hook-approver（hook:approve），且审批人不能
+// 等于作者。这两条判据依赖 hook 的当前状态，因此在 handler 内部判断，
+// 不在路由层用单一权限码卡死。
+func (s *Server) handleApproveHook(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	hook, err := s.deps.Hooks.GetHook(r.Context(), id, 0)
+	if err != nil {
+		writeInternal(w, err)
+		return
+	}
+
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		apierr.WriteError(w, apierr.New(http.StatusUnauthorized, apierr.CodeUnauthenticated,
+			"未登录或登录状态已过期，请重新登录"))
+		return
+	}
+	codes := codesForRoles(user.Roles)
+
+	switch hook.State {
+	case model.HookStateDraft:
+		if !hasCode(codes, codeHookWrite) {
+			apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeForbidden,
+				"draft → review 需要 hook:write 权限（作者本人发起）"))
+			return
+		}
+		updated, err := s.deps.Hooks.UpdateHookState(r.Context(), id, hook.Version, model.HookStateReview, "", 0)
+		if err != nil {
+			writeInternal(w, err)
+			return
+		}
+		apierr.WriteOK(w, toHookItem(updated))
+	case model.HookStateReview:
+		if !hasCode(codes, codeHookApprove) {
+			apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeForbidden,
+				"review → active 需要 hook:approve 权限"))
+			return
+		}
+		if user.Username == hook.Author {
+			apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeForbidden,
+				"审批人不能等于作者（pre 阶段 hook 能碰分区，双人复核前提是审批人与作者不是同一人）"))
+			return
+		}
+		updated, err := s.deps.Hooks.UpdateHookState(r.Context(), id, hook.Version, model.HookStateActive,
+			user.Username, s.clock.Now())
+		if err != nil {
+			writeInternal(w, err)
+			return
+		}
+		apierr.WriteOK(w, toHookItem(updated))
+	default:
+		apierr.WriteError(w, apierr.New(http.StatusConflict, apierr.CodeConflict,
+			"该 hook 已是终态或已完成审批（active/deprecated），不能再次流转"))
+	}
+}
