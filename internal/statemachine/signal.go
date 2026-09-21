@@ -124,8 +124,23 @@ func (m *Machine) ApplySignal(ctx context.Context, taskID string, signal model.S
 //
 // 幂等：已有未过期的 finalize token 时返回同一个。不幂等的后果是重复
 // 渲染（比如 Ubuntu 取两个文件）会换掉 token，而先前写进目标系统的那个
-// 就失效了。
+// 就失效了——这不只是「快速连续调用两次」的场景，并发调用（两个请求几乎
+// 同时到达）同样会踩到：若不加锁，两个 goroutine 都可能读到「尚未签发」，
+// 各自生成不同的 token，只有最后一次 MutateTaskFields 真正落库，另一个
+// 调用方拿到的 token 从未被持久化过，等它被写进目标系统时已经形同虚设
+// （已用并发压测复现，见 concurrency_test.go）。
+//
+// 用 m.lockTask 而不是普通的 GetTask+MutateTaskFields：本方法不涉及状态
+// 转换（不改 task.state），不需要 casRetry 的 CAS 骨架，但仍需要与
+// casRetry 共享同一把「同 taskID 的读-决策-写序列化」的锁——否则本方法
+// 与 casRetry 驱动的其它方法之间、或本方法自己的并发调用之间，仍然会
+// 出现 MutateTaskFields 缺乏版本保护导致的乱序覆盖（见 machine.go
+// Machine.taskLocks 字段文档）。
 func (m *Machine) IssueFinalizeToken(ctx context.Context, taskID string) (model.Task, error) {
+	lock := m.lockTask(taskID)
+	lock.Lock()
+	defer lock.Unlock()
+
 	now := m.clock.Now()
 
 	current, err := m.store.GetTask(ctx, taskID)

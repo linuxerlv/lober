@@ -1,6 +1,7 @@
-// 本文件测试三个并发场景（任务 10）。网关与扫描循环并发调用同一个状态
-// 机，没有竞态检测的通过不算数。用屏障让 goroutine 尽量同时发起，断言
-// 精确计数而不是「至少一个成功」。
+// 本文件测试三个并发场景（任务 10）与并发签发 finalize token 的幂等性
+// （独立验证补充，见 TestConcurrentIssueFinalizeTokenReturnsSameToken）。
+// 网关与扫描循环并发调用同一个状态机，没有竞态检测的通过不算数。用屏障
+// 让 goroutine 尽量同时发起，断言精确计数而不是「至少一个成功」。
 package statemachine
 
 import (
@@ -220,6 +221,71 @@ func TestConcurrentScanAndSignalNoDoneThenFailedByTimeout(t *testing.T) {
 		t.Errorf("ApplySignal(ready) 报告 StateChanged=true（已把任务推进到 done），"+
 			"但最终读到的状态是 %q，want %q —— 说明扫描侧的 CAS 覆盖了一个已经提交的"+
 			"终态，这正是「已 done 又被判超时失败」这个 bug", final.State, model.TaskStateDone)
+	}
+}
+
+// TestConcurrentIssueFinalizeTokenReturnsSameToken 验证并发调用
+// IssueFinalizeToken（不是先后连续调用，是多个 goroutine 几乎同时发起）
+// 时，全部调用方拿到的必须是同一个 token——任务 7 的幂等要求本身不区分
+// 「快速连续调用」与「真正并发调用」两种触发方式，但如果不做同一 taskID
+// 的写入序列化，两个 goroutine 都可能读到「尚未签发」而各自生成不同的
+// token，只有最后一次落库的那个是真的，另一个调用方拿到的 token 从未被
+// 持久化——这是用本测试实测复现过的真实交错，不是理论推测。
+func TestConcurrentIssueFinalizeTokenReturnsSameToken(t *testing.T) {
+	ctx := context.Background()
+	store := fake.NewStore()
+	clock := fake.NewClock()
+	m := newBootTestMachine(store, clock, alwaysPassPrechecker{})
+
+	installingTaskAtPhase(t, store, "task-concurrent-finalize", model.PhasePost, 60)
+
+	const goroutines = 8
+	var barrier sync.WaitGroup
+	barrier.Add(1)
+	var ready sync.WaitGroup
+	ready.Add(goroutines)
+	var wg sync.WaitGroup
+
+	results := make([]model.Task, goroutines)
+	errs := make([]error, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			ready.Done()
+			barrier.Wait()
+			results[idx], errs[idx] = m.IssueFinalizeToken(ctx, "task-concurrent-finalize")
+		}(i)
+	}
+	ready.Wait()
+	barrier.Done()
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d 的 IssueFinalizeToken 返回了错误: %v", i, err)
+		}
+	}
+
+	want := results[0].FinalizeToken
+	if want == "" {
+		t.Fatalf("goroutine 0 拿到的 FinalizeToken 为空，测试前提不成立")
+	}
+	for i := 1; i < goroutines; i++ {
+		if results[i].FinalizeToken != want {
+			t.Errorf("并发 IssueFinalizeToken 返回了不同的 token（goroutine 0=%q, goroutine %d=%q），"+
+				"want 全部相同 —— 不幂等的后果是某个调用方拿到的 token 从未真正落库，"+
+				"等它被写进目标系统时已经形同虚设", want, i, results[i].FinalizeToken)
+		}
+	}
+
+	final, err := store.GetTask(ctx, "task-concurrent-finalize")
+	if err != nil {
+		t.Fatalf("GetTask 失败: %v", err)
+	}
+	if final.FinalizeToken != want {
+		t.Errorf("最终落库的 FinalizeToken = %q, want 与全部调用方拿到的 %q 一致", final.FinalizeToken, want)
 	}
 }
 

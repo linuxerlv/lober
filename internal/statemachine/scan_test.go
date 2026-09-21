@@ -4,6 +4,7 @@ package statemachine
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -317,6 +318,70 @@ func TestScanTimeoutsOneTaskFailureDoesNotAbortRound(t *testing.T) {
 	if got.State != model.TaskStateFailed {
 		t.Errorf("正常超时的任务 State = %q, want %q —— "+
 			"另一个任务处置失败不该影响它被正常处理", got.State, model.TaskStateFailed)
+	}
+}
+
+// erroringMutateStore 包装 contract.Store，对指定 taskID 的
+// MutateTaskFields 调用强制返回一个真实错误（不是 noop、不是
+// contract.ErrConflict）。TestScanTimeoutsOneTaskFailureDoesNotAbortRound
+// 验证的是「任务被并发抢先终态化」这种会走 noop 分支的撞车——
+// handleTimedOutTask 在这种情况下从未真正返回非 nil error，ScanTimeouts
+// 循环里的 continue 分支因此从未被一条会返回真实错误的路径覆盖过。本
+// 类型让 TestScanTimeoutsRealStoreErrorDoesNotAbortRound 能构造一条真正
+// 命中 continue 分支的场景。
+type erroringMutateStore struct {
+	contract.Store
+	failTaskID string
+}
+
+var errScanFalsifyInjected = errors.New("scan_test: 注入的 Store 错误")
+
+func (s *erroringMutateStore) MutateTaskFields(ctx context.Context, taskID string, mutation model.TaskMutation) (model.Task, error) {
+	if taskID == s.failTaskID {
+		return model.Task{}, errScanFalsifyInjected
+	}
+	return s.Store.MutateTaskFields(ctx, taskID, mutation)
+}
+
+// TestScanTimeoutsRealStoreErrorDoesNotAbortRound 验证 handleTimedOutTask
+// 真正返回错误（不是并发终态化导致的 noop）时，ScanTimeouts 仍然继续
+// 处理其余任务——这是计划任务 9「单个任务撞 CAS 冲突不该让其余任务本轮
+// 不被处理」字面要求的行为，与
+// TestScanTimeoutsOneTaskFailureDoesNotAbortRound 互补：那条测试验证的
+// 撞车场景走的是 noop（不报错）分支，从未真正让 handleTimedOutTask 返回
+// 非 nil error，本测试用真实的 Store 错误补上这个分支。
+func TestScanTimeoutsRealStoreErrorDoesNotAbortRound(t *testing.T) {
+	ctx := context.Background()
+	backing := fake.NewStore()
+	clock := fake.NewClock()
+
+	store := &erroringMutateStore{Store: backing, failTaskID: "task-scan-store-error"}
+	m := newBootTestMachine(store, clock, alwaysPassPrechecker{})
+
+	preBudget, _ := model.PhaseBudget(model.PhasePre)
+	enteredAt := clock.Now()
+
+	createTaskAtPhaseEnteredAt(t, backing, "task-scan-store-error", model.TaskStateInstalling, model.PhasePre, enteredAt, 1)
+	normal := createTaskAtPhaseEnteredAt(t, backing, "task-scan-store-error-normal", model.TaskStateInstalling, model.PhasePre, enteredAt, 1)
+
+	clock.Advance(preBudget + time.Second)
+
+	failedCount, err := m.ScanTimeouts(ctx, clock.Now())
+	if err != nil {
+		t.Fatalf("ScanTimeouts 返回了错误: %v，want nil —— 单个任务撞到真实 Store 错误不该让整轮失败", err)
+	}
+	if failedCount != 1 {
+		t.Errorf("一个任务处置时撞到真实 Store 错误、一个正常超时，failedCount = %d, want 1 —— "+
+			"单个任务的处置异常不该让其余任务本轮不被处理", failedCount)
+	}
+
+	got, err := backing.GetTask(ctx, normal.ID)
+	if err != nil {
+		t.Fatalf("GetTask 失败: %v", err)
+	}
+	if got.State != model.TaskStateFailed {
+		t.Errorf("正常超时的任务 State = %q, want %q —— "+
+			"另一个任务撞到真实 Store 错误不该影响它被正常处理", got.State, model.TaskStateFailed)
 	}
 }
 
