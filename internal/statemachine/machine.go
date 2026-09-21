@@ -55,14 +55,12 @@ func New(
 }
 
 // 编译期断言：*Machine 必须同时实现 StateMachine、TokenIssuer 与
-// Prechecker（计划任务 10 会解开；此刻先注释掉，等八个方法全部实现后再
-// 启用，否则在实现过程中每次编译都会因未完成的方法报错）。
-//
-// var (
-// 	_ contract.StateMachine = (*Machine)(nil)
-// 	_ contract.TokenIssuer  = (*Machine)(nil)
-// 	_ contract.Prechecker   = (*Machine)(nil)
-// )
+// Prechecker（计划任务 10）。八个 StateMachine 方法全部实现后启用。
+var (
+	_ contract.StateMachine = (*Machine)(nil)
+	_ contract.TokenIssuer  = (*Machine)(nil)
+	_ contract.Prechecker   = (*Machine)(nil)
+)
 
 // transitionDecision 是 CAS 回调的返回值：描述「基于当前任务算出的目标
 // 转换」。回调必须是纯函数式的（输入当前任务，输出目标转换），不做 IO——
@@ -76,16 +74,27 @@ type transitionDecision struct {
 	// 不可重装）。casRetry 原样返回这个错误，不重试、不做任何写入。
 	rejectErr error
 
-	// mutation 非 nil 时，casRetry 会先调用 MutateTaskFields 写入这些
-	// 运行时字段（token、阶段、attempt 等），再执行状态 CAS。
+	// mutation 非 nil 时，casRetry 会在状态 CAS 成功之后调用
+	// MutateTaskFields 写入这些运行时字段（token、阶段、attempt 等）。
 	//
-	// 顺序是 mutation 先、CAS 后：这是本模块对「状态转换与字段写入必须
-	// 原子」这条计划要求在当前 Store 契约下的最保守处理 —— 见本文件末尾
-	// 的契约缺口说明。mutation 先写的好处是，如果进程在两次调用之间崩溃，
-	// 任务仍停留在旧状态（只是携带了一个尚未生效的新 token/phase），比
-	// 「状态已经推进但字段没写」这种半成品更安全：旧状态下任务不会被误认
-	// 为已经进入新阶段，且遗留的 token/字段会在下一次同样的转换尝试时被
-	// 覆盖。
+	// 顺序是 CAS 先、mutation 后——这是本模块对「状态转换与字段写入必须
+	// 原子」这条计划要求在当前 Store 契约下的最保守处理，见本文件末尾
+	// 的契约缺口说明。之所以是这个顺序而不是反过来：MutateTaskFields
+	// 完全没有 CAS 语义（不接受期望版本号，任何调用都会无条件生效），
+	// 若先 mutate 再 CAS，两个并发的失败者会在各自的 CAS 真正执行之前
+	// 都先把 mutation 写进库里——即使随后只有一个的 CAS 能成功，失败者
+	// 的 mutation 副作用已经真实发生过（例如 attempt_count 被写了两次
+	// 自增的中间值），这是一个已经在并发测试里实测复现过的 bug，不是
+	// 假设。CAS 先执行则只有真正赢得 CAS 的那个 goroutine 才会执行
+	// 后续的 mutation，不会有「输家也写了一次」的副作用。
+	//
+	// 代价：进程在 CAS 成功、mutation 执行之前崩溃，会留下「状态已经是
+	// newState，但 token/phase 等字段还是旧值」的任务——这正是计划里
+	// 提醒过的「已 booting 但无 token」的那种半成品。这是本模块在当前
+	// Store 契约（MutateTaskFields 无 CAS 保护）下能做到的最好结果：
+	// 该半成品有确定的止损（booting 阶段仍有 15 分钟预算，超时扫描会
+	// 按 attempt 上限判定回 pending 或 failed，不会无限期挂住），而
+	// mutate-first 顺序下的重复写副作用没有对应的止损机制。
 	mutation *model.TaskMutation
 
 	// newState 非空时，casRetry 会执行
@@ -101,8 +110,12 @@ type casRetryFunc func(current model.Task) transitionDecision
 
 // casRetry 是六个改状态方法共用的 CAS 重试骨架（计划任务 1）。
 //
-// 流程：重读任务 → 调 decide 得到目标转换 → 执行（或跳过）写入 → 撞 CAS
-// 冲突则重试，最多 maxCASRetries 轮；重试用尽返回 contract.ErrConflict。
+// 流程：重读任务 → 调 decide 得到目标转换 → 若有 newState 先执行 CAS
+// （撞冲突则重试，最多 maxCASRetries 轮，重试用尽返回
+// contract.ErrConflict）→ CAS 成功（或本次转换不改变 state）之后再执行
+// mutation。CAS 必须先于 mutation：MutateTaskFields 没有版本保护，
+// 先 mutate 会让并发的失败者也执行一次写副作用（见 transitionDecision.
+// mutation 字段文档）。
 //
 // 三种必须处理的情形：
 //   - decide 返回 noop：跳过写入，直接返回当前任务
@@ -126,6 +139,20 @@ func (m *Machine) casRetry(ctx context.Context, taskID string, decide casRetryFu
 		}
 
 		result := current
+		if decision.newState != "" {
+			result, err = m.store.CASTaskState(ctx, taskID, current.State, current.Version, decision.newState)
+			if err != nil {
+				if errors.Is(err, contract.ErrConflict) {
+					lastErr = err
+					// 撞冲突：下一轮循环会重新 GetTask、重新调用 decide，
+					// 用最新版本号重试——不执行 mutation，避免输家产生
+					// 写副作用。
+					continue
+				}
+				return model.Task{}, err
+			}
+		}
+
 		if decision.mutation != nil {
 			result, err = m.store.MutateTaskFields(ctx, taskID, *decision.mutation)
 			if err != nil {
@@ -133,21 +160,7 @@ func (m *Machine) casRetry(ctx context.Context, taskID string, decide casRetryFu
 			}
 		}
 
-		if decision.newState == "" {
-			// 本次转换不改变 state（只有 mutation），mutation 本身不走
-			// CAS 条件，因此不存在「冲突」这一说——直接返回。
-			return result, nil
-		}
-
-		result, err = m.store.CASTaskState(ctx, taskID, current.State, current.Version, decision.newState)
-		if err == nil {
-			return result, nil
-		}
-		if !errors.Is(err, contract.ErrConflict) {
-			return model.Task{}, err
-		}
-		lastErr = err
-		// 撞冲突：下一轮循环会重新 GetTask，用最新版本号重试。
+		return result, nil
 	}
 	return model.Task{}, lastErr
 }
