@@ -121,6 +121,13 @@ func ExtractWindows(
 				"制品集（SPEC §2.1、§0.3）", declaredFirmware)
 	}
 
+	if detector == nil {
+		return model.ArtifactPaths{}, fmt.Errorf(
+			"imports: ExtractWindows 的 detector 参数为 nil——调用方必须注入一个 WimArchDetector" +
+				"实现，否则位宽校验这道导入期前哨完全跑不起来（计划任务 1、SPEC §4.6），" +
+				"这里明确报错而不是让后面的 detector.DetectFirmware 调用直接 panic")
+	}
+
 	for _, f := range windowsArtifactFiles {
 		p := f.path(ext)
 		if p == "" {

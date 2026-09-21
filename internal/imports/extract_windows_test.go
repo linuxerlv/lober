@@ -258,6 +258,30 @@ func TestExtractWindows_ArchDetectorError_PropagatesAsImportFailure(t *testing.T
 	}
 }
 
+// TestExtractWindows_NilDetector_ReturnsErrorNotPanic 是复核阶段发现并修复的
+// 回归测试：detector 参数为 nil 时，原实现会在调用
+// detector.DetectFirmware(...) 处直接 panic（nil interface 上调方法）——这与
+// 本函数其它每一处前置校验的风格矛盾：所有已知的缺失/不一致输入
+// （declaredFirmware 非法、四个文件缺任一、位宽不符）都返回一条具体的 error，
+// 只有"调用方忘了注入 detector"这一种输入方式会让整个导入 job 直接崩溃，而
+// 不是走 job.go 的 fail() 分支置为 failed 状态。对运维而言两者的现场完全
+// 不同：一个是制品集变成 failed 且有原因，另一个是导入 job 的 goroutine
+// panic（若调用方没有 recover，会拖垫整个进程）。修复：在触达 detector 之前
+// 显式校验 nil 并返回 error。
+func TestExtractWindows_NilDetector_ReturnsErrorNotPanic(t *testing.T) {
+	root := sampleWindowsRoot()
+	ext := windowsExternalFiles(t, []byte("uefi-winpe-bytes"))
+	destDir := t.TempDir()
+
+	_, err := ExtractWindows(root, ext, destDir, model.FirmwareUEFI, nil)
+	if err == nil {
+		t.Fatal("detector 为 nil 时应返回错误，不应假装成功")
+	}
+	if !strings.Contains(err.Error(), "detector") {
+		t.Errorf("错误信息应具体指出问题出在 detector 参数，got: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestExtractWindows：同一版本导两个制品集（不同固件）互不冲突
 // ---------------------------------------------------------------------------
