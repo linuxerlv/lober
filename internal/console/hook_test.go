@@ -227,6 +227,254 @@ func TestHook_ValidateSkipsPowerShellWithExplanation(t *testing.T) {
 	}
 }
 
+// TestHook_RejectReturnsReviewToDraft 锁住「驳回把 review 状态回退到
+// draft，且不引入新状态」——这是本次契约变更的核心行为（SPEC §2.2 冻结了
+// HookState 只有四个取值，驳回不能发明第五个）。
+func TestHook_RejectReturnsReviewToDraft(t *testing.T) {
+	ts := newTestServer(t)
+	authorTok := ts.login("carol-author")
+	approverTok := ts.login("dave-approver")
+
+	rr := ts.doJSON("POST", "/console/v1/hooks", authorTok, validHookBody())
+	var created struct {
+		Data hookItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &created)
+
+	// draft → review。
+	rr = ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/approve", authorTok, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("draft→review 应成功: %d, body=%s", rr.Code, rr.Body.String())
+	}
+
+	// review → draft（驳回），approver 填理由。
+	rr = ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/reject", approverTok,
+		map[string]string{"reason": "脚本里硬编码了内网密码，需要改成读环境变量"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("review→draft（驳回）应成功: %d, body=%s", rr.Code, rr.Body.String())
+	}
+	var rejected struct {
+		Data hookItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &rejected)
+	if rejected.Data.State != "draft" {
+		t.Fatalf("驳回后 state 应回到 draft，实际 %q（HookState 四个取值是冻结的，"+
+			"驳回不能发明新状态）", rejected.Data.State)
+	}
+}
+
+// TestHook_RejectRejectsNonReviewStates 锁住「只有 review 状态能被驳回」
+// ——draft 驳回没有意义（还没提交审批），active 已经生效（要停用是
+// deprecate 不是 reject），都要拒绝并给出可读原因（计划任务硬约束）。
+func TestHook_RejectRejectsNonReviewStates(t *testing.T) {
+	ts := newTestServer(t)
+	authorTok := ts.login("carol-author")
+	approverTok := ts.login("dave-approver")
+
+	t.Run("draft", func(t *testing.T) {
+		rr := ts.doJSON("POST", "/console/v1/hooks", authorTok, validHookBody())
+		var created struct {
+			Data hookItem `json:"data"`
+		}
+		decodeJSON(t, rr.Body.Bytes(), &created)
+
+		rr = ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/reject", approverTok,
+			map[string]string{"reason": "理由"})
+		var env struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		}
+		decodeJSON(t, rr.Body.Bytes(), &env)
+		if env.Code != int(apierr.CodeConflict) {
+			t.Errorf("draft 状态驳回应回 CodeConflict，实际 code=%d, message=%q", env.Code, env.Message)
+		}
+	})
+
+	t.Run("active", func(t *testing.T) {
+		rr := ts.doJSON("POST", "/console/v1/hooks", authorTok, validHookBody())
+		var created struct {
+			Data hookItem `json:"data"`
+		}
+		decodeJSON(t, rr.Body.Bytes(), &created)
+		ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/approve", authorTok, nil)
+		ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/approve", approverTok, nil)
+
+		rr = ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/reject", approverTok,
+			map[string]string{"reason": "理由"})
+		var env struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		}
+		decodeJSON(t, rr.Body.Bytes(), &env)
+		if env.Code != int(apierr.CodeConflict) {
+			t.Errorf("active 状态驳回应回 CodeConflict（要停用应用 deprecate 不是 reject），"+
+				"实际 code=%d, message=%q", env.Code, env.Message)
+		}
+	})
+}
+
+// TestHook_RejectRequiresApprovePermission 锁住「无 hook:approve 权限的
+// 角色驳回被拒」——驳回同样是审批权，不是作者自己能做的事（计划任务硬
+// 约束，与 approve 的 review→active 分支对称）。
+func TestHook_RejectRequiresApprovePermission(t *testing.T) {
+	ts := newTestServer(t)
+	authorTok := ts.login("carol-author")
+
+	rr := ts.doJSON("POST", "/console/v1/hooks", authorTok, validHookBody())
+	var created struct {
+		Data hookItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &created)
+	ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/approve", authorTok, nil)
+
+	// 用 viewer（无 hook:approve 权限码）尝试驳回。
+	viewerTok := ts.login("alice-viewer")
+	rr = ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/reject", viewerTok,
+		map[string]string{"reason": "理由"})
+	var env struct {
+		Code int `json:"code"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &env)
+	if env.Code != int(apierr.CodeForbidden) {
+		t.Errorf("无 hook:approve 权限的角色驳回应被拒绝，实际 code=%d", env.Code)
+	}
+}
+
+// TestHook_RejectAuthorCannotRejectOwnHook 锁住「作者不能驳回自己的
+// hook」——与 approve 的「审批人不能等于作者」对称：本测试用
+// frank-both（同时持有 hook-author 与 hook-approver 两个角色）复现
+// TestHook_ApproverCannotEqualAuthorEvenWithApprovePermission 的证伪逻辑，
+// 确认拒绝原因是「同人判定」本身，而不是权限码不够。
+func TestHook_RejectAuthorCannotRejectOwnHook(t *testing.T) {
+	ts := newTestServer(t)
+
+	const bothUsername = "frank-both-reject"
+	const bothPassword = "password123"
+	hash, err := bcrypt.GenerateFromPassword([]byte(bothPassword), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("生成 bcrypt 哈希失败: %v", err)
+	}
+	ts.Server.deps.Users = append(ts.Server.deps.Users, AuthUser{
+		Name:       bothUsername,
+		BcryptHash: string(hash),
+		Roles:      []string{roleHookAuthor, roleHookApprover},
+	})
+
+	loginRR := ts.doJSON("POST", "/console/v1/auth/login", "", map[string]string{
+		"username": bothUsername, "password": bothPassword,
+	})
+	var loginEnv struct {
+		Data struct {
+			AccessToken string `json:"accessToken"`
+		} `json:"data"`
+	}
+	decodeJSON(t, loginRR.Body.Bytes(), &loginEnv)
+	tok := loginEnv.Data.AccessToken
+
+	rr := ts.doJSON("POST", "/console/v1/hooks", tok, validHookBody())
+	var created struct {
+		Data hookItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &created)
+	ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/approve", tok, nil)
+
+	// 同一账号既是作者也持有 hook:approve 权限码，此时唯一能解释拒绝的
+	// 原因就是「作者不能驳回自己的 hook」这条判据本身。
+	rr = ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/reject", tok,
+		map[string]string{"reason": "理由"})
+	var env struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &env)
+	if env.Code != int(apierr.CodeForbidden) {
+		t.Errorf("持有 hook:approve 权限码的作者本人驳回自己的 hook 仍应被拒（作者不能驳回自己的 hook），"+
+			"实际 code=%d, message=%q", env.Code, env.Message)
+	}
+}
+
+// TestHook_RejectReasonIsQueryableViaAuditLog 锁住「驳回理由能被查到」
+// ——本项目里 model.Hook 没有专门字段存理由（不能改 model，它是冻结契约），
+// 选定方案是写入审计日志的 detail 字段（AuditLogger 已有该职责）。本测试
+// 断言 audit 记录里出现 action=hook.reject、且 detail 包含理由原文。
+//
+// 契约缺口（详见 docs/contracts/http-console.md 变更记录与本轮
+// contractGaps）：AuditLogger 接口只有 Log（写），没有查询方法，整个
+// console 包也没有任何读取审计日志的 HTTP 端点——因此「审计日志里查得到」
+// 这句话目前只在服务端内部成立（可用于日后补一个审计查询端点，或运维
+// 直接查存储层），作者本人无法通过现有任何 API 拿到这条理由。本测试与
+// 响应体回显理由（见下一个测试）共同构成当前最保守的方案。
+func TestHook_RejectReasonIsQueryableViaAuditLog(t *testing.T) {
+	ts := newTestServer(t)
+	authorTok := ts.login("carol-author")
+	approverTok := ts.login("dave-approver")
+
+	rr := ts.doJSON("POST", "/console/v1/hooks", authorTok, validHookBody())
+	var created struct {
+		Data hookItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &created)
+	ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/approve", authorTok, nil)
+
+	const reason = "接口调用没有做超时保护，容易把主机名单请求卡死"
+	rr = ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/reject", approverTok,
+		map[string]string{"reason": reason})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("驳回应成功: %d, body=%s", rr.Code, rr.Body.String())
+	}
+
+	// 响应体本身回显理由——这是理由在「查得到」这件事上唯二的保障之一
+	// （另一个是下方的审计日志），因为驳回没有改变正文，无法靠正文差异
+	// 推断理由。
+	var rejected struct {
+		Data hookItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &rejected)
+
+	found := false
+	for _, e := range ts.Audit.all() {
+		if e.Action == "hook.reject" && e.Target == created.Data.ID && containsSubstr(e.Detail, reason) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("审计日志里应有一条 action=hook.reject、detail 含理由原文的记录，实际 entries=%+v", ts.Audit.all())
+	}
+}
+
+// TestHook_RejectDoesNotModifyBodyOrDigest 锁住「驳回不改动正文与
+// digest」——这是本轮测试里最重要的一条：SPEC §2.7 的浮动引用防护要求
+// 「hook 正文不可变，模板 pin 的是 digest，审批过的内容不会被偷换」。
+// 如果驳回顺手改了 body/bodySha256，就意味着一个已经进入过 review 阶段
+// 的正文可以被审批人以外的路径悄悄替换——这正是 §2.7 要防的事。
+func TestHook_RejectDoesNotModifyBodyOrDigest(t *testing.T) {
+	ts := newTestServer(t)
+	authorTok := ts.login("carol-author")
+	approverTok := ts.login("dave-approver")
+
+	rr := ts.doJSON("POST", "/console/v1/hooks", authorTok, validHookBody())
+	var created struct {
+		Data hookItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &created)
+	ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/approve", authorTok, nil)
+
+	rr = ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/reject", approverTok,
+		map[string]string{"reason": "理由"})
+	var rejected struct {
+		Data hookItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &rejected)
+
+	if rejected.Data.Body != created.Data.Body {
+		t.Errorf("驳回不应改动正文，创建时 body=%q，驳回后 body=%q", created.Data.Body, rejected.Data.Body)
+	}
+	if rejected.Data.BodySHA256 != created.Data.BodySHA256 {
+		t.Errorf("驳回不应改动 digest（正文没变，digest 就不该变；正文被改动意味着审批过的内容能被偷换，"+
+			"SPEC §2.7），创建时 digest=%q，驳回后 digest=%q", created.Data.BodySHA256, rejected.Data.BodySHA256)
+	}
+}
+
 func containsSubstr(s, sub string) bool {
 	return len(s) >= len(sub) && (func() bool {
 		for i := 0; i+len(sub) <= len(s); i++ {

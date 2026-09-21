@@ -8,6 +8,21 @@
 > 类型字段名对应 `internal/core/model`：`Task`（task.go）、`Host`/`ArtifactSet`
 > （inventory.go）、`Hook`/`Template`/`HookRef`（authoring.go）、`TaskEvent`
 > （event.go）。
+>
+> **变更记录：新增 `POST /hooks/{id}/reject`（驳回 hook 审批）。** 原因：本
+> 文档冻结时全文搜索 reject / 驳回 / decline 零匹配——`POST /hooks/{id}/approve`
+> 只能把 hook 从 `draft` 推进到 `review` 再到 `active`，一旦提交 `review`
+> 就无法退回，审批人若发现问题（脚本有安全隐患、参数声明有误等）没有任何
+> 拒绝入口，只能眼看着 hook 卡在 `review` 或被迫违心通过。这是一个被独立
+> 核实过的真实契约缺口（grep 契约文档零匹配 + 读 `internal/console/hook.go`
+> 确认只有 approve 一个流转端点），经编排方核实后授权补上。新增端点编号为
+> `28`（追加在端点总表末尾，不重排 12-27 号——本次是新增能力，不是对既有
+> 端点的修订，重排会让已经存在的 PR/评审记录里的端点编号失去指代意义）。
+> 影响模块：`internal/console`（新增 `handleRejectHook`，与既有
+> `handleApproveHook` 对称）；不影响 `internal/core/model`（`HookState` 四个
+> 取值不变，驳回只是 `review → draft` 的状态回退）；不影响
+> `internal/store/sqlite`、`internal/core/fake`（复用既有的
+> `HookStore.UpdateHookState`，未新增 store 方法）。
 
 ## 响应包裹格式
 
@@ -81,7 +96,7 @@ token 无效）时返回 HTTP `401`，body 仍为上述失败形态。
 | 9 | POST | `/console/v1/artifact-sets/{id}/verify` | `admin` | `null`（异步重算，立即返回接受） |
 | 10 | DELETE | `/console/v1/artifact-sets/{id}` | `admin` | `null` |
 
-### hook（6 个）
+### hook（7 个）
 
 | # | 方法 | 路径 | 权限 | 返回 |
 |---|---|---|---|---|
@@ -91,6 +106,7 @@ token 无效）时返回 HTTP `401`，body 仍为上述失败形态。
 | 14 | POST | `/console/v1/hooks/{id}/validate` | `hook-author` | `HookValidateResult` |
 | 15 | GET | `/console/v1/hooks/{id}/versions` | 已登录 | `HookItem[]` |
 | 16 | POST | `/console/v1/hooks/{id}/approve` | `hook-approver`（`hook:approve`） | 更新后的 `HookItem` |
+| 28 | POST | `/console/v1/hooks/{id}/reject` | `hook-approver`（`hook:approve`） | 更新后的 `HookItem`（附回显的 `reason`） |
 
 ### 模板（4 个）
 
@@ -350,6 +366,57 @@ interpreter 为 bash）、`requires` 里声明的 `facts` 是否为 `model.IsFac
 `review → active` 必须 `hook-approver`（`hook:approve`），且**审批人不能等于
 作者**（SPEC §9.4：`pre` 阶段 hook 能碰分区，需要独立审批权限，双人复核的
 前提是审批人与作者不是同一人）——违反 → `CodeForbidden`。
+
+#### `POST /hooks/{id}/reject`（本次变更新增，见文首「变更记录」）
+
+`review → draft` 单步回退，与 `POST /hooks/{id}/approve` 对称。**不引入新
+状态**——`model.HookState` 的四个取值（`draft`/`review`/`active`/
+`deprecated`）是冻结契约，驳回只是把状态改回 `draft`，不是发明第五个值。
+
+**入参：**
+
+```json
+{"reason": "string"}
+```
+
+`reason` 必填且不能是空白字符串——驳回必须能填理由，否则作者不知道为什么
+被拒。为空 → `CodeBadRequest`。
+
+**成功：** `data = HookItem` 附加一个 `reason` 字段（回显请求里的理由）：
+
+```json
+{
+  "id": "string", "...": "...余下字段与 HookItem 相同，state 变回 draft",
+  "reason": "string"
+}
+```
+
+**失败：**
+
+- 当前 `state` 不是 `review`（即 `draft`/`active`/`deprecated`）→
+  `CodeConflict`，`message` 说明具体原因（`draft` 驳回没有意义，还没提交
+  审批；`active` 已经生效，要停用应该用 `deprecate` 而不是 `reject`；
+  `deprecated` 已是终态）。
+- 无 `hook:approve` 权限码 → `CodeForbidden`（驳回同样是审批权，不是作者
+  自己能做的事，与 approve 的 `review → active` 分支权限要求一致）。
+- 审批人（此处即驳回人）等于作者 → `CodeForbidden`（与 approve 的
+  「审批人不能等于作者」对称：作者不能驳回自己的 hook）。
+
+**不变量：** 驳回不改动 `body`/`bodySha256`。SPEC §2.7 要求 hook 正文
+不可变、模板 pin 住的是 digest——驳回只是状态回退，绝不触碰正文，否则就
+是「审批过的内容被偷换」的反面案例。
+
+**理由的可查性（契约缺口，如实记录）：** `model.Hook`没有专门字段存驳回
+理由（该 struct 是冻结契约，本次变更不改它）。理由通过两条路径暴露：
+(1) 本端点的响应体原样回显；(2) 写入一条 `action = "hook.reject"` 的审计
+日志（`internal/console/audit.go` 的 `AuditLogger.Log`，`detail` 字段含
+理由原文）。**但审计日志目前只能写、不能读**——`contract.AuditLogger`
+接口只有 `Log` 方法，全项目没有任何读取/查询审计日志的存储方法或 HTTP
+端点。因此理由的"可查"目前只在驳回发生的**当次响应**里对调用方成立；
+若作者当时不在场（例如异步查看被驳回的 hook），现有系统没有任何 API
+能让他事后查到理由。这不是本次变更引入的缺口——审计日志本来就没有读
+接口——但本次变更是第一个「理由的可查性」依赖这条读路径的场景，因此在
+此明确记录，供后续补一个审计查询端点时参考。
 
 ---
 

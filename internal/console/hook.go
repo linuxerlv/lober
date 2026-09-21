@@ -31,6 +31,11 @@ func (s *Server) routesHook() {
 	// 作者自己发起，review→active 需要 hook:approve 且审批人不能等于
 	// 作者），不在路由层用单一权限码卡死。
 	s.handleFunc("POST", "/hooks/{id}/approve", "", "hook.approve", s.handleApproveHook)
+	// reject 与 approve 对称：权限判定（hook:approve 且审批人不能等于
+	// 作者）与状态校验（只有 review 能被驳回）都在 handler 内部完成，
+	// 同样不在路由层用单一权限码卡死（本次契约变更，见
+	// docs/contracts/http-console.md「变更记录」）。
+	s.handleFunc("POST", "/hooks/{id}/reject", "", "hook.reject", s.handleRejectHook)
 }
 
 // hookItem 是响应形态，字段名与 model.Hook 对应。
@@ -510,4 +515,99 @@ func (s *Server) handleApproveHook(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteError(w, apierr.New(http.StatusConflict, apierr.CodeConflict,
 			"该 hook 已是终态或已完成审批（active/deprecated），不能再次流转"))
 	}
+}
+
+// hookRejectRequest 是 POST /hooks/{id}/reject 的入参形态：驳回必须能填
+// 理由（否则作者不知道为什么被拒），理由是必填字段。
+type hookRejectRequest struct {
+	Reason string `json:"reason"`
+}
+
+// hookRejectResponse 在 HookItem 之外附带回显的驳回理由。这是本次契约
+// 变更下「理由能被查到」的第一层保障：审计日志是第二层（写入
+// action=hook.reject 的 detail），但 AuditLogger 接口只写不读、console
+// 包也没有任何读取审计日志的 HTTP 端点，因此响应体回显是当前唯一能保证
+// 「调用方（前端）当场拿到理由」的路径（详见 contractGaps）。
+type hookRejectResponse struct {
+	hookItem
+	Reason string `json:"reason"`
+}
+
+// handleRejectHook 处理 POST /hooks/{id}/reject：review → draft 单步回退，
+// 与 handleApproveHook 对称（本次契约变更，见
+// docs/contracts/http-console.md「变更记录」）。
+//
+// 设计要点：
+//   - HookState 的四个取值是冻结的（model.HookState），驳回只能落在
+//     draft/review/active/deprecated 之内——回退到 draft，不发明新状态。
+//   - 只有 review 状态能被驳回：draft 驳回没有意义（还没提交审批），
+//     active 已经生效（要停用是 deprecate 不是 reject）；两者都回
+//     CodeConflict，理由写清楚，不是笼统的「状态不对」。
+//   - 权限与 approve 的 review→active 分支完全一致：需要 hook:approve，
+//     且审批人不能等于作者——驳回同样是审批权，不是作者自己能做的事。
+//   - 不改动 Body/BodySHA256：SPEC §2.7 要求 hook 正文不可变，驳回只是
+//     状态回退，不是内容变更；UpdateHookState 本身就不接受修改 Body，
+//     这条约束由 store 层的方法签名保证，handler 无法意外绕过。
+//   - 理由不进 model.Hook（该 struct 是冻结契约，不能加字段）：写入
+//     审计日志的 detail 字段，并在响应体里原样回显。
+func (s *Server) handleRejectHook(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	hook, err := s.deps.Hooks.GetHook(r.Context(), id, 0)
+	if err != nil {
+		writeInternal(w, err)
+		return
+	}
+
+	var req hookRejectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "请求体不是合法的 JSON"))
+		return
+	}
+	if strings.TrimSpace(req.Reason) == "" {
+		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest,
+			"reason 不能为空：驳回必须填理由，否则作者不知道为什么被拒"))
+		return
+	}
+
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		apierr.WriteError(w, apierr.New(http.StatusUnauthorized, apierr.CodeUnauthenticated,
+			"未登录或登录状态已过期，请重新登录"))
+		return
+	}
+	codes := codesForRoles(user.Roles)
+
+	if hook.State != model.HookStateReview {
+		apierr.WriteError(w, apierr.New(http.StatusConflict, apierr.CodeConflict,
+			fmt.Sprintf("只有 review 状态能被驳回，当前状态是 %q（draft 驳回没有意义，"+
+				"active 要停用应该用 deprecate 而不是 reject）", hook.State)))
+		return
+	}
+	if !hasCode(codes, codeHookApprove) {
+		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeForbidden,
+			"驳回需要 hook:approve 权限（驳回同样是审批权，不是作者自己能做的事）"))
+		return
+	}
+	if user.Username == hook.Author {
+		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeForbidden,
+			"作者不能驳回自己的 hook（与审批对称：审批人不能等于作者）"))
+		return
+	}
+
+	updated, err := s.deps.Hooks.UpdateHookState(r.Context(), id, hook.Version, model.HookStateDraft, "", 0)
+	if err != nil {
+		writeInternal(w, err)
+		return
+	}
+
+	if s.deps.Audit != nil {
+		detail := fmt.Sprintf("reason=%s", req.Reason)
+		// 错误被有意吞掉：审计写入失败不影响主流程（与 auditMiddleware
+		// 的既有约定一致，计划任务 2）。这里额外单独调用（而不是只靠
+		// auditMiddleware 记的那条不含理由的记录）是因为 auditMiddleware
+		// 的 detail 固定是 "client_ip=..."，装不下理由原文。
+		_ = s.deps.Audit.Log(r.Context(), user.Username, "hook.reject", id, detail)
+	}
+
+	apierr.WriteOK(w, hookRejectResponse{hookItem: toHookItem(updated), Reason: req.Reason})
 }
