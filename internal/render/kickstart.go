@@ -137,6 +137,11 @@ func baseDirectives(ctx model.RenderContext) string {
 	b.WriteString("bootloader --location=mbr\n")
 	fmt.Fprintf(&b, "clearpart --all --drives=%s\n", diskByID)
 	fmt.Fprintf(&b, "part / --fstype=xfs --grow --ondisk=%s\n", diskByID)
+	// 这是装机 VLAN 上安装器自身正在使用的网卡（机器正是通过它 PXE 引导
+	// 到这里的），激活它不违反 SPEC §5.7 的"业务网写配置但不激活"——那条
+	// 规则约束的是 %post 阶段用户 hook 可能配置的业务网（另一 VLAN），与
+	// 这里的装机网是两个完全不同的网络。装机 VLAN 的 DHCP 本就应保持到
+	// rebooting 信号发出（§5.7），这行正是维持这一点的基础指令。
 	b.WriteString("network --bootproto=dhcp --activate\n")
 	// root 不设可复用密码：锁定密码登录，只允许 SSH 公钥登录（MVP 无 TLS，
 	// 应答文件被截获也换不成持久访问，SPEC §1.5）。
