@@ -112,14 +112,15 @@ func TestRenderer_UbuntuAcceptsMetaData(t *testing.T) {
 	r := &Renderer{}
 	ctx := injectionTestCtx()
 	ctx.Artifact.OSFamily = model.OSFamilyUbuntu
+	ctx.Facts = cloneFacts(ctx.Facts)
+	ctx.Facts[model.FactHostname] = "web-01"
 
-	_, err := r.RenderAnswerFile(ctx, "meta-data")
-	if err == nil {
-		t.Fatal("Ubuntu 家族的渲染在 MVP 范围内未实现，RenderAnswerFile 应返回错误")
+	out, err := r.RenderAnswerFile(ctx, "meta-data")
+	if err != nil {
+		t.Fatalf("Ubuntu 家族的 meta-data 渲染在 phase2-01 已实现，RenderAnswerFile 不应返回错误: %v", err)
 	}
-	if strings.Contains(err.Error(), "文件名") || strings.Contains(err.Error(), "不一致") {
-		t.Errorf("meta-data 应被文件名校验层面接受，此处的错误应是「未实现」而不是"+
-			"「文件名不匹配」，got: %v", err)
+	if out == "" {
+		t.Error("meta-data 渲染结果不应为空")
 	}
 
 	// 对比：一个既不是 user-data 也不是 meta-data 的文件名，才应该在文件名

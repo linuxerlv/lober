@@ -42,10 +42,24 @@ func (r *Renderer) RenderAnswerFile(ctx model.RenderContext, fileName string) (s
 	switch ctx.Artifact.OSFamily {
 	case model.OSFamilyRHEL:
 		return AssembleKickstart(ctx)
-	case model.OSFamilyUbuntu, model.OSFamilyDebian, model.OSFamilySUSE,
-		model.OSFamilyWindows, model.OSFamilyESXi:
+	case model.OSFamilyDebian:
+		return AssemblePreseed(ctx)
+	case model.OSFamilyUbuntu:
+		// meta-data 是 validateAnswerFileName 额外放行的第二个文件名
+		// （NoCloud 要求该目录下 user-data 与 meta-data 都存在），必须在
+		// 这里单独分派到 RenderMetaData——若不判断 fileName，请求
+		// meta-data 时会被误当作 user-data 走 AssembleAutoinstall，产出
+		// 内容错误但格式仍合法的 YAML，cloud-init 会因为缺少真正的
+		// meta-data 内容（实例 id/主机名）而在后续阶段行为异常，且这类
+		// 错误不会在渲染层报错——必须在分派处就分清楚两个文件名各自对应
+		// 哪个渲染函数。
+		if fileName == "meta-data" {
+			return RenderMetaData(ctx)
+		}
+		return AssembleAutoinstall(ctx)
+	case model.OSFamilySUSE, model.OSFamilyWindows, model.OSFamilyESXi:
 		// SUSE 用 AutoYaST，不是 kickstart（SPEC §5.1、计划任务 6/8 的
-		// 反复警示）。这里的分支结构本身就是防线：SUSE 与其它四个未实现
+		// 反复警示）。这里的分支结构本身就是防线：SUSE 与其它两个未实现
 		// 家族一样落进"未实现"分支，绝不会有任何路径把 SUSE 送进
 		// AssembleKickstart——那是 RHEL 专属的 case，SUSE 不会匹配到它。
 		return "", unimplementedFamilyError(ctx.Artifact.OSFamily)

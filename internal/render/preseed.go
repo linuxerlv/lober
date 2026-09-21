@@ -1,0 +1,344 @@
+// 本文件实现 Debian preseed 应答文件的组装（对应实现计划 phase2-01 任务
+// 2，依据 SPEC §4.4、§4.5、§5.2）。
+//
+// preseed 的语法是 debconf 预置项：每行「所有者 键 类型 值」四段，用 tab
+// 分隔（真实 debian-installer 的 preseed.cfg 惯例）。与 kickstart 的脚本式
+// 语法不同，preseed 本身不是 shell——hook 的执行动作要通过
+// `preseed/late_command`（安装阶段末尾，d-i 会执行这个值指定的 shell
+// 命令）间接触发，因此 pre/post-nochroot/post 三个 installer 阶段的
+// hook 调用不是"直接写在段落里"，而是"生成一段安装期执行的 shell，塞进
+// late_command 的值"。
+//
+// 跨家族映射（SPEC §5.2）：
+//
+//	pre            → preseed/early_command（d-i 环境，分区之前）
+//	post-nochroot  → preseed/late_command，命令不加 in-target（目标盘已挂
+//	                 但仍在 d-i 环境执行，对应 kickstart 的 %post --nochroot）
+//	post           → preseed/late_command，命令加 in-target 前缀（chroot
+//	                 进目标系统执行，对应 kickstart 的 %post）
+//
+// 两个阶段共用同一个 late_command 键，靠"是否加 in-target 前缀"区分能力
+// 边界——这正是 SPEC §5.2"阶段不是排序，是能力边界"在 Debian 下的具体
+// 体现：post-nochroot 与 post 的 hook 若放错，不是执行顺序错了，而是
+// post-nochroot 的 hook 一旦被错误地加上 in-target，会在目标系统里执行
+// 一个此刻还没有完整依赖（比如目标系统里可能还没有某个 nochroot 阶段本该
+// 直接操作宿主工具才能做的事）的命令；反之 post 的 hook 若漏了 in-target，
+// 会在 installer 环境里跑，装的包、建的用户全部落空。
+package render
+
+import (
+	"encoding/base64"
+	"fmt"
+	"strings"
+
+	"github.com/lober/lober/internal/core/model"
+)
+
+// base64Encode 是标准 base64（非 URL 安全变体）编码，供 lateCommandValue
+// 把可能含引号与特殊字符的脚本正文安全地塞进 debconf 单行值。
+func base64Encode(s string) string {
+	return base64.StdEncoding.EncodeToString([]byte(s))
+}
+
+// debconfLine 渲染一行「所有者 键 类型 值」的 debconf 预置项，字段间用
+// tab 分隔（真实 preseed.cfg 惯例，debconf-set-selections 也按此解析）。
+//
+// value 在写入前经 sanitizeDebconfValue 处理——四段式是靠 tab 分隔、靠
+// 换行分行的纯文本格式，value 里若含裸 tab 或换行，就能伪造出额外的列或
+// 独立一行（真的验证过：把 ctx.Facts[LOBER_HOSTNAME] 设成"web01\nd-i\t
+// passwd/root-login\tboolean\ttrue"会让 preseedNetwork 产出一条独立的
+// 「passwd/root-login=true」数据行，覆盖 preseedAccountAndPackages 固定
+// 写的「false」，这正是 SPEC §5.6 强调的"账户策略不可被绕过"这条不变量
+// 会被打破的方式）。value 的来源里 ctx.Facts[LOBER_HOSTNAME] 直接来自
+// 表单 formData（internal/provider/resolve.go 的 Resolve 方法），不经过
+// InlineParams/guard 校验——ResolvedParams 与 Facts 是两个独立的字符串
+// 表，注入防护只覆盖了前者（injection_test.go 端到端验证的是
+// ResolvedParams），后者目前没有值级校验。在契约层补上 hostname 格式
+// 校验之前，本函数在写入点做最小化清理：忠实反映一条 SPEC §5.4 事实——
+// facts 是"文本 KV"，不承诺值本身免受这类结构破坏，所以清理放在消费端
+// （这里）而不是假装 facts 本身已经是安全的。
+func debconfLine(owner, key, valueType, value string) string {
+	return fmt.Sprintf("%s\t%s\t%s\t%s\n", owner, key, valueType, sanitizeDebconfValue(value))
+}
+
+// sanitizeDebconfValue 清除 value 中能伪造出额外列或额外行的字符——裸
+// tab（会被解析成第五段，破坏四段式）与裸换行（会被解析成新的一行，即
+// 本文件重点修复的注入路径）。替换为空格而不是报错：与 preseedShellValue
+// 对 early_command/late_command 整体值的处理方式一致（那里也是替换而非
+// 拒绝），保持同一份文件内"值级清理"这件事只有一种处理哲学。
+func sanitizeDebconfValue(value string) string {
+	value = strings.ReplaceAll(value, "\t", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return value
+}
+
+// preseedLocalization 渲染本地化段落：语言、键盘、时区。
+func preseedLocalization() string {
+	var b strings.Builder
+	b.WriteString(debconfLine("d-i", "localechooser/languagelist", "select", "en_US.UTF-8"))
+	b.WriteString(debconfLine("d-i", "keyboard-configuration/xkb-keymap", "select", "us"))
+	b.WriteString(debconfLine("d-i", "clock-setup/utc", "boolean", "true"))
+	b.WriteString(debconfLine("d-i", "time/zone", "string", "UTC"))
+	return b.String()
+}
+
+// preseedNetwork 渲染网络段落：主机名与 DHCP（装机 VLAN 上安装器自身
+// 正在使用的网卡，激活它不违反 SPEC §5.7——那条规则约束的是业务网，见
+// baseDirectives 同等注释）。
+func preseedNetwork(ctx model.RenderContext) string {
+	hostname := ctx.Facts[model.FactHostname]
+
+	var b strings.Builder
+	b.WriteString(debconfLine("d-i", "netcfg/choose_interface", "select", "auto"))
+	b.WriteString(debconfLine("d-i", "netcfg/get_hostname", "string", hostname))
+	b.WriteString(debconfLine("d-i", "netcfg/get_domain", "string", "unassigned-domain"))
+	return b.String()
+}
+
+// preseedMirror 渲染镜像源段落：指向制品服务的仓库树（本地导入的 ISO
+// 内容，不是公网镜像）。
+func preseedMirror(ctx model.RenderContext) string {
+	repoURL := ctx.Bases.RepoURL(ctx.Artifact.Paths.Repo)
+	hostPart, dirPart := splitHostAndPath(repoURL)
+
+	var b strings.Builder
+	b.WriteString(debconfLine("d-i", "mirror/country", "string", "manual"))
+	b.WriteString(debconfLine("d-i", "mirror/http/hostname", "string", hostPart))
+	b.WriteString(debconfLine("d-i", "mirror/http/directory", "string", dirPart))
+	b.WriteString(debconfLine("d-i", "mirror/http/proxy", "string", ""))
+	return b.String()
+}
+
+// splitHostAndPath 把一个完整 URL 拆成"host（含端口，不含 scheme）"与
+// "路径"两部分，供 mirror/http/hostname、mirror/http/directory 这类
+// debconf 键分别填值（它们各自只接受 URL 的一部分，不接受完整 URL）。
+func splitHostAndPath(rawURL string) (host, path string) {
+	withoutScheme := rawURL
+	if idx := strings.Index(rawURL, "://"); idx != -1 {
+		withoutScheme = rawURL[idx+3:]
+	}
+	slashIdx := strings.Index(withoutScheme, "/")
+	if slashIdx == -1 {
+		return withoutScheme, "/"
+	}
+	return withoutScheme[:slashIdx], withoutScheme[slashIdx:]
+}
+
+// preseedPartitioning 渲染分区段落：用服务端决策的盘（by-id 标识，SPEC
+// §5.6），配方用 partman-auto 的 recipe 语法，单分区（MVP 范围，与
+// baseDirectives 的 RHEL 单分区策略一致）。
+func preseedPartitioning(ctx model.RenderContext) string {
+	diskByID := ctx.Facts[model.FactDiskPrimary]
+
+	var b strings.Builder
+	b.WriteString(debconfLine("d-i", "partman-auto/disk", "string", diskByID))
+	b.WriteString(debconfLine("d-i", "partman-auto/method", "string", "regular"))
+	b.WriteString(debconfLine("d-i", "partman-auto/choose_recipe", "select", "atomic"))
+	b.WriteString(debconfLine("d-i", "partman-partitioning/confirm_write_new_label", "boolean", "true"))
+	b.WriteString(debconfLine("d-i", "partman/choose_partition", "select", "finish"))
+	b.WriteString(debconfLine("d-i", "partman/confirm", "boolean", "true"))
+	b.WriteString(debconfLine("d-i", "partman/confirm_nooverwrite", "boolean", "true"))
+	return b.String()
+}
+
+// preseedAccountAndPackages 渲染账户与软件包段落：root 不设可复用密码
+// （同 kickstart 的 rootpw --lock，MVP 无 TLS，SPEC §1.5），只装基础任务。
+//
+// preseed 没有与 kickstart `sshkey` 指令直接等价的 debconf 键——真实
+// debian-installer 的 SSH 公钥注入惯例是通过 late_command 里的一条
+// `in-target mkdir -p /root/.ssh && in-target sh -c 'echo ... >> ...'`
+// 完成，而不是一个独立的 debconf 键。本函数只负责 disable 密码登录这一半
+// （root-login 设为 false，等价于 kickstart 的 rootpw --lock），SSH 公钥
+// 注入部分复用 AssemblePreseed 组装时已经在跑的 post 阶段 hook 落盘机制
+// （与 kickstart.go 的 rockyRootSSHKeyPlaceholder 同一个契约缺口，见该
+// 变量的注释——本文件不重复声明第二份占位符，复用同一个包级变量）。
+func preseedAccountAndPackages() string {
+	var b strings.Builder
+	b.WriteString(debconfLine("d-i", "passwd/root-login", "boolean", "false"))
+	b.WriteString(debconfLine("d-i", "passwd/make-user", "boolean", "false"))
+	b.WriteString(debconfLine("tasksel", "tasksel/first", "multiselect", "standard"))
+	b.WriteString(debconfLine("popularity-contest", "popularity-contest/participate", "boolean", "false"))
+	return b.String()
+}
+
+// earlyCommandValue 渲染 preseed/early_command 的值：pre 阶段的全部
+// hook 调用压成一段 shell（early_command 在真实 d-i 里执行得早、环境
+// 简单，不落盘脚本文件，直接内联执行——这与 post 阶段的"落脚本再执行"
+// 不同，是因为 pre 阶段通常只是少量探测/准备动作，压缩成分号连接的单行
+// 不会像 post 阶段那样容易因为 hook 数量增长而失控）。
+//
+// 与 kickstart 序言段一致：先内联参数、注入 facts，再注入 ClientLib，
+// 最后按 Order 逐个调用 run_hook。
+func earlyCommandValue(ctx model.RenderContext) (string, error) {
+	params, err := InlineParams(ctx.Task.ResolvedParams)
+	if err != nil {
+		return "", fmt.Errorf("render: 参数内联失败: %w", err)
+	}
+
+	var script strings.Builder
+	script.WriteString(inlineForSingleLine(params))
+	script.WriteString(inlineForSingleLine(InjectFacts(ctx.Facts)))
+	script.WriteString(inlineForSingleLine(ClientLib(ctx)))
+
+	// pre-start/pre-done 信号点（phase2-01 任务 4，SPEC §6.1：pre 阶段 →
+	// early_command 首尾）。RHEL 家族当前尚未实际发出这一对信号（M4 的
+	// kickstart.go/firstboot.go 只发 firstboot 阶段的四个信号，installer
+	// 阶段的七个信号在 RHEL 侧目前是空白——见本文件末尾契约缺口说明），
+	// Debian 在这里补上，不等待 RHEL 对齐后再实现。
+	script.WriteString(inlineForSingleLine(`signal "pre-start" 0` + "\n"))
+
+	lines := StageHookCallLines(ctx.Hooks, model.HookStagePre)
+	for _, line := range lines {
+		script.WriteString(inlineForSingleLine(line))
+	}
+
+	script.WriteString(inlineForSingleLine(`signal "pre-done" 0` + "\n"))
+
+	return preseedShellValue(script.String()), nil
+}
+
+// inlineForSingleLine 把一段可能含多行的 shell 文本转换成"用 ; 连接的
+// 单行等价形式"的中间表示——本函数只是简单地把换行替换成 `; `，调用方
+// 负责保证被替换的文本本身是可以按行分号连接执行的简单赋值/函数体（这里
+// 传入的都是 params.go/clientlib.go 产出的规整文本，不含需要保留换行语义
+// 的复杂控制结构，如多行 heredoc）。
+func inlineForSingleLine(text string) string {
+	trimmed := strings.TrimRight(text, "\n")
+	if trimmed == "" {
+		return ""
+	}
+	return strings.ReplaceAll(trimmed, "\n", "; ") + "; "
+}
+
+// preseedShellValue 把一段 shell 命令包装成可以安全塞进 debconf 值字段的
+// 形式：外层用双引号包裹交给 late_command/early_command 解释执行的语义由
+// d-i 自身处理（这两个键的值本身就是"整段传给 sh -c 的字符串"），本函数
+// 只做最基本的清理——确保值本身不含裸换行（debconf 预置项本身是逐行解析
+// 的文本格式，值里的裸换行会被误解析成新的一行）。
+func preseedShellValue(script string) string {
+	return strings.ReplaceAll(strings.TrimSpace(script), "\n", " ")
+}
+
+// lateCommandValue 渲染 preseed/late_command 的值：post-nochroot 阶段的
+// hook（不加 in-target，直接在 d-i 环境执行）与 post 阶段的 hook（加
+// in-target 前缀，chroot 进目标系统执行）依次落地为脚本文件后执行。
+//
+// 三处必须小心的细节里的第一条："late_command 是单行的，所有 post 阶段
+// 的 hook 调用要压进一行——推荐落一个脚本文件再执行它，单行的可读性
+// 极差，且任何一个 hook 正文里有换行就会坏掉"。本函数正是这样做：把每个
+// hook 的 run_hook 调用写进一个独立脚本文件（用 in-target tee 落盘），
+// late_command 的值本身只是"落盘 + chmod + 执行"这几条固定命令，不随
+// hook 数量或 hook 正文长度变化——hook 数量再多，late_command 那一行的
+// 长度也是常数。
+func lateCommandValue(ctx model.RenderContext) (string, error) {
+	nochrootLines := StageHookCallLines(ctx.Hooks, model.HookStagePostNoChroot)
+	postLines := StageHookCallLines(ctx.Hooks, model.HookStagePost)
+
+	// 即使没有任何 post-nochroot/post 阶段的 hook，late_command 仍必须
+	// 发出 post-start/post-done/rebooting 三个信号（phase2-01 任务 4：
+	// "三个家族各自生成全部信号点"，不因为用户没挂 hook 就让信号点跟着
+	// 消失——信号协议描述的是装机流程本身的阶段推进，与用户是否挂了 hook
+	// 无关）。因此这里不再有"无 hook 就用占位命令跳过整个脚本"的早退
+	// 分支，一律走下面的完整脚本生成路径。
+
+	const scriptPath = "/tmp/lober-late.sh"
+
+	var script strings.Builder
+	script.WriteString("#!/bin/bash\n")
+	script.WriteString(ClientLib(ctx))
+
+	// post-start 信号（phase2-01 任务 4，SPEC §6.1：post 阶段 → late_command
+	// 首尾）。在 d-i 环境（chroot 外）发出，与 rebooting 一起构成"这个脚本
+	// 自己负责的信号边界"——post-nochroot 与 post 两类 hook 都夹在这一对
+	// 信号之间，不区分谁在 chroot 内谁在 chroot 外，因为对信号协议而言
+	// "post 阶段"是 late_command 整体，chroot 与否是 Debian 内部的能力
+	// 边界（本文件头部注释），不是信号协议关心的边界。
+	script.WriteString(`signal "post-start" 0` + "\n")
+
+	for _, line := range nochrootLines {
+		script.WriteString(line)
+	}
+	if len(postLines) > 0 {
+		inTarget, err := inTargetPrefix(model.OSFamilyDebian)
+		if err != nil {
+			return "", err
+		}
+
+		// 修复的真实 bug（本文件设计期发现，与 kickstart.go 修复过的同类
+		// bug 同源）：`in-target bash -c '...'` 是 chroot 包装器起的一个
+		// 全新 bash 子进程，运行在目标系统里——它与外层脚本（d-i 环境里
+		// 定义 run_hook/signal 的那个进程）不共享任何变量或函数定义，
+		// chroot 边界比 kickstart 多个 %post 段落各自独立子进程的边界
+		// 更彻底（chroot 连文件系统根都换了）。若只把 "run_hook '...' ||
+		// exit 1" 这一行原样塞进 in-target bash -c，目标系统里的 bash
+		// 会得到 "run_hook: command not found"（exit 127），required
+		// hook 失败即中止装机这条安全不变量会被静默架空——这与
+		// kickstart.go RenderStageSection 头部注释描述的 bug 是同一类
+		// 错误，只是载体从"anaconda 各段落独立子进程"变成了"in-target
+		// chroot 边界"。
+		//
+		// 修复方式一致：把 ClientLib(ctx) 与该 hook 的调用行一并塞进
+		// 同一个 in-target bash -c 调用里，让目标系统里的这个新 bash
+		// 进程也能看到 run_hook/signal 的定义。
+		for _, line := range postLines {
+			inTargetScript := ClientLib(ctx) + line
+			script.WriteString(inTarget + ` bash -c '` +
+				strings.ReplaceAll(strings.TrimRight(inTargetScript, "\n"), `'`, `'\''`) + "'\n")
+		}
+	}
+
+	// post-done 与 rebooting（SPEC §6.1："rebooting 与 booted 配成一对，
+	// 中间的空窗即明确的重启窗口"）。两者都在 d-i 环境发出——late_command
+	// 执行完毕后 d-i 即将触发重启，这个脚本本身就是 late_command 阶段
+	// 全部工作的收尾点。
+	script.WriteString(`signal "post-done" 0` + "\n")
+	script.WriteString(`signal "rebooting" 0` + "\n")
+
+	// late_command 的值：用 in-target 把脚本内容写入目标系统的临时路径
+	// （late_command 阶段目标盘已经挂好，即使是 post-nochroot 的命令也能
+	// 直接操作目标盘上的文件，无需额外 mkdir），赋可执行权限后执行。
+	// 写入动作复用 preseedShellValue 里"值不能含裸换行"的约束，用 base64
+	// 规避——脚本正文可能含引号与特殊字符（hook digest 本身是十六进制，
+	// 但脚本里的 ClientLib 正文含大量 shell 语法），转义穿透 late_command
+	// 单行值的风险远高于直接 base64 编码后用 base64 -d 落盘。
+	encoded := base64Encode(script.String())
+
+	return fmt.Sprintf(
+		"in-target sh -c 'echo %s | base64 -d > %s && chmod 755 %s && %s'",
+		encoded, scriptPath, scriptPath, scriptPath,
+	), nil
+}
+
+// AssemblePreseed 把五组段落与三个 installer 阶段的 hook 组装成完整的
+// Debian preseed.cfg 文本（计划任务 2）。
+func AssemblePreseed(ctx model.RenderContext) (string, error) {
+	// 提前做一次参数内联校验：即使 early_command/late_command 内部各自也会
+	// 调用 InlineParams，这里先校验一遍可以让"表单值不合法"的错误在组装
+	// 最开始就被发现，不必等到拼好一半才失败（与 kickstart 序言段的校验
+	// 时机一致：错误发生点越早，越不容易让人误以为"前面的段落已经生效"）。
+	if _, err := InlineParams(ctx.Task.ResolvedParams); err != nil {
+		return "", fmt.Errorf("render: 参数内联失败: %w", err)
+	}
+
+	var b strings.Builder
+
+	b.WriteString(preseedLocalization())
+	b.WriteString(preseedNetwork(ctx))
+	b.WriteString(preseedMirror(ctx))
+	b.WriteString(preseedPartitioning(ctx))
+	b.WriteString(preseedAccountAndPackages())
+
+	early, err := earlyCommandValue(ctx)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(debconfLine("d-i", "preseed/early_command", "string", early))
+
+	late, err := lateCommandValue(ctx)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(debconfLine("d-i", "preseed/late_command", "string", late))
+
+	return b.String(), nil
+}

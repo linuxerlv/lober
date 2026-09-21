@@ -87,12 +87,14 @@ func TestMenu_KsPointsToAnswerFile(t *testing.T) {
 	}
 }
 
-// TestMenu_UnimplementedFamiliesReturnError 锁住"五个未实现的家族各自
-// 返回错误（不是空字符串）"（计划任务 7 测试要求第二条）。
+// TestMenu_UnimplementedFamiliesReturnError 锁住"未实现的家族各自
+// 返回错误（不是空字符串）"（计划任务 7 测试要求第二条）。Debian 与
+// Ubuntu 在 phase2-01 已实现，从这份"未实现"清单中移除——它们的正确性
+// 分别由 preseed_test.go 的 TestGolden_DebianMenu、autoinstall_test.go
+// 的 TestGolden_UbuntuMenu 等测试覆盖。
 func TestMenu_UnimplementedFamiliesReturnError(t *testing.T) {
 	families := []model.OSFamily{
-		model.OSFamilyUbuntu, model.OSFamilyDebian, model.OSFamilySUSE,
-		model.OSFamilyWindows, model.OSFamilyESXi,
+		model.OSFamilySUSE, model.OSFamilyWindows, model.OSFamilyESXi,
 	}
 	for _, family := range families {
 		t.Run(string(family), func(t *testing.T) {
