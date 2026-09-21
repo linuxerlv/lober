@@ -1,23 +1,36 @@
 // 本文件把机器侧 inspect 采集脚本上报的原始 facts KV（扁平
 // map[string]string，来自 GET /v1/facts 端点）解析成结构化的硬件事实
-// （磁盘列表与网卡列表），供 DiskPlanner 与网卡决策消费。对应实现计划
-// P2-02 任务 2、任务 3，依据 SPEC §5.4、§5.5、§5.6。
+// （磁盘列表与网卡列表）。对应实现计划 P2-02 任务 2、任务 3，依据 SPEC
+// §5.4、§5.5、§5.6。
 //
 // 契约缺口（写在此处，因为本文件是唯一的解析现场）：contract.HWFacts 只有
 // OSFamily/Vendor/Product/Arch 四个字段，不携带磁盘/网卡这类结构化硬件
 // 事实；TaskParamsResolver.Resolve 的 facts 参数类型是扁平的
 // map[string]string，不是结构化类型。本文件因此在 provider 包内部定义
-// HWDisk/HWNIC 两个结构化类型，只在跨接口边界处（resolve.go 调用
-// contract.DiskPlanner.Plan 时）转换为 contract.Disk；HWNIC 没有对应的
-// contract 类型（网卡决策不是七个 provider 扩展点之一），故 HWNIC 是纯
-// provider 包内部类型，不需要跨边界转换。
+// HWDisk/HWNIC 两个结构化类型。HWNIC 确实在跨接口边界处被消费：
+// resolve.go 的 decideAndAppendInstallNICMAC 调用 ParseHWNICs 解析并
+// 转交 PlanInstallNIC 做网卡决策。
+//
+// HWNIC/HWDisk 目前不对称：HWDisk 与 ParseHWDisks 只有单元测试消费，
+// resolve.go 现有的磁盘规划输入（decodeDisksFromFacts）读取的是另一个
+// 键——冻结契约键 model.FactDisks（LOBER_DISKS，SPEC §5.4 标注"by-id
+// 列表（inspect 采集）"），而本文件的 inspectDiskKeyPrefix
+// （LOBER_INSPECT_DISK_）是采集脚本（render/inspect.go）实际写入的键，
+// 两者不是同一个键，没有任何生产代码把 ParseHWDisks 的输出接到
+// DiskPlanner——即 render/inspect.go 采到的磁盘事实目前无法进入磁盘决策。
+// 这不是本文件刻意的设计取舍，是发现的真实功能缺口：正确的修法需要先
+// 确定 LOBER_DISKS 的字符串序列化格式（SPEC 未给出，contract 也未冻结，
+// internal/console/dryrun.go 的 parseDisksFact 与 resolve.go 的
+// decodeDisksFromFacts 已经各自猜了一种互不兼容的分隔符格式），这是一个
+// 契约缺口，不是本文件能在内部悄悄补的——本文件不擅自选择第三种猜测格式
+// 接入 decodeDisksFromFacts，留给契约持有者裁决。
 //
 // 正解：contract.HWFacts 补充结构化磁盘/网卡字段，或者
 // TaskParamsResolver.Resolve 的签名改为接收一个结构化的硬件事实参数（不再
-// 从扁平字符串 map 里二次解析）。届时本文件的解析逻辑可以整体保留（服务端
-// 仍需要"从 facts KV 文本还原结构"这一步，只是调用点从 provider 内部搬到
-// gateway 或装配点），只是转换到 contract 类型的那一小段代码需要跟着新
-// 字段调整。
+// 从扁平字符串 map 里二次解析）；同时需要走契约变更流程冻结 LOBER_DISKS
+// 的序列化格式（或改为让 render/inspect.go 直接写 LOBER_DISKS 本身）。
+// 届时本文件的解析逻辑可以整体保留（服务端仍需要"从 facts KV 文本还原
+// 结构"这一步，只是调用点可能从 provider 内部搬到 gateway 或装配点）。
 package provider
 
 import (
