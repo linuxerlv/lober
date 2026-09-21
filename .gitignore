@@ -23,3 +23,4 @@ internal/console/ui/dist/
 !internal/console/ui/dist/assets/index-placeholder0a1b2c3d.js
 !internal/console/ui/dist/_app/
 !internal/console/ui/dist/_app/config-placeholder.js
+/.wf-*.js
