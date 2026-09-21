@@ -92,7 +92,8 @@ func TestRenderESXiBootCfg_ModulesLeadingSlashStripped(t *testing.T) {
 // 任务 1/2 均明确警示：顺序是引导要求，不能重排）。用一份模块名刻意不按
 // 字母序排列的输入，确认输出顺序与输入完全一致（不是被意外排序）。
 func TestRenderESXiBootCfg_ModulesOrderPreserved(t *testing.T) {
-	template := "kernelopt=runweasel\n" +
+	template := "prefix=\n" +
+		"kernelopt=runweasel\n" +
 		"modules=/zzz.gz --- /aaa.gz --- /mmm.gz\n"
 	out, err := RenderESXiBootCfg(template, "http://ng/artifacts/esxi8", "http://gw/v1/answer/42/tok/boot.cfg")
 	if err != nil {
@@ -145,6 +146,37 @@ func TestRenderESXiBootCfg_MissingKernelOptRejected(t *testing.T) {
 	_, err := RenderESXiBootCfg(template, "http://ng/artifacts/esxi8", "http://gw/v1/answer/42/tok/boot.cfg")
 	if err == nil {
 		t.Fatal("原始模板缺少 kernelopt= 行时应返回错误，got nil")
+	}
+}
+
+// TestRenderESXiBootCfg_MissingPrefixLineRejected 复查验证发现的回归点：
+// 原始模板完全没有 prefix= 行时，三处必须改写之一（prefix）不存在，函数
+// 之前会静默成功并产出一份没有 HTTP 前缀的 boot.cfg——引导器会去本地相对
+// 路径找 kernel 与全部模块文件，找不到，且不会有任何报错指向这一步渲染
+// 逻辑（计划任务 2 明确警示的故障模式）。现在必须像 kernelopt= 缺失那样
+// 显式拒绝。
+func TestRenderESXiBootCfg_MissingPrefixLineRejected(t *testing.T) {
+	template := "kernelopt=runweasel\nmodules=/a.gz\n" // 无 prefix= 行
+	_, err := RenderESXiBootCfg(template, "http://ng/artifacts/esxi8", "http://gw/v1/answer/42/tok/boot.cfg")
+	if err == nil {
+		t.Fatal("原始模板缺少 prefix= 行时应返回错误，got nil")
+	}
+	if !strings.Contains(err.Error(), "prefix") {
+		t.Errorf("失败原因应提到 prefix，got: %v", err)
+	}
+}
+
+// TestRenderESXiBootCfg_MissingModulesLineRejected 同上，针对 modules= 行
+// 缺失的情形：原始模板没有 modules= 行时，函数之前会静默成功并产出一份
+// 没有任何模块清单的 boot.cfg——ESXi 引导到某一步会因为找不到模块而停住。
+func TestRenderESXiBootCfg_MissingModulesLineRejected(t *testing.T) {
+	template := "prefix=\nkernelopt=runweasel\n" // 无 modules= 行
+	_, err := RenderESXiBootCfg(template, "http://ng/artifacts/esxi8", "http://gw/v1/answer/42/tok/boot.cfg")
+	if err == nil {
+		t.Fatal("原始模板缺少 modules= 行时应返回错误，got nil")
+	}
+	if !strings.Contains(err.Error(), "modules") {
+		t.Errorf("失败原因应提到 modules，got: %v", err)
 	}
 }
 

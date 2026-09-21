@@ -91,7 +91,22 @@ func RenderESXiBootCfg(template string, bootCfgURLBase string, answerFileURL str
 	lines := strings.Split(template, "\n")
 	out := make([]string, len(lines))
 
+	// sawPrefix/sawKernelOpt/sawModules 各自跟踪三处必须改写的键是否真的在
+	// 原始模板中出现过——三者都要有对应的存在性校验，缺一不可：
+	//
+	// 这条校验原本只覆盖了 kernelopt=（缺它会直接导致无法注入 ks= 参数，
+	// 逻辑上必须在本函数内部就能判断"缺了"）。但 prefix= 与 modules= 同样是
+	// 计划任务 2 表格里明确列出的三处必须改写之一，且后果同样严重（prefix=
+	// 缺失时引导器会去本地相对路径找 kernel/模块文件，找不到；modules= 缺失
+	// 时压根没有模块清单可加载）——本函数在没有这条校验之前会对这两种情况
+	// 静默成功：因为改写逻辑走的是"遇到就替换该行"，原始模板中根本不存在
+	// 这一行时，改写自然也不会发生，但函数不会报错，产出一份看似正常、实际
+	// 缺失关键字段的 boot.cfg。现场表现正是计划文档反复警示的那种"引导器报
+	// 文件取不到，运维去查 nginx 而不是查这个渲染逻辑"——因为渲染这一步本该
+	// 在源头就发现模板不完整，却什么都没说。
+	sawPrefix := false
 	sawKernelOpt := false
+	sawModules := false
 	for i, line := range lines {
 		key, value, isKV := splitBootCfgLine(line)
 		if !isKV {
@@ -101,20 +116,30 @@ func RenderESXiBootCfg(template string, bootCfgURLBase string, answerFileURL str
 
 		switch key {
 		case esxiBootCfgPrefixKey:
+			sawPrefix = true
 			out[i] = esxiBootCfgPrefixKey + "=" + bootCfgURLBase
 		case esxiBootCfgKernelOptKey:
 			sawKernelOpt = true
 			out[i] = esxiBootCfgKernelOptKey + "=" + rewriteKernelOpt(value, answerFileURL)
 		case esxiBootCfgModulesKey:
+			sawModules = true
 			out[i] = esxiBootCfgModulesKey + "=" + rewriteModulesLine(value)
 		default:
 			out[i] = line // 未涉及的键（如 bootstate/title/timeout/build/updated），原样保留
 		}
 	}
 
+	if !sawPrefix {
+		return "", fmt.Errorf("render: 原始 boot.cfg 模板中没有找到 prefix= 行，" +
+			"无法改写为 HTTP 路径——引导器会去本地相对路径找 kernel 与模块文件，找不到")
+	}
 	if !sawKernelOpt {
 		return "", fmt.Errorf("render: 原始 boot.cfg 模板中没有找到 kernelopt= 行，" +
 			"无法注入应答文件参数——这不是一份可用的 ESXi boot.cfg 模板")
+	}
+	if !sawModules {
+		return "", fmt.Errorf("render: 原始 boot.cfg 模板中没有找到 modules= 行，" +
+			"无法确定要加载哪些模块——这不是一份可用的 ESXi boot.cfg 模板")
 	}
 
 	return strings.Join(out, "\n"), nil
