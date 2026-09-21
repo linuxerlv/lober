@@ -50,6 +50,24 @@ var hookStageSections = map[model.HookStage]string{
 // 空字符串：firstboot hook 不落在任何 kickstart 段落里（它们进
 // FirstbootScaffold），这里不对非法阶段值报错，因为调用方（本包内部的
 // AssembleKickstart）只会传入三个合法的 installer 阶段常量。
+//
+// 修复的真实 bug（原实现未处理，验证时用真实 bash 子进程执行才发现）：
+// anaconda 把每一个 %pre / %post / %post --nochroot 段落各自落成独立的
+// /tmp/ks-script-XXXX 文件，用 execWithRedirect 各自起一个全新子进程执行
+// （anaconda 源码 pyanaconda/kickstart.py 的 runPreScripts 与
+// pyanaconda/core/kickstart/scripts.py 的 run_script 证实）——同类型的多个
+// %pre 段落之间、以及 %pre 与 %post/%post --nochroot 之间，完全不共享变量
+// 与函数定义。序言段的 %pre 段落定义了 signal()/run_hook() 两个函数，但那
+// 只在序言段自己的子进程里生效；本函数产出的三个 installer 阶段段落是
+// **另外三个独立的段落**，若不在这里重新注入 ClientLib(ctx)，其中的
+// run_hook 调用在真机上会得到 "run_hook: command not found"（exit 127）
+// ——required hook 失败即中止装机这条安全不变量因此被静默架空（run_hook
+// 本身都不存在，required 判断逻辑根本不会被执行到）。
+//
+// 修复方式与 firstboot.go 的 initScript 完全一致：那个函数已经正确地在
+// 自己独立执行的 heredoc 脚本里重新注入了一份 ClientLib——因为原作者清楚
+// 那是另一个独立进程。这里补上同样的处理，让每个 installer 阶段段落也
+// 自成一个完整脚本。
 func RenderStageSection(ctx model.RenderContext, stage model.HookStage) string {
 	header, ok := hookStageSections[stage]
 	if !ok {
@@ -64,6 +82,7 @@ func RenderStageSection(ctx model.RenderContext, stage model.HookStage) string {
 	var b strings.Builder
 	b.WriteString(header)
 	b.WriteString("\n")
+	b.WriteString(ClientLib(ctx))
 	for _, ref := range refs {
 		b.WriteString(runHookCall(ref))
 	}
@@ -89,8 +108,28 @@ func hooksForStage(hooks []model.HookRef, stage model.HookStage) []model.HookRef
 
 // runHookCall 渲染一行对 run_hook 的调用，参数是 digest、required 标志与
 // 超时值（计划任务 5 实现要点）。
+//
+// 修复的真实 bug（原实现未处理，验证时用真实 bash 子进程执行才发现）：
+// run_hook 函数体末尾的 `[ "$rc" -eq 0 ] || [ "$required" != "true" ]`
+// 在 required hook 真的失败时会正确返回退出码 1（计划任务 3 clientlib.go
+// 已经验证过这一点）——但原实现只是裸调用 `run_hook '...' '...' '...'`，
+// 不检查它的返回值。bash 脚本默认不会因为某一行命令返回非零就中止（没有
+// `set -e`），会继续执行下一行。当同一阶段有多个 hook 时（计划任务 5 明确
+// 要求支持"同阶段多个 hook 按 order 顺序出现"），若第一个 required hook
+// 失败、第二个 hook 成功，整个段落脚本的退出码会被第二条命令的成功状态
+// 覆盖——anaconda 会认为这个 %post/%pre 段落整体成功，继续装机，正是计划
+// 原文点名警示的"required hook 失败也不会中止装机，机器带着半配置的状态
+// 装完"。
+//
+// 修复：每条 run_hook 调用后追加 `|| exit 1`——run_hook 只有在"hook 失败
+// 且 required"时才返回非零（成功、或失败但非 required 都返回 0，参见
+// clientlib.go 的函数体），所以这个 `|| exit 1` 只在真正需要中止的那一种
+// 情况下触发，不会误杀"失败但非 required，应记日志继续"的路径。
+// exit 1 中止的是这个段落自己独立的脚本进程（不是整个 kickstart 文件的
+// 其它段落），与 anaconda "各段落各自成脚本、各自决定是否因非零退出码而
+// 中止装机"的执行模型完全吻合。
 func runHookCall(ref model.HookRef) string {
-	return fmt.Sprintf("run_hook '%s' '%t' '%d'\n", ref.HookDigest, ref.Required, defaultHookTimeoutSec)
+	return fmt.Sprintf("run_hook '%s' '%t' '%d' || exit 1\n", ref.HookDigest, ref.Required, defaultHookTimeoutSec)
 }
 
 // rockyRootSSHKeyPlaceholder 是 MVP 阶段 root 免密登录注入的 SSH 公钥占位
