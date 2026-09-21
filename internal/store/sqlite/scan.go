@@ -61,6 +61,33 @@ func decodeJSON(text string, out any) error {
 	return nil
 }
 
+// decodeJSONMapNilIfEmpty 解码一个 JSON 文本列到 map[string]string，若
+// 解码结果是空 map（长度 0）则归一为 nil，保持与写入前「nil map」在 Go
+// 层的可比较性一致。
+//
+// 存在的理由：encodeJSON 侧为了不写入裸空串而把 nil map 归一编码成合法
+// JSON 的 "{}"（scan.go 上方 encodeJSON 注释），这一步是必要的——SQLite
+// 该列是 NOT NULL 且没有别的合法空值表示。但反过来，多数调用点（如
+// model.HookRef.ParamsDefaults）在 Go 层用 nil 表达「没有覆盖任何默认
+// 参数」，而不是「有一个空 map」；这两种状态在业务语义上没有区别，但
+// go-cmp 之类的深度比较会把 nil 与 map[string]string{} 视为不同值，
+// 导致 conformance 套件里「写入 nil、断言取回后仍是零值」的用例误报。
+// 本函数只在明确需要这种「空即 nil」归一的调用点使用，不是 decodeJSON
+// 的默认行为——像 ArtifactPaths.Extra 这类字段的语义空值就是非 nil 的
+// 空 map（内存实现的 copyStringMap 同样只在输入为 nil 时才返回 nil，
+// 输入是空但非 nil 的 map 时返回一个新的空 map，两者行为一致），不应
+// 被这个归一逻辑影响。
+func decodeJSONMapNilIfEmpty(text string) (map[string]string, error) {
+	var m map[string]string
+	if err := decodeJSON(text, &m); err != nil {
+		return nil, err
+	}
+	if len(m) == 0 {
+		return nil, nil
+	}
+	return m, nil
+}
+
 // ---------------------------------------------------------------------------
 // 可空文本列：两个 token，空串与 NULL 要统一
 // ---------------------------------------------------------------------------
