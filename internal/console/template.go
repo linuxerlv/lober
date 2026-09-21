@@ -343,9 +343,17 @@ func (s *Server) handleTemplatePreview(w http.ResponseWriter, r *http.Request) {
 	var req previewRequest
 	_ = json.NewDecoder(r.Body).Decode(&req) // preview 入参整体可选，解析失败按空 body 处理
 
+	// 修复：这里曾直接调用 HostStore.GetHost(req.HostID)——但 req.HostID
+	// 是前端从 GET /hosts 拿到的暴露 id（hostID() 算出的裸 SN/MAC/UUID
+	// 值），而 GetHost 的 id 取法「由实现决定」（contract.HostStore 文档
+	// 明确说明），fake.Store 的具体实现用带前缀的内部 key，两者不是同一
+	// 个字符串，导致真实存在的主机永远查不到、静默退回 fakePreviewHost，
+	// 前端完全无法察觉自己看到的是假数据。改用 findHostByExposedID——与
+	// host.go/task.go 同一套反查逻辑，只依赖 contract 文档化的
+	// identityMatches 语义，不依赖任何具体 Store 实现的内部 key 格式。
 	host := fakePreviewHost
 	if req.HostID != "" {
-		if h, err := s.deps.Hosts.GetHost(r.Context(), req.HostID); err == nil {
+		if h, err := s.findHostByExposedID(r.Context(), req.HostID); err == nil {
 			host = h
 		}
 	}

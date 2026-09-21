@@ -192,6 +192,68 @@ func TestTemplate_PreviewReturnsTwoSectionsWithoutSideEffects(t *testing.T) {
 	}
 }
 
+// TestTemplate_PreviewWithRealHostIDUsesThatHostNotFakeDefault 证伪一个
+// 隐藏假设：handleTemplatePreview 传入真实 hostId 时是否真的用了那台主机。
+//
+// host.go 的 findHostByExposedID 与 task.go 的 handleCreateTask 都刻意
+// 避免直接调用 HostStore.GetHost——因为「暴露给人面 API 的 id」（hostID()
+// 算出的裸 SN/MAC/UUID）与 fake.Store 内部 hostKey() 用的带前缀 key
+// （"sn:xxx"）不是同一个字符串，直接拿裸值查 GetHost 必然查不到。但
+// handleTemplatePreview 的实现（template.go）在有 req.HostID 时确实直接
+// 调用了 s.deps.Hosts.GetHost(ctx, req.HostID)，且失败时静默回退到
+// fakePreviewHost、不报错、不警告——如果这个假设错了（换个 Store 实现，
+// 或者就是当前的 fake.Store），前端传一个从 GET /hosts 拿到的真实 hostId
+// 进来，preview 展示的会一直是内置假主机的数据，运维完全看不出来。
+func TestTemplate_PreviewWithRealHostIDUsesThatHostNotFakeDefault(t *testing.T) {
+	ts := newTestServer(t)
+	set := seedActiveArtifactSet(t, ts, "as-preview-realhost", model.OSFamilyRHEL)
+	tok := ts.login("eve-admin")
+
+	const realSN = "PREVIEW-REAL-HOST-SN-42"
+	realHost := model.Host{
+		SN: realSN, MAC: "11:22:33:44:55:66", Arch: model.ArchX86_64, Firmware: model.FirmwareUEFI,
+	}
+	if _, err := ts.Store.UpsertHost(t.Context(), realHost); err != nil {
+		t.Fatalf("准备主机失败: %v", err)
+	}
+	// 与 host.go/task.go 一致的取法：暴露给人面 API 的 id 是 hostID()
+	// 算出的值（这里就是 SN 本身），前端从 GET /hosts 拿到的正是这个值。
+	exposedHostID := hostID(realHost)
+
+	// 用一个能回显 ctx.Task.HostSN 的 Renderer，观察 preview 实际用了
+	// 哪台主机的数据。
+	var capturedHostSN string
+	ts.Server.deps.Renderer = &stubRenderer{
+		answerFunc: func(ctx model.RenderContext, fileName string) (string, error) {
+			capturedHostSN = ctx.Task.HostSN
+			return "# answer for " + ctx.Task.HostSN + "\n", nil
+		},
+	}
+
+	rr := ts.doJSON("POST", "/console/v1/templates", tok, map[string]any{
+		"name": "tpl-preview-realhost", "artifactSetId": set.ID, "answerTemplate": "# ks\n",
+	})
+	var created struct {
+		Data templateItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &created)
+
+	rr = ts.doJSON("POST", "/console/v1/templates/"+created.Data.ID+"/preview", tok, map[string]any{
+		"hostId": exposedHostID,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("preview 失败: %d, body=%s", rr.Code, rr.Body.String())
+	}
+
+	if capturedHostSN != realSN {
+		t.Errorf("preview 传入真实 hostId=%q（来自 GET /hosts 会暴露的同一个值）时，"+
+			"渲染上下文里的 HostSN 应为真实主机的 %q，实际却是 %q——"+
+			"说明 handleTemplatePreview 用 HostStore.GetHost(裸id) 查不到真实主机，"+
+			"静默回退成了内置假主机 fakePreviewHost（SN=%q），前端无法察觉",
+			exposedHostID, realSN, capturedHostSN, fakePreviewHost.SN)
+	}
+}
+
 // TestTemplate_SaveRejectsUnknownHookDigest 锁住「保存模板时引用了不存在
 // 的 digest 被拒」（本实现按 hookId 解析出 active 版本自动填 digest，
 // 因此「不存在的 digest」体现为「引用了不存在或没有 active 版本的
