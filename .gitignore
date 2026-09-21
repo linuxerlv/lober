@@ -1,0 +1,11 @@
+/lober
+/lober.exe
+/mkuser
+/mkuser.exe
+/dist/
+/srv/
+*.db
+*.db-wal
+*.db-shm
+node_modules/
+internal/console/ui/dist/
