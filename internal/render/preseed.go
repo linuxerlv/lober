@@ -42,8 +42,34 @@ func base64Encode(s string) string {
 
 // debconfLine 渲染一行「所有者 键 类型 值」的 debconf 预置项，字段间用
 // tab 分隔（真实 preseed.cfg 惯例，debconf-set-selections 也按此解析）。
+//
+// value 在写入前经 sanitizeDebconfValue 处理——四段式是靠 tab 分隔、靠
+// 换行分行的纯文本格式，value 里若含裸 tab 或换行，就能伪造出额外的列或
+// 独立一行（真的验证过：把 ctx.Facts[LOBER_HOSTNAME] 设成"web01\nd-i\t
+// passwd/root-login\tboolean\ttrue"会让 preseedNetwork 产出一条独立的
+// 「passwd/root-login=true」数据行，覆盖 preseedAccountAndPackages 固定
+// 写的「false」，这正是 SPEC §5.6 强调的"账户策略不可被绕过"这条不变量
+// 会被打破的方式）。value 的来源里 ctx.Facts[LOBER_HOSTNAME] 直接来自
+// 表单 formData（internal/provider/resolve.go 的 Resolve 方法），不经过
+// InlineParams/guard 校验——ResolvedParams 与 Facts 是两个独立的字符串
+// 表，注入防护只覆盖了前者（injection_test.go 端到端验证的是
+// ResolvedParams），后者目前没有值级校验。在契约层补上 hostname 格式
+// 校验之前，本函数在写入点做最小化清理：忠实反映一条 SPEC §5.4 事实——
+// facts 是"文本 KV"，不承诺值本身免受这类结构破坏，所以清理放在消费端
+// （这里）而不是假装 facts 本身已经是安全的。
 func debconfLine(owner, key, valueType, value string) string {
-	return fmt.Sprintf("%s\t%s\t%s\t%s\n", owner, key, valueType, value)
+	return fmt.Sprintf("%s\t%s\t%s\t%s\n", owner, key, valueType, sanitizeDebconfValue(value))
+}
+
+// sanitizeDebconfValue 清除 value 中能伪造出额外列或额外行的字符——裸
+// tab（会被解析成第五段，破坏四段式）与裸换行（会被解析成新的一行，即
+// 本文件重点修复的注入路径）。替换为空格而不是报错：与 preseedShellValue
+// 对 early_command/late_command 整体值的处理方式一致（那里也是替换而非
+// 拒绝），保持同一份文件内"值级清理"这件事只有一种处理哲学。
+func sanitizeDebconfValue(value string) string {
+	value = strings.ReplaceAll(value, "\t", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return value
 }
 
 // preseedLocalization 渲染本地化段落：语言、键盘、时区。

@@ -338,6 +338,70 @@ func TestPreseed_MaliciousFactValueDoesNotInjectExtraDebconfLine(t *testing.T) {
 	}
 }
 
+// TestPreseed_HostnameFactCannotForgeDebconfLine 是审阅时补的回归测试：
+// TestPreseed_MaliciousFactValueDoesNotInjectExtraDebconfLine 只覆盖了
+// LOBER_RACK（该值只流经 earlyCommandValue，经 preseedShellValue 压成
+// 单行后天然安全），从未覆盖 LOBER_HOSTNAME/LOBER_DISK_PRIMARY 这两个
+// 直接以四段式 debconfLine 写入 preseedNetwork/preseedMirror/
+// preseedPartitioning 的字段——它们才是真正未经压缩、原样拼进
+// "所有者\t键\t类型\t值"这行文本的位置。
+//
+// LOBER_HOSTNAME 的值来自 internal/provider/resolve.go 的
+// `resolved[model.FactHostname] = formData[model.FactHostname]`——直接
+// 复制表单原始值，不经过 InlineParams/guard 校验（那套校验只覆盖
+// ctx.Task.ResolvedParams，不覆盖 ctx.Facts）。本测试验证换行注入不能
+// 借道 preseedNetwork 伪造出一条独立的 debconf 行、覆盖
+// preseedAccountAndPackages 固定写死的 passwd/root-login=false（SPEC
+// §5.6 的账户策略不应被这条路径绕过）。
+func TestPreseed_HostnameFactCannotForgeDebconfLine(t *testing.T) {
+	ctx := fullPreseedCtx()
+	ctx.Facts = cloneFacts(ctx.Facts)
+	forgedLine := "d-i\tpasswd/root-login\tboolean\ttrue"
+	ctx.Facts[model.FactHostname] = "web01\n" + forgedLine
+
+	out, err := AssemblePreseed(ctx)
+	if err != nil {
+		t.Fatalf("AssemblePreseed 返回错误: %v", err)
+	}
+
+	lines := strings.Split(out, "\n")
+	for _, l := range lines {
+		if l == forgedLine {
+			t.Errorf("恶意 LOBER_HOSTNAME 换行注入伪造出了独立的 debconf 行 %q，"+
+				"覆盖了固定的 passwd/root-login=false。got 完整输出:\n%s", forgedLine, out)
+		}
+	}
+	// 双重确认：合法的 root-login=false 那一行仍然完整存在（没有被后续的
+	// 伪造行覆盖或替换）。
+	if !strings.Contains(out, "d-i\tpasswd/root-login\tboolean\tfalse") {
+		t.Errorf("合法的 passwd/root-login=false 行应始终存在，got:\n%s", out)
+	}
+}
+
+// TestPreseed_DiskPrimaryFactCannotForgeDebconfLine 同上，覆盖
+// LOBER_DISK_PRIMARY——它经 preseedPartitioning 直接写入
+// partman-auto/disk 的值段，是分区配方唯一的设备来源（计划任务 2"分区要
+// 用服务端决策的盘"）。即使该值当前来自磁盘规划器（服务端计算，不是表单
+// 直传），debconfLine 消费端的清理不应因值的来源"目前较可信"而省略——
+// sanitizeDebconfValue 是 debconfLine 的统一写入口，任何未来改动都不应
+// 悄悄绕开它。
+func TestPreseed_DiskPrimaryFactCannotForgeDebconfLine(t *testing.T) {
+	ctx := fullPreseedCtx()
+	ctx.Facts = cloneFacts(ctx.Facts)
+	forgedLine := "d-i\tpasswd/root-login\tboolean\ttrue"
+	ctx.Facts[model.FactDiskPrimary] = "/dev/disk/by-id/evil\n" + forgedLine
+
+	out, err := AssemblePreseed(ctx)
+	if err != nil {
+		t.Fatalf("AssemblePreseed 返回错误: %v", err)
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if l == forgedLine {
+			t.Errorf("恶意 LOBER_DISK_PRIMARY 换行注入伪造出了独立的 debconf 行 %q，got 完整输出:\n%s", forgedLine, out)
+		}
+	}
+}
+
 // TestGolden_MinimalPreseed 锁住无 hook 的最小 preseed 输出。
 func TestGolden_MinimalPreseed(t *testing.T) {
 	out, err := AssemblePreseed(minimalPreseedCtx())
