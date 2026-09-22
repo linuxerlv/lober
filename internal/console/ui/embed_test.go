@@ -36,6 +36,43 @@ func TestDistFS_IndexHTMLIsEmbedded(t *testing.T) {
 	}
 }
 
+// findUnderscorePrefixedFile 在 distFS 里找一个「文件名或所在目录名以
+// `_` 开头」的真实文件路径，找不到则让调用者的测试直接失败并说明原因。
+//
+// 不硬编码具体文件名：占位阶段是 `_app/config-placeholder.js`，真实 Vite
+// 产物里是 lodash-es 按需打包出的 `_baseClone-*.js` 一类文件（文件名带内容
+// 哈希，每次构建都会变）——测试要锁住的是「go:embed 模式没有漏收下划线前缀
+// 文件」这一行为，不是某个具体文件名，所以改成动态发现。
+func findUnderscorePrefixedFile(t *testing.T) string {
+	t.Helper()
+
+	var found string
+	err := fs.WalkDir(distFS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if found != "" {
+			return fs.SkipAll
+		}
+		if strings.HasPrefix(d.Name(), "_") && !d.IsDir() {
+			found = p
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("遍历内嵌文件系统失败: %v", err)
+	}
+	if found == "" {
+		t.Fatalf("内嵌的 dist 里没有找到任何下划线前缀的文件 —— " +
+			"本测试假定真实 Vite 产物里存在这类文件（已观察到的现象，" +
+			"例如 lodash-es 按需打包出的 _baseClone-*.js）；如果这次构建" +
+			"产物确实一个都没有，说明假设不再成立，需要更新测试本身的前提，" +
+			"而不是删掉这条测试")
+	}
+	return found
+}
+
 // TestDistFS_UnderscorePrefixedFileIsEmbedded 断言下划线前缀的文件确实被
 // go:embed 嵌进来了。
 //
@@ -43,18 +80,20 @@ func TestDistFS_IndexHTMLIsEmbedded(t *testing.T) {
 // `//go:embed dist`（裸模式）而不是 `//go:embed all:dist`——裸模式会静默
 // 跳过这个文件，不报编译错误、不报运行时错误，只是运行时该文件访问不到，
 // 表现为「某个资源 404 了但看不出为什么」。真实 Vite 产物里存在下划线
-// 前缀目录是已观察到的现象，这个坑必须在占位阶段就锁住，不能等真实产物
-// 接进来才发现。
+// 前缀目录是已观察到的现象（lodash-es 按需打包出的 `_baseClone-*.js` 等），
+// 这个坑必须锁住。
 func TestDistFS_UnderscorePrefixedFileIsEmbedded(t *testing.T) {
-	data, err := fs.ReadFile(distFS, "_app/config-placeholder.js")
+	name := findUnderscorePrefixedFile(t)
+
+	data, err := fs.ReadFile(distFS, name)
 	if err != nil {
-		t.Fatalf("从内嵌文件系统读取 _app/config-placeholder.js 失败: %v —— "+
+		t.Fatalf("从内嵌文件系统读取 %s 失败: %v —— "+
 			"这说明 go:embed 指令漏掉了下划线前缀的文件，很可能是写成了裸 "+
 			"`dist` 模式而不是 `all:dist`；真实前端产物里若也有下划线前缀的"+
-			"资源目录，会在生产环境表现为该资源不可访问", err)
+			"资源目录，会在生产环境表现为该资源不可访问", name, err)
 	}
 	if len(data) == 0 {
-		t.Fatalf("_app/config-placeholder.js 读出来是空文件，占位内容应当非空")
+		t.Fatalf("%s 读出来是空文件，真实构建产物不应该产出空文件", name)
 	}
 }
 
@@ -108,8 +147,45 @@ func TestHandler_IndexHTMLIsNeverCached(t *testing.T) {
 	}
 }
 
-// TestHandler_HashedAssetIsLongCached 断言带内容哈希的资源文件（assets/
-// 目录下）被设置为长期缓存，且与 index.html 的策略不同。
+// findHashedAsset 在 distFS 里找一个非 index.html 的真实文件路径，充当
+// 「带内容哈希的资源」样本，找不到则让调用者的测试直接失败并说明原因。
+//
+// 不硬编码具体路径：占位阶段是 `assets/index-placeholder0a1b2c3d.js`，真实
+// Vite 产物按当前 vite.config.ts 的 rollupOptions 分到了 `js/`、`css/`、
+// `jse/` 几个目录下（不是 upstream 默认的单一 `assets/` 目录），且每次构建
+// 文件名哈希都会变——测试要锁住的是「非 index.html 的资源被设成长期缓存」
+// 这一行为，不是某个具体路径，所以改成动态发现。
+func findHashedAsset(t *testing.T) string {
+	t.Helper()
+
+	var found string
+	err := fs.WalkDir(distFS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if found != "" {
+			return fs.SkipAll
+		}
+		if !d.IsDir() && p != indexHTML {
+			found = p
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("遍历内嵌文件系统失败: %v", err)
+	}
+	if found == "" {
+		t.Fatalf("内嵌的 dist 里除 index.html 之外没有找到任何文件 —— " +
+			"本测试假定真实构建产物至少有一个 JS/CSS 资源文件；如果这次" +
+			"产物确实只有 index.html，说明假设不再成立，需要更新测试本身的" +
+			"前提，而不是删掉这条测试")
+	}
+	return found
+}
+
+// TestHandler_HashedAssetIsLongCached 断言带内容哈希的资源文件被设置为
+// 长期缓存，且与 index.html 的策略不同。
 //
 // 为什么这条重要：这类文件名里含内容哈希，内容变了文件名必然变——旧文件名
 // 永远指向旧内容，长期缓存不会导致运维看到过期内容。反之，若这类文件也被
@@ -117,14 +193,15 @@ func TestHandler_IndexHTMLIsNeverCached(t *testing.T) {
 // 条件不佳时会明显拖慢页面加载。
 func TestHandler_HashedAssetIsLongCached(t *testing.T) {
 	h := Handler()
-	req := httptest.NewRequest(http.MethodGet, "/assets/index-placeholder0a1b2c3d.js", nil)
+	name := findHashedAsset(t)
+	req := httptest.NewRequest(http.MethodGet, "/"+name, nil)
 	rec := httptest.NewRecorder()
 
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /assets/index-placeholder0a1b2c3d.js 状态码 = %d，want %d，body=%q",
-			rec.Code, http.StatusOK, rec.Body.String())
+		t.Fatalf("GET /%s 状态码 = %d，want %d，body=%q",
+			name, rec.Code, http.StatusOK, rec.Body.String())
 	}
 
 	cc := rec.Header().Get("Cache-Control")
