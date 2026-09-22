@@ -9,18 +9,25 @@
 *.db-shm
 node_modules/
 internal/console/ui/dist/
-# 例外：占位 dist 的最小产物需要入库（M8 计划任务 14）。
-# 真实前端构建产物会覆盖这些文件，不影响后续 pnpm build 的产出流程——
-# vite build 会先清空 outDir 再写入。
+# 例外：占位 dist 必须入库，否则 go:embed 在只有 git 仓库的机器上编译失败
+# （embed 找不到 dist 目录即报错，整个 cmd/lober 装配不出来）。
+#
+# 交付方式是 release tar（SPEC §12.3 方案一）：真实构建产物有 213 个带 hash 的
+# 文件，不入库 —— 每次前端改动都会产生一整批新文件名，diff 无法审阅。构建在有
+# 外网的机器上做，dist 随 release tar 带进内网覆盖占位文件。
+#
+# 因此这两个占位文件的作用只有一个：让 clone 出来的仓库能 go build。它们不是
+# 可用的前端，index.html 里写明了这一点。
 #
 # 目录本身被上面那条规则忽略后，Git 默认不会再进入该目录检查里面的文件是否
 # 被排除在忽略之外（gitignore 的已知行为：父目录被排除时，子路径的否定规则
 # 不生效，除非先把目录本身也否定掉）。因此这里先否定目录，再否定目录内的
 # 具体子路径。
+#
+# 第二个占位文件带下划线前缀，用于锁住 embed 必须用 all: 模式 —— 裸 embed 会
+# 静默跳过下划线开头的文件，而真实 Vite 产物里有 4 个这样的文件（_baseClone、
+# _plugin-vue_export-helper、_app-config 等），漏掉它们的表现是运行时白屏。
 !internal/console/ui/dist/
 !internal/console/ui/dist/index.html
-!internal/console/ui/dist/assets/
-!internal/console/ui/dist/assets/index-placeholder0a1b2c3d.js
-!internal/console/ui/dist/_app/
-!internal/console/ui/dist/_app/config-placeholder.js
+!internal/console/ui/dist/_placeholder-keeps-embed-underscore-mode.js
 /.wf-*.js
