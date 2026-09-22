@@ -481,7 +481,8 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 		ParamsResolver: paramsResolver,
 		DiskPlanner:    providers.DiskPlanner,
 		EventBus:       events,
-		Audit:          newAuditLogger(),
+		Audit:          newAuditLogger(st, clock),
+		AuditQuery:     st,
 		Clock:          clock,
 
 		Users:      authUsers,

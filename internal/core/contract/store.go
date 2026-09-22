@@ -1,9 +1,15 @@
 // 本文件定义 Store 契约：窄接口族、查询过滤器、sentinel error。对应实现
 // 计划任务 10，依据 SPEC §2.6、§2.7、§3.3、§3.4、§3.6、§4.2、§4.3、§4.4、
-// §5.5、§12.8。
+// §5.5、§9.4、§12.8。
 //
 // 拆成窄接口族而不是一个大接口：渲染器只需要模板查询，超时扫描只需要任务
 // 查询——窄依赖让每个模块的测试替身只实现自己用到的那几个方法。
+//
+// AuditStore 是本次契约变更新增的成员（见 docs/real-machine/05-审计持久化.md）：
+// audit_log 表在 M1 就已建好（internal/store/sqlite/schema/001_init.sql），
+// 但此前没有任何窄接口把它纳入 Store——审计记录因此只能写进 log/slog，
+// 写了就查不回来。补上本接口后，两层缺口（只写不查、写的地方绕开了
+// Store 抽象）都在契约层面消除，具体落地见 AuditStore 类型文档。
 package contract
 
 import (
@@ -55,6 +61,26 @@ type EventFilter struct {
 	// AfterSeq 非零时只返回 Seq 大于此值的事件，供 SSE 用 Last-Event-ID
 	// 续传（§12.8），不从头重放。
 	AfterSeq int
+}
+
+// AuditFilter 是审计记录查询的过滤条件，与 TaskFilter/EventFilter 同一种
+// 风格：结构体而非一长串参数，加字段不改签名（store.go 既有约定）。零值
+// 表示不过滤该维度。
+type AuditFilter struct {
+	// Target 非空时只返回 Target 完全等于该值的记录（如某个 hook id）——
+	// 这是「查某条 hook 的驳回理由」这个用例需要的最小维度，不做子串匹配。
+	Target string
+
+	// SinceTS/UntilTS 非零时限定 TS 的闭区间 [SinceTS, UntilTS]。两者
+	// 都非零且 SinceTS > UntilTS 时实现应返回空结果而不是报错——这是
+	// 调用方传参颠倒的正常后果，不是需要中断请求的异常。
+	SinceTS int64
+	UntilTS int64
+
+	// Limit 非零时限定返回条数，按 TS 倒序取最新的 Limit 条（§9.4 的
+	// 审计用途是「事后追责」，最近发生的记录价值最高，倒序+limit 让
+	// 调用方不必先取全量再在应用层截断）。零值表示不限制条数。
+	Limit int
 }
 
 // TaskStore 是状态机唯一的任务持久化出口。
@@ -228,6 +254,66 @@ type EventStore interface {
 	ListEvents(ctx context.Context, taskID string, filter EventFilter) ([]model.TaskEvent, error)
 }
 
+// AuditRecord 是一条落库的审计记录，字段与 schema 的 audit_log 表逐一
+// 对应（id 除外——id 是存储层的自增主键，不进本类型：调用方按 TS 倒序
+// 与 Filter 取数据，不需要按 id 寻址单条记录，见 AuditStore.ListAudit
+// 的文档）。
+//
+// 本类型定义在 contract 包而不是 internal/core/model：它不是业务实体，
+// 是审计这个横切关注点自己的形态，且 model 包已冻结、不接受因本次契约
+// 变更新增类型（本次改动的文件清单不含 internal/core/model/**）。这与
+// TaskFilter/EventFilter 同样定义在 contract 包是同一个理由。
+type AuditRecord struct {
+	// TS 是写入时刻（Unix 秒），由调用方传入（与 AuditLogger.Log 不接受
+	// 时钟参数、由 AuditStore 实现自行决定落盘时间同理——具体取哪个时钟
+	// 由实现决定，本类型只声明字段含义）。
+	TS int64
+
+	// Actor 是操作人标识（用户名），与 AuditLogger.Log 的 actor 参数
+	// 同义。
+	Actor string
+
+	// Action 是「资源.动作」形式的固定字符串（如 hook.reject），与
+	// AuditLogger.Log 的 action 参数同义。
+	Action string
+
+	// Target 是被操作对象的标识（如 hook id），与 AuditLogger.Log 的
+	// target 参数同义。AuditFilter.Target 按这个字段做精确匹配。
+	Target string
+
+	// Detail 是补充说明的原文，与 AuditLogger.Log 的 detail 参数同义。
+	// 落库时 JSON 编码进 detail_json 列（schema 早已建成该列为 JSON
+	// 文本列），取回时原样解码——detail 本身是自由文本（如
+	// "reason=xxx"），不是一个要拆字段的结构体，JSON 编码只是复用既有
+	// 列类型的手段，不代表 detail 本身有内部结构。
+	Detail string
+}
+
+// AuditStore 承载人面操作审计记录的持久化与查询（§9.4）。
+//
+// 与 AuditLogger（service.go）的关系：AuditLogger 是审计中间件
+// （console.auditMiddleware）看到的写入面——一个不关心「写到哪」的
+// fire-and-forget 接口，语义类似日志器。AuditStore 是本次契约变更新增
+// 的查询面：装配点（cmd/lober）现在提供的 AuditLogger 实现内部持有一个
+// AuditStore，Log 调用委托给 AppendAudit；ListAudit 供 HTTP 查询端点
+// （GET /hooks/{id}/audit）使用。两者不合并成一个接口——写路径的调用方
+// （中间件、hook.go 的 reject handler）只需要 Log 这一个方法，合并会让
+// 那些调用点被迫依赖一个查询能力它们根本不使用（窄接口族的一贯原则）。
+type AuditStore interface {
+	// AppendAudit 追加一条审计记录（append-only，没有更新或删除——审计
+	// 记录本身不可变，篡改留痕比篡改内容更严重，因此本接口不提供任何
+	// 修改已写入记录的方法）。
+	AppendAudit(ctx context.Context, record AuditRecord) error
+
+	// ListAudit 按过滤条件列出审计记录，按 TS 倒序（最新的在前——§9.4
+	// 的审计用途是事后追责，运维打开页面最想看到的是最近发生的事）。
+	//
+	// 查不到匹配记录时返回空切片而非 ErrNotFound：没有审计记录是正常
+	// 状态（比如一个刚创建、从未被驳回过的 hook），不是异常，调用方
+	// （HTTP handler）不需要为这条查询专门处理一个错误分支。
+	ListAudit(ctx context.Context, filter AuditFilter) ([]AuditRecord, error)
+}
+
 // FactStore 承载跨阶段跨重启传递的 facts KV（§5.5）。
 type FactStore interface {
 	// MergeFacts 把给定键值对合并写入该任务的 fact 集合：已存在的键被覆盖，
@@ -253,6 +339,7 @@ type Store interface {
 	TemplateStore
 	EventStore
 	FactStore
+	AuditStore
 }
 
 // TxRunner 是事务运行接口：在单个数据库事务里执行 fn，fn 内部对同一事务

@@ -23,6 +23,29 @@
 > 取值不变，驳回只是 `review → draft` 的状态回退）；不影响
 > `internal/store/sqlite`、`internal/core/fake`（复用既有的
 > `HookStore.UpdateHookState`，未新增 store 方法）。
+>
+> **变更记录 2：新增 `GET /hooks/{id}/audit`（查审计记录）。** 原因：上一条
+> 变更记录（reject）自己写明了一个遗留缺口——「审计日志目前只能写、不能
+> 读……供后续补一个审计查询端点时参考」。核实确认这个缺口比表面看到的更深：
+> `contract.AuditLogger` 只有 `Log` 方法，全项目没有任何查询方法；唯一的
+> 生产实现（`cmd/lober/auditlog.go`）只把记录写进 `log/slog`，从不写
+> `internal/store/sqlite/schema/001_init.sql` 第 174 行早已建好的
+> `audit_log` 表——该文件自己的注释也承认这是绕过，正解是给
+> `contract.Store` 补一个窄接口。经编排方核实后授权补上，按 M1 的五步
+> 契约变更流程执行（改接口 → 改 conformance 断言 → 改内存实现 → 改
+> SQLite 实现 → 接上调用方）。新增端点编号为 `29`（同样追加在末尾，
+> 不重排既有编号，理由与变更记录 1 相同）。
+>
+> 影响模块：`internal/core/contract`（新增 `AuditStore` 窄接口、
+> `AuditRecord`/`AuditFilter` 类型，纳入组合 `Store` 接口）；
+> `internal/core/contract/conformance`（新增五条断言，覆盖写入后能查回、
+> detail 原文往返、按时间倒序、limit 生效、查无记录返回空）；
+> `internal/core/fake`、`internal/store/sqlite`（各自实现 `AuditStore`，
+> 两者跑同一套 conformance 断言）；`cmd/lober`（`auditlog.go` 换成落库
+> 实现，失败时降级写 slog 兜底，不让审计故障升级成业务故障）；
+> `internal/console`（新增 `Deps.AuditQuery`、`handleHookAudit`）。
+> **不影响** `internal/core/model`、`internal/store/sqlite/schema`
+> （`audit_log` 表结构不变，本次只是第一次真正读写它）。
 
 ## 响应包裹格式
 
@@ -96,7 +119,7 @@ token 无效）时返回 HTTP `401`，body 仍为上述失败形态。
 | 9 | POST | `/console/v1/artifact-sets/{id}/verify` | `admin` | `null`（异步重算，立即返回接受） |
 | 10 | DELETE | `/console/v1/artifact-sets/{id}` | `admin` | `null` |
 
-### hook（7 个）
+### hook（9 个）
 
 | # | 方法 | 路径 | 权限 | 返回 |
 |---|---|---|---|---|
@@ -107,6 +130,7 @@ token 无效）时返回 HTTP `401`，body 仍为上述失败形态。
 | 15 | GET | `/console/v1/hooks/{id}/versions` | 已登录 | `HookItem[]` |
 | 16 | POST | `/console/v1/hooks/{id}/approve` | `hook-approver`（`hook:approve`） | 更新后的 `HookItem` |
 | 28 | POST | `/console/v1/hooks/{id}/reject` | `hook-approver`（`hook:approve`） | 更新后的 `HookItem`（附回显的 `reason`） |
+| 29 | GET | `/console/v1/hooks/{id}/audit?limit=` | `hook-author`（`hook:write`）或 `hook-approver`（`hook:approve`） | `AuditRecordItem[]`（本次变更新增，见文首「变更记录」） |
 
 ### 模板（4 个）
 
@@ -406,17 +430,51 @@ interpreter 为 bash）、`requires` 里声明的 `facts` 是否为 `model.IsFac
 不可变、模板 pin 住的是 digest——驳回只是状态回退，绝不触碰正文，否则就
 是「审批过的内容被偷换」的反面案例。
 
-**理由的可查性（契约缺口，如实记录）：** `model.Hook`没有专门字段存驳回
-理由（该 struct 是冻结契约，本次变更不改它）。理由通过两条路径暴露：
-(1) 本端点的响应体原样回显；(2) 写入一条 `action = "hook.reject"` 的审计
-日志（`internal/console/audit.go` 的 `AuditLogger.Log`，`detail` 字段含
-理由原文）。**但审计日志目前只能写、不能读**——`contract.AuditLogger`
-接口只有 `Log` 方法，全项目没有任何读取/查询审计日志的存储方法或 HTTP
-端点。因此理由的"可查"目前只在驳回发生的**当次响应**里对调用方成立；
-若作者当时不在场（例如异步查看被驳回的 hook），现有系统没有任何 API
-能让他事后查到理由。这不是本次变更引入的缺口——审计日志本来就没有读
-接口——但本次变更是第一个「理由的可查性」依赖这条读路径的场景，因此在
-此明确记录，供后续补一个审计查询端点时参考。
+**理由的可查性（原契约缺口，已在本次变更中补上，见下方
+`GET /hooks/{id}/audit`）：** `model.Hook` 没有专门字段存驳回理由（该
+struct 是冻结契约，本次变更不改它）。理由通过两条路径暴露：(1) 本端点的
+响应体原样回显；(2) 写入一条 `action = "hook.reject"` 的审计日志
+（`internal/console/audit.go` 的 `AuditLogger.Log`，`detail` 字段含理由
+原文）。此前（本文档更早版本记录的缺口）审计日志只能写、不能读：
+`contract.AuditLogger` 接口只有 `Log` 方法，全项目没有任何读取/查询审计
+日志的存储方法或 HTTP 端点，理由的“可查”只在驳回发生的**当次响应**里
+对调用方成立，作者若当时不在场就永远查不到。本次变更新增了
+`contract.AuditStore`（查询面，`internal/core/contract/store.go`）与
+`GET /hooks/{id}/audit`（下方端点），补上了这条读路径——完整取舍与
+两层缺口的说明见 `docs/real-machine/05-审计持久化.md`。
+
+#### `GET /hooks/{id}/audit?limit=`（本次变更新增，见文首「变更记录」）
+
+按 `hook id` 查该 hook 的审计记录，**按时间倒序**返回（最新的在前）。
+`limit` 可选，默认 1000（与其它列表端点的默认上限一致，见约定 2 的
+`defaultListLimit`）。
+
+**成功：** `data = AuditRecordItem[]`：
+
+```json
+[{"ts": 0, "actor": "string", "action": "string", "target": "string", "detail": "string"}]
+```
+
+字段与 `contract.AuditRecord` 对应；`target` 恒等于路径里的 `{id}`
+（本端点已经按 target 过滤，附带这个字段只是让响应形态自描述，不需要
+调用方从 URL 反推）。**没有任何审计记录时返回空数组，不是错误**——一个
+从未被驳回过的 hook 没有审计记录是正常状态。
+
+**权限：** `hook-author`（`hook:write`）或 `hook-approver`
+（`hook:approve`）之一即可（`admin` 通过角色聚合权限码天然满足，见
+`internal/console/rbac.go` 的 `roleCodes` 表）。**不开放给 `operator`/
+`viewer`**——审计记录含操作人信息（`actor` 字段），SPEC §9.4 按敏感操作
+分级授权，与这个 hook 的审批流程无关的角色不应看到谁驳回过、驳回了什么
+（这与「查看的是哪个 hook」无关，是角色本身的权限边界）。无权限 →
+`CodeForbidden`。
+
+**为什么按 hook id 而不是全局 `/audit?target=`（设计取舍）：** 全局端点
+需要更粗放的权限（至少 admin），否则任何持有任意一个审计相关权限码的
+用户都能查看全部资源的审计流；本端点挂在 `/hooks/{id}` 之下，天然把
+授权范围收窄到「与这一个 hook 有关的人」，不需要额外发明一个更高权限级
+别。当前唯一的消费场景（hook 页面查驳回理由）也只需要按 hook 维度查，
+全局查询留给确有需要时再补（那时可以复用同一个 `contract.AuditStore`，
+不需要改契约）。
 
 ---
 

@@ -30,7 +30,10 @@ type contractEndpoint struct {
 }
 
 // allContractEndpoints 与 docs/contracts/http-console.md「端点总表」
-// 28 条逐一对应。
+// 29 条逐一对应（28 条冻结 + 本次契约变更新增的 GET /hooks/{id}/audit，
+// 编号 29——上一轮补 reject 端点时留了一条明确的教训：「上一轮就是漏了
+// 这一步，那张表会静默少测一个端点而不会变红」，本轮新增端点时同一时刻
+// 把这张表也改掉，不留给下一轮）。
 var allContractEndpoints = []contractEndpoint{
 	{"POST", "/auth/login", false, false},
 	{"GET", "/user/info", false, false},
@@ -49,6 +52,7 @@ var allContractEndpoints = []contractEndpoint{
 	{"GET", "/hooks/{id}/versions", true, false},
 	{"POST", "/hooks/{id}/approve", false, false},
 	{"POST", "/hooks/{id}/reject", false, false},
+	{"GET", "/hooks/{id}/audit", true, false},
 	{"POST", "/templates", false, false},
 	{"PUT", "/templates/{id}", false, false},
 	{"GET", "/templates/{id}/form-schema", false, false},
@@ -62,7 +66,7 @@ var allContractEndpoints = []contractEndpoint{
 	{"POST", "/disk-policy/dryrun", false, false},
 }
 
-// TestRoutes_AllContractEndpointsReachable 断言 28 条端点全部注册且不是
+// TestRoutes_AllContractEndpointsReachable 断言 29 条端点全部注册且不是
 // 404——即便业务逻辑因为占位 id 不存在而返回业务错误码，只要不是 HTTP
 // 404，就说明路由本身被正确注册（404 只可能来自 net/http.ServeMux 找
 // 不到匹配的路由，业务层的「找不到资源」走的是 apierr 的 CodeNotFound、

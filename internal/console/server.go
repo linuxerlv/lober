@@ -52,6 +52,17 @@ type Deps struct {
 	// Audit 记录写操作的操作人与动作（§9.4）。
 	Audit contract.AuditLogger
 
+	// AuditQuery 供 GET /hooks/{id}/audit 查询审计记录（本次契约变更新增，
+	// 见 docs/contracts/http-console.md「变更记录」）。与 Audit 分开声明：
+	// 前者是审计中间件与 handler 内部使用的纯写入面，后者是本次新增的
+	// 查询面——两者语义不同的窄接口，即便装配点（cmd/lober）目前用同一个
+	// sqlite.Store 实例满足两者，Server 内部仍按各自的用途分别持有，不
+	// 强行把查询方法塞进 Audit 字段的类型里（Audit 的类型是
+	// contract.AuditLogger，只有 Log 一个方法，改它的类型会牵连
+	// auditMiddleware 与 hook.go 现有的全部调用点）。可为 nil——测试里
+	// 不需要查询能力时不必填。
+	AuditQuery contract.AuditStore
+
 	// Clock 供会话过期、任务过期等计算使用，测试里换成 fake.Clock 实现
 	// 瞬时推进。
 	Clock contract.Clock

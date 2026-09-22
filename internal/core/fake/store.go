@@ -24,6 +24,7 @@ package fake
 import (
 	"context"
 	"errors"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -54,6 +55,12 @@ type Store struct {
 	events map[string][]model.TaskEvent
 	// facts 按 task id 分桶，桶内是该任务全部 facts 的合并结果。
 	facts map[string]map[string]string
+	// audit 是全部审计记录，按写入顺序追加（append-only，与真实的
+	// audit_log 表一样没有更新或删除）。ListAudit 遍历这个切片按 Filter
+	// 筛选、按 TS 倒序返回——记录数量级是人面操作次数，规模远小于任务/
+	// 事件表，遍历代价可忽略（与 HookStore.ListHooks 用 map 遍历代价相同
+	// 的取舍）。
+	audit []contract.AuditRecord
 
 	// nextHostID 给没有可用身份键的主机分配一个回退 id（现实中不会发生，
 	// Host 的三个查找键理论上不会同时为空，这里只是防御性兜底）。
@@ -924,6 +931,51 @@ func (s *Store) GetFacts(ctx context.Context, taskID string) (map[string]string,
 	defer s.mu.RUnlock()
 
 	return copyStringMap(s.facts[taskID]), nil
+}
+
+// ---------------------------------------------------------------------------
+// AuditStore
+// ---------------------------------------------------------------------------
+
+// AppendAudit 追加一条审计记录（append-only）。
+func (s *Store) AppendAudit(ctx context.Context, record contract.AuditRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.audit = append(s.audit, record)
+	return nil
+}
+
+// ListAudit 按过滤条件列出审计记录，按 TS 倒序返回。查不到匹配记录时
+// 返回空切片而非错误（contract.AuditStore.ListAudit 文档明确要求：没有
+// 审计记录是正常状态）。
+func (s *Store) ListAudit(ctx context.Context, filter contract.AuditFilter) ([]contract.AuditRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]contract.AuditRecord, 0, len(s.audit))
+	for _, rec := range s.audit {
+		if filter.Target != "" && rec.Target != filter.Target {
+			continue
+		}
+		if filter.SinceTS != 0 && rec.TS < filter.SinceTS {
+			continue
+		}
+		if filter.UntilTS != 0 && rec.TS > filter.UntilTS {
+			continue
+		}
+		out = append(out, rec)
+	}
+
+	// 按 TS 倒序：最新的在前（§9.4 的审计用途是事后追责）。用稳定排序
+	// 保持同一时刻多条记录之间的写入顺序反转（先写入的排后面），行为
+	// 与 SQLite 实现的 "ORDER BY ts DESC, id DESC" 一致（sqlite/audit.go）。
+	sort.SliceStable(out, func(i, j int) bool { return out[i].TS > out[j].TS })
+
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------
