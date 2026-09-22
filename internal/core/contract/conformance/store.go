@@ -72,6 +72,12 @@ func RunConformanceSuite(t *testing.T, newStore func() contract.Store) {
 	t.Run("hook按digest反查改一个字节即查不到", func(t *testing.T) { testHookLookupByDigestIsExact(t, newStore) })
 	t.Run("制品导入写回OSFamily与Paths完整往返", func(t *testing.T) { testArtifactSetContentRoundTrip(t, newStore) })
 	t.Run("导入失败只改状态不清空已写入的Paths", func(t *testing.T) { testArtifactSetStateUpdateDoesNotClobberPaths(t, newStore) })
+	t.Run("审计写入后能按target查回", func(t *testing.T) { testAuditAppendThenListByTarget(t, newStore) })
+	t.Run("审计detail原文完整往返", func(t *testing.T) { testAuditDetailRoundTrip(t, newStore) })
+	t.Run("审计按时间倒序且limit生效", func(t *testing.T) { testAuditOrderedDescendingWithLimit(t, newStore) })
+	t.Run("审计查不到时返回空而不是错误", func(t *testing.T) { testAuditListEmptyIsNotError(t, newStore) })
+	t.Run("审计按时间范围过滤", func(t *testing.T) { testAuditFilterByTimeRange(t, newStore) })
+	t.Run("审计同一时刻多条记录按写入顺序倒序", func(t *testing.T) { testAuditSameTimestampOrderedByInsertionDesc(t, newStore) })
 }
 
 // ---------------------------------------------------------------------------
@@ -986,4 +992,230 @@ func testArtifactSetStateUpdateDoesNotClobberPaths(t *testing.T, newStore func()
 			"OSFamily 同样是 SetArtifactSetContent 的写回内容，状态更新不应触及它",
 			got.OSFamily, model.OSFamilyRHEL)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 审计记录（SPEC §9.4，本次契约变更新增的 AuditStore）
+// ---------------------------------------------------------------------------
+
+// testAuditAppendThenListByTarget 验证「写入后能按 target 查回来」——这是
+// 本次契约变更要补的第一层缺口的核心诉求：hook 驳回理由必须能在驳回那次
+// HTTP 响应之外，事后按 hook id 查到。如果 AppendAudit 写入的记录在
+// ListAudit(Target=同一个值) 里查不到，查询面就是摆设，等于缺口没补上。
+func testAuditAppendThenListByTarget(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+
+	rec := contract.AuditRecord{
+		TS: fixedNow, Actor: "approver-1", Action: "hook.reject",
+		Target: "hook-audit-target-1", Detail: "reason=脚本有安全隐患",
+	}
+	if err := store.AppendAudit(ctx, rec); err != nil {
+		t.Fatalf("AppendAudit 失败: %v", err)
+	}
+	// 另一个 target 的记录，验证过滤确实按 target 精确匹配，不是「只要有
+	// 记录就都返回」。
+	if err := store.AppendAudit(ctx, contract.AuditRecord{
+		TS: fixedNow, Actor: "approver-1", Action: "hook.reject",
+		Target: "hook-audit-target-其它", Detail: "reason=无关记录",
+	}); err != nil {
+		t.Fatalf("AppendAudit(其它 target) 失败: %v", err)
+	}
+
+	got, err := store.ListAudit(ctx, contract.AuditFilter{Target: "hook-audit-target-1"})
+	if err != nil {
+		t.Fatalf("ListAudit 失败: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ListAudit(Target=%q) 返回 %d 条, want 1 —— "+
+			"驳回理由查不到，作者事后无法知道自己的 hook 为什么被拒",
+			rec.Target, len(got))
+	}
+	if got[0].Actor != rec.Actor || got[0].Action != rec.Action || got[0].Target != rec.Target {
+		t.Errorf("ListAudit 查回的记录 = %+v, want 与写入时的 actor/action/target 一致: %+v", got[0], rec)
+	}
+}
+
+// testAuditDetailRoundTrip 验证 Detail 原文完整往返。detail_json 是 JSON
+// 列（schema 早已建成），JSON 列最容易在编解码时掉字段或错误转义特殊
+// 字符——本测试专门构造含引号、换行、中文与 "reason=" 前缀的 detail，
+// 覆盖 hook.go handleRejectHook 实际写入的形态（reason 是运维手填的自由
+// 文本，可能包含任意字符）。
+func testAuditDetailRoundTrip(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+
+	const tricky = `reason=脚本用了 "rm -rf /data"，第二行` + "\n" + `还有反斜杠 \ 与制表符	`
+	if err := store.AppendAudit(ctx, contract.AuditRecord{
+		TS: fixedNow, Actor: "approver-2", Action: "hook.reject",
+		Target: "hook-audit-detail-roundtrip", Detail: tricky,
+	}); err != nil {
+		t.Fatalf("AppendAudit 失败: %v", err)
+	}
+
+	got, err := store.ListAudit(ctx, contract.AuditFilter{Target: "hook-audit-detail-roundtrip"})
+	if err != nil {
+		t.Fatalf("ListAudit 失败: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ListAudit 返回 %d 条, want 1", len(got))
+	}
+	if got[0].Detail != tricky {
+		t.Errorf("Detail 往返后 = %q, want %q —— "+
+			"JSON 列编解码丢了字符，驳回理由里的引号/换行/中文会被截断或乱码，"+
+			"运维看到的理由和作者当时填的不是同一句话", got[0].Detail, tricky)
+	}
+}
+
+// testAuditOrderedDescendingWithLimit 验证「按时间倒序」与「limit 生效」
+// 这两条设计要点。同一个 target 下写入三条不同 TS 的记录，断言查回顺序
+// 是最新的在前；再验证 Limit=1 时只返回最新那一条——审计页面打开时最
+// 想看到的是最近发生的事，倒序+limit 让调用方不必先取全量再截断
+// （AuditFilter.Limit 的文档明确要求这个用法）。
+func testAuditOrderedDescendingWithLimit(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+	const target = "hook-audit-order-limit"
+
+	ts := []int64{fixedNow - 20, fixedNow - 10, fixedNow}
+	actors := []string{"actor-最早", "actor-中间", "actor-最新"}
+	for i := range ts {
+		if err := store.AppendAudit(ctx, contract.AuditRecord{
+			TS: ts[i], Actor: actors[i], Action: "hook.reject", Target: target, Detail: "reason=x",
+		}); err != nil {
+			t.Fatalf("AppendAudit(#%d) 失败: %v", i, err)
+		}
+	}
+
+	all, err := store.ListAudit(ctx, contract.AuditFilter{Target: target})
+	if err != nil {
+		t.Fatalf("ListAudit 失败: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("ListAudit 返回 %d 条, want 3", len(all))
+	}
+	wantOrder := []string{"actor-最新", "actor-中间", "actor-最早"}
+	for i, want := range wantOrder {
+		if all[i].Actor != want {
+			t.Errorf("ListAudit 第 %d 条 Actor = %q, want %q —— "+
+				"顺序不是按 TS 倒序，运维打开审计页面最先看到的会是最旧而不是最新的驳回记录",
+				i, all[i].Actor, want)
+		}
+	}
+
+	limited, err := store.ListAudit(ctx, contract.AuditFilter{Target: target, Limit: 1})
+	if err != nil {
+		t.Fatalf("ListAudit(Limit=1) 失败: %v", err)
+	}
+	if len(limited) != 1 {
+		t.Fatalf("ListAudit(Limit=1) 返回 %d 条, want 1", len(limited))
+	}
+	if limited[0].Actor != "actor-最新" {
+		t.Errorf("ListAudit(Limit=1) 返回的记录 Actor = %q, want %q —— "+
+			"Limit 应该配合倒序取「最新的 N 条」，不是任意截断",
+			limited[0].Actor, "actor-最新")
+	}
+}
+
+// testAuditSameTimestampOrderedByInsertionDesc 验证同一时刻（TS 相等）
+// 写入的多条记录之间的顺序：必须是「后写入的排前面」，与
+// SQLite 实现文档写明的 "ORDER BY ts DESC, id DESC" 语义一致（id 自增，
+// DESC 即后写入的行排前面）。
+//
+// 这条断言存在的理由：时间戳精度是秒，同一秒内并发写入并不罕见（审计
+// 中间件与 handler 内部的额外一条 Log 调用，见 hook.go
+// handleRejectHook，可能落在同一秒）。此前 fake 实现用
+// sort.SliceStable 只比较 TS，对相等的元素保持切片原有顺序（先写入的
+// 排前面），与 SQLite 的实际行为相反——但 testAuditOrderedDescendingWithLimit
+// 只覆盖了三个不同 TS 的场景，从未触发这条分叉，直到本次核对独立复现
+// 才发现。
+func testAuditSameTimestampOrderedByInsertionDesc(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+	const target = "hook-audit-same-ts"
+	sameTS := fixedNow
+
+	actors := []string{"actor-第一个写入", "actor-第二个写入", "actor-第三个写入"}
+	for _, actor := range actors {
+		if err := store.AppendAudit(ctx, contract.AuditRecord{
+			TS: sameTS, Actor: actor, Action: "hook.reject", Target: target, Detail: "reason=x",
+		}); err != nil {
+			t.Fatalf("AppendAudit(%s) 失败: %v", actor, err)
+		}
+	}
+
+	got, err := store.ListAudit(ctx, contract.AuditFilter{Target: target})
+	if err != nil {
+		t.Fatalf("ListAudit 失败: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("ListAudit 返回 %d 条, want 3", len(got))
+	}
+
+	wantOrder := []string{"actor-第三个写入", "actor-第二个写入", "actor-第一个写入"}
+	for i, want := range wantOrder {
+		if got[i].Actor != want {
+			t.Errorf("同一时刻多条记录，第 %d 条 Actor = %q, want %q —— "+
+				"同一秒内后写入的记录应排在前面（与 SQLite 的 id DESC 一致），"+
+				"顺序错了会让运维在并发驳回场景下看到过时的记录排在最前",
+				i, got[i].Actor, want)
+		}
+	}
+}
+
+// testAuditListEmptyIsNotError 验证「查不到时返回空而不是错误」——没有
+// 审计记录是正常状态（一个从未被驳回过的 hook），不是异常。如果这条
+// 断言不锁住，某个实现可能在查无记录时返回 contract.ErrNotFound，调用方
+// （HTTP handler）就被迫为一个正常状态多写一层错误处理，且容易和「target
+// 参数本身有问题」这种真正的错误混淆。
+func testAuditListEmptyIsNotError(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+
+	got, err := store.ListAudit(ctx, contract.AuditFilter{Target: "hook-从未被驳回过"})
+	if err != nil {
+		t.Fatalf("ListAudit(查无记录) err = %v, want nil —— 没有审计记录是正常状态，不是异常", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListAudit(查无记录) 返回 %d 条, want 0", len(got))
+	}
+}
+
+// testAuditFilterByTimeRange 验证 SinceTS/UntilTS 的闭区间过滤——支持
+// 「按时间范围」查询是设计要点明确列出的维度之一（区别于单纯按 target），
+// 运维排查「今天上午的驳回」这类问题时需要按时间窗口而不是逐条翻。
+func testAuditFilterByTimeRange(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+	const target = "hook-audit-time-range"
+
+	ts := []int64{fixedNow - 30, fixedNow - 20, fixedNow - 10}
+	for i, tv := range ts {
+		if err := store.AppendAudit(ctx, contract.AuditRecord{
+			TS: tv, Actor: "actor", Action: "hook.reject", Target: target, Detail: "reason=x",
+		}); err != nil {
+			t.Fatalf("AppendAudit(#%d) 失败: %v", i, err)
+		}
+	}
+
+	got, err := store.ListAudit(ctx, contract.AuditFilter{
+		Target: target, SinceTS: fixedNow - 25, UntilTS: fixedNow - 15,
+	})
+	if err != nil {
+		t.Fatalf("ListAudit 失败: %v", err)
+	}
+	if len(got) != 1 || got[0].TS != fixedNow-20 {
+		t.Errorf("ListAudit(SinceTS=%d, UntilTS=%d) 返回 %d 条（TS=%v）, want 1 条 TS=%d —— "+
+			"时间范围过滤不准，运维会漏看或多看不属于该时间窗口的记录",
+			fixedNow-25, fixedNow-15, len(got), tsList(got), fixedNow-20)
+	}
+}
+
+// tsList 提取一组审计记录的 TS，供断言失败信息里打印实际查回的时间点。
+func tsList(records []contract.AuditRecord) []int64 {
+	out := make([]int64, 0, len(records))
+	for _, r := range records {
+		out = append(out, r.TS)
+	}
+	return out
 }

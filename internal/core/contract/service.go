@@ -225,6 +225,16 @@ type LogStore interface {
 
 // AuditLogger 记人面动作（§9.4）。与任务事件（TaskEvent）分开：审计对象不
 // 止任务（还有 hook 审批、provider 配置），且必须记操作人。
+//
+// 本接口只写不查——查询面是 store.go 里的 AuditStore（本次契约变更新增）。
+// 两者故意分开：console 包的审计中间件（auditMiddleware）与 hook.go 的
+// reject handler 只需要「写一条、不关心写到哪、失败也不影响主流程」这一
+// 个能力，是 Log 这一个方法；把查询方法也塞进同一个接口会让这些纯写入的
+// 调用点被迫依赖一个它们从不使用的能力。装配点（cmd/lober）现在提供的
+// AuditLogger 实现内部持有一个 AuditStore，Log 委托给 AuditStore.AppendAudit
+// 落库，并在落库失败时降级写 slog（细节见 cmd/lober/auditlog.go 与
+// docs/real-machine/05-审计持久化.md）——调用方看到的仍然只是本接口这一个
+// 方法，实现内部换成有持久化能力的版本对调用点透明。
 type AuditLogger interface {
 	// Log 记一条审计日志。actor 是操作人标识，action 是动作名
 	// （如 "task.create"、"hook.approve"），target 是被操作对象的标识

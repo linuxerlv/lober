@@ -1,6 +1,7 @@
-// 本文件实现 hook 六个端点：创建、列表、更新（建新版本）、校验、列版本、
-// 审批。对应实现计划任务 4，依据 docs/contracts/http-console.md §4、
-// SPEC §2.2、§7.5、§9.4、§12.7。
+// 本文件实现 hook 八个端点：创建、列表、更新（建新版本）、校验、列版本、
+// 审批、驳回、审计查询。对应实现计划任务 4，依据 docs/contracts/http-console.md
+// §4、SPEC §2.2、§7.5、§9.4、§12.7；驳回与审计查询是本次契约变更新增
+// （见 docs/contracts/http-console.md「变更记录」）。
 package console
 
 import (
@@ -17,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lober/lober/internal/apierr"
+	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
 )
 
@@ -36,6 +38,11 @@ func (s *Server) routesHook() {
 	// 同样不在路由层用单一权限码卡死（本次契约变更，见
 	// docs/contracts/http-console.md「变更记录」）。
 	s.handleFunc("POST", "/hooks/{id}/reject", "", "hook.reject", s.handleRejectHook)
+	// audit 端点（本次契约变更新增，端点编号 29，见
+	// docs/contracts/http-console.md「变更记录」）：权限是「hook:write 或
+	// hook:approve 或 admin」三者之一，不是单一权限码，因此同样不在路由层
+	// 用 codeXxx 卡死，判定逻辑在 handleHookAudit 内部完成。
+	s.handleFunc("GET", "/hooks/{id}/audit", "", "", s.handleHookAudit)
 }
 
 // hookItem 是响应形态，字段名与 model.Hook 对应。
@@ -523,11 +530,13 @@ type hookRejectRequest struct {
 	Reason string `json:"reason"`
 }
 
-// hookRejectResponse 在 HookItem 之外附带回显的驳回理由。这是本次契约
-// 变更下「理由能被查到」的第一层保障：审计日志是第二层（写入
-// action=hook.reject 的 detail），但 AuditLogger 接口只写不读、console
-// 包也没有任何读取审计日志的 HTTP 端点，因此响应体回显是当前唯一能保证
-// 「调用方（前端）当场拿到理由」的路径（详见 contractGaps）。
+// hookRejectResponse 在 HookItem 之外附带回显的驳回理由——这是「调用方
+// （前端）当场拿到理由」最快的路径，不需要多一次请求。事后查（作者当时
+// 不在场）的路径是 GET /hooks/{id}/audit（本次契约变更新增，见
+// handleHookAudit），两条路径并存：当场回显优化首次可见性，事后查询
+// 解决「审计记录只在写入那一刻的响应体里可见、之后无法复原」这个更深的
+// 缺口（此前 AuditLogger 接口只写不读，且没有任何 HTTP 端点能查审计
+// 记录，见 docs/real-machine/05-审计持久化.md）。
 type hookRejectResponse struct {
 	hookItem
 	Reason string `json:"reason"`
@@ -610,4 +619,73 @@ func (s *Server) handleRejectHook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apierr.WriteOK(w, hookRejectResponse{hookItem: toHookItem(updated), Reason: req.Reason})
+}
+
+// auditRecordItem 是 GET /hooks/{id}/audit 的响应元素形态，字段名与
+// contract.AuditRecord 对应。
+type auditRecordItem struct {
+	TS     int64  `json:"ts"`
+	Actor  string `json:"actor"`
+	Action string `json:"action"`
+	Target string `json:"target"`
+	Detail string `json:"detail"`
+}
+
+func toAuditRecordItem(r contract.AuditRecord) auditRecordItem {
+	return auditRecordItem{TS: r.TS, Actor: r.Actor, Action: r.Action, Target: r.Target, Detail: r.Detail}
+}
+
+// handleHookAudit 处理 GET /hooks/{id}/audit（本次契约变更新增，端点
+// 编号 29，见 docs/contracts/http-console.md「变更记录」）：按 hook id
+// 查该 hook 的审计记录，最新的在前。
+//
+// 存在的理由：hook 驳回理由此前只在驳回那一次的 HTTP 响应体里可见
+// （hookRejectResponse.Reason）——作者如果当时不在场，之后没有任何 API
+// 能查到自己的 hook 为什么被驳回，这是本次契约变更要补的第一层缺口
+// （详见 docs/real-machine/05-审计持久化.md）。本端点让这条信息随时可查，
+// 不再要求作者必须在驳回发生的那一刻在场。
+//
+// 权限：hook-author（hook:write）、hook-approver（hook:approve）、
+// admin 三者之一即可——这三个角色正是「与这个 hook 的审批流程有关的人」
+// （SPEC §9.4：hook 的创建/编辑/激活审批各自独立于其它资源分权）；不
+// 开放给 operator/viewer，审计记录含操作人信息，无关角色不应看到别人的
+// 操作留痕。三者取一用 OR 语义，不是单一权限码能表达的，因此本端点在
+// 路由层不传 code（routesHook 的注释已说明），判定放在本函数内部——与
+// handleApproveHook/handleRejectHook 的既有风格一致。
+func (s *Server) handleHookAudit(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AuditQuery == nil {
+		apierr.WriteOK(w, []auditRecordItem{})
+		return
+	}
+
+	user, ok := userFromContext(r.Context())
+	if !ok {
+		apierr.WriteError(w, apierr.New(http.StatusUnauthorized, apierr.CodeUnauthenticated,
+			"未登录或登录状态已过期，请重新登录"))
+		return
+	}
+	codes := codesForRoles(user.Roles)
+	// admin 不需要单独判断：roleCodes 表（rbac.go）已经把 codeHookWrite 与
+	// codeHookApprove 都聚合进了 roleAdmin，因此持有 admin 角色的用户在
+	// codesForRoles 展开后天然满足下面两个 hasCode 之一，不需要第三个
+	// 分支。
+	if !hasCode(codes, codeHookWrite) && !hasCode(codes, codeHookApprove) {
+		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeForbidden,
+			"查看 hook 审计记录需要 hook:write 或 hook:approve 权限（admin 通过聚合权限满足）"))
+		return
+	}
+
+	id := r.PathValue("id")
+	limit := parseLimit(r.URL.Query().Get("limit"), defaultListLimit)
+	records, err := s.deps.AuditQuery.ListAudit(r.Context(), contract.AuditFilter{Target: id, Limit: limit})
+	if err != nil {
+		writeInternal(w, err)
+		return
+	}
+
+	items := make([]auditRecordItem, 0, len(records))
+	for _, rec := range records {
+		items = append(items, toAuditRecordItem(rec))
+	}
+	apierr.WriteOK(w, items)
 }

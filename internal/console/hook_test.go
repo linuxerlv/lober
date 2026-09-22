@@ -442,6 +442,98 @@ func TestHook_RejectReasonIsQueryableViaAuditLog(t *testing.T) {
 	}
 }
 
+// TestHook_AuditEndpointReturnsRejectReasonAfterTheFact 锁住本次契约变更
+// 要补的第一层缺口：驳回理由必须能在驳回发生的那次 HTTP 响应之外，事后
+// 用一个独立的查询请求拿回来——用真的 httptest 请求走完整链路（登录 →
+// 建 hook → 审批 → 驳回 → 用另一次独立请求查审计），而不是像上面
+// TestHook_RejectReasonIsQueryableViaAuditLog 那样直接读 stub 的内存切片
+// （那条测试证明的是「中间件确实调用了 Log」，不是「有 API 能查到」，
+// 两者是本任务描述的两层缺口）。
+func TestHook_AuditEndpointReturnsRejectReasonAfterTheFact(t *testing.T) {
+	ts := newTestServer(t)
+	authorTok := ts.login("carol-author")
+	approverTok := ts.login("dave-approver")
+
+	rr := ts.doJSON("POST", "/console/v1/hooks", authorTok, validHookBody())
+	var created struct {
+		Data hookItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &created)
+	ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/approve", authorTok, nil)
+
+	const reason = "params_schema 里漏了必填的 disk_target 字段"
+	rr = ts.doJSON("POST", "/console/v1/hooks/"+created.Data.ID+"/reject", approverTok,
+		map[string]string{"reason": reason})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("驳回应成功: %d, body=%s", rr.Code, rr.Body.String())
+	}
+
+	// 作者事后（用一次全新的、与驳回无关的请求）查自己 hook 的审计记录，
+	// 应该能拿到驳回理由——这正是本次契约变更要解决的问题：作者当时不
+	// 在场，也不该因此永远失去查理由的机会。
+	rr = ts.doJSON("GET", "/console/v1/hooks/"+created.Data.ID+"/audit", authorTok, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("author 查审计应成功: %d, body=%s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Data []auditRecordItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &resp)
+
+	found := false
+	for _, rec := range resp.Data {
+		if rec.Action == "hook.reject" && rec.Target == created.Data.ID && containsSubstr(rec.Detail, reason) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("GET /hooks/{id}/audit 应查到 action=hook.reject 且 detail 含理由原文的记录，实际 data=%+v", resp.Data)
+	}
+
+	// 审批人一样能查（三个允许角色之二）。
+	rr = ts.doJSON("GET", "/console/v1/hooks/"+created.Data.ID+"/audit", approverTok, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("approver 查审计应成功: %d, body=%s", rr.Code, rr.Body.String())
+	}
+
+	// operator 与 viewer 都没有 hook:write/hook:approve，应被拒绝——审计
+	// 记录含操作人信息，无关角色不应看到别人的操作留痕。
+	operatorTok := ts.login("bob-operator")
+	rr = ts.doJSON("GET", "/console/v1/hooks/"+created.Data.ID+"/audit", operatorTok, nil)
+	var envelope struct {
+		Code int `json:"code"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &envelope)
+	if envelope.Code != int(apierr.CodeForbidden) {
+		t.Errorf("operator 查 hook 审计应被拒绝，code=%d, want %d, body=%s", envelope.Code, apierr.CodeForbidden, rr.Body.String())
+	}
+}
+
+// TestHook_AuditEndpointEmptyForNeverRejectedHook 锁住「查不到时返回空
+// 而不是错误」——一个从未被驳回过的 hook 是正常状态，不是异常。
+func TestHook_AuditEndpointEmptyForNeverRejectedHook(t *testing.T) {
+	ts := newTestServer(t)
+	authorTok := ts.login("carol-author")
+
+	rr := ts.doJSON("POST", "/console/v1/hooks", authorTok, validHookBody())
+	var created struct {
+		Data hookItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &created)
+
+	rr = ts.doJSON("GET", "/console/v1/hooks/"+created.Data.ID+"/audit", authorTok, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("查审计应成功（即便没有记录）: %d, body=%s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Data []auditRecordItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &resp)
+	if len(resp.Data) != 0 {
+		t.Errorf("从未被驳回过的 hook 查审计应返回空数组，实际 %+v", resp.Data)
+	}
+}
+
 // TestHook_RejectDoesNotModifyBodyOrDigest 锁住「驳回不改动正文与
 // digest」——这是本轮测试里最重要的一条：SPEC §2.7 的浮动引用防护要求
 // 「hook 正文不可变，模板 pin 的是 digest，审批过的内容不会被偷换」。

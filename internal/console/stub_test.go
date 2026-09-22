@@ -184,13 +184,26 @@ var _ contract.EventBus = (*stubEventBus)(nil)
 // AuditLogger 桩
 // ---------------------------------------------------------------------------
 
-// stubAuditLogger 记录全部 Log 调用，供审计中间件测试断言五项内容。
+// stubAuditLogger 记录全部 Log 调用，供审计中间件测试断言五项内容；同时
+// 在 store 非 nil 时把每条记录写透到一个真正的 contract.AuditStore
+// ——这是为了让测试环境下 Deps.Audit（本桩）与 Deps.AuditQuery（通常是
+// 同一个 fake.Store）之间的关系，与生产环境下 dbAuditLogger 委托给
+// AuditStore.AppendAudit、AuditQuery 直接是同一个 sqlite.Store 的关系
+// 保持一致：如果本桩只记进自己的 entries 切片、不写透到 store，
+// GET /hooks/{id}/audit 之类依赖 AuditQuery 的测试就会拿到空结果，
+// 与真实部署下的行为脱节（entries 与 all() 仍然保留，供只需要断言
+// 「中间件确实调用了 Log」的既有测试使用，不强迫它们改成查 store）。
 type stubAuditLogger struct {
 	mu      sync.Mutex
 	entries []auditEntry
+	store   contract.AuditStore
+	clock   contract.Clock
 
 	// failNext 为真时下一次 Log 调用返回错误——供测试验证「审计写入失败
-	// 不影响主流程」。
+	// 不影响主流程」。写透到 store 的那一步不受 failNext 影响：failNext
+	// 模拟的是「本桩返回给调用方的错误」，与「记录是否已经落进可查询的
+	// store」是两件事，现实中 dbAuditLogger 落库失败时也不会因此撤回
+	// 已经写入 slog 的兜底记录。
 	failNext bool
 }
 
@@ -203,10 +216,25 @@ type auditEntry struct {
 
 func (a *stubAuditLogger) Log(ctx context.Context, actor, action, target, detail string) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.entries = append(a.entries, auditEntry{Actor: actor, Action: action, Target: target, Detail: detail})
-	if a.failNext {
-		a.failNext = false
+	failed := a.failNext
+	a.failNext = false
+	store := a.store
+	clock := a.clock
+	a.mu.Unlock()
+
+	if store != nil {
+		ts := int64(0)
+		if clock != nil {
+			ts = clock.Now()
+		}
+		// 错误被有意吞掉：与 dbAuditLogger（cmd/lober/auditlog.go）的降级
+		// 语义一致，写透失败不应该让本桩的 Log 调用方看到一个与
+		// failNext 无关的额外错误来源。
+		_ = store.AppendAudit(ctx, contract.AuditRecord{TS: ts, Actor: actor, Action: action, Target: target, Detail: detail})
+	}
+
+	if failed {
 		return fmt.Errorf("stub: 模拟审计写入失败")
 	}
 	return nil
@@ -280,7 +308,7 @@ func newTestServer(t *testing.T) *testServer {
 
 	store := fake.NewStore()
 	clock := fake.NewClock()
-	audit := &stubAuditLogger{}
+	audit := &stubAuditLogger{store: store, clock: clock}
 	sm := &stubStateMachine{t: t}
 	bus := &stubEventBus{}
 
@@ -306,6 +334,7 @@ func newTestServer(t *testing.T) *testServer {
 		DiskPlanner:    &stubDiskPlanner{},
 		EventBus:       bus,
 		Audit:          audit,
+		AuditQuery:     store,
 		Clock:          clock,
 		Users:          users,
 	}
