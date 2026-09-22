@@ -238,6 +238,14 @@ SPEC 附录 A.15 记录过真实案例：有用户报告 UEFI 固件明确发了
   永远到不了网关。**不对怎么办**：检查 user-class（option 77）判定规则
   是否存在、且（若是 dhcpd）判定顺序是否确实排在架构判定**之前**——
   dhcpd 靠 `elsif` 顺序保证互斥，顺序颠倒是这条失败模式最常见的成因。
+  **服务端判定逻辑本身（非真实固件）已在 WSL debian-13 上用隔离 veth +
+  真实 dhclient 核对通过**（2026-09-22，dhcpd 与 Kea 均测试了
+  `client-arch=7` 与 `user-class=iPXE` 同时出现的场景，均正确返回
+  `boot.ipxe` URL 而非架构专属二进制，详见
+  `docs/real-machine/01-配置语法核对.md` 第 2.1/3.2 节）——**这条勾选框
+  仍不打勾**，因为它验证的是「真实固件」这一端，本轮测试用的是可控客户端
+  模拟同样的 option 组合，两者不是同一件事，仍需真实 iPXE 固件跑一次
+  完整验证。
 - [ ] **未知架构的机器拿不到任何引导文件名，且日志里有这次 DISCOVER 的
   记录（含它上报的 client-arch 原始值）。** 这一条验证的是「静默失败」
   与「配置遗漏」的区别——如果连日志都没有记录到这次请求，问题可能在
@@ -267,6 +275,15 @@ SPEC 附录 A.15 记录过真实案例：有用户报告 UEFI 固件明确发了
 这个编译选项，补装不上——只能整个重新编译 nginx 或换一个自带此选项的
 发行版包，返工成本远高于装机前花两分钟确认。
 
+- [x] **已在 WSL debian-13 上核对通过**（2026-09-22，命令：`nginx -V`）：
+  Debian trixie 的 `nginx` 核心包（`1.26.3-3+deb13u9`，`nginx-core`/
+  `nginx-full`/`nginx-light`/`nginx-extras` 四个变体共享同一个核心二进制，
+  与选哪个变体无关）**同时带有 `--with-threads` 与
+  `--with-http_secure_link_module` 两个编译选项**，`sendfile`+`aio threads`
+  与 Phase 2 的 `secure_link` 均可正常工作。详见
+  `docs/real-machine/01-配置语法核对.md` 第 5 节。**此结论只对 Debian
+  trixie 成立**——若目标机房用其它发行版或其它 Debian 版本，仍需按下面的
+  命令重跑一次核对（秒级完成，不构成负担）。
 - [ ] **命令**：
 
   ```bash
