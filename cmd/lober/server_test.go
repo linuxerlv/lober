@@ -96,6 +96,15 @@ func TestRunServers_SyslogReceivesUDPPacket(t *testing.T) {
 	// runServers 当前的接口形状（只接收配置里的地址字符串，不返回实际
 	// 绑定结果）不匹配。选一个测试专用高位端口，冲突概率低。
 	cfg.Gateway.SyslogListen = "127.0.0.1:19514"
+	// 两个 HTTP listener 改成 :0。本测试只关心 syslog 那一路，但
+	// runServers 是「任一 listener 绑定失败就整体返回错误」的语义——
+	// 沿用 testConfig 的固定端口 18080/18090 会让本测试在那两个端口被
+	// 占用时失败，而失败现象是「syslog 日志文件不存在」，与真正的原因
+	// （网关端口冲突）毫无关联，极难定位。实际踩过一次：一个被中断的
+	// 进程在 18080 上留下僵死监听（进程已退出、socket 未回收），本测试
+	// 连续三次红，而 syslog 本身完全正常。
+	cfg.Gateway.Listen = "127.0.0.1:0"
+	cfg.Console.Listen = "127.0.0.1:0"
 	app := buildAppWithDBForTest(t, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())

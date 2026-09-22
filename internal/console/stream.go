@@ -59,13 +59,25 @@ func (s *Server) handleTaskStream(w http.ResponseWriter, r *http.Request) {
 
 	afterSeq := parseLastEventID(r.Header.Get("Last-Event-ID"))
 
+	// pushed 记录本连接已推送过的事件 Seq。单靠 afterSeq 水位不够：
+	// contract.EventStore 规定 Seq 非正数表示非信号来源的事件（扫描循环判
+	// 超时、人工操作、任务创建），而水位初值是 0、只在 e.Seq > afterSeq 时
+	// 抬高 —— 非正 Seq 永远不满足，水位卡在 0，于是每轮轮询都把这些事件
+	// 重新推一遍。真机上的现象是任务详情页历史事件每 1.5 秒刷屏一次，且
+	// 重复内容挤占连接、把真正的新信号延迟到十秒量级。
+	//
+	// 用 Seq 做键是安全的：task_events 上 (task_id, seq) 有唯一索引，
+	// 同一任务内 Seq 唯一标识一条事件。水位仍然保留 —— 它让查询在 SQL 侧
+	// 就剪掉正 Seq 的历史，去重集合只兜非正 Seq 那部分。
+	pushed := make(map[int]struct{})
+
 	ctx := r.Context()
 	ticker := time.NewTicker(streamPollInterval)
 	defer ticker.Stop()
 
 	// 首次立即推送一批已有事件（不等第一个 tick），否则客户端首次连接要
 	// 等一个轮询周期才看到任何数据。
-	if done := s.streamPushBatch(ctx, w, flusher, taskID, &afterSeq); done {
+	if done := s.streamPushBatch(ctx, w, flusher, taskID, &afterSeq, pushed); done {
 		return
 	}
 
@@ -77,7 +89,7 @@ func (s *Server) handleTaskStream(w http.ResponseWriter, r *http.Request) {
 			// 攒住一堆连接）。
 			return
 		case <-ticker.C:
-			if done := s.streamPushBatch(ctx, w, flusher, taskID, &afterSeq); done {
+			if done := s.streamPushBatch(ctx, w, flusher, taskID, &afterSeq, pushed); done {
 				return
 			}
 		}
@@ -87,13 +99,20 @@ func (s *Server) handleTaskStream(w http.ResponseWriter, r *http.Request) {
 // streamPushBatch 拉取 taskID 在 afterSeq 之后的全部新事件并逐条推送，
 // 每条推送后 flush。若本批事件里出现终态事件，推送完成后返回 done=true，
 // 调用方据此关闭连接（主动关流，不等客户端断开）。
-func (s *Server) streamPushBatch(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, taskID string, afterSeq *int) bool {
+func (s *Server) streamPushBatch(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, taskID string, afterSeq *int, pushed map[int]struct{}) bool {
 	events, err := s.deps.Events.ListEvents(ctx, taskID, contract.EventFilter{AfterSeq: *afterSeq})
 	if err != nil {
 		return false
 	}
 
 	for _, e := range events {
+		// 已推过的不再推。非正 Seq 的事件只能靠这里拦住 —— 它们抬不高水位，
+		// 每轮查询都会被重新取回来（见 handler 里 pushed 的说明）。
+		if _, ok := pushed[e.Seq]; ok {
+			continue
+		}
+		pushed[e.Seq] = struct{}{}
+
 		writeSSEEvent(w, e)
 		flusher.Flush()
 		if e.Seq > *afterSeq {
