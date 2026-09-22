@@ -77,6 +77,7 @@ func RunConformanceSuite(t *testing.T, newStore func() contract.Store) {
 	t.Run("审计按时间倒序且limit生效", func(t *testing.T) { testAuditOrderedDescendingWithLimit(t, newStore) })
 	t.Run("审计查不到时返回空而不是错误", func(t *testing.T) { testAuditListEmptyIsNotError(t, newStore) })
 	t.Run("审计按时间范围过滤", func(t *testing.T) { testAuditFilterByTimeRange(t, newStore) })
+	t.Run("审计同一时刻多条记录按写入顺序倒序", func(t *testing.T) { testAuditSameTimestampOrderedByInsertionDesc(t, newStore) })
 }
 
 // ---------------------------------------------------------------------------
@@ -1113,6 +1114,52 @@ func testAuditOrderedDescendingWithLimit(t *testing.T, newStore func() contract.
 		t.Errorf("ListAudit(Limit=1) 返回的记录 Actor = %q, want %q —— "+
 			"Limit 应该配合倒序取「最新的 N 条」，不是任意截断",
 			limited[0].Actor, "actor-最新")
+	}
+}
+
+// testAuditSameTimestampOrderedByInsertionDesc 验证同一时刻（TS 相等）
+// 写入的多条记录之间的顺序：必须是「后写入的排前面」，与
+// SQLite 实现文档写明的 "ORDER BY ts DESC, id DESC" 语义一致（id 自增，
+// DESC 即后写入的行排前面）。
+//
+// 这条断言存在的理由：时间戳精度是秒，同一秒内并发写入并不罕见（审计
+// 中间件与 handler 内部的额外一条 Log 调用，见 hook.go
+// handleRejectHook，可能落在同一秒）。此前 fake 实现用
+// sort.SliceStable 只比较 TS，对相等的元素保持切片原有顺序（先写入的
+// 排前面），与 SQLite 的实际行为相反——但 testAuditOrderedDescendingWithLimit
+// 只覆盖了三个不同 TS 的场景，从未触发这条分叉，直到本次核对独立复现
+// 才发现。
+func testAuditSameTimestampOrderedByInsertionDesc(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+	const target = "hook-audit-same-ts"
+	sameTS := fixedNow
+
+	actors := []string{"actor-第一个写入", "actor-第二个写入", "actor-第三个写入"}
+	for _, actor := range actors {
+		if err := store.AppendAudit(ctx, contract.AuditRecord{
+			TS: sameTS, Actor: actor, Action: "hook.reject", Target: target, Detail: "reason=x",
+		}); err != nil {
+			t.Fatalf("AppendAudit(%s) 失败: %v", actor, err)
+		}
+	}
+
+	got, err := store.ListAudit(ctx, contract.AuditFilter{Target: target})
+	if err != nil {
+		t.Fatalf("ListAudit 失败: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("ListAudit 返回 %d 条, want 3", len(got))
+	}
+
+	wantOrder := []string{"actor-第三个写入", "actor-第二个写入", "actor-第一个写入"}
+	for i, want := range wantOrder {
+		if got[i].Actor != want {
+			t.Errorf("同一时刻多条记录，第 %d 条 Actor = %q, want %q —— "+
+				"同一秒内后写入的记录应排在前面（与 SQLite 的 id DESC 一致），"+
+				"顺序错了会让运维在并发驳回场景下看到过时的记录排在最前",
+				i, got[i].Actor, want)
+		}
 	}
 }
 

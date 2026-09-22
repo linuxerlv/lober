@@ -953,8 +953,13 @@ func (s *Store) ListAudit(ctx context.Context, filter contract.AuditFilter) ([]c
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	// 反向遍历 s.audit（从最后写入的开始）：s.audit 本身按写入顺序追加，
+	// 反向遍历后 out 里的相对顺序就是「后写入的排前面」。这一步是让下面
+	// 的稳定排序在同一时刻多条记录之间也能正确倒转顺序的前提——见下方
+	// 排序那行的说明。
 	out := make([]contract.AuditRecord, 0, len(s.audit))
-	for _, rec := range s.audit {
+	for i := len(s.audit) - 1; i >= 0; i-- {
+		rec := s.audit[i]
 		if filter.Target != "" && rec.Target != filter.Target {
 			continue
 		}
@@ -967,9 +972,14 @@ func (s *Store) ListAudit(ctx context.Context, filter contract.AuditFilter) ([]c
 		out = append(out, rec)
 	}
 
-	// 按 TS 倒序：最新的在前（§9.4 的审计用途是事后追责）。用稳定排序
-	// 保持同一时刻多条记录之间的写入顺序反转（先写入的排后面），行为
-	// 与 SQLite 实现的 "ORDER BY ts DESC, id DESC" 一致（sqlite/audit.go）。
+	// 按 TS 倒序：最新的在前（§9.4 的审计用途是事后追责）。out 此时已经是
+	// 反向写入顺序（见上面的反向遍历），sort.SliceStable 只按 TS 比较、
+	// 对相等的元素保持 out 当前的相对顺序不变——两者合起来，同一时刻多条
+	// 记录之间的顺序就是「后写入的排前面」，与 SQLite 实现的
+	// "ORDER BY ts DESC, id DESC" 一致（sqlite/audit.go：id 自增，DESC
+	// 即后写入的行排前面）。若改成正向遍历 s.audit 再排序，稳定排序会让
+	// 同一时刻的记录保持「先写入的排前面」，与 SQLite 的行为相反——这正是
+	// 本函数曾经的实现方式，直到一条覆盖同秒多条记录的测试才把它证伪。
 	sort.SliceStable(out, func(i, j int) bool { return out[i].TS > out[j].TS })
 
 	if filter.Limit > 0 && len(out) > filter.Limit {
