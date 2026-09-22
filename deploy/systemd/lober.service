@@ -61,14 +61,13 @@ Group=CHANGE-ME-lober-group
 ExecStartPre=/opt/lober/bin/lober -config /etc/lober/lober.yaml -check
 ExecStart=/opt/lober/bin/lober -config /etc/lober/lober.yaml
 
-# 要点 2：TimeoutStopSec 必须长于装配点（cmd/lober 任务 4 server.go）的优雅
+# 要点 2：TimeoutStopSec 必须长于装配点（cmd/lober/server.go）的优雅
 # 关闭宽限期，否则 systemd 会在收尾完成前强杀进程，导致在途的机器侧请求
 # （引导脚本获取、应答文件获取、信号上报）被硬中断。
 #
-# 本文件写作时 cmd/lober/server.go 尚未在本 worktree 实现（七个模块的代码
-# 在其它并行分支上），无法读到该宽限期的实际常量值。这里取 30 秒作为
-# 保守上限（一般优雅关闭宽限期设计在个位数到十几秒之间），并要求：
-# ExecStart 装配点实现落地后，运维/评审需核对该常量 < 30，否则调大本值。
+# 已核实：cmd/lober/server.go 里 shutdownGrace = 15 * time.Second（本轮在
+# WSL debian-13 上核对语法与语义时读到的实际值），15 < 30，本值仍有效。
+# 若日后该常量改大到 >= 30，需同步调大本值。
 TimeoutStopSec=30
 
 # 要点 6：失败自动重启，但要有重启间隔，避免配置错误或依赖不可用时

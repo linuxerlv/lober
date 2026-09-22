@@ -12,9 +12,6 @@
 
 ## 部署前必跑的校验命令
 
-本机是 Windows 开发环境，没有 dnsmasq，以下命令**无法在此验证，必须在目标 Linux 主机
-上补做**：
-
 ```bash
 # 1. 语法校验
 dnsmasq --test --conf-file=/etc/dnsmasq.d/lober.conf
@@ -23,10 +20,14 @@ dnsmasq --test --conf-file=/etc/dnsmasq.d/lober.conf
 tcpdump -i <lober.conf 里 interface= 指定的网卡> -vvv -s0 port 67 or port 68
 ```
 
+**第 1 条已在 WSL debian-13 上核对通过**（2026-09-22，占位符替换成测试值后
+运行，`dnsmasq: syntax check OK.`），详见
+`docs/real-machine/01-配置语法核对.md` 第 1 节。
+
 `dnsmasq --test` 只能验证语法，验证不了「这台 UEFI 机器真的报 7 而不是别的值」——
-这一点只能靠第 2 条命令现场核对，SPEC 附录 B 把 option 93 实机取值列为待核实项，
-尤其**国产 ARM 平台（飞腾/鲲鹏）是否规范地报 11**，MVP 阶段没有真实 ARM64 硬件可测时
-这一条留待有硬件时补做。
+这一点只能靠第 2 条命令现场核对，**仍需真实固件，WSL 无法模拟**。SPEC 附录 B
+把 option 93 实机取值列为待核实项，尤其**国产 ARM 平台（飞腾/鲲鹏）是否规范地
+报 11**，MVP 阶段没有真实 ARM64 硬件可测时这一条留待有硬件时补做。
 
 ---
 
