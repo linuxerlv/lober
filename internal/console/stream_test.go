@@ -221,3 +221,50 @@ func TestStream_FlushCalledPerEvent(t *testing.T) {
 		t.Errorf("flush 次数 = %d, want >= 3（写头 1 次 + 两条事件各 1 次）", rr.count())
 	}
 }
+
+// TestStream_NonPositiveSeqEventNotRepushed 锁住「非正 seq 的事件只推一次」。
+//
+// contract.EventStore 明确规定 event.Seq 非正数表示非信号来源的事件（扫描
+// 循环判超时、人工操作、任务创建）。而 SSE 的续传水位 afterSeq 初值是 0，
+// 推送时只在 e.Seq > *afterSeq 才抬高水位 —— 非正 seq 永远不满足这个条件，
+// 于是水位卡在 0，每轮询一次就把这些事件重新推一遍。
+//
+// 不锁住的后果（QEMU 真机上实测到的现象）：运维打开任务详情页，历史事件
+// 每 1.5 秒重复刷屏一次；更糟的是重复内容会挤占连接，把真正的新信号事件
+// 的到达延迟拖到十秒量级 —— 而 §12.8 做 SSE 的全部理由就是实时看到装机
+// 进展。非终态任务不会主动关流，所以这个重放会一直持续到运维关页面。
+func TestStream_NonPositiveSeqEventNotRepushed(t *testing.T) {
+	ts := newTestServer(t)
+	ctx := t.Context()
+
+	// 非终态任务：不会主动关流，轮询会一直进行 —— 这是暴露该 bug 的前提。
+	if _, err := ts.Store.CreateTask(ctx, model.Task{
+		ID: "task-nonpos", State: model.TaskStateInstalling, Version: 1,
+		CurrentPhase: model.PhasePackages,
+	}); err != nil {
+		t.Fatalf("准备任务失败: %v", err)
+	}
+	// seq 非正：由实现分配的非信号来源事件（这里显式传 0 走同一条路径）。
+	if _, err := ts.Store.AppendEvent(ctx, model.TaskEvent{
+		TaskID: "task-nonpos", Seq: 0, Phase: model.PhasePending,
+		Level: model.EventLevelInfo, Message: "任务已创建",
+	}); err != nil {
+		t.Fatalf("准备非正 seq 事件失败: %v", err)
+	}
+
+	tok := ts.login("bob-operator")
+	// 留出足够时间让轮询至少触发两轮（间隔 1.5s）。
+	reqCtx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	req := newJSONRequest(t, "GET", "/console/v1/tasks/task-nonpos/stream", nil).WithContext(reqCtx)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rr := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	ts.Server.ServeHTTP(rr, req)
+
+	got := strings.Count(rr.Body.String(), "任务已创建")
+	if got != 1 {
+		t.Errorf("非正 seq 事件被推送 %d 次, want 1 —— 水位 afterSeq 没有被非正 seq 抬高，"+
+			"每轮轮询都会重放它（contract.EventStore 规定非正 seq 是合法的非信号来源事件）", got)
+	}
+}
