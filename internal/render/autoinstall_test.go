@@ -48,6 +48,9 @@ func minimalAutoinstallCtx() model.RenderContext {
 		FinalizeToken: fixedFinalizeToken,
 		SyslogHost:    "10.10.0.1",
 		SyslogPort:    514,
+		RootSSHPublicKeys: []string{
+			"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober",
+		},
 	}
 }
 
@@ -356,6 +359,113 @@ func TestSignalPoints_UbuntuRebootingAtEndOfLastStage(t *testing.T) {
 	lastItem := doc.Autoinstall.LateCommands[len(doc.Autoinstall.LateCommands)-1]
 	if !strings.Contains(lastItem, `signal "rebooting"`) {
 		t.Errorf("late-commands 的最后一项应包含 rebooting 信号，got 最后一项:\n%s", lastItem)
+	}
+}
+
+// TestAutoinstall_SSHKeyInjected 锁住本轮核心行为："identity.password 锁定
+// 密码登录"这一半意图之外，公钥必须真正落进 ssh.authorized-keys，且
+// ssh.install-server 必须为 true（不装 openssh-server 就没有 sshd 可登录，
+// 公钥配置再对也没用，SPEC §1.5）。
+func TestAutoinstall_SSHKeyInjected(t *testing.T) {
+	ctx := minimalAutoinstallCtx()
+	out, err := AssembleAutoinstall(ctx)
+	if err != nil {
+		t.Fatalf("AssembleAutoinstall 返回错误: %v", err)
+	}
+
+	var doc struct {
+		Autoinstall struct {
+			SSH struct {
+				InstallServer  bool     `yaml:"install-server"`
+				AuthorizedKeys []string `yaml:"authorized-keys"`
+			} `yaml:"ssh"`
+		} `yaml:"autoinstall"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("解析失败: %v\n输出:\n%s", err, out)
+	}
+	if !doc.Autoinstall.SSH.InstallServer {
+		t.Errorf("ssh.install-server 应为 true（不装 openssh-server 就没有 sshd 可登录），got:\n%s", out)
+	}
+	if len(doc.Autoinstall.SSH.AuthorizedKeys) != 1 || doc.Autoinstall.SSH.AuthorizedKeys[0] != ctx.RootSSHPublicKeys[0] {
+		t.Errorf("ssh.authorized-keys = %v, want [%q]", doc.Autoinstall.SSH.AuthorizedKeys, ctx.RootSSHPublicKeys[0])
+	}
+}
+
+// TestAutoinstall_MultipleSSHKeysAllInjected 锁住多把公钥全部保留。
+func TestAutoinstall_MultipleSSHKeysAllInjected(t *testing.T) {
+	ctx := minimalAutoinstallCtx()
+	ctx.RootSSHPublicKeys = []string{
+		"ssh-ed25519 AAAAalice alice@lober",
+		"ssh-rsa AAAAbob bob@lober",
+	}
+	out, err := AssembleAutoinstall(ctx)
+	if err != nil {
+		t.Fatalf("AssembleAutoinstall 返回错误: %v", err)
+	}
+	var doc struct {
+		Autoinstall struct {
+			SSH struct {
+				AuthorizedKeys []string `yaml:"authorized-keys"`
+			} `yaml:"ssh"`
+		} `yaml:"autoinstall"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if len(doc.Autoinstall.SSH.AuthorizedKeys) != 2 {
+		t.Fatalf("ssh.authorized-keys 长度 = %d, want 2 —— 团队多人且轮换期需要新旧并存，"+
+			"不能只保留第一把，got: %v", len(doc.Autoinstall.SSH.AuthorizedKeys), doc.Autoinstall.SSH.AuthorizedKeys)
+	}
+}
+
+// TestAutoinstall_EmptySSHKeysRejected 锁住"渲染器万一拿到空值就返回错误
+// 而绝不再写一个假公钥"这条防御，与 kickstart.go baseDirectives 同一个
+// 设计要点。
+func TestAutoinstall_EmptySSHKeysRejected(t *testing.T) {
+	ctx := minimalAutoinstallCtx()
+	ctx.RootSSHPublicKeys = nil
+	_, err := AssembleAutoinstall(ctx)
+	if err == nil {
+		t.Fatal("AssembleAutoinstall 对空 RootSSHPublicKeys 未返回错误——" +
+			"这会静默产出一台 root 既没有密码也没有公钥、没人能登进去的机器")
+	}
+}
+
+// TestAutoinstall_MaliciousSSHKeyStaysValidYAML 锁住"恶意公钥不逃逸 YAML
+// 结构"这条注入防护（本轮设计要点第 4 条）。与 kickstart 的文本拼接不同，
+// autoinstall 用 yaml.Marshal 序列化，理论上应该天然免疫这一类问题——本
+// 测试就是验证这个"理论上"在公钥这个新字段上也成立：含换行、单引号、
+// 冒号（YAML 特殊字符）的恶意值走一遍渲染，输出必须仍是合法 YAML，且
+// 恶意值不能被解析成额外的顶层键。
+func TestAutoinstall_MaliciousSSHKeyStaysValidYAML(t *testing.T) {
+	ctx := minimalAutoinstallCtx()
+	malicious := "ssh-ed25519 AAAAtest evil\ninjected: true\nssh:\n  install-server: false"
+	ctx.RootSSHPublicKeys = []string{malicious}
+
+	out, err := AssembleAutoinstall(ctx)
+	if err != nil {
+		t.Fatalf("AssembleAutoinstall 返回错误: %v", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("含恶意公钥时输出不是合法 YAML: %v\n输出:\n%s", err, out)
+	}
+	autoinstall, ok := doc["autoinstall"].(map[string]any)
+	if !ok {
+		t.Fatalf("顶层 autoinstall 键解析后类型不对，got: %T", doc["autoinstall"])
+	}
+	if _, injected := autoinstall["injected"]; injected {
+		t.Error("恶意公钥中的 YAML 键值对被解析成了顶层 autoinstall 下的真实键，" +
+			"说明换行注入突破了 YAML 结构边界")
+	}
+	sshSection, ok := autoinstall["ssh"].(map[string]any)
+	if !ok {
+		t.Fatalf("autoinstall.ssh 解析后类型不对，got: %T", autoinstall["ssh"])
+	}
+	if installServer, _ := sshSection["install-server"].(bool); !installServer {
+		t.Error("ssh.install-server 被恶意公钥中注入的 false 覆盖了——" +
+			"说明恶意值突破了 authorized-keys 列表项的边界，篡改了同级的另一个键")
 	}
 }
 

@@ -48,6 +48,15 @@ type Deps struct {
 	// 把 syslog 目标写进应答文件，机器侧据此上报 syslog）。
 	SyslogHost string
 	SyslogPort int
+
+	// RootSSHPublicKeys 是要注入每台新装机器 root 账户的 SSH 公钥列表
+	// （SPEC §1.5：root 不设可复用密码，注入 SSH 公钥并关闭密码登录），
+	// 来自 internal/config.Gateway.RootSSHPublicKeys，装配点在构造 Deps
+	// 时原样传入。buildRenderContext（rendercontext.go）把它原样复制进
+	// 每次渲染的 model.RenderContext.RootSSHPublicKeys 字段——本字段与
+	// Bases/SyslogHost/SyslogPort 是同一种"部署级配置值，随 Deps 注入、
+	// 每次构造渲染上下文时原样传递"的接缝，不是随请求变化的运行期数据。
+	RootSSHPublicKeys []string
 }
 
 // Server 持有全部依赖，实现 http.Handler（内部用标准库 ServeMux 路由）。

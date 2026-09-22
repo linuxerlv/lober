@@ -141,29 +141,6 @@ func runHookCall(ref model.HookRef) string {
 	return fmt.Sprintf("run_hook '%s' '%t' '%d' || exit 1\n", ref.HookDigest, ref.Required, defaultHookTimeoutSec)
 }
 
-// rockyRootSSHKeyPlaceholder 是 MVP 阶段 root 免密登录注入的 SSH 公钥占位
-// 值（对应实现计划任务 6"基础指令里的两条要点"之一："root 不设可复用密码，
-// 注入 SSH 公钥并关闭密码登录"）。
-//
-// 契约缺口：SPEC §1.5 与本计划都要求注入 SSH 公钥，但 model.RenderContext
-// / model.Task / model.Template / model.FactKeysV1 的 24 个 fact 键中都
-// 没有任何字段承载"要注入的 SSH 公钥文本"。这不是可以从现有字段间接推导
-// 的值（不像磁盘 by-id 那样能从 Facts[LOBER_DISK_PRIMARY] 拿到）——它是
-// 一个纯粹缺失的输入。
-//
-// 保守处理：不静默省略 SSH 公钥指令（省略会让机器装完后 root 完全无法
-// 登录，比"用一个占位公钥"更危险——运维连不上任何刚装好的机器）；也不去
-// 触碰 internal/config（那是冻结契约，禁止修改）。因此用一个包级变量
-// （不是 const——保留被测试或未来装配点覆盖的可能性）承载一个明显不可用
-// 的占位公钥，值本身以 "REPLACE-ME" 开头，任何人拿它去连接真实机器都会
-// 立刻失败并意识到需要配置真实公钥。
-//
-// 正解需要契约新增一处 SSH 公钥来源——最自然的位置是
-// internal/config.Gateway（新增字段 RootSSHPublicKey）或
-// model.RenderContext（新增字段），由 M9 装配时把配置值传下来，
-// 到时只需把下面 baseDirectives 里对本变量的引用换成 ctx 上的新字段。
-var rockyRootSSHKeyPlaceholder = "ssh-ed25519 REPLACE-ME-lober-has-no-contract-field-for-this-key placeholder@lober"
-
 // baseDirectives 渲染 Rocky 9 kickstart 的基础指令块：语言、键盘、时区、
 // 引导加载器、磁盘、网络、root 密码策略（计划任务 6"组装顺序"第一段）。
 //
@@ -175,7 +152,22 @@ var rockyRootSSHKeyPlaceholder = "ssh-ed25519 REPLACE-ME-lober-has-no-contract-f
 //
 // 磁盘用 by-id 标识，来自服务端决策（ctx.Facts[LOBER_DISK_PRIMARY]），不
 // 在这里硬编码 /dev/sda（计划任务 6 明确警示）。
-func baseDirectives(ctx model.RenderContext) string {
+//
+// SSH 公钥来自 ctx.RootSSHPublicKeys（model.RenderContext 新增字段，
+// SPEC §1.5：root 不设可复用密码，注入 SSH 公钥并关闭密码登录）。为空时
+// 返回错误而不是省略这一行或写死一个占位公钥——省略会让机器装完后 root
+// 完全无法登录，写占位值会让人误以为已经配置了真实凭据，两者都比报错更
+// 危险。正常部署路径下这个错误不会触发：internal/config.Validate 已经在
+// 启动时拒绝了空的 gateway.root_ssh_public_keys，本函数这里的检查是第二层
+// 防御（万一渲染上下文的构造路径漏了赋值）。
+func baseDirectives(ctx model.RenderContext) (string, error) {
+	if len(ctx.RootSSHPublicKeys) == 0 {
+		return "", fmt.Errorf("render: RenderContext.RootSSHPublicKeys 为空，" +
+			"无法渲染 kickstart——root 不设可复用密码（rootpw --lock），" +
+			"公钥是唯一登录通路，绝不能省略这一行或写入占位公钥，" +
+			"那会静默产出一台没人能登录的机器（SPEC §1.5）")
+	}
+
 	diskByID := ctx.Facts[model.FactDiskPrimary]
 
 	var b strings.Builder
@@ -194,8 +186,33 @@ func baseDirectives(ctx model.RenderContext) string {
 	// root 不设可复用密码：锁定密码登录，只允许 SSH 公钥登录（MVP 无 TLS，
 	// 应答文件被截获也换不成持久访问，SPEC §1.5）。
 	b.WriteString("rootpw --lock\n")
-	fmt.Fprintf(&b, "sshkey --username=root \"%s\"\n", rockyRootSSHKeyPlaceholder)
-	return b.String()
+	// 逐把公钥各生成一行 sshkey 指令——kickstart 语法本身支持多次出现该
+	// 指令（anaconda 会把每一把都写进 /root/.ssh/authorized_keys），这与
+	// 该文件本身"任一行匹配即放行"的语义一致（config.go 字段文档：团队
+	// 多人各自持有私钥，轮换期需要新旧并存）。
+	//
+	// 本函数不单靠上游 config.Validate 的白名单校验就假设输入无害——万一
+	// 未来出现另一条不经过 config.Validate 的构造路径（例如测试或其它
+	// 装配点直接构造 RenderContext），这里仍要独立防住两类逃逸：
+	//  1. 双引号：转义为 \"，防止提前结束 sshkey 指令的字符串边界。
+	//  2. 裸换行：kickstart 是逐行解析的文本格式，换行本身就能在这一行
+	//     指令中间开出一条新指令，光转义引号不够——即使双引号被转义了，
+	//     换行仍会让解析器把后半段文本当成下一行独立的 kickstart 指令
+	//     （真实验证过：只转义引号、不处理换行时，一个跨两行的恶意公钥
+	//     能在 sshkey 那一行之后拼出一条独立的 rootpw 指令）。因此换行
+	//     直接拒绝整次渲染而不是转义或删除——公钥值本身就不应该含换行，
+	//     出现即说明上游校验被绕过或数据已损坏，报错比生成一份结构被
+	//     篡改的应答文件更安全。
+	for _, key := range ctx.RootSSHPublicKeys {
+		if strings.ContainsAny(key, "\n\r") {
+			return "", fmt.Errorf("render: RootSSHPublicKeys 中的公钥 %q 含裸换行，"+
+				"kickstart 是逐行解析的文本格式，换行会在 sshkey 指令中间开出一条独立的新指令"+
+				"（SPEC §5.6 注入防护）——这个值不应该出现在这里，说明上游校验被绕过或数据已损坏", key)
+		}
+		escaped := strings.ReplaceAll(key, `"`, `\"`)
+		fmt.Fprintf(&b, "sshkey --username=root \"%s\"\n", escaped)
+	}
+	return b.String(), nil
 }
 
 // loggingDirective 渲染 `logging --host=` 一行，指向 syslog（计划任务 6
@@ -236,7 +253,11 @@ func prologue(ctx model.RenderContext) (string, error) {
 func AssembleKickstart(ctx model.RenderContext) (string, error) {
 	var b strings.Builder
 
-	b.WriteString(baseDirectives(ctx))
+	base, err := baseDirectives(ctx)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(base)
 	b.WriteString(loggingDirective(ctx))
 	b.WriteString(ctx.Template.AnswerTemplate)
 	b.WriteString("\n")

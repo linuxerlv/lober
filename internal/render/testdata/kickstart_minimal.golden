@@ -6,7 +6,7 @@ clearpart --all --drives=/dev/disk/by-id/wwn-0x5000c500fixed0001
 part / --fstype=xfs --grow --ondisk=/dev/disk/by-id/wwn-0x5000c500fixed0001
 network --bootproto=dhcp --activate
 rootpw --lock
-sshkey --username=root "ssh-ed25519 REPLACE-ME-lober-has-no-contract-field-for-this-key placeholder@lober"
+sshkey --username=root "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober"
 logging --host=10.10.0.1 --port=514 --level=info
 %packages
 @core

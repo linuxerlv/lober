@@ -166,3 +166,22 @@ func TestRenderContext_AnswerFileName(t *testing.T) {
 			got, ok)
 	}
 }
+
+// TestRenderContext_RootSSHPublicKeysField 锁住本轮新增字段的存在与直接
+// 赋值可用——RenderContext 需要一个独立字段承载"要注入的 SSH 公钥文本"
+// （SPEC §1.5：root 不设可复用密码，注入 SSH 公钥并关闭密码登录），不塞进
+// Facts——fact 命名空间是面向 hook 的对外 API（§5.4：一旦有数十个 hook 在
+// 用就不能改名，只增不删），把渲染器内部要用的东西塞进去会永久绑住。
+func TestRenderContext_RootSSHPublicKeysField(t *testing.T) {
+	ctx := RenderContext{
+		RootSSHPublicKeys: []string{
+			"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober",
+		},
+	}
+	if len(ctx.RootSSHPublicKeys) != 1 {
+		t.Fatalf("RenderContext.RootSSHPublicKeys 长度 = %d, want 1", len(ctx.RootSSHPublicKeys))
+	}
+	if ctx.RootSSHPublicKeys[0] != "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober" {
+		t.Errorf("RenderContext.RootSSHPublicKeys[0] = %q，字段值与赋值不一致", ctx.RootSSHPublicKeys[0])
+	}
+}

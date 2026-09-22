@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"io"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lober/lober/internal/config"
 	"github.com/lober/lober/internal/core/contract"
@@ -27,6 +31,9 @@ func testConfig(t *testing.T) *config.Config {
 			GatewayBase:  "http://127.0.0.1:18080",
 			ArtifactBase: "http://127.0.0.1:18081",
 			SyslogListen: "127.0.0.1:18514",
+			RootSSHPublicKeys: []string{
+				"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober",
+			},
 		},
 		Console: config.Console{
 			Listen:      "127.0.0.1:18090",
@@ -237,6 +244,74 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
 		t.Fatalf("写文件失败: %v", err)
+	}
+}
+
+// TestBuildApp_RootSSHPublicKeysWiredToGatewayAnswer 是本轮新增契约通路
+// 的端到端验证：cfg.Gateway.RootSSHPublicKeys 必须真的从配置一路传到
+// GatewayServer 渲染出的应答文件里（SPEC §1.5）。不用桩渲染器、不直接
+// 读取 gateway.Server 的私有字段（它没有导出访问器）——用真实的
+// render.Renderer 走一次完整的 HTTP 请求，这是唯一能在 cmd/lober 这一层
+// 证明"配置值真的到达了渲染输出"的方式，比断言某个中间接缝非空更接近
+// 任务要求的"真的跑起来"。
+func TestBuildApp_RootSSHPublicKeysWiredToGatewayAnswer(t *testing.T) {
+	cfg := testConfig(t)
+	app := buildAppWithDBForTest(t, cfg)
+
+	ctx := context.Background()
+	host := model.Host{SN: "SN-WIRE-1", MAC: "aa:bb:cc:dd:ee:ff", UUID: "uuid-wire-1", Arch: model.ArchX86_64, Firmware: model.FirmwareUEFI}
+	if _, err := app.Store.UpsertHost(ctx, host); err != nil {
+		t.Fatalf("UpsertHost 失败: %v", err)
+	}
+
+	artifact := model.ArtifactSet{
+		ID: "art-wire-1", Name: "rocky9.4", OSFamily: model.OSFamilyRHEL, OSVersion: "9.4",
+		Arch: model.ArchX86_64, Firmware: model.FirmwareAny, State: model.ArtifactSetReady,
+		Paths: model.ArtifactPaths{Kernel: "vmlinuz", Initrd: []string{"initrd.img"}, Repo: "repo/"},
+	}
+	if _, err := app.Store.CreateArtifactSet(ctx, artifact); err != nil {
+		t.Fatalf("CreateArtifactSet 失败: %v", err)
+	}
+
+	tpl := model.Template{ID: "tpl-wire-1", Name: "rocky9", ArtifactSetID: "art-wire-1", Version: 1, State: model.TemplateStateActive}
+	if _, err := app.Store.CreateTemplate(ctx, tpl); err != nil {
+		t.Fatalf("CreateTemplate 失败: %v", err)
+	}
+
+	task := model.Task{
+		ID: "task-wire-1", HostSN: "SN-WIRE-1", HostMAC: "aa:bb:cc:dd:ee:ff", HostUUID: "uuid-wire-1",
+		TemplateID: "tpl-wire-1", TemplateVersion: 1, ArtifactSetID: "art-wire-1",
+		State: model.TaskStateBooting, CurrentPhase: model.PhaseBooting,
+		Token:          "install-tok-wire-1",
+		TokenExpiresAt: time.Now().Add(time.Hour).Unix(),
+	}
+	if _, err := app.Store.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask 失败: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/answer/task-wire-1/install-tok-wire-1/ks.cfg", nil)
+	rec := httptest.NewRecorder()
+	app.GatewayServer.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("读取响应体失败: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/answer 状态码 = %d, want %d，body:\n%s", resp.StatusCode, http.StatusOK, body)
+	}
+
+	wantKey := cfg.Gateway.RootSSHPublicKeys[0]
+	if !strings.Contains(string(body), wantKey) {
+		t.Errorf("应答文件正文应含配置里的公钥 %q，说明 cfg.Gateway.RootSSHPublicKeys 未能"+
+			"一路传到渲染输出，got body:\n%s", wantKey, body)
+	}
+	if strings.Contains(string(body), "REPLACE-ME") {
+		t.Errorf("应答文件正文仍含旧占位公钥标记 REPLACE-ME，说明占位值未被真实配置值替换，"+
+			"got body:\n%s", body)
 	}
 }
 

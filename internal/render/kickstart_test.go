@@ -129,3 +129,102 @@ func TestStageMapping_RunHookCallHasRequiredAndDigest(t *testing.T) {
 		t.Errorf("run_hook 调用应带 required=true 参数，got:\n%s", out)
 	}
 }
+
+// sshKeyBaseCtx 构造一个能通过 baseDirectives 全部前置条件的最小
+// RenderContext（磁盘 fact 非空），供 SSH 公钥注入相关测试复用。
+func sshKeyBaseCtx(keys []string) model.RenderContext {
+	return model.RenderContext{
+		Facts:             map[string]string{model.FactDiskPrimary: "/dev/disk/by-id/wwn-test"},
+		RootSSHPublicKeys: keys,
+	}
+}
+
+// TestBaseDirectives_SSHKeyInjected 锁住"公钥从 RenderContext 注入，不再是
+// 写死的占位值"这条本轮的核心行为（SPEC §1.5）。
+func TestBaseDirectives_SSHKeyInjected(t *testing.T) {
+	ctx := sshKeyBaseCtx([]string{"ssh-ed25519 AAAAtestkey ops@lober"})
+	out, err := baseDirectives(ctx)
+	if err != nil {
+		t.Fatalf("baseDirectives 返回错误: %v", err)
+	}
+	want := `sshkey --username=root "ssh-ed25519 AAAAtestkey ops@lober"` + "\n"
+	if !strings.Contains(out, want) {
+		t.Errorf("baseDirectives 输出应含公钥指令 %q，got:\n%s", want, out)
+	}
+	if strings.Contains(out, "REPLACE-ME") {
+		t.Errorf("baseDirectives 输出仍含旧占位公钥标记 REPLACE-ME，说明占位值未被移除，got:\n%s", out)
+	}
+}
+
+// TestBaseDirectives_MultipleSSHKeysAllInjected 锁住"支持多把公钥，全部
+// 都要落进应答文件"——团队多人各自持有私钥，轮换期需要新旧并存。
+func TestBaseDirectives_MultipleSSHKeysAllInjected(t *testing.T) {
+	ctx := sshKeyBaseCtx([]string{
+		"ssh-ed25519 AAAAalice alice@lober",
+		"ssh-rsa AAAAbob bob@lober",
+	})
+	out, err := baseDirectives(ctx)
+	if err != nil {
+		t.Fatalf("baseDirectives 返回错误: %v", err)
+	}
+	if !strings.Contains(out, `sshkey --username=root "ssh-ed25519 AAAAalice alice@lober"`) {
+		t.Errorf("输出应含 alice 的公钥指令，got:\n%s", out)
+	}
+	if !strings.Contains(out, `sshkey --username=root "ssh-rsa AAAAbob bob@lober"`) {
+		t.Errorf("输出应含 bob 的公钥指令，got:\n%s", out)
+	}
+}
+
+// TestBaseDirectives_EmptySSHKeysRejected 锁住"渲染器万一拿到空值就返回
+// 错误而绝不再写一个假公钥"这条防御（本轮设计要点第 3 条：静默降级成
+// 占位公钥不在可选项里）。config.Validate 已经在启动时拦住空配置，这里
+// 是第二层防御——万一渲染上下文的构造路径漏了赋值，也不会静默产出一台
+// 登不进去的机器。
+func TestBaseDirectives_EmptySSHKeysRejected(t *testing.T) {
+	ctx := sshKeyBaseCtx(nil)
+	_, err := baseDirectives(ctx)
+	if err == nil {
+		t.Fatal("baseDirectives 对空 RootSSHPublicKeys 未返回错误——" +
+			"这会静默产出一台 root 既没有密码也没有公钥、没人能登进去的机器")
+	}
+}
+
+// TestBaseDirectives_MaliciousKeyDoesNotEscapeQuotes 锁住"恶意输入不逃逸
+// kickstart 双引号包裹"这条注入防护测试（本轮设计要点第 4 条：三个家族的
+// 转义规则不同，各自都要有测试证明恶意输入不逃逸）。正常情况下
+// config.Validate 已经在配置层拒绝了含引号的公钥，这里额外验证：即使有
+// 恶意值绕过配置层直接进了 RenderContext，baseDirectives 自身产出的这一
+// 行也不会因为公钥里含双引号而被截断成两条指令。
+func TestBaseDirectives_MaliciousKeyWithNewlineRejected(t *testing.T) {
+	malicious := `ssh-ed25519 AAAAtest evil" ` + "\n" + `rootpw --plaintext hacked #`
+	ctx := sshKeyBaseCtx([]string{malicious})
+	_, err := baseDirectives(ctx)
+	if err == nil {
+		t.Fatal("baseDirectives 对含裸换行的公钥未返回错误——" +
+			"kickstart 是逐行解析的文本格式，换行会在 sshkey 指令中间开出一条独立的新指令" +
+			"（这里构造的恶意值会拼出一条独立的 rootpw --plaintext 指令），必须拒绝而不是" +
+			"依赖转义，光转义双引号不足以防住换行造成的逃逸")
+	}
+}
+
+// TestBaseDirectives_QuoteInKeyEscapedNotRejected 是转义路径的对照组：
+// 单独一个双引号（不含换行）应该被转义后正常渲染，不应触发拒绝——拒绝的
+// 判定标准是"能否开出新指令"，双引号单独出现时会被转义中和，不构成
+// 逃逸，因此不应比换行更严格。
+func TestBaseDirectives_QuoteInKeyEscapedNotRejected(t *testing.T) {
+	withQuote := `ssh-ed25519 AAAAtest evil"comment`
+	ctx := sshKeyBaseCtx([]string{withQuote})
+	out, err := baseDirectives(ctx)
+	if err != nil {
+		t.Fatalf("baseDirectives 对含单个双引号（无换行）的公钥返回了错误: %v"+
+			"——双引号本身会被转义中和，不应该触发拒绝", err)
+	}
+	if !strings.Contains(out, `evil\"comment`) {
+		t.Errorf("公钥里的双引号应被转义为 \\\"，got:\n%s", out)
+	}
+	rootpwCount := strings.Count(out, "\nrootpw ")
+	if rootpwCount != 1 {
+		t.Errorf("独立成行的 rootpw 指令出现了 %d 次，want 1——转义后不应产生第二条指令，got:\n%s",
+			rootpwCount, out)
+	}
+}

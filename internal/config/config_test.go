@@ -21,6 +21,8 @@ gateway:
   artifact_base: "http://10.10.0.1/artifacts/"
   syslog_listen: "10.10.0.1:514"
   syslog_target: "10.10.0.1:5514"
+  root_ssh_public_keys:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober"
 console:
   listen: "192.168.1.10:8081"
   token_secret: "test-secret-please-change"
@@ -338,6 +340,135 @@ provider:
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() 拒绝了「disk_policy=by-model 且给了型号串」的合法配置: %v；"+
 			"给了型号串应当被接受，否则这条业务规则会误伤所有正确配置", err)
+	}
+}
+
+// TestValidate_空SSH公钥列表被拒绝 锁住本轮新增的第五类启动校验：
+// gateway.root_ssh_public_keys 不能为空（SPEC §1.5：root 不设可复用密码，
+// 注入 SSH 公钥并关闭密码登录——公钥是这条安全策略唯一的登录通路，空列表
+// 意味着装好的机器 root 完全无法登录，必须在启动时拒绝而不是留到装机现场
+// 才发现，那时机器已经装完、运维却连不上任何一台）。
+func TestValidate_空SSH公钥列表被拒绝(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{"字段整体省略", strings.Replace(minimalYAML,
+			`  root_ssh_public_keys:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober"
+`, "", 1)},
+		{"空列表", strings.Replace(minimalYAML,
+			`  root_ssh_public_keys:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober"
+`, "  root_ssh_public_keys: []\n", 1)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Parse(strings.NewReader(tc.yaml))
+			if err != nil {
+				t.Fatalf("Parse 阶段就失败: %v", err)
+			}
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() 未拒绝空的 gateway.root_ssh_public_keys（SPEC §1.5）：" +
+					"root 不设可复用密码，公钥是唯一登录通路，空列表会静默产出一台" +
+					"装完后没人能登录的机器——这种「错了也不报错」的配置必须在启动时拒绝")
+			}
+		})
+	}
+}
+
+// TestValidate_SSH公钥格式非法被拒绝 锁住白名单校验：类型前缀
+// （ssh-ed25519/ssh-rsa/ecdsa-sha2-*）+ base64 主体 + 可选注释，拒绝
+// 换行、引号、YAML/kickstart 结构字符。公钥最终会被写进 kickstart 的
+// `sshkey --username=root "..."` 与 cloud-init 的
+// `ssh_authorized_keys:` 列表项，一个带换行或引号的值能破坏整个应答
+// 文件的结构（SPEC §5.6 注入防护同理）。
+func TestValidate_SSH公钥格式非法被拒绝(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+	}{
+		{"空字符串", ""},
+		{"缺类型前缀", "AAAAC3NzaC1lZDI1NTE5AAAA ops@lober"},
+		{"类型前缀不在白名单", "ssh-dss AAAAB3NzaC1kc3MAAAA ops@lober"},
+		{"含裸换行", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5\nAAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober"},
+		{"含双引号", `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 "ops@lober"`},
+		{"含单引号", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops'@lober"},
+		{"主体含非base64字符", "ssh-ed25519 not!!valid!!base64!! ops@lober"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// 直接调用 validateSSHPublicKey 而不经过 YAML 往返：像"含双引号"
+			// 这类用例若塞进 minimalYAML 里已经用双引号包裹的 YAML 标量，会先
+			// 在 YAML 语法层就失败（未转义的引号破坏了 YAML 字符串边界），
+			// 测的是 YAML 解析器而不是本函数的白名单逻辑。这里改用
+			// cfg.Gateway.RootSSHPublicKeys 字段直接赋值，绕开 YAML 序列化，
+			// 让测试精确针对 Validate() 内部的白名单校验这一层。
+			cfg, err := Parse(strings.NewReader(minimalYAML))
+			if err != nil {
+				t.Fatalf("Parse(最小配置) 返回错误: %v", err)
+			}
+			cfg.Gateway.RootSSHPublicKeys = []string{tc.key}
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("Validate() 未拒绝非法 SSH 公钥 %q："+
+					"该值会被直接拼进 kickstart 的 sshkey 指令与 cloud-init 的 YAML 列表项，"+
+					"带换行/引号/结构字符的值能破坏整个应答文件的结构（SPEC §5.6 同理）", tc.key)
+			}
+		})
+	}
+}
+
+// TestValidate_合法SSH公钥三种类型全部被接受 是上一条的对照组：确认白名单
+// 没写窄，三个类型家族（ed25519/rsa/ecdsa）与「省略注释」这一合法变体都
+// 应被接受。
+func TestValidate_合法SSH公钥三种类型全部被接受(t *testing.T) {
+	cases := []string{
+		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober",
+		"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7 ops@lober",
+		"ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY= ops@lober",
+		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2", // 无注释
+	}
+
+	for _, key := range cases {
+		t.Run(key, func(t *testing.T) {
+			yaml := strings.Replace(minimalYAML,
+				`ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober`,
+				key, 1)
+			cfg, err := Parse(strings.NewReader(yaml))
+			if err != nil {
+				t.Fatalf("Parse 阶段就失败: %v", err)
+			}
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("Validate() 拒绝了合法 SSH 公钥 %q: %v", key, err)
+			}
+		})
+	}
+}
+
+// TestValidate_多把SSH公钥全部保留 锁住计划要求的「支持多个公钥」——同一批
+// 机器共用运维团队的公钥，团队多人且轮换期需要新旧并存，因此列表长度大于 1
+// 时全部条目都必须被保留而不是只取第一个。
+func TestValidate_多把SSH公钥全部保留(t *testing.T) {
+	yaml := strings.Replace(minimalYAML,
+		`  root_ssh_public_keys:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober"
+`,
+		`  root_ssh_public_keys:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 alice@lober"
+    - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7 bob@lober"
+`, 1)
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() 拒绝了两把合法公钥: %v", err)
+	}
+	if len(cfg.Gateway.RootSSHPublicKeys) != 2 {
+		t.Fatalf("RootSSHPublicKeys 长度 = %d, want 2 —— "+
+			"团队多人且轮换期需要新旧并存，不能只保留第一把", len(cfg.Gateway.RootSSHPublicKeys))
 	}
 }
 

@@ -461,6 +461,14 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 
 		SyslogHost: syslogHost,
 		SyslogPort: syslogPort,
+
+		// SPEC §1.5：root 不设可复用密码，注入 SSH 公钥并关闭密码登录。
+		// 部署级常量，与 Bases/SyslogHost/SyslogPort 同一种"随 Deps 注入、
+		// 渲染上下文构造时原样传递"的接缝（见 gateway.Deps.
+		// RootSSHPublicKeys 的字段文档）。cfg 在到达这里之前已经通过
+		// config.Validate 的校验（非空、每把公钥都是合法白名单格式），
+		// buildApp 本身不重复做这层校验。
+		RootSSHPublicKeys: cfg.Gateway.RootSSHPublicKeys,
 	})
 
 	authUsers := make([]console.AuthUser, 0, len(cfg.Auth.Users))
