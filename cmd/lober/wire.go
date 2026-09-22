@@ -461,6 +461,14 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 
 		SyslogHost: syslogHost,
 		SyslogPort: syslogPort,
+
+		// SPEC §1.5：root 不设可复用密码，注入 SSH 公钥并关闭密码登录。
+		// 部署级常量，与 Bases/SyslogHost/SyslogPort 同一种"随 Deps 注入、
+		// 渲染上下文构造时原样传递"的接缝（见 gateway.Deps.
+		// RootSSHPublicKeys 的字段文档）。cfg 在到达这里之前已经通过
+		// config.Validate 的校验（非空、每把公钥都是合法白名单格式），
+		// buildApp 本身不重复做这层校验。
+		RootSSHPublicKeys: cfg.Gateway.RootSSHPublicKeys,
 	})
 
 	authUsers := make([]console.AuthUser, 0, len(cfg.Auth.Users))
@@ -486,6 +494,10 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 
 		Users:      authUsers,
 		SessionTTL: cfg.Console.TokenTTL,
+
+		// 与 gateway.Deps 取同一个配置值：preview 端点自己构造
+		// RenderContext，而渲染器对空公钥列表是硬拒绝（SPEC §1.5）。
+		RootSSHPublicKeys: cfg.Gateway.RootSSHPublicKeys,
 	})
 
 	// 第 8 步：组装成一个持有全部组件的结构体返回。

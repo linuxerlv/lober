@@ -3,6 +3,7 @@
 package render
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -45,6 +46,9 @@ func minimalPreseedCtx() model.RenderContext {
 		FinalizeToken: fixedFinalizeToken,
 		SyslogHost:    "10.10.0.1",
 		SyslogPort:    514,
+		RootSSHPublicKeys: []string{
+			"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober",
+		},
 	}
 }
 
@@ -399,6 +403,100 @@ func TestPreseed_DiskPrimaryFactCannotForgeDebconfLine(t *testing.T) {
 		if l == forgedLine {
 			t.Errorf("恶意 LOBER_DISK_PRIMARY 换行注入伪造出了独立的 debconf 行 %q，got 完整输出:\n%s", forgedLine, out)
 		}
+	}
+}
+
+// TestPreseed_SSHKeyWrittenToAuthorizedKeysInTarget 锁住本轮核心行为：
+// preseed 没有与 kickstart `sshkey` 或 autoinstall `ssh.authorized-keys`
+// 直接等价的键，公钥注入走 late_command 里已经在跑的 in-target 落盘机制
+// ——把公钥追加写进目标系统的 /root/.ssh/authorized_keys（SPEC §1.5）。
+func TestPreseed_SSHKeyWrittenToAuthorizedKeysInTarget(t *testing.T) {
+	ctx := minimalPreseedCtx()
+	late, err := lateCommandValue(ctx)
+	if err != nil {
+		t.Fatalf("lateCommandValue 返回错误: %v", err)
+	}
+	decoded := decodeLateCommandScript(t, late)
+
+	if !strings.Contains(decoded, "authorized_keys") {
+		t.Fatalf("late_command 脚本应含写 authorized_keys 的命令，decoded:\n%s", decoded)
+	}
+	if !strings.Contains(decoded, ctx.RootSSHPublicKeys[0]) {
+		t.Errorf("late_command 脚本应含公钥文本 %q，decoded:\n%s", ctx.RootSSHPublicKeys[0], decoded)
+	}
+	if !strings.Contains(decoded, "mkdir") || !strings.Contains(decoded, ".ssh") {
+		t.Errorf("落盘前应先 mkdir /root/.ssh（目标系统的全新安装，该目录默认不存在），decoded:\n%s", decoded)
+	}
+}
+
+// TestPreseed_MultipleSSHKeysAllWritten 锁住多把公钥全部写入。
+func TestPreseed_MultipleSSHKeysAllWritten(t *testing.T) {
+	ctx := minimalPreseedCtx()
+	ctx.RootSSHPublicKeys = []string{
+		"ssh-ed25519 AAAAalice alice@lober",
+		"ssh-rsa AAAAbob bob@lober",
+	}
+	late, err := lateCommandValue(ctx)
+	if err != nil {
+		t.Fatalf("lateCommandValue 返回错误: %v", err)
+	}
+	decoded := decodeLateCommandScript(t, late)
+	for _, key := range ctx.RootSSHPublicKeys {
+		if !strings.Contains(decoded, key) {
+			t.Errorf("late_command 脚本应含公钥 %q，decoded:\n%s", key, decoded)
+		}
+	}
+}
+
+// TestPreseed_EmptySSHKeysRejected 锁住"渲染器万一拿到空值就返回错误而
+// 绝不再写一个假公钥"这条防御，与 kickstart/autoinstall 同一个设计要点。
+func TestPreseed_EmptySSHKeysRejected(t *testing.T) {
+	ctx := minimalPreseedCtx()
+	ctx.RootSSHPublicKeys = nil
+	_, err := AssemblePreseed(ctx)
+	if err == nil {
+		t.Fatal("AssemblePreseed 对空 RootSSHPublicKeys 未返回错误——" +
+			"这会静默产出一台 root 既没有密码也没有公钥、没人能登进去的机器")
+	}
+}
+
+// TestPreseed_MaliciousSSHKeyDoesNotBreakInTargetQuoting 锁住"恶意公钥不
+// 逃逸 in-target bash -c 的单引号包裹"这条注入防护（本轮设计要点第 4 条）。
+// late_command 脚本本身经 base64 编码传输，公钥文本作为脚本内容的一部分
+// 落进这个已编码的载体里；脚本内部把公钥写进 authorized_keys 时用单引号
+// heredoc 或等价的单引号包裹——若公钥里含单引号且未被正确转义，会提前
+// 结束这段 shell 语法，让后续文本被解释成新的 shell 命令。
+func TestPreseed_MaliciousSSHKeyDoesNotBreakInTargetQuoting(t *testing.T) {
+	ctx := minimalPreseedCtx()
+	malicious := `ssh-ed25519 AAAAtest evil' ; touch /tmp/pwned ; echo '`
+	ctx.RootSSHPublicKeys = []string{malicious}
+
+	late, err := lateCommandValue(ctx)
+	if err != nil {
+		t.Fatalf("lateCommandValue 返回错误: %v", err)
+	}
+	decoded := decodeLateCommandScript(t, late)
+
+	stubDir := t.TempDir()
+	writeStub(t, stubDir, "curl")
+	writeStub(t, stubDir, "sha256sum")
+	writeInTargetStub(t, stubDir)
+	stubDirPosix := posixPath(t, stubDir)
+
+	// 真实执行解码后的脚本（用与 preseed_exec_test.go 相同的 in-target
+	// stub），断言恶意值没有让 touch /tmp/pwned 这条注入的命令被执行到——
+	// 只做静态字符串包含断言无法证明"运行时是否真的被 shell 解释执行"，
+	// 必须像 kickstart_exec_test.go/preseed_exec_test.go 一样起真实 bash
+	// 子进程才能验证转义在运行期而不仅是文本层面生效。用 t.TempDir() 下的
+	// marker 文件替代真实的 /tmp/pwned 路径，跨平台可写且测试结束自动清理。
+	pwnedMarkerNative := t.TempDir() + string(os.PathSeparator) + "pwned-marker"
+	pwnedMarkerPosix := posixPath(t, pwnedMarkerNative)
+	scriptWithMarkerRedirect := strings.ReplaceAll(decoded, "touch /tmp/pwned", "touch "+pwnedMarkerPosix)
+	runBashSectionOffline(t, stubDirPosix, scriptWithMarkerRedirect)
+
+	if _, statErr := os.Stat(pwnedMarkerNative); statErr == nil {
+		t.Errorf("恶意公钥里的单引号逃逸了 in-target bash -c 的单引号包裹，" +
+			"注入的 touch 命令被真实执行了")
 	}
 }
 

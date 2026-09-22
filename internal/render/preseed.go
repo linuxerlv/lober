@@ -219,9 +219,59 @@ func preseedShellValue(script string) string {
 	return strings.ReplaceAll(strings.TrimSpace(script), "\n", " ")
 }
 
+// sshAuthorizedKeysHeredocDelimiter 是写入 authorized_keys 那段 heredoc 的
+// 定界符。选一个不太可能出现在真实 SSH 公钥文本里的具体串（LOBER 前缀 +
+// 固定后缀），配合 config.Validate 与 baseDirectives 同款的"拒绝裸换行"
+// 校验：公钥值本身不可能包含换行，因此也不可能包含"独占一行、内容恰好
+// 等于这个定界符"的那一行——heredoc 定界符逃逸依赖的正是"注入的文本里有
+// 一行内容与定界符相同"，换行已被别处拒绝，这条逃逸路径不成立。
+const sshAuthorizedKeysHeredocDelimiter = "LOBER_SSH_AUTHORIZED_KEYS_EOF"
+
+// sshAuthorizedKeysInTargetCommand 生成"在目标系统里追加写入
+// /root/.ssh/authorized_keys"的 in-target 命令（SPEC §1.5：root 不设可
+// 复用密码，注入 SSH 公钥并关闭密码登录）。
+//
+// preseed 没有与 kickstart `sshkey` 或 autoinstall `ssh.authorized-keys`
+// 直接等价的键——真实 debian-installer 的惯例正是通过 late_command 里的
+// in-target 命令完成这件事（preseedAccountAndPackages 函数文档已经记录
+// 了这个事实）。本函数复用 late_command 脚本已经在用的 in-target bash -c
+// 载体，用带引号的 heredoc（<<'EOF'，定界符加引号会关闭 shell 对 heredoc
+// 正文的全部展开/解释，公钥里的单引号、双引号、$、反引号都不会被解释成
+// shell 语法）把每把公钥各写一行追加进 authorized_keys。
+//
+// 写入前先 mkdir -p ~/.ssh 并 chmod 700：目标系统是全新安装，
+// /root/.ssh 默认不存在，sshd 对权限过宽的 .ssh 目录/文件会拒绝使用
+// （直接影响"公钥登录到底能不能用"这个功能本身，不只是安全加固）。
+func sshAuthorizedKeysInTargetCommand(ctx model.RenderContext) (string, error) {
+	inTarget, err := inTargetPrefix(model.OSFamilyDebian)
+	if err != nil {
+		return "", err
+	}
+
+	var inner strings.Builder
+	inner.WriteString("mkdir -p /root/.ssh && chmod 700 /root/.ssh\n")
+	inner.WriteString("cat >> /root/.ssh/authorized_keys <<'" + sshAuthorizedKeysHeredocDelimiter + "'\n")
+	for _, key := range ctx.RootSSHPublicKeys {
+		inner.WriteString(key)
+		inner.WriteString("\n")
+	}
+	inner.WriteString(sshAuthorizedKeysHeredocDelimiter + "\n")
+	inner.WriteString("chmod 600 /root/.ssh/authorized_keys\n")
+
+	// 整段 inner 脚本被包进 in-target bash -c '...'——与 postLines 的处理
+	// 方式一致，外层用单引号包裹整段命令，因此这里只需转义 inner 文本中
+	// 出现的单引号本身（heredoc 定界符加了引号，内部的单引号不会被解释成
+	// shell 语法，但 heredoc 结束之后、外层 in-target 命令仍然是被单引号
+	// 包裹的整体，所以 heredoc 语法字符 `<<'...'` 里的单引号必须转义，
+	// 否则会提前结束外层的 bash -c '...' 包裹）。
+	escaped := strings.ReplaceAll(strings.TrimRight(inner.String(), "\n"), `'`, `'\''`)
+	return inTarget + " bash -c '" + escaped + "'\n", nil
+}
+
 // lateCommandValue 渲染 preseed/late_command 的值：post-nochroot 阶段的
 // hook（不加 in-target，直接在 d-i 环境执行）与 post 阶段的 hook（加
-// in-target 前缀，chroot 进目标系统执行）依次落地为脚本文件后执行。
+// in-target 前缀，chroot 进目标系统执行）依次落地为脚本文件后执行，外加
+// 写入 root 的 SSH 公钥（SPEC §1.5）。
 //
 // 三处必须小心的细节里的第一条："late_command 是单行的，所有 post 阶段
 // 的 hook 调用要压进一行——推荐落一个脚本文件再执行它，单行的可读性
@@ -230,7 +280,21 @@ func preseedShellValue(script string) string {
 // late_command 的值本身只是"落盘 + chmod + 执行"这几条固定命令，不随
 // hook 数量或 hook 正文长度变化——hook 数量再多，late_command 那一行的
 // 长度也是常数。
+//
+// ctx.RootSSHPublicKeys 为空时返回错误：root 不设可复用密码
+// （passwd/root-login=false），公钥是唯一登录通路，绝不能省略写入
+// authorized_keys 的命令或写入占位公钥（与 kickstart.go baseDirectives、
+// autoinstall.go AssembleAutoinstall 同一个设计要点）。正常部署路径下这个
+// 错误不会触发：internal/config.Validate 已经在启动时拒绝了空的
+// gateway.root_ssh_public_keys，本函数的检查是第二层防御。
 func lateCommandValue(ctx model.RenderContext) (string, error) {
+	if len(ctx.RootSSHPublicKeys) == 0 {
+		return "", fmt.Errorf("render: RenderContext.RootSSHPublicKeys 为空，" +
+			"无法渲染 preseed late_command——root 不设可复用密码，公钥是唯一登录通路，" +
+			"绝不能省略写入 authorized_keys 的命令或写入占位公钥，" +
+			"那会静默产出一台没人能登录的机器（SPEC §1.5）")
+	}
+
 	nochrootLines := StageHookCallLines(ctx.Hooks, model.HookStagePostNoChroot)
 	postLines := StageHookCallLines(ctx.Hooks, model.HookStagePost)
 
@@ -254,6 +318,16 @@ func lateCommandValue(ctx model.RenderContext) (string, error) {
 	// "post 阶段"是 late_command 整体，chroot 与否是 Debian 内部的能力
 	// 边界（本文件头部注释），不是信号协议关心的边界。
 	script.WriteString(`signal "post-start" 0` + "\n")
+
+	// SSH 公钥写入是独立于 hook 的固定动作，不依赖用户是否挂了任何 post
+	// 阶段的 hook——放在 post-start 之后、hook 调用之前执行，与
+	// passwd/root-login=false（preseedAccountAndPackages）在装机流程上
+	// 尽量靠近，都是"账户登录策略"这一类固定基础设施。
+	sshCmd, err := sshAuthorizedKeysInTargetCommand(ctx)
+	if err != nil {
+		return "", err
+	}
+	script.WriteString(sshCmd)
 
 	for _, line := range nochrootLines {
 		script.WriteString(line)

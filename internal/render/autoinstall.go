@@ -53,9 +53,19 @@ type autoinstallBody struct {
 
 	Packages []string `yaml:"packages"`
 
-	// SSHImportID/SSH 字段（真实 autoinstall 有 ssh.install-server 与
-	// ssh.authorized-keys 两个键）本次不落地——契约缺口，见文件末尾说明，
-	// 与 kickstart.go 的 rockyRootSSHKeyPlaceholder 是同一类缺口。
+	// SSH 对应真实 autoinstall 的 ssh 大键：ssh.install-server 与
+	// ssh.authorized-keys（SPEC §1.5：root 不设可复用密码，注入 SSH 公钥
+	// 并关闭密码登录）。来源是 ctx.RootSSHPublicKeys，见 AssembleAutoinstall
+	// 的赋值处与 model.RenderContext.RootSSHPublicKeys 的字段文档。
+	SSH autoinstallSSH `yaml:"ssh"`
+}
+
+// autoinstallSSH 对应 ssh 大键：是否安装 openssh-server（不装的话没有
+// sshd 可登录，公钥配置再对也没用）与要写入 root 账户
+// authorized_keys 的公钥列表。
+type autoinstallSSH struct {
+	InstallServer  bool     `yaml:"install-server"`
+	AuthorizedKeys []string `yaml:"authorized-keys"`
 }
 
 // autoinstallIdentity 对应 identity 大键：主机名与账户策略。
@@ -153,9 +163,23 @@ func buildInTargetCommandLines(ctx model.RenderContext, hookLines []string) []st
 	return lines
 }
 
-// AssembleAutoinstall 把本地化/身份/存储/网络/命令/包六个大键组装成完整
-// 的 Ubuntu autoinstall（user-data）YAML 文本（计划任务 3）。
+// AssembleAutoinstall 把本地化/身份/存储/网络/命令/包/SSH 七个大键组装成
+// 完整的 Ubuntu autoinstall（user-data）YAML 文本（计划任务 3）。
+//
+// ctx.RootSSHPublicKeys 为空时返回错误：root 不设可复用密码
+// （identity.password 用锁定占位值），公钥是唯一登录通路，绝不能省略
+// ssh.authorized-keys 或写入占位公钥（SPEC §1.5，与 kickstart.go
+// baseDirectives 同一个设计要点）。正常部署路径下这个错误不会触发：
+// internal/config.Validate 已经在启动时拒绝了空的
+// gateway.root_ssh_public_keys，本函数的检查是第二层防御。
 func AssembleAutoinstall(ctx model.RenderContext) (string, error) {
+	if len(ctx.RootSSHPublicKeys) == 0 {
+		return "", fmt.Errorf("render: RenderContext.RootSSHPublicKeys 为空，" +
+			"无法渲染 autoinstall——root 不设可复用密码，公钥是唯一登录通路，" +
+			"绝不能省略 ssh.authorized-keys 或写入占位公钥，" +
+			"那会静默产出一台没人能登录的机器（SPEC §1.5）")
+	}
+
 	params, err := InlineParams(ctx.Task.ResolvedParams)
 	if err != nil {
 		return "", fmt.Errorf("render: 参数内联失败: %w", err)
@@ -174,6 +198,17 @@ func AssembleAutoinstall(ctx model.RenderContext) (string, error) {
 				Password: autoinstallRootPasswordLockedPlaceholder,
 			},
 			Packages: []string{},
+			SSH: autoinstallSSH{
+				// 不装 openssh-server 就没有 sshd 可登录，公钥配置再对也
+				// 没用——两者必须同时配置才是完整的"公钥能登录"意图。
+				InstallServer: true,
+				// yaml.Marshal 序列化，不是文本拼接：即使公钥文本含换行、
+				// 引号、冒号等 YAML 特殊字符，标准库也会正确转义或用块
+				// 标量语法处理，不会让恶意值突破这个列表项的边界去篡改
+				// 同级的 install-server 或其它顶层键（TestAutoinstall_
+				// MaliciousSSHKeyStaysValidYAML 用真实恶意输入验证过）。
+				AuthorizedKeys: ctx.RootSSHPublicKeys,
+			},
 		},
 	}
 	doc.Autoinstall.Keyboard.Layout = "us"
@@ -291,13 +326,8 @@ func RenderMetaData(ctx model.RenderContext) (string, error) {
 	return string(out), nil
 }
 
-// 契约缺口：与 kickstart.go 的 rockyRootSSHKeyPlaceholder 同一类缺口——
-// model.RenderContext 没有承载"要注入的 SSH 公钥文本"的字段，autoinstall
-// 的 identity 段本应配合 ssh.authorized-keys 键注入公钥并设
-// ssh.install-server=true，但当前契约缺这个输入。保守处理：identity.
-// password 用锁定占位值表达"不设可复用密码"的一半意图（与 kickstart
-// rootpw --lock、preseed passwd/root-login=false 同等地位），不省略也不
-// 编造一个假公钥塞进 ssh.authorized-keys（省略会让机器装完后无法登录，
-// 编造假公钥会让人误以为已经配置好了真实的登录凭据）。正解方向与
-// kickstart.go 的说明一致：需要 M1 在 RenderContext 或 config 补一个
-// SSH 公钥来源字段。
+// 契约缺口已解决（原注释见 git 历史）：model.RenderContext.RootSSHPublicKeys
+// 字段落地后，identity.password 的锁定占位值与 ssh.authorized-keys/
+// ssh.install-server 分别承担"锁定密码登录"与"注入公钥登录"这两半完整
+// 意图（SPEC §1.5），不再是各说一半的临时状态——见 AssembleAutoinstall
+// 的赋值处与 model.RenderContext.RootSSHPublicKeys 的字段文档。

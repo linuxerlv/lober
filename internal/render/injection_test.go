@@ -57,6 +57,9 @@ func injectionTestCtx() model.RenderContext {
 		FinalizeToken: "finalize-tok-inject",
 		SyslogHost:    "10.10.0.1",
 		SyslogPort:    514,
+		RootSSHPublicKeys: []string{
+			"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober",
+		},
 	}
 }
 
@@ -228,5 +231,27 @@ func TestInjection_BizIPMaliciousRejected(t *testing.T) {
 	}
 	if out != "" {
 		t.Errorf("非法 biz_ip 应导致渲染失败时不返回任何内容，got:\n%s", out)
+	}
+}
+
+// TestInjection_MaliciousSSHKeyEndToEnd 用一把含裸换行的恶意 SSH 公钥走完整
+// 的 RenderAnswerFile 流程（RHEL/kickstart 家族），锁住"渲染器自身不单靠
+// config.Validate 的上游校验就假设 ctx.RootSSHPublicKeys 无害"这条纵深防御
+// ——万一某条不经过配置校验的路径把恶意值塞进了 RenderContext（例如测试或
+// 其它装配点直接构造），端到端流程也必须整体失败、不产出任何内容，不能让
+// 换行逃逸出 sshkey 指令拼出一条独立的恶意指令。
+func TestInjection_MaliciousSSHKeyEndToEnd(t *testing.T) {
+	r := &Renderer{}
+	ctx := injectionTestCtx()
+	ctx.RootSSHPublicKeys = []string{
+		"ssh-ed25519 AAAAtest evil\"\nrootpw --plaintext hacked #",
+	}
+	name, _ := ctx.AnswerFileName()
+	out, err := r.RenderAnswerFile(ctx, name)
+	if err == nil {
+		t.Errorf("含裸换行的恶意 SSH 公钥应导致 RenderAnswerFile 整体返回错误，got nil，out=%q", out)
+	}
+	if out != "" {
+		t.Errorf("恶意 SSH 公钥应导致渲染失败时不返回任何内容（不是部分成功），got:\n%s", out)
 	}
 }

@@ -89,5 +89,13 @@ func (s *Server) buildRenderContext(ctx context.Context, task model.Task, actual
 		SyslogPort: s.deps.SyslogPort,
 
 		ActualFirmware: actualFirmware,
+
+		// 部署级常量，随 Deps 原样传递（与 Bases/SyslogHost/SyslogPort 同一
+		// 种接缝，见 Deps.RootSSHPublicKeys 的字段文档）。渲染器（kickstart.go
+		// baseDirectives、autoinstall.go AssembleAutoinstall、preseed.go
+		// lateCommandValue）各自在为空时返回错误，本函数不重复做这层校验——
+		// 那是 internal/config.Validate（启动时）与渲染器（渲染时）已经在
+		// 覆盖的两层防御，网关这里只是原样传递，不是第三层校验点。
+		RootSSHPublicKeys: s.deps.RootSSHPublicKeys,
 	}, nil
 }

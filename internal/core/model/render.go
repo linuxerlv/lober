@@ -140,6 +140,24 @@ type RenderContext struct {
 	// §4.6 引导时按实际上报值校验的直接体现——任务里存的是 discovery
 	// 阶段的记录值，可能与眼前机器不符。
 	ActualFirmware FirmwareMode
+
+	// RootSSHPublicKeys 是要注入本次装机 root 账户的 SSH 公钥列表
+	// （SPEC §1.5：root 不设可复用密码，注入 SSH 公钥并关闭密码登录——
+	// 截获也换不成持久访问），来源是 internal/config.Gateway.
+	// RootSSHPublicKeys（部署级常量，装配点在构造渲染上下文时原样传入）。
+	//
+	// 不放进 Facts：fact 命名空间是面向 hook 的对外 API（§5.4：一旦有
+	// 数十个 hook 在用就不能改名，只增不删，废弃字段要双写一个版本
+	// 周期），公钥是渲染器内部消费的输入，不是给 hook 读取的运行期事实，
+	// 混进 Facts 会把这个内部实现细节永久绑进那份对外契约。
+	//
+	// 渲染器必须把它当作必需输入：为空时返回错误而不是省略 SSH 公钥
+	// 指令（省略会让机器装完后 root 完全无法登录）、更不能写死一个假
+	// 公钥占位（那会让人误以为已经配置好了真实的登录凭据，是比报错更
+	// 危险的静默失败）。装配点已经在配置校验阶段（internal/config.
+	// Validate）拒绝空列表，这里的防御是第二层——万一渲染上下文的构造
+	// 路径漏了赋值，也不会静默产出一台登不进去的机器。
+	RootSSHPublicKeys []string
 }
 
 // AnswerFileName 返回本任务的应答文件名，按 RenderContext.Artifact.OSFamily

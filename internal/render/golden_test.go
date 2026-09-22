@@ -78,6 +78,9 @@ func minimalKickstartCtx() model.RenderContext {
 		FinalizeToken: fixedFinalizeToken,
 		SyslogHost:    "10.10.0.1",
 		SyslogPort:    514,
+		RootSSHPublicKeys: []string{
+			"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober",
+		},
 	}
 }
 

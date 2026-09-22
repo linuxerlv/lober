@@ -182,6 +182,13 @@ gateway:
   gateway_base: "${GW_BASE}"
   artifact_base: "${GW_BASE}"
   syslog_listen: "127.0.0.1:${SYSLOG_PORT}"
+  # SPEC §1.5：root 不设可复用密码，注入 SSH 公钥并关闭密码登录——
+  # gateway.root_ssh_public_keys 是启动时的必填项（internal/config.
+  # Validate），不填的话本脚本第一步的 -check 校验就会直接失败。这是
+  # 一把仅用于本脚本自建临时环境的测试公钥，不对应任何真实私钥，不是
+  # 生产凭据（与上面 ADMIN_HASH 固定哈希同一类"一次性脚本自用测试数据"）。
+  root_ssh_public_keys:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 e2e-test@lober"
 console:
   listen: "127.0.0.1:${CONSOLE_PORT}"
   token_secret: "e2e-test-secret"

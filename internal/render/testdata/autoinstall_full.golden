@@ -385,3 +385,7 @@ autoinstall:
           signal "post-done" 0
           signal "rebooting" 0
     packages: []
+    ssh:
+        install-server: true
+        authorized-keys:
+            - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober

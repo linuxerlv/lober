@@ -54,6 +54,8 @@ gateway:
   gateway_base: "http://127.0.0.1:18180"
   artifact_base: "http://127.0.0.1:18181"
   syslog_listen: "127.0.0.1:18614"
+  root_ssh_public_keys:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober"
 console:
   listen: "127.0.0.1:18190"
   token_secret: "test-secret"
