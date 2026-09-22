@@ -69,6 +69,14 @@ type Deps struct {
 	// 与 M5 一致）：只在直连 peer 是 loopback 时才信任转发头部里的客户端
 	// IP。为 nil 时 Server 使用默认实现（判定 host 部分是否为 loopback）。
 	TrustedProxyPeer func(remoteAddr string) bool
+
+	// RootSSHPublicKeys 与 gateway.Deps 的同名字段承载同一个部署级配置值
+	// （来自 internal/config.Gateway.RootSSHPublicKeys，装配点原样传入）。
+	// preview 端点自己构造 model.RenderContext，必须把它一并传进去——
+	// 渲染器对空值是硬拒绝（SPEC §1.5：root 不设可复用密码，公钥是唯一
+	// 登录通路），不传的后果是 preview 对任何模板都返回渲染失败，而 §8.2
+	// 说明 preview 是开发期性价比最高的两个端点之一。
+	RootSSHPublicKeys []string
 }
 
 // AuthUser 是 console 包认识的认证记录形态：用户名、bcrypt 哈希、角色

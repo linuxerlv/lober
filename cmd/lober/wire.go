@@ -494,6 +494,10 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 
 		Users:      authUsers,
 		SessionTTL: cfg.Console.TokenTTL,
+
+		// 与 gateway.Deps 取同一个配置值：preview 端点自己构造
+		// RenderContext，而渲染器对空公钥列表是硬拒绝（SPEC §1.5）。
+		RootSSHPublicKeys: cfg.Gateway.RootSSHPublicKeys,
 	})
 
 	// 第 8 步：组装成一个持有全部组件的结构体返回。

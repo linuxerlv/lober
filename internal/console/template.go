@@ -367,11 +367,15 @@ func (s *Server) handleTemplatePreview(w http.ResponseWriter, r *http.Request) {
 			FormData: req.FormData, ResolvedParams: req.FormData,
 		},
 		Template: tpl, Artifact: artifact, Host: host,
-		Hooks:          sortedHookRefsForPreview(tpl),
-		Facts:          map[string]string{},
-		InstallToken:   "preview-install-token",
-		FinalizeToken:  "preview-finalize-token",
-		ActualFirmware: host.Firmware,
+		Hooks:         sortedHookRefsForPreview(tpl),
+		Facts:         map[string]string{},
+		InstallToken:  "preview-install-token",
+		FinalizeToken: "preview-finalize-token",
+		// 部署级配置值，与 gateway.buildRenderContext 取自同一处
+		// （Deps.RootSSHPublicKeys）。渲染器对空值硬拒绝，不传这一项
+		// preview 会对任何模板都渲染失败（SPEC §1.5）。
+		RootSSHPublicKeys: s.deps.RootSSHPublicKeys,
+		ActualFirmware:    host.Firmware,
 	}
 
 	answerFileName, ok := ctx.AnswerFileName()

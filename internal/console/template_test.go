@@ -305,3 +305,51 @@ func mapKeys(m map[string]json.RawMessage) []string {
 	}
 	return out
 }
+
+// TestTemplate_PreviewPassesRootSSHPublicKeys 锁住「preview 端点把
+// Deps.RootSSHPublicKeys 传进它自己构造的 RenderContext」。
+//
+// 为什么这条重要：preview 是少数自己拼 model.RenderContext 字面量的地方
+// （gateway 走 buildRenderContext，两条路径独立）。而渲染器对空公钥列表
+// 是硬拒绝——SPEC §1.5 要求 root 不设可复用密码、公钥是唯一登录通路，
+// 写占位公钥会静默产出一台没人能登录的机器，所以渲染器宁可报错。
+//
+// 漏传的后果是 preview 对任何模板都返回渲染失败，而 §8.2 说明 preview 与
+// dryrun 是开发期性价比最高的两个端点（把模板调试周期从「上电等十分钟」
+// 压到秒级）。这个缺口实际发生过一次：新增公钥字段时 gateway 那条路径
+// 改了、preview 这条漏了，而单元测试用的 stubRenderer 不做校验、测不出来，
+// 只有 e2e 的阶段 5 才暴露。这条测试把它拉回单元测试层。
+func TestTemplate_PreviewPassesRootSSHPublicKeys(t *testing.T) {
+	ts := newTestServer(t)
+	wantKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItestkeyfordeps admin@ops"
+	ts.Server.deps.RootSSHPublicKeys = []string{wantKey}
+
+	var gotKeys []string
+	ts.Server.deps.Renderer = &stubRenderer{
+		answerFunc: func(ctx model.RenderContext, _ string) (string, error) {
+			gotKeys = ctx.RootSSHPublicKeys
+			return "# fake answer", nil
+		},
+	}
+
+	set := seedActiveArtifactSet(t, ts, "as-sshkey", model.OSFamilyRHEL)
+	tok := ts.login("eve-admin")
+	rr := ts.doJSON("POST", "/console/v1/templates", tok, map[string]any{
+		"name": "tpl-sshkey", "artifactSetId": set.ID, "answerTemplate": "# ks\n",
+	})
+	var created struct {
+		Data templateItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &created)
+
+	rr = ts.doJSON("POST", "/console/v1/templates/"+created.Data.ID+"/preview", tok, map[string]any{
+		"formData": map[string]string{"hostname": "web-01"},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("preview 失败: %d, body=%s", rr.Code, rr.Body.String())
+	}
+	if len(gotKeys) != 1 || gotKeys[0] != wantKey {
+		t.Errorf("RenderContext.RootSSHPublicKeys = %v, want [%s] —— preview 漏传这一项会让它对"+
+			"任何模板都渲染失败（渲染器对空公钥硬拒绝，SPEC §1.5）", gotKeys, wantKey)
+	}
+}
