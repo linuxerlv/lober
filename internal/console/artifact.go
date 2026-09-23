@@ -54,6 +54,31 @@ type ArtifactImporter interface {
 	TriggerImport(ctx context.Context, artifactSetID, isoPath string)
 }
 
+// ArtifactVerifier 是控制台触发异步「重算 manifest 校验完整性」需要的
+// 最窄接口：只有一个方法。
+//
+// 与 ArtifactImporter 同一种接缝设计（接口定义在 console 包内，具体实现
+// 放装配点 cmd/lober/verifier.go）：真正的 manifest 生成逻辑
+// （imports.GenerateManifest）在 internal/imports 包，而 console 不能
+// import internal/imports（archtest 的依赖方向守卫拦住任何实现模块之间
+// 互相 import，唯一豁免是 cmd/lober 装配点）。
+//
+// TriggerVerify 的语义是「异步触发，立即返回」——校验要重算整棵制品树的
+// sha256（可能是几 GB 文件），本接口的实现必须自己起 goroutine，不能
+// 阻塞调用方；handleVerifyArtifactSet 在 HTTP 响应写出之前调用它，若这里
+// 同步跑完，会让校验请求挂起到整棵树算完 sha256 才返回，与 SPEC §8.2
+// 「重算 sha256 校验完整性」这一端点应保持的响应及时性、以及本模块对
+// ArtifactImporter 已经确立的「异步 job，端点立即返回」纪律相冲突。
+//
+// 方法本身不返回执行结果（结果体现在制品集的字段上，供前端轮询
+// GET /artifact-sets 观察——具体体现方式见 verifier.go 里生产实现的文档，
+// 那里详细论证了「校验失败时该不该把状态置为 failed」这一设计决策）。
+type ArtifactVerifier interface {
+	// TriggerVerify 异步触发对 artifactSetID 的完整性校验：重算
+	// manifest、与已登记的 ManifestSHA256 比对，把可观察的结果写回。
+	TriggerVerify(ctx context.Context, artifactSetID string)
+}
+
 // routesArtifactSet 注册制品集四个端点。
 func (s *Server) routesArtifactSet() {
 	s.handleFunc("POST", "/artifact-sets", codeArtifactImport, "artifact_set.create", s.handleCreateArtifactSet)
@@ -182,18 +207,36 @@ func (s *Server) handleListArtifactSets(w http.ResponseWriter, r *http.Request) 
 	apierr.WriteOK(w, items)
 }
 
-// handleVerifyArtifactSet 处理 POST /artifact-sets/{id}/verify：重算
-// manifest 校验完整性。MVP 阶段控制台不持有真实制品文件系统访问权
-// （那属于 M7/存储层的职责），本端点校验制品集存在后直接返回接受，真正
-// 的重算由异步 job 完成、结果体现在下次 GET 的 state 字段——与
-// http-console.md「异步执行，结果体现在下次 GET /artifact-sets 的 state
-// 字段」的约定一致。
+// handleVerifyArtifactSet 处理 POST /artifact-sets/{id}/verify：触发一次
+// 真正的 manifest 重算，校验制品完整性（SPEC §8.2「重算 sha256 校验完整
+// 性」；docs/contracts/http-console.md 同一定义）。
+//
+// 校验本身是长耗时操作（要重算几 GB 文件的 sha256），因此本 handler 只做
+// 两件事：确认制品集存在（不存在返回 apierr.CodeNotFound），再通过
+// Deps.ArtifactVerifier 这个窄接口异步触发校验，本端点立即返回——与
+// handleCreateArtifactSet 触发导入 job 的既有纪律完全一致（不在 HTTP
+// handler 里同步跑完长耗时操作）。
+//
+// Deps.ArtifactVerifier 判空：可为 nil（测试或某些部署形态可能不需要
+// 校验能力，与 Deps.ArtifactImporter 同一种「按需注入、handler 调用前
+// 判空」的接缝设计）——为 nil 时端点仍返回接受，只是不会真的触发任何
+// 重算，这与「校验能力缺省时端点应表现为不阻塞、不报错」的既有降级预期
+// 一致（任务要求的「verifier 为 nil 时的降级行为」，参照
+// handleCreateArtifactSet 对 ArtifactImporter 判空的既有处理）。
 func (s *Server) handleVerifyArtifactSet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, err := s.deps.ArtifactSets.GetArtifactSet(r.Context(), id); err != nil {
 		writeInternal(w, err)
 		return
 	}
+
+	// 与 handleCreateArtifactSet 触发导入时同样的理由：用
+	// context.WithoutCancel 剥离本次 HTTP 请求的生命周期，否则响应写出、
+	// 请求结束后 ctx 被取消，goroutine 里刚起步的重算就可能被牵连中断。
+	if s.deps.ArtifactVerifier != nil {
+		s.deps.ArtifactVerifier.TriggerVerify(context.WithoutCancel(r.Context()), id)
+	}
+
 	apierr.WriteOK(w, nil)
 }
 

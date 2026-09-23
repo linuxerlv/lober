@@ -95,6 +95,13 @@ type Deps struct {
 	// importing（与本断口接入之前的既有行为一致，不是本次改动引入的
 	// 新风险）。
 	ArtifactImporter ArtifactImporter
+
+	// ArtifactVerifier 供 POST /artifact-sets/{id}/verify 触发异步重算
+	// manifest 校验完整性（本轮新增，见 artifact.go 的 ArtifactVerifier
+	// 接口文档）。可为 nil——为 nil 时校验端点仍立即返回接受，只是不会
+	// 真的触发任何重算（与 ArtifactImporter 同一种按需注入、判空降级的
+	// 接缝设计）。
+	ArtifactVerifier ArtifactVerifier
 }
 
 // AuthUser 是 console 包认识的认证记录形态：用户名、bcrypt 哈希、角色
