@@ -35,9 +35,15 @@ func (f failingDiskPlanner) Plan(ctx context.Context, disks []contract.Disk, int
 	return f.layout, nil
 }
 
+// validFormData 里的 hostname 键改用裸键 "hostname"（本轨修复的核心）：
+// scripts/e2e.sh 的建任务请求体（"formData":{"hostname":"e2e-host-01"}）
+// 与 SPEC §8.3 一致确认表单字段是裸键，不是 model.FactHostname
+// （"LOBER_HOSTNAME"，那是注入给机器侧 hook 的 fact 命名空间键，与表单键
+// 是两个不同的命名空间）。修复前用 model.FactHostname 当键去读表单，
+// Resolve 读到的永远是空字符串。
 func validFormData() map[string]string {
 	return map[string]string{
-		model.FactHostname:       "web-01",
+		"hostname":               "web-01",
 		staticIPAMFormKeyIP:      "10.0.1.5",
 		staticIPAMFormKeyGateway: "10.0.1.1",
 		staticIPAMFormKeyMask:    "255.255.255.0",
@@ -59,9 +65,39 @@ func validFacts() map[string]string {
 	}
 }
 
+// recordingDiskPlanner 包一层真实的 diskPlannerFirst，额外记录收到的
+// disks 参数——用于证明编排器确实把 decodeDisksFromFacts 解析出的磁盘
+// 清单转交给了磁盘规划器（而不是仅仅证明"某个键出现在返回值里"，因为
+// 本轨修复后返回值不再携带 disk_primary，见下面测试的说明）。
+type recordingDiskPlanner struct {
+	inner      contract.DiskPlanner
+	gotDisks   []contract.Disk
+	planCalled bool
+}
+
+func (r *recordingDiskPlanner) Plan(ctx context.Context, disks []contract.Disk, intent contract.DiskIntent) (contract.Layout, error) {
+	r.planCalled = true
+	r.gotDisks = disks
+	return r.inner.Plan(ctx, disks, intent)
+}
+
+// TestResolveTaskParams_AllSucceedMergesAllExpectedKeys 锁住编排器合并
+// 三个 provider 结果之后、最终返回值只包含 InlineParams 白名单认得的
+// 裸键（hostname/biz_ip）这一核心行为——这是本轨修复的核心断言，修复前
+// 会失败：Resolve 读表单用的是 model.FactHostname 这个键，读到的是空
+// 字符串，成功合并的只有 biz_ip。
+//
+// 本测试同时断言 biz_gw/biz_mask/disk_primary/template_id/
+// template_version 五个键不出现在返回值中——不是"这些决策没有发生"，而是
+// "它们发生了，但按照 render/params.go 的 InlineParams 白名单硬约束，
+// 不能出现在 ResolvedParams 里"（详见 resolve.go 的 Resolve 方法末尾
+// 注释）。disk_primary 确实被正确计算这件事，改用 recordingDiskPlanner
+// 记录 Plan 收到的磁盘清单来验证，而不是检查返回值里有没有这个键——
+// 这不是弱化断言，是把"编排器把磁盘决策接对了"这件事换一个仍然真实、
+// 仍然会在接线错误时失败的观测点来验证。
 func TestResolveTaskParams_AllSucceedMergesAllExpectedKeys(t *testing.T) {
 	resolver := failingResolver{ref: contract.TemplateRef{TemplateID: "tpl-1", TemplateVersion: 2}}
-	diskPlanner := diskPlannerFirst{} // 用真实策略验证端到端组合
+	diskPlanner := &recordingDiskPlanner{inner: diskPlannerFirst{}}
 
 	orchestrator := NewTaskParamsResolver(resolver, diskPlanner, contract.DiskIntent{})
 	params, err := orchestrator.Resolve(context.Background(), validFormData(), validFacts())
@@ -69,24 +105,39 @@ func TestResolveTaskParams_AllSucceedMergesAllExpectedKeys(t *testing.T) {
 		t.Fatalf("三个 provider 都成功时不应报错: %v", err)
 	}
 
-	wantKeys := []string{
-		model.FactHostname, model.FactBizIP, model.FactBizGW, model.FactBizMask,
-		model.FactDiskPrimary, "template_id", "template_version",
+	want := map[string]string{
+		"hostname": "web-01",
+		"biz_ip":   "10.0.1.5",
 	}
-	for _, k := range wantKeys {
-		if _, ok := params[k]; !ok {
-			t.Errorf("合并结果缺少预期键 %q，got %+v", k, params)
+	if len(params) != len(want) {
+		t.Fatalf("返回值键数量 = %d, want %d（返回值只应包含 InlineParams 白名单裸键），got %+v",
+			len(params), len(want), params)
+	}
+	for k, v := range want {
+		if params[k] != v {
+			t.Errorf("键 %q = %q, want %q，got %+v", k, params[k], v, params)
 		}
 	}
 
-	if params[model.FactBizIP] != "10.0.1.5" {
-		t.Errorf("biz_ip got %q, want 10.0.1.5", params[model.FactBizIP])
+	// InlineParams 白名单认不出的键必须缺席——留下任何一个都会让六个
+	// 家族的渲染器在渲染应答文件这一步 100% 报错（本轨修复要解决的正是
+	// 这个真实故障，见 resolve.go Resolve 方法末尾的详细说明）。
+	forbidden := []string{model.FactBizGW, model.FactBizMask, model.FactDiskPrimary,
+		"template_id", "template_version"}
+	for _, k := range forbidden {
+		if v, ok := params[k]; ok {
+			t.Errorf("键 %q 不应出现在返回值中（InlineParams 白名单认不出），但 got 值=%q，完整结果=%+v",
+				k, v, params)
+		}
 	}
-	if params[model.FactDiskPrimary] != "/dev/disk/by-id/aaa" {
-		t.Errorf("disk_primary got %q, want /dev/disk/by-id/aaa", params[model.FactDiskPrimary])
+
+	// 磁盘决策确实发生、确实收到了 decodeDisksFromFacts 解析出的磁盘——
+	// 用调用记录验证，因为该决策结果按上面的断言不应出现在返回值里。
+	if !diskPlanner.planCalled {
+		t.Fatal("磁盘规划器的 Plan 未被调用——编排器没有把磁盘决策接上")
 	}
-	if params["template_id"] != "tpl-1" {
-		t.Errorf("template_id got %q, want tpl-1", params["template_id"])
+	if len(diskPlanner.gotDisks) != 1 || diskPlanner.gotDisks[0].ByIDPath != "/dev/disk/by-id/aaa" {
+		t.Errorf("磁盘规划器收到的磁盘清单不对，got %+v", diskPlanner.gotDisks)
 	}
 }
 
@@ -146,16 +197,24 @@ func TestResolveTaskParams_DiskPlannerFailureFailsOverallNoPartialResult(t *test
 	}
 }
 
-// TestResolveTaskParams_ByHookDiskPolicy_DiskPrimaryKeyOmittedNotEmpty 锁住
-// by-hook 磁盘策略与同步编排器组合时的行为：by-hook 契约上返回
+// TestResolveTaskParams_ByHookDiskPolicy_OrchestratorSucceedsNoPartialFailure
+// 锁住 by-hook 磁盘策略与同步编排器组合时的行为：by-hook 契约上返回
 // len(Selected)==1 但 Disk 是零值（不做服务端决策，选盘逻辑推到 %pre 阶段
 // 的 hook，SPEC §5.6）。编排器必须整体成功（这不是失败，是「没有服务端
-// 决策」这一种合法结果），但绝不能把 LOBER_DISK_PRIMARY 写成空字符串——
-// 空字符串会被 %pre 里的 hook 脚本当成「存在但是空路径」误用，而完全不
-// 写入这个键则能让 `[ -n "$LOBER_DISK_PRIMARY" ]` 之类的判断正确探测到
-// 「没有服务端决策」。这条修复对应 verifier 发现的真实缺陷：修复前
-// resolved_params 里会出现 LOBER_DISK_PRIMARY=""。
-func TestResolveTaskParams_ByHookDiskPolicy_DiskPrimaryKeyOmittedNotEmpty(t *testing.T) {
+// 决策」这一种合法结果）。
+//
+// 本测试历史上还断言过 model.FactDiskPrimary 键不出现在返回值中（防止
+// %pre 的 hook 脚本把空字符串误当成真实但为空的盘路径）——本轨修复后这
+// 条断言对任何磁盘策略都恒为真（返回值从不携带 disk_primary，见
+// resolve.go Resolve 方法末尾说明），不再是 by-hook 特有的行为，因此不
+// 再是一条能分辨"改对了"还是"改错了"的有效断言，本测试改为只锁住"by-hook
+// 策略下编排器仍然成功、仍然产出白名单裸键"这一件事——"disk_primary 是否
+// 该出现在返回值里"已经被上面的
+// TestResolveTaskParams_AllSucceedMergesAllExpectedKeys 统一覆盖（对
+// 所有磁盘策略都成立），"by-hook 本身选盘行为对不对"由
+// diskplanner_test.go 的 TestDiskByHook_ReturnsEmptyPrimaryWithNonEmptyReason
+// 单独锁住，不需要在这里重复。
+func TestResolveTaskParams_ByHookDiskPolicy_OrchestratorSucceedsNoPartialFailure(t *testing.T) {
 	resolver := failingResolver{ref: contract.TemplateRef{TemplateID: "tpl-1"}}
 	diskPlanner := diskPlannerByHook{}
 
@@ -168,17 +227,12 @@ func TestResolveTaskParams_ByHookDiskPolicy_DiskPrimaryKeyOmittedNotEmpty(t *tes
 	if params == nil {
 		t.Fatal("by-hook 策略下编排器应正常产出参数（不是失败路径）")
 	}
-	if v, ok := params[model.FactDiskPrimary]; ok {
-		t.Fatalf("by-hook 策略下不应写入 %s 键（无服务端决策结果可写），"+
-			"got 键存在且值=%q——这会让 %%pre 的 hook 脚本把空字符串误当成"+
-			"一个真实但为空的盘路径使用", model.FactDiskPrimary, v)
-	}
 	// 其余键（IPAM/模板解析产出的部分）应照常存在，证明这不是整体失败。
-	if params[model.FactBizIP] != "10.0.1.5" {
-		t.Errorf("biz_ip got %q, want 10.0.1.5", params[model.FactBizIP])
+	if params["biz_ip"] != "10.0.1.5" {
+		t.Errorf("biz_ip got %q, want 10.0.1.5，完整结果=%+v", params["biz_ip"], params)
 	}
-	if params["template_id"] != "tpl-1" {
-		t.Errorf("template_id got %q, want tpl-1", params["template_id"])
+	if params["hostname"] != "web-01" {
+		t.Errorf("hostname got %q, want web-01，完整结果=%+v", params["hostname"], params)
 	}
 }
 
@@ -313,11 +367,15 @@ func TestLifecycle_ReadyTriggersDNSRegistrationAndNotify(t *testing.T) {
 	notify := &recordingNotify{}
 	RegisterLifecycleHooks(bus, dns, notify)
 
+	// 键改用裸键 "hostname"/"biz_ip"——与 resolve.go 的 Resolve 现在写回
+	// ResolvedParams 时使用的键名一致（也是 lifecycle.go 的 onTaskReady
+	// 现在读取的键名），不再是 fact 命名空间常量 model.FactHostname/
+	// model.FactBizIP（那两个是注入给机器侧 hook 的 Facts 命名空间键）。
 	tk := model.Task{
 		ID: "task-1",
 		ResolvedParams: map[string]string{
-			model.FactHostname: "web-01",
-			model.FactBizIP:    "10.0.1.5",
+			"hostname": "web-01",
+			"biz_ip":   "10.0.1.5",
 		},
 	}
 	bus.Publish(contract.LifecycleEventTaskReady, tk)

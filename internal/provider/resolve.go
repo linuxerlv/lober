@@ -119,6 +119,32 @@ func decodeDisksFromFacts(facts map[string]string) ([]contract.Disk, error) {
 	return disks, nil
 }
 
+// formKeyHostname 是建任务表单里主机名字段的裸键名。SPEC §2.4/§8.3 与
+// scripts/e2e.sh 的建任务请求体（"formData":{"hostname":"e2e-host-01"}）
+// 一致确认：表单字段用的是裸键 "hostname"，不是 fact 命名空间常量
+// model.FactHostname（"LOBER_HOSTNAME"）——那是注入给机器侧 hook 的环境
+// 变量名（SPEC §5.4），与表单键是两个不同的命名空间。本文件历史上把两者
+// 混用（用 model.FactHostname 去读表单），读到的永远是空串，因为表单里
+// 根本没有这个键；cmd/lober/wire.go 的 resolvedParamsKeyFixup 曾经在装配点
+// 补一层键名转换兜住写回方向的偏差，但读表单这一侧的偏差从未被兜住过——
+// 静态 IPAM（ipam.go 的 staticIPAMFormKeyIP 等）一直读的就是裸键，只有本
+// 文件的 hostname 读取用错了命名空间。
+const formKeyHostname = "hostname"
+
+// resolvedKeyHostname 与 resolvedKeyBizIP 是本函数写回 resolved
+// map（最终成为 model.Task.ResolvedParams）时使用的键名——裸键，与
+// internal/render/params.go 的 InlineParams 白名单
+// {"hostname","biz_ip","role"} 对齐。InlineParams 被六个家族的渲染器
+// 直接喂整个 ResolvedParams（无任何字段级过滤），任何不在白名单里的键
+// 出现在这个 map 里都会让渲染整体报错拒绝——因此本函数只把这两个键放进
+// 返回值，其它内部计算出的决策结果（biz_gw/biz_mask/disk_primary/
+// nic_install_mac/template_id/template_version）刻意不放进返回值，
+// 详见本函数末尾的说明。
+const (
+	resolvedKeyHostname = "hostname"
+	resolvedKeyBizIP    = "biz_ip"
+)
+
 func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]string, facts map[string]string) (map[string]string, error) {
 	hwFacts := contract.HWFacts{
 		OSFamily: facts[model.FactOSFamily],
@@ -132,9 +158,10 @@ func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]st
 		return nil, fmt.Errorf("provider: 同步决策编排失败于模板解析步骤: %w", err)
 	}
 
+	hostname := formData[formKeyHostname]
 	ipam := r.ipamFactory(formData)
 	allocResult, err := ipam.Allocate(ctx, contract.AllocRequest{
-		Hostname: formData[model.FactHostname],
+		Hostname: hostname,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("provider: 同步决策编排失败于 IPAM 步骤: %w", err)
@@ -154,8 +181,14 @@ func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]st
 			"（DiskPlanner 契约要求零块盘时返回错误而不是空 Selected），视为编排失败")
 	}
 
-	resolved := map[string]string{
-		model.FactHostname: formData[model.FactHostname],
+	// decided 是本函数内部的完整决策结果记账（fact 命名空间键 +
+	// bookkeeping 键），供网卡决策、日志、未来的 Facts 落库等内部用途
+	// 使用——不直接作为返回值。这不是又一层"装配点式"的键名包装：decided
+	// 本身不做任何键名转换，只是把每个 provider 的原始决策结果按 fact
+	// 命名空间收好，方便本函数末尾统一决定"哪些键真的要进入
+	// ResolvedParams"这一件事。
+	decided := map[string]string{
+		model.FactHostname: hostname,
 		model.FactBizIP:    allocResult.IP,
 		model.FactBizGW:    allocResult.Gateway,
 		model.FactBizMask:  allocResult.Mask,
@@ -176,7 +209,7 @@ func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]st
 	// 刻意选择「宁可键缺失，也不要键存在但值是误导性的空字符串」——与本
 	// 计划贯穿的「错误优先于静默退化」是同一个方向。
 	if primary := layout.Selected[0].Disk.ByIDPath; primary != "" {
-		resolved[model.FactDiskPrimary] = primary
+		decided[model.FactDiskPrimary] = primary
 	}
 
 	// 新增步骤（P2-02 计划任务 3）：网卡决策。刻意放在磁盘规划步骤之后、
@@ -203,7 +236,49 @@ func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]st
 	//
 	// 与磁盘 by-hook 策略同一方向的处理：宁可键缺失，也不要键存在但值
 	// 是误导性的空字符串（decideAndAppendInstallNICMAC 内部保证这一点）。
-	decideAndAppendInstallNICMAC(facts, resolved)
+	decideAndAppendInstallNICMAC(facts, decided)
+
+	// resolved 是本方法真正的返回值，也就是最终写进
+	// model.Task.ResolvedParams 的内容。它只收录 internal/render/params.go
+	// 的 InlineParams 白名单认得的裸键——hostname 与 biz_ip（role 本函数
+	// 不产出，表单若填了 role 会随 formData 原样留在别处，不属于本函数
+	// 职责）。
+	//
+	// 为什么 decided 里其余的键（biz_gw/biz_mask/disk_primary/
+	// template_id/template_version/nic_install_mac）不放进 resolved，而
+	// 不是像 cmd/lober/wire.go 原来的 resolvedParamsKeyFixup 那样在装配点
+	// 事后剔除：InlineParams 被六个家族的渲染器直接喂整个
+	// ctx.Task.ResolvedParams，未知键出现在里面会让渲染整体报错拒绝
+	// （render/params.go 的白名单校验），而 console/task.go 的
+	// handleCreateTask 把 Resolve 的返回值不做任何过滤直接写进
+	// task.ResolvedParams——这意味着"返回值只能是白名单子集"不是本函数
+	// 可以选择遵守或不遵守的偏好，而是当前接线方式下的硬约束：任何走真实
+	// 建任务路径产出的任务，只要 resolved_params 里混入一个白名单认不出
+	// 的键，第一次渲染应答文件就会 500（这正是本函数修复前由装配点兜住
+	// 的那个真实故障，见 wire.go 移除 fixup 前的文档）。在约束不变的前提
+	// 下，把剔除动作从"调用之后再补一层包装"搬到"决策产出的源头就不产出"，
+	// 是同一个约束更早成立的位置，不是新增了一条限制。
+	//
+	// 遗留的契约缺口（未受本次改动影响，据实记录）：biz_gw/biz_mask/
+	// disk_primary/nic_install_mac 四项决策结果目前没有任何生产代码路径
+	// 把它们写进 Facts（六个渲染器读磁盘主盘用的是 ctx.Facts[LOBER_DISK_
+	// PRIMARY]，不是 ResolvedParams；全仓搜索确认建任务路径上没有任何调用
+	// FactStore.MergeFacts 落库这四项）——它们在本函数修复前、修复后都
+	// 同样"算出来了但送不到任何消费者手上"，这是 P2-02 计划任务 4（涉及
+	// internal/gateway/facts.go，不在本文件归属范围）尚待接线的断口，不是
+	// 本次修复引入或掩盖的新问题。template_id/template_version 是例外：
+	// 它们本就已经以 model.Task.TemplateID/TemplateVersion 字段的形式
+	// 存在（handleCreateTask 从 tpl.ID/tpl.Version 直接赋值），继续在
+	// resolved_params 里重复保留它们不会补上任何信息缺口，只会重新制造
+	// 白名单冲突——因此本函数干脆不再计算它们要不要进入返回值这件事，
+	// 只保留在 decided 内部记账中（供未来若要接 Facts 落库时仍能拿到）。
+	resolved := map[string]string{}
+	if v := decided[model.FactHostname]; v != "" {
+		resolved[resolvedKeyHostname] = v
+	}
+	if v := decided[model.FactBizIP]; v != "" {
+		resolved[resolvedKeyBizIP] = v
+	}
 
 	return resolved, nil
 }
@@ -222,7 +297,9 @@ func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]st
 const nicInstallMACParamKey = "nic_install_mac"
 
 // decideAndAppendInstallNICMAC 尝试从 facts 中解析网卡采集事实并决策装机
-// 网卡，成功时把结果写入 resolved（原地修改）。
+// 网卡，成功时把结果写入 decided（原地修改，Resolve 内部的完整决策记账，
+// 不是最终返回值——见 Resolve 方法末尾"resolved 是本方法真正的返回值"
+// 一段的说明）。
 //
 // 两种"不写入"的情形，都不算错误：
 //  1. facts 中没有任何网卡采集键（ParseHWNICs 返回空切片）——上游尚未
@@ -232,7 +309,7 @@ const nicInstallMACParamKey = "nic_install_mac"
 //  2. PlanInstallNIC 因为找不到依据而报错（全部 link down 且无 MAC 匹配）
 //     ——记录不下决策结果，但不让调用方的 Resolve 因此失败（见调用处的
 //     详细说明）。
-func decideAndAppendInstallNICMAC(facts map[string]string, resolved map[string]string) {
+func decideAndAppendInstallNICMAC(facts map[string]string, decided map[string]string) {
 	nics, err := ParseHWNICs(facts)
 	if err != nil || len(nics) == 0 {
 		return
@@ -242,7 +319,7 @@ func decideAndAppendInstallNICMAC(facts map[string]string, resolved map[string]s
 	if err != nil {
 		return
 	}
-	resolved[nicInstallMACParamKey] = decision.MAC
+	decided[nicInstallMACParamKey] = decision.MAC
 }
 
 // 编译期断言：taskParamsResolver 必须满足 contract.TaskParamsResolver。

@@ -91,7 +91,11 @@ func heartbeatOnce(ctx context.Context, lister heartbeatTaskLister, prober contr
 			continue
 		}
 		for _, task := range tasks {
-			ip := task.ResolvedParams[model.FactBizIP]
+			// 读裸键 "biz_ip"：resolve.go 写回 ResolvedParams 时用的是
+			// InlineParams 白名单认得的裸键，不是 fact 命名空间常量
+			// model.FactBizIP（LOBER_BIZ_IP 属于注入给机器侧 hook 的
+			// Facts 命名空间，与 ResolvedParams 是两个不同的键空间）。
+			ip := task.ResolvedParams["biz_ip"]
 			if ip == "" {
 				// 没有已知探测地址的任务不进目标列表——喂一个空字符串 IP
 				// 给探测器没有意义，且会污染探测结果的可观测性（任务

@@ -42,8 +42,15 @@ func RegisterLifecycleHooks(bus contract.EventBus, dns contract.DNSProviderV1, n
 func onTaskReady(tk model.Task, dns contract.DNSProviderV1, notify contract.NotifyProviderV1) {
 	ctx := context.Background()
 
-	fqdn := tk.ResolvedParams[model.FactHostname]
-	ip := tk.ResolvedParams[model.FactBizIP]
+	// 读裸键 "hostname"/"biz_ip"，与 resolve.go 的 Resolve 写回
+	// ResolvedParams 时使用的键名对齐（也是 internal/render/params.go
+	// InlineParams 白名单认得的同一组键）——ResolvedParams 现在只可能
+	// 携带这两个裸键（外加可能的 role，本处不需要），不再是 fact 命名空间
+	// 键 model.FactHostname/model.FactBizIP（LOBER_HOSTNAME/LOBER_BIZ_IP
+	// 是注入给机器侧 hook 的环境变量名，属于 Facts 命名空间，不属于
+	// ResolvedParams）。
+	fqdn := tk.ResolvedParams["hostname"]
+	ip := tk.ResolvedParams["biz_ip"]
 	if fqdn != "" && ip != "" {
 		if err := dns.Register(ctx, fqdn, ip); err != nil {
 			log.Printf("provider/lifecycle: task.ready 写 DNS 失败（task_id=%s, fqdn=%s, ip=%s）: %v"+

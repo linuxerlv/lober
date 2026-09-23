@@ -1,112 +1,107 @@
+// 本文件历史上测试的是 resolvedParamsKeyFixup——装配点曾经用来兜住
+// internal/provider/resolve.go 产出键名体系与 internal/render/params.go
+// 的 InlineParams 白名单不对齐这一裂缝的包装类型。n5-resolve-keys 这一轨
+// 把修复挪到了裂缝的源头（resolve.go 自己直接产出白名单认得的裸键），
+// resolvedParamsKeyFixup 因此被移除（见 wire.go 移除处的说明）。
+//
+// 本文件改为在装配点这一层验证同一件事，但对象换成真实的、完整装配出的
+// contract.TaskParamsResolver（app.ParamsResolver）——不再是包着一个可
+// 编程测试替身的 fixup，而是 provider.NewTaskParamsResolver 的真实产出，
+// 走真实的 IPAM/模板解析/磁盘规划三个内置 provider。这比原来的测试更
+// 接近"真的跑起来"：原来的测试只证明了"fixup 这一层转换逻辑本身没写错"，
+// 不能证明"接完整个装配链路之后，真实建任务路径真的能拿到裸键"——而后者
+// 正是本轨修复要解决的真实故障（e2e 脚本第一次跑到取应答文件这一步
+// 100% 复现的 500）。
 package main
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/lober/lober/internal/core/model"
 )
 
-// stubTaskParamsResolver 是 contract.TaskParamsResolver 的可编程测试
-// 替身，模拟 internal/provider/resolve.go 的真实产出形态（fact 命名空间
-// 键 + 两个 bookkeeping 键），不需要搭出真实的 provider 依赖链。
-type stubTaskParamsResolver struct {
-	resolved map[string]string
-	err      error
-}
+// TestParamsResolver_WiredEndToEndProducesInlineParamsWhitelistKeys 是本轨
+// 修复的装配点级回归测试：给真实装配出的 app.ParamsResolver 喂一份与
+// scripts/e2e.sh 建任务请求体同构的表单数据（裸键 "hostname"），断言
+// 返回值恰好是 internal/render/params.go 的 InlineParams 白名单认得的
+// 两个裸键——不多（template_id/template_version/biz_gw/biz_mask/
+// disk_primary 不该泄漏进来）、不少（hostname/biz_ip 必须真的读到了
+// 表单值，不是空字符串）。
+//
+// 修复前这条测试会失败：resolve.go 的 Resolve 曾经读 model.FactHostname
+// 这个键去取表单值，表单里根本没有这个键，读到的是空字符串，
+// resolvedParamsKeyFixup 尚未移除时会把这个空字符串直接剔除（fixup 对
+// 空值键的既有处理），最终返回值里连 hostname 键本身都不存在。
+func TestParamsResolver_WiredEndToEndProducesInlineParamsWhitelistKeys(t *testing.T) {
+	cfg := testConfig(t) // IPAM: static, DiskPolicy: largest（testConfig 的既有配置）
+	app := buildAppWithDBForTest(t, cfg)
 
-func (s stubTaskParamsResolver) Resolve(ctx context.Context, formData map[string]string, facts map[string]string) (map[string]string, error) {
-	return s.resolved, s.err
-}
-
-// TestResolvedParamsKeyFixup_TranslatesFactKeysToInlineParamsWhitelist 是
-// 本任务在实测 e2e 阶段 8（取应答文件）时发现的真实契约裂缝的回归测试：
-// internal/provider/resolve.go 产出的键名体系（LOBER_HOSTNAME、
-// LOBER_BIZ_IP 等 fact 命名空间键，外加 template_id/template_version 两个
-// bookkeeping 键）与 internal/render/params.go 的 InlineParams 白名单
-// （裸键名 hostname/biz_ip/role）完全不对齐——不修复的后果是任何走真实
-// 建任务路径产出的任务，第一次请求应答文件就会 500（"表单键 ... 不在
-// 已知校验器白名单中"），这在 e2e 脚本里 100% 复现，不是理论上的边界
-// 情形。
-func TestResolvedParamsKeyFixup_TranslatesFactKeysToInlineParamsWhitelist(t *testing.T) {
-	stub := stubTaskParamsResolver{
-		resolved: map[string]string{
-			model.FactHostname: "e2e-host-01",
-			model.FactBizIP:    "10.0.0.5",
-			model.FactBizGW:    "10.0.0.1",
-			model.FactBizMask:  "255.255.255.0",
-			"template_id":      "tpl-1",
-			"template_version": "1",
-		},
+	formData := map[string]string{
+		"hostname":    "e2e-host-01", // 与 scripts/e2e.sh 的建任务请求体同构
+		"biz_ip":      "10.0.1.5",
+		"biz_gateway": "10.0.1.1",
+		"biz_mask":    "255.255.255.0",
 	}
-	fixup := resolvedParamsKeyFixup{inner: stub}
+	facts := map[string]string{
+		model.FactOSFamily:                string(model.OSFamilyRHEL),
+		"LOBER_INSPECT_DISK_0_BYID":       "/dev/disk/by-id/aaa",
+		"LOBER_INSPECT_DISK_0_SIZE":       "500000000000",
+		"LOBER_INSPECT_DISK_0_ROTATIONAL": "false",
+		"LOBER_INSPECT_DISK_0_MODEL":      "SSD",
+	}
 
-	got, err := fixup.Resolve(context.Background(), nil, nil)
+	got, err := app.ParamsResolver.Resolve(context.Background(), formData, facts)
 	if err != nil {
-		t.Fatalf("Resolve 失败: %v", err)
+		t.Fatalf("真实装配出的 ParamsResolver.Resolve 失败: %v", err)
 	}
 
 	want := map[string]string{
 		"hostname": "e2e-host-01",
-		"biz_ip":   "10.0.0.5",
+		"biz_ip":   "10.0.1.5",
 	}
 	if len(got) != len(want) {
-		t.Fatalf("结果键数量 = %d, want %d，got=%v", len(got), len(want), got)
+		t.Fatalf("返回值键数量 = %d, want %d（应恰好是 InlineParams 白名单裸键），got=%+v",
+			len(got), len(want), got)
 	}
 	for k, v := range want {
 		if got[k] != v {
-			t.Errorf("键 %q = %q, want %q", k, got[k], v)
+			t.Errorf("键 %q = %q, want %q，完整结果=%+v", k, got[k], v, got)
 		}
 	}
 
-	// 确认 template_id/template_version/biz_gw/biz_mask 这四个
-	// InlineParams 白名单认不出的键确实被剔除——留下任何一个都会让
-	// render/params.go 的 InlineParams 整体报错拒绝渲染。
-	for _, leftoverKey := range []string{"template_id", "template_version", model.FactBizGW, model.FactBizMask} {
-		if _, ok := got[leftoverKey]; ok {
-			t.Errorf("键 %q 应被剔除，但仍出现在结果中: %v", leftoverKey, got)
+	// InlineParams 白名单认不出的键必须缺席——留下任何一个都会让六个
+	// 家族的渲染器在渲染应答文件这一步 100% 报错，这正是本轨修复要解决
+	// 的真实故障（e2e 脚本第一次跑到取应答文件这一步的 500）。
+	forbidden := []string{model.FactHostname, model.FactBizIP, model.FactBizGW, model.FactBizMask,
+		model.FactDiskPrimary, "template_id", "template_version"}
+	for _, k := range forbidden {
+		if v, ok := got[k]; ok {
+			t.Errorf("键 %q 不应出现在真实装配链路的返回值中，但 got 值=%q，完整结果=%+v", k, v, got)
 		}
 	}
 }
 
-// TestResolvedParamsKeyFixup_EmptyValueSkipped 断言值为空字符串的键不会
-// 被翻译进结果——render/params.go 的白名单校验器对空字符串可能因具体
-// 校验规则不同而行为不一致（如 hostnameValidator 可能拒绝空串），保留
-// 一个空值键不如干脆不写这个键，效果对渲染器而言等价（未提供该参数），
-// 但不会引入一条"键存在但值可能不合法"的额外失败模式。
-func TestResolvedParamsKeyFixup_EmptyValueSkipped(t *testing.T) {
-	stub := stubTaskParamsResolver{
-		resolved: map[string]string{
-			model.FactHostname: "",
-			model.FactBizIP:    "10.0.0.5",
-		},
-	}
-	fixup := resolvedParamsKeyFixup{inner: stub}
+// TestParamsResolver_WiredEndToEnd_IPAMFailurePropagatesAsError 断言真实
+// 装配链路下，阻塞式 provider 失败仍然阻塞整体 Resolve（§7.4 语义）——
+// 用一个 static IPAM 天然不会失败的事实反过来验证模板解析步骤的阻塞
+// 语义：模板解析找不到匹配规则时整体应报错、不产生部分结果。这条与
+// resolvedParamsKeyFixup 曾经的
+// TestResolvedParamsKeyFixup_PassesThroughError 覆盖的是同一件事（错误
+// 路径必须原样阻塞建任务），只是验证对象换成了真实装配链路而不是桩。
+func TestParamsResolver_WiredEndToEnd_IPAMFailurePropagatesAsError(t *testing.T) {
+	cfg := testConfig(t)
+	app := buildAppWithDBForTest(t, cfg)
 
-	got, err := fixup.Resolve(context.Background(), nil, nil)
-	if err != nil {
-		t.Fatalf("Resolve 失败: %v", err)
-	}
-	if _, ok := got["hostname"]; ok {
-		t.Errorf("空字符串的 hostname 不应出现在结果中，got=%v", got)
-	}
-	if got["biz_ip"] != "10.0.0.5" {
-		t.Errorf("biz_ip = %q, want 10.0.0.5", got["biz_ip"])
-	}
-}
+	// rule-based 模板解析器在没有任何规则、且没有 fallback 配置时，对
+	// 找不到匹配规则的 facts 返回错误（internal/provider/resolver.go 的
+	// TestResolver_ZeroMatchReturnsError 已经锁住这个算法本身的行为）；
+	// testConfig 没有配置任何解析规则，任意 facts 都会走到这条路径。
+	formData := map[string]string{"hostname": "e2e-host-02"}
+	facts := map[string]string{model.FactOSFamily: string(model.OSFamilyRHEL)}
 
-// TestResolvedParamsKeyFixup_PassesThroughError 断言底层 Resolve 本身
-// 返回错误（如 IPAM 分配失败）时原样透传，不做任何改写——这条修复只
-// 处理成功返回值的键名翻译，不应该影响错误路径的语义（§7.4 的阻塞
-// 语义必须原样保留：失败即建任务失败）。
-func TestResolvedParamsKeyFixup_PassesThroughError(t *testing.T) {
-	wantErr := errors.New("boom: 模拟 IPAM 分配失败")
-	stub := stubTaskParamsResolver{err: wantErr}
-	fixup := resolvedParamsKeyFixup{inner: stub}
-
-	_, err := fixup.Resolve(context.Background(), nil, nil)
-	if !errors.Is(err, wantErr) {
-		t.Errorf("err = %v, want 原样透传 %v", err, wantErr)
+	_, err := app.ParamsResolver.Resolve(context.Background(), formData, facts)
+	if err == nil {
+		t.Fatal("没有配置任何模板解析规则时，Resolve 应该报错（阻塞式 provider 失败必须阻塞建任务）")
 	}
 }

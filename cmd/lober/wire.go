@@ -370,78 +370,43 @@ func (d *autoRetryScanDecorator) ScanTimeouts(ctx context.Context, asOf int64) (
 
 var _ contract.StateMachine = (*autoRetryScanDecorator)(nil)
 
-// resolvedParamsKeyFixup 是本装配点为修复另一处真实的跨模块契约裂缝而
-// 构造的 contract.TaskParamsResolver 包装。
-//
-// 契约缺口（详见任务返回值 contractGaps，此处只记落地方式）：
-// internal/provider/resolve.go 的 taskParamsResolver.Resolve 产出的
-// resolved map，键名用的是 SPEC §5.4/§5.5 fact 命名空间的形式
+// 本装配点历史上在此处定义过 resolvedParamsKeyFixup，一个包一层
+// contract.TaskParamsResolver 的转换器：internal/provider/resolve.go 的
+// taskParamsResolver.Resolve 曾经产出 fact 命名空间键名
 // （model.FactHostname="LOBER_HOSTNAME"、model.FactBizIP="LOBER_BIZ_IP"
-// 等），外加两个纯 bookkeeping 键 "template_id"/"template_version"；这个
-// map 未经任何转换就被 internal/console/task.go 的 handleCreateTask
-// 直接写进 task.ResolvedParams。但 internal/render/params.go 的
-// InlineParams（AssembleKickstart 在 %pre 段调用它渲染
-// ctx.Task.ResolvedParams）只认一张写死的白名单
-// {"hostname","biz_ip","role"}——裸键名、不带 LOBER_ 前缀、也不认
-// template_id/template_version。render/params.go 自己的注释已经承认了
-// 部分缺口（"一旦 M6/M7 确认这两个键会出现在 ResolvedParams 里"，指
-// biz_gw/biz_mask），但它假设的是"缺两个键"，而实测（e2e 脚本走一次真实
-// 建任务→引导→取应答文件）复现的是更根本的问题："resolved 里的键从来
-// 就不是白名单期待的形式"——不是漏了几个键，是键名体系本身就不对齐，
-// 任何非空 ResolvedParams 的任务在渲染应答文件这一步都会 100% 报错
-// （"表单键 ... 不在已知校验器白名单中"），HTTP 状态码 500。这不是本
-// 装配点凭空猜测的边界情形，是本次 e2e 验证第一次跑到"取应答文件"这一
-// 步就必然触发的真实故障。
+// 等）外加 template_id/template_version 两个 bookkeeping 键，而
+// internal/render/params.go 的 InlineParams（六个家族的渲染器都用它
+// 渲染 ctx.Task.ResolvedParams）只认一张裸键白名单
+// {"hostname","biz_ip","role"}——两者的键名体系不对齐，任何非空
+// ResolvedParams 的任务在渲染应答文件这一步都会 100% 报错。
+// resolvedParamsKeyFixup 曾经在装配点事后把已知键映射回裸键、剔除认不出
+// 的键，兜住这个裂缝。
 //
-// 最保守的绕法（不改 internal/provider 或 internal/render 任何文件）：
-// 本类型包一层 contract.TaskParamsResolver，在 Resolve 返回之后、写入
-// task.ResolvedParams 之前，把已知的 fact 命名空间键映射回 InlineParams
-// 白名单认得的裸键名，并整体剔除两个 bookkeeping 键（template_id/
-// template_version 已经分别以 model.Task.TemplateID/TemplateVersion
-// 字段存在，不需要也不应该在 ResolvedParams 里重复出现——重复出现只会
-// 让第一次渲染就报错）。不认识的 LOBER_BIZ_GW/LOBER_BIZ_MASK
-// /LOBER_DISK_PRIMARY 等键按 render/params.go 自己记录的立场原样剔除
-// （它们的正确去向是 ctx.Facts，由 InjectFacts 单独处理，不是
-// ResolvedParams/InlineParams 这条管线的职责——但目前没有任何模块在建
-// 任务路径上调用 FactStore.MergeFacts 把它们写进 facts 表，这是另一段
-// 记入 contractGaps 的缺口：即使本类型不剔除这些键，它们也不会通过
-// ResolvedParams 这条管线到达 Facts）。
+// 本轨（n5-resolve-keys）改为在裂缝的源头修复：resolve.go 的 Resolve
+// 现在直接读表单裸键（"hostname"，与 static IPAM 一直在用的 "biz_ip"/
+// "biz_gateway"/"biz_mask" 同一种裸键约定对齐），且只把 InlineParams
+// 白名单认得的裸键（hostname/biz_ip）放进返回值——biz_gw/biz_mask/
+// disk_primary/nic_install_mac/template_id/template_version 六项内部
+// 计算出的决策结果不再进入返回值（原因与去向见 resolve.go 的 Resolve
+// 方法末尾注释）。修复后 provider.NewTaskParamsResolver 的产出已经天然
+// 满足 InlineParams 的白名单约束，resolvedParamsKeyFixup 这一层包装
+// 不再有事可做——移除前已确认它兜的两件事（键名转换、bookkeeping 键
+// 剔除）现在都由 resolve.go 自己完成，且验证过继续保留这一层反而会
+// 出错：resolvedParamsKeyFixup 的 factKeyToInlineParamKey 表只认
+// model.FactHostname/model.FactBizIP 这两个源键名，resolve.go 修复后
+// 已经不再产出这两个键（直接产出裸键 hostname/biz_ip），若不移除这层
+// 包装，它会把 resolve.go 新产出的裸键当成"不认识的键"整体剔除，导致
+// ResolvedParams 变成永远的空 map——这不是"多余但无害"的包装，是修复
+// 表单键读取偏差之后必须同步移除的另一半，否则会制造一个新的、比原来
+// 更隐蔽的故障（不再是 500，而是任务建成但 hostname/biz_ip 静默丢失）。
 //
-// 正解方向（不是本类型能做到的）：让 render/params.go 的 knownParams
-// 白名单与 provider/resolve.go 产出的键名体系基于同一份显式约定（要么
-// provider 侧改产出裸键名，要么 render 侧改认 LOBER_ 前缀），并让
-// biz_gw/biz_mask/disk_primary 类决策结果走 Facts 管线而不是
-// ResolvedParams，由 M6 在建任务成功后调用 FactStore.MergeFacts 落库。
-type resolvedParamsKeyFixup struct {
-	inner contract.TaskParamsResolver
-}
-
-// factKeyToInlineParamKey 是 fact 命名空间键到 InlineParams 白名单裸键名
-// 的映射表，只覆盖 render/params.go 白名单已经收录、且 provider/
-// resolve.go 确实会产出对应决策的两项——hostname 与 biz_ip。不在此表中
-// 的键（template_id/template_version/LOBER_BIZ_GW/LOBER_BIZ_MASK/
-// LOBER_DISK_PRIMARY）在 Resolve 返回后被整体剔除，见类型文档。
-var factKeyToInlineParamKey = map[string]string{
-	model.FactHostname: "hostname",
-	model.FactBizIP:    "biz_ip",
-}
-
-func (f resolvedParamsKeyFixup) Resolve(ctx context.Context, formData map[string]string, facts map[string]string) (map[string]string, error) {
-	resolved, err := f.inner.Resolve(ctx, formData, facts)
-	if err != nil {
-		return nil, err
-	}
-
-	fixed := make(map[string]string, len(factKeyToInlineParamKey))
-	for factKey, inlineKey := range factKeyToInlineParamKey {
-		if v, ok := resolved[factKey]; ok && v != "" {
-			fixed[inlineKey] = v
-		}
-	}
-	return fixed, nil
-}
-
-var _ contract.TaskParamsResolver = resolvedParamsKeyFixup{}
+// 已确认的另一件事：template_id/template_version 本就已经以
+// model.Task.TemplateID/TemplateVersion 字段的形式存在
+// （handleCreateTask 从 tpl.ID/tpl.Version 直接赋值），resolve.go 不再
+// 产出它们不会造成信息丢失。
+//
+// buildAppWithDB 现在直接使用 provider.NewTaskParamsResolver 的返回值，
+// 不再包装。
 
 // buildApp 按顺序装配全部组件，返回一个持有全部接缝的 App。
 //
@@ -547,13 +512,11 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 		Policy: string(cfg.Provider.DiskPolicy),
 		Params: diskIntentParams(cfg.Provider),
 	}
-	// 用 resolvedParamsKeyFixup 包一层——见该类型文档：不包这一层的话，
-	// 任何走真实建任务路径产出的任务在渲染应答文件这一步会 100% 报错
-	// （render/params.go 的 InlineParams 白名单认不出 provider 产出的
-	// 键名体系）。
-	paramsResolver := resolvedParamsKeyFixup{
-		inner: provider.NewTaskParamsResolver(providers.TemplateResolver, providers.DiskPlanner, diskIntent),
-	}
+	// 不再需要装配点包一层键名转换——provider.NewTaskParamsResolver 的
+	// Resolve 现在直接产出 InlineParams 白名单认得的裸键（hostname/
+	// biz_ip），见 resolve.go 与本文件上方移除 resolvedParamsKeyFixup
+	// 处的说明。
+	paramsResolver := provider.NewTaskParamsResolver(providers.TemplateResolver, providers.DiskPlanner, diskIntent)
 
 	bases := model.BaseURLs{GatewayBase: cfg.Gateway.GatewayBase, ArtifactBase: cfg.Gateway.ArtifactBase}
 
