@@ -129,18 +129,30 @@ func answerFileContentType(family model.OSFamily) string {
 // 文件名。
 //
 // 绝大多数家族只有一个合法文件名（AnswerFileName() 的返回值），逐字符相等
-// 即可。**Ubuntu 是唯一的例外**：autoinstall 走 cloud-init 的 NoCloud 数据源，
+// 即可。**Ubuntu 是一个例外**：autoinstall 走 cloud-init 的 NoCloud 数据源，
 // 内核参数 ds=nocloud-net;s=<url> 指向一个目录，而 cloud-init 会在那个目录下
 // 依次取 user-data 与 meta-data 两个文件（SPEC §4.4）。只放行 user-data 的
 // 后果是 meta-data 请求拿到 404 —— 现场表现是「机器装到一半停住」，而
 // internal/render/renderer.go 里那个专门处理 meta-data 的分支会成为死代码。
 //
-// 这条放行必须窄：只对 Ubuntu 家族、且只多放行 "meta-data" 这一个名字。
+// **ESXi 是与 Ubuntu 同构的第二个例外**：boot.cfg（AnswerFileName(esxi) 固定
+// 返回的唯一值）是 mboot.efi 的引导参数文件本身，其 kernelopt= 行的 ks= 参数
+// 指向另一份独立的文件——ESXi 自己的 kickstart 方言正文，真实部署里这两个
+// 文件从来不是同一个（见 internal/render/esxi.go 文件头注释）。只放行 boot.cfg
+// 的后果是 ks.cfg 请求拿到 404，internal/render/renderer.go 里能正确渲染
+// kickstart 正文的 AssembleESXiKickstart 分支永远走不到 ks.cfg 这条路径
+// （它目前仍会被 boot.cfg 请求触发，产出内容错误但这是另一个已记录的契约
+// 缺口，见 renderer.go 文件末尾）。
+//
+// 这两条放行都必须窄：只对各自的家族、且只多放行那一个具体名字。
 // 路径段来自机器请求，放宽成模糊匹配或按扩展名猜测等于让机器自己指定要取
 // 哪种应答文件。
 func answerFileNameAllowed(ctx model.RenderContext, file, wantFile string) bool {
 	if file == wantFile {
 		return true
 	}
-	return ctx.Artifact.OSFamily == model.OSFamilyUbuntu && file == "meta-data"
+	if ctx.Artifact.OSFamily == model.OSFamilyUbuntu && file == "meta-data" {
+		return true
+	}
+	return ctx.Artifact.OSFamily == model.OSFamilyESXi && file == "ks.cfg"
 }

@@ -295,3 +295,63 @@ func TestAnswer_NonUbuntuMetaDataStill404(t *testing.T) {
 		t.Errorf("RHEL 取 meta-data 状态码 = %d, want 404 —— meta-data 只对 Ubuntu 放行", status)
 	}
 }
+
+// TestAnswer_ESXiKsCfgIsServed 锁住 ESXi 的 ks.cfg 放行——与
+// TestAnswer_UbuntuMetaDataIsServed 同构。
+//
+// 为什么这条重要：ESXi 的 boot.cfg（AnswerFileName(esxi) 固定返回的唯一
+// 文件名）是 mboot.efi 的引导参数文件本身，其 kernelopt= 行的 ks= 参数
+// 指向另一份独立文件——ESXi 自己的 kickstart 方言正文（见
+// internal/render/esxi.go 文件头注释）。这两个文件从来不是同一个，机器
+// 引导到"取 ks= 指向的文件"这一步时请求的路径段是 ks.cfg，不是 boot.cfg。
+//
+// 在本次改动之前，answerFileNameAllowed 只放行 boot.cfg，ks.cfg 请求会
+// 拿到 404——现场表现与 meta-data 404 同一类："引导器/安装器某一步取不到
+// 文件"，且 internal/render/renderer.go 里能正确渲染这份内容的
+// AssembleESXiKickstart 分支在 ks.cfg 这条路径上完全是死代码。
+func TestAnswer_ESXiKsCfgIsServed(t *testing.T) {
+	fx := newAnswerFixture(t, model.TaskStateBooting)
+	// 把制品集改成 ESXi（夹具默认造的是 RHEL）。
+	if _, err := fx.store.SetArtifactSetContent(t.Context(), "art-1",
+		model.OSFamilyESXi, model.ArtifactPaths{Extra: map[string]string{"boot.cfg": "boot.cfg"}}); err != nil {
+		t.Fatalf("把制品集改成 ESXi 失败: %v", err)
+	}
+	fx.deps.StateMachine = newStateMachineStub()
+	renderer := newRendererStub()
+	fx.deps.Renderer = renderer
+
+	for _, file := range []string{"boot.cfg", "ks.cfg"} {
+		t.Run(file, func(t *testing.T) {
+			_, status := doAnswer(t, fx.deps, fx.task.ID, "fixed-install-token", file)
+			if status != http.StatusOK {
+				t.Errorf("ESXi 取 %s 状态码 = %d, want 200 —— boot.cfg 的 ks= 参数指向 ks.cfg，"+
+					"取不到会导致装机在引导参数解析或 kickstart 执行这一步失败", file, status)
+			}
+		})
+	}
+}
+
+// TestAnswer_NonESXiKsCfgStill404 锁住 ks.cfg 的放行只对 ESXi 生效。与
+// TestAnswer_NonUbuntuMetaDataStill404 同一条防线：路径段来自机器请求，
+// 无条件放行等于让机器自己指定要取哪种应答文件。
+//
+// 故意选 Debian（AnswerFileName(debian) = "preseed.cfg"）而不是默认夹具的
+// RHEL——RHEL 自己的应答文件名恰好也叫 "ks.cfg"（AnswerFileName(rhel) =
+// "ks.cfg"），若仍用 RHEL 测试，请求 ks.cfg 会先命中「与本来的返回值逐字符
+// 相等」这条路径本身就通过，测不出"ks.cfg 放行分支是否被非 ESXi 家族误
+// 命中"这件事。Debian 的本来文件名与 "ks.cfg" 不同，才能确认命中的是
+// 兜底的 404，不是凑巧相等。
+func TestAnswer_NonESXiKsCfgStill404(t *testing.T) {
+	fx := newAnswerFixture(t, model.TaskStateBooting)
+	if _, err := fx.store.SetArtifactSetContent(t.Context(), "art-1",
+		model.OSFamilyDebian, model.ArtifactPaths{Kernel: "install.amd/vmlinuz"}); err != nil {
+		t.Fatalf("把制品集改成 Debian 失败: %v", err)
+	}
+	fx.deps.StateMachine = newStateMachineStub()
+	fx.deps.Renderer = newRendererStub()
+
+	_, status := doAnswer(t, fx.deps, fx.task.ID, "fixed-install-token", "ks.cfg")
+	if status != http.StatusNotFound {
+		t.Errorf("Debian 取 ks.cfg 状态码 = %d, want 404 —— ks.cfg 放行只对 ESXi 生效", status)
+	}
+}
