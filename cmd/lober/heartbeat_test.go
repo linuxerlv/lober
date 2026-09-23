@@ -55,11 +55,16 @@ func (f *fakeHeartbeatProber) Ping(ctx context.Context) error { return nil }
 
 var _ contract.HeartbeatProviderV1 = (*fakeHeartbeatProber)(nil)
 
+// taskWithBizIP 构造一个带已知探测地址的任务。键用裸键 "biz_ip"——与
+// resolve.go 的 Resolve 现在写回 ResolvedParams 时使用的键名一致（也是
+// heartbeat.go 现在读取的键名），不再是 fact 命名空间常量
+// model.FactBizIP（LOBER_BIZ_IP 属于注入给机器侧 hook 的 Facts 命名
+// 空间，与 ResolvedParams 是两个不同的键空间）。
 func taskWithBizIP(id string, state model.TaskState, ip string) model.Task {
 	return model.Task{
 		ID:             id,
 		State:          state,
-		ResolvedParams: map[string]string{model.FactBizIP: ip},
+		ResolvedParams: map[string]string{"biz_ip": ip},
 	}
 }
 
