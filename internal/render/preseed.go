@@ -319,6 +319,34 @@ func lateCommandValue(ctx model.RenderContext) (string, error) {
 	// 边界（本文件头部注释），不是信号协议关心的边界。
 	script.WriteString(`signal "post-start" 0` + "\n")
 
+	// packages-start/packages-done（本轮补上的第二个缺口，§6.1 信号点表；
+	// 计划任务 4 的三家族信号点映射表把 Debian 这两个信号标注为"安装基础
+	// 系统前/后"）。真实 debian-installer 里，装包（base-installer 跑
+	// debootstrap，随后 pkgsel 装 tasksel 选中的任务）发生在 late_command
+	// 执行之前——late_command 是整个 d-i 流程的最后一步，此刻基础系统与
+	// 任务包早已装完。这意味着 preseed 没有任何 debconf 钩子能让我们在
+	// debootstrap/pkgsel 真正开始或结束的那个时刻插入命令，我们能拿到的
+	// 最早执行点就是 late_command 脚本本身——而这个点在时间上已经晚于真实
+	// 的装包动作。
+	//
+	// 采用与 Ubuntu autoinstall.go 的 firstbootInTargetCommands 同一栏
+	// （§6.1 映射表："只能近似"）相同的近似方案：在 post-start 之后立即
+	// 成对发出这两个信号，不追求精确对应真实解包动作的起止时刻。选择"成对
+	// 紧邻"而不是"分开插在脚本中间某处"，是因为分开插不会让近似更准（装包
+	// 早已结束，脚本里任何位置都同样是"晚于真实动作"），却会让人误读为
+	// "这两个信号之间的时间跨度对应真实装包耗时"——紧邻发出更清楚地表达
+	// "这只是一个占位性的进度打点，不是精确计量"。
+	//
+	// 这不是完全没有意义的占位：至少它让运维在事件时间线上能看到"装包阶段
+	// 已上报"这件事本身（区分"卡在装包"与"卡在更早的阶段"仍然成立——若
+	// packages-start 都没发出，说明卡在 pre 阶段或更早；若发出了但一直没有
+	// post-done，说明卡在 post 阶段的某处，只是不能再精确到"卡在装包本身"
+	// 还是"卡在用户 hook"）。
+	//
+	// 契约缺口：见本文件末尾 AssemblePreseed 之后的说明。
+	script.WriteString(`signal "packages-start" 0` + "\n")
+	script.WriteString(`signal "packages-done" 0` + "\n")
+
 	// SSH 公钥写入是独立于 hook 的固定动作，不依赖用户是否挂了任何 post
 	// 阶段的 hook——放在 post-start 之后、hook 调用之前执行，与
 	// passwd/root-login=false（preseedAccountAndPackages）在装机流程上
@@ -360,6 +388,36 @@ func lateCommandValue(ctx model.RenderContext) (string, error) {
 				strings.ReplaceAll(strings.TrimRight(inTargetScript, "\n"), `'`, `'\''`) + "'\n")
 		}
 	}
+
+	// firstboot 脚手架（本轮补上的第一个、也是更严重的那个缺口）：埋点
+	// systemd oneshot unit、hook 脚本、finalize token，全部落在 in-target
+	// 之内——FirstbootScaffold 写的路径（/var/lib/lober、
+	// /etc/systemd/system、/usr/local/sbin）都是目标系统路径，late_command
+	// 顶层脚本本身跑在 d-i 环境（未 chroot），若不加 in-target 直接执行会
+	// 落在 installer 自己的临时环境里，重启后目标系统里什么都不会有，
+	// 四个重启后信号（booted/init-start/init-done/ready）就没有任何机制
+	// 会发出——这正是 Debian preseed 端目前最严重的缺口（任务描述：装完
+	// 重启后会卡在 rebooting 直到超时，且 rebooting 超时是不可重装的失败
+	// 态，SPEC §3.4）。
+	//
+	// 放在这里（用户 post 阶段 hook 之后、post-done 之前）而不是更早：与
+	// kickstart.go AssembleKickstart 的顺序一致（firstboot 脚手架在三个
+	// installer 阶段的 hook 段落之后追加），保证两个家族在"脚手架相对用户
+	// hook 的先后关系"上是一致的行为，便于跨家族排查问题。
+	//
+	// 这里独立再取一次 in-target 前缀（不复用上面 if 块内的 inTarget 局部
+	// 变量）：那个变量的作用域被限制在 postLines 非空的分支里，postLines
+	// 为空时（minimalPreseedCtx 就是这种情况）该变量不存在，而 firstboot
+	// 脚手架必须无条件执行（TestPreseed_FirstbootScaffoldRunsEvenWithoutHooks
+	// 锁住的正是这一点——脚手架描述装机流程本身的能力，不因为这台机器的
+	// 模板没挂任何 hook 就整体消失）。
+	scaffoldInTarget, err := inTargetPrefix(model.OSFamilyDebian)
+	if err != nil {
+		return "", err
+	}
+	scaffold := FirstbootScaffold(ctx)
+	script.WriteString(scaffoldInTarget + ` bash -c '` +
+		strings.ReplaceAll(strings.TrimRight(scaffold, "\n"), `'`, `'\''`) + "'\n")
 
 	// post-done 与 rebooting（SPEC §6.1："rebooting 与 booted 配成一对，
 	// 中间的空窗即明确的重启窗口"）。两者都在 d-i 环境发出——late_command

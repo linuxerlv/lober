@@ -501,6 +501,221 @@ func TestPreseed_MaliciousSSHKeyDoesNotBreakInTargetQuoting(t *testing.T) {
 	}
 }
 
+// TestPreseed_FirstbootScaffoldCalledInPostStage 锁住本轮核心缺口修复
+// 第一条：preseed.go 必须调用 FirstbootScaffold，把 firstboot 脚手架接进
+// late_command 的 post 阶段（SPEC §5.2 的阶段映射：firstboot → systemd
+// oneshot，与 RHEL 相同）。修复前 preseed.go 通篇零处调用 FirstbootScaffold
+// （任务描述已 grep 确认），后果是重启后没有任何机制发出 booted/
+// init-start/init-done/ready 四个信号，任务会卡在 rebooting 直到超时——
+// 而 rebooting 超时是不可重装的失败态（§3.4）。本测试直接断言脚手架的
+// 标志性产出（systemd unit、ConditionPathExists、标记文件、lober-init.sh）
+// 出现在解码后的 late_command 脚本里。
+func TestPreseed_FirstbootScaffoldCalledInPostStage(t *testing.T) {
+	late, err := lateCommandValue(fullPreseedCtx())
+	if err != nil {
+		t.Fatalf("lateCommandValue 返回错误: %v", err)
+	}
+	decoded := decodeLateCommandScript(t, late)
+
+	wants := []struct {
+		label string
+		want  string
+	}{
+		{"systemd unit 文件", "/etc/systemd/system/lober-init.service"},
+		{"ConditionPathExists 只跑一次保证", "ConditionPathExists=/var/lib/lober/init.pending"},
+		{"标记文件", "touch /var/lib/lober/init.pending"},
+		{"enable 命令", "systemctl enable lober-init.service"},
+		{"firstboot 执行脚本", "/usr/local/sbin/lober-init.sh"},
+	}
+	for _, w := range wants {
+		if !strings.Contains(decoded, w.want) {
+			t.Errorf("late_command 脚本缺少%s（期望包含 %q）——preseed.go 未正确调用 "+
+				"FirstbootScaffold，重启后 firstboot 脚手架不会被埋点，got:\n%s", w.label, w.want, decoded)
+		}
+	}
+}
+
+// TestPreseed_FirstbootScaffoldRunsEvenWithoutHooks 锁住"即使当前渲染的
+// 这台机器没有任何 firstboot hook，脚手架本身（systemd unit、四个重启后
+// 信号的触发机制）仍必须存在"——与 RHEL 的 AssembleKickstart 无条件在
+// %post 追加 FirstbootScaffold 是同一个设计：脚手架描述的是装机流程本身
+// 的能力，不因为这台机器的模板没挂 firstboot hook 就整体消失。
+func TestPreseed_FirstbootScaffoldRunsEvenWithoutHooks(t *testing.T) {
+	late, err := lateCommandValue(minimalPreseedCtx())
+	if err != nil {
+		t.Fatalf("lateCommandValue 返回错误: %v", err)
+	}
+	decoded := decodeLateCommandScript(t, late)
+	if !strings.Contains(decoded, "/etc/systemd/system/lober-init.service") {
+		t.Errorf("无 hook 的最小 preseed 也应含 firstboot 脚手架（systemd unit），got:\n%s", decoded)
+	}
+}
+
+// TestPreseed_FirstbootScaffoldWrappedInTargetForChroot 锁住"FirstbootScaffold
+// 的产出必须包在 in-target 里执行"——它写的路径（/var/lib/lober、
+// /etc/systemd/system、/usr/local/sbin）全部是目标系统路径，late_command
+// 本身跑在 d-i 环境（未加 in-target 时是宿主 initrd，不是目标盘），若不加
+// in-target 前缀，这些 mkdir/cat/systemctl 全部会作用在 installer 自己的
+// 临时环境上，重启后目标系统里什么都不会有（与 Ubuntu autoinstall.go 的
+// firstbootInTargetCommands 同一个设计要点）。
+func TestPreseed_FirstbootScaffoldWrappedInTargetForChroot(t *testing.T) {
+	late, err := lateCommandValue(fullPreseedCtx())
+	if err != nil {
+		t.Fatalf("lateCommandValue 返回错误: %v", err)
+	}
+	decoded := decodeLateCommandScript(t, late)
+
+	idx := strings.Index(decoded, "/etc/systemd/system/lober-init.service")
+	if idx == -1 {
+		t.Fatalf("找不到 systemd unit 路径，decoded:\n%s", decoded)
+	}
+	// 从该行往前找最近一次出现的 "in-target"，确认它确实处于某个 in-target
+	// 包裹范围内，而不是裸露在 late_command 顶层脚本中直接执行。
+	before := decoded[:idx]
+	if !strings.Contains(before, "in-target") {
+		t.Errorf("FirstbootScaffold 的产出前面找不到 in-target 前缀，说明它没有被包进"+
+			"chroot 执行，脚手架会错误地作用在 d-i 环境而不是目标系统，decoded 前缀:\n%s", before)
+	}
+}
+
+// TestPreseed_FirstbootHookScriptsFetchedInPostStage 锁住本轮任务要点：
+// "用户的 firstboot hook 脚本与参数必须在 post 阶段就落进目标系统"（SPEC
+// §5.8），不能等重启后再去 nginx 拉——重启后业务网可能已生效，装机 VLAN
+// 未必还可达。验证方式：fullPreseedCtx 里挂了一个 firstboot 阶段的 hook
+// （dddd4444firstboot），解码后的 late_command 脚本里应包含对它的下载与
+// 校验命令（curl + sha256sum -c），且这些命令必须出现在脚本正文里（即
+// %post 执行期就会跑到），不是只出现在重启后才执行的 lober-init.sh heredoc
+// 之外的某个不会被执行的位置——用 curl 命令本身在 heredoc 边界之外（即
+// late_command 脚本会直接执行到它，不是被 heredoc 引用包裹成"仅供重启后
+// 使用的文本"）来确认。
+func TestPreseed_FirstbootHookScriptsFetchedInPostStage(t *testing.T) {
+	late, err := lateCommandValue(fullPreseedCtx())
+	if err != nil {
+		t.Fatalf("lateCommandValue 返回错误: %v", err)
+	}
+	decoded := decodeLateCommandScript(t, late)
+
+	fetchLine := "curl -fsS -o /var/lib/lober/hooks/010-dddd4444firstboot.sh"
+	if !strings.Contains(decoded, fetchLine) {
+		t.Fatalf("late_command 脚本缺少 firstboot hook 下载命令 %q——"+
+			"用户的 firstboot hook 没有在 post 阶段落进目标系统，got:\n%s", fetchLine, decoded)
+	}
+	if !strings.Contains(decoded, "dddd4444firstboot  /var/lib/lober/hooks/010-dddd4444firstboot.sh") {
+		t.Errorf("firstboot hook 下载后应有 sha256sum -c 校验，got:\n%s", decoded)
+	}
+
+	// 下载命令必须出现在 lober-init.sh 的 heredoc 定界符之外（不能只是被
+	// 引用成"重启后才会执行的文本的一部分"）——heredoc 内容以
+	// LOBER_INIT_EOF 结尾，下载命令应出现在这对定界符之外的脚本主体中。
+	heredocStart := strings.Index(decoded, "cat > /usr/local/sbin/lober-init.sh")
+	heredocEnd := strings.Index(decoded, "LOBER_INIT_EOF\n")
+	fetchIdx := strings.Index(decoded, fetchLine)
+	if heredocStart == -1 || heredocEnd == -1 || fetchIdx == -1 {
+		t.Fatalf("定位标记失败，heredocStart=%d heredocEnd=%d fetchIdx=%d", heredocStart, heredocEnd, fetchIdx)
+	}
+	if fetchIdx > heredocStart && fetchIdx < heredocEnd {
+		t.Errorf("firstboot hook 下载命令落在了 lober-init.sh 的 heredoc 内容内部，"+
+			"说明它被写进了「重启后才执行」的脚本正文，而不是 post 阶段立即执行的命令，"+
+			"decoded:\n%s", decoded)
+	}
+}
+
+// TestPreseed_RebootSignalsHaveTriggerMechanism 锁住"重启后四个信号
+// （booted/init-start/init-done/ready）有触发机制"——即 lober-init.sh 的
+// 正文里包含这四个 signal 调用，且该脚本被 systemd oneshot unit
+// enable，这正是"有机制会在重启后跑起来并发出它们"的证据链（与
+// firstboot_test.go 的 TestFirstbootScaffold_InitScriptSignalOrder 验证
+// 的是同一件事，这里是从 preseed 组装层面确认没有在接线时被漏掉或截断）。
+func TestPreseed_RebootSignalsHaveTriggerMechanism(t *testing.T) {
+	late, err := lateCommandValue(fullPreseedCtx())
+	if err != nil {
+		t.Fatalf("lateCommandValue 返回错误: %v", err)
+	}
+	decoded := decodeLateCommandScript(t, late)
+
+	markers := []string{`signal "booted" 0`, `signal "init-start" 0`, `signal "init-done" 0`, `signal "ready" 0`}
+	lastIdx := -1
+	for _, m := range markers {
+		idx := strings.Index(decoded, m)
+		if idx == -1 {
+			t.Fatalf("找不到重启后信号 %q，decoded:\n%s", m, decoded)
+		}
+		if idx <= lastIdx {
+			t.Errorf("信号 %q 出现顺序不对（应晚于前一个），decoded:\n%s", m, decoded)
+		}
+		lastIdx = idx
+	}
+	if !strings.Contains(decoded, "ExecStart=/usr/local/sbin/lober-init.sh") {
+		t.Errorf("systemd unit 应以 lober-init.sh 为 ExecStart，即触发机制的落点，got:\n%s", decoded)
+	}
+}
+
+// TestPreseed_PackagesStartDoneSignalsPresent 锁住本轮缺口修复第二条：
+// packages-start/packages-done 两个信号点必须生成（§6.1 的信号点表里有
+// 它们，计划任务 4 的三家族信号点映射表把 Debian 的这两个信号标注为
+// "安装基础系统前/后"）。preseed 没有对应的 debconf 钩子可以精确挂在
+// debootstrap/base-installer 步骤的前后——late_command 本身执行时点已经
+// 晚于基础系统安装完成，因此这里采用与 Ubuntu autoinstall.go
+// （§6.1 映射表同一栏"只能近似"）相同的近似方案：在 post-start 之后立即
+// 成对发出，不追求精确对应真实解包动作的起止时刻（contractGaps 记录该
+// 近似的理由）。本测试只锁住"两个信号确实被发出"，顺序测试见下一个函数。
+func TestPreseed_PackagesStartDoneSignalsPresent(t *testing.T) {
+	late, err := lateCommandValue(fullPreseedCtx())
+	if err != nil {
+		t.Fatalf("lateCommandValue 返回错误: %v", err)
+	}
+	decoded := decodeLateCommandScript(t, late)
+
+	for _, sig := range []model.SignalKind{model.SignalPackagesStart, model.SignalPackagesDone} {
+		marker := `signal "` + string(sig) + `"`
+		if !strings.Contains(decoded, marker) {
+			t.Errorf("late_command 脚本缺少信号 %q（marker=%q）——§6.1 信号点表要求的 "+
+				"packages-start/packages-done 未生成，装包这个预算最长的阶段完全没有进度"+
+				"可见性，got:\n%s", sig, marker, decoded)
+		}
+		if _, ok := model.LookupSignal(sig); !ok {
+			t.Errorf("信号 %q 不在 M1 的信号表里", sig)
+		}
+	}
+}
+
+// TestPreseed_PackagesStartDoneOrderedAfterPostStartBeforeHooks 锁住
+// packages-start/packages-done 的插入位置：必须在 post-start 之后（post
+// 阶段已经开始）、且成对相邻出现（近似方案不精确对应真实起止，但至少要
+// 保证两者语义上的先后关系不倒），不应该混进用户 hook 调用的中间或之后
+// （装包阶段的语义边界在"用户 hook 开始跑之前"——用户的 post 阶段 hook
+// 本质上是"装完包之后做点什么"，若 packages-done 排在用户 hook 之后，会
+// 让运维误以为装包一直持续到用户 hook 跑完，混淆两个不同阶段的边界）。
+func TestPreseed_PackagesStartDoneOrderedAfterPostStartBeforeHooks(t *testing.T) {
+	late, err := lateCommandValue(fullPreseedCtx())
+	if err != nil {
+		t.Fatalf("lateCommandValue 返回错误: %v", err)
+	}
+	decoded := decodeLateCommandScript(t, late)
+
+	postStartIdx := strings.Index(decoded, `signal "post-start" 0`)
+	pkgStartIdx := strings.Index(decoded, `signal "packages-start" 0`)
+	pkgDoneIdx := strings.Index(decoded, `signal "packages-done" 0`)
+	// fullPreseedCtx 挂了一个 required=false 的 post-nochroot hook，其
+	// run_hook 调用是第一个真正的用户 hook 调用行。
+	nochrootHookIdx := strings.Index(decoded, "run_hook 'bbbb2222nochroot'")
+	if postStartIdx == -1 || pkgStartIdx == -1 || pkgDoneIdx == -1 || nochrootHookIdx == -1 {
+		t.Fatalf("定位标记失败：postStartIdx=%d pkgStartIdx=%d pkgDoneIdx=%d nochrootHookIdx=%d",
+			postStartIdx, pkgStartIdx, pkgDoneIdx, nochrootHookIdx)
+	}
+	if pkgStartIdx <= postStartIdx {
+		t.Errorf("packages-start 应出现在 post-start 之后，got 顺序不对，decoded:\n%s", decoded)
+	}
+	if pkgDoneIdx <= pkgStartIdx {
+		t.Errorf("packages-done 应出现在 packages-start 之后，decoded:\n%s", decoded)
+	}
+	if pkgDoneIdx >= nochrootHookIdx {
+		t.Errorf("packages-done 应出现在第一个用户 hook 调用之前——装包阶段的信号边界"+
+			"不应晚于用户 hook 开始执行，否则会让运维误以为装包持续到用户 hook 跑完，"+
+			"decoded:\n%s", decoded)
+	}
+}
+
 // TestGolden_MinimalPreseed 锁住无 hook 的最小 preseed 输出。
 func TestGolden_MinimalPreseed(t *testing.T) {
 	out, err := AssemblePreseed(minimalPreseedCtx())
