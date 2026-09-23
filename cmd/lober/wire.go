@@ -469,6 +469,17 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 		// config.Validate 的校验（非空、每把公钥都是合法白名单格式），
 		// buildApp 本身不重复做这层校验。
 		RootSSHPublicKeys: cfg.Gateway.RootSSHPublicKeys,
+
+		// SPEC §9.3 Phase 2 项：制品授权。三个字段原样传递自
+		// config.Gateway 的同名字段——cfg 在到达这里之前已经通过
+		// config.Validate 校验（SecureLinkEnabled 为 true 时
+		// SecureLinkSecret 必须非空），buildApp 本身不重复做这层校验。
+		// SecureLinkEnabled 默认 false，此时 SecureLinkSecret 即使是
+		// 空字符串也不影响任何行为（gateway.handleBootGrant 只在
+		// SecureLinkEnabled 为 true 时才使用这个密钥）。
+		SecureLinkEnabled: cfg.Gateway.SecureLinkEnabled,
+		SecureLinkSecret:  gateway.SecureLinkSecret(cfg.Gateway.SecureLinkSecret),
+		SecureLinkTTL:     cfg.Gateway.SecureLinkTTL,
 	})
 
 	authUsers := make([]console.AuthUser, 0, len(cfg.Auth.Users))

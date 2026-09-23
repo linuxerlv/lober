@@ -34,6 +34,14 @@ const (
 	defaultDiskPolicy        = model.DiskPolicyLargest
 	defaultHeartbeatMode     = "tcp"
 	defaultHeartbeatInterval = 60 * time.Second
+
+	// defaultSecureLinkTTL 是签名 URL 的默认有效期：30 分钟。取值理由
+	// （SPEC §9.3 末段的边界情形）：必须长于「取引导脚本」到「取内核/
+	// initrd」之间的正常间隔（同一次 PXE 引导，秒级到分钟级），又不需要
+	// 接近 deploy/dnsmasq/lober.conf 的 24h DHCP 租约窗口——那条 24h
+	// 租约是用来避免"整个装机窗口内 IP 不变"，签名 URL 的 TTL 是一次
+	// 引导内部的时间窗口，两者是不同量级的两件事，不应该取相同的值。
+	defaultSecureLinkTTL = 30 * time.Minute
 )
 
 // heartbeatModes 是心跳模式的白名单（SPEC §6.6、计划任务 15）。
@@ -105,6 +113,32 @@ type Gateway struct {
 	// 交付到真机就会立刻暴露的阻塞问题，因此在启动时就拒绝而不是留到装机
 	// 现场才发现。
 	RootSSHPublicKeys []string `yaml:"root_ssh_public_keys"`
+
+	// SecureLinkEnabled 打开后，网关会对渲染出的大制品 URL（kernel/
+	// initrd，以及将来的 Windows/ESXi 镜像文件）附加 nginx secure_link
+	// 签名查询参数（SPEC §9.3 Phase 2 项）。默认 false——MVP 阶段制品是
+	// 开放的（deploy/nginx/lober.conf 现有的 /artifacts/ location 不校验
+	// 任何签名），这是一个可选的加固开关，不是新的硬性要求，因此不影响
+	// 任何已有部署（未显式打开时，现有配置文件不需要任何改动即可继续
+	// 通过 Validate）。
+	//
+	// 打开后必须同时提供非空的 SecureLinkSecret（见 Validate）——启用了
+	// 授权却配置了空密钥，等于所有客户端都能自己算出正确签名（因为公式
+	// 里密钥参与拼接的那一段变成固定的单个空格，任何人都能重现），比完全
+	// 不启用更危险的地方在于它看起来像是"已经加了保护"。
+	SecureLinkEnabled bool `yaml:"secure_link_enabled"`
+
+	// SecureLinkSecret 是 secure_link 签名的共享密钥，必须与
+	// deploy/nginx/lober.conf 里 secure_link_md5 指令引用的密钥字面值
+	// 逐字节相同（部署期核对项，见 docs/real-machine/06-securelink.md）。
+	// 仅当 SecureLinkEnabled 为 true 时才校验非空（见 Validate）。
+	SecureLinkSecret string `yaml:"secure_link_secret"`
+
+	// SecureLinkTTL 是签名 URL 的有效期，默认 30 分钟（见
+	// defaultSecureLinkTTL 常量文档：需要长于「取引导脚本」到「取内核/
+	// initrd」之间的正常间隔，又不能长到接近 dnsmasq 的 24h 租约窗口，
+	// 否则失去"过期"的意义）。仅在 SecureLinkEnabled 为 true 时使用。
+	SecureLinkTTL time.Duration `yaml:"secure_link_ttl"`
 }
 
 // Console 是人面控制台的配置：监听地址、token 密钥与 TTL。
@@ -235,6 +269,15 @@ func applyDefaults(cfg *Config) {
 	if cfg.Provider.HeartbeatInterval == 0 {
 		cfg.Provider.HeartbeatInterval = defaultHeartbeatInterval
 	}
+
+	// SecureLinkTTL 的默认值只在功能打开时才有意义填充，但即使功能关闭也
+	// 一并填充默认值——这样 SecureLinkEnabled 未来被运行期代码读取时，
+	// TTL 字段始终是一个非零的合理值，不会因为「功能当前关闭所以没人管
+	// 这个字段」而让它保持零值、一旦功能被打开却忘记配置 TTL 就退化成
+	// 「立即过期」的隐蔽故障。
+	if cfg.Gateway.SecureLinkTTL == 0 {
+		cfg.Gateway.SecureLinkTTL = defaultSecureLinkTTL
+	}
 }
 
 // hasPort 判定 addr 是否已经带端口号（形如 host:port）。仅用于 syslog_listen
@@ -309,6 +352,13 @@ func (c *Config) Validate() error {
 				"（该值会被直接拼进 kickstart 的 sshkey 指令与 cloud-init 的 YAML 列表项，"+
 				"带换行/引号/结构字符的值能破坏整个应答文件的结构，SPEC §5.6 同理）", i, err)
 		}
+	}
+
+	if c.Gateway.SecureLinkEnabled && c.Gateway.SecureLinkSecret == "" {
+		return fmt.Errorf("config: gateway.secure_link_enabled 为 true 时 gateway.secure_link_secret " +
+			"不能为空（SPEC §9.3）：空密钥意味着 secure_link_md5 公式里密钥参与拼接的那一段" +
+			"变成固定的单个空格，任何人都能重现出正确签名，等于开了授权开关却没有授权——" +
+			"这比完全不开更危险，因为它看起来像是已经加了保护，必须在启动时拒绝")
 	}
 
 	if !heartbeatModes[c.Provider.HeartbeatMode] {

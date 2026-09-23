@@ -538,3 +538,103 @@ func TestValidate_合法磁盘策略全部被接受(t *testing.T) {
 		})
 	}
 }
+
+// TestValidate_最小配置不含secure_link字段仍能通过 锁住向后兼容：
+// secure_link 是 Phase 2 的可选加固开关（默认 false），minimalYAML 完全
+// 不提这三个新字段，Validate() 必须仍然通过——不能因为新增了一类校验就
+// 让所有既有配置文件（未显式配置 secure_link 的部署）在启动时突然报错。
+func TestValidate_最小配置不含secure_link字段仍能通过(t *testing.T) {
+	cfg, err := Parse(strings.NewReader(minimalYAML))
+	if err != nil {
+		t.Fatalf("Parse(最小配置) 返回错误: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() 拒绝了未配置 secure_link 的最小配置: %v；"+
+			"secure_link 是可选加固开关，默认关闭时不应影响任何既有部署", err)
+	}
+	if cfg.Gateway.SecureLinkEnabled {
+		t.Errorf("SecureLinkEnabled 默认值 = true, want false（未显式打开时应保持关闭）")
+	}
+}
+
+// TestValidate_SecureLink打开但密钥为空被拒绝 锁住 t11-securelink 任务
+// 「测试要锁住」第五条：空密钥配置被启动校验拒绝（否则等于没有授权）。
+func TestValidate_SecureLink打开但密钥为空被拒绝(t *testing.T) {
+	yaml := strings.Replace(minimalYAML,
+		"gateway:\n  listen:",
+		"gateway:\n  secure_link_enabled: true\n  secure_link_secret: \"\"\n  listen:", 1)
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() 未拒绝「secure_link_enabled=true 但 secure_link_secret 为空」的配置" +
+			"（SPEC §9.3）：空密钥意味着 secure_link_md5 公式里密钥参与拼接的那一段变成固定的" +
+			"单个空格，任何人都能重现出正确签名，等于开了授权开关却没有授权——这比完全不开更" +
+			"危险，因为它看起来像是已经加了保护")
+	}
+}
+
+// TestValidate_SecureLink打开且密钥非空则接受 是上一条的对照组：确认新增
+// 校验不是简单地拒绝一切，给了非空密钥的合法配置必须被接受。
+func TestValidate_SecureLink打开且密钥非空则接受(t *testing.T) {
+	yaml := strings.Replace(minimalYAML,
+		"gateway:\n  listen:",
+		"gateway:\n  secure_link_enabled: true\n  secure_link_secret: \"a-real-shared-secret\"\n  listen:", 1)
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() 拒绝了「secure_link_enabled=true 且给了非空密钥」的合法配置: %v", err)
+	}
+}
+
+// TestValidate_SecureLink关闭时空密钥不被拒绝 锁住「开关未打开时不校验
+// 密钥」这条边界：secure_link_enabled 省略或显式 false 时，即使密钥字段
+// 也一并省略，Validate() 不应报错——这是 SecureLinkEnabled 默认 false 时
+// 向后兼容的直接体现，与「打开时空密钥被拒绝」互为镜像测试。
+func TestValidate_SecureLink关闭时空密钥不被拒绝(t *testing.T) {
+	yaml := strings.Replace(minimalYAML,
+		"gateway:\n  listen:",
+		"gateway:\n  secure_link_enabled: false\n  listen:", 1)
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() 拒绝了「secure_link_enabled=false」的配置: %v；"+
+			"关闭状态下不应要求密钥非空", err)
+	}
+}
+
+// TestDefaults_SecureLinkTTL默认三十分钟 锁住默认值：未显式配置
+// secure_link_ttl 时应填充 30 分钟（defaultSecureLinkTTL），且这条填充
+// 不依赖 SecureLinkEnabled 是否为 true（见 applyDefaults 的字段注释：
+// 功能关闭时也一并填充，避免将来打开功能时因为 TTL 仍是零值而「立即
+// 过期」）。
+func TestDefaults_SecureLinkTTL默认三十分钟(t *testing.T) {
+	cfg, err := Parse(strings.NewReader(minimalYAML))
+	if err != nil {
+		t.Fatalf("Parse(最小配置) 返回错误: %v", err)
+	}
+	if got, want := cfg.Gateway.SecureLinkTTL.String(), "30m0s"; got != want {
+		t.Errorf("Gateway.SecureLinkTTL = %s, want %s", got, want)
+	}
+}
+
+// TestDefaults_SecureLinkTTL显式配置不被覆盖 是上一条的对照组：确认
+// 「零值才填默认值」这条规则同样适用于 SecureLinkTTL，不会覆盖运维显式
+// 选择的非默认 TTL。
+func TestDefaults_SecureLinkTTL显式配置不被覆盖(t *testing.T) {
+	yaml := strings.Replace(minimalYAML,
+		"gateway:\n  listen:",
+		"gateway:\n  secure_link_ttl: \"5m\"\n  listen:", 1)
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if got, want := cfg.Gateway.SecureLinkTTL.String(), "5m0s"; got != want {
+		t.Errorf("Gateway.SecureLinkTTL = %s, want %s（显式配置的值不应被默认值覆盖）", got, want)
+	}
+}

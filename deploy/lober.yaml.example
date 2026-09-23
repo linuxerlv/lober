@@ -102,6 +102,35 @@ gateway:
     - "ssh-ed25519 REPLACE-ME-with-your-real-ops-team-public-key ops1@CHANGE-ME"
     - "ssh-ed25519 REPLACE-ME-with-your-real-ops-team-public-key ops2@CHANGE-ME"
 
+  # 可选（Phase 2 项，默认 false）：制品授权（SPEC §9.3）。打开后，网关
+  # 会给渲染出的大制品 URL（kernel/initrd）附加 nginx secure_link 签名
+  # 查询参数，客户端拿不到正确密钥就无法下载——这是一项加固开关，不是
+  # MVP 的硬性要求，未打开时制品仍走 deploy/nginx/lober.conf 现有的开放
+  # /artifacts/ location，行为与本字段引入之前完全一致。
+  #
+  # 后果说明：打开（true）时 secure_link_secret 必须同时给非空值，否则
+  # config.Validate 直接拒绝启动——空密钥意味着 secure_link_md5 公式里
+  # 密钥参与拼接的那一段变成固定的单个空格，任何人都能重现出正确签名，
+  # 等于开了授权开关却没有授权，这比完全不开更危险。保持 false（不改
+  # 本行）时，下面两个字段留空也能通过 Validate。
+  secure_link_enabled: false
+
+  # CHANGE-ME（仅当上面 secure_link_enabled 为 true 时才需要真实值）：
+  # secure_link 签名的共享密钥，必须与 deploy/nginx/lober.conf 里
+  # /artifacts/secure/ location 的 secure_link_md5 指令引用的密钥字面值
+  # 逐字节相同——两侧但凡有一个字符不同，机器取制品即 403（部署期核对项，
+  # 见 docs/real-machine/06-securelink.md）。用
+  # `openssl rand -base64 32` 之类命令生成，不要提交进版本控制。
+  secure_link_secret: ""
+
+  # 签名 URL 的有效期，默认 30 分钟（省略此字段等价于写 30m）。需要长于
+  # 同一次 PXE 引导内「取引导脚本」到「取内核/initrd」之间的正常间隔，
+  # 又不需要接近 deploy/dnsmasq/lober.conf 的 24h DHCP 租约窗口——两者是
+  # 不同量级的两件事（SPEC §9.3 末段的边界情形：若机器在两次请求之间换了
+  # DHCP 租约导致 IP 变化，签名会失效，24h 租期是用来避开这种情况，不是
+  # 用来决定这里的 TTL）。
+  secure_link_ttl: 30m
+
 # --- 控制台（人面，管理网）------------------------------------------------
 console:
   # CHANGE-ME：控制台 HTTP 监听地址，必须是具体 IP，且不应与网关共用同一
