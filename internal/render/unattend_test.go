@@ -333,3 +333,34 @@ func TestUnattend_NoLoberControlledLiteralHTTPScheme(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderUnattend_HostnameIsFilledIn 锁住「unattend.xml 的 ComputerName
+// 真的被填进去」。
+//
+// 为什么这条重要：此前单元测试只验 XML 结构合法与转义正确，从没断言主机名
+// 真的出现在产出里。Windows 端到端脚本报告 <ComputerName> 为空，一度让人
+// 以为 unattend.go 读错了键（它读字面 "hostname"，而 provider/resolve.go
+// 写回的是 model.FactHostname 常量）。
+//
+// 实际不是读错：cmd/lober 的 resolvedParamsKeyFixup 在装配点把 fact 命名空间
+// 键转成 InlineParams 白名单认的裸键名（wire.go 的 factKeyToInlineParamKey），
+// 所以到渲染器时键确实是 "hostname"。全部六个家族都把 ResolvedParams 喂给
+// InlineParams，裸键是全系统一致的既有约定。
+//
+// 真正的问题在 provider/resolve.go 读 formData[model.FactHostname] 而表单传的
+// 是字面 "hostname" —— 那一侧读不到、写回空串，靠装配点的 fixup 兜着。
+// 这条测试只锁渲染侧的正确性；那个 fixup 掩盖的上游偏差记在 contractGaps。
+func TestRenderUnattend_HostnameIsFilledIn(t *testing.T) {
+	ctx := fullUnattendCtx()
+	const wantHost = "win-web-01"
+	ctx.Task.ResolvedParams = map[string]string{"hostname": wantHost}
+
+	out, err := RenderUnattend(ctx)
+	if err != nil {
+		t.Fatalf("RenderUnattend 返回错误: %v", err)
+	}
+	if !strings.Contains(out, "<ComputerName>"+wantHost+"</ComputerName>") {
+		t.Errorf("unattend.xml 未包含 <ComputerName>%s</ComputerName>——"+
+			"装出来的机器会用 Windows 随机生成的主机名，运维在控制台里认不出哪台是哪台", wantHost)
+	}
+}
