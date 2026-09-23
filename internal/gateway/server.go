@@ -11,6 +11,7 @@ package gateway
 import (
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
@@ -57,6 +58,20 @@ type Deps struct {
 	// Bases/SyslogHost/SyslogPort 是同一种"部署级配置值，随 Deps 注入、
 	// 每次构造渲染上下文时原样传递"的接缝，不是随请求变化的运行期数据。
 	RootSSHPublicKeys []string
+
+	// SecureLinkEnabled/SecureLinkSecret/SecureLinkTTL 是制品授权
+	// （SPEC §9.3 Phase 2 项）的三个接缝，来自
+	// internal/config.Gateway 的同名字段（装配点原样传入，见
+	// cmd/lober/wire.go）。SecureLinkEnabled 为 false 时（默认值）
+	// handleBootGrant 不对渲染出的菜单文本做任何签名后处理，行为与本次
+	// 改动之前完全一致——这是一个可选的加固开关，不是新的硬性要求。
+	//
+	// 密钥本身不出现在 model.RenderContext 里（见 siglink.go 文件头
+	// 注释：渲染器是纯函数，不该持有密钥），只在网关自己的
+	// handleBootGrant 里使用，构造 SignedArtifactURL 的调用参数。
+	SecureLinkEnabled bool
+	SecureLinkSecret  SecureLinkSecret
+	SecureLinkTTL     time.Duration
 }
 
 // Server 持有全部依赖，实现 http.Handler（内部用标准库 ServeMux 路由）。

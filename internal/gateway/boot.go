@@ -189,6 +189,22 @@ func (s *Server) handleBootGrant(w http.ResponseWriter, r *http.Request, task mo
 		return
 	}
 
+	// 制品授权（SPEC §9.3 Phase 2 项，默认关闭）：对菜单文本里的大制品
+	// URL（kernel/initrd，Windows/ESXi 家族接线后还有 wimboot/BCD/
+	// boot.sdi/boot.wim/mboot.efi）附加 secure_link 签名查询参数。见
+	// siglink.go 文件头注释：渲染器本身保持纯函数、不持有密钥，签名是
+	// 网关对渲染产出的一次后处理。
+	//
+	// 必须用 clientIP(r) 而不是 r.RemoteAddr 本身——§1.6/§9.3 的陷阱：
+	// nginx 校验时看到的是真实客户端 IP，Go 若直接用自己看到的 peer
+	// （nginx 之后是 loopback），两侧 HMAC 永远对不上，机器取制品即
+	// 403。clientIP 已经实现了「仅当直连 peer 是 loopback 时才信任
+	// X-Real-IP」这条判断，此处直接复用。
+	if s.deps.SecureLinkEnabled {
+		expiresAt := s.deps.Clock.Now() + int64(s.deps.SecureLinkTTL.Seconds())
+		menu = signLargeArtifactURLs(menu, renderCtx, s.deps.SecureLinkSecret, clientIP(r), expiresAt)
+	}
+
 	// 记录本次请求的客户端 IP 与任务的关联，供 syslog 接收器归档使用
 	// （见 syslog.go 文件头注释）。装机阶段机器还在装机 VLAN，此时的
 	// clientIP 大概率就是稍后 installer 发 syslog 时的源 IP。
