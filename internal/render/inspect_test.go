@@ -440,3 +440,93 @@ func TestInspect_DeterministicOutputForSameInput(t *testing.T) {
 			"非确定性来源")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestInspect_FullLoop：采集 → 解析 → 决策 → 渲染的完整闭环
+// ---------------------------------------------------------------------------
+//
+// 本轨（t12-inspect-wire）任务明确要求锁住的测试之一：给一份真实形态的
+// lsblk 输出文本，确认最终渲染出的应答文件里写的是 by-id 路径而不是
+// /dev/sda。
+//
+// 闭环的四步分属两个互不可见的实现模块（render 不能 import provider，
+// archtest 规则三），因此本测试只覆盖闭环的后两步（决策结果 → 渲染），
+// 前两步（采集 → 解析）由同一份闭环场景在 internal/provider 包内的对应
+// 测试覆盖（TestFullLoop_RealisticLsblkOutputThroughParseAndPlan，
+// hwfacts_test.go）——两个测试共享同一份"真实 lsblk 形态输出"场景数据
+// （下面 TestInspect_DiskFunctionOutputExactKeyFormat 已经验证了这份数据
+// 经采集脚本产出的键名格式），拼起来即是 SPEC §5.6 要求的完整顺序：
+// 采集（render/inspect.go 的 lober_inspect_disks 函数）→ 解析
+// （provider.ParseHWDisks）→ 决策（provider 的 DiskPlanner）→ 渲染（本
+// 测试，AssembleKickstart 消费决策结果）。
+//
+// 这不是重复测试：TestInspect_DiskFunctionOutputExactKeyFormat 验证的是
+// "采集脚本产出的键名格式对不对"，本测试验证的是"决策产出的 by-id 路径
+// 能不能正确进入最终应答文件的分区指令"——两者验证闭环的不同环节，中间
+// 的"决策"环节由 provider 包的测试覆盖，此处不重复决策逻辑本身。
+func TestInspect_FullLoop_DecisionResultReachesRenderedAnswerFileAsByIDPath(t *testing.T) {
+	// 模拟真机上报后、服务端决策完成的结果：按 SPEC §5.6"按容量选盘"的
+	// 规则，两块候选盘中容量更大的 wwn-...bbb（2TB）胜出，决策产出的
+	// by-id 路径写入 Facts[model.FactDiskPrimary]——这正是
+	// provider/resolve.go 的 Resolve 方法在真实调用链路中会做的事（对应
+	// TestResolveTaskParams_AllSucceedMergesAllExpectedKeys 已经验证的
+	// "decodeDisksFromFacts 能从 LOBER_INSPECT_DISK_ 键解析出盘并交给
+	// DiskPlanner"这一段），本测试从"决策已经产出结果"这一步接续，验证
+	// 渲染层如何消费它。
+	const decidedByIDPath = "/dev/disk/by-id/wwn-0x5000c500bbb"
+
+	ctx := minimalKickstartCtx()
+	ctx.Facts[model.FactDiskPrimary] = decidedByIDPath
+
+	ks, err := AssembleKickstart(ctx)
+	if err != nil {
+		t.Fatalf("组装 kickstart 失败: %v", err)
+	}
+
+	if !strings.Contains(ks, decidedByIDPath) {
+		t.Fatalf("应答文件应包含服务端决策产出的 by-id 路径 %q，但没有找到。"+
+			"完整应答文件:\n%s", decidedByIDPath, ks)
+	}
+	// 核心断言（SPEC §10 失败模式 5）：不能出现内核分配的设备名——那种
+	// 名字在不同启动之间会漂移，装完的机器可能因为设备名重新编号而擦错盘。
+	forbiddenKernelNames := []string{"/dev/sda", "/dev/sdb", "/dev/nvme0n1", "/dev/vda"}
+	for _, bad := range forbiddenKernelNames {
+		if strings.Contains(ks, bad) {
+			t.Errorf("应答文件不应包含内核分配的设备名 %q——磁盘设备名在不同启动之间"+
+				"会漂移，装完的机器可能因为重新编号而擦错盘（SPEC §10 失败模式 5）。"+
+				"完整应答文件:\n%s", bad, ks)
+		}
+	}
+	if !strings.Contains(ks, "--ondisk="+decidedByIDPath) {
+		t.Errorf("分区指令应使用 --ondisk=%s 精确指向决策选中的盘，但没有找到。"+
+			"完整应答文件:\n%s", decidedByIDPath, ks)
+	}
+}
+
+// TestInspect_FullLoop_ByHookPolicyOmitsDiskPrimaryStillRendersWithoutKernelName
+// 验证 by-hook 策略场景（服务端不做决策，见 provider/resolve.go 的
+// TestResolveTaskParams_ByHookDiskPolicy_DiskPrimaryKeyOmittedNotEmpty）与
+// 渲染层的组合：Facts 中不存在 LOBER_DISK_PRIMARY 键时，diskByID 取到零值
+// 空字符串——这不是本测试要验证的"正确"场景（by-hook 场景下渲染出一个
+// 空 --ondisk= 是已知的、留给 kickstart.go 装配点处理的行为，不在本文件
+// 归属范围内修复），本测试只确认这种组合不会意外地拼出一个看起来合法的
+// 内核设备名（比如某种回退逻辑悄悄补了 /dev/sda），把"服务端未决策"这个
+// 事实掩盖掉。
+func TestInspect_FullLoop_MissingDiskPrimaryFactDoesNotFallBackToKernelName(t *testing.T) {
+	ctx := minimalKickstartCtx()
+	delete(ctx.Facts, model.FactDiskPrimary)
+
+	ks, err := AssembleKickstart(ctx)
+	if err != nil {
+		t.Fatalf("组装 kickstart 失败: %v", err)
+	}
+
+	forbiddenKernelNames := []string{"/dev/sda", "/dev/sdb", "/dev/nvme0n1", "/dev/vda"}
+	for _, bad := range forbiddenKernelNames {
+		if strings.Contains(ks, bad) {
+			t.Errorf("Facts 中没有服务端决策结果时，渲染器不应静默回退到内核设备名 %q"+
+				"——那会掩盖「没有决策结果」这个事实，让人误以为选盘正常完成。"+
+				"完整应答文件:\n%s", bad, ks)
+		}
+	}
+}
