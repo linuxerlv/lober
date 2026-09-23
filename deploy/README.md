@@ -68,7 +68,7 @@
 | 3 | **跑校验模式** | `lober -config <路径> -check`，见下方「步骤 3 详解」 |
 | 4 | **放 iPXE 二进制** | 见[第 3 节](#3-tftp-二进制放哪四个文件) |
 | 5 | **装 DHCP 配置**（dnsmasq 或既有 dhcpd/Kea） | 见[第 4 节](#4-选哪套-dhcp-配置) |
-| 6 | **装 nginx 配置** | `deploy/nginx/lober.conf`、`lober-http-snippet.conf` |
+| 6 | **签发人面证书、装 nginx 配置** | `deploy/nginx/lober.conf`、`lober-http-snippet.conf`、`deploy/ca/`，见下方「步骤 6 详解」 |
 | 7 | **装 systemd 单元** | `deploy/systemd/lober.service`、`nginx.service.d/after-lober.conf` |
 | 8 | **配防火墙** | 见下方「步骤 8 详解」 |
 
@@ -109,6 +109,30 @@ install -d -m 750 -o lober-svc -g lober-svc /srv/lober/artifacts
 这条命令等价于 `deploy/systemd/lober.service` 里 `ExecStartPre` 那一行
 （校验模式是专门为 `ExecStartPre` 设计的运行模式）。**手动跑一次确认通过
 之后才继续下一步**，不要假设配置写对了就直接起服务。
+
+### 步骤 6 详解：签发人面证书、装 nginx 配置
+
+**范围**：浏览器 ↔ 控制台之间走 HTTPS，装机端 ↔ 网关之间保持 HTTP——
+这是显式的范围决定，不是尚未完成的工作，理由与安全论证见
+`docs/tls-与安全启动-范围决定.md`（本文档不重复展开）。
+
+1. **只给人面域名签发证书**，机器面域名不需要签：
+
+   ```bash
+   # 在离线 CA 机器上（见 deploy/ca/README.md 的完整流程与安全前提）：
+   bash issue-cert.sh \
+     --ca-dir /path/to/offline-media/lober-ca \
+     --domain console.lober.internal \
+     --out-dir ./server-certs
+   ```
+
+2. 把签发出的 `console.lober.internal.cert.pem` / `.key.pem` 放到
+   `deploy/nginx/lober.conf` 人面 server 块 `ssl_certificate` /
+   `ssl_certificate_key` 指令指向的路径（该文件里的 `__TLS_CERT_DIR__`
+   占位符必须替换）。
+3. 装 `deploy/nginx/lober.conf`、`lober-http-snippet.conf`，替换全部
+   `__占位__` 值（该文件顶部注释列出了完整清单）。
+4. `nginx -t` 通过后才进入下一步。
 
 ### 步骤 8 详解：配防火墙
 
@@ -410,6 +434,8 @@ log，见 `docs/contracts/http-machine.md`「约定 2」）。
 ## 附：本文档交叉引用的文件（供快速定位，不代表本文档拥有这些文件）
 
 - `deploy/nginx/lober.conf`、`deploy/nginx/lober-http-snippet.conf`
+- `deploy/ca/README.md`（人面证书签发；机器面 TLS 已放弃，见下条）
+- `docs/tls-与安全启动-范围决定.md`（TLS 与 Secure Boot 范围决定，接手人先看这份）
 - `deploy/dnsmasq/lober.conf`、`deploy/dnsmasq/README.md`
 - `deploy/dhcpd/lober.conf`、`deploy/kea/lober-dhcp4.json`、`deploy/README-既有DHCP.md`
 - `deploy/systemd/lober.service`、`deploy/systemd/nginx.service.d/after-lober.conf`
