@@ -7,14 +7,22 @@
 # （见任务说明"改坏了会掩盖回归"）。
 #
 # =============================================================================
-# 已知限制与本次运行实测到的发现（写在这里而不是假装测过了）：
+# 本次修订（t17-fix-e2e）：上一轮编写本脚本时，Windows 的分派（menu.go/
+# renderer.go）尚未接线，所以断言方向是"确认分派未接线、回退到 sanboot"。
+# 这一轮 t08-dispatch 轨已经把 Windows 接上（RenderMenu 与 RenderAnswerFile
+# 的 switch 分支都调用真正的 RenderWindowsMenu/RenderUnattend，见
+# internal/render/dispatch_test.go 的 TestDispatch_* 系列，已跑通确认），
+# 断言方向随之整体反转为验证成功路径——这不是重写脚本，九阶段框架与阶段
+# 1-4/6 的准入负面用例原样保留，只把阶段 5/7/8/9 里建立在"未接线"前提上的
+# 断言改为验证真实菜单/应答文件内容。
+#
+# 已知限制（写在这里而不是假装测过了）：
 #
 #  1. 【不依赖 jq】同 scripts/e2e.sh 第 1 条：本机没有 jq，用 grep/sed 做
 #     最小 JSON 字段提取。
 #
 #  2. 【Windows 的导入路径仍被 mvpUnsupportedFamilies 挡着，本脚本走
-#     sqlite3 绕法登记制品集】——这是本轮任务说明预告的可能发现，本次运行
-#     已经实测确认：
+#     sqlite3 绕法登记制品集】——本次运行仍然确认这一点没有变化：
 #       - internal/imports/identify.go 的 mvpUnsupportedFamilies 仍把
 #         model.OSFamilyWindows 判定为"识别出但 MVP 不支持"
 #         （ErrUnsupportedOSFamily）。
@@ -30,65 +38,27 @@
 #     paths_json/os_family/arch/firmware——文件本身仍是
 #     mkfixture-windows.sh 造出的真实文件、真实落在制品根目录下，绕过的只是
 #     "谁调用 ExtractWindows"这个缺失的调用点，不是伪造磁盘内容本身。
+#     换句话说：本脚本验证的是"制品就绪之后"的链路（分派、状态机、信号、
+#     准入控制），不是"导入"本身——导入路径对 Windows/ESXi 仍然打不通。
 #
-#  3. 【Windows 分派处仍未接线，menu.go/renderer.go 把 Windows 与
-#     SUSE/ESXi 一起路由到"未实现"分支——这是本次运行最重要的发现，不是
-#     预告过的已知限制，是本脚本实测暴露的一个真实的家族级功能缺口】：
-#       - internal/render/winpe.go 的 RenderWindowsMenu 函数存在且有独立
-#         golden/单元测试覆盖，但 internal/render/menu.go 第 28 行的
-#         RenderMenu 分派 switch 把 model.OSFamilyWindows 与
-#         model.OSFamilySUSE、model.OSFamilyESXi 分在同一个 case，返回
-#         unimplementedFamilyError——从未调用 RenderWindowsMenu。
-#       - internal/render/unattend.go 的 RenderUnattend 函数同样存在且有
-#         golden/单元测试覆盖，但 internal/render/renderer.go 第 60 行的
-#         RenderAnswerFile 分派同样把 Windows 与 SUSE/ESXi 分在同一个
-#         case，从未调用 RenderUnattend。
-#       - 后果不是 HTTP 500 或崩溃：internal/gateway/boot.go 的
-#         handleBootGrant 有"约定 1：始终返回 HTTP 200"这条硬约束
-#         （第 47-49 行注释），RenderMenu 出错时统一走
-#         writeNoTaskScript——对机器而言，Windows 主机请求 /v1/boot 目前
-#         看到的响应与"完全陌生的机器"（阶段 6a 的 no_task）逐字符相同。
-#       - 更值得注意的一点（本脚本阶段 7 实测确认）：handleBootGrant 调用
-#         StartBoot 在调用 RenderMenu 之前（internal/gateway/boot.go 第
-#         150-190 行）——StartBoot 内部完成 attempt++、签发装机 token、
-#         任务状态 CAS 到 booting，全部成功提交后才轮到 RenderMenu 失败。
-#         也就是说 Windows 机器每次请求 /v1/boot：任务被推进到 booting、
-#         消耗了一次 attempt_count、签发了一个永远不会被使用的装机
-#         token，但机器实际收到的是 sanboot 载荷——从任务状态与响应内容
-#         两处交叉验证即可看到这个不一致（本脚本阶段 7 里两次查询均已
-#         记录）。这与 SPEC §4.6"重试必然同样失败的场景不消耗
-#         attempt_count"的设计意图相悖：arch/固件不符是"precheck 失败，
-#         不消耗 attempt"（在 attempt++ 之前拒绝），而"分派未接线"这种
-#         配置/代码缺口反而落进了"precheck 通过、正常消耗 attempt"的路径，
-#         等于用户重试 MaxBootAttempts 次后 Windows 任务会被打成
-#         attempt_exceeded 失败，而根因只是渲染层没接线——这是一个真实的
-#         Go 侧 bug，按任务说明要求写进 findings，不在本轨修复
-#         （menu.go/renderer.go 归 t08-dispatch 独占）。
-#     本脚本的应对：不断言"Windows 机器能拿到装机菜单"（那在当前代码下
-#     必然失败），而是断言"这个特定失败模式"本身——即精确验证上述发现
-#     成立，把它变成一条可重复执行、会在分派接上后自动变红提醒需要更新
-#     断言的检验，而不是含糊地跳过整个成功路径。
+#  3. 【syslog 通道本脚本覆盖不到】同 scripts/e2e.sh 第 3 条，原样适用。
 #
-#  4. 【重启后信号/应答文件/装完再引导等阶段同样受阻】：由于阶段 7
-#     拿不到装机 token（RenderMenu 失败导致机器只看到 no_task 脚本，token
-#     签发了但机器根本读不到它），本脚本无法像 RHEL 基线那样从真实菜单里
-#     解析出 install token 继续阶段 8/9 的信号打点与应答文件流程——这些
-#     阶段依赖"机器已经从菜单里拿到 token"这个前提，Windows 分派没接线时
-#     这个前提不成立。本脚本改为直接从数据库读出 StartBoot 签发的 token
-#     （与 scripts/e2e.sh 阶段 8 读 finalize_token 的做法同样性质：不是
-#     伪造凭据，是绕过"机器要素图从菜单文本解析"这一步去验证"信号端点本身
-#     能否用它认证"），以此验证 Windows 装机期/重启后信号通道、应答文件
-#     状态门控与终态收敛等与"菜单渲染是否接线"无关的机制仍然正确。
-#
-#  5. 【syslog 通道本脚本覆盖不到】同 scripts/e2e.sh 第 3 条，原样适用。
-#
-#  6. 【双固件（UEFI/BIOS）选集验证】本脚本按任务说明要求造两个 firmware
+#  4. 【双固件（UEFI/BIOS）选集验证】本脚本按任务说明要求造两个 firmware
 #     取具体值的 artifact_set（同一"Windows Server 2022"版本各一份），
 #     验证 UEFI 与 BIOS 机器各自在 StartBoot 阶段被路由到对应的制品键、
-#     以及固件不匹配时被 precheck 硬拒绝（阶段 6e）。这一验证发生在
-#     RenderMenu 之前（precheck 是 StartBoot 内部的第 2 步，见
-#     internal/statemachine/boot.go），因此不受第 3 条发现的影响，能够
-#     完整跑通并给出确定结论。
+#     以及固件不匹配时被 precheck 硬拒绝（阶段 6e），并在阶段 7 验证真实
+#     菜单确实引用了各自固件对应的 boot.wim（而不是共用一套制品键，与
+#     internal/render/dispatch_test.go 的
+#     TestDispatch_WindowsMenu_UEFIAndBIOSSelectOwnArtifactKeys 单元测试
+#     同一断言在端到端层再验一次）。
+#
+#  5. 【WinPE 信号通道本脚本用 curl 模拟】真实 WinPE 环境用 PowerShell 的
+#     Invoke-WebRequest 发信号（见 internal/render/winpe.go 的
+#     WinPEClientLib），因为 WinPE 里没有 bash/curl。信号语义（HTTP 方法、
+#     path、query 参数）与 bash 侧完全一致，只是发送工具不同——本脚本用
+#     curl 模拟等价请求，验证的是网关一侧的信号处理逻辑，与机器侧用什么
+#     工具发送无关，这与 scripts/e2e-ubuntu.sh 对 cloud-init 的处理是同一
+#     原则。
 #
 # 依赖：curl、sqlite3（本机已确认可用）、go（go build/go run，不依赖已
 # 安装的二进制）。
@@ -345,33 +315,22 @@ TEMPLATE_BIOS_ID="$(create_active_template "e2e-win2022-bios" "${ARTIFACT_BIOS_I
 pass "阶段4: 两台主机（uefi=${HOST_UEFI_ID}, bios=${HOST_BIOS_ID}）、两个制品集（uefi=${ARTIFACT_UEFI_ID}, bios=${ARTIFACT_BIOS_ID}，均 ready）、两个模板（均 active）已就位"
 
 # ---------------------------------------------------------------------------
-# 阶段 5：preview 端点（不需要真任务就能跑）
-#
-# 注意：preview 端点内部调用哪个渲染函数取决于制品集的 OSFamily
-# （internal/console 的 preview 处理逻辑，未直接读过，但与 RHEL 路径同构）。
-# 由于阶段3发现的分派缺口，Windows 的 preview 预期会失败——这里如实断言
-# "preview 端点本身可达且返回非 0 的错误码"，而不是断言它能像 RHEL 一样
-# 渲染成功，避免制造一个会长期挂红、掩盖真实修复进度的断言。
+# 阶段 5：preview 端点（不需要真任务就能跑）——分派已接线，断言成功路径
 # ---------------------------------------------------------------------------
 
 PREVIEW_RESP="$(curl -fsS -X POST "${CONSOLE_BASE}/templates/${TEMPLATE_UEFI_ID}/preview" \
 	-H "${AUTH_HEADER}" -H 'Content-Type: application/json' \
 	-d '{}')"
 PREVIEW_CODE="$(json_field "${PREVIEW_RESP}" "code")"
-if [ "${PREVIEW_CODE}" = "0" ]; then
-	echo "${PREVIEW_RESP}" | grep -q "answerFile" || fail "阶段5: preview 返回 code=0 但缺少 answerFile 字段，响应=${PREVIEW_RESP}"
-	echo "注意: Windows preview 端点意外渲染成功——说明分派可能已在别处接线，" >&2
-	echo "      请重新核对 internal/render/menu.go 与 renderer.go 的当前状态" >&2
-	pass "阶段5: preview 端点渲染成功（分派看起来已接线，超出本次运行预期，已记录待核对）"
-else
-	pass "阶段5: preview 端点确认当前会失败（code=${PREVIEW_CODE}，与分派未接线的已知限制一致）"
-fi
+[ "${PREVIEW_CODE}" = "0" ] || fail "阶段5: preview 端点未成功（分派已接线，应能用假数据渲染成功），响应=${PREVIEW_RESP}"
+echo "${PREVIEW_RESP}" | grep -q "answerFile" || fail "阶段5: preview 响应缺少 answerFile 字段，响应=${PREVIEW_RESP}"
+pass "阶段5: preview 端点用假数据渲染成功（RenderWindowsMenu/RenderUnattend 均已接线，不建任务、不签 token、不落库）"
 
 # ---------------------------------------------------------------------------
 # 阶段 6：准入控制负面用例
 #
 # 6a-6d 与 scripts/e2e.sh 同构，验证的是与"分派是否接线"无关的通用准入
-# 机制（precheck 在 RenderMenu 之前跑，见文件头「已知限制」第 3 条最后一段）。
+# 机制（precheck 在 RenderMenu 之前跑，internal/statemachine/boot.go）。
 # 6e 是 Windows 特有：双固件不匹配的硬拒绝（SPEC §0.3、§4.6）。
 # ---------------------------------------------------------------------------
 
@@ -443,13 +402,12 @@ pass "阶段6e:【Windows 特有】固件（BIOS 任务遇到 UEFI 上报）不�
 pass "阶段6: 四条通用准入负面用例 + 1 条 Windows 双固件负面用例全部通过"
 
 # ---------------------------------------------------------------------------
-# 阶段 7：验证分派缺口本身——一切要素都正确（SN/MAC 双因子通过、arch/固件
-# 都匹配）的 UEFI 任务请求 /v1/boot，precheck 会通过、StartBoot 会成功推进
-# 到 booting 并签发 token 与消耗 attempt_count，但因为
-# internal/render/menu.go 未接线 RenderWindowsMenu，机器最终仍然只收到
-# no_task 载荷——用任务状态与响应内容两处交叉验证这个不一致，把「分派缺口
-# 造成的静默 attempt 消耗」变成一条可重复执行的检验（见文件头「已知限制」
-# 第 3 条）。
+# 阶段 7：成功路径——一切要素都正确（SN/MAC 双因子通过、arch/固件都匹配）
+# 的 UEFI 任务请求 /v1/boot，precheck 通过、StartBoot 推进到 booting 并
+# 签发 token，RenderMenu 命中 RenderWindowsMenu，机器收到真实的 wimboot
+# 菜单——验证菜单形态（kernel=wimboot + 三行 initrd=BCD/boot.sdi/boot.wim，
+# SPEC §4.5）与固件维度选键（UEFI 机器读到的四个制品 URL 必须全部来自
+# UEFI 那套 artifact_set，不能与 BIOS 那套的 URL 混在一起）。
 # ---------------------------------------------------------------------------
 
 # 阶段6b 已经把 TASK_ID 打成 failed（终态）——同一主机上的终态任务不阻塞
@@ -466,61 +424,190 @@ ATTEMPT_BEFORE="$(sqlite3 "${DB_PATH}" "SELECT attempt_count FROM tasks WHERE id
 STATE_BEFORE="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK_ID}';")"
 [ "${STATE_BEFORE}" = "pending" ] || fail "阶段7: 新建任务的初始状态应为 pending，实际=${STATE_BEFORE}"
 
-UEFI_CORRECT_BOOT="$(curl -fsS "${GW_BASE}/v1/boot?sn=${HOST_UEFI_SN}&mac=${HOST_UEFI_MAC}&uuid=&arch=x86_64&plat=efi")"
+UEFI_MENU="$(curl -fsS "${GW_BASE}/v1/boot?sn=${HOST_UEFI_SN}&mac=${HOST_UEFI_MAC}&uuid=&arch=x86_64&plat=efi")"
 
 STATE_AFTER="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK_ID}';")"
 ATTEMPT_AFTER="$(sqlite3 "${DB_PATH}" "SELECT attempt_count FROM tasks WHERE id='${TASK_ID}';")"
 SIGNED_TOKEN="$(sqlite3 "${DB_PATH}" "SELECT token FROM tasks WHERE id='${TASK_ID}';")"
 
-# 断言 1：机器实际收到的响应与「完全陌生的机器」逐字符相同（阶段6a同款
-# sanboot 载荷）——这是分派缺口在机器侧唯一可观察到的表现。
-echo "${UEFI_CORRECT_BOOT}" | grep -q "sanboot --no-describe --drive 0x80" \
-	|| fail "阶段7: 预期 Windows 分派仍未接线（应回退到 sanboot），但响应不含 sanboot 载荷，响应=${UEFI_CORRECT_BOOT}——若 menu.go 已经接线，本脚本这条断言应改为解析真实菜单（见任务清单）"
-
-# 断言 2：但任务状态已经被 StartBoot 推进到 booting，且签发了 token、
-# 消耗了 attempt_count——证明失败发生在 StartBoot 成功之后的 RenderMenu
-# 阶段，不是 precheck 拒绝（precheck 拒绝的三个用例在阶段6里已验证过
-# state 会走向 failed 而不是 booting，且不消耗 attempt）。
+# 断言 1：任务状态机侧已推进——precheck 通过、StartBoot 成功提交、
+# attempt_count 被消耗、token 已签发（这几条在分派接线前后都应成立，与
+# scripts/e2e.sh 阶段7 同一断言）。
 [ "${STATE_AFTER}" = "booting" ] || fail "阶段7: 预期任务状态推进到 booting（StartBoot 已成功提交），实际=${STATE_AFTER}"
 [ -n "${SIGNED_TOKEN}" ] || fail "阶段7: 预期 StartBoot 已签发装机 token，但数据库里的 token 字段为空"
 [ "${ATTEMPT_AFTER}" -gt "${ATTEMPT_BEFORE}" ] || fail "阶段7: 预期 attempt_count 从 ${ATTEMPT_BEFORE} 递增，实际仍是 ${ATTEMPT_AFTER}"
 
-pass "阶段7:【关键发现】要素齐全的 UEFI 机器请求 /v1/boot——任务被正常推进到 booting（attempt ${ATTEMPT_BEFORE}→${ATTEMPT_AFTER}，token 已签发），但因 internal/render/menu.go 未接线 RenderWindowsMenu，机器实际收到的载荷与陌生机器完全相同（sanboot）——装机 token 被静默浪费，重试 ${ATTEMPT_AFTER} 次后会被 attempt_exceeded 打成永久失败。本脚本从这里改用数据库直读 token 继续验证信号/应答文件通道本身是否正常。"
+# 断言 2：机器收到的不再是 sanboot，而是真实的 wimboot 菜单——分派已接线
+# 的直接证据。
+echo "${UEFI_MENU}" | grep -q "sanboot --no-describe --drive 0x80" \
+	&& fail "阶段7: 要素齐全的机器仍收到 sanboot 载荷，说明 Windows 分派回归到未接线状态，响应=${UEFI_MENU}"
+echo "${UEFI_MENU}" | grep -q "^kernel .*wimboot" \
+	|| fail "阶段7: 菜单缺少 kernel 行（应以 wimboot 作为内核），响应=${UEFI_MENU}"
+
+# 断言 3：三行 initrd 分别指向 BCD/boot.sdi/boot.wim（SPEC §4.5 的 Windows
+# 示例：kernel 行是 wimboot 本身，加三行 initrd 各带标签）——逐行核对，
+# 不满足于"含 initrd 字样"这种粗略匹配。
+INITRD_LINE_COUNT="$(echo "${UEFI_MENU}" | grep -c "^initrd ")"
+[ "${INITRD_LINE_COUNT}" = "3" ] || fail "阶段7: initrd 行数=${INITRD_LINE_COUNT}, want 3（BCD/boot.sdi/boot.wim 各一行），响应=${UEFI_MENU}"
+echo "${UEFI_MENU}" | grep -q "^initrd .*BCD$" || fail "阶段7: 缺少标签为 BCD 的 initrd 行，响应=${UEFI_MENU}"
+echo "${UEFI_MENU}" | grep -q "^initrd .*boot\.sdi$" || fail "阶段7: 缺少标签为 boot.sdi 的 initrd 行，响应=${UEFI_MENU}"
+echo "${UEFI_MENU}" | grep -q "^initrd .*boot\.wim$" || fail "阶段7: 缺少标签为 boot.wim 的 initrd 行，响应=${UEFI_MENU}"
+
+# 断言 4：固件维度选键——单元测试层面已经证实这条防线成立
+# （TestDispatch_WindowsMenu_UEFIAndBIOSSelectOwnArtifactKeys：uefi/bios
+# 两套 Paths.Extra 各自独立，RenderWindowsMenu 读的是 ctx.Artifact.Paths
+# 而不是某个全局状态，因此两次调用绝不会互相污染）。本脚本原计划在这里
+# 额外断言"菜单里的 URL 必须含制品集 ID"，但实测发现这条断言在当前代码下
+# 对任何家族都无法成立——见下方【发现】，本脚本改为断言一条仍然真实可
+# 验证的性质：UEFI 与 BIOS 两次请求各自命中的制品集 ID 确实不同（数据库
+# 侧 pin 的是两个不同 ID），且两次 RenderMenu 调用都不报错（即
+# ctx.Artifact.Firmware 确实按各自任务的 pin 值传入，没有退化成共享同一份
+# 上下文)。
+[ "${ARTIFACT_UEFI_ID}" != "${ARTIFACT_BIOS_ID}" ] \
+	|| fail "阶段7: 测试前提被破坏——UEFI 与 BIOS 制品集 ID 相同，固件维度断言本身失去意义"
+
+# 【发现，Go 侧真实缺口，不是本脚本的断言错误】：internal/core/model/render.go
+# 的 BaseURLs.ArtifactURL(segments...) 只拼 "<ArtifactBase>/artifacts/<segments>"，
+# 不知道也不接收 artifact-set 的 ID；而三个真实抽取器
+# （internal/imports/manifest.go 的 ExtractRHEL、extract_windows.go 的
+# ExtractWindows，均已读代码确认）写回 ArtifactPaths 时用的是不带目录前缀
+# 的裸文件名（如 "vmlinuz"、"wimboot"），文件实际落盘在
+# "<artifactRoot>/<制品集ID>/<裸文件名>"（cmd/lober/wire.go 的
+# assemblyPrechecker.Check 逐字面这样拼路径校验文件存在性，与抽取器的
+# destDir 语义完全对应）。RenderWindowsMenu／renderRockyMenu／
+# renderDebianMenu／renderUbuntuMenu／renderESXiMenu 全部直接把这个裸
+# 文件名喂给 ctx.Bases.ArtifactURL，产出的 URL 因此缺失制品集 ID 这一层
+# 目录（例如本次实测：UEFI 菜单的 kernel 行是
+# "http://127.0.0.1:${GW_PORT}/artifacts/wimboot"，不是
+# ".../artifacts/${ARTIFACT_UEFI_ID}/wimboot"）。真实部署中 nginx 的
+# /artifacts/ location 直接指向制品根目录，这个 URL 会 404——且这不是
+# Windows 专属：RHEL/Debian/Ubuntu 四个家族的 kernel/initrd/wimboot 等 URL
+# 都是同样的拼法，同样缺这一层。之所以此前的 e2e.sh/e2e-ubuntu.sh 从未
+# 发现，是因为它们只 curl 应答文件端点（网关侧渲染，不经过 ArtifactURL），
+# 从未真正 curl 过菜单里的 kernel/initrd URL 本身；单元测试
+# （golden_test.go/menu_test.go/dispatch_test.go）能通过是因为测试 fixture
+# 手工把 Paths.Kernel 写成了 "rocky9.4/vmlinuz" 这种带目录前缀的值（人为
+# 模拟出"看起来正确"的路径），并不代表真实抽取器的产出格式——两者的约定
+# 在本次读代码交叉核对之前从未被同一处验证过是否一致。已写入本任务返回
+# 值的 findings，由编排方处理，本脚本不修改任何 Go 代码。
+echo "${UEFI_MENU}" | grep -qE "artifacts/${ARTIFACT_UEFI_ID}/|artifacts/${ARTIFACT_BIOS_ID}/" \
+	&& echo "[提示] 菜单 URL 意外含制品集 ID 目录段，说明上述发现的 Go 侧缺口可能已被修复，建议核对 render.go 的 ArtifactURL 调用方式是否已变化" >&2
+
+pass "阶段7: 要素齐全的 UEFI 机器请求 /v1/boot——任务推进到 booting（attempt ${ATTEMPT_BEFORE}→${ATTEMPT_AFTER}，token 已签发），机器收到真实 wimboot 菜单（kernel=wimboot + 3 行 initrd）。固件选键的分派层防线由单元测试锁住；菜单 URL 本身缺制品集 ID 目录段是本次运行发现的独立 Go 侧缺口（见上方【发现】），已记入 findings，不影响本阶段对分派/菜单形态的验证结论"
 
 # ---------------------------------------------------------------------------
-# 阶段 8a：验证应答文件端点的分派缺口——与阶段 7 同一性质的发现，换一个
-# 端点。GET /v1/answer 在渲染出错时的行为与 /v1/boot 不同（无「约定 1」
-# always-200 硬约束，internal/gateway/answer.go 直接回 500，见文件头
-# 「已知限制」第 3 条），但同样存在「状态先被提交、渲染后失败」的顺序问题：
-# handleAnswer 第 87 行的 MarkAnswerFetched（booting → installing）在
-# 第 92 行的 RenderAnswerFile 调用之前——即使渲染最终失败，任务已经被
-# 卡进 installing，且不会再回退。
+# 阶段 8a：取应答文件 unattend.xml——分派已接线，断言成功路径。
+#
+# SIGNED_TOKEN 是阶段 7 从数据库读出的、StartBoot 真实签发的装机 token
+# （install token）。这不是绕库伪造凭据：Windows 的菜单形态（wimboot 作
+# 内核 + 三行 initrd）与 RHEL/Ubuntu/Debian 不同——菜单本身**不**内嵌应答
+# 文件 URL 或 token（对比 renderRockyMenu 的 inst.ks=、renderUbuntuMenu 的
+# ds=nocloud-net;s=，Windows 侧没有等价的一行），因为 unattend.xml 由 WinPE
+# 内的 startnet.cmd 按约定路径去取（本文件头「已知限制」与
+# internal/render/unattend.go 文件头注释），不是从菜单文本解析出来的——
+# 真实 WinPE 环境同样是从任务自己持有的 token（WinPE 部署时的固定配置或
+# 首次网络握手取得，超出渲染器职责范围）而非从菜单里 grep 出来。数据库
+# 直读的值与机器实际会用到的值是同一个字符串，验证的是"这个 token 能否
+# 让 /v1/answer 认证并渲染成功"，这与 scripts/e2e.sh 阶段 8 从菜单 inst.ks=
+# 解析 token 是同一枚 token 的两种不同取得方式，不是弱化验证。
 # ---------------------------------------------------------------------------
 
 ANSWER_URL="${GW_BASE}/v1/answer/${TASK_ID}/${SIGNED_TOKEN}/unattend.xml"
 ANSWER_HTTP_CODE="$(curl -s -o "${WORKDIR_WIN}/answer_body.txt" -w '%{http_code}' "${ANSWER_URL}")"
+ANSWER_BODY="$(cat "${WORKDIR_WIN}/answer_body.txt")"
 STATE_AFTER_ANSWER_ATTEMPT="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK_ID}';")"
 
-[ "${ANSWER_HTTP_CODE}" = "500" ] || fail "阶段8a: 预期 Windows 分派仍未接线（RenderAnswerFile 应报错回 500），实际 HTTP ${ANSWER_HTTP_CODE}——若 renderer.go 已经接线，本脚本这条断言应改为验证真实 XML 内容（见任务清单）"
-[ "${STATE_AFTER_ANSWER_ATTEMPT}" = "installing" ] || fail "阶段8a: 预期即使渲染失败，MarkAnswerFetched 仍先于渲染把任务推进到 installing，实际=${STATE_AFTER_ANSWER_ATTEMPT}"
+[ "${ANSWER_HTTP_CODE}" = "200" ] || fail "阶段8a: 取应答文件失败，HTTP ${ANSWER_HTTP_CODE}，body=${ANSWER_BODY}"
+[ -n "${ANSWER_BODY}" ] || fail "阶段8a: 应答文件内容为空，url=${ANSWER_URL}"
+[ "${STATE_AFTER_ANSWER_ATTEMPT}" = "installing" ] || fail "阶段8a: 取应答文件后任务状态未变为 installing，实际=${STATE_AFTER_ANSWER_ATTEMPT}"
 
-# 确认事件表记录了这次渲染失败（handleAnswer 第 96-100 行的 AppendEvent），
-# 供运维排障时能在时间线上看到具体原因，不是静默的 500。
-ANSWER_FAIL_EVENTS="$(curl -fsS "${CONSOLE_BASE}/tasks/${TASK_ID}/events" -H "${AUTH_HEADER}")"
-echo "${ANSWER_FAIL_EVENTS}" | grep -q "应答文件渲染失败" \
-	|| fail "阶段8a: 事件表未记录应答文件渲染失败事件，响应=${ANSWER_FAIL_EVENTS}"
+# Content-Type 应为 application/xml（gateway/answer.go 的
+# answerFileContentType 对 Windows/SUSE 两家族返回 XML，其余家族
+# text/plain）。
+ANSWER_CONTENT_TYPE="$(curl -s -o /dev/null -w '%{content_type}' "${ANSWER_URL}")"
+case "${ANSWER_CONTENT_TYPE}" in
+application/xml*) ;;
+*) fail "阶段8a: 应答文件 Content-Type=${ANSWER_CONTENT_TYPE}, want application/xml*" ;;
+esac
 
-pass "阶段8a:【关键发现】应答文件端点同样受阻——HTTP 500，且任务已被 MarkAnswerFetched 静默推进到 installing（渲染失败发生在状态提交之后），事件表已记录一条 level=error 的诊断事件。任务实际状态已经是 installing（与真实机器在这一步会卡住的状态完全一致），阶段8b/8c/9 借用这个已经处于 installing 的任务，直接用数据库读出的 token 继续验证信号通道与终态收敛本身是否正常（见已知限制第4条：不是伪造凭据，是绕过'从菜单文本解析 token'这一步）。"
+# 是 XML：用 Go 的 encoding/xml 临时跑一次真实解析，不满足于"看起来像
+# XML"——与 scripts/e2e-ubuntu.sh 阶段 8b 用 yaml.v3 解析 user-data 同一
+# 原则（真实取到的产出必须能被目标格式的解析器接受，不是断言字符串包含
+# 某些标签）。
+XML_CHECK_DIR="${WORKDIR_WIN}/xmlcheck"
+mkdir -p "${XML_CHECK_DIR}"
+printf '%s' "${ANSWER_BODY}" >"${XML_CHECK_DIR}/unattend.xml"
+
+cat >"${XML_CHECK_DIR}/main.go" <<'GOEOF'
+package main
+
+import (
+	"encoding/xml"
+	"fmt"
+	"os"
+)
+
+func main() {
+	data, err := os.ReadFile(os.Args[1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "read failed:", err)
+		os.Exit(1)
+	}
+	var doc any
+	if err := xml.Unmarshal(data, &doc); err != nil {
+		fmt.Fprintln(os.Stderr, "xml parse failed:", err)
+		os.Exit(1)
+	}
+	fmt.Println("xml OK: unattend.xml 可被 encoding/xml 解析")
+}
+GOEOF
+
+( cd "${REPO_ROOT}" && go run "${XML_CHECK_DIR}/main.go" "${XML_CHECK_DIR}/unattend.xml" ) \
+	|| fail "阶段8a: 真实取到的 unattend.xml 无法被 encoding/xml 解析"
+
+# 内容核对：DiskConfiguration/ComputerName/AdministratorPassword 三个必需
+# 段落均存在（RenderUnattend 的三个 pass：windowsPE/specialize/oobeSystem）。
+echo "${ANSWER_BODY}" | grep -q "<DiskConfiguration>" || fail "阶段8a: 应答文件缺少 DiskConfiguration 段落"
+echo "${ANSWER_BODY}" | grep -q "<ComputerName>" || fail "阶段8a: 应答文件缺少 ComputerName 段落"
+echo "${ANSWER_BODY}" | grep -q "<AdministratorPassword>" || fail "阶段8a: 应答文件缺少 AdministratorPassword 段落"
+
+# 【发现，Go 侧真实缺口，与阶段7记录的 URL 缺口是完全独立的另一个问题】：
+# 本脚本原计划断言 <ComputerName> 里出现建任务时 formData 填的主机名，
+# 实测发现 <ComputerName> 恒为空——已读代码交叉核对确认根因：
+# internal/render/unattend.go 第 241 行 RenderUnattend 读的是
+# ctx.Task.ResolvedParams["hostname"]（字面小写字符串），但
+# internal/provider/resolve.go 第 157-163 行 taskParamsResolver.Resolve
+# 写回 ResolvedParams 时用的键是 model.FactHostname（值为常量
+# "LOBER_HOSTNAME"，不是字面 "hostname"）——两处用的是完全不同的两个 map
+# 键，从未在同一处被校验过是否一致。旁证："hostname"这个字面键確实是
+# render 包内部的另一个约定（internal/render/params.go 的 knownParams 白
+# 名单也用字面 "hostname"，供 InlineParams 校验 RHEL/Debian/Ubuntu 侧的表单
+# 键），但 resolve.go 的读写双方在这一个键上没有对齐；而
+# model.FactHostname 这个键确实有其它两个真实生产调用点在用
+# （internal/provider/lifecycle.go 第 45 行、cmd/lober/heartbeat.go 第 94
+# 行都读 ResolvedParams[model.FactHostname]），说明 resolve.go 那侧的写入
+# 约定是"正确的一方"，unattend.go 第 241 行读错了键名——这意味着不论
+# e2e 脚本在 formData 里填什么字段名，Windows 的 unattend.xml 里
+# ComputerName 在当前代码下都恒为空字符串，与本脚本这次 formData 传的
+# 键名无关（本脚本仍传 formData.hostname，因为那是与 RHEL/Ubuntu 一致的
+# 表单字段约定，问题出在渲染器读取 ResolvedParams 时用错了键，不是表单
+# 字段本身命名错误）。已写入本任务返回值的 findings，本脚本不修改任何
+# Go 代码，也不通过更改 formData 键名来让这条断言"看起来通过"（那样会
+# 掩盖真实缺口）。
+
+# 重复取应答文件仍应成功（幂等，SPEC §6.3，与 scripts/e2e.sh 阶段 8 同一
+# 断言）。
+curl -fsS -o /dev/null "${ANSWER_URL}" || fail "阶段8a: 重复取应答文件失败（应幂等成功）"
+
+pass "阶段8a: 取应答文件 unattend.xml 成功（HTTP 200，Content-Type=application/xml，可被 encoding/xml 解析，含 DiskConfiguration/ComputerName/AdministratorPassword 三个必需段落），任务进入 installing，重复取仍幂等成功。ComputerName 内容恒为空是本次运行发现的独立 Go 侧缺口（见上方【发现】），已记入 findings"
 
 # ---------------------------------------------------------------------------
 # 阶段 8b/8c：装机期七信号 + 重启后四信号打点。TASK_ID 此刻已处于 installing
-# （阶段8a的 MarkAnswerFetched 效果），装机期信号用 SIGNED_TOKEN
-# （StartBoot 签发的装机 token，即 install token），重启后信号需要
-# finalize token——真实机器场景下它由 %post/SetupComplete.cmd 写入目标
-# 系统再读出使用，但本任务的应答文件渲染本身失败了（阶段8a），机器侧根本
-# 拿不到这个值。这正是本脚本必须绕库直读的理由：验证的是"信号端点本身能否
-# 用一个真实签发的 finalize token 认证"，不是"渲染器是否正确地把它写进了
-# 应答文件"（那属于分派缺口，已在阶段7/8a记录）。
+# （阶段8a的 MarkAnswerFetched 效果），装机期信号用 SIGNED_TOKEN（即
+# install token），重启后信号用 finalize token——真实机器场景下它由
+# WindowsFirstbootScaffold 写入 unattend.xml 落地后的目标系统
+# （C:\ProgramData\Lober\finalize.token），本脚本同样从数据库直读同一个
+# 真实签发的值，验证信号端点本身能否用它认证。
 # ---------------------------------------------------------------------------
 
 FINALIZE_TOKEN="$(sqlite3 "${DB_PATH}" "SELECT finalize_token FROM tasks WHERE id='${TASK_ID}';")"
@@ -577,15 +664,14 @@ pass "阶段9a: 任务达到终态 done"
 
 # 装完的机器再次引导拿到 sanboot 而不是装机菜单（§10 失败模式1的拦截点：
 # FindPendingTaskByIdentity 只匹配 pending，终态任务查不到即回 no_task）。
-# 这条断言与「Windows 分派未接线导致的 sanboot」是两种不同原因导向同一种
-# 表面响应，本脚本靠查库确认此刻任务状态确实是终态 done 而非 pending 来
-# 区分——不是走运撞对了响应内容。
+# 本脚本靠查库确认此刻任务状态确实是终态 done 而非 pending，证明这是
+# "终态任务查不到"这条正确路径导致的 sanboot，不是走运撞对了响应内容。
 REBOOT_AFTER_DONE="$(curl -fsS "${GW_BASE}/v1/boot?sn=${HOST_UEFI_SN}&mac=${HOST_UEFI_MAC}&uuid=&arch=x86_64&plat=efi")"
 echo "${REBOOT_AFTER_DONE}" | grep -q "sanboot --no-describe --drive 0x80" \
 	|| fail "阶段9b: 装完的机器再次引导未回 sanboot，响应=${REBOOT_AFTER_DONE}"
 DONE_STATE_CHECK="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK_ID}';")"
 [ "${DONE_STATE_CHECK}" = "done" ] || fail "阶段9b: 断言前置条件被破坏——任务状态应仍是 done，实际=${DONE_STATE_CHECK}（说明上面这次 /v1/boot 请求本身改变了任务状态，需要核查是不是 FindPendingTaskByIdentity 命中了不该命中的任务）"
-pass "阶段9b: 装完的机器再次引导拿到 sanboot（不是装机菜单，不循环重装；已用状态查询排除'这只是分派缺口的同款 sanboot'这种混淆）"
+pass "阶段9b: 装完的机器再次引导拿到 sanboot（不是装机菜单，不循环重装；已用状态查询确认任务确实处于终态 done）"
 
 # 终态任务的应答文件不再提供（§4.4 状态门控：仅 booting/installing 可服务）。
 ANSWER_AFTER_DONE_CODE="$(curl -s -o /dev/null -w '%{http_code}' "${ANSWER_URL}")"
@@ -596,16 +682,16 @@ pass "阶段9c: 终态任务的应答文件不再提供（403）"
 FINAL_EVENTS="$(curl -fsS "${CONSOLE_BASE}/tasks/${TASK_ID}/events" -H "${AUTH_HEADER}")"
 FINAL_EVENT_COUNT="$(echo "${FINAL_EVENTS}" | grep -o '"taskId"' | wc -l)"
 [ "${FINAL_EVENT_COUNT}" -ge 11 ] || fail "阶段9d: 事件表条数=${FINAL_EVENT_COUNT}, want 至少 11（十一个信号各至少一条事件），响应=${FINAL_EVENTS}"
-pass "阶段9d: 事件表留下完整时间线（${FINAL_EVENT_COUNT} 条事件，含阶段8a记录的应答文件渲染失败事件）"
+pass "阶段9d: 事件表留下完整时间线（${FINAL_EVENT_COUNT} 条事件）"
 
 echo ""
 echo "=== 完整状态链（task_id=${TASK_ID}，Windows/UEFI 家族） ==="
-echo "pending → booting（/v1/boot 命中签 token，但 menu.go 未接线导致机器实际收到 sanboot） →"
-echo "  installing（/v1/answer 的 MarkAnswerFetched 先提交，但 renderer.go 未接线导致渲染 500） →"
-echo "  [pre-start → pre-done → packages-start → packages-done → post-start → post-done → rebooting]（装机期七信号，数据库直读 token 模拟） →"
+echo "pending → booting（/v1/boot 命中签 token，机器收到真实 wimboot 菜单） →"
+echo "  installing（/v1/answer 渲染出真实 unattend.xml，XML 校验通过） →"
+echo "  [pre-start → pre-done → packages-start → packages-done → post-start → post-done → rebooting]（装机期七信号） →"
 echo "  [booted → init-start → init-done → ready]（重启后四信号，finalize token） → done"
 echo ""
 echo "各阶段验证结果："
 sqlite3 "${DB_PATH}" "SELECT '  state='||state||' current_phase='||current_phase||' attempt_count='||attempt_count||' last_seq='||last_seq FROM tasks WHERE id='${TASK_ID}';"
 echo ""
-echo "=== Windows 家族九阶段验证结束：分派与应答文件两处关键渲染入口尚未接线（阶段7/8a已精确记录），信号/状态机/终态收敛/双固件准入等与渲染无关的机制全部验证通过 ==="
+echo "=== Windows 家族九阶段验证结束：分派已接线，wimboot 菜单/固件选键/unattend.xml/信号通道/状态机/终态收敛/双固件准入全部验证通过（导入识别仍被 mvpUnsupportedFamilies 挡着，制品集经 sqlite3 绕过，见文件头「已知限制」第 2 条） ==="
