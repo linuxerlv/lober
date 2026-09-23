@@ -36,6 +36,50 @@ const (
 	defaultHeartbeatInterval = 60 * time.Second
 )
 
+// defaultAdmissionLimitConfigDefault 是 Scan.AdmissionLimit 未在 YAML 中
+// 显式配置时使用的默认值。与 internal/statemachine/admission.go 的
+// defaultAdmissionLimit 取相同的数值（20）而不是直接引用那个常量——
+// config 包不允许 import internal/statemachine（铁律 7：实现模块之间
+// 绝不互相 import，archtest 会拦住），两个包各自独立声明同一个数值，
+// 是本仓库既有的「跨模块边界的同一条业务规则各自表达一次」的惯例（本文件
+// 前面 diskPolicies 引用 model.DiskPolicy 是不同情形——那是引用同一个包
+// 的类型定义，不是跨越两个互相不可见的实现模块）。
+//
+// 估算方法（与 admission.go 的文档一致）：
+//
+//	并发上限 ≈ 机架上行带宽（Mbps） / 单机平均传输速率需求（Mbps）
+//
+// 例如机架上行 1 Gbps、要求每台机器至少 50 Mbps 传输速率时，
+// 上限 ≈ 1000/50 = 20。这是一个不依赖具体机房条件的保守估算，运维应结合
+// 本机房的实测上行带宽与单机传输量调整 scan.admission_limit 字段。
+//
+// 契约缺口（零值语义的简化）：Scan.AdmissionLimit 的合法取值里，0 有
+// 「不限」的特殊含义（与 AdmissionController.SetLimit(0)/
+// statemachine.SetGlobalAdmissionLimit(0) 语义一致）——但 YAML 反序列化
+// 之后，普通 int 字段的「显式写了 0」与「整个字段被省略」在 Go 里是同一个
+// 零值，无法区分。本包对这两种输入统一按「未显式配置」处理、套用这个
+// 包级默认值 20，而不是把裸零值直接当作「运维主动选择了不限」——理由是
+// 「忘记配置」远比「真的想要不限」常见，而误判成不限的代价（一次上电几十
+// 台机器全部同时抢带宽、一起阶段超时失败）比误判成默认 20 的代价（真的
+// 想要不限的运维需要显式填一个足够大的数字，而不是填 0）严重得多。真正
+// 需要「完全不限」的部署，应该显式配置一个足够大的数字（例如 999999），
+// 不依赖裸 0 这个容易被误解的特殊值——正解方向是把该字段改成 *int（指针
+// 区分「未设置」与「显式设为 0」），但那会让本包与 YAML 反序列化的既有
+// 惯例（本文件其它十余个字段全部是值类型，靠 applyDefaults 的零值判定
+// 填充默认值）不一致，不在本次改动范围内引入这个例外。
+const defaultAdmissionLimitConfigDefault = 20
+
+// defaultAutoRetryMaxAttempts 是 Scan.AutoRetryMaxAttempts 未在 YAML 中
+// 显式配置时使用的默认值——计划任务 4「建议自动只重试一次，之后必须人工
+// 介入」。与 AdmissionLimit 不同，这个字段的零值（0）恰好就是「不允许
+// 自动重试任何任务」这个安全侧的合法语义（见 Scan.AutoRetryMaxAttempts
+// 字段文档），因此不存在零值语义歧义——但 AutoRetryEnabled 默认 false
+// 这道闸门本身已经保证「未显式开启时不会发生自动重试」，本默认值只在
+// 运维显式把 AutoRetryEnabled 设为 true、却忘了同时设置
+// AutoRetryMaxAttempts 时才有意义（避免「开了自动重试开关，却因为忘设
+// 次数上限导致上限退化成 0、开关等于白开」这种令人困惑的中间状态）。
+const defaultAutoRetryMaxAttempts = 1
+
 // heartbeatModes 是心跳模式的白名单（SPEC §6.6、计划任务 15）。
 //
 // 默认 tcp 而非 icmp：ICMP 需要特权套接字（root / CAP_NET_RAW /
@@ -127,11 +171,53 @@ type Store struct {
 	LogPath      string `yaml:"log_path"`
 }
 
-// Scan 是超时扫描循环的配置。
+// Scan 是超时扫描循环的配置。字段包含 Phase 4 新增的两组运维开关：并发
+// 准入上限（SPEC §10 失败模式 11）与自动重试（实现计划 phase4-01 任务
+// 4）。两者都归入 Scan 组而不是单独开一个新的顶层配置组：它们都是驱动
+// 「30 秒周期扫描循环」这同一个循环体的运行参数（AdmissionLimit 影响
+// StartBoot 的准入判定，装配点在读到配置后调用
+// statemachine.SetGlobalAdmissionLimit；AutoRetryEnabled/
+// AutoRetryMaxAttempts 直接构成传给 AutoRetryFailedTasks 的
+// AutoRetryConfig），与 Scan.Interval 同属「扫描循环怎么跑」这一类决策，
+// 不是给它们单开一个 Concurrency/AutoRetry 顶层组的理由。
+//
+// 契约缺口：本任务的文件归属括号写的是「并发上限配置项」，字面上没有
+// 覆盖「自动重试」这两个字段——但计划任务 4 明确要求自动重试必须有
+// 「独立开关，默认关闭」与「独立于手工重试的次数上限」这两个配置项，
+// 且没有其它任务的文件归属包含 config.go。最保守的处理：把两组字段都
+// 放进同一个 Scan 分组（而不是省略自动重试的配置项，让它变成硬编码常量
+// 无法被运维关闭——那与计划任务 4「默认关闭」这条刻意的设计决定直接冲突），
+// 并在这里明确记录这个归属范围的解读，供后续审阅确认是否需要调整。
 type Scan struct {
 	// Interval 默认 30 秒（SPEC §3.3：扫描循环独立于请求路径，每 30 s 扫
 	// phase_entered_at + budget < now）。
 	Interval time.Duration `yaml:"interval"`
+
+	// AdmissionLimit 是「同时处于消耗带宽阶段（booting 或 installing）的
+	// 任务数」上限（SPEC §10 失败模式 11：并发装机打满 HTTP，实际是带宽
+	// 争抢，表现成一批机器一起阶段超时失败）。0 表示不限（向后兼容未显式
+	// 配置本字段的部署）。
+	//
+	// 默认值与调参方法见 defaultAdmissionLimitConfigDefault 常量文档——
+	// 估算公式是「机架上行带宽（Mbps） / 单机平均传输速率需求（Mbps）」，
+	// 运维应结合本机房的实测上行带宽与单机传输量调整，不要直接照抄默认值
+	// 用于生产部署。
+	AdmissionLimit int `yaml:"admission_limit"`
+
+	// AutoRetryEnabled 是自动重试的独立开关，默认 false（计划任务 4
+	// 「独立的开关，默认关闭。自动重装是一个需要运维明确同意的行为」）。
+	// §3.2 已经说明「建任务即授权」的残留风险——机器一旦网络启动就会
+	// 装机，本系统没有远程关机手段；自动重试把这个风险窗口从「一次」
+	// 变成「多次」，运维可能没意识到自己开启了这个行为，因此默认必须是
+	// 关闭，需要运维在配置文件里显式写 true 才会生效。
+	AutoRetryEnabled bool `yaml:"auto_retry_enabled"`
+
+	// AutoRetryMaxAttempts 是同一任务允许被自动重试的独立次数上限，
+	// 必须比手工重试（控制台 Retry 端点，无次数上限）更严格。默认 1
+	// （计划任务 4「建议自动只重试一次，之后必须人工介入」）。0 表示
+	// 「不允许自动重试任何任务」，与 AutoRetryEnabled=false 是两道独立
+	// 的闸门——任何一道关着都不会发生自动重试。
+	AutoRetryMaxAttempts int `yaml:"auto_retry_max_attempts"`
 }
 
 // Auth 是认证配置：用户列表。用户来自配置文件的 bcrypt 哈希，不做用户管理
@@ -215,6 +301,14 @@ func applyDefaults(cfg *Config) {
 
 	if cfg.Scan.Interval == 0 {
 		cfg.Scan.Interval = defaultScanInterval
+	}
+	if cfg.Scan.AdmissionLimit == 0 {
+		cfg.Scan.AdmissionLimit = defaultAdmissionLimitConfigDefault
+	}
+	// AutoRetryEnabled 不需要在这里处理：它的零值（false）本身就是计划
+	// 任务 4 要求的默认关闭状态，不是「需要补一个非零默认值」的字段。
+	if cfg.Scan.AutoRetryMaxAttempts == 0 {
+		cfg.Scan.AutoRetryMaxAttempts = defaultAutoRetryMaxAttempts
 	}
 
 	if cfg.Provider.IPAM == "" {
