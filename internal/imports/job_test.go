@@ -303,3 +303,190 @@ func TestJob_ConcurrentSubmissionsRunSerially(t *testing.T) {
 func containsSubstring(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
+
+// ---------------------------------------------------------------------------
+// Run 的家族分派（本轮新增：查表分派取代逐家族单独暴露一个 RunXxx 方法）
+// ---------------------------------------------------------------------------
+
+// sampleUbuntuRoot 构造一份能让 Identify 判定为 Ubuntu、且能让 ExtractUbuntu
+// 成功跑完的最小内存文件系统（casper/ 下三个固定文件名）。
+func sampleUbuntuRoot() fstest.MapFS {
+	return fstest.MapFS{
+		".disk/info":                 &fstest.MapFile{Data: []byte("Ubuntu 24.04")},
+		"casper/vmlinuz":             &fstest.MapFile{Data: []byte("kernel-bytes")},
+		"casper/initrd":              &fstest.MapFile{Data: []byte("initrd-bytes")},
+		"casper/filesystem.squashfs": &fstest.MapFile{Data: []byte("squashfs-bytes")},
+	}
+}
+
+// sampleDebianRoot 构造一份能让 Identify 判定为 Debian、且能让 ExtractDebian
+// 成功跑完的最小内存文件系统（dists/ 目录 + installer 子目录下两个固定
+// 文件名，findDebianInstallerFile 会跳过 dists/pool 递归查找其余部分）。
+func sampleDebianRoot() fstest.MapFS {
+	return fstest.MapFS{
+		"dists/stable/Release":  &fstest.MapFile{Data: []byte("dummy")},
+		"install.amd/vmlinuz":   &fstest.MapFile{Data: []byte("kernel-bytes")},
+		"install.amd/initrd.gz": &fstest.MapFile{Data: []byte("initrd-bytes")},
+	}
+}
+
+// TestJob_Run_DispatchesRHELDebianUbuntuToTheirExtractors 锁住「三个已实现
+// 家族各自走到对应的抽取器」这条要求：用内存文件系统造出三种家族各自的
+// 特征文件，断言 Run 跑完后制品集是 ready，且落盘路径符合各家族抽取函数
+// 自己的产出约定（不是随便某个家族的产出）。
+func TestJob_Run_DispatchesRHELDebianUbuntuToTheirExtractors(t *testing.T) {
+	cases := []struct {
+		name       string
+		root       fstest.MapFS
+		wantFamily model.OSFamily
+		wantKernel string
+		wantInitrd []string
+	}{
+		{
+			name:       "RHEL",
+			root:       sampleRHELRoot(),
+			wantFamily: model.OSFamilyRHEL,
+			wantKernel: "vmlinuz",
+			wantInitrd: []string{"initrd.img"},
+		},
+		{
+			name:       "Debian",
+			root:       sampleDebianRoot(),
+			wantFamily: model.OSFamilyDebian,
+			wantKernel: "linux",
+			wantInitrd: []string{"initrd.gz"},
+		},
+		{
+			name:       "Ubuntu",
+			root:       sampleUbuntuRoot(),
+			wantFamily: model.OSFamilyUbuntu,
+			wantKernel: "vmlinuz",
+			wantInitrd: []string{"initrd"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeArtifactSetStore()
+			extractor := fakeExtractor{root: tc.root}
+			job := NewJob(store, extractor)
+			destDir := t.TempDir()
+
+			err := job.Run(context.Background(), "artifact-1", "/tmp/whatever.iso", destDir)
+			if err != nil {
+				t.Fatalf("%s 应成功分派到对应抽取器，got err: %v", tc.name, err)
+			}
+
+			state, paths, _ := store.snapshot()
+			if state != model.ArtifactSetReady {
+				t.Fatalf("%s 成功后状态应为 ready，got %s", tc.name, state)
+			}
+			if store.osFamily != tc.wantFamily {
+				t.Errorf("%s 写回的 OSFamily = %s, want %s", tc.name, store.osFamily, tc.wantFamily)
+			}
+			if paths.Kernel != tc.wantKernel {
+				t.Errorf("%s 写回的 Kernel = %q, want %q——分派到了错误家族的抽取器",
+					tc.name, paths.Kernel, tc.wantKernel)
+			}
+			if len(paths.Initrd) != len(tc.wantInitrd) || (len(paths.Initrd) > 0 && paths.Initrd[0] != tc.wantInitrd[0]) {
+				t.Errorf("%s 写回的 Initrd = %v, want %v", tc.name, paths.Initrd, tc.wantInitrd)
+			}
+			if store.manifestSHA256 == "" {
+				t.Errorf("%s 成功后应记录 manifest 校验值", tc.name)
+			}
+		})
+	}
+}
+
+// TestJob_Run_UnsupportedFamily_FailsWithMVPReason 锁住「未实现家族落明确
+// 错误而非静默成功」这条最关键的要求（任务说明：静默成功会产出一个
+// ready 但没有 kernel 的制品集，而那要等机器上电取不到内核才暴露）——
+// Windows/ESXi 被 Identify 判定为「识别出但 MVP 不支持」，Run 必须把
+// 这类情形置为 failed，绝不能因为查表分派而意外放行。
+func TestJob_Run_UnsupportedFamily_FailsWithMVPReason(t *testing.T) {
+	cases := []struct {
+		name string
+		root fstest.MapFS
+	}{
+		{name: "ESXi", root: fstest.MapFS{
+			"boot.cfg":  &fstest.MapFile{Data: []byte("")},
+			"mboot.efi": &fstest.MapFile{Data: []byte("")},
+		}},
+		{name: "Windows", root: fstest.MapFS{
+			"sources/install.wim": &fstest.MapFile{Data: []byte("")},
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeArtifactSetStore()
+			extractor := fakeExtractor{root: tc.root}
+			job := NewJob(store, extractor)
+
+			err := job.Run(context.Background(), "artifact-1", "/tmp/whatever.iso", t.TempDir())
+			if err == nil {
+				t.Fatalf("%s 应导致导入失败，不应静默成功", tc.name)
+			}
+			if !containsSubstring(err.Error(), "MVP 不支持") {
+				t.Fatalf("%s 失败原因应说明是 MVP 限制，got %q", tc.name, err.Error())
+			}
+
+			state, paths, contentCalls := store.snapshot()
+			if state != model.ArtifactSetFailed {
+				t.Fatalf("%s 失败后状态应为 failed，got %s——静默成功会产出一个 ready 但没有"+
+					"kernel 的制品集，那个错误要等机器上电取不到内核才暴露", tc.name, state)
+			}
+			if contentCalls != 0 {
+				t.Fatalf("%s 未支持家族不应调用 SetArtifactSetContent，got %d 次调用", tc.name, contentCalls)
+			}
+			if paths.Kernel != "" {
+				t.Fatalf("%s 未支持家族不应写入任何 Kernel 路径，got %q", tc.name, paths.Kernel)
+			}
+		})
+	}
+}
+
+// TestJob_Run_NotIdentified_FailsWithSpecificReason 锁住「完全识别不出时
+// 明确失败」（与 Windows/ESXi 的「识别出但不支持」是两种不同的失败原因，
+// 错误信息要能区分两者，运维看日志才能判断该做什么）。
+func TestJob_Run_NotIdentified_FailsWithSpecificReason(t *testing.T) {
+	store := newFakeArtifactSetStore()
+	extractor := fakeExtractor{root: fstest.MapFS{"README.txt": &fstest.MapFile{Data: []byte("no markers")}}}
+	job := NewJob(store, extractor)
+
+	err := job.Run(context.Background(), "artifact-1", "/tmp/whatever.iso", t.TempDir())
+	if err == nil {
+		t.Fatal("识别不出家族时应返回错误")
+	}
+	if !containsSubstring(err.Error(), "识别不出") {
+		t.Fatalf("错误信息应具体指出是识别步骤失败，got %q", err.Error())
+	}
+
+	state, _, _ := store.snapshot()
+	if state != model.ArtifactSetFailed {
+		t.Fatalf("识别不出时状态应为 failed，got %s", state)
+	}
+}
+
+// TestJob_RunRHEL_DelegatesToRunAndRejectsWrongFamily 确认 RunRHEL 兼容
+// 入口仍然可用（既有测试 TestJob_SuccessPath_* 等已经覆盖了正常路径，
+// 本测试补上「RunRHEL 名字本身承诺了家族」这一条：传入实际是 Ubuntu 的
+// 内容时，RunRHEL 必须拒绝，不能因为委托给 Run 而意外接受任意家族）。
+func TestJob_RunRHEL_DelegatesToRunAndRejectsWrongFamily(t *testing.T) {
+	store := newFakeArtifactSetStore()
+	extractor := fakeExtractor{root: sampleUbuntuRoot()}
+	job := NewJob(store, extractor)
+
+	err := job.RunRHEL(context.Background(), "artifact-1", "/tmp/whatever.iso", t.TempDir())
+	if err == nil {
+		t.Fatal("RunRHEL 收到 Ubuntu 内容时应拒绝")
+	}
+	if !containsSubstring(err.Error(), "家族与调用的抽取方法不符") {
+		t.Fatalf("错误信息应指出家族不符，got %q", err.Error())
+	}
+
+	state, _, _ := store.snapshot()
+	if state != model.ArtifactSetFailed {
+		t.Fatalf("家族不符时状态应为 failed，got %s", state)
+	}
+}

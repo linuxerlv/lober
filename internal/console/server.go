@@ -88,6 +88,13 @@ type Deps struct {
 	// 登录通路），不传的后果是 preview 对任何模板都返回渲染失败，而 §8.2
 	// 说明 preview 是开发期性价比最高的两个端点之一。
 	RootSSHPublicKeys []string
+
+	// ArtifactImporter 供 POST /artifact-sets 登记成功后触发异步导入 job
+	// （本轮新增，见 artifact.go 的 ArtifactImporter 接口文档）。可为
+	// nil——为 nil 时登记端点只落库、不触发导入，制品集停留在
+	// importing（与本断口接入之前的既有行为一致，不是本次改动引入的
+	// 新风险）。
+	ArtifactImporter ArtifactImporter
 }
 
 // AuthUser 是 console 包认识的认证记录形态：用户名、bcrypt 哈希、角色
