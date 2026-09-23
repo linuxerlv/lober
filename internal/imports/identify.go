@@ -23,19 +23,6 @@ var (
 	ErrOSFamilyNotIdentified = fmt.Errorf("imports: 未能识别出任何已知 OS 家族")
 )
 
-// mvpUnsupportedFamilies 是识别成功但 MVP 明确不支持的家族集合（任务 9：
-// 曾包含 Windows 与 ESXi，两者都被识别但返回「MVP 不支持」）。
-//
-// 本轮（n2 轨）解除了 Windows 的封锁——Windows 已有完整的登记→导入→ready
-// 路径（见 job.go 的 Run 对 model.OSFamilyWindows 的专门分派分支），不再
-// 属于「识别出但不支持」，故从本表移除。ESXi 保留在表内：该家族归 n3 轨，
-// 两轨同时改这个文件，本任务不擅自移除 ESXi 那一行以免产生合并冲突
-// （identify_test.go 的 TestIdentify_ESXiStillBlockedByMVPUnsupportedFamilies
-// 锁住这一点）。
-var mvpUnsupportedFamilies = map[model.OSFamily]bool{
-	model.OSFamilyESXi: true,
-}
-
 // Identify 按特征文件判定 root 对应的 ISO 内容属于哪个 OS 家族（SPEC
 // §2.1 的特征文件表）：
 //
@@ -67,12 +54,19 @@ var mvpUnsupportedFamilies = map[model.OSFamily]bool{
 // .treeinfo 判据之后。只用 repomd.xml 且排在 RHEL 之前会把现代 RHEL 误判成
 // SUSE，那会让 RHEL 机器拿到 AutoYaST 应答文件而安装器根本不认。
 //
-// 一块特征文件都不命中时返回 ErrOSFamilyNotIdentified；命中 ESXi 时返回
-// (esxi, ErrUnsupportedOSFamily)——注意这种情况下返回值的第一个字段不是
-// 零值，调用方可以从中知道「识别出了什么，只是不支持」，而不是把这类情况
-// 与「完全没识别出来」混为一谈。命中 Windows 时返回 (windows, nil)——
-// Windows 已解除 MVP 封锁（本轮 n2 轨），job.go 的 Run 有专门的分派分支
-// 走到 ExtractWindows，不再是「识别出但不支持」。
+// 一块特征文件都不命中时返回 ErrOSFamilyNotIdentified。
+//
+// **六个家族现在全部返回 nil**：Windows 与 ESXi 曾经返回
+// ErrUnsupportedOSFamily（MVP 支持闸门），两者的抽取器与渲染分派都已接线，
+// job.go 的 Run 各有专门分派分支（runWindows / runESXi，它们的抽取函数比
+// familyExtractors 的行类型多参数，所以不进那张查表）。
+//
+// 顺带删掉了 mvpUnsupportedFamilies 那张表：它定义了却**从没被任何代码
+// 查询过**（Identify 的 if 分支一直是硬编码返回 sentinel error），是装饰性
+// 死代码。这类「看着是开关、实际不起作用」的东西最危险——有人改了表以为
+// 解封了，实际没有。ErrUnsupportedOSFamily 本身保留：将来真有不支持的
+// 家族时仍然用它，但那时必须真的从 Identify 返回它，而不是往一张没人查的
+// 表里加一行。
 func Identify(root fs.FS) (model.OSFamily, error) {
 	if exists(root, ".treeinfo") {
 		return model.OSFamilyRHEL, nil
@@ -89,7 +83,7 @@ func Identify(root fs.FS) (model.OSFamily, error) {
 		return model.OSFamilySUSE, nil
 	}
 	if exists(root, "boot.cfg") && exists(root, "mboot.efi") {
-		return model.OSFamilyESXi, ErrUnsupportedOSFamily
+		return model.OSFamilyESXi, nil
 	}
 	if exists(root, "sources/install.wim") {
 		return model.OSFamilyWindows, nil

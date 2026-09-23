@@ -88,6 +88,12 @@ func (s *Server) routesArtifactSet() {
 }
 
 // artifactSetItem 是响应形态，字段名与 model.ArtifactSet 对应。
+//
+// FailReason 是本次契约变更新增字段（t01 记录的缺口：导入失败时运维在
+// 列表里只看到一个没有信息量的 "failed"，不知道是路径打不开、识别不出
+// 家族、抽取失败还是 manifest 生成失败）。非 failed 状态下通常为空字符串
+// ——与 model.ArtifactSet.FailReason 的零值语义一致，不是需要特殊处理的
+// 哨兵值。
 type artifactSetItem struct {
 	ID              string            `json:"id"`
 	Name            string            `json:"name"`
@@ -98,6 +104,7 @@ type artifactSetItem struct {
 	SourceISOSHA256 string            `json:"sourceIsoSha256"`
 	State           string            `json:"state"`
 	ManifestSHA256  string            `json:"manifestSha256"`
+	FailReason      string            `json:"failReason"`
 	Paths           artifactPathsItem `json:"paths"`
 }
 
@@ -127,6 +134,7 @@ func toArtifactSetItem(a model.ArtifactSet) artifactSetItem {
 		SourceISOSHA256: a.SourceISOSHA256,
 		State:           string(a.State),
 		ManifestSHA256:  a.ManifestSHA256,
+		FailReason:      a.FailReason,
 		Paths: artifactPathsItem{
 			Kernel: a.Paths.Kernel,
 			Initrd: initrd,

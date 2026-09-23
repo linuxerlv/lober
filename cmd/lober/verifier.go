@@ -32,7 +32,7 @@ import (
 // SetArtifactSetContent/DeleteArtifactSet 四个本类型完全不需要的方法。
 type artifactVerifierStore interface {
 	GetArtifactSet(ctx context.Context, id string) (model.ArtifactSet, error)
-	UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256 string) (model.ArtifactSet, error)
+	UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256, reason string) (model.ArtifactSet, error)
 }
 
 // artifactVerifier 是 console.ArtifactVerifier 的生产实现：每次
@@ -148,7 +148,7 @@ func (v *artifactVerifier) runVerify(ctx context.Context, artifactSetID string) 
 	// 确认，不是改变），State 原样传回、不做任何变更——
 	// UpdateArtifactSetState 的签名要求同时给出两个字段，没有「只改一个,
 	// 另一个保持原值」的重载，因此显式传回 set.State 而不是某个新值。
-	if _, err := v.store.UpdateArtifactSetState(ctx, artifactSetID, set.State, manifest.SHA256); err != nil {
+	if _, err := v.store.UpdateArtifactSetState(ctx, artifactSetID, set.State, manifest.SHA256, ""); err != nil {
 		slog.Error("校验通过但写回确认结果失败",
 			slog.String("artifact_set_id", artifactSetID), slog.Any("error", err))
 		return

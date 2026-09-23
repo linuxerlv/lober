@@ -599,10 +599,14 @@ func (s *Store) ListArtifactSets(ctx context.Context) ([]model.ArtifactSet, erro
 	return out, nil
 }
 
-// UpdateArtifactSetState 只改 State 与 ManifestSHA256，不触及 Paths 与
-// OSFamily——导入失败路径调用本方法，失败时 Paths 可能尚未写入或只写了一
-// 半，绝不能被本方法覆盖成半成品（计划任务 10 设计要点）。
-func (s *Store) UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256 string) (model.ArtifactSet, error) {
+// UpdateArtifactSetState 只改 State、ManifestSHA256 与 FailReason，不触及
+// Paths 与 OSFamily——导入失败路径调用本方法，失败时 Paths 可能尚未写入或
+// 只写了一半，绝不能被本方法覆盖成半成品（计划任务 10 设计要点）。
+//
+// reason 是本次契约变更新增的第四个参数（见 contract.ArtifactSetStore 的
+// 文档）：导入失败时把具体原因一并写入，供运维在控制台看到「为什么失败」
+// 而不只是一个没有信息量的 "failed"。
+func (s *Store) UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256, reason string) (model.ArtifactSet, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -612,6 +616,7 @@ func (s *Store) UpdateArtifactSetState(ctx context.Context, id string, state mod
 	}
 	a.State = state
 	a.ManifestSHA256 = manifestSHA256
+	a.FailReason = reason
 	s.artifact[id] = a
 	return copyArtifactSet(a), nil
 }

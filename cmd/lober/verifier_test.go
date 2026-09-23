@@ -53,7 +53,7 @@ func (f *fakeVerifierStore) GetArtifactSet(ctx context.Context, id string) (mode
 	return s, nil
 }
 
-func (f *fakeVerifierStore) UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256 string) (model.ArtifactSet, error) {
+func (f *fakeVerifierStore) UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256, reason string) (model.ArtifactSet, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s, ok := f.sets[id]

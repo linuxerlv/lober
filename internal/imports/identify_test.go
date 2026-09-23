@@ -47,17 +47,29 @@ func TestIdentify_Debian(t *testing.T) {
 	}
 }
 
-func TestIdentify_ESXi_UnsupportedButIdentified(t *testing.T) {
+// TestIdentify_ESXi_NowSupported 锁住 ESXi 的 MVP 封锁已解除：
+// Identify 对 boot.cfg + mboot.efi 返回 (esxi, nil)，不再是
+// ErrUnsupportedOSFamily。
+//
+// ESXi 的抽取器（ExtractESXi，经 NewESXiFamilyExtractor 适配）与渲染分派
+// 都已接线，job.go 的 Run 有专门的 runESXi 分支（它比 familyExtractors 的
+// 行类型多一个 declaredFirmware 参数，所以不进那张查表）。
+//
+// 顺带记一笔：原先挡住 ESXi 的 mvpUnsupportedFamilies 表**从没被任何代码
+// 查询过**，Identify 的 if 分支一直是硬编码返回 sentinel error —— 那张表是
+// 装饰性死代码，已删除。这类「看着是开关、实际不起作用」的东西最危险：
+// 有人改了表以为解封了，实际没有。
+func TestIdentify_ESXi_NowSupported(t *testing.T) {
 	root := fstest.MapFS{
 		"boot.cfg":  &fstest.MapFile{Data: []byte("")},
 		"mboot.efi": &fstest.MapFile{Data: []byte("")},
 	}
 	family, err := Identify(root)
-	if !errors.Is(err, ErrUnsupportedOSFamily) {
-		t.Fatalf("ESXi 应被识别但报 MVP 不支持，got err=%v", err)
+	if err != nil {
+		t.Fatalf("ESXi 已解封，应返回 nil error，got %v", err)
 	}
 	if family != model.OSFamilyESXi {
-		t.Fatalf("即使不支持，识别出的家族字段也应该是 esxi，got %s", family)
+		t.Fatalf("got %s, want esxi", family)
 	}
 }
 
@@ -77,23 +89,6 @@ func TestIdentify_Windows_NowSupported(t *testing.T) {
 	}
 	if family != model.OSFamilyWindows {
 		t.Fatalf("识别出的家族字段应为 windows，got %s", family)
-	}
-}
-
-// TestIdentify_ESXiStillBlockedByMVPUnsupportedFamilies 确认本轮只解除了
-// Windows 的封锁，ESXi 仍然留在 mvpUnsupportedFamilies 里（该家族归 n3 轨，
-// 本任务不动它）——防止未来有人以为"顺手一起解封"而误删 ESXi 那一行。
-func TestIdentify_ESXiStillBlockedByMVPUnsupportedFamilies(t *testing.T) {
-	root := fstest.MapFS{
-		"boot.cfg":  &fstest.MapFile{Data: []byte("")},
-		"mboot.efi": &fstest.MapFile{Data: []byte("")},
-	}
-	family, err := Identify(root)
-	if !errors.Is(err, ErrUnsupportedOSFamily) {
-		t.Fatalf("ESXi 不属于本任务范围，应仍被 mvpUnsupportedFamilies 挡住，got err=%v", err)
-	}
-	if family != model.OSFamilyESXi {
-		t.Fatalf("即使不支持，识别出的家族字段也应该是 esxi，got %s", family)
 	}
 }
 

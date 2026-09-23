@@ -26,6 +26,7 @@ type fakeArtifactSetStore struct {
 
 	state          model.ArtifactSetState
 	manifestSHA256 string
+	failReason     string
 	osFamily       model.OSFamily
 	paths          model.ArtifactPaths
 
@@ -54,7 +55,7 @@ func (f *fakeArtifactSetStore) GetArtifactSet(ctx context.Context, id string) (m
 	return model.ArtifactSet{ID: id, Firmware: f.declaredFirmware}, nil
 }
 
-func (f *fakeArtifactSetStore) UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256 string) (model.ArtifactSet, error) {
+func (f *fakeArtifactSetStore) UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256, reason string) (model.ArtifactSet, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stateUpdateCalls++
@@ -63,7 +64,8 @@ func (f *fakeArtifactSetStore) UpdateArtifactSetState(ctx context.Context, id st
 	}
 	f.state = state
 	f.manifestSHA256 = manifestSHA256
-	return model.ArtifactSet{ID: id, State: f.state, ManifestSHA256: f.manifestSHA256}, nil
+	f.failReason = reason
+	return model.ArtifactSet{ID: id, State: f.state, ManifestSHA256: f.manifestSHA256, FailReason: f.failReason}, nil
 }
 
 func (f *fakeArtifactSetStore) SetArtifactSetContent(ctx context.Context, id string, osFamily model.OSFamily, paths model.ArtifactPaths) (model.ArtifactSet, error) {
@@ -198,7 +200,17 @@ func TestJob_SetContentFailure_PathsNotClearedOnFailure(t *testing.T) {
 	}
 }
 
-func TestJob_UnsupportedFamily_ESXi_FailsWithMVPReason(t *testing.T) {
+// TestJob_RunUnsupported_ESXi_NowRejectsAsCallerLogicError 替换了原先锁
+// 「ESXi 走 RunUnsupported 应因 MVP 限制失败」的测试 —— 那个封锁已解除。
+//
+// RunUnsupported 这个兼容入口的语义是「调用前还不知道家族、用它确认内容
+// 确实不受支持」。ESXi 现在有了完整的导入路径（runESXi 分支 → ExtractESXi），
+// 所以传入 ESXi 的内容意味着调用方在没查过支持情况之前就走错了入口，
+// 应明确报「调用方逻辑错误」，而不是按已经不成立的 MVP 限制文案失败。
+//
+// 六个家族现在全部受支持，所以 RunUnsupported 只剩「识别不出家族」这一条
+// 真正会走到的路径。
+func TestJob_RunUnsupported_ESXi_NowRejectsAsCallerLogicError(t *testing.T) {
 	store := newFakeArtifactSetStore()
 	extractor := fakeExtractor{root: fstest.MapFS{
 		"boot.cfg":  &fstest.MapFile{Data: []byte("")},
@@ -208,10 +220,10 @@ func TestJob_UnsupportedFamily_ESXi_FailsWithMVPReason(t *testing.T) {
 
 	err := job.RunUnsupported(context.Background(), "artifact-1", "/tmp/esxi.iso")
 	if err == nil {
-		t.Fatal("ESXi 应导致导入失败")
+		t.Fatal("ESXi 已受支持，走 RunUnsupported 应报调用方逻辑错误")
 	}
-	if !containsSubstring(err.Error(), "MVP 不支持") {
-		t.Fatalf("失败原因应说明是 MVP 限制，got %q", err.Error())
+	if !containsSubstring(err.Error(), "调用方逻辑错误") {
+		t.Fatalf("失败原因应指出调用方走错入口，got %q", err.Error())
 	}
 
 	state, _, _ := store.snapshot()
@@ -425,57 +437,6 @@ func TestJob_Run_DispatchesRHELDebianUbuntuToTheirExtractors(t *testing.T) {
 			}
 			if store.manifestSHA256 == "" {
 				t.Errorf("%s 成功后应记录 manifest 校验值", tc.name)
-			}
-		})
-	}
-}
-
-// TestJob_Run_UnsupportedFamily_FailsWithMVPReason 锁住「未实现家族落明确
-// 错误而非静默成功」这条最关键的要求（任务说明：静默成功会产出一个
-// ready 但没有 kernel 的制品集，而那要等机器上电取不到内核才暴露）——
-// ESXi 被 Identify 判定为「识别出但 MVP 不支持」，Run 必须把这类情形置为
-// failed，绝不能因为查表分派而意外放行。
-//
-// 本用例表格本轮（n2 轨）移除了 Windows：Windows 已解除封锁，不再属于
-// 「MVP 不支持」这一类，它的成功路径与「已解封但配置缺失」两种新行为分别由
-// TestJob_Run_Windows_DispatchesToExtractWindows 与
-// TestJob_Run_Windows_MissingConfiguration_FailsWithSpecificReason 覆盖——
-// ESXi 归 n3 轨，不属于本任务范围，保留在本表内维持覆盖。
-func TestJob_Run_UnsupportedFamily_FailsWithMVPReason(t *testing.T) {
-	cases := []struct {
-		name string
-		root fstest.MapFS
-	}{
-		{name: "ESXi", root: fstest.MapFS{
-			"boot.cfg":  &fstest.MapFile{Data: []byte("")},
-			"mboot.efi": &fstest.MapFile{Data: []byte("")},
-		}},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			store := newFakeArtifactSetStore()
-			extractor := fakeExtractor{root: tc.root}
-			job := NewJob(store, extractor)
-
-			err := job.Run(context.Background(), "artifact-1", "/tmp/whatever.iso", t.TempDir())
-			if err == nil {
-				t.Fatalf("%s 应导致导入失败，不应静默成功", tc.name)
-			}
-			if !containsSubstring(err.Error(), "MVP 不支持") {
-				t.Fatalf("%s 失败原因应说明是 MVP 限制，got %q", tc.name, err.Error())
-			}
-
-			state, paths, contentCalls := store.snapshot()
-			if state != model.ArtifactSetFailed {
-				t.Fatalf("%s 失败后状态应为 failed，got %s——静默成功会产出一个 ready 但没有"+
-					"kernel 的制品集，那个错误要等机器上电取不到内核才暴露", tc.name, state)
-			}
-			if contentCalls != 0 {
-				t.Fatalf("%s 未支持家族不应调用 SetArtifactSetContent，got %d 次调用", tc.name, contentCalls)
-			}
-			if paths.Kernel != "" {
-				t.Fatalf("%s 未支持家族不应写入任何 Kernel 路径，got %q", tc.name, paths.Kernel)
 			}
 		})
 	}

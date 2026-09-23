@@ -176,10 +176,18 @@ type ArtifactSetStore interface {
 	// arch, firmware) 四元组过滤（过滤逻辑在调用方）。
 	ListArtifactSets(ctx context.Context) ([]model.ArtifactSet, error)
 
-	// UpdateArtifactSetState 只改 State（及可选的 ManifestSHA256），不触及
+	// UpdateArtifactSetState 只改 State、ManifestSHA256 与 FailReason，不触及
 	// Paths。导入失败路径调用本方法——失败时 Paths 可能尚未写入或只写了一
 	// 半，绝不能被本方法覆盖成半成品。
-	UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256 string) (model.ArtifactSet, error)
+	//
+	// reason 是本次契约变更新增的第四个参数（原签名只有三个参数，见本方法
+	// 的历史版本）：导入失败时运维只能在 /artifact-sets 列表里看到一个
+	// "failed"，不知道是路径打不开、识别不出家族、抽取失败还是 manifest
+	// 生成失败——这四种失败的处置完全不同，但此前全都长一样（t01 记录的
+	// 契约缺口，见 internal/imports/job.go 文件末尾曾经的契约缺口说明）。
+	// 成功路径调用本方法时 reason 传空字符串——空字符串是「没有失败原因」
+	// 的正常表达，不是一个需要特殊处理的哨兵值。
+	UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256, reason string) (model.ArtifactSet, error)
 
 	// SetArtifactSetContent 写回导入完成后才知道的内容：OSFamily 识别结果与
 	// Paths。导入 job 成功路径调用本方法。
