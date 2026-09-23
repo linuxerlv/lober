@@ -324,8 +324,12 @@ func sampleUbuntuRoot() fstest.MapFS {
 // 文件名，findDebianInstallerFile 会跳过 dists/pool 递归查找其余部分）。
 func sampleDebianRoot() fstest.MapFS {
 	return fstest.MapFS{
-		"dists/stable/Release":  &fstest.MapFile{Data: []byte("dummy")},
-		"install.amd/vmlinuz":   &fstest.MapFile{Data: []byte("kernel-bytes")},
+		"dists/stable/Release": &fstest.MapFile{Data: []byte("dummy")},
+		// Debian 的内核文件名是 linux（不是 RHEL 的 vmlinuz），initrd 是
+		// initrd.gz（不是 initrd.img）—— 两者都与 RHEL 不同，抽取器按
+		// 真实文件名查找，夹具必须照真实 ISO 的命名造，否则测的是一个
+		// 不存在的 ISO 形态。
+		"install.amd/linux":     &fstest.MapFile{Data: []byte("kernel-bytes")},
 		"install.amd/initrd.gz": &fstest.MapFile{Data: []byte("initrd-bytes")},
 	}
 }

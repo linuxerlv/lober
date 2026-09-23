@@ -36,14 +36,30 @@ var mvpUnsupportedFamilies = map[model.OSFamily]bool{
 //	RHEL 系   .treeinfo
 //	Ubuntu    .disk/info
 //	Debian    dists/
+//	SUSE 系   repodata/repomd.xml + media.1/products（见下方实证说明）
 //	ESXi      boot.cfg + mboot.efi
 //	Windows   sources/install.wim
 //
 // 识别顺序要考虑歧义（任务 9 明确要求写进注释）：Ubuntu 的 ISO 也含
 // dists/ 目录，所以 Ubuntu 的判定必须排在 Debian 之前——否则将来有人
 // 「顺手整理」了判定顺序，就会把 Ubuntu 识别成 Debian。本函数按
-// RHEL → Ubuntu → Debian → ESXi → Windows 的固定顺序逐一检查特征文件，
-// 这个顺序本身就是对歧义的处理，不能因为「看起来更整齐」而重排。
+// RHEL → Ubuntu → Debian → SUSE → ESXi → Windows 的固定顺序逐一检查
+// 特征文件，这个顺序本身就是对歧义的处理，不能因为「看起来更整齐」而重排。
+//
+// SUSE 的判据与 SPEC §2.1 的表不同，理由已实证（2026-09-23）：
+//
+// SPEC 那张表里没有 SUSE 一行，而常见资料给的 content 文件判据**已经过时**。
+// openSUSE 官方 linuxrc 文档明确写 content 文件识别法 "is obsolete since
+// SLE15/openSUSE Leap 15, the newer products use the repomd repositories on
+// the installation media"。对 download.opensuse.org 的实测印证了这一点：
+// Leap 15.6 的 repo 下 repodata/repomd.xml 与 media.1/products 都是 200，
+// 而 content 是 404。
+//
+// **单用 repodata/repomd.xml 不足以区分 SUSE 与现代 RHEL**——后者同样是
+// RPM-MD 仓库、也有这个文件。所以 SUSE 的判据是 repomd.xml 与 media.1/products
+// 的组合（后者是 SUSE 专属，RHEL/Debian/Ubuntu 都没有），且排在 RHEL 的
+// .treeinfo 判据之后。只用 repomd.xml 且排在 RHEL 之前会把现代 RHEL 误判成
+// SUSE，那会让 RHEL 机器拿到 AutoYaST 应答文件而安装器根本不认。
 //
 // 一块特征文件都不命中时返回 ErrOSFamilyNotIdentified；命中 Windows 或
 // ESXi 时返回 (该家族, ErrUnsupportedOSFamily)——注意这种情况下返回值
@@ -58,6 +74,11 @@ func Identify(root fs.FS) (model.OSFamily, error) {
 	}
 	if existsDir(root, "dists") {
 		return model.OSFamilyDebian, nil
+	}
+	// SUSE：必须两个条件同时成立（见函数注释的实证说明）。media.1/products
+	// 是 SUSE 专属标记，用它把 SUSE 与同样含 repodata/ 的现代 RHEL 分开。
+	if exists(root, "repodata/repomd.xml") && exists(root, "media.1/products") {
+		return model.OSFamilySUSE, nil
 	}
 	if exists(root, "boot.cfg") && exists(root, "mboot.efi") {
 		return model.OSFamilyESXi, ErrUnsupportedOSFamily

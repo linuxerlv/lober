@@ -83,6 +83,7 @@ var familyExtractors = map[model.OSFamily]familyExtractor{
 	model.OSFamilyRHEL:   ExtractRHEL,
 	model.OSFamilyDebian: ExtractDebian,
 	model.OSFamilyUbuntu: ExtractUbuntu,
+	model.OSFamilySUSE:   ExtractSUSE,
 }
 
 // Run 是导入 job 的统一入口（任务：按识别结果自动分派，取代逐家族单独
