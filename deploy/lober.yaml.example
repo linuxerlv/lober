@@ -225,9 +225,15 @@ auth:
 
 # --- Provider 选择与参数 -----------------------------------------------------
 provider:
-  # IPAM/DNS/resolver 目前各只有单一内置实现，config 阶段不做白名单校验
-  # （见 config.go 的字段注释：合法值由 M7 的实现集合决定）。MVP 阶段
-  # 保持这三个默认值即可。
+  # IPAM/DNS 除了内置实现（static/noop），现在还支持 exec/http 两种通用
+  # 加载器（SPEC §7.2，internal/provider/loader 包）——把这两个字段改成
+  # "exec" 或 "http" 即可让对应扩展点改由子进程脚本或 webhook 实现，见
+  # 下方 ipam_loader/dns_loader/heartbeat_loader 三段的示例与
+  # docs/real-machine/08-loaders.md 的完整说明。Resolver 仍只有
+  # rule-based 一种内置实现（TemplateResolver 是纯决策接口，刻意不接
+  # 加载器，见该文档"不做什么"一节）。config 阶段不对 ipam/dns 的取值做
+  # 白名单校验（合法值由 factory.go 的实现集合决定），但选了 exec/http
+  # 时会强制校验对应 loader 段的结构完整性（见下）。
   ipam: "static"
   dns: "noop"
   resolver: "rule-based"
@@ -239,11 +245,63 @@ provider:
   disk_policy: "largest"
   disk_model: ""
 
-  # 心跳模式：tcp / icmp / off。默认 tcp——icmp 需要特权套接字（root /
-  # CAP_NET_RAW），心跳只是辅助通道（SPEC §6.6），不值得为它给整个进程
-  # 提权。心跳间隔默认 60 秒。
+  # 心跳模式：tcp / icmp / off / exec / http。默认 tcp——icmp 需要特权
+  # 套接字（root / CAP_NET_RAW），心跳只是辅助通道（SPEC §6.6），不值得
+  # 为它给整个进程提权。心跳间隔默认 60 秒。
   heartbeat_mode: "tcp"
   heartbeat_interval: 60s
+
+  # 以下三段是 ipam/dns/heartbeat_mode 选了 exec 或 http 时才生效的加载器
+  # 参数（SPEC §7.2）。选择项不是 exec/http 时，这三段的内容完全被忽略
+  # ——下面按注释掉的方式给出示例，切换到 exec/http 时取消注释并按需改值。
+  #
+  # 示例一：IPAM 走 exec（气隙环境下最实用的加载方式，改一个 shell 脚本
+  # 不需要重启进程，下次调用就生效——SPEC §7.2 选型判据）：
+  #   ipam: "exec"
+  #   ipam_loader:
+  #     type: "exec"                              # 必须与上面的选择项一致
+  #     command: "/etc/lober/providers/ipam.sh"    # 必须存在，否则启动即拒绝
+  #     args: []                                    # 可选的固定参数
+  #     timeout: 10s                                 # 默认 10s（DefaultTimeout）
+  #     max_retries: 2                                # 默认 0（不重试）
+  #     retry_backoff: 200ms                           # 默认 200ms，指数退避
+  #     breaker_threshold: 3                             # 连续失败 3 次后熔断，默认 3
+  #
+  # 示例二：DNS 走 http（对方已有 webhook/REST 接口时更直接，SPEC §7.2）：
+  #   dns: "http"
+  #   dns_loader:
+  #     type: "http"
+  #     url: "http://dns.internal/api/v1/register"  # 必须非空，否则启动即拒绝
+  #     timeout: 10s
+  #
+  # 心跳走加载器同理，用 heartbeat_loader 段，字段与上面完全相同。
+  ipam_loader:
+    type: ""
+    command: ""
+    args: []
+    url: ""
+    timeout: 0s
+    max_retries: 0
+    retry_backoff: 0s
+    breaker_threshold: 0
+  dns_loader:
+    type: ""
+    command: ""
+    args: []
+    url: ""
+    timeout: 0s
+    max_retries: 0
+    retry_backoff: 0s
+    breaker_threshold: 0
+  heartbeat_loader:
+    type: ""
+    command: ""
+    args: []
+    url: ""
+    timeout: 0s
+    max_retries: 0
+    retry_backoff: 0s
+    breaker_threshold: 0
 
 # ===========================================================================
 # 校验方法二（若 cmd/lober 尚未在你所在分支落地，用这个替代 -check flag）：
