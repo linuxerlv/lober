@@ -1,9 +1,11 @@
 // 本文件测试开始引导 StartBoot（任务 4）与标记应答文件已取
-// MarkAnswerFetched（任务 5）。锁住 §4.2 五步顺序这条硬约束。
+// MarkAnswerFetched（任务 5）。锁住 §4.2 步骤顺序这条硬约束，以及 Phase 4
+// 新增的并发准入检查（§10 失败模式 11）接入点。
 package statemachine
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"testing"
 	"time"
@@ -352,6 +354,125 @@ func TestMarkAnswerFetchedOnPendingRejected(t *testing.T) {
 	if err == nil {
 		t.Fatalf("MarkAnswerFetched 对 pending 任务返回了 nil error，want 错误 —— " +
 			"installer 不可能在签 token 之前起来")
+	}
+}
+
+// TestStartBootAdmissionRejectsQueuesWithoutFailOrAttempt 验证并发准入
+// 检查接入 StartBoot 之后最关键的一条行为（Phase 4 §10 失败模式 11）：
+// 并发上限打满时，StartBoot 返回错误（网关据此回退到既有的 no_task 载荷，
+// 机器继续 PXE 轮询），但任务本身原样留在 pending——不消耗 attempt、
+// 不置 failed、不签发 token。这是与 precheck 失败/attempt 超限两种既有
+// 拒绝路径的关键区别：那两种是「重试必然同样失败」，这一种是「稍后重试
+// 就会成功」，处理后果必须相反。
+func TestStartBootAdmissionRejectsQueuesWithoutFailOrAttempt(t *testing.T) {
+	defer SetGlobalAdmissionLimit(defaultAdmissionLimit)
+
+	ctx := context.Background()
+	store := fake.NewStore()
+	clock := fake.NewClock()
+	m := newBootTestMachine(store, clock, alwaysPassPrechecker{})
+
+	// 先占满上限：造一台已经在 booting 的任务，把全局上限压到 1——本次
+	// StartBoot 面对的任务应该被判定为「已达上限」而拒绝。
+	occupying := pendingTaskWithArtifact(t, store, "task-admission-occupying", "artifact-1")
+	occupyingResult, err := m.StartBoot(ctx, occupying.ID, model.ArchX86_64, model.FirmwareUEFI)
+	if err != nil {
+		t.Fatalf("占位任务的 StartBoot 失败: %v（此时上限仍是默认值，应该成功）", err)
+	}
+	if occupyingResult.State != model.TaskStateBooting {
+		t.Fatalf("占位任务 State = %q, want %q", occupyingResult.State, model.TaskStateBooting)
+	}
+	SetGlobalAdmissionLimit(1)
+
+	pending := pendingTaskWithArtifact(t, store, "task-admission-queued", "artifact-2")
+
+	_, err = m.StartBoot(ctx, pending.ID, model.ArchX86_64, model.FirmwareUEFI)
+	if err == nil {
+		t.Fatalf("并发已达上限（占位任务在 booting，上限=1）时 StartBoot 返回了 nil error，" +
+			"want 非 nil——超限必须让调用方（网关）知道这次引导不该继续，" +
+			"而不是签发 token 让第 21 台机器一起挤占带宽")
+	}
+	if !errors.Is(err, errAdmissionQueued) {
+		t.Errorf("StartBoot 在准入拒绝时返回的错误 = %v，want 能被 errors.Is(err, errAdmissionQueued) 识别", err)
+	}
+
+	got, getErr := store.GetTask(ctx, pending.ID)
+	if getErr != nil {
+		t.Fatalf("GetTask 失败: %v", getErr)
+	}
+	if got.State != model.TaskStatePending {
+		t.Errorf("准入拒绝之后任务 State = %q, want %q——超限的任务必须原样留在 pending，"+
+			"不能被置 failed（那会让运维看到一堆「因为并发限流」而失败的任务，"+
+			"而这批任务本该在几分钟后自然装上）", got.State, model.TaskStatePending)
+	}
+	if got.AttemptCount != 0 {
+		t.Errorf("准入拒绝之后 AttemptCount = %d, want 0——超限不是失败，不能消耗 attempt"+
+			"（消耗的后果是三轮排队之后任务被判 attempt_exceeded，而它本该只是等一会儿）",
+			got.AttemptCount)
+	}
+	if got.Token != "" {
+		t.Errorf("准入拒绝之后 Token = %q, want 空——不应该签发装机 token", got.Token)
+	}
+	if got.Version != pending.Version {
+		t.Errorf("准入拒绝之后 Version = %d, want %d（未变）——准入检查是纯读判定，"+
+			"不应该触发任何一次 CAS 或 mutation", got.Version, pending.Version)
+	}
+}
+
+// TestStartBootAdmissionUnderLimitProceedsNormally 是上一条的对照组：
+// 未达上限时，准入检查完全不影响既有成功路径（token 签发、attempt 递增、
+// 状态转换 booting）——本任务对 StartBoot 只做新增，不改既有成功路径的
+// 任何字段。
+func TestStartBootAdmissionUnderLimitProceedsNormally(t *testing.T) {
+	ctx := context.Background()
+	store := fake.NewStore()
+	clock := fake.NewClock()
+	m := newBootTestMachine(store, clock, alwaysPassPrechecker{})
+
+	pendingTaskWithArtifact(t, store, "task-admission-under-limit", "artifact-1")
+
+	result, err := m.StartBoot(ctx, "task-admission-under-limit", model.ArchX86_64, model.FirmwareUEFI)
+	if err != nil {
+		t.Fatalf("未达并发上限时 StartBoot 返回了错误: %v，want nil error", err)
+	}
+	if result.State != model.TaskStateBooting {
+		t.Errorf("未达并发上限时 State = %q, want %q", result.State, model.TaskStateBooting)
+	}
+	if result.Token == "" {
+		t.Errorf("未达并发上限时 Token 为空，want 非空——准入检查不应阻断正常的成功路径")
+	}
+	if result.AttemptCount != 1 {
+		t.Errorf("未达并发上限时 AttemptCount = %d, want 1", result.AttemptCount)
+	}
+}
+
+// TestStartBootAdmissionLimitZeroMeansUnlimited 验证全局上限设为 0 时
+// StartBoot 的准入检查等价于不生效（向后兼容未显式配置并发上限的部署，
+// 与 AdmissionController.SetLimit(0) 的语义一致）。
+func TestStartBootAdmissionLimitZeroMeansUnlimited(t *testing.T) {
+	defer SetGlobalAdmissionLimit(defaultAdmissionLimit)
+
+	ctx := context.Background()
+	store := fake.NewStore()
+	clock := fake.NewClock()
+	m := newBootTestMachine(store, clock, alwaysPassPrechecker{})
+
+	SetGlobalAdmissionLimit(0)
+
+	// 先占满一台，验证 0 表示不限时后续任务仍能正常拿到 token——若实现
+	// 错误地把 0 当作「上限为 0 台」而不是「不限」，第二台会被误拒。
+	occupying := pendingTaskWithArtifact(t, store, "task-unlimited-occupying", "artifact-1")
+	if _, err := m.StartBoot(ctx, occupying.ID, model.ArchX86_64, model.FirmwareUEFI); err != nil {
+		t.Fatalf("占位任务的 StartBoot 失败: %v", err)
+	}
+
+	pending := pendingTaskWithArtifact(t, store, "task-unlimited-second", "artifact-2")
+	result, err := m.StartBoot(ctx, pending.ID, model.ArchX86_64, model.FirmwareUEFI)
+	if err != nil {
+		t.Fatalf("全局上限为 0（不限）时第二台 StartBoot 返回了错误: %v，want nil error", err)
+	}
+	if result.State != model.TaskStateBooting {
+		t.Errorf("全局上限为 0 时第二台 State = %q, want %q", result.State, model.TaskStateBooting)
 	}
 }
 

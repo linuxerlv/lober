@@ -248,6 +248,48 @@ func TestAdmissionController_DefaultLimitIsPositive(t *testing.T) {
 	}
 }
 
+// TestGlobalAdmissionLimit_DefaultsToPackageDefault 验证
+// globalAdmissionLimit 未经装配点调用 SetGlobalAdmissionLimit 时落到
+// defaultAdmissionLimit，而不是 0——StartBoot 的准入检查不应因为装配点
+// 忘记调用 SetGlobalAdmissionLimit 就静默变成不限（与
+// NewAdmissionController 默认落到 defaultAdmissionLimit 是同一条设计
+// 原则）。
+func TestGlobalAdmissionLimit_DefaultsToPackageDefault(t *testing.T) {
+	if got := globalAdmissionLimit.Load(); got != int64(defaultAdmissionLimit) {
+		t.Fatalf("globalAdmissionLimit 初始值 = %d, want %d（包级默认值）——"+
+			"未经装配点调用 SetGlobalAdmissionLimit 时不应静默变成不限",
+			got, defaultAdmissionLimit)
+	}
+}
+
+// TestSetGlobalAdmissionLimit_OverridesAndRestores 验证
+// SetGlobalAdmissionLimit 能覆盖当前生效的上限，且
+// newAdmissionControllerFromGlobalLimit 现场构造的控制器会使用最新写入的
+// 值。测试结束前恢复默认值——globalAdmissionLimit 是包级状态，跨测试用例
+// 共享，若不恢复会让测试顺序影响其它用例的结果。
+func TestSetGlobalAdmissionLimit_OverridesAndRestores(t *testing.T) {
+	defer SetGlobalAdmissionLimit(defaultAdmissionLimit)
+
+	ctx := context.Background()
+	store := fake.NewStore()
+	SetGlobalAdmissionLimit(1)
+
+	mustCreateTaskInState(t, store, "task-global-limit-1", model.TaskStateBooting)
+
+	a := newAdmissionControllerFromGlobalLimit(store)
+	decision, err := a.Check(ctx)
+	if err != nil {
+		t.Fatalf("Check 返回了错误: %v", err)
+	}
+	if decision.Limit != 1 {
+		t.Errorf("newAdmissionControllerFromGlobalLimit 构造的控制器 Limit = %d, want 1"+
+			"——应该读取 SetGlobalAdmissionLimit 写入的最新值", decision.Limit)
+	}
+	if decision.Admitted {
+		t.Errorf("已有 1 台在装、上限 1，Admitted = true, want false")
+	}
+}
+
 // TestAdmissionController_SetLimitOverridesDefault 验证注入口：SetLimit
 // 能覆盖默认值。config 包已冻结、没有准入上限这个字段（契约缺口，见任务
 // 返回值 contractGaps），因此本模块必须留一个不依赖 config 包改动的注入
