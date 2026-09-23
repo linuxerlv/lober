@@ -41,10 +41,25 @@ const (
 // 默认 tcp 而非 icmp：ICMP 需要特权套接字（root / CAP_NET_RAW /
 // ping_group_range），而心跳只是辅助通道（§6.6）——不值得为它给整个进程
 // 提权。off 允许完全关闭心跳探测（例如业务网与管理网不通、无法探测的部署）。
+// 新增 exec/http 两个取值（本次任务，SPEC §7.2 通用加载器）：心跳探测
+// 也能接一个外部脚本/服务，与 IPAM/DNS 一样按加载器透明替换（对调用方
+// 是同一个 contract.HeartbeatProviderV1，无论背后是内置 tcp/icmp 还是
+// 子进程/HTTP）。
 var heartbeatModes = map[string]bool{
 	"tcp":  true,
 	"icmp": true,
 	"off":  true,
+	"exec": true,
+	"http": true,
+}
+
+// loaderTypes 是 LoaderConfig.Type 的合法取值白名单（SPEC §7.2：exec 与
+// http 两种通用加载器，本次任务落地；grpc/starlark 是 Phase 3，不在此
+// 白名单内——config 包在 Type 字段这一层就拒绝，不留到 factory.go 才
+// 发现「这个类型还没实现」）。
+var loaderTypes = map[string]bool{
+	"exec": true,
+	"http": true,
 }
 
 // diskPolicies 是磁盘策略的白名单，取自 model.DiskPolicy 的五个具名取值
@@ -152,14 +167,22 @@ type User struct {
 }
 
 // Provider 是 provider 相关的选择项与参数：IPAM/DNS/resolver 三个内置实现
-// 选择、磁盘策略、心跳模式与间隔。
+// 选择、磁盘策略、心跳模式与间隔、以及 exec/http 加载器的参数。
 //
-// 这里的选择项是字符串而非强类型枚举，因为 IPAM/DNS/resolver 目前只有单一
-// 内置实现（static/noop/rule-based），config 阶段不需要也不应该白名单校验
-// 它们——一旦通用 provider 加载器（SPEC §7.2，MVP 不做）落地，这些字段的
-// 合法值会由 M7 的实现集合决定，而不是 config 包能提前穷举的。DiskPolicy
-// 与 HeartbeatMode 不同：它们的合法值在 MVP 阶段就是确定且封闭的（前者取自
-// model.DiskPolicy，后者是 tcp/icmp/off 三选一），因此在这里做白名单校验。
+// IPAM/DNS/HeartbeatMode 的选择项是字符串而非强类型枚举，因为合法取值集合
+// 不是 config 包能提前穷举封闭的——除了 MVP 阶段的内置实现
+// （static/noop/tcp/icmp/off），现在还多了 exec/http 两种通用加载器
+// （SPEC §7.2，internal/provider/loader 包，本次任务落地）。config 包只在
+// Validate 里做「选了 exec 必须给 command、选了 http 必须给 url」这类
+// 结构性校验，不做"选择项字符串必须在某个白名单内"的封闭校验——具体某个
+// 字符串是否被工厂认可（factory.go 的 switch）是 internal/provider 的职责，
+// config 包不重复维护第二份白名单。Resolver 目前仍只有 rule-based 一种
+// 内置实现，没有 exec/http 支持（docs/phase2-loader-需求依据.md 第 4 节：
+// TemplateResolver 是纯决策接口，刻意不提供 Ping，不适合套加载器，本任务
+// 未对 Resolver 增加加载器选项，与该结论保持一致）。DiskPolicy 与
+// HeartbeatMode 的「模式」这一层不同：它们的合法值在 MVP 阶段就是确定且
+// 封闭的（前者取自 model.DiskPolicy，加 exec/http 属于扩展 HeartbeatMode
+// 的合法值集合），因此在这里做白名单校验（heartbeatModes 已扩展，见下）。
 type Provider struct {
 	IPAM     string `yaml:"ipam"`
 	DNS      string `yaml:"dns"`
@@ -172,10 +195,74 @@ type Provider struct {
 	// Validate 里强制要求。
 	DiskModel string `yaml:"disk_model"`
 
-	// HeartbeatMode 默认 tcp（SPEC §6.6、计划任务 15）。
+	// HeartbeatMode 默认 tcp（SPEC §6.6、计划任务 15）。新增合法值
+	// exec/http（本次任务），与 tcp/icmp/off 平级。
 	HeartbeatMode string `yaml:"heartbeat_mode"`
 	// HeartbeatInterval 默认 60 秒。
 	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
+
+	// IPAMLoader/DNSLoader/NotifyLoader/InventoryLoader/HeartbeatLoader
+	// 是对应扩展点选择 "exec" 或 "http" 时使用的加载器参数（SPEC §7.2
+	// 示例配置：`dns: { type: exec, command: ..., timeout: 10s }`）。
+	// 选择项不是 exec/http 时，这些字段的内容被忽略（不校验、不报错——
+	// 运维在切换回内置实现时不需要同步删除已经写好的加载器参数段落，
+	// 这与 DiskModel 只在 DiskPolicy=by-model 时才被强制要求是同一种
+	// "只在选中对应模式时才生效"的设计）。
+	//
+	// 五个字段各自独立（不是一个共享的 LoaderConfig 加一个"这是哪个
+	// provider"的标签）：不同扩展点在同一份部署里可能一个接 exec 一个
+	// 接 http（如 DNS 走 exec 脚本、Notify 走 http webhook），独立字段
+	// 让 YAML 里每个扩展点的加载器参数各自成段，比共享一个数组再按
+	// 名字查找更直观，且与 IPAM/DNS/HeartbeatMode 这几个选择项本身就是
+	// 独立字段的既有风格一致。
+	//
+	// 没有 ResolverLoader：见 Provider 类型文档，TemplateResolver 是纯
+	// 决策接口，本任务未对它增加加载器支持。
+	IPAMLoader      LoaderConfig `yaml:"ipam_loader"`
+	DNSLoader       LoaderConfig `yaml:"dns_loader"`
+	InventoryLoader LoaderConfig `yaml:"inventory_loader"`
+	NotifyLoader    LoaderConfig `yaml:"notify_loader"`
+	HeartbeatLoader LoaderConfig `yaml:"heartbeat_loader"`
+}
+
+// LoaderConfig 是 exec/http 加载器的参数（SPEC §7.2）。字段并集覆盖两种
+// 加载器各自的专属参数（exec 的 Command/Args，http 的 URL）与两者共用的
+// 超时/重试/熔断参数——用一个并集结构而不是「按类型二选一的嵌套结构」，
+// 理由是 YAML 里写起来更直接（不需要 `exec: {command: ...}` 或
+// `http: {url: ...}` 这层多余嵌套，`type` 字段本身已经决定了哪些字段
+// 有意义），且与 internal/provider/loader 包的 ExecConfig/HTTPConfig/
+// Config 三个独立结构体在字段名上一一对应，转换时不需要做名字映射
+// （见 factory.go 新增的 case 分支——它只是把这里的字段原样搬进对应的
+// loader.XxxConfig）。
+type LoaderConfig struct {
+	// Type 是 "exec" 或 "http" 之一。留空且选择项不是 exec/http 时无意义
+	// （被忽略，见 Provider 字段文档）；选择项是 exec/http 时必须匹配
+	// （Validate 强制要求），防止「选了 http 却在 loader 参数段填了
+	// type: exec」这种自相矛盾的配置被静默接受。
+	Type string `yaml:"type"`
+
+	// Command 与 Args 是 Type=exec 时使用的参数，对应
+	// loader.ExecConfig.Command/Args。Type=exec 时 Command 必须非空
+	// （否则运行期第一次调用才会发现，见 loader.NewExecLoader 的启动
+	// 校验——config.Validate 提前做同样的校验，让运维在配置阶段就发现
+	// 而不是等到第一次建任务/DNS 注册才报错）。
+	Command string   `yaml:"command"`
+	Args    []string `yaml:"args"`
+
+	// URL 是 Type=http 时使用的参数，对应 loader.HTTPConfig.URL。
+	// Type=http 时必须非空，理由与 Command 对称。
+	URL string `yaml:"url"`
+
+	// Timeout/MaxRetries/RetryBackoff/BreakerThreshold 对应
+	// loader.Config 的同名字段，两种类型共用。零值在 Parse 阶段不填充
+	// 默认值（不同于 Console.TokenTTL 等字段）——loader.Config.withDefaults
+	// 已经会在构造加载器时填充默认值，config 包在这里重复填充只会造成
+	// 「配置文件里没写，但 Parse 之后却看到一个非零值」的困惑，两处默认值
+	// 逻辑保持单一来源（loader 包）更不容易漂移。
+	Timeout          time.Duration `yaml:"timeout"`
+	MaxRetries       int           `yaml:"max_retries"`
+	RetryBackoff     time.Duration `yaml:"retry_backoff"`
+	BreakerThreshold int           `yaml:"breaker_threshold"`
 }
 
 // Parse 从 r 读取 YAML 并反序列化为 Config，随后填充默认值。
@@ -313,7 +400,7 @@ func (c *Config) Validate() error {
 
 	if !heartbeatModes[c.Provider.HeartbeatMode] {
 		return fmt.Errorf("config: provider.heartbeat_mode 取值 %q 不合法，"+
-			"必须是 tcp/icmp/off 之一（SPEC §6.6）", c.Provider.HeartbeatMode)
+			"必须是 tcp/icmp/off/exec/http 之一（SPEC §6.6、§7.2）", c.Provider.HeartbeatMode)
 	}
 
 	if !diskPolicies[c.Provider.DiskPolicy] {
@@ -325,6 +412,97 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: provider.disk_policy 为 by-model 时必须同时提供 " +
 			"provider.disk_model（不给的运行期表现是所有机器的磁盘规划都失败，" +
 			"不如启动就拒绝——计划任务 15）")
+	}
+
+	if err := validateLoaderSelection("provider.ipam", c.Provider.IPAM, "ipam_loader", c.Provider.IPAMLoader); err != nil {
+		return err
+	}
+	if err := validateLoaderSelection("provider.dns", c.Provider.DNS, "dns_loader", c.Provider.DNSLoader); err != nil {
+		return err
+	}
+	if err := validateLoaderSelection("provider.heartbeat_mode", c.Provider.HeartbeatMode, "heartbeat_loader", c.Provider.HeartbeatLoader); err != nil {
+		return err
+	}
+	// Inventory/Notify 没有独立的选择项字段（factory.go 现状：MVP 阶段
+	// 两者无条件构造内置版本，不通过配置选择——见 factory.go 顶部契约
+	// 缺口说明第 3 条）。本次任务在不改动这条既有事实的前提下，仍然给
+	// 两者的 LoaderConfig 做结构性校验：只要 Type 字段非空（运维已经
+	// 明确填写了加载器参数段，即使当前工厂还不读取它），就按该 Type
+	// 校验 command/url 是否齐备——避免运维填了一份"看起来配置好了"但
+	// 其实从未被读取、且内容本身还缺字段的加载器参数，日后 factory.go
+	// 补上 Inventory/Notify 的选择项字段时，这份配置已经是校验过的。
+	if c.Provider.InventoryLoader.Type != "" {
+		if err := validateLoaderSelection("provider.inventory_loader.type",
+			c.Provider.InventoryLoader.Type, "inventory_loader", c.Provider.InventoryLoader); err != nil {
+			return err
+		}
+	}
+	if c.Provider.NotifyLoader.Type != "" {
+		if err := validateLoaderSelection("provider.notify_loader.type",
+			c.Provider.NotifyLoader.Type, "notify_loader", c.Provider.NotifyLoader); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateLoaderSelection 校验「selection 是 exec/http 时，对应的
+// LoaderConfig 必须结构完整」这条规则（本次任务，SPEC §7.2）。
+//
+// selection 不是 exec 或 http 时直接放行，不校验 loaderCfg 的任何字段——
+// 见 Provider.IPAMLoader 等字段的文档：选择项不是 exec/http 时，加载器
+// 参数字段的内容被忽略，运维切换回内置实现不需要同步清空已经写好的
+// 加载器参数段。
+//
+// selection 是 exec 或 http 时的三条校验（任务明确要求的测试点「配置里
+// 选了 exec 但没给 command → 启动校验拒绝」，http 的 url 同理）：
+//  1. loaderCfg.Type 必须非空且与 selection 相同的类型语义匹配——不要求
+//     字符串相等（selection 可能是 "ipam"/"dns" 这类选择项本身，而
+//     loaderCfg.Type 取值只能是 "exec"/"http"），真正比较的是 selection
+//     是否等于 "exec"/"http" 其中之一，与 loaderCfg.Type 是否等于同一个
+//     值——见调用处传入的 selection 参数实际就是 c.Provider.IPAM 这个
+//     字符串本身（值恰好是 "exec"/"http" 之一时才会走到本函数的严格
+//     校验分支，调用处已经隐含了这一点，见下方 fieldPrefix 参数的用法）。
+//  2. Type=exec 时 Command 非空。
+//  3. Type=http 时 URL 非空。
+//
+// fieldPrefix 是错误信息里用来指代"选择项在哪个字段"的字符串（如
+// "provider.ipam"），loaderFieldName 是加载器参数段在 YAML 里的字段名
+// （如 "ipam_loader"）——两者都只用于拼错误信息，不参与判断逻辑。
+func validateLoaderSelection(fieldPrefix, selection, loaderFieldName string, loaderCfg LoaderConfig) error {
+	if selection != "exec" && selection != "http" {
+		return nil
+	}
+
+	if loaderCfg.Type == "" {
+		return fmt.Errorf("config: %s 选择了 %q，但 %s 缺少 type 字段"+
+			"（必须显式填 type: %s，不能留空——留空会让运行期第一次调用才发现"+
+			"加载器没有正确初始化，SPEC §7.2）", fieldPrefix, selection, loaderFieldName, selection)
+	}
+	if !loaderTypes[loaderCfg.Type] {
+		return fmt.Errorf("config: %s.type 取值 %q 不合法，必须是 exec/http 之一"+
+			"（grpc/starlark 是 Phase 3，本版本未实现，SPEC §7.2）", loaderFieldName, loaderCfg.Type)
+	}
+	if loaderCfg.Type != selection {
+		return fmt.Errorf("config: %s 选择了 %q，但 %s.type 取值 %q 与之不一致"+
+			"（两者必须相同，不能一边说要 exec 一边在加载器参数段填 http，"+
+			"这种自相矛盾的配置必须在启动时拒绝）", fieldPrefix, selection, loaderFieldName, loaderCfg.Type)
+	}
+
+	switch loaderCfg.Type {
+	case "exec":
+		if loaderCfg.Command == "" {
+			return fmt.Errorf("config: %s 缺少 command 字段"+
+				"（type 是 exec 时必须提供要执行的命令，不能等到运行期第一次调用才发现，"+
+				"SPEC §7.2）", loaderFieldName)
+		}
+	case "http":
+		if loaderCfg.URL == "" {
+			return fmt.Errorf("config: %s 缺少 url 字段"+
+				"（type 是 http 时必须提供目标地址，不能等到运行期第一次调用才发现，"+
+				"SPEC §7.2）", loaderFieldName)
+		}
 	}
 
 	return nil

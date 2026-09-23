@@ -9,6 +9,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // minimalYAML 是能通过全部四类启动校验的最小配置：具体 IP 监听、非空基址与
@@ -536,5 +537,202 @@ func TestValidate_合法磁盘策略全部被接受(t *testing.T) {
 				t.Fatalf("Validate() 拒绝了合法磁盘策略 %q: %v", policy, err)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// exec/http 加载器配置（本次任务，SPEC §7.2）
+// ---------------------------------------------------------------------------
+
+// TestValidate_选了exec但缺command被拒绝 锁住任务明确要求的测试点：
+// 「配置里选了 exec 但没给 command → 启动校验拒绝」，不能等到运行期
+// 第一次调用才发现（那时已经在阻塞建任务或推送告警的路径上）。
+func TestValidate_选了exec但缺command被拒绝(t *testing.T) {
+	yaml := minimalYAML + `
+provider:
+  ipam: "exec"
+  ipam_loader:
+    type: "exec"
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() 未拒绝选了 exec 却没给 command 的配置（SPEC §7.2）：" +
+			"不给 command 的运行期表现是第一次建任务时才报错，必须在启动时拒绝")
+	}
+}
+
+// TestValidate_选了http但缺url被拒绝 是上一条测试的 http 对照组。
+func TestValidate_选了http但缺url被拒绝(t *testing.T) {
+	yaml := minimalYAML + `
+provider:
+  dns: "http"
+  dns_loader:
+    type: "http"
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() 未拒绝选了 http 却没给 url 的配置（SPEC §7.2）：" +
+			"不给 url 的运行期表现是第一次写 DNS 时才报错，必须在启动时拒绝")
+	}
+}
+
+// TestValidate_选了exec但loader段缺type被拒绝 验证「选择项是 exec/http，
+// 但对应 loader 段完全没填 type」这种更常见的笔误（忘了填 type，只填了
+// command）同样被拒绝，不是只在 type 与 command 都缺时才报错。
+func TestValidate_选了exec但loader段缺type被拒绝(t *testing.T) {
+	yaml := minimalYAML + `
+provider:
+  ipam: "exec"
+  ipam_loader:
+    command: "/etc/lober/providers/ipam.sh"
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() 未拒绝 ipam_loader 缺少 type 字段的配置：" +
+			"必须显式声明 type，不能靠 command 存在就默认推断为 exec")
+	}
+}
+
+// TestValidate_loader段type与选择项不一致被拒绝 验证「provider.ipam 选了
+// exec，但 ipam_loader.type 填了 http」这种自相矛盾的配置被拒绝——两者
+// 必须一致，不能一边说要 exec 一边在参数段配 http。
+func TestValidate_loader段type与选择项不一致被拒绝(t *testing.T) {
+	yaml := minimalYAML + `
+provider:
+  ipam: "exec"
+  ipam_loader:
+    type: "http"
+    url: "http://ipam.internal/allocate"
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() 未拒绝 provider.ipam=exec 但 ipam_loader.type=http 的自相矛盾配置")
+	}
+}
+
+// TestValidate_loader段type不合法被拒绝 验证 type 字段本身写了一个不在
+// exec/http 白名单内的值（如 grpc，Phase 3 未实现）时被拒绝。
+func TestValidate_loader段type不合法被拒绝(t *testing.T) {
+	yaml := minimalYAML + `
+provider:
+  ipam: "exec"
+  ipam_loader:
+    type: "grpc"
+    command: "/etc/lober/providers/ipam.sh"
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() 未拒绝 ipam_loader.type=grpc（grpc 是 Phase 3，本版本未实现，SPEC §7.2）")
+	}
+}
+
+// TestValidate_合法exec加载器配置被接受 是上面几条拒绝测试的对照组：
+// command/type 都齐备的 exec 配置必须通过校验。
+func TestValidate_合法exec加载器配置被接受(t *testing.T) {
+	yaml := minimalYAML + `
+provider:
+  ipam: "exec"
+  ipam_loader:
+    type: "exec"
+    command: "/etc/lober/providers/ipam.sh"
+    args: ["--mode=alloc"]
+    timeout: 10s
+    max_retries: 2
+    breaker_threshold: 3
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() 拒绝了合法的 exec 加载器配置: %v", err)
+	}
+	if cfg.Provider.IPAMLoader.Command != "/etc/lober/providers/ipam.sh" {
+		t.Errorf("IPAMLoader.Command = %q，与 YAML 输入不一致", cfg.Provider.IPAMLoader.Command)
+	}
+	if len(cfg.Provider.IPAMLoader.Args) != 1 || cfg.Provider.IPAMLoader.Args[0] != "--mode=alloc" {
+		t.Errorf("IPAMLoader.Args = %v，与 YAML 输入不一致", cfg.Provider.IPAMLoader.Args)
+	}
+	if cfg.Provider.IPAMLoader.Timeout != 10*time.Second {
+		t.Errorf("IPAMLoader.Timeout = %v, want 10s", cfg.Provider.IPAMLoader.Timeout)
+	}
+	if cfg.Provider.IPAMLoader.BreakerThreshold != 3 {
+		t.Errorf("IPAMLoader.BreakerThreshold = %d, want 3", cfg.Provider.IPAMLoader.BreakerThreshold)
+	}
+}
+
+// TestValidate_合法http加载器配置被接受 是 http 类型的对照组。
+func TestValidate_合法http加载器配置被接受(t *testing.T) {
+	yaml := minimalYAML + `
+provider:
+  dns: "http"
+  dns_loader:
+    type: "http"
+    url: "http://dns.internal/api/v1/register"
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() 拒绝了合法的 http 加载器配置: %v", err)
+	}
+	if cfg.Provider.DNSLoader.URL != "http://dns.internal/api/v1/register" {
+		t.Errorf("DNSLoader.URL = %q，与 YAML 输入不一致", cfg.Provider.DNSLoader.URL)
+	}
+}
+
+// TestValidate_选择项不是exec或http时忽略loader段 验证「选择项仍是内置
+// 实现（static/noop/tcp），但 loader 参数段留空甚至写了不完整的内容」
+// 不影响校验——运维切换回内置实现时不需要同步清空已经写好的加载器参数
+// （Provider 字段文档明确的设计意图）。用一个故意不完整的 loader 段
+// （只有 type 没有 command）来确认"忽略"是真的不校验，而不是恰好凑巧
+// 通过。
+func TestValidate_选择项不是exec或http时忽略loader段(t *testing.T) {
+	yaml := minimalYAML + `
+provider:
+  ipam: "static"
+  ipam_loader:
+    type: "exec"
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() 拒绝了 provider.ipam=static 但 ipam_loader 内容不完整的配置: %v"+
+			"——选择项不是 exec/http 时，加载器参数字段应该被完全忽略", err)
+	}
+}
+
+// TestValidate_HeartbeatMode为exec时同样校验loader段 验证心跳模式扩展的
+// exec/http 取值同样受 heartbeat_loader 的结构性校验约束，不是只有
+// IPAM/DNS 两个字段生效。
+func TestValidate_HeartbeatMode为exec时同样校验loader段(t *testing.T) {
+	yaml := minimalYAML + `
+provider:
+  heartbeat_mode: "exec"
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() 未拒绝 heartbeat_mode=exec 但 heartbeat_loader 缺少 type/command 的配置")
 	}
 }
