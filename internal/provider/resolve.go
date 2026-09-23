@@ -22,7 +22,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
@@ -74,11 +73,52 @@ func NewTaskParamsResolver(
 // 「谁负责把采集到的结构化磁盘信息编码进 facts KV，用什么编码」这条尚未
 // 定义的契约。
 //
-// 保守处理：本文件定义并使用一个私有的、显式标注为「临时」的编码约定
-// （见 decodeDisksFromFacts 的文档），只解析本约定产出的格式；未来正解
-// 应该是给 contract.HWFacts 或 TaskParamsResolver.Resolve 的签名补一个
-// 结构化的磁盘清单参数（不再从扁平字符串 map 里二次解析），届时删除本文件
-// 的编码/解码函数，调用点改为直接传结构化值即可，不影响编排顺序本身。
+// 本轨（t12-inspect-wire）接线修复：上面这段契约缺口描述的是"facts 里的
+// 结构化磁盘信息该用什么编码"这个尚未冻结的问题，但本文件历史上给出的
+// 保守处理（自造一个私有 "|" 分隔格式，只解析这一种自己发明的格式）绕过了
+// 一个更根本的问题——render/inspect.go 实际产出、hwfacts.go 已经实现并
+// 测试过解析的 LOBER_INSPECT_DISK_<n>_<field> 格式，从未被接到磁盘规划
+// 输入这一步：整个仓库里 ParseHWDisks 在本次修复前只有单元测试调用它
+// （hwfacts.go 文件头注释已经明确记录了这个断口）。真机采集出来的磁盘
+// 事实因此根本进不了磁盘决策。
+//
+// 修复：decodeDisksFromFacts 改为直接调用同包的 ParseHWDisks（对
+// render/inspect.go 产出格式的解析，已有完整测试覆盖畸形输入），把
+// HWDisk 逐字段转换为 contract.Disk——两个类型字段集合完全一致
+// （ByIDPath/SizeBytes/Rotational/Model），转换是纯粹的搬运，不引入新的
+// 解析逻辑。原来的私有 "|" 分隔格式与本函数一起删除：全仓搜索确认除本
+// 文件自己的测试外没有任何生产代码依赖该格式（不是对外契约，删除不需要
+// 兼容期）。
+//
+// 仍然成立的契约缺口（未解决，留给契约持有者）：SPEC §5.4 冻结的
+// LOBER_DISKS 键本身（"by-id 列表（inspect 采集）"）没有给出字符串序列化
+// 格式，本修复没有去填 LOBER_DISKS 这个键——它绕开了那个未冻结的字符串
+// 格式问题，直接消费 render/inspect.go 与 hwfacts.go 之间已经存在、已经
+// 测试过的键值对编码（LOBER_INSPECT_DISK_*），这是本轨文件归属范围内能
+// 做到的最小、最正确的接线；LOBER_DISKS 该长什么样仍是正解要走契约变更
+// 流程解决的问题，不受本次修复影响。
+func decodeDisksFromFacts(facts map[string]string) ([]contract.Disk, error) {
+	hwDisks, err := ParseHWDisks(facts)
+	if err != nil {
+		// ParseHWDisks 当前实现对畸形字段值总是跳过而不报错（见其文档），
+		// 这个 err 分支目前不可达；保留是因为 ParseHWDisks 的签名承诺了
+		// error 返回值，忽略它会在该函数未来收紧行为（比如键名本身彻底
+		// 不可读）时丢掉一个应该往上传的错误。
+		return nil, fmt.Errorf("provider: 解析磁盘采集事实失败: %w", err)
+	}
+
+	disks := make([]contract.Disk, 0, len(hwDisks))
+	for _, d := range hwDisks {
+		disks = append(disks, contract.Disk{
+			ByIDPath:   d.ByIDPath,
+			SizeBytes:  d.SizeBytes,
+			Rotational: d.Rotational,
+			Model:      d.Model,
+		})
+	}
+	return disks, nil
+}
+
 func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]string, facts map[string]string) (map[string]string, error) {
 	hwFacts := contract.HWFacts{
 		OSFamily: facts[model.FactOSFamily],
@@ -203,61 +243,6 @@ func decideAndAppendInstallNICMAC(facts map[string]string, resolved map[string]s
 		return
 	}
 	resolved[nicInstallMACParamKey] = decision.MAC
-}
-
-// decodeDisksFromFacts 从 facts KV 解析出结构化的磁盘清单。
-//
-// 临时编码约定（详见 Resolve 的契约缺口说明）：facts[model.FactDisks]
-// 是用 ";" 分隔的记录列表，每条记录内部用 "|" 分隔四个字段，顺序固定为
-// "by_id_path|size_bytes|rotational|model"，例如：
-//
-//	/dev/disk/by-id/aaa|500000000000|false|SAMSUNG SSD 860;/dev/disk/by-id/bbb|2000000000000|true|WDC HDD
-//
-// 选 ";" 与 "|" 而不是 JSON：facts KV 的值类型是纯字符串
-// （contract.TaskParamsResolver.Resolve 的 facts 参数类型是
-// map[string]string），塞一段 JSON 进单个 string 值技术上可行，但会让
-// 「facts 是简单文本 KV」这条 SPEC §5.5 强调的设计意图在这一个字段上
-// 悄悄破例。用简单分隔符与其它 fact 值（如 LOBER_NICS 的
-// "eth0:aa:bb:...:up,eth1:..."）保持同一种「文本分隔」的调性。
-//
-// facts 中不存在该键或值为空串时返回空切片、不报错——上游（discovery）
-// 尚未采集到磁盘信息是正常的中间状态，不应该在这里就失败；真正的「零块
-// 盘」判断交给 DiskPlanner.Plan 自己处理（它已经对空清单返回明确错误）。
-func decodeDisksFromFacts(facts map[string]string) ([]contract.Disk, error) {
-	raw := facts[model.FactDisks]
-	if raw == "" {
-		return nil, nil
-	}
-
-	records := strings.Split(raw, ";")
-	disks := make([]contract.Disk, 0, len(records))
-	for i, rec := range records {
-		fields := strings.Split(rec, "|")
-		if len(fields) != 4 {
-			return nil, fmt.Errorf("provider: %s 第 %d 条记录字段数=%d，want 4"+
-				"（临时编码约定：by_id_path|size_bytes|rotational|model），原始记录=%q",
-				model.FactDisks, i, len(fields), rec)
-		}
-
-		size, err := strconv.ParseInt(fields[1], 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("provider: %s 第 %d 条记录的容量字段 %q 不是合法整数: %w",
-				model.FactDisks, i, fields[1], err)
-		}
-		rotational, err := strconv.ParseBool(fields[2])
-		if err != nil {
-			return nil, fmt.Errorf("provider: %s 第 %d 条记录的 rotational 字段 %q 不是合法布尔值: %w",
-				model.FactDisks, i, fields[2], err)
-		}
-
-		disks = append(disks, contract.Disk{
-			ByIDPath:   fields[0],
-			SizeBytes:  size,
-			Rotational: rotational,
-			Model:      fields[3],
-		})
-	}
-	return disks, nil
 }
 
 // 编译期断言：taskParamsResolver 必须满足 contract.TaskParamsResolver。

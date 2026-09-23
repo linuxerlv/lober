@@ -44,12 +44,18 @@ func validFormData() map[string]string {
 	}
 }
 
+// validFacts 里的磁盘事实改用 LOBER_INSPECT_DISK_ 前缀（本轨修复：
+// decodeDisksFromFacts 现在调用 ParseHWDisks，消费的是 render/inspect.go
+// 真机采集脚本实际产出的键格式，不再是本文件历史上自造的 "|" 分隔格式）。
 func validFacts() map[string]string {
 	return map[string]string{
-		model.FactOSFamily: "rhel",
-		model.FactVendor:   "Dell",
-		model.FactProduct:  "R740",
-		model.FactDisks:    "/dev/disk/by-id/aaa|500000000000|false|SSD",
+		model.FactOSFamily:                "rhel",
+		model.FactVendor:                  "Dell",
+		model.FactProduct:                 "R740",
+		"LOBER_INSPECT_DISK_0_BYID":       "/dev/disk/by-id/aaa",
+		"LOBER_INSPECT_DISK_0_SIZE":       "500000000000",
+		"LOBER_INSPECT_DISK_0_ROTATIONAL": "false",
+		"LOBER_INSPECT_DISK_0_MODEL":      "SSD",
 	}
 }
 
@@ -187,17 +193,29 @@ func (f failingIPAM) Allocate(ctx context.Context, req contract.AllocRequest) (c
 func (f failingIPAM) Release(ctx context.Context, ip string) error { return nil }
 func (f failingIPAM) Ping(ctx context.Context) error               { return nil }
 
+// TestResolveTaskParams_MalformedDiskFactsFailsOverall 锁住的意图不变
+// （磁盘采集事实异常时不能让任务带着错误的磁盘决策悄悄建成），但本轨
+// 修复后失败路径变了：ParseHWDisks 对畸形字段值的设计是"跳过该条记录，
+// 不让它污染其它记录"（hwfacts.go 已有完整测试覆盖，真实硬件上
+// lsblk/lspci 输出千奇百怪，不能因为一条坏记录 panic 或让整体解析报错）。
+// 因此"全部磁盘记录都畸形"在本轨修复后表现为"有效磁盘清单为空"，整体
+// Resolve 仍然失败——只是失败原因从"解析报错"变成"DiskPlanner 面对零块盘
+// 报错"（diskplanner.go 的既有行为：零块盘不能返回空布局，SPEC §10 失败
+// 模式 5），效果同样是"不产生部分结果、不让运维带着错误磁盘信息把任务
+// 建出来"。
 func TestResolveTaskParams_MalformedDiskFactsFailsOverall(t *testing.T) {
 	resolver := failingResolver{ref: contract.TemplateRef{TemplateID: "tpl-1"}}
 	diskPlanner := diskPlannerFirst{}
 
 	orchestrator := NewTaskParamsResolver(resolver, diskPlanner, contract.DiskIntent{})
 	facts := validFacts()
-	facts[model.FactDisks] = "字段数不对|500"
+	// 唯一一条磁盘记录的 SIZE 字段畸形——ParseHWDisks 会跳过整条记录，
+	// 清单归零，diskPlannerFirst 面对零块盘报错。
+	facts["LOBER_INSPECT_DISK_0_SIZE"] = "字段数不对"
 
 	params, err := orchestrator.Resolve(context.Background(), validFormData(), facts)
 	if err == nil {
-		t.Fatal("磁盘 facts 格式异常时应返回错误")
+		t.Fatal("磁盘 facts 格式异常导致有效磁盘清单为空时应返回错误")
 	}
 	if params != nil {
 		t.Fatalf("失败时不应产生部分结果，got %+v", params)
@@ -209,14 +227,21 @@ func TestDecodeDisksFromFacts_EmptyReturnsNilNoError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("facts 中没有磁盘键时不应报错: %v", err)
 	}
-	if disks != nil {
-		t.Fatalf("got %+v, want nil", disks)
+	if len(disks) != 0 {
+		t.Fatalf("got %+v, want 空切片", disks)
 	}
 }
 
 func TestDecodeDisksFromFacts_MultipleRecordsParsedCorrectly(t *testing.T) {
 	facts := map[string]string{
-		model.FactDisks: "/dev/disk/by-id/aaa|500000000000|false|SSD-A;/dev/disk/by-id/bbb|2000000000000|true|HDD-B",
+		"LOBER_INSPECT_DISK_0_BYID":       "/dev/disk/by-id/aaa",
+		"LOBER_INSPECT_DISK_0_SIZE":       "500000000000",
+		"LOBER_INSPECT_DISK_0_ROTATIONAL": "false",
+		"LOBER_INSPECT_DISK_0_MODEL":      "SSD-A",
+		"LOBER_INSPECT_DISK_1_BYID":       "/dev/disk/by-id/bbb",
+		"LOBER_INSPECT_DISK_1_SIZE":       "2000000000000",
+		"LOBER_INSPECT_DISK_1_ROTATIONAL": "true",
+		"LOBER_INSPECT_DISK_1_MODEL":      "HDD-B",
 	}
 	disks, err := decodeDisksFromFacts(facts)
 	if err != nil {
