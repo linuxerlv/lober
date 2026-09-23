@@ -321,16 +321,17 @@ func TestExtractWindows_SameVersionTwoFirmwares_NoConflict(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // TestExtractWindows：识别出 Windows 家族（复用 Identify 的输出，间接锁住
-// 「导入流程能识别 Windows」这条行为，即使 Identify 当前对 Windows 返回
-// ErrUnsupportedOSFamily——见本文件末尾的契约缺口说明）。
+// 「导入流程能识别 Windows」这条行为）。本轮（n2 轨）解除了 Windows 的 MVP
+// 封锁，Identify 现在对 Windows 特征文件返回 (windows, nil)，不再是
+// ErrUnsupportedOSFamily——本用例替换了旧版断言（旧版锁的正是本轮要解除
+// 的封锁行为）。
 // ---------------------------------------------------------------------------
 
 func TestExtractWindows_IdentifyRecognizesWindowsFamily(t *testing.T) {
 	root := sampleWindowsRoot()
 	family, err := Identify(root)
-	if !errors.Is(err, ErrUnsupportedOSFamily) {
-		t.Fatalf("当前 identify.go 对 Windows 特征文件的行为应是「识别出但报 MVP 不支持」，"+
-			"got family=%s err=%v", family, err)
+	if err != nil {
+		t.Fatalf("Windows 已解除 MVP 封锁，识别 Windows 特征文件不应报错，got family=%s err=%v", family, err)
 	}
 	if family != model.OSFamilyWindows {
 		t.Fatalf("识别出的家族字段应为 windows，got %s", family)

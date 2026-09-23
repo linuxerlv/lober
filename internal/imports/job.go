@@ -17,17 +17,49 @@ import (
 	"github.com/lober/lober/internal/core/model"
 )
 
-// artifactSetUpdater 是 Job 依赖的最窄写回接口：只需要
-// contract.ArtifactSetStore 的两个写方法（状态更新与内容写回），不需要
-// 完整接口的 Create/Get/List/Delete——窄依赖让测试替身只实现这两个方法。
+// artifactSetUpdater 是 Job 依赖的最窄写回/读取接口：只需要
+// contract.ArtifactSetStore 的三个方法（读取、状态更新、内容写回），不需要
+// 完整接口的 Create/List/Delete——窄依赖让测试替身只实现这三个方法。
+//
+// GetArtifactSet 是本轮（n2 轨，Windows 解封）新增的方法：Windows 的固件
+// 维度是硬约束（SPEC §0.3、§2.1），declaredFirmware 的唯一正确来源是登记时
+// 运维填的 model.ArtifactSet.Firmware 字段，而不是某个额外的函数参数——
+// 本方法签名与 contract.ArtifactSetStore.GetArtifactSet 完全一致（只读，
+// 未修改 internal/core/contract/**），任何真实 Store 天然已经满足，不需要
+// 额外适配代码。
 //
 // 状态更新与内容写回分成两个方法调用（对应 contract.ArtifactSetStore 的
 // 设计）：导入失败时只调 UpdateState，不调 SetContent——失败时 Paths
 // 可能尚未写入或只写了一半，绝不能被状态更新覆盖成半成品（任务 11：
 // 失败时已写入的路径不被清空）。
 type artifactSetUpdater interface {
+	GetArtifactSet(ctx context.Context, id string) (model.ArtifactSet, error)
 	UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256 string) (model.ArtifactSet, error)
 	SetArtifactSetContent(ctx context.Context, id string, osFamily model.OSFamily, paths model.ArtifactPaths) (model.ArtifactSet, error)
+}
+
+// WindowsSourcesResolver 是「按制品集 ID 取 Windows 外部文件路径集合」的
+// 窄接口（本轮 n2 轨新增，解除 Windows 的 MVP 封锁）。
+//
+// wimboot/BCD/boot.sdi/boot.wim 四个文件不在 ISO 里，是运维在登记之外
+// 单独准备、放在某处的本地文件（extract_windows.go 的
+// WindowsExternalSources 文档）。Job.Run 的固定四参数签名
+// (ctx, artifactSetID, isoPath, destDir) 里没有位置携带这四个路径，而
+// console.ArtifactImporter.TriggerImport 与 cmd/lober 的装配代码同样没有
+// 携带它们的参数（本任务不允许修改 internal/console/** 或 cmd/**）——
+// 做成可注入接口，把「按 ID 去哪里找这四个文件」这个决定权交给调用方，
+// Job 本身不关心具体实现（本地目录约定、配置文件、数据库表都可以），
+// 与 Extractor/WimArchDetector 两个接口的设计理由一致。
+//
+// 生产环境如何真正把这个接口接到 cmd/lober 的装配点，是本轮遗留的契约
+// 缺口（见文件末尾契约缺口说明）：当前没有任何调用方满足这个接口，
+// Job 在未配置时会对 Windows 家族返回明确错误（见 Run 方法），不会静默
+// 成功或 panic。
+type WindowsSourcesResolver interface {
+	// ResolveWindowsSources 返回 artifactSetID 对应的 Windows 外部文件
+	// 路径集合。找不到或路径无效时返回 error，调用方（Run）据此让整个
+	// 导入失败，不能假设一组默认路径继续。
+	ResolveWindowsSources(ctx context.Context, artifactSetID string) (WindowsExternalSources, error)
 }
 
 // Job 是单次 ISO 导入的执行体。
@@ -38,9 +70,21 @@ type artifactSetUpdater interface {
 // 同一个包级信号量，跨多个 Job 实例共享（否则「同一时刻只允许一个」这条
 // 约束就只在单个 Job 实例内成立，两个不同 Job 实例仍能并发跑，与设计
 // 要点矛盾）。
+//
+// windowsSourcesResolver 与 windowsArchDetector 是本轮新增的两个可选字段
+// （零值 nil 表示「未配置」），通过 ConfigureWindows 方法注入而不是塞进
+// NewJob 的参数列表——这样做的理由：
+//  1. NewJob 的签名保持不变，cmd/lober 现有的 imports.NewJob(r.store,
+//     r.extractor) 调用点不需要跟着改（那处于 cmd/lober，本任务不拥有）；
+//  2. RHEL/Debian/Ubuntu/SUSE 四个家族完全不需要这两个字段，让它们的
+//     调用路径（RunRHEL、familyExtractors 查表分派）保持对这两个字段
+//     零感知，符合「不接死在必填参数里」的一致设计。
 type Job struct {
 	store     artifactSetUpdater
 	extractor Extractor
+
+	windowsSourcesResolver WindowsSourcesResolver
+	windowsArchDetector    WimArchDetector
 }
 
 // importSemaphore 是全局导入并发信号量，缓冲为 1。包级变量而非 Job 的
@@ -52,6 +96,19 @@ var importSemaphore = make(chan struct{}, 1)
 // NewJob 构造一个导入 job。
 func NewJob(store artifactSetUpdater, extractor Extractor) *Job {
 	return &Job{store: store, extractor: extractor}
+}
+
+// ConfigureWindows 注入 Windows 导入所需的两个额外依赖（本轮 n2 轨新增）：
+// resolver 负责按制品集 ID 找到 wimboot/BCD/boot.sdi/boot.wim 四个外部
+// 文件的本地路径，detector 负责探测 boot.wim 实际的固件位宽。
+//
+// 不在 NewJob 里做成必填参数：RHEL/Debian/Ubuntu/SUSE 四个已实现家族的
+// 调用方（包括全部既有测试）不需要关心 Windows 的这两个依赖，若做成
+// 必填参数，所有既有的 NewJob(store, extractor) 调用都要跟着改——那正是
+// 本任务铁律 3 明确禁止的「改动既有函数时不得让任何现存测试变红」。
+func (j *Job) ConfigureWindows(resolver WindowsSourcesResolver, detector WimArchDetector) {
+	j.windowsSourcesResolver = resolver
+	j.windowsArchDetector = detector
 }
 
 // familyExtractor 是「按识别结果选抽取函数」这张表里每一行的统一形状：
@@ -126,6 +183,17 @@ func (j *Job) Run(ctx context.Context, artifactSetID, isoPath, destDir string) e
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("识别不出 OS 家族: %v", err))
 	}
 
+	// Windows 单独判一次，不进 familyExtractors 查表（本轮 n2 轨新增）：
+	// ExtractWindows 比表的行类型 func(fs.FS, string) (ArtifactPaths, error)
+	// 多三个参数（外部文件路径、声明固件、架构探测器），且这三者必须按
+	// artifactSetID 动态解析（同一 Job 实例的不同调用对应不同制品集），
+	// 用闭包在建表时静态绑定做不到这一点。这个分支必须放在
+	// familyExtractors 查表之前——否则 Windows 会先落到「表里没有这一行」
+	// 的错误分支，永远走不到这里。
+	if family == model.OSFamilyWindows {
+		return j.runWindows(ctx, artifactSetID, root, destDir)
+	}
+
 	extract, ok := familyExtractors[family]
 	if !ok {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf(
@@ -145,6 +213,52 @@ func (j *Job) Run(ctx context.Context, artifactSetID, isoPath, destDir string) e
 	}
 
 	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, family, paths); err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
+	}
+
+	if _, err := j.store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetReady, manifest.SHA256); err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回就绪状态失败: %v", err))
+	}
+
+	return nil
+}
+
+// runWindows 是 Windows 家族的导入分支（本轮 n2 轨新增，被 Run 在识别为
+// windows 时调用）。与 Run 主体的表驱动分支共用同样的收尾三步（生成
+// manifest、写回内容、置 ready），但前置步骤不同：Windows 需要先从制品集
+// 读出运维登记时声明的固件、再向 resolver 要外部文件路径，这两步 RHEL/
+// Debian/Ubuntu/SUSE 完全不需要，因此不放进公共路径，避免为了复用而让
+// 四个已稳定的家族的分派逻辑跟着变形。
+func (j *Job) runWindows(ctx context.Context, artifactSetID string, root fs.FS, destDir string) error {
+	if j.windowsSourcesResolver == nil || j.windowsArchDetector == nil {
+		return j.fail(ctx, artifactSetID,
+			"识别到家族 windows，但导入 job 尚未调用 ConfigureWindows 完成配置"+
+				"（需要注入 WindowsSourcesResolver 与 WimArchDetector 两个依赖才能"+
+				"继续，见 job.go 契约缺口说明：生产装配点目前还没有这两个依赖的"+
+				"真实实现）")
+	}
+
+	set, err := j.store.GetArtifactSet(ctx, artifactSetID)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("读取制品集声明的固件失败: %v", err))
+	}
+
+	ext, err := j.windowsSourcesResolver.ResolveWindowsSources(ctx, artifactSetID)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("解析 Windows 外部文件来源失败: %v", err))
+	}
+
+	paths, err := ExtractWindows(root, ext, destDir, set.Firmware, j.windowsArchDetector)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("抽取 Windows 制品失败: %v", err))
+	}
+
+	manifest, err := GenerateManifest(destDir)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("生成 manifest 失败: %v", err))
+	}
+
+	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, model.OSFamilyWindows, paths); err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
 	}
 

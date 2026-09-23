@@ -24,10 +24,16 @@ var (
 )
 
 // mvpUnsupportedFamilies 是识别成功但 MVP 明确不支持的家族集合（任务 9：
-// Windows 与 ESXi 被识别但返回「MVP 不支持」）。
+// 曾包含 Windows 与 ESXi，两者都被识别但返回「MVP 不支持」）。
+//
+// 本轮（n2 轨）解除了 Windows 的封锁——Windows 已有完整的登记→导入→ready
+// 路径（见 job.go 的 Run 对 model.OSFamilyWindows 的专门分派分支），不再
+// 属于「识别出但不支持」，故从本表移除。ESXi 保留在表内：该家族归 n3 轨，
+// 两轨同时改这个文件，本任务不擅自移除 ESXi 那一行以免产生合并冲突
+// （identify_test.go 的 TestIdentify_ESXiStillBlockedByMVPUnsupportedFamilies
+// 锁住这一点）。
 var mvpUnsupportedFamilies = map[model.OSFamily]bool{
-	model.OSFamilyWindows: true,
-	model.OSFamilyESXi:    true,
+	model.OSFamilyESXi: true,
 }
 
 // Identify 按特征文件判定 root 对应的 ISO 内容属于哪个 OS 家族（SPEC
@@ -61,10 +67,12 @@ var mvpUnsupportedFamilies = map[model.OSFamily]bool{
 // .treeinfo 判据之后。只用 repomd.xml 且排在 RHEL 之前会把现代 RHEL 误判成
 // SUSE，那会让 RHEL 机器拿到 AutoYaST 应答文件而安装器根本不认。
 //
-// 一块特征文件都不命中时返回 ErrOSFamilyNotIdentified；命中 Windows 或
-// ESXi 时返回 (该家族, ErrUnsupportedOSFamily)——注意这种情况下返回值
-// 的第一个字段不是零值，调用方可以从中知道「识别出了什么，只是不支持」，
-// 而不是把这类情况与「完全没识别出来」混为一谈。
+// 一块特征文件都不命中时返回 ErrOSFamilyNotIdentified；命中 ESXi 时返回
+// (esxi, ErrUnsupportedOSFamily)——注意这种情况下返回值的第一个字段不是
+// 零值，调用方可以从中知道「识别出了什么，只是不支持」，而不是把这类情况
+// 与「完全没识别出来」混为一谈。命中 Windows 时返回 (windows, nil)——
+// Windows 已解除 MVP 封锁（本轮 n2 轨），job.go 的 Run 有专门的分派分支
+// 走到 ExtractWindows，不再是「识别出但不支持」。
 func Identify(root fs.FS) (model.OSFamily, error) {
 	if exists(root, ".treeinfo") {
 		return model.OSFamilyRHEL, nil
@@ -84,7 +92,7 @@ func Identify(root fs.FS) (model.OSFamily, error) {
 		return model.OSFamilyESXi, ErrUnsupportedOSFamily
 	}
 	if exists(root, "sources/install.wim") {
-		return model.OSFamilyWindows, ErrUnsupportedOSFamily
+		return model.OSFamilyWindows, nil
 	}
 	return "", ErrOSFamilyNotIdentified
 }
