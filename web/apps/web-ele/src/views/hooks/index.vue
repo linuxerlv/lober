@@ -15,7 +15,7 @@ import type { VbenFormSchema } from '@vben/common-ui';
 import { computed, h, ref } from 'vue';
 
 import { Page, useVbenModal } from '@vben/common-ui';
-import { useUserStore } from '@vben/stores';
+import { useAccessStore, useUserStore } from '@vben/stores';
 
 import { useClipboard } from '@vueuse/core';
 import {
@@ -32,6 +32,7 @@ import {
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { requestClient } from '#/api/request';
+import AuditTimeline from '#/components/audit-timeline.vue';
 
 defineOptions({ name: 'HooksIndex' });
 
@@ -119,6 +120,20 @@ const INTERPRETER_OPTIONS = ['bash', 'ash', 'powershell'];
 const userStore = useUserStore();
 const currentUsername = computed(() => userStore.userInfo?.username ?? '');
 
+/**
+ * GET /hooks/{id}/audit 只对持有 hook:write 或 hook:approve 权限码的人
+ * 开放（admin 通过聚合权限码天然满足）。这里用同样的判定预先收起入口——
+ * 无权限的人不该点进去才看到「无权限查看」，按钮直接不出现体验更清楚
+ * （docs/real-machine/05-审计持久化.md「UI 侧还需要做什么」第 2 点）。
+ * 这只是体验层收敛，真正的权限判定仍然在服务端（403 兜底不依赖前端）。
+ */
+const accessStore = useAccessStore();
+const hasAuditAccess = computed(
+  () =>
+    accessStore.accessCodes.includes('hook:write') ||
+    accessStore.accessCodes.includes('hook:approve'),
+);
+
 function shortDigest(sha256: string) {
   return sha256 ? `${sha256.slice(0, 12)}…` : '（无）';
 }
@@ -195,7 +210,7 @@ const [Grid, gridApi] = useVbenVxeGrid<HookItem>({
       {
         field: 'action',
         title: '操作',
-        width: 300,
+        width: 380,
         fixed: 'right',
         slots: { default: 'action' },
       },
@@ -474,8 +489,11 @@ const [RejectModal, rejectModalApi] = useVbenModal({
     );
     rejectModalApi.close();
     gridApi.reload();
-    // 已知缺口如实告知操作者：理由目前只在这次响应里可见，没有查询 API，
-    // 不能暗示「理由会留在某处给作者看」——服务端的 AuditLogger 只写不读。
+    // 本轮变更之前这里说「没有查询 API，只能靠线下沟通告知作者」——
+    // 端点 29（GET /hooks/{id}/audit）已经补上事后查询路径，那句话现在
+    // 是假的，必须更新，否则会误导操作者以为理由真的会永久丢失。同时
+    // 不能反过来暗示「理由会自动推送/通知作者」——那是这个端点做不到的
+    // 事，本次任务的要点明确要求不能给这个假象。
     await ElMessageBox.alert(
       h('div', [
         h('p', { class: 'mb-2' }, `已驳回，状态回退为草稿。理由：`),
@@ -483,7 +501,7 @@ const [RejectModal, rejectModalApi] = useVbenModal({
         h(
           'p',
           { class: 'mt-2 text-sm text-gray-500' },
-          '注意：此理由目前只在这次驳回操作的响应里可见，系统没有为作者提供事后查询驳回理由的入口。请通过其它渠道（如线下沟通）把这条理由告知作者。',
+          '此理由不会自动通知作者，系统没有推送能力。但理由已经写入审计记录，作者或其它审批人可以随时通过该 hook 的「审计」入口自行查询——不需要恰好在驳回发生的这一刻在场。',
         ),
       ]),
       '驳回已提交',
@@ -500,6 +518,23 @@ function openReject(row: HookItem) {
   rejectReason.value = '';
   rejectModalApi.setState({ title: `驳回 hook：${row.name} v${row.version}` });
   rejectModalApi.open();
+}
+
+/**
+ * 审计记录面板（端点 29 GET /hooks/{id}/audit）——查这个 hook 被谁在
+ * 什么时候做了什么，驳回理由的事后查询入口就在这里。
+ */
+const auditTarget = ref<HookItem | null>(null);
+const [AuditModal, auditModalApi] = useVbenModal({
+  onCancel() {
+    auditModalApi.close();
+  },
+});
+
+function openAudit(row: HookItem) {
+  auditTarget.value = row;
+  auditModalApi.setState({ title: `审计记录：${row.name} v${row.version}` });
+  auditModalApi.open();
 }
 </script>
 
@@ -530,6 +565,14 @@ function openReject(row: HookItem) {
         <ElButton link size="small" @click="openVersions(row)">版本</ElButton>
         <ElButton link size="small" @click="openNewVersion(row)">
           新建版本
+        </ElButton>
+        <ElButton
+          v-if="hasAuditAccess"
+          link
+          size="small"
+          @click="openAudit(row)"
+        >
+          审计
         </ElButton>
         <ElButton
           v-if="row.state === 'draft'"
@@ -752,7 +795,7 @@ function openReject(row: HookItem) {
       </template>
     </ApprovalModal>
 
-    <!-- 驳回弹窗：理由必填，提交后原样回显并说明可查性缺口 -->
+    <!-- 驳回弹窗：理由必填，提交后原样回显，并引导去审计记录里事后查询 -->
     <RejectModal class="w-[520px]" :confirm-disabled="isSelfApproval">
       <label class="mb-1 block text-sm">驳回理由（必填）</label>
       <ElInput
@@ -762,5 +805,13 @@ function openReject(row: HookItem) {
         placeholder="作者需要靠这段文字知道问题所在"
       />
     </RejectModal>
+
+    <!-- 审计记录面板（端点 29）：谁在什么时候做了什么，含驳回理由的事后查询入口 -->
+    <AuditModal class="w-[640px]">
+      <div v-if="auditTarget" class="mb-3 text-sm text-gray-500">
+        hook：{{ auditTarget.name }}（当前版本 v{{ auditTarget.version }}）
+      </div>
+      <AuditTimeline v-if="auditTarget" :hook-id="auditTarget.id" />
+    </AuditModal>
   </Page>
 </template>
