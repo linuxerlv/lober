@@ -9,77 +9,66 @@
 # 支持，不是 anaconda kickstart）。
 #
 # =====================================================================
-# 本脚本最重要的产出：一个真实的、可复现的失败发现（而不是让脚本假装
-# 全过）——写在这里而不是假装测过了：
+# 本次修订（t17-fix-e2e）：上一轮编写本脚本时，ESXi 的分派（menu.go/
+# renderer.go）尚未接线，所以断言方向是"确认分派未接线、回退到 sanboot"。
+# 这一轮 t08-dispatch 轨已经把 ESXi 的菜单渲染（RenderMenu → renderESXiMenu
+# → RenderESXiMenuLine）接上（见 internal/render/dispatch_test.go 的
+# TestDispatch_RenderMenu_ImplementedFamiliesSucceed/esxi 子测试，已跑通
+# 确认），断言方向随之整体反转为验证成功路径——九阶段框架与阶段 1-4/6 的
+# 准入负面用例原样保留，只把阶段 5/7/8/9 里建立在"未接线"前提上的断言改为
+# 验证真实菜单/应答文件内容。
 #
-#  【核心发现：ESXi 分派处仍未接线，成功路径无法端到端跑通】
+# 但本次运行同时确认：**分派接上的只是菜单渲染，不是应答文件的两段式渲染**
+# ——RenderAnswerFile 对 ESXi 请求 "boot.cfg" 时调用的是
+# AssembleESXiKickstart（产出 ESXi kickstart 方言正文），不是
+# RenderESXiBootCfg（改写引导参数文件的三处 prefix=/kernelopt=/modules=）。
+# 这不是本脚本的猜测，是 internal/render/renderer.go 与 internal/render/
+# esxi.go 文件末尾"契约缺口 1"自己记录的已知设计决策，本脚本在阶段 8 里
+# 精确验证这个决策的真实后果（取到的 boot.cfg 内容实际上是 kickstart 正文，
+# 不含任何 prefix=/kernelopt= 改写），而不是断言"三处改写在端到端层生效"
+# （那在当前代码下不成立，断言了会是一条长期虚假失败或被迫弱化的检验）。
 #
-#  internal/render/menu.go 与 internal/render/renderer.go 的 switch 分支里，
-#  model.OSFamilyESXi 仍与 SUSE、Windows 一起落在
-#  `case model.OSFamilySUSE, model.OSFamilyWindows, model.OSFamilyESXi:`
-#  分支，返回 unimplementedFamilyError——本轮之前的 Wave2（t08-dispatch 轨）
-#  只搭好了分派 switch 的骨架与端到端注入防护（validateAnswerFileName），
-#  没有给任何一个新家族（ESXi/Windows/SUSE）接上具体渲染函数调用，尽管
-#  internal/render/esxi.go 的三个导出函数（RenderESXiBootCfg/
-#  RenderESXiMenuLine/AssembleESXiKickstart）与对应的单元测试、golden file
-#  全部就位。这不是本脚本的推测——用 grep 直接核对了这两个文件在本 worktree
-#  当前 HEAD 的字面内容（git log 显示两文件最近的改动是
-#  140fef4 "entry dispatch with end-to-end injection guard"，即骨架
-#  commit，没有后续接线 commit）。
+# 已知限制（写在这里而不是假装测过了）：
 #
-#  具体的传导链（本脚本阶段 7 会实测到）：
-#   1. 真实机器上报 UEFI + arch 匹配 + SN/MAC 双因子匹配 → precheck 三项
-#      校验（arch/firmware/制品完整性）全部通过（这一段与分派无关，独立
-#      验证见下方阶段 6e）。
-#   2. internal/statemachine/boot.go 的 StartBoot 第 4/5 步随即执行：
-#      attempt_count++、签发装机 token、任务 CAS 到 booting——即
-#      "消耗了一次真实的装机尝试"，任务状态已经改变，无法撤销。
-#   3. 紧接着 internal/gateway/boot.go 的 handleBootGrant 调用
-#      s.deps.Renderer.RenderMenu(renderCtx)，命中 unimplementedFamilyError。
-#   4. handleBootGrant 对渲染失败的处理是静默回退到 writeNoTaskScript
-#      （sanboot 载荷），HTTP 响应仍是 200——机器侧收到的响应与"完全陌生的
-#      机器"或"MAC 不匹配"两种拒绝场景逐字符相同，机器没有任何办法区分
-#      "我从未被认识"与"我被认识、已经消耗了一次尝试、但服务端不会渲染
-#      我的菜单"。
+#  1. 【不依赖 jq】同 scripts/e2e.sh 第 1 条：本机没有 jq，用 grep/sed 做
+#     最小 JSON 字段提取。
 #
-#  这比一个直白的报错更隐蔽：任务的 attempt_count 已经不可逆地递增，
-#  但 HTTP 响应看起来与完全无害的"没有任务"一模一样，唯一能看出区别的
-#  地方是查询任务详情接口（本脚本阶段 7 会展示这一点：/v1/boot 命中之后
-#  任务的 attempt_count 确实变成了 1，state 也确实变成了 booting，但机器
-#  实际收到的引导脚本是 sanboot 而不是 ESXi 菜单）。如果 MVP 的
-#  attempt_count 上限较小（§9.1 第三道闸门），这意味着"分派没接好"这一个
-#  纯服务端问题会表现成"这台机器很快就被服务端标记为 attempt_exceeded 永久
-#  拒绝"——运维会去查机器硬件或网络，而不会想到去查渲染器的 switch 分支。
+#  2. 【ESXi 的导入识别在 MVP 阶段仍被拒绝，本脚本走 sqlite3 绕法登记
+#     制品集】——本次运行确认这一点没有变化：
+#       - internal/imports/identify.go 的 mvpUnsupportedFamilies 仍把 ESXi
+#         列在其中——Identify() 认出 boot.cfg+mboot.efi 特征后返回
+#         (model.OSFamilyESXi, ErrUnsupportedOSFamily)。
+#       - internal/imports/job.go 只有 RunRHEL 一个执行入口，没有 RunESXi。
+#     本脚本对此的绕法与 scripts/e2e.sh 完全一致：先用真实端点落一条
+#     importing 记录取得真实分配的 ID，再用 sqlite3 CLI 直接把该记录推进
+#     到 ready 并写回 paths_json/os_family/arch/firmware——文件本身仍是
+#     mkfixture-esxi.sh 造出的真实文件、真实落在制品根目录下，绕过的只是
+#     "识别+导入"这两步，不是伪造磁盘内容。换句话说：本脚本验证的是"制品
+#     就绪之后"的链路，不是"导入"本身。
 #
-#  本脚本仍然完整跑完能跑的全部阶段并把这个发现作为阶段 7 的断言内容——
-#  断言"RenderMenu 确实按预期失败并回退到 sanboot"，而不是跳过阶段 7。
-#  见阶段 7 的详细注释与 docs/real-machine/15-e2e-esxi.md 的完整分析。
+#  3. 【应答文件的第二文件名契约缺口——本脚本阶段 8 精确验证其真实后果】
 #
-#  【第二个发现：ESXi 的导入识别在 MVP 阶段被拒绝】
-#
-#  internal/imports/identify.go 的 mvpUnsupportedFamilies 仍把 ESXi 列在
-#  其中——Identify() 认出 boot.cfg+mboot.efi 特征后返回
-#  (model.OSFamilyESXi, ErrUnsupportedOSFamily)，且 internal/imports/job.go
-#  只有 RunRHEL 一个执行入口，没有 RunESXi。这意味着即使制品集登记→导入
-#  job 之间的桥接在本轮由 t01 轨接上了（本脚本已尝试走真实路径，见阶段 4
-#  的详细过程与失败记录），ESXi 家族的导入本身仍会在 Identify 这一步就被
-#  拒绝——本脚本退回 sqlite3 直接写表的绕法，绕开的是"导入识别"这一步，
-#  不是"注册触发导入"这一步（两者是不同的缺口，见下方阶段 4 注释）。
-#
-#  【第三个发现：ESXi 应答文件的第二文件名契约缺口（复述 esxi.go 已记录的）】
-#
-#  即使分派接好，internal/render/renderer.go 的 validateAnswerFileName
-#  当前只接受 ctx.AnswerFileName() 算出的唯一文件名（Ubuntu 是唯一的
-#  例外，硬编码接受额外的 "meta-data"）。model.AnswerFileName(esxi) 固定
-#  返回 "boot.cfg"，但真实 ESXi 流程需要两个独立文件：mboot.efi 引导器
-#  读取的 boot.cfg（本身不是 kickstart 语法）与 boot.cfg 的 kernelopt 行
-#  ks= 指向的另一份真正的 kickstart 脚本（AssembleESXiKickstart 的产出）。
-#  esxi.go 文件末尾已经完整记录了这个缺口与正解方向（建议第二文件名
-#  "ks.cfg"，与 Ubuntu 的 meta-data 先例同构），本脚本不重复分析过程，
-#  只在阶段 7 的注释里指出：即使 RenderMenu/RenderAnswerFile 的 switch
-#  被接上，若不同时补上这个第二文件名的分派，取应答文件那一步
-#  （/v1/answer/<task>/<token>/ks.cfg）仍会被 validateAnswerFileName 拒绝，
-#  因为它只会与 "boot.cfg" 比较、请求 "ks.cfg" 会被判定为"文件名不一致"。
+#     model.AnswerFileName(esxi) 固定返回 "boot.cfg"，
+#     internal/render/renderer.go 的 validateAnswerFileName 对 ESXi 没有
+#     像 Ubuntu 的 "meta-data" 那样额外放行第二个文件名。这意味着：
+#       a) 请求 /v1/answer/<task>/<token>/boot.cfg 会通过文件名校验（它
+#          就是 AnswerFileName() 算出的唯一值），但 RenderAnswerFile 对
+#          ESXi 分派到的是 AssembleESXiKickstart——产出的是 kickstart 正文
+#          （%firstboot/%pre/%post 等段落），不是一份经过三处改写的
+#          boot.cfg 引导参数文件。
+#       b) RenderESXiBootCfg（改写 prefix=/kernelopt=/modules= 的函数）
+#          在生产代码里没有任何调用点（已用 grep 核对全仓，唯一调用点在
+#          esxi_test.go），这意味着 mboot.efi 实际会读到的"boot.cfg"响应
+#          其实是一段 kickstart 脚本文本，mboot.efi 无法解析它——真实部署
+#          场景下这会导致 ESXi 安装器在引导器解析 boot.cfg 这一步直接失败，
+#          比"装到一半停住"更早。
+#       c) 请求 /v1/answer/<task>/<token>/ks.cfg（真正的 kickstart 应该在
+#          的文件名）会被 validateAnswerFileName 拒绝为 404，因为它只与
+#          "boot.cfg" 比较。
+#     esxi.go 文件末尾"契约缺口 1"已经完整记录这个缺口与正解方向（建议
+#     第二文件名 "ks.cfg"，与 Ubuntu 的 meta-data 先例同构）——本脚本不
+#     重复分析过程，只在阶段 8 里把 a)/b) 两点实测坐实（用真实 HTTP 响应
+#     内容核对，不满足于读代码推断），并记入 findings。
 #
 # 依赖：curl、sqlite3、go（与 e2e.sh 完全相同）。
 set -euo pipefail
@@ -357,33 +346,30 @@ ACTIVE_CHECK="$(sqlite3 "${DB_PATH}" "SELECT state FROM templates WHERE id='${TE
 pass "阶段4: 主机=${HOST_ID}、制品集=${CREATED_ARTIFACT_ID}（ready，esxi/8.0/uefi）、模板=${TEMPLATE_ID}（active）均已就位"
 
 # ---------------------------------------------------------------------------
-# 阶段 5：preview 端点——【预期在本轮会失败，这是分派缺口的直接证据】
+# 阶段 5：preview 端点——分派已接线，断言成功路径。
 #
-# handleTemplatePreview 内部调用 s.deps.Renderer.RenderAnswerFile 与
-# RenderMenu（internal/console/template.go 第 388/393 行），两者对 ESXi
-# 都会命中 unimplementedFamilyError。本脚本断言这一点确实发生，而不是
-# 断言 preview 成功——若某天这条断言开始失败（即 preview 意外成功），
-# 说明分派已经接上，需要把本脚本这一段改回像 e2e.sh 阶段 5 那样断言成功。
+# handleTemplatePreview 内部对未指定 hostId 的请求用 fakePreviewHost（固定
+# firmware=uefi），与本任务的 ESXi 制品集固件一致，因此 RenderMenu 与
+# RenderAnswerFile 都应成功（不会命中 ErrESXiRequiresUEFI）。
 # ---------------------------------------------------------------------------
 
-PREVIEW_RESP="$(curl -sS -X POST "${CONSOLE_BASE}/templates/${TEMPLATE_ID}/preview" \
+PREVIEW_RESP="$(curl -fsS -X POST "${CONSOLE_BASE}/templates/${TEMPLATE_ID}/preview" \
 	-H "${AUTH_HEADER}" -H 'Content-Type: application/json' \
 	-d '{}')"
-echo "${PREVIEW_RESP}" | grep -q "MVP 范围内未实现" \
-	|| fail "阶段5: 预期 preview 因分派未接线而报错（含'MVP 范围内未实现'），实际响应=${PREVIEW_RESP}——" \
-		"若这是因为分派已经接上，请把本阶段改为像 e2e.sh 阶段5那样断言成功"
-finding "阶段5: preview 端点对 ESXi 模板报错（'该 OS 家族的...渲染在 MVP 范围内未实现'）——" \
-	"与 menu.go/renderer.go 的分派缺口完全一致，不是 preview 自身的问题。"
-pass "阶段5: 确认 preview 端点因分派未接线而按预期报错（渲染器 switch 分支仍返回未实现）"
+PREVIEW_CODE="$(json_field "${PREVIEW_RESP}" "code")"
+[ "${PREVIEW_CODE}" = "0" ] || fail "阶段5: preview 端点未成功，响应=${PREVIEW_RESP}"
+echo "${PREVIEW_RESP}" | grep -q "answerFile" || fail "阶段5: preview 响应缺少 answerFile 字段，响应=${PREVIEW_RESP}"
+echo "${PREVIEW_RESP}" | grep -qi "mvp 范围内未实现" \
+	&& fail "阶段5: preview 响应仍含'未实现'字样，说明分派未真正接线，响应=${PREVIEW_RESP}"
+pass "阶段5: preview 端点用假数据渲染成功（RenderMenu/RenderAnswerFile 均已接线，不建任务、不签 token、不落库）"
 
 # ---------------------------------------------------------------------------
 # 阶段 6：准入控制负面用例——四条硬性要求 + ESXi 特有的第五条（BIOS 硬拒绝）
 #
-# 6a-6d 与分派是否接线完全无关：precheck 三项校验（arch/firmware/制品
-# 完整性）都发生在 StartBoot 内部，早于对 Renderer.RenderMenu 的调用
-# （internal/statemachine/boot.go 第 43-66 行 vs
-# internal/gateway/boot.go 第 150-186 行）。本脚本据此预期这五条负面
-# 用例全部能通过真实路径验证，与阶段 5/7 的分派缺口互不影响。
+# 6a-6d 与分派是否接线无关：precheck 三项校验（arch/firmware/制品完整性）
+# 都发生在 StartBoot 内部，早于对 Renderer.RenderMenu 的调用
+# （internal/statemachine/boot.go vs internal/gateway/boot.go 的
+# handleBootGrant）。
 # ---------------------------------------------------------------------------
 
 # 6a. 完全陌生的机器 → sanboot（§4.2、§0.1）。
@@ -475,7 +461,8 @@ pass "阶段6e复查: 两次 precheck 拒绝（arch、firmware）均未消耗 at
 pass "阶段6: 四条通用准入控制负面用例 + ESXi 特有的 BIOS 硬拒绝，全部通过"
 
 # ---------------------------------------------------------------------------
-# 阶段 7：真实成功路径——UEFI + 正确 SN/MAC/arch → 【本脚本的核心发现】
+# 阶段 7：真实成功路径——UEFI + 正确 SN/MAC/arch → 机器应收到真实的 ESXi
+# 菜单（mboot.efi -c <boot.cfg URL>，SPEC §4.5），不是 sanboot。
 #
 # 用 6e 之后需要 retry 回到 pending 的 TASK2_ID（precheck 拒绝允许 retry，
 # 与 6d 同样的道理），这次带完全正确的一切（含 plat=efi）请求 /v1/boot。
@@ -487,59 +474,193 @@ RETRY2_STATE="$(json_field "${RETRY2_RESP}" "state")"
 
 ATTEMPT_BEFORE="$(sqlite3 "${DB_PATH}" "SELECT attempt_count FROM tasks WHERE id='${TASK2_ID}';")"
 
-REAL_BOOT_RESP="$(curl -fsS "${GW_BASE}/v1/boot?sn=${HOST2_SN}&mac=${HOST2_MAC}&uuid=&arch=x86_64&plat=efi")"
+ESXI_MENU="$(curl -fsS "${GW_BASE}/v1/boot?sn=${HOST2_SN}&mac=${HOST2_MAC}&uuid=&arch=x86_64&plat=efi")"
 
-TASK2_AFTER_REAL_BOOT="$(curl -fsS "${CONSOLE_BASE}/tasks?sn=${HOST2_SN}" -H "${AUTH_HEADER}")"
 ATTEMPT_AFTER="$(sqlite3 "${DB_PATH}" "SELECT attempt_count FROM tasks WHERE id='${TASK2_ID}';")"
 STATE_AFTER="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK2_ID}';")"
+SIGNED_TOKEN="$(sqlite3 "${DB_PATH}" "SELECT token FROM tasks WHERE id='${TASK2_ID}';")"
 
-echo "" >&2
-echo "=== 阶段7 核心发现的实测数据 ===" >&2
-echo "  请求前 attempt_count = ${ATTEMPT_BEFORE}" >&2
-echo "  请求后 attempt_count = ${ATTEMPT_AFTER}" >&2
-echo "  请求后任务 state     = ${STATE_AFTER}" >&2
-echo "  机器实际收到的响应体 = ${REAL_BOOT_RESP}" >&2
-echo "" >&2
-
-# 断言 1：任务状态机侧确实推进了——precheck 通过、attempt 确实被消耗、
-# state 确实变成了 booting。这证明"分派缺口发生在 StartBoot 成功之后"，
-# 不是"整条链路都没跑起来"那种更容易被发现的失败。
-[ "${STATE_AFTER}" = "booting" ] || fail "阶段7: 预期任务状态机侧已推进到 booting（与分派是否接线无关），实际=${STATE_AFTER}"
+# 断言 1：任务状态机侧已推进——precheck 通过、attempt 已消耗、state 已变
+# 成 booting、token 已签发（与 scripts/e2e.sh 阶段7 同一断言）。
+[ "${STATE_AFTER}" = "booting" ] || fail "阶段7: 预期任务状态推进到 booting（StartBoot 已成功提交），实际=${STATE_AFTER}"
 [ "${ATTEMPT_AFTER}" -gt "${ATTEMPT_BEFORE}" ] || fail "阶段7: 预期 attempt_count 已被消耗（${ATTEMPT_BEFORE} -> ${ATTEMPT_AFTER}），实际未变化"
+[ -n "${SIGNED_TOKEN}" ] || fail "阶段7: 预期 StartBoot 已签发装机 token，但数据库里的 token 字段为空"
 
-# 断言 2：但机器实际收到的响应是 sanboot，不是 ESXi 菜单——这就是分派
-# 缺口的直接后果。若这条断言开始失败（即机器收到了 mboot.efi 菜单行），
-# 说明分派已经接上，需要把本阶段改写为断言真正的菜单内容（mboot.efi -c
-# <boot.cfg URL>，SPEC §4.5），并继续往下验证阶段 8/9。
-echo "${REAL_BOOT_RESP}" | grep -q "sanboot --no-describe --drive 0x80" \
-	|| fail "阶段7: 预期分派未接线导致回退到 sanboot，实际响应=${REAL_BOOT_RESP}——" \
-		"若分派已接上，请把本阶段改为断言 'mboot.efi -c' 菜单内容并继续验证阶段8/9"
+# 断言 2：机器收到的不再是 sanboot，而是真实的 ESXi 菜单——分派已接线的
+# 直接证据。
+echo "${ESXI_MENU}" | grep -q "sanboot --no-describe --drive 0x80" \
+	&& fail "阶段7: 要素齐全的机器仍收到 sanboot 载荷，说明 ESXi 分派回归到未接线状态，响应=${ESXI_MENU}"
 
-finding "阶段7:【核心发现】precheck 全部通过、attempt_count 已消耗" \
-	"（${ATTEMPT_BEFORE} -> ${ATTEMPT_AFTER}）、任务状态已推进到 booting，" \
-	"但机器收到的响应体与'完全陌生的机器'/'MAC不匹配'逐字符相同（sanboot" \
-	"载荷）——因为 RenderMenu 命中 unimplementedFamilyError，" \
-	"internal/gateway/boot.go 的 handleBootGrant 把渲染失败静默降级为" \
-	"no_task 载荷。机器侧无法区分'从未被认识'与'已消耗一次尝试但服务端" \
-	"不会渲染菜单'这两种完全不同的情形。"
+# 断言 3：菜单形态是唯一一行 `kernel <mboot.efi URL> -c <boot.cfg URL>`
+# （RenderESXiMenuLine 的产出，SPEC §4.5），没有 initrd 行——ESXi 的模块由
+# boot.cfg 的 modules= 列出，不走 iPXE 的 initrd 机制（esxi.go 文件头注释
+# 明确说明"没有 initrd 行"是刻意设计，不是遗漏）。
+echo "${ESXI_MENU}" | grep -q "^kernel .*mboot\.efi -c " \
+	|| fail "阶段7: 菜单不是预期的 'kernel <mboot.efi URL> -c <boot.cfg URL>' 形态，响应=${ESXI_MENU}"
+MENU_LINE_COUNT="$(echo "${ESXI_MENU}" | grep -cv '^[[:space:]]*$')"
+[ "${MENU_LINE_COUNT}" = "1" ] || fail "阶段7: ESXi 菜单应恰好一行（无 initrd 行），实际非空行数=${MENU_LINE_COUNT}，响应=${ESXI_MENU}"
+echo "${ESXI_MENU}" | grep -q "^initrd " \
+	&& fail "阶段7: ESXi 菜单不应含 initrd 行（模块清单在 boot.cfg 的 modules= 里），响应=${ESXI_MENU}"
 
-pass "阶段7:【核心发现，已实测确认】ESXi 分派未接线——StartBoot 成功推进状态机并消耗 attempt，但 RenderMenu 失败后网关静默回退到 sanboot，机器侧完全无法区分这与'陌生机器'的差异"
+# 断言 4：-c 参数指向的 boot.cfg URL 含正确的 task/token 路径段
+# （GatewayURL("v1","answer",taskID,token,"boot.cfg")，与 renderRockyMenu
+# 拼 ksURL 同一模式）。
+echo "${ESXI_MENU}" | grep -q "/v1/answer/${TASK2_ID}/${SIGNED_TOKEN}/boot.cfg" \
+	|| fail "阶段7: 菜单里 -c 参数未指向预期的 /v1/answer/${TASK2_ID}/${SIGNED_TOKEN}/boot.cfg，响应=${ESXI_MENU}"
 
-echo "" >&2
-echo "=== 阶段 8/9 无法继续 ===" >&2
-echo "机器从未拿到装机 token（菜单里的 inst.ks=/ks= 段），阶段 8（取应答" >&2
-echo "文件、装机期信号）与阶段 9（终态断言、重启后 sanboot 断言）都需要" >&2
-echo "这个 token 才能进行——这不是本脚本还需要补的逻辑，是分派缺口本身" >&2
-echo "导致后续阶段在真实环境下同样无法达到，与本脚本的验证方式无关。" >&2
-echo "" >&2
+pass "阶段7: 要素齐全的 UEFI 机器请求 /v1/boot——任务推进到 booting（attempt ${ATTEMPT_BEFORE}→${ATTEMPT_AFTER}，token 已签发），机器收到真实 ESXi 菜单（唯一一行 kernel=mboot.efi -c <boot.cfg URL>，无 initrd 行）"
+
+# ---------------------------------------------------------------------------
+# 阶段 8：取应答文件——精确验证"boot.cfg 请求收到的是 kickstart 正文，不是
+# 改写后的引导参数文件"这个已知契约缺口的真实后果（本文件头部「已知限制」
+# 第 3 条），而不是断言三处改写在端到端层生效（那不成立）。
+# ---------------------------------------------------------------------------
+
+ANSWER_URL="${GW_BASE}/v1/answer/${TASK2_ID}/${SIGNED_TOKEN}/boot.cfg"
+ANSWER_HTTP_CODE="$(curl -s -o "${WORKDIR_WIN}/answer_body.txt" -w '%{http_code}' "${ANSWER_URL}")"
+ANSWER_BODY="$(cat "${WORKDIR_WIN}/answer_body.txt")"
+STATE_AFTER_ANSWER="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK2_ID}';")"
+
+[ "${ANSWER_HTTP_CODE}" = "200" ] || fail "阶段8: 取应答文件失败，HTTP ${ANSWER_HTTP_CODE}，body=${ANSWER_BODY}"
+[ -n "${ANSWER_BODY}" ] || fail "阶段8: 应答文件内容为空，url=${ANSWER_URL}"
+[ "${STATE_AFTER_ANSWER}" = "installing" ] || fail "阶段8: 取应答文件后任务状态未变为 installing，实际=${STATE_AFTER_ANSWER}"
+
+# Content-Type：ESXi 走 answerFileContentType 的 default 分支，应为
+# text/plain（与 ks.cfg/preseed.cfg/user-data 同一档，不同于 Windows/SUSE
+# 的 application/xml）。
+ANSWER_CONTENT_TYPE="$(curl -s -o /dev/null -w '%{content_type}' "${ANSWER_URL}")"
+case "${ANSWER_CONTENT_TYPE}" in
+text/plain*) ;;
+*) fail "阶段8: 应答文件 Content-Type=${ANSWER_CONTENT_TYPE}, want text/plain*" ;;
+esac
+
+# 【发现，已在文件头部「已知限制」第 3 条完整分析，这里坐实真实后果】：
+# 取到的 boot.cfg 内容实际上是 AssembleESXiKickstart 的产出——含 install/
+# rootpw/network/reboot 等 ESXi kickstart 指令，不含任何 prefix=/kernelopt=
+# /modules= 行（那些是 mboot.efi 解析 boot.cfg 需要的引导参数语法，与
+# kickstart 语法完全不同）。用内容特征区分两者，不满足于"能取到内容"：
+echo "${ANSWER_BODY}" | grep -q "^install " \
+	|| fail "阶段8: 取到的 boot.cfg 内容不含 'install ' 指令（ESXi kickstart 特征），" \
+		"说明 AssembleESXiKickstart 的产出形态发生了变化，需要重新核对本发现是否仍成立，内容=${ANSWER_BODY}"
+if echo "${ANSWER_BODY}" | grep -q "^prefix="; then
+	echo "[提示] 取到的 boot.cfg 内容意外含 prefix= 行，说明 RenderAnswerFile 对 ESXi 的" >&2
+	echo "       boot.cfg 分派可能已经改为调用 RenderESXiBootCfg，请重新核对本文件头部" >&2
+	echo "       「已知限制」第 3 条与 esxi.go 的契约缺口记录是否仍准确" >&2
+fi
+finding "阶段8: 请求 boot.cfg 实际收到的是 ESXi kickstart 正文（AssembleESXiKickstart 的产出，" \
+	"含 install/rootpw/network/reboot 等指令），不是经过 prefix=/kernelopt=/modules= 三处" \
+	"改写的引导参数文件（RenderESXiBootCfg 的产出，该函数在生产代码里零调用点）。" \
+	"真实部署场景下 mboot.efi 会尝试把这段 kickstart 文本当作 boot.cfg 解析，解析失败，" \
+	"比'装到一半停住'更早。已记入 findings，正解方向见 esxi.go 文件末尾"契约缺口 1"。"
+
+# 断言产出的不是 RHEL kickstart——不含 RHEL 特有的段落头/指令（anaconda
+# 的 %packages、sshkey 指令，esxi.go 已记录 ESXi kickstart 没有 sshkey
+# 等价指令）。
+echo "${ANSWER_BODY}" | grep -q "%packages" \
+	&& fail "阶段8: boot.cfg 响应含 RHEL kickstart 特征 %packages，说明被错误路由到了 AssembleKickstart，响应=${ANSWER_BODY}"
+echo "${ANSWER_BODY}" | grep -q "^sshkey " \
+	&& fail "阶段8: boot.cfg 响应含 RHEL 专属的 sshkey 指令（ESXi kickstart 没有这个指令），说明被错误路由到了 AssembleKickstart，响应=${ANSWER_BODY}"
+
+# ESXi 的阶段映射：post-nochroot 在 ESXi 上不存在（SPEC §5.2 表格该列是
+# "—"）。本任务模板未配任何 hook（阶段4建模板时 hookRefs 为空），因此
+# %pre/%post/%firstboot 段落各自的 hook 调用部分应为空，但 %firstboot 段落
+# 本身（原生支持，不需要 systemd oneshot 脚手架）必须存在。
+echo "${ANSWER_BODY}" | grep -q "%firstboot" \
+	|| fail "阶段8: boot.cfg 响应缺少 %firstboot 段落（ESXi 原生支持首次启动段），响应=${ANSWER_BODY}"
+echo "${ANSWER_BODY}" | grep -qi "post-nochroot\|%post --nochroot" \
+	&& fail "阶段8: boot.cfg 响应含 post-nochroot 相关内容，但该阶段在 ESXi 上不存在（SPEC §5.2），响应=${ANSWER_BODY}"
+
+# 重复取应答文件仍应成功（幂等，SPEC §6.3）。
+curl -fsS -o /dev/null "${ANSWER_URL}" || fail "阶段8: 重复取应答文件失败（应幂等成功）"
+
+pass "阶段8: 取应答文件成功（HTTP 200，Content-Type=text/plain），内容是 ESXi kickstart 正文（install/%firstboot 齐全，不含 RHEL 特征 %packages/sshkey，不含 ESXi 不存在的 post-nochroot），任务进入 installing，重复取仍幂等成功。取到的不是改写后的 boot.cfg 引导参数文件，已记入 findings（见上方【发现】）"
+
+# ---------------------------------------------------------------------------
+# 阶段 8b/8c：装机期信号打点。ESXi 的 %firstboot 段落（esxiFirstbootSection）
+# 发 booted/init-start/init-done/ready 四个信号，与 Linux/Windows 共用同一
+# 组 model.SignalKind；没有 WinPE 那种独立的"装机期七信号"分组——ESXi 没有
+# 类似 kickstart 的 pre/post 显式信号点插入约定（RenderESXiStageSection 里
+# 没有插 signal 调用，只有 %firstboot 里插了，见 esxiFirstbootSection）。
+# 装机期信号改用 SIGNED_TOKEN（install token）验证权限模型本身：install
+# token 应能发任意 signal，finalize token 越权发 install 阶段信号应被拒。
+# ---------------------------------------------------------------------------
+
+FINALIZE_TOKEN="$(sqlite3 "${DB_PATH}" "SELECT finalize_token FROM tasks WHERE id='${TASK2_ID}';")"
+[ -n "${FINALIZE_TOKEN}" ] || fail "阶段8: 无法从数据库取得 finalize token（应已在阶段7的 /v1/boot 命中路径签发）"
+
+send_signal() {
+	local token="$1" phase="$2" seq="$3" rc="${4:-0}"
+	curl -sS -X POST "${GW_BASE}/v1/signal/${TASK2_ID}/${token}/${phase}?rc=${rc}&seq=${seq}" \
+		-d "signal ${phase} seq=${seq}" -o /dev/null -w '%{http_code}'
+}
+
+# 装机期信号：ESXi 的 %pre/%post 段落本身不插信号点（esxiHookStageDirectives
+# 只有 pre/post 两个 header，RenderESXiStageSection 内部只在有 hook 引用时
+# 才渲染内容，没有 hook 时返回空字符串），因此本脚本不模拟一组"固定的装机
+# 期信号名"（那样会断言一个 ESXi 渲染器实际不会生成的信号序列）。这里只用
+# install token 打一个通用信号验证权限模型：install token 应能发信号。
+SEQ=1
+INSTALL_SIGNAL_CODE="$(send_signal "${SIGNED_TOKEN}" "pre-start" "${SEQ}")"
+[ "${INSTALL_SIGNAL_CODE}" = "200" ] || fail "阶段8b: install token 发 pre-start 信号返回 HTTP ${INSTALL_SIGNAL_CODE}, want 200"
+SEQ=$((SEQ + 1))
+
+FINALIZE_MISUSE_CODE="$(send_signal "${FINALIZE_TOKEN}" "pre-start" 100)"
+[ "${FINALIZE_MISUSE_CODE}" = "403" ] || fail "阶段8b: finalize token 发装机期信号（pre-start）返回 HTTP ${FINALIZE_MISUSE_CODE}, want 403"
+
+pass "阶段8b: install token 能发信号（权限模型验证）；finalize token 越权发装机期信号被拒（403）"
+
+# 重启后四个信号（%firstboot 段落原生发出，见 esxiFirstbootSection）：
+# booted → init-start → init-done → ready，用 finalize token。
+for phase in booted init-start init-done ready; do
+	code="$(send_signal "${FINALIZE_TOKEN}" "${phase}" "${SEQ}")"
+	[ "${code}" = "200" ] || fail "阶段8c: 信号 ${phase}（重启后）返回 HTTP ${code}, want 200"
+	SEQ=$((SEQ + 1))
+done
+
+pass "阶段8c: 重启后四个信号（booted/init-start/init-done/ready，ESXi 家族 %firstboot 原生对应阶段）打点成功"
+
+# ---------------------------------------------------------------------------
+# 阶段 9：断言终态 done；装完再引导一次验证不循环重装；终态任务的应答文件
+# 不再提供；事件时间线完整。
+# ---------------------------------------------------------------------------
+
+wait_for_task_state() {
+	local want="$1"
+	sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK2_ID}';" | grep -qx "${want}"
+}
+poll_until "任务达到终态 done" 10 wait_for_task_state "done"
+pass "阶段9a: 任务达到终态 done"
+
+# 装完的机器再次引导拿到 sanboot 而不是装机菜单（§10 失败模式1：
+# FindPendingTaskByIdentity 只匹配 pending，终态任务查不到即回 no_task）。
+REBOOT_AFTER_DONE="$(curl -fsS "${GW_BASE}/v1/boot?sn=${HOST2_SN}&mac=${HOST2_MAC}&uuid=&arch=x86_64&plat=efi")"
+echo "${REBOOT_AFTER_DONE}" | grep -q "sanboot --no-describe --drive 0x80" \
+	|| fail "阶段9b: 装完的机器再次引导未回 sanboot，响应=${REBOOT_AFTER_DONE}"
+DONE_STATE_CHECK="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK2_ID}';")"
+[ "${DONE_STATE_CHECK}" = "done" ] || fail "阶段9b: 断言前置条件被破坏——任务状态应仍是 done，实际=${DONE_STATE_CHECK}"
+pass "阶段9b: 装完的机器再次引导拿到 sanboot（不是装机菜单，不循环重装；已用状态查询确认任务确实处于终态 done）"
+
+# 终态任务的应答文件不再提供（§4.4 状态门控：仅 booting/installing 可服务）。
+ANSWER_AFTER_DONE_CODE="$(curl -s -o /dev/null -w '%{http_code}' "${ANSWER_URL}")"
+[ "${ANSWER_AFTER_DONE_CODE}" = "403" ] || fail "阶段9c: 终态任务的应答文件请求返回 HTTP ${ANSWER_AFTER_DONE_CODE}, want 403"
+pass "阶段9c: 终态任务的应答文件不再提供（403）"
+
+# 事件表留下了完整时间线。
+FINAL_EVENTS="$(curl -fsS "${CONSOLE_BASE}/tasks/${TASK2_ID}/events" -H "${AUTH_HEADER}")"
+FINAL_EVENT_COUNT="$(echo "${FINAL_EVENTS}" | grep -o '"taskId"' | wc -l)"
+[ "${FINAL_EVENT_COUNT}" -ge 5 ] || fail "阶段9d: 事件表条数=${FINAL_EVENT_COUNT}, want 至少 5（五个信号各至少一条事件），响应=${FINAL_EVENTS}"
+pass "阶段9d: 事件表留下完整时间线（${FINAL_EVENT_COUNT} 条事件）"
 
 echo ""
-echo "=== ESXi 端到端验证结论 ==="
-echo "阶段 1-4（基础设施、主机、制品集、模板）：通过（制品集经 sqlite3 绕过导入识别）"
-echo "阶段 5（preview）：按预期因分派未接线而报错（已确认）"
-echo "阶段 6（五条准入控制负面用例，含 ESXi 特有的 BIOS 硬拒绝）：全部通过，与分派无关"
-echo "阶段 7（真实成功路径）：precheck 通过、attempt 消耗、状态推进到 booting，"
-echo "                        但 RenderMenu 失败，机器收到 sanboot 而非 ESXi 菜单"
-echo "阶段 8/9：无法继续（机器从未拿到装机 token）"
+echo "=== 完整状态链（task_id=${TASK2_ID}，ESXi/UEFI 家族） ==="
+echo "pending → booting（/v1/boot 命中签 token，机器收到真实 ESXi 菜单 mboot.efi -c boot.cfg） →"
+echo "  installing（/v1/answer 渲染出 ESXi kickstart 正文——不是改写后的 boot.cfg，见 findings） →"
+echo "  pre-start（install token 验证）→ [booted → init-start → init-done → ready]（重启后四信号，%firstboot 原生发出） → done"
 echo ""
-echo "=== 三个核心发现已记录，见本文件头部注释与 docs/real-machine/15-e2e-esxi.md ==="
+echo "各阶段验证结果："
+sqlite3 "${DB_PATH}" "SELECT '  state='||state||' current_phase='||current_phase||' attempt_count='||attempt_count||' last_seq='||last_seq FROM tasks WHERE id='${TASK2_ID}';"
+echo ""
+echo "=== ESXi 家族九阶段验证结束：分派已接线，菜单形态/固件硬拒绝/信号通道/状态机/终态收敛全部验证通过。" \
+	"两个独立 Go 侧缺口已记入 findings：1) 应答文件端点对 boot.cfg 请求返回 kickstart 正文而非改写后的" \
+	"引导参数文件（RenderESXiBootCfg 零调用点）；2) 导入识别仍被 mvpUnsupportedFamilies 挡着，制品集经" \
+	"sqlite3 绕过 ==="
