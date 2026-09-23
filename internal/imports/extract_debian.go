@@ -20,13 +20,17 @@ import (
 	"github.com/lober/lober/internal/core/model"
 )
 
-// debianInstallerKernelNames、debianInstallerInitrdNames 是真实 Debian ISO
-// installer 目录下内核与 initrd 的候选文件名——不同 Debian 版本/架构下
+// debianInstallerKernelName、debianInstallerInitrdName 是真实 Debian ISO
+// installer 目录下内核与 initrd 的文件名——不同 Debian 版本/架构下
 // installer 子目录名不同（`install.amd`、`install.arm64` 等），但目录内
-// 文件名本身固定为 `vmlinuz` 与 `initrd.gz`（Debian 官方 debian-installer
-// 打包惯例）。
+// 文件名本身固定为 `linux` 与 `initrd.gz`（Debian 官方 debian-installer
+// 打包惯例，与 RHEL 的 `vmlinuz` 不同拼写——之前这里错写成了 `vmlinuz`，
+// 与本文件头部注释、实现计划 phase2-01 任务 5 的描述、以及 SPEC §4.5 的
+// Debian 菜单示例 `kernel .../linux` 三处都不一致，是一处真实 bug：
+// 用真实 Debian netinst ISO 目录树跑会在 install.<arch>/ 下找不到
+// vmlinuz 这个文件名，报"找不到内核"，而真实原因是文件名找错了）。
 const (
-	debianInstallerKernelName = "vmlinuz"
+	debianInstallerKernelName = "linux"
 	debianInstallerInitrdName = "initrd.gz"
 )
 
@@ -72,7 +76,7 @@ func findDebianInstallerFile(root fs.FS, fileName string) (string, error) {
 }
 
 // ExtractDebian 执行 Debian 系的抽取（计划任务 5）：
-//  1. 递归查找内核（vmlinuz）与 initrd（initrd.gz）
+//  1. 递归查找内核（linux）与 initrd（initrd.gz），并校验 dists/ 存在
 //  2. 复制到 destDir 下，固定文件名 linux/initrd.gz（SPEC §4.5 的 Debian
 //     菜单示例："kernel .../linux ... initrd .../initrd.gz"——内核落盘后
 //     改名为 linux 而不是保留 vmlinuz，是本函数与 RHEL 抽取的一处关键
@@ -89,6 +93,16 @@ func ExtractDebian(root fs.FS, destDir string) (model.ArtifactPaths, error) {
 	initrdSrc, err := findDebianInstallerFile(root, debianInstallerInitrdName)
 	if err != nil {
 		return model.ArtifactPaths{}, fmt.Errorf("imports: 查找 Debian initrd 失败: %w", err)
+	}
+	// dists/ 是 Debian 的软件包索引树，preseed 装机在选包阶段依赖它——没有
+	// 就不是一份完整的 installer 制品。这里显式校验存在且是目录，而不是让
+	// 后面的 copyTreeFromFS 在缺失时静默产出一个空 repo/ 目录：一个内核/
+	// initrd 都在但 repo/ 是空的制品集会被标记 ready，机器引导到选包阶段
+	// 才会发现问题，比在导入时立刻报错晚得多。
+	if info, statErr := fs.Stat(root, "dists"); statErr != nil || !info.IsDir() {
+		return model.ArtifactPaths{}, fmt.Errorf("imports: 在 ISO 内容中找不到 dists/ 目录" +
+			"（Debian 的软件包索引树，缺失时不是一份完整的 installer 制品，" +
+			"preseed 装机会在选包阶段失败）")
 	}
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
