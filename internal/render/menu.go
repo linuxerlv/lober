@@ -13,10 +13,24 @@ import (
 // RenderMenu 按 OS 家族渲染 iPXE 菜单文本（contract.Renderer.RenderMenu 的
 // 实现之一）。
 //
-// MVP 只有 RHEL 家族（Rocky 9）真正实现；其余五个家族留分支返回"未实现"
-// 错误——分支位置就是 Phase 2/3 的锚点，不为了"看起来完整"而实现半个
-// Ubuntu 渲染逻辑（没有 golden file 覆盖、没有真机验证的渲染逻辑比明确的
-// "未实现"更危险，计划"MVP 范围提示"）。
+// RHEL/Debian/Ubuntu/Windows/ESXi 五个家族已接线到各自的渲染实现（本函数
+// 即 t08-dispatch 一轨的接线点，归它独占，见文件顶部说明）；SUSE 仍留在
+// "未实现"分支——AutoYaST 的渲染实现（AssembleAutoYaST/RenderAutoYaSTMenu）
+// 在本 worktree 内不存在（已检查 internal/render/ 下所有文件，没有任何
+// 名字含 "AutoYaST" 或 "suse" 的导出函数），没有实现可接，接了会编译失败。
+// 见文件末尾 contractGaps。
+//
+// Windows 与 ESXi 的接线细节：
+//   - Windows：RenderWindowsMenu（winpe.go）内部已经自己做了"实际固件 vs
+//     任务 pin 固件"的硬校验（§4.6），本分支不重复；
+//   - ESXi：RenderESXiMenuLine（esxi.go）需要 mbootEFIPath 与
+//     answerFileURL 两个额外参数，本分支负责从 ctx 拼出它们——这是
+//     renderESXiMenu 辅助函数存在的原因，与 renderRockyMenu 自己从 ctx
+//     拼 URL 是同一模式，不是 esxi.go 的职责（esxi.go 顶部注释也说明了
+//     "接线由编排方完成"，即本文件）。ESXi 只支持 UEFI（§0.3 附录
+//     A.14）：BIOS+ESXi 的拒绝已经在 RenderESXiMenuLine 内部用
+//     ctx.ActualFirmware 校验（返回 ErrESXiRequiresUEFI），本分支不重复
+//     判断，直接把 ctx 转发过去。
 func RenderMenu(ctx model.RenderContext) (string, error) {
 	switch ctx.Artifact.OSFamily {
 	case model.OSFamilyRHEL:
@@ -25,11 +39,42 @@ func RenderMenu(ctx model.RenderContext) (string, error) {
 		return renderDebianMenu(ctx)
 	case model.OSFamilyUbuntu:
 		return renderUbuntuMenu(ctx)
-	case model.OSFamilySUSE, model.OSFamilyWindows, model.OSFamilyESXi:
+	case model.OSFamilyWindows:
+		return RenderWindowsMenu(ctx)
+	case model.OSFamilyESXi:
+		return renderESXiMenu(ctx)
+	case model.OSFamilySUSE:
 		return "", unimplementedFamilyError(ctx.Artifact.OSFamily)
 	default:
 		return "", fmt.Errorf("render: 未知的 OS 家族 %q，无法渲染菜单", ctx.Artifact.OSFamily)
 	}
+}
+
+// esxiMbootEFIExtraKey 是 ArtifactPaths.Extra 中 ESXi 引导器文件的键名
+// （与 esxi.go／imports 侧对 mboot.efi 的约定键一致——ESXi 的制品集只有
+// 这一个 Extra 项要在菜单渲染时读取，boot.cfg 模板本身走应答文件分派，
+// 不在菜单渲染路径里）。
+const esxiMbootEFIExtraKey = "mboot.efi"
+
+// renderESXiMenu 是 ESXi 菜单渲染的分派辅助函数：从 ctx 里取出
+// RenderESXiMenuLine 需要的 mbootEFIPath 与 answerFileURL 两个参数，再转发
+// 过去。拼 answerFileURL 的方式与 renderRockyMenu 拼 ksURL 完全一致（同一个
+// GatewayURL("v1","answer",taskID,token,文件名) 模式），确保 ESXi 与 RHEL
+// 两条路径对"应答文件 URL 怎么拼"这件事没有第二种写法。
+func renderESXiMenu(ctx model.RenderContext) (string, error) {
+	mbootEFIPath, ok := ctx.Artifact.Paths.Extra[esxiMbootEFIExtraKey]
+	if !ok || mbootEFIPath == "" {
+		return "", fmt.Errorf(
+			"render: ESXi 制品集缺少 ArtifactPaths.Extra[%q]，无法渲染引导菜单", esxiMbootEFIExtraKey)
+	}
+
+	answerFileName, ok := ctx.AnswerFileName()
+	if !ok {
+		return "", fmt.Errorf("render: 无法确定 OS 家族 %q 的应答文件名", ctx.Artifact.OSFamily)
+	}
+	answerFileURL := ctx.Bases.GatewayURL("v1", "answer", ctx.Task.ID, ctx.InstallToken, answerFileName)
+
+	return RenderESXiMenuLine(ctx, mbootEFIPath, answerFileURL)
 }
 
 // unimplementedFamilyError 统一构造"该家族 MVP 未实现"的错误，携带具体

@@ -57,10 +57,35 @@ func (r *Renderer) RenderAnswerFile(ctx model.RenderContext, fileName string) (s
 			return RenderMetaData(ctx)
 		}
 		return AssembleAutoinstall(ctx)
-	case model.OSFamilySUSE, model.OSFamilyWindows, model.OSFamilyESXi:
-		// SUSE 用 AutoYaST，不是 kickstart（SPEC §5.1、计划任务 6/8 的
-		// 反复警示）。这里的分支结构本身就是防线：SUSE 与其它两个未实现
-		// 家族一样落进"未实现"分支，绝不会有任何路径把 SUSE 送进
+	case model.OSFamilyWindows:
+		return RenderUnattend(ctx)
+	case model.OSFamilyESXi:
+		// 契约缺口（见 esxi.go 文件末尾"契约缺口 1"与本文件末尾
+		// contractGaps）：model.AnswerFileName(esxi) 固定为 "boot.cfg"，
+		// 且 docs/contracts/http-machine.md 约定 4 明确"{file} 不接受
+		// handler 自行拼接的候选名单"——只有一个文件名可以走到这个分支，
+		// 没有第二个路径能命中 AssembleESXiKickstart。两个候选实现里，
+		// RenderESXiBootCfg 需要"原始 boot.cfg 模板文本"作为输入，而渲染器
+		// 是不做 IO 的纯函数（文件顶部注释），RenderContext 里没有任何
+		// 字段携带这份原始文本（ArtifactPaths.Extra["boot.cfg"] 是磁盘
+		// 相对路径字符串，不是文件内容，见 imports/extract_esxi.go）——
+		// 调用 RenderESXiBootCfg 需要先读盘，这里没有合法方式获得那份输入。
+		// 保守选择 AssembleESXiKickstart：它是不需要额外磁盘输入的纯函数，
+		// 与本方法"零 IO"的约束兼容；代价是产出的正文是 ESXi kickstart
+		// 方言（ks= 指向的那份文件），而不是 mboot.efi 真正解析的 boot.cfg
+		// 引导参数文件——这意味着 boot.cfg 的三处必需改写（prefix=/
+		// kernelopt= 的 ks=/modules= 去前导斜杠）目前没有任何调用点会
+		// 执行，mboot.efi 拿到的仍是导入时原样保存的模板，不会指向正确的
+		// HTTP 地址。这不是"看起来能用但细节有误"，是"这条链路目前打不通"，
+		// 已在 contractGaps 完整记录，需要 gateway 侧另开一个可以做磁盘
+		// IO 的调用点（读 Extra["boot.cfg"] 路径 → RenderESXiBootCfg）
+		// 才能真正解决，本方法的签名（RenderContext, string) (string,
+		// error)，纯函数、无 IO）无法安全地自行读盘。
+		return AssembleESXiKickstart(ctx)
+	case model.OSFamilySUSE:
+		// AutoYaST 的渲染实现（AssembleAutoYaST）在本 worktree 内不存在
+		// （已检查 internal/render/ 下所有文件），没有实现可接。SUSE 与
+		// kickstart 分支的隔离仍然成立：它落"未实现"分支，绝不会被送进
 		// AssembleKickstart——那是 RHEL 专属的 case，SUSE 不会匹配到它。
 		return "", unimplementedFamilyError(ctx.Artifact.OSFamily)
 	default:
