@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -274,6 +275,101 @@ func (f stateMachineErrorFixup) ScanTimeouts(ctx context.Context, asOf int64) (i
 
 var _ contract.StateMachine = stateMachineErrorFixup{}
 
+// autoRetryScanDecorator 是本装配点为把 Phase 4 新增的自动重试
+// （internal/statemachine/scan.go 的 AutoRetryFailedTasks）接进现有的
+// 30 秒周期扫描循环而构造的 contract.StateMachine 包装。
+//
+// 为什么需要这一层装配点包装，而不是让 cmd/lober/scanner.go 直接调用
+// AutoRetryFailedTasks：scanner.go 与 main.go 都不在本任务的文件归属
+// 范围内（铁律 1），本任务只允许在 cmd/lober/wire.go 里加代码。scanner.go
+// 现有的 runScanLoop 只依赖一个窄接口 timeoutScanner{ScanTimeouts}，
+// main.go 的 serve() 把 app.StateMachine（本类型的一个实例）传给它——
+// 因此让 ScanTimeouts 这一个方法在做完超时扫描之后再多做一件事（跑一轮
+// 自动重试判定），就能在不新开一个 goroutine、不改 scanner.go 或
+// main.go 任何一行的前提下，让自动重试搭上已经存在的扫描节奏。
+//
+// 两者共享同一个 30 秒节奏纯粹是「不需要为了这一个新增动作再起一条
+// 后台循环」的装配便利，不代表业务上两者有先后依赖——AutoRetryFailedTasks
+// 内部查询「当前处于 failed 状态的任务」，与 ScanTimeouts 内部查询
+// 「当前阶段预算已过期的非终态任务」是两个完全独立的候选集合，互不影响，
+// 顺序对调也不会改变结果（本类型选择先跑超时扫描、再跑自动重试，仅仅是
+// 与 ScanTimeouts 本身在 §3.3 里的既有语义顺序一致：先发现新的失败，
+// 下一轮才可能捕捉到刚产生的失败候选——但由于是查库判定而不是内存传递，
+// 即使颠倒顺序，同一轮里刚被 ScanTimeouts 判失败的任务最早也要等下一轮
+// AutoRetryFailedTasks 扫描时才会被看到，不会在本轮内被自动重试，这与
+// 计划任务 4「自动重试的对象是已经是 failed 状态的任务」的语义完全一致）。
+//
+// 自动重试出错不影响 ScanTimeouts 本身的返回值：与 ScanTimeouts 内部
+// 「单个任务处置失败不中断整轮」的既有取舍一致（scan.go 文档），本装饰器
+// 对 AutoRetryFailedTasks 的错误只记日志，不让它污染 ScanTimeouts 原本
+// 就要返回给调用方（scanner.go 的 scanOnce，进而是 slog 日志）的
+// (failedCount, err) 语义——调用方原本的错误处理路径是「记录并跳过，
+// 下一轮再试」，自动重试的错误处理需要同一条路径，不需要一个新的错误
+// 通道。
+type autoRetryScanDecorator struct {
+	inner *statemachine.Machine
+	cfg   config.Scan
+}
+
+// newAutoRetryScanDecorator 构造一个 autoRetryScanDecorator。cfg 是
+// config.Scan 的值拷贝（Go 的值类型，装配阶段读一次即固定），不是指针——
+// 自动重试的开关与次数上限预期只在启动装配阶段确定一次，与
+// AdmissionLimit 需要跨越 StartBoot 调用点与装配点两个不同代码位置共享、
+// 因此需要 atomic 包级变量的场景不同：本装饰器持有的 cfg 只在自己内部
+// 的 ScanTimeouts 方法里被读取，不存在跨包共享的需求。
+func newAutoRetryScanDecorator(inner *statemachine.Machine, cfg config.Scan) *autoRetryScanDecorator {
+	return &autoRetryScanDecorator{inner: inner, cfg: cfg}
+}
+
+func (d *autoRetryScanDecorator) StartBoot(ctx context.Context, taskID string, actualArch model.Arch, actualFirmware model.FirmwareMode) (model.Task, error) {
+	return d.inner.StartBoot(ctx, taskID, actualArch, actualFirmware)
+}
+
+func (d *autoRetryScanDecorator) MarkAnswerFetched(ctx context.Context, taskID string) (model.Task, error) {
+	return d.inner.MarkAnswerFetched(ctx, taskID)
+}
+
+func (d *autoRetryScanDecorator) ApplySignal(ctx context.Context, taskID string, signal model.SignalKind, seq int) (contract.SignalOutcome, error) {
+	return d.inner.ApplySignal(ctx, taskID, signal, seq)
+}
+
+func (d *autoRetryScanDecorator) IssueFinalizeToken(ctx context.Context, taskID string) (model.Task, error) {
+	return d.inner.IssueFinalizeToken(ctx, taskID)
+}
+
+func (d *autoRetryScanDecorator) Fail(ctx context.Context, taskID string, reason model.FailureReason, detail model.FailureDetail) (model.Task, error) {
+	return d.inner.Fail(ctx, taskID, reason, detail)
+}
+
+func (d *autoRetryScanDecorator) Cancel(ctx context.Context, taskID string) (model.Task, error) {
+	return d.inner.Cancel(ctx, taskID)
+}
+
+func (d *autoRetryScanDecorator) Retry(ctx context.Context, taskID string) (model.Task, error) {
+	return d.inner.Retry(ctx, taskID)
+}
+
+// ScanTimeouts 先跑既有的超时扫描（原样返回它的 failedCount/err，本装饰
+// 器不改变 scanner.go 观察到的既有行为），再跑一轮自动重试判定——自动
+// 重试的次数与错误都不汇入返回值，只记日志（见类型文档）。
+func (d *autoRetryScanDecorator) ScanTimeouts(ctx context.Context, asOf int64) (int, error) {
+	failedCount, err := d.inner.ScanTimeouts(ctx, asOf)
+
+	retried, retryErr := d.inner.AutoRetryFailedTasks(ctx, statemachine.AutoRetryConfig{
+		Enabled:        d.cfg.AutoRetryEnabled,
+		MaxAutoRetries: d.cfg.AutoRetryMaxAttempts,
+	})
+	if retryErr != nil {
+		slog.Error("自动重试本轮出错", slog.Any("error", retryErr))
+	} else if retried > 0 {
+		slog.Info("自动重试本轮完成", slog.Int("retried_count", retried))
+	}
+
+	return failedCount, err
+}
+
+var _ contract.StateMachine = (*autoRetryScanDecorator)(nil)
+
 // resolvedParamsKeyFixup 是本装配点为修复另一处真实的跨模块契约裂缝而
 // 构造的 contract.TaskParamsResolver 包装。
 //
@@ -401,6 +497,16 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 	sm := statemachine.New(st, clock, tokens, precheck, logs, events)
 	precheck.setInner(sm) // 反填：*Machine 实现了 contract.Prechecker。
 
+	// 并发准入上限（Phase 4 新增，SPEC §10 失败模式 11）：StartBoot
+	// （internal/statemachine/boot.go）在准入检查这一步读取的是包级的
+	// statemachine.globalAdmissionLimit，不是 sm 的字段——见 admission.go
+	// 顶部「为什么需要一个包级变量」的说明（Machine 的构造签名冻结在
+	// machine.go，不在本任务的文件归属范围内，无法给它加第七个依赖）。
+	// 这里在装配阶段调用一次，把配置读到的值覆盖进去；未调用时仍然生效
+	// 于 statemachine 包自己的保守默认值（20），不会因为忘记装配就静默
+	// 变成不限。
+	statemachine.SetGlobalAdmissionLimit(cfg.Scan.AdmissionLimit)
+
 	// smForHTTP 是修复过 StartBoot 契约裂缝的包装（见
 	// stateMachineErrorFixup 文档），供网关与控制台的 Deps.StateMachine
 	// 字段使用。precheck.setInner 上面已经用了未包装的 sm——那处需要的是
@@ -417,7 +523,22 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cmd/lober: 构造 provider 失败: %w", err)
 	}
-	provider.RegisterLifecycleHooks(events, providers.DNS, providers.Notify)
+	// 用 provider.NewAlertingNotify 包一层内置的 Notify 实现（Phase 4
+	// 新增，实现计划 phase4-01 任务 5）——这是 internal/provider/notify.go
+	// 自己文档记录的契约缺口的落地方式（见该文件顶部「契约缺口」段落：
+	// 「装配点用 NewAlertingNotify(真实实现) 包一层即可获得诊断字段与
+	// 降噪能力」）。providers.Notify 目前是 provider.NewBuiltinNotify()
+	// 构造的内置「记结构化日志」实现（provider/factory.go），
+	// AlertingNotify 组装 §3.5 的诊断字段与 §3.4 的不可重装警示、并对
+	// 同一任务的同一失败去重，再委托给内置实现真正落盘/落日志。
+	//
+	// 装配点在这里包一层而不是在 provider 包内部直接改 NewBuiltinNotify
+	// 的返回值：AlertingNotify 与具体的告警传输方式解耦（notify.go 文档：
+	// 「真实生产环境会换成 P2-03 的 http 加载器接的外部告警系统」），装配
+	// 点是替换传输层实现、同时保留内容组装与降噪能力这两件事该发生的
+	// 位置。
+	alertingNotify := provider.NewAlertingNotify(providers.Notify)
+	provider.RegisterLifecycleHooks(events, providers.DNS, alertingNotify)
 
 	// 必须接上建任务的同步决策接口（§7.4）。漏了它的后果是 IPAM 失败也能
 	// 建出任务，那台机器会带着空的业务 IP 配置装上去，且这个错误不会有
@@ -508,9 +629,15 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 		Clock:  clock,
 		Events: events,
 
-		TokenIssuer:  tokens,
-		Prechecker:   precheck,
-		StateMachine: sm,
+		TokenIssuer: tokens,
+		Prechecker:  precheck,
+		// StateMachine 字段用 autoRetryScanDecorator 包一层 sm——见该类型
+		// 文档。main.go 的 serve() 用 app.StateMachine 驱动
+		// cmd/lober/scanner.go 现有的 30 秒周期扫描循环（那两个文件都不
+		// 在本任务的文件归属范围内，本装配点通过「让 ScanTimeouts 这一个
+		// 方法多做一件事」把自动重试接进同一个循环节奏，不需要新开一个
+		// goroutine、不需要改 scanner.go 或 main.go 任何一行）。
+		StateMachine: newAutoRetryScanDecorator(sm, cfg.Scan),
 		Renderer:     renderer,
 
 		Providers:      providers,
