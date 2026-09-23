@@ -104,11 +104,12 @@ func (r *Renderer) RenderAnswerFile(ctx model.RenderContext, fileName string) (s
 		// 接线参考。
 		return AssembleESXiKickstart(ctx)
 	case model.OSFamilySUSE:
-		// AutoYaST 的渲染实现（AssembleAutoYaST）在本 worktree 内不存在
-		// （已检查 internal/render/ 下所有文件），没有实现可接。SUSE 与
-		// kickstart 分支的隔离仍然成立：它落"未实现"分支，绝不会被送进
-		// AssembleKickstart——那是 RHEL 专属的 case，SUSE 不会匹配到它。
-		return "", unimplementedFamilyError(ctx.Artifact.OSFamily)
+		// SUSE 用 AutoYaST，**不是 kickstart**：引导参数是 autoyast= 而非
+		// inst.ks=，应答文件是 autoinst.xml（独立的 XML 格式）。SPEC 反复
+		// 警示不能因为两者都被口头叫「ks」就复用 kickstart 渲染器 ——
+		// 语法完全不同，产出的文件安装器根本不认。这里是独立的 case，
+		// 与 AssembleKickstart（RHEL 专属）之间没有任何共享路径。
+		return AssembleAutoYaST(ctx)
 	default:
 		return "", fmt.Errorf("render: 未知的 OS 家族 %q，无法渲染应答文件", ctx.Artifact.OSFamily)
 	}

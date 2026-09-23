@@ -2,7 +2,6 @@
 package render
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -88,26 +87,59 @@ func TestMenu_KsPointsToAnswerFile(t *testing.T) {
 	}
 }
 
-// TestMenu_UnimplementedFamiliesReturnError 锁住"未实现的家族各自
-// 返回错误（不是空字符串）"（计划任务 7 测试要求第二条）。Debian 与
-// Ubuntu 在 phase2-01 已实现，从这份"未实现"清单中移除——它们的正确性
-// 分别由 preseed_test.go 的 TestGolden_DebianMenu、autoinstall_test.go
-// 的 TestGolden_UbuntuMenu 等测试覆盖。
-func TestMenu_UnimplementedFamiliesReturnError(t *testing.T) {
+// TestMenu_LinuxFamiliesRenderSuccessfully 锁住四个 Linux 家族的菜单渲染
+// 都已接线（本文件的 menuTestCtx 是 Rocky 形态的通用 Linux 夹具，四家共用）。
+//
+// 这条测试替换了原先的 TestMenu_UnimplementedFamiliesReturnError —— 那条
+// 断言 suse/windows/esxi 三个家族返回「未实现」错误，是分派接线之前的状态。
+//
+// Windows 与 ESXi **刻意不在这里覆盖**：它们对制品集有额外要求，用这个通用
+// 夹具调用会得到正确的拒绝（Windows 要求 ArtifactSet.Firmware 与机器实际
+// 上报的固件相符，ESXi 要求 Paths.Extra["mboot.efi"]），那不是「渲染失败」
+// 而是「前提不满足时的硬拒绝」。它们的成功路径由 dispatch_test.go 用各自的
+// 专用夹具覆盖，不在此重复。
+//
+// 为什么值得一条专门的测试：SUSE 的接线漏过一次。分派接线那一轨与写
+// AutoYaST 渲染器的那一轨是同一波并行的，接线者检查时 autoyast.go 还不存在，
+// 于是它在 renderer.go 留下注释「已检查 internal/render/ 下所有文件，没有
+// 实现可接」并保留了未实现分支。而当时的分派测试不覆盖 SUSE 成功路径，
+// 所以这个漏接没有变红 —— 直到 SUSE 的端到端脚本在 preview 阶段撞上它。
+func TestMenu_LinuxFamiliesRenderSuccessfully(t *testing.T) {
 	families := []model.OSFamily{
-		model.OSFamilySUSE, model.OSFamilyWindows, model.OSFamilyESXi,
+		model.OSFamilyRHEL, model.OSFamilyDebian,
+		model.OSFamilyUbuntu, model.OSFamilySUSE,
 	}
 	for _, family := range families {
 		t.Run(string(family), func(t *testing.T) {
 			ctx := menuTestCtx(family, model.FirmwareUEFI)
 			out, err := RenderMenu(ctx)
-			if err == nil {
-				t.Errorf("RenderMenu(family=%s) 应返回错误（未实现），got nil error, out=%q", family, out)
+			if err != nil {
+				t.Fatalf("RenderMenu(family=%s) 返回错误: %v", family, err)
 			}
-			if out != "" {
-				t.Errorf("RenderMenu(family=%s) 返回错误时输出应为空字符串，got %q", family, out)
+			if out == "" {
+				t.Errorf("RenderMenu(family=%s) 产出为空", family)
 			}
 		})
+	}
+}
+
+// TestMenu_SUSEUsesAutoYaSTNotKickstart 锁住 SUSE 的菜单用 autoyast= 而不是
+// inst.ks=。SPEC 反复警示：两者都被口头叫「ks」，但 AutoYaST 是独立的 XML
+// 格式，把 SUSE 路由进 kickstart 渲染器产出的文件安装器根本不认。
+func TestMenu_SUSEUsesAutoYaSTNotKickstart(t *testing.T) {
+	ctx := menuTestCtx(model.OSFamilySUSE, model.FirmwareUEFI)
+	out, err := RenderMenu(ctx)
+	if err != nil {
+		t.Fatalf("RenderMenu(suse) 返回错误: %v", err)
+	}
+	if !strings.Contains(out, "autoyast=") {
+		t.Errorf("SUSE 菜单应含 autoyast= 引导参数，got:\n%s", out)
+	}
+	if strings.Contains(out, "inst.ks=") {
+		t.Errorf("SUSE 菜单不应含 inst.ks=（那是 RHEL 的 kickstart 参数），got:\n%s", out)
+	}
+	if !strings.Contains(out, "autoinst.xml") {
+		t.Errorf("SUSE 的应答文件名应是 autoinst.xml，got:\n%s", out)
 	}
 }
 
@@ -137,20 +169,16 @@ func TestMenu_NoLiteralHTTPScheme(t *testing.T) {
 	}
 }
 
-// TestMenu_ErrIsDistinguishable 验证未实现家族返回的错误可用 errors.Is /
-// errors.As 或至少能与其它错误区分（供网关未来据此选择 HTTP 状态码）。
-// 本测试只验证错误非空且携带家族名信息，不对错误类型做过强假设（那属于
-// 契约层，M4 未被要求定义专门的 sentinel error 类型）。
+// TestMenu_ErrIsDistinguishable 验证渲染错误携带足够信息可区分。
+// 原先用 SUSE 做样本（那时它未实现），SUSE 已接线，改用一个真正未知的家族。
 func TestMenu_ErrIsDistinguishable(t *testing.T) {
-	ctx := menuTestCtx(model.OSFamilySUSE, model.FirmwareUEFI)
+	const bogus = "totally-bogus-family"
+	ctx := menuTestCtx(model.OSFamily(bogus), model.FirmwareUEFI)
 	_, err := RenderMenu(ctx)
 	if err == nil {
 		t.Fatal("want non-nil error")
 	}
-	if errors.Is(err, nil) {
-		t.Error("错误值不应等价于 nil")
-	}
-	if !strings.Contains(err.Error(), "suse") && !strings.Contains(strings.ToLower(err.Error()), "suse") {
-		t.Errorf("错误信息应指出具体家族 suse，got: %v", err)
+	if !strings.Contains(err.Error(), bogus) {
+		t.Errorf("错误信息应指出具体家族 %s，got: %v", bogus, err)
 	}
 }

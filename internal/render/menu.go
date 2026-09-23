@@ -44,7 +44,9 @@ func RenderMenu(ctx model.RenderContext) (string, error) {
 	case model.OSFamilyESXi:
 		return renderESXiMenu(ctx)
 	case model.OSFamilySUSE:
-		return "", unimplementedFamilyError(ctx.Artifact.OSFamily)
+		// 菜单用 autoyast=<URL> 指向 autoinst.xml，不是 inst.ks=（见
+		// renderer.go 的 SUSE case 注释）。
+		return RenderAutoYaSTMenu(ctx)
 	default:
 		return "", fmt.Errorf("render: 未知的 OS 家族 %q，无法渲染菜单", ctx.Artifact.OSFamily)
 	}
