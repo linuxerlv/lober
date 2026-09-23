@@ -21,6 +21,7 @@ import (
 
 	"github.com/lober/lober/internal/config"
 	"github.com/lober/lober/internal/core/contract"
+	"github.com/lober/lober/internal/provider/loader"
 )
 
 // defaultTCPHeartbeatPort 是 tcp 心跳探测器在 config 未提供端口字段时使用
@@ -55,12 +56,12 @@ type Providers struct {
 // 未知的选择项返回错误而不是回落到默认（任务 7 明确要求）：配置里写错
 // 一个 provider 名字应该在启动时被发现。
 func NewProviders(cfg config.Provider, hosts hostLister) (Providers, error) {
-	ipam, err := newIPAMFromConfig(cfg.IPAM)
+	ipam, err := newIPAMFromConfig(cfg.IPAM, cfg.IPAMLoader)
 	if err != nil {
 		return Providers{}, err
 	}
 
-	dns, err := newDNSFromConfig(cfg.DNS)
+	dns, err := newDNSFromConfig(cfg.DNS, cfg.DNSLoader)
 	if err != nil {
 		return Providers{}, err
 	}
@@ -75,7 +76,7 @@ func NewProviders(cfg config.Provider, hosts hostLister) (Providers, error) {
 		return Providers{}, err
 	}
 
-	heartbeat, err := newHeartbeatFromConfig(cfg.HeartbeatMode)
+	heartbeat, err := newHeartbeatFromConfig(cfg.HeartbeatMode, cfg.HeartbeatLoader)
 	if err != nil {
 		return Providers{}, err
 	}
@@ -99,22 +100,83 @@ func NewProviders(cfg config.Provider, hosts hostLister) (Providers, error) {
 // taskParamsResolver.Resolve（resolve.go）为每次请求单独构造一个带当次
 // 表单数据的实例，不复用工厂阶段这个占位实例。工厂返回的这个实例仅用于
 // Ping 探活与满足 Providers 结构体字段非 nil 这两个用途。
-func newIPAMFromConfig(kind string) (contract.IPAMProviderV1, error) {
+//
+// exec/http 分支（本次任务，SPEC §7.2）不受上面这条限制——
+// loader.IPAMAdapter.Allocate 直接把 contract.AllocRequest（含
+// Hostname/Role）编码发给外部程序/服务，不需要 static 实现那种「工厂
+// 阶段先占位、调用阶段再重建」的两步走，本工厂构造出来的这一个实例
+// 从一开始就是最终会被调用的那个实例。
+//
+// 契约缺口：taskParamsResolver.ipamFactory（resolve.go）目前硬编码为
+// `func(form) contract.IPAMProviderV1 { return newStaticIPAM(form) }`，
+// 不读取 Providers.IPAM 字段，也不知道工厂这里可能构造出了一个 exec/http
+// 加载的 IPAM 实现——这意味着即使运维把 provider.ipam 配成 "exec" 且
+// 本工厂据此成功构造出 Providers.IPAM，装机建任务时真正被调用的仍然是
+// resolve.go 里硬编码的 static 实现，Providers.IPAM 字段实际上只被
+// Ping 探活等辅助路径使用。这不是我能在本文件内部悄悄绕过的缺口——
+// resolve.go 不在本任务的文件归属范围内（铁律第 1 条：分派处/既有
+// 编排逻辑归其它轨或保持原样），正解是把 taskParamsResolver 的构造
+// 参数从「无参数的 ipamFactory 闭包」改成「接受 Providers.IPAM 或一个
+// 按表单数据重新注入 form 的窄接口」，这需要改 resolve.go 与它的构造
+// 调用点（装配点 cmd/lober），已写入本次任务的 wiringNeeded。
+func newIPAMFromConfig(kind string, loaderCfg config.LoaderConfig) (contract.IPAMProviderV1, error) {
 	switch kind {
 	case "static":
 		return newStaticIPAM(nil), nil
+	case "exec", "http":
+		caller, err := newLoaderCaller(kind, loaderCfg)
+		if err != nil {
+			return nil, fmt.Errorf("provider: 构造 IPAM 加载器失败: %w", err)
+		}
+		return loader.NewIPAMAdapter(caller), nil
 	default:
-		return nil, fmt.Errorf("provider: 未知的 IPAM 选择项 %q，MVP 只内置 static 一种实现", kind)
+		return nil, fmt.Errorf("provider: 未知的 IPAM 选择项 %q，MVP 内置 static，"+
+			"另支持 exec/http 两种加载器（SPEC §7.2）", kind)
 	}
 }
 
 // newDNSFromConfig 按配置的 DNS 选择项构造实现。
-func newDNSFromConfig(kind string) (contract.DNSProviderV1, error) {
+func newDNSFromConfig(kind string, loaderCfg config.LoaderConfig) (contract.DNSProviderV1, error) {
 	switch kind {
 	case "noop":
 		return newNoopDNS(), nil
+	case "exec", "http":
+		caller, err := newLoaderCaller(kind, loaderCfg)
+		if err != nil {
+			return nil, fmt.Errorf("provider: 构造 DNS 加载器失败: %w", err)
+		}
+		return loader.NewDNSAdapter(caller), nil
 	default:
-		return nil, fmt.Errorf("provider: 未知的 DNS 选择项 %q，MVP 只内置 noop 一种实现", kind)
+		return nil, fmt.Errorf("provider: 未知的 DNS 选择项 %q，MVP 内置 noop，"+
+			"另支持 exec/http 两种加载器（SPEC §7.2）", kind)
+	}
+}
+
+// newLoaderCaller 按 kind（"exec" 或 "http"）与 loaderCfg 构造一个通用的
+// loader.Caller，供 IPAM/DNS/Heartbeat 三个扩展点的 exec/http 分支共用
+// ——三者需要的构造逻辑完全相同（只是把 config.LoaderConfig 的字段搬进
+// loader.ExecConfig/HTTPConfig/Config），抽成一个函数避免三处 case 分支
+// 各自重复同样的字段搬运代码。
+//
+// kind 必须是 "exec" 或 "http"（调用方在进入这个分支前已经用 switch
+// 保证了这一点），其它取值会走到 default 分支返回错误——这是防御性的
+// "不应该发生"分支，正常路径不会触达。
+func newLoaderCaller(kind string, loaderCfg config.LoaderConfig) (loader.Caller, error) {
+	sharedCfg := loader.Config{
+		Timeout:          loaderCfg.Timeout,
+		MaxRetries:       loaderCfg.MaxRetries,
+		RetryBackoff:     loaderCfg.RetryBackoff,
+		BreakerThreshold: loaderCfg.BreakerThreshold,
+	}
+
+	switch kind {
+	case "exec":
+		return loader.NewExecLoader(loader.ExecConfig{Command: loaderCfg.Command, Args: loaderCfg.Args}, sharedCfg)
+	case "http":
+		return loader.NewHTTPLoader(loader.HTTPConfig{URL: loaderCfg.URL}, sharedCfg)
+	default:
+		return nil, fmt.Errorf("provider: newLoaderCaller 收到不支持的 kind %q（只接受 exec/http，"+
+			"调用方应该已经用 switch 排除了其它取值——走到这里说明调用处有 bug）", kind)
 	}
 }
 
@@ -139,7 +201,13 @@ func newResolverFromConfig(kind string) (contract.TemplateResolver, error) {
 // 不需要额外判空分支，Providers.Heartbeat 字段在任何合法配置下都是可用
 // 的非 nil 值，这是「构造期决定行为，调用期不需要再做特殊判断」的一贯
 // 原则（与 by-hook 磁盘策略、noop DNS 是同一种设计思路）。
-func newHeartbeatFromConfig(mode string) (contract.HeartbeatProviderV1, error) {
+//
+// exec/http 分支（本次任务，SPEC §7.2）：loader.HeartbeatAdapter.Probe
+// 已经保证「整批调用失败时退化为逐目标失败，不改变结果切片长度」（见
+// adapters.go 该方法的文档），与 tcp/icmp 实现「单目标失败不影响其余」
+// 的既有约定在可观察行为上一致——调用方不需要区分心跳背后是内置探测器
+// 还是加载器。
+func newHeartbeatFromConfig(mode string, loaderCfg config.LoaderConfig) (contract.HeartbeatProviderV1, error) {
 	switch mode {
 	case "tcp":
 		return newTCPHeartbeat(defaultTCPHeartbeatPort), nil
@@ -147,8 +215,15 @@ func newHeartbeatFromConfig(mode string) (contract.HeartbeatProviderV1, error) {
 		return newICMPHeartbeat(), nil
 	case "off":
 		return offHeartbeat{}, nil
+	case "exec", "http":
+		caller, err := newLoaderCaller(mode, loaderCfg)
+		if err != nil {
+			return nil, fmt.Errorf("provider: 构造心跳加载器失败: %w", err)
+		}
+		return loader.NewHeartbeatAdapter(caller), nil
 	default:
-		return nil, fmt.Errorf("provider: 未知的心跳模式 %q，合法取值为 tcp/icmp/off 之一", mode)
+		return nil, fmt.Errorf("provider: 未知的心跳模式 %q，合法取值为 tcp/icmp/off/exec/http 之一"+
+			"（SPEC §6.6、§7.2）", mode)
 	}
 }
 
