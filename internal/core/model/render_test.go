@@ -62,7 +62,8 @@ func TestBaseURLs_SchemeFromConfig(t *testing.T) {
 	gotGW := b.GatewayURL("v1/boot")
 	if gotGW != "https://gw.internal/v1/boot" {
 		t.Errorf("GatewayURL 用 https 基址拼出 %q，want 保留 https:// scheme —— "+
-			"将来上 TLS 只应是部署变更（改配置），代码若硬编码 http:// 就会变成代码变更（SPEC §1.5）",
+			"scheme 必须完全来自配置：代码若硬编码 http:// 就把 URL 形态变成代码决定"+
+			"（SPEC §1.5；人面已上 HTTPS，机器面永久明文，见 docs/tls-与安全启动-范围决定.md）",
 			gotGW)
 	}
 

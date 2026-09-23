@@ -89,7 +89,7 @@ func TestBootScript_BaseURLFromConfig(t *testing.T) {
 // TestBootScript_NoLiteralHTTPScheme 锁住：响应不含字面 http://（scheme 来自
 // 配置的基址）。这条断言的写法是：去掉基址本身贡献的那个 http://
 // 之后，剩余文本里不应再出现 http://——网关代码自己不应该在别处硬编码
-// scheme（SPEC §1.5：模板中不出现字面 http://，将来上 TLS 只改配置不改
+// scheme（SPEC §1.5：模板中不出现字面 http://，scheme 完全来自配置，不改
 // 代码）。
 func TestBootScript_NoLiteralHTTPScheme(t *testing.T) {
 	base := "http://gw.example.test"

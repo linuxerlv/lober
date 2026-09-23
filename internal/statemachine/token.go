@@ -1,7 +1,8 @@
 // 本文件实现 contract.TokenIssuer：签发不可预测的随机字符串。对应实现
 // 计划任务 2，依据 SPEC §0.1、§1.5、§4.4、§9.1。
 //
-// token 是删掉 armed 之后唯一的执行许可。MVP 无 TLS，所以它与「默认拒绝」
+// token 是删掉 armed 之后唯一的执行许可。机器面永久保持明文 HTTP
+// （2026-09-23 范围决定，见 docs/tls-与安全启动-范围决定.md），所以它与「默认拒绝」
 // 是唯一的防线，不能降级实现——必须用 crypto/rand，不能用 math/rand、
 // 不能从时间戳或任务 id 派生。
 package statemachine

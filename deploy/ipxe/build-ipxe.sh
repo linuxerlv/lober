@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+#
+# **本能力已放弃（2026-09-23 范围决定）。** 机器面 TLS 不做了，iPXE 无需重新编译。
+# 理由与保留本脚本的价值见 docs/tls-与安全启动-范围决定.md。
+# 本脚本的构建步骤仍然准确，保留它是为了将来若重新评估时不必从零再查一遍。
+#
 # 部署前必跑的校验命令（在有外网、装好构建工具链的机器上）：
 #   bash deploy/ipxe/build-ipxe.sh --dry-run --ca-cert /path/to/ca.cert.pem
 # --dry-run 只打印将要执行的 git clone / make 命令与目标产物路径，不实际

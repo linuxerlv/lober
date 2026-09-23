@@ -5,7 +5,12 @@ package model
 import "strings"
 
 // BaseURLs 承载网关与制品服务的基址。所有 URL 从这里拼出——SPEC §1.5
-// 要求模板中不出现字面 http://，将来上 TLS 只改配置不改代码。
+// 要求模板中不出现字面 http://：scheme 完全来自配置。
+//
+// 这条约束的价值不依赖于要不要上 TLS —— 它换来的是「URL 形态是部署决定、
+// 不是代码决定」。2026-09-23 的范围决定是机器面永久保持明文 HTTP（见
+// docs/tls-与安全启动-范围决定.md），但这条约束仍然保留：它同时也是
+// 「用域名不用 IP」与「基址可换主机」的前提。
 //
 // scheme 完全来自配置：GatewayBase 与 ArtifactBase 各自已经包含 scheme
 // （如 "http://gw" 或将来的 "https://gw"），本类型不额外拼接或假设 scheme。

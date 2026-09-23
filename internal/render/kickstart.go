@@ -183,7 +183,9 @@ func baseDirectives(ctx model.RenderContext) (string, error) {
 	// 这里的装机网是两个完全不同的网络。装机 VLAN 的 DHCP 本就应保持到
 	// rebooting 信号发出（§5.7），这行正是维持这一点的基础指令。
 	b.WriteString("network --bootproto=dhcp --activate\n")
-	// root 不设可复用密码：锁定密码登录，只允许 SSH 公钥登录（MVP 无 TLS，
+	// root 不设可复用密码：锁定密码登录，只允许 SSH 公钥登录（机器面永久
+	// 明文 HTTP，见 docs/tls-与安全启动-范围决定.md —— 这条措施因此不是
+	// 过渡期妥协而是长期防线，不得放松，
 	// 应答文件被截获也换不成持久访问，SPEC §1.5）。
 	b.WriteString("rootpw --lock\n")
 	// 逐把公钥各生成一行 sshkey 指令——kickstart 语法本身支持多次出现该

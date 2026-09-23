@@ -142,7 +142,9 @@ func preseedPartitioning(ctx model.RenderContext) string {
 }
 
 // preseedAccountAndPackages 渲染账户与软件包段落：root 不设可复用密码
-// （同 kickstart 的 rootpw --lock，MVP 无 TLS，SPEC §1.5），只装基础任务。
+// （同 kickstart 的 rootpw --lock。机器面永久明文 HTTP，见
+// docs/tls-与安全启动-范围决定.md 与 SPEC §1.5 —— 这条措施是长期防线，
+// 不是过渡期妥协），只装基础任务。
 //
 // preseed 没有与 kickstart `sshkey` 指令直接等价的 debconf 键——真实
 // debian-installer 的 SSH 公钥注入惯例是通过 late_command 里的一条
