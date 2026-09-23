@@ -247,3 +247,51 @@ func TestAnswer_MarkAnswerFetchedCalledForEachRequest(t *testing.T) {
 		t.Errorf("MarkAnswerFetched 被调用 %d 次, want 1", markCalls)
 	}
 }
+
+// TestAnswer_UbuntuMetaDataIsServed 锁住「Ubuntu 的 meta-data 请求也能取到」。
+//
+// 为什么这条重要：Ubuntu 的 autoinstall 走 cloud-init 的 NoCloud 数据源，
+// 内核参数 ds=nocloud-net;s=<url> 指向一个目录，cloud-init 会在那个目录下
+// **依次取 user-data 与 meta-data 两个文件**（SPEC §4.4）。
+//
+// 这个 bug 是 Ubuntu 端到端脚本跑出来的：渲染器（internal/render/renderer.go）
+// 早就有专门处理 meta-data 的分支，但网关只比对 AnswerFileName() 的单一
+// 返回值，于是 meta-data 请求拿到 404、渲染器那个分支成了死代码。现场表现是
+// 「机器装到一半停住」—— cloud-init 取不到 meta-data 就不会继续。
+//
+// 放行必须窄：只对 Ubuntu 家族、只多放行 "meta-data" 这一个名字。下面第二个
+// 子测试锁住「RHEL 请求 meta-data 仍然 404」，防止将来把放行放宽成无条件的。
+func TestAnswer_UbuntuMetaDataIsServed(t *testing.T) {
+	fx := newAnswerFixture(t, model.TaskStateBooting)
+	// 把制品集改成 Ubuntu（夹具默认造的是 RHEL）。
+	if _, err := fx.store.SetArtifactSetContent(t.Context(), "art-1",
+		model.OSFamilyUbuntu, model.ArtifactPaths{Kernel: "casper/vmlinuz"}); err != nil {
+		t.Fatalf("把制品集改成 Ubuntu 失败: %v", err)
+	}
+	fx.deps.StateMachine = newStateMachineStub()
+	renderer := newRendererStub()
+	fx.deps.Renderer = renderer
+
+	for _, file := range []string{"user-data", "meta-data"} {
+		t.Run(file, func(t *testing.T) {
+			_, status := doAnswer(t, fx.deps, fx.task.ID, "fixed-install-token", file)
+			if status != http.StatusOK {
+				t.Errorf("Ubuntu 取 %s 状态码 = %d, want 200 —— cloud-init 要取 user-data 与 "+
+					"meta-data 两个文件，缺一个就会停在装机中途（SPEC §4.4）", file, status)
+			}
+		})
+	}
+}
+
+// TestAnswer_NonUbuntuMetaDataStill404 锁住 meta-data 的放行只对 Ubuntu 生效。
+// 路径段来自机器请求，无条件放行等于让机器自己指定要取哪种应答文件。
+func TestAnswer_NonUbuntuMetaDataStill404(t *testing.T) {
+	fx := newAnswerFixture(t, model.TaskStateBooting) // 夹具默认 RHEL
+	fx.deps.StateMachine = newStateMachineStub()
+	fx.deps.Renderer = newRendererStub()
+
+	_, status := doAnswer(t, fx.deps, fx.task.ID, "fixed-install-token", "meta-data")
+	if status != http.StatusNotFound {
+		t.Errorf("RHEL 取 meta-data 状态码 = %d, want 404 —— meta-data 只对 Ubuntu 放行", status)
+	}
+}
