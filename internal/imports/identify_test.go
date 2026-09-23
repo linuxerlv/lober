@@ -61,16 +61,39 @@ func TestIdentify_ESXi_UnsupportedButIdentified(t *testing.T) {
 	}
 }
 
-func TestIdentify_Windows_UnsupportedButIdentified(t *testing.T) {
+// TestIdentify_Windows_NowSupported 锁住本轮解封：Windows 从
+// mvpUnsupportedFamilies 移除后，Identify 对 sources/install.wim 特征文件
+// 应返回 (windows, nil)——不再是 ErrUnsupportedOSFamily。这条测试替换了
+// 旧版 TestIdentify_Windows_UnsupportedButIdentified（旧版断言的正是本轮
+// 要解除的封锁行为，若保留会与新行为直接矛盾）。ESXi 的对应测试
+// TestIdentify_ESXi_UnsupportedButIdentified 保持不变，不在本任务范围内。
+func TestIdentify_Windows_NowSupported(t *testing.T) {
 	root := fstest.MapFS{
 		"sources/install.wim": &fstest.MapFile{Data: []byte("")},
 	}
 	family, err := Identify(root)
-	if !errors.Is(err, ErrUnsupportedOSFamily) {
-		t.Fatalf("Windows 应被识别但报 MVP 不支持，got err=%v", err)
+	if err != nil {
+		t.Fatalf("Windows 已解除 MVP 封锁，含 sources/install.wim 应识别成功不报错，got err=%v", err)
 	}
 	if family != model.OSFamilyWindows {
-		t.Fatalf("即使不支持，识别出的家族字段也应该是 windows，got %s", family)
+		t.Fatalf("识别出的家族字段应为 windows，got %s", family)
+	}
+}
+
+// TestIdentify_ESXiStillBlockedByMVPUnsupportedFamilies 确认本轮只解除了
+// Windows 的封锁，ESXi 仍然留在 mvpUnsupportedFamilies 里（该家族归 n3 轨，
+// 本任务不动它）——防止未来有人以为"顺手一起解封"而误删 ESXi 那一行。
+func TestIdentify_ESXiStillBlockedByMVPUnsupportedFamilies(t *testing.T) {
+	root := fstest.MapFS{
+		"boot.cfg":  &fstest.MapFile{Data: []byte("")},
+		"mboot.efi": &fstest.MapFile{Data: []byte("")},
+	}
+	family, err := Identify(root)
+	if !errors.Is(err, ErrUnsupportedOSFamily) {
+		t.Fatalf("ESXi 不属于本任务范围，应仍被 mvpUnsupportedFamilies 挡住，got err=%v", err)
+	}
+	if family != model.OSFamilyESXi {
+		t.Fatalf("即使不支持，识别出的家族字段也应该是 esxi，got %s", family)
 	}
 }
 
