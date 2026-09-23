@@ -1,8 +1,12 @@
 // 本文件实现制品集四个端点：登记、列表、校验完整性、删除。对应实现计划
 // 任务 4，依据 docs/contracts/http-console.md §3、SPEC §2.1、§2.7。
+//
+// 本轮新增：登记成功后触发异步导入 job（importing → ready/failed），对应
+// SPEC §11 Phase 2、§12.6「ISO 登记与导入进度（异步 job）」的要求。
 package console
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,6 +17,42 @@ import (
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
 )
+
+// ArtifactImporter 是控制台触发异步导入 job 需要的最窄接口：只有一个
+// 方法，「异步导入这个制品集」。
+//
+// 接口定义放在 console 包内（不放 internal/core/contract）：契约层
+// internal/core/contract/** 对本轮任务只读，且「调用方定义接口」本身就是
+// Go 的惯例——真正的导入逻辑在 internal/imports 包，但 console 不能
+// import internal/imports（archtest 的依赖方向守卫拦住任何实现模块之间
+// 互相 import，唯一豁免是 cmd/lober 装配点），因此装配点
+// （cmd/lober/importrunner.go）持有 internal/imports 的具体类型、实现
+// 这个窄接口后注入进来，console 包本身的代码全程看不到 internal/imports
+// 的任何类型。
+//
+// TriggerImport 的语义是「异步触发，立即返回」——本接口的实现必须自己
+// 起 goroutine（或复用某种任务队列），不能阻塞调用方；handleCreateArtifactSet
+// 在 HTTP 响应写出之前调用它，若这里同步跑几 GB 的解压，会让登记请求
+// 挂起到导入完成才返回，与 SPEC §2.1「导入是异步 job」的要求直接冲突。
+//
+// isoPath 是登记时运维填写的本地路径（气隙环境下以「登记服务器本地
+// 路径」为主，与 createArtifactSetRequest.SourcePath 同一个值）——
+// model.ArtifactSet 没有承载这个值的字段（该结构体的字段列表见
+// internal/core/model/inventory.go，只有 SourceISOSHA256 记录内容
+// 摘要，没有记录来源路径本身），所以本接口在触发时机直接把 handler
+// 收到的原始请求值转发过去，不依赖任何持久化字段——这也是为什么导入
+// 只能在登记这一次 HTTP 请求的生命周期内触发：进程重启后没有任何地方
+// 能重新取到这个路径（详见 contractGaps 与 notes 中对「在途导入中断」
+// 的运维说明）。
+type ArtifactImporter interface {
+	// TriggerImport 异步触发对 artifactSetID 的导入：从 isoPath 打开 ISO、
+	// 识别家族、抽取、写回制品集内容与状态。方法本身不返回执行结果
+	// （结果体现在制品集的 state 字段上，供前端轮询 GET /artifact-sets
+	// 观察，与 docs/contracts/http-console.md 对 POST /artifact-sets 的
+	// 现有约定「导入是异步 job，本端点立即返回，进度由前端轮询观察」
+	// 完全一致，不需要新增端点）。
+	TriggerImport(ctx context.Context, artifactSetID, isoPath string)
+}
 
 // routesArtifactSet 注册制品集四个端点。
 func (s *Server) routesArtifactSet() {
@@ -78,10 +118,11 @@ type createArtifactSetRequest struct {
 	Name       string `json:"name"`
 }
 
-// handleCreateArtifactSet 处理 POST /artifact-sets：登记触发异步导入 job，
-// 本端点立即返回 state=importing 的记录（本模块不 import M7 的实际导入
-// 实现，异步 job 本身由装配点接入的其它组件驱动——控制台只负责落一条
-// importing 记录，状态更新走 ArtifactSetStore.UpdateArtifactSetState，
+// handleCreateArtifactSet 处理 POST /artifact-sets：落库 state=importing
+// 记录后，通过 Deps.ArtifactImporter 这个窄接口触发异步导入 job，本端点
+// 立即返回（本模块不 import internal/imports 的实际实现，真正的抽取/
+// manifest/状态写回逻辑由装配点注入的 ArtifactImporter 实现完成——控制台
+// 只负责落库与触发，状态更新走 ArtifactSetStore.UpdateArtifactSetState，
 // 不在本 handler 内同步执行导入）。
 func (s *Server) handleCreateArtifactSet(w http.ResponseWriter, r *http.Request) {
 	var req createArtifactSetRequest
@@ -108,6 +149,22 @@ func (s *Server) handleCreateArtifactSet(w http.ResponseWriter, r *http.Request)
 		writeInternal(w, err)
 		return
 	}
+
+	// 触发异步导入（本轮新增）：登记本身已经落库成功，导入是否成功不影响
+	// 本次 HTTP 响应——本端点始终返回 state=importing 的记录，真正的
+	// ready/failed 由异步 job 事后写回，前端轮询 GET /artifact-sets 观察
+	// （docs/contracts/http-console.md 对本端点的既有约定）。
+	//
+	// Deps.ArtifactImporter 判空：可为 nil（测试或某些部署形态可能不需要
+	// 触发能力，与 Deps.EventBus 同一种「按需注入、handler 调用前判空」
+	// 的接缝设计），为 nil 时制品集会停留在 importing，直到有人用
+	// sqlite3 CLI 或未来的手工修复路径把它推进——这不是本次改动引入的
+	// 新风险，是「没有导入触发」这一断口在 Deps.ArtifactImporter 缺省时
+	// 的自然延续。
+	if s.deps.ArtifactImporter != nil {
+		s.deps.ArtifactImporter.TriggerImport(context.WithoutCancel(r.Context()), created.ID, req.SourcePath)
+	}
+
 	apierr.WriteOK(w, toArtifactSetItem(created))
 }
 

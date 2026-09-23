@@ -476,6 +476,13 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 		authUsers = append(authUsers, console.AuthUser{Name: u.Name, BcryptHash: u.BcryptHash, Roles: u.Roles})
 	}
 
+	// importRunner 是 console.ArtifactImporter 的生产实现（见
+	// importrunner.go）：登记端点触发导入后，另起 goroutine 调用
+	// internal/imports.Job.Run，把制品根目录（cfg.Store.ArtifactPath）
+	// 与真实挂载式抽取器接到一起——这是本轮任务要接上的关键断口：此前
+	// 登记端点把状态写成 importing 就结束了，没有任何东西触发导入 job。
+	importer := newImportRunner(st, nil, cfg.Store.ArtifactPath)
+
 	consoleServer := console.NewServer(console.Deps{
 		Hosts:        st,
 		ArtifactSets: st,
@@ -499,6 +506,8 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 		// 与 gateway.Deps 取同一个配置值：preview 端点自己构造
 		// RenderContext，而渲染器对空公钥列表是硬拒绝（SPEC §1.5）。
 		RootSSHPublicKeys: cfg.Gateway.RootSSHPublicKeys,
+
+		ArtifactImporter: importer,
 	})
 
 	// 第 8 步：组装成一个持有全部组件的结构体返回。
