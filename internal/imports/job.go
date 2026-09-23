@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/lober/lober/internal/core/model"
 )
@@ -53,12 +54,49 @@ func NewJob(store artifactSetUpdater, extractor Extractor) *Job {
 	return &Job{store: store, extractor: extractor}
 }
 
-// RunRHEL 执行一次完整的 RHEL 系导入流程（任务 11 的 job 执行流程）：
+// familyExtractor 是「按识别结果选抽取函数」这张表里每一行的统一形状：
+// 接收 Identify 已确认过的文件系统视图与目标根目录，返回落盘路径。
+//
+// 只有输入输出都是（fs.FS, destDir）→（ArtifactPaths, error）的抽取函数
+// 才能进表——RHEL/Debian/Ubuntu 三者都满足。Windows（还需要
+// WindowsExternalSources/declaredFirmware/WimArchDetector 三个额外参数）
+// 与 ESXi（还需要 declaredFirmware）的签名不满足这个形状，装它们需要
+// job.go 之外先收集这些额外输入，不是简单的「表里加一行」；本表故意只
+// 收窄到三个签名一致的家族，另两个family的接线留给能拿到那些额外参数的
+// 调用层（见文件末尾契约缺口说明）。
+type familyExtractor func(root fs.FS, destDir string) (model.ArtifactPaths, error)
+
+// familyExtractors 是「识别到的 OS 家族 → 对应抽取函数」的查找表（任务
+// 「不接死 if 分支」的设计要求）：Run 只查表，不知道表里有哪些家族。
+//
+// 新增一个签名兼容的家族（未来若有）只需要在此加一行，不改 Run 本身的
+// 分派逻辑——本仓库当前 Identify 能返回的家族里，只有 RHEL/Debian/Ubuntu
+// 三者的 ExtractXxx 签名与 familyExtractor 一致，因此表目前只有三行；
+// Windows/ESXi 由 Identify 自身在识别阶段就返回
+// ErrUnsupportedOSFamily（identify.go，非本文件职责），不会走到这张表的
+// 查找，SUSE 则连 Identify 都识别不出（同样不是本文件职责）——两者都会
+// 在 Run 里被下面的 switch 分支正确地判定为「未支持」而非「表里没有」，
+// 语义更精确：真正意义上的「表里没有」只留给「Identify 已经判定支持、
+// 但本表尚未收录对应抽取函数」这一种情况（比如未来某天 identify.go 学会
+// 识别 SUSE 之后，本表还没加对应行的窗口期）。
+var familyExtractors = map[model.OSFamily]familyExtractor{
+	model.OSFamilyRHEL:   ExtractRHEL,
+	model.OSFamilyDebian: ExtractDebian,
+	model.OSFamilyUbuntu: ExtractUbuntu,
+}
+
+// Run 是导入 job 的统一入口（任务：按识别结果自动分派，取代逐家族单独
+// 暴露一个 RunXxx 方法）：
 //  1. 打开抽取器得到文件系统视图
-//  2. 识别 OS 家族；不支持则置失败
-//  3. 按家族抽取（当前只接了 RHEL 一种，其它家族的抽取逻辑不在本模块的
-//     计划任务范围内，未来新增家族时在 identify 分支后加对应的 ExtractXxx
-//     调用，不改变本方法的整体结构）
+//  2. 识别 OS 家族——Identify 已经把 Windows/ESXi（识别出但 MVP 不支持）
+//     与完全识别不出这两类情形分别用不同的 sentinel error 区分开
+//     （identify.go），Run 据此给出不同的失败原因文案
+//  3. 查 familyExtractors 表；查到就调用对应抽取函数，查不到（这种情况
+//     目前不会发生，因为 Identify 只会返回表里已经收录的三个家族之一，
+//     或是被上面第 2 步拦下的 Windows/ESXi/未识别——保留这个分支是为了
+//     不静默假设「Identify 能返回的家族」与「本表收录的家族」永远一一
+//     对应，未来任何一侧单独变化都会在这里显式报错而不是 panic）落到
+//     明确的「未接线」错误
 //  4. 生成 manifest
 //  5. 写回家族与路径
 //  6. 置 ready 并记录 manifest 校验值
@@ -67,6 +105,61 @@ func NewJob(store artifactSetUpdater, extractor Extractor) *Job {
 //
 // isoPath 是登记时运维填写的本地路径（气隙环境下以「登记服务器本地路径」
 // 为主，SPEC §2.1），destDir 是制品集在磁盘上的根目录。
+func (j *Job) Run(ctx context.Context, artifactSetID, isoPath, destDir string) error {
+	importSemaphore <- struct{}{}
+	defer func() { <-importSemaphore }()
+
+	root, err := j.extractor.Open(ctx, isoPath)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("打开 ISO 失败: %v", err))
+	}
+
+	family, err := Identify(root)
+	switch {
+	case err == nil:
+		// 继续往下走查表分派。
+	case errIsUnsupported(err):
+		return j.fail(ctx, artifactSetID, fmt.Sprintf(
+			"识别到家族 %s，但 MVP 不支持该家族的导入（SPEC §2.1、计划任务 9）", family))
+	default:
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("识别不出 OS 家族: %v", err))
+	}
+
+	extract, ok := familyExtractors[family]
+	if !ok {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf(
+			"识别到家族 %s，但导入 job 尚未接线对应的抽取函数"+
+				"（identify.go 判定为已支持，job.go 的分派表却缺这一行——"+
+				"两侧不同步，需要给 familyExtractors 补上这个家族）", family))
+	}
+
+	paths, err := extract(root, destDir)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("抽取内核/initrd/仓库树失败: %v", err))
+	}
+
+	manifest, err := GenerateManifest(destDir)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("生成 manifest 失败: %v", err))
+	}
+
+	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, family, paths); err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
+	}
+
+	if _, err := j.store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetReady, manifest.SHA256); err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回就绪状态失败: %v", err))
+	}
+
+	return nil
+}
+
+// RunRHEL 是 Run 的兼容入口（保留给既有测试与既有调用方，任务要求「保留
+// RunRHEL 作为兼容入口」）：委托给 Run，额外校验一次识别结果确实是
+// RHEL——RunRHEL 这个名字本身承诺了「这次调用针对的是 RHEL」，如果实际
+// 识别出别的家族，用一个具体指出「家族与调用的方法不符」的原因拒绝，而
+// 不是悄悄按 Run 的通用分派逻辑接受任意家族（那会让 RunRHEL 这个名字名不
+// 副实，调用方传错了 isoPath 也不会得到任何提示）。
 func (j *Job) RunRHEL(ctx context.Context, artifactSetID, isoPath, destDir string) error {
 	importSemaphore <- struct{}{}
 	defer func() { <-importSemaphore }()
