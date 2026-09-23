@@ -615,6 +615,12 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 	// 登记端点把状态写成 importing 就结束了，没有任何东西触发导入 job。
 	importer := newImportRunner(st, nil, cfg.Store.ArtifactPath)
 
+	// verifier 是 console.ArtifactVerifier 的生产实现（见 verifier.go）：
+	// 校验端点触发后，另起 goroutine 重算 manifest 并与已登记的
+	// ManifestSHA256 比对——把本轮任务要接上的另一个断口接好：此前校验
+	// 端点只确认制品集存在就返回接受，没有任何东西真的重算过 sha256。
+	verifier := newArtifactVerifier(st, cfg.Store.ArtifactPath)
+
 	consoleServer := console.NewServer(console.Deps{
 		Hosts:        st,
 		ArtifactSets: st,
@@ -640,6 +646,7 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 		RootSSHPublicKeys: cfg.Gateway.RootSSHPublicKeys,
 
 		ArtifactImporter: importer,
+		ArtifactVerifier: verifier,
 	})
 
 	// 第 8 步：组装成一个持有全部组件的结构体返回。

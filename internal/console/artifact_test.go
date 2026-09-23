@@ -55,6 +55,45 @@ func (f *fakeArtifactImporter) triggeredCalls() []fakeImportCall {
 
 var _ ArtifactImporter = (*fakeArtifactImporter)(nil)
 
+// fakeArtifactVerifier 是 ArtifactVerifier 的可控测试替身：记录每次
+// TriggerVerify 调用的 artifactSetID，并按测试预设的 onTrigger 行为驱动
+// store——不真的重算任何 sha256，只验证「校验端点确实异步触发了校验，且
+// 端点本身不等触发完成就返回」这条契约。
+type fakeArtifactVerifier struct {
+	mu    sync.Mutex
+	calls []string
+
+	// onTrigger 是每次 TriggerVerify 被调用时执行的行为，nil 时什么也
+	// 不做（仅记录调用）。
+	onTrigger func(ctx context.Context, artifactSetID string)
+}
+
+// TriggerVerify 记录调用后立即返回，onTrigger（若非 nil）在独立 goroutine
+// 里执行——接口文档要求实现方自己负责异步（不能阻塞调用方），真实实现
+// （cmd/lober/verifier.go）用 go func(){...}() 满足这条要求，本测试替身
+// 必须模拟同样的义务：否则用阻塞 channel 断言「handler 不等触发完成」的
+// 测试会在假替身这一层同步阻塞住，而不是在验证 handler 本身是否异步。
+func (f *fakeArtifactVerifier) TriggerVerify(ctx context.Context, artifactSetID string) {
+	f.mu.Lock()
+	f.calls = append(f.calls, artifactSetID)
+	onTrigger := f.onTrigger
+	f.mu.Unlock()
+
+	if onTrigger != nil {
+		go onTrigger(ctx, artifactSetID)
+	}
+}
+
+func (f *fakeArtifactVerifier) triggeredIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+var _ ArtifactVerifier = (*fakeArtifactVerifier)(nil)
+
 // TestArtifact_CreateTriggersImportAndImportingUntilJobCompletes 锁住
 // 「登记端点返回后制品集是 importing」这一条：导入器的 onTrigger 故意留空
 // （不立即完成），断言登记响应与紧随其后的一次 GET 都看到 importing。
@@ -239,6 +278,104 @@ func TestArtifact_CreateListVerify(t *testing.T) {
 	rr = ts.doJSON("POST", "/console/v1/artifact-sets/"+created.Data.ID+"/verify", tok, nil)
 	if rr.Code != http.StatusOK {
 		t.Errorf("校验完整性应返回 HTTP 200，实际 %d", rr.Code)
+	}
+}
+
+// TestArtifact_VerifyTriggersVerifierAndReturnsImmediately 锁住「校验端点
+// 确实调用了 Deps.ArtifactVerifier.TriggerVerify，且不等它跑完就返回」——
+// 假验证器的 onTrigger 故意阻塞在一个 channel 上，若 handler 是同步等待
+// 触发完成才写响应，本测试会超时挂起；若 handler 确实异步触发、立即
+// 返回，doJSON 会在假验证器仍阻塞的情况下先拿到 HTTP 200。
+func TestArtifact_VerifyTriggersVerifierAndReturnsImmediately(t *testing.T) {
+	ts := newTestServer(t)
+	ctx := t.Context()
+
+	set, err := ts.Store.CreateArtifactSet(ctx, model.ArtifactSet{
+		ID: "as-verify-1", Name: "rhel9-x86_64", State: model.ArtifactSetReady, ManifestSHA256: "sha256-orig",
+	})
+	if err != nil {
+		t.Fatalf("准备制品集失败: %v", err)
+	}
+
+	block := make(chan struct{})
+	verifier := &fakeArtifactVerifier{
+		onTrigger: func(ctx context.Context, artifactSetID string) {
+			<-block // 故意阻塞：只有测试主动关闭 block 才会解除。
+		},
+	}
+	ts.Server.deps.ArtifactVerifier = verifier
+	defer close(block) // 测试结束前释放，避免遗留 goroutine。
+
+	tok := ts.login("eve-admin")
+	rr := ts.doJSON("POST", "/console/v1/artifact-sets/"+set.ID+"/verify", tok, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("校验端点应立即返回 HTTP 200（不等触发完成），实际 %d, body=%s", rr.Code, rr.Body.String())
+	}
+
+	calls := verifier.triggeredIDs()
+	if len(calls) != 1 || calls[0] != set.ID {
+		t.Errorf("应恰好触发 1 次校验，且 artifactSetID = %q，实际 %v", set.ID, calls)
+	}
+}
+
+// TestArtifact_VerifyNotFound 锁住「校验不存在的制品集返回
+// apierr.CodeNotFound」（任务要求「不存在的制品集返回 1004」）。
+func TestArtifact_VerifyNotFound(t *testing.T) {
+	ts := newTestServer(t)
+	tok := ts.login("eve-admin")
+
+	rr := ts.doJSON("POST", "/console/v1/artifact-sets/does-not-exist/verify", tok, nil)
+	var env struct {
+		Code int `json:"code"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &env)
+	if env.Code != int(apierr.CodeNotFound) {
+		t.Errorf("校验不存在的制品集应回 CodeNotFound(%d)，实际 code=%d", apierr.CodeNotFound, env.Code)
+	}
+}
+
+// TestArtifact_VerifyNotFound_DoesNotTriggerVerifier 锁住「制品集不存在
+// 时不应该触发校验器」——不存在的 ID 没有意义去触发一次「校验」，这与
+// handleCreateArtifactSet 的「先落库成功才触发导入」是同一种顺序纪律。
+func TestArtifact_VerifyNotFound_DoesNotTriggerVerifier(t *testing.T) {
+	ts := newTestServer(t)
+	verifier := &fakeArtifactVerifier{}
+	ts.Server.deps.ArtifactVerifier = verifier
+
+	tok := ts.login("eve-admin")
+	ts.doJSON("POST", "/console/v1/artifact-sets/does-not-exist/verify", tok, nil)
+
+	if calls := verifier.triggeredIDs(); len(calls) != 0 {
+		t.Errorf("制品集不存在时不应触发校验，实际触发了 %v", calls)
+	}
+}
+
+// TestArtifact_VerifyWithNilVerifier_StillReturnsOK 锁住「Deps.ArtifactVerifier
+// 为 nil 时校验端点仍正常返回接受」——这是按需注入依赖缺省时的既有降级
+// 预期（与 Deps.ArtifactImporter 判空同一套设计）。
+func TestArtifact_VerifyWithNilVerifier_StillReturnsOK(t *testing.T) {
+	ts := newTestServer(t)
+	ctx := t.Context()
+	// 有意不设置 ts.Server.deps.ArtifactVerifier（保持零值 nil）。
+
+	set, err := ts.Store.CreateArtifactSet(ctx, model.ArtifactSet{
+		ID: "as-verify-nil", Name: "x", State: model.ArtifactSetReady,
+	})
+	if err != nil {
+		t.Fatalf("准备制品集失败: %v", err)
+	}
+
+	tok := ts.login("eve-admin")
+	rr := ts.doJSON("POST", "/console/v1/artifact-sets/"+set.ID+"/verify", tok, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("ArtifactVerifier 为 nil 时校验端点也应返回 HTTP 200: %d, body=%s", rr.Code, rr.Body.String())
+	}
+	var env struct {
+		Code int `json:"code"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &env)
+	if env.Code != int(apierr.CodeOK) {
+		t.Errorf("ArtifactVerifier 为 nil 时校验端点应返回成功，实际 code=%d", env.Code)
 	}
 }
 
