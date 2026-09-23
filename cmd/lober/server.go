@@ -45,6 +45,23 @@ func runServers(ctx context.Context, app *App, cfg *config.Config) error {
 		return fmt.Errorf("cmd/lober: 控制台监听失败（addr=%s): %w", cfg.Console.Listen, err)
 	}
 
+	// 心跳探测循环（heartbeat.go，t14-heartbeat）：与两个 HTTP listener
+	// 同一个 ctx，随本函数一起启停——探测循环不是请求处理路径的一部分，
+	// 但它的生命周期天然与「服务正在跑」这件事绑定，本函数已经是唯一
+	// 同时持有 app（心跳需要的 Store/Providers.Heartbeat）与 cfg（心跳
+	// 间隔）的装配后调用点。用独立的 heartbeatCtx/cancel 而不是直接复用
+	// 外层 ctx——两个 HTTP listener 走 Shutdown 优雅关闭（等在途请求，
+	// shutdownGrace 宽限期），心跳循环没有"在途请求"这个概念，ctx 取消后
+	// 应该立刻退出，不需要等宽限期，因此让它在函数返回前无条件 cancel
+	// 并等待其 done channel，不与两个 HTTP server 的优雅关闭共用同一套
+	// 超时逻辑。
+	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
+	heartbeatDone := runHeartbeatLoop(heartbeatCtx, app.Store, app.Providers.Heartbeat, cfg.Provider.HeartbeatInterval)
+	defer func() {
+		cancelHeartbeat()
+		<-heartbeatDone
+	}()
+
 	// 三个都成功后才各起 goroutine 开始 Serve。
 	gwHTTPServer := &http.Server{Handler: app.GatewayServer, ReadHeaderTimeout: readHeaderTimeout}
 	consoleMux := http.NewServeMux()
