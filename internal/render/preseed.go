@@ -98,7 +98,7 @@ func preseedNetwork(ctx model.RenderContext) string {
 // preseedMirror 渲染镜像源段落：指向制品服务的仓库树（本地导入的 ISO
 // 内容，不是公网镜像）。
 func preseedMirror(ctx model.RenderContext) string {
-	repoURL := ctx.Bases.RepoURL(ctx.Artifact.Paths.Repo)
+	repoURL := ctx.SetRepoURL(ctx.Artifact.Paths.Repo)
 	hostPart, dirPart := splitHostAndPath(repoURL)
 
 	var b strings.Builder

@@ -34,13 +34,14 @@ func dispatchDebianCtx() model.RenderContext {
 	return model.RenderContext{
 		Task: model.Task{ID: "d1", FinalizeToken: "finalize-tok-debian"},
 		Artifact: model.ArtifactSet{
+			ID:        "as-debian12",
 			OSFamily:  model.OSFamilyDebian,
 			OSVersion: "12",
 			Arch:      model.ArchX86_64,
 			Paths: model.ArtifactPaths{
-				Kernel: "debian12/vmlinuz",
-				Initrd: []string{"debian12/initrd.gz"},
-				Repo:   "debian12/repo/",
+				Kernel: "vmlinuz",
+				Initrd: []string{"initrd.gz"},
+				Repo:   "repo/",
 			},
 		},
 		Facts: map[string]string{
@@ -59,13 +60,14 @@ func dispatchUbuntuCtx() model.RenderContext {
 	return model.RenderContext{
 		Task: model.Task{ID: "u1", FinalizeToken: "finalize-tok-ubuntu"},
 		Artifact: model.ArtifactSet{
+			ID:        "as-ubuntu2404",
 			OSFamily:  model.OSFamilyUbuntu,
 			OSVersion: "24.04",
 			Arch:      model.ArchX86_64,
 			Paths: model.ArtifactPaths{
-				Kernel: "ubuntu2404/vmlinuz",
-				Initrd: []string{"ubuntu2404/initrd"},
-				Extra:  map[string]string{"squashfs": "ubuntu2404/casper/filesystem.squashfs"},
+				Kernel: "vmlinuz",
+				Initrd: []string{"initrd"},
+				Extra:  map[string]string{"squashfs": "casper/filesystem.squashfs"},
 			},
 		},
 		Facts: map[string]string{
@@ -93,6 +95,7 @@ func dispatchWindowsCtx(firmware model.FirmwareMode) model.RenderContext {
 			},
 		},
 		Artifact: model.ArtifactSet{
+			ID:        "as-win2022",
 			OSFamily:  model.OSFamilyWindows,
 			OSVersion: "2022",
 			Arch:      model.ArchX86_64,
@@ -256,7 +259,7 @@ func TestDispatch_WindowsMenu_UEFIAndBIOSSelectOwnArtifactKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderMenu(windows, uefi) 返回错误: %v", err)
 	}
-	wantUEFIWimboot := uefiCtx.Bases.ArtifactURL(uefiCtx.Artifact.Paths.Extra["wimboot"])
+	wantUEFIWimboot := uefiCtx.SetArtifactURL(uefiCtx.Artifact.Paths.Extra["wimboot"])
 	if !strings.Contains(uefiOut, wantUEFIWimboot) {
 		t.Errorf("windows uefi 菜单应指向 uefi 制品键 %q，got:\n%s", wantUEFIWimboot, uefiOut)
 	}
@@ -266,7 +269,7 @@ func TestDispatch_WindowsMenu_UEFIAndBIOSSelectOwnArtifactKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderMenu(windows, bios) 返回错误: %v", err)
 	}
-	wantBIOSWimboot := biosCtx.Bases.ArtifactURL(biosCtx.Artifact.Paths.Extra["wimboot"])
+	wantBIOSWimboot := biosCtx.SetArtifactURL(biosCtx.Artifact.Paths.Extra["wimboot"])
 	if !strings.Contains(biosOut, wantBIOSWimboot) {
 		t.Errorf("windows bios 菜单应指向 bios 制品键 %q，got:\n%s", wantBIOSWimboot, biosOut)
 	}

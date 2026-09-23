@@ -7,7 +7,7 @@ d-i	netcfg/get_hostname	string	web-01
 d-i	netcfg/get_domain	string	unassigned-domain
 d-i	mirror/country	string	manual
 d-i	mirror/http/hostname	string	ng.internal
-d-i	mirror/http/directory	string	/artifacts/debian12/repo/
+d-i	mirror/http/directory	string	/artifacts/as-debian12/repo/
 d-i	mirror/http/proxy	string	
 d-i	partman-auto/disk	string	/dev/disk/by-id/wwn-0x5000c500fixed0001
 d-i	partman-auto/method	string	regular

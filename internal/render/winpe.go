@@ -64,10 +64,10 @@ func RenderWindowsMenu(ctx model.RenderContext) (string, error) {
 		paths[key] = rel
 	}
 
-	wimbootURL := ctx.Bases.ArtifactURL(paths["wimboot"])
-	bcdURL := ctx.Bases.ArtifactURL(paths["BCD"])
-	bootSDIURL := ctx.Bases.ArtifactURL(paths["boot.sdi"])
-	bootWIMURL := ctx.Bases.ArtifactURL(paths["boot.wim"])
+	wimbootURL := ctx.SetArtifactURL(paths["wimboot"])
+	bcdURL := ctx.SetArtifactURL(paths["BCD"])
+	bootSDIURL := ctx.SetArtifactURL(paths["boot.sdi"])
+	bootWIMURL := ctx.SetArtifactURL(paths["boot.wim"])
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "kernel %s\n", wimbootURL)

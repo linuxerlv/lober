@@ -22,13 +22,14 @@ func minimalPreseedCtx() model.RenderContext {
 			ID: "tpl-debian12-minimal",
 		},
 		Artifact: model.ArtifactSet{
+			ID:        "as-debian12",
 			OSFamily:  model.OSFamilyDebian,
 			OSVersion: "12",
 			Arch:      model.ArchX86_64,
 			Paths: model.ArtifactPaths{
-				Kernel: "debian12/linux",
-				Initrd: []string{"debian12/initrd.gz"},
-				Repo:   "debian12/repo/",
+				Kernel: "linux",
+				Initrd: []string{"initrd.gz"},
+				Repo:   "repo/",
 			},
 		},
 		Facts: map[string]string{

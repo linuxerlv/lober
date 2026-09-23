@@ -236,6 +236,7 @@ func esxiMenuCtx(firmware model.FirmwareMode) model.RenderContext {
 	return model.RenderContext{
 		Task: model.Task{ID: "42"},
 		Artifact: model.ArtifactSet{
+			ID:       "as-esxi8",
 			OSFamily: model.OSFamilyESXi,
 			Firmware: model.FirmwareUEFI,
 		},
@@ -248,7 +249,7 @@ func esxiMenuCtx(firmware model.FirmwareMode) model.RenderContext {
 func TestRenderESXiMenuLine_UEFISucceeds(t *testing.T) {
 	ctx := esxiMenuCtx(model.FirmwareUEFI)
 	answerURL := ctx.Bases.GatewayURL("v1", "answer", ctx.Task.ID, ctx.InstallToken, "boot.cfg")
-	out, err := RenderESXiMenuLine(ctx, "esxi8/mboot.efi", answerURL)
+	out, err := RenderESXiMenuLine(ctx, "mboot.efi", answerURL)
 	if err != nil {
 		t.Fatalf("UEFI 机器渲染 ESXi 菜单行应成功，got err=%v", err)
 	}
@@ -277,7 +278,7 @@ func TestRenderESXiMenuLine_BIOSRejected(t *testing.T) {
 	ctx := esxiMenuCtx(model.FirmwareBIOS)
 	answerURL := ctx.Bases.GatewayURL("v1", "answer", ctx.Task.ID, ctx.InstallToken, "boot.cfg")
 
-	out, err := RenderESXiMenuLine(ctx, "esxi8/mboot.efi", answerURL)
+	out, err := RenderESXiMenuLine(ctx, "mboot.efi", answerURL)
 	if err == nil {
 		t.Fatalf("BIOS 机器请求 ESXi 菜单应被拒绝，got nil error, out=%q", out)
 	}
@@ -303,8 +304,8 @@ func TestRenderESXiMenuLine_ModelFirmwareMatrixAgreesWithRejection(t *testing.T)
 		t.Fatal("测试前提不满足：model.FirmwareCompatible(esxi, uefi) 应为 true")
 	}
 
-	_, errBIOS := RenderESXiMenuLine(esxiMenuCtx(model.FirmwareBIOS), "esxi8/mboot.efi", "http://gw/v1/answer/42/tok/boot.cfg")
-	_, errUEFI := RenderESXiMenuLine(esxiMenuCtx(model.FirmwareUEFI), "esxi8/mboot.efi", "http://gw/v1/answer/42/tok/boot.cfg")
+	_, errBIOS := RenderESXiMenuLine(esxiMenuCtx(model.FirmwareBIOS), "mboot.efi", "http://gw/v1/answer/42/tok/boot.cfg")
+	_, errUEFI := RenderESXiMenuLine(esxiMenuCtx(model.FirmwareUEFI), "mboot.efi", "http://gw/v1/answer/42/tok/boot.cfg")
 	if errBIOS == nil {
 		t.Error("与 model.FirmwareCompatible 矩阵一致：BIOS 应被拒绝")
 	}
@@ -323,7 +324,7 @@ func TestRenderESXiMenuLine_MissingMbootPathRejected(t *testing.T) {
 
 func TestRenderESXiMenuLine_MissingAnswerURLRejected(t *testing.T) {
 	ctx := esxiMenuCtx(model.FirmwareUEFI)
-	_, err := RenderESXiMenuLine(ctx, "esxi8/mboot.efi", "")
+	_, err := RenderESXiMenuLine(ctx, "mboot.efi", "")
 	if err == nil {
 		t.Fatal("answerFileURL 为空时应返回错误，got nil")
 	}
@@ -334,7 +335,7 @@ func TestRenderESXiMenuLine_NoLiteralHTTPScheme(t *testing.T) {
 	ctx.Bases = model.BaseURLs{GatewayBase: "https://gw.internal", ArtifactBase: "https://ng.internal"}
 	answerURL := ctx.Bases.GatewayURL("v1", "answer", ctx.Task.ID, ctx.InstallToken, "boot.cfg")
 
-	out, err := RenderESXiMenuLine(ctx, "esxi8/mboot.efi", answerURL)
+	out, err := RenderESXiMenuLine(ctx, "mboot.efi", answerURL)
 	if err != nil {
 		t.Fatalf("RenderESXiMenuLine 返回错误: %v", err)
 	}
@@ -374,14 +375,15 @@ func esxiKickstartCtx() model.RenderContext {
 			ID: "tpl-esxi8-minimal",
 		},
 		Artifact: model.ArtifactSet{
+			ID:        "as-esxi8",
 			OSFamily:  model.OSFamilyESXi,
 			OSVersion: "8.0",
 			Arch:      model.ArchX86_64,
 			Firmware:  model.FirmwareUEFI,
 			Paths: model.ArtifactPaths{
 				Extra: map[string]string{
-					"mboot.efi": "esxi8/mboot.efi",
-					"boot.cfg":  "esxi8/boot.cfg",
+					"mboot.efi": "mboot.efi",
+					"boot.cfg":  "boot.cfg",
 				},
 			},
 		},

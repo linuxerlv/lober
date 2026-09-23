@@ -92,8 +92,8 @@ func unimplementedFamilyError(family model.OSFamily) error {
 // 三个 URL 全部从 ctx.Bases 的方法拼出（不出现字面 scheme，SPEC §1.5），
 // token 在路径段里、不在 query（SPEC §4.4）。
 func renderRockyMenu(ctx model.RenderContext) (string, error) {
-	kernelURL := ctx.Bases.ArtifactURL(ctx.Artifact.Paths.Kernel)
-	repoURL := ctx.Bases.RepoURL(ctx.Artifact.Paths.Repo)
+	kernelURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Kernel)
+	repoURL := ctx.SetRepoURL(ctx.Artifact.Paths.Repo)
 	answerFileName, ok := ctx.AnswerFileName()
 	if !ok {
 		return "", fmt.Errorf("render: 无法确定 OS 家族 %q 的应答文件名", ctx.Artifact.OSFamily)
@@ -103,7 +103,7 @@ func renderRockyMenu(ctx model.RenderContext) (string, error) {
 	if len(ctx.Artifact.Paths.Initrd) == 0 {
 		return "", fmt.Errorf("render: RHEL 制品集缺少 initrd 路径")
 	}
-	initrdURL := ctx.Bases.ArtifactURL(ctx.Artifact.Paths.Initrd[0])
+	initrdURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Initrd[0])
 
 	return fmt.Sprintf(
 		"kernel %s \\\n"+
@@ -123,7 +123,7 @@ func renderRockyMenu(ctx model.RenderContext) (string, error) {
 // 不含 query，这条约束由 BaseURLs 的拼接函数与 AnswerFileName 的调用方式
 // 共同保证，本函数不需要额外处理。
 func renderDebianMenu(ctx model.RenderContext) (string, error) {
-	kernelURL := ctx.Bases.ArtifactURL(ctx.Artifact.Paths.Kernel)
+	kernelURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Kernel)
 	answerFileName, ok := ctx.AnswerFileName()
 	if !ok {
 		return "", fmt.Errorf("render: 无法确定 OS 家族 %q 的应答文件名", ctx.Artifact.OSFamily)
@@ -133,7 +133,7 @@ func renderDebianMenu(ctx model.RenderContext) (string, error) {
 	if len(ctx.Artifact.Paths.Initrd) == 0 {
 		return "", fmt.Errorf("render: Debian 制品集缺少 initrd 路径")
 	}
-	initrdURL := ctx.Bases.ArtifactURL(ctx.Artifact.Paths.Initrd[0])
+	initrdURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Initrd[0])
 
 	return fmt.Sprintf(
 		"kernel %s auto=true priority=critical \\\n"+
@@ -163,13 +163,13 @@ func renderDebianMenu(ctx model.RenderContext) (string, error) {
 //     （即使右侧当前为空，分隔符的位置本身也是"正确" autoinstall
 //     引导行的组成部分，遗漏它不算错误但保留它更贴近真实可核对的形态）。
 func renderUbuntuMenu(ctx model.RenderContext) (string, error) {
-	kernelURL := ctx.Bases.ArtifactURL(ctx.Artifact.Paths.Kernel)
+	kernelURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Kernel)
 	answerDirURL := ctx.Bases.GatewayURL("v1", "answer", ctx.Task.ID, ctx.InstallToken+"/")
 
 	if len(ctx.Artifact.Paths.Initrd) == 0 {
 		return "", fmt.Errorf("render: Ubuntu 制品集缺少 initrd 路径")
 	}
-	initrdURL := ctx.Bases.ArtifactURL(ctx.Artifact.Paths.Initrd[0])
+	initrdURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Initrd[0])
 
 	return fmt.Sprintf(
 		"kernel %s autoinstall ds=nocloud-net;s=%s ---\n"+

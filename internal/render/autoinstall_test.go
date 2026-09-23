@@ -23,14 +23,15 @@ func minimalAutoinstallCtx() model.RenderContext {
 			ID: "tpl-ubuntu2404-minimal",
 		},
 		Artifact: model.ArtifactSet{
+			ID:        "as-ubuntu2404",
 			OSFamily:  model.OSFamilyUbuntu,
 			OSVersion: "24.04",
 			Arch:      model.ArchX86_64,
 			Paths: model.ArtifactPaths{
-				Kernel: "ubuntu2404/vmlinuz",
-				Initrd: []string{"ubuntu2404/initrd"},
-				Repo:   "ubuntu2404/repo/",
-				Extra:  map[string]string{"squashfs": "ubuntu2404/casper/filesystem.squashfs"},
+				Kernel: "vmlinuz",
+				Initrd: []string{"initrd"},
+				Repo:   "repo/",
+				Extra:  map[string]string{"squashfs": "casper/filesystem.squashfs"},
 			},
 		},
 		Facts: map[string]string{

@@ -225,7 +225,7 @@ func RenderESXiMenuLine(ctx model.RenderContext, mbootEFIPath string, answerFile
 		return "", fmt.Errorf("render: ESXi 菜单渲染缺少 boot.cfg 应答文件 URL")
 	}
 
-	kernelURL := ctx.Bases.ArtifactURL(mbootEFIPath)
+	kernelURL := ctx.SetArtifactURL(mbootEFIPath)
 	return fmt.Sprintf("kernel %s -c %s\n", kernelURL, answerFileURL), nil
 }
 

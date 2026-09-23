@@ -165,3 +165,34 @@ type RenderContext struct {
 func (c RenderContext) AnswerFileName() (name string, ok bool) {
 	return AnswerFileName(c.Artifact.OSFamily)
 }
+
+// SetArtifactURL 拼接**本制品集内**某个相对路径的 URL，即
+// <base>/artifacts/<制品集ID>/<rel>。
+//
+// 为什么必须有这个方法、而不能直接用 Bases.ArtifactURL：
+// ArtifactPaths 里的路径按 docs/contracts/filesystem.md 的约定是**相对制品集
+// 根目录**的（抽取器写回的是裸文件名，如 "vmlinuz"、"linux"），文件实际落盘在
+// /srv/lober/artifacts/<制品集ID>/ 下 —— cmd/lober 的启动自检也是按
+// path.Join(制品集ID, rel) 校验文件存在性的。
+//
+// 直接把裸文件名喂给 Bases.ArtifactURL 会产出 /artifacts/vmlinuz，**少了制品集
+// ID 那一层目录**，真实部署下机器取内核必定 404。这个 bug 单元测试测不出来：
+// menu/golden 的测试夹具手工把 Paths.Kernel 写成 "rocky9.4/vmlinuz" 这种带前缀
+// 的值，与真实抽取器的产出格式不一致，两者从未被同一处交叉验证过。是 Windows
+// 端到端脚本第一次真正 curl 菜单里的 kernel URL 才暴露的。
+//
+// 注意与「全局制品路径」的区别：hooks/<digest>/script.sh 不属于任何制品集，
+// 那类路径仍然直接用 Bases.ArtifactURL，不能走本方法。
+func (c RenderContext) SetArtifactURL(rel string) string {
+	return c.Bases.ArtifactURL(c.Artifact.ID, rel)
+}
+
+// SetRepoURL 拼接**本制品集内**仓库树的 URL，即
+// <base>/artifacts/<制品集ID>/<rel>，并保留 rel 的结尾斜杠。
+//
+// 结尾斜杠必须保留：Ubuntu 的 ds=nocloud-net;s=<url> 与 RHEL 的 inst.repo= 都
+// 要求目录 URL 带结尾斜杠（SPEC §4.4），吃掉它的现场表现是「机器装到一半停住」，
+// 极难定位到一个斜杠。Bases.RepoURL 已经处理了这一点，本方法只是补上制品集 ID。
+func (c RenderContext) SetRepoURL(rel string) string {
+	return c.Bases.RepoURL(c.Artifact.ID, rel)
+}

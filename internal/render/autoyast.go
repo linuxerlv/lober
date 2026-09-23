@@ -494,7 +494,7 @@ func AssembleAutoYaST(ctx model.RenderContext) (string, error) {
 // 路径段而不进 query（与 RHEL/Debian 同一条 SPEC §4.4 约束："token 走
 // 路径段"，避免内核命令行上出现 & 导致解析歧义）。
 func RenderAutoYaSTMenu(ctx model.RenderContext) (string, error) {
-	kernelURL := ctx.Bases.ArtifactURL(ctx.Artifact.Paths.Kernel)
+	kernelURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Kernel)
 	answerFileName, ok := ctx.AnswerFileName()
 	if !ok {
 		return "", fmt.Errorf("render: 无法确定 OS 家族 %q 的应答文件名", ctx.Artifact.OSFamily)
@@ -504,7 +504,7 @@ func RenderAutoYaSTMenu(ctx model.RenderContext) (string, error) {
 	if len(ctx.Artifact.Paths.Initrd) == 0 {
 		return "", fmt.Errorf("render: SUSE 制品集缺少 initrd 路径")
 	}
-	initrdURL := ctx.Bases.ArtifactURL(ctx.Artifact.Paths.Initrd[0])
+	initrdURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Initrd[0])
 
 	return fmt.Sprintf(
 		"kernel %s \\\n"+

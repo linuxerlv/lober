@@ -29,13 +29,14 @@ func autoyastTestCtx() model.RenderContext {
 			FinalizeToken: "finalize-tok-suse",
 		},
 		Artifact: model.ArtifactSet{
+			ID:        "as-sles155",
 			OSFamily:  model.OSFamilySUSE,
 			OSVersion: "15.5",
 			Arch:      model.ArchX86_64,
 			Paths: model.ArtifactPaths{
-				Kernel: "sles15.5/linux",
-				Initrd: []string{"sles15.5/initrd"},
-				Repo:   "sles15.5/repo/",
+				Kernel: "linux",
+				Initrd: []string{"initrd"},
+				Repo:   "repo/",
 			},
 		},
 		Facts: map[string]string{
@@ -527,13 +528,14 @@ func minimalAutoYaSTCtx() model.RenderContext {
 			FinalizeToken: fixedFinalizeToken,
 		},
 		Artifact: model.ArtifactSet{
+			ID:        "as-sles155",
 			OSFamily:  model.OSFamilySUSE,
 			OSVersion: "15.5",
 			Arch:      model.ArchX86_64,
 			Paths: model.ArtifactPaths{
-				Kernel: "sles15.5/linux",
-				Initrd: []string{"sles15.5/initrd"},
-				Repo:   "sles15.5/repo/",
+				Kernel: "linux",
+				Initrd: []string{"initrd"},
+				Repo:   "repo/",
 			},
 		},
 		Facts: map[string]string{

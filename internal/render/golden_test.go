@@ -54,13 +54,14 @@ func minimalKickstartCtx() model.RenderContext {
 			AnswerTemplate: "%packages\n@core\n%end\n",
 		},
 		Artifact: model.ArtifactSet{
+			ID:        "as-rocky94",
 			OSFamily:  model.OSFamilyRHEL,
 			OSVersion: "9.4",
 			Arch:      model.ArchX86_64,
 			Paths: model.ArtifactPaths{
-				Kernel: "rocky9.4/vmlinuz",
-				Initrd: []string{"rocky9.4/initrd.img"},
-				Repo:   "rocky9.4/repo/",
+				Kernel: "vmlinuz",
+				Initrd: []string{"initrd.img"},
+				Repo:   "repo/",
 			},
 		},
 		Facts: map[string]string{
