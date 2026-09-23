@@ -1,0 +1,173 @@
+<?xml version="1.0"?>
+<!DOCTYPE profile>
+<profile xmlns="http://www.suse.com/1.0/yast2ns" xmlns:config="http://www.suse.com/1.0/configns">
+  <general>
+    <mode>
+      <confirm config:type="boolean">false</confirm>
+    </mode>
+  </general>
+  <partitioning config:type="list">
+    <drive>
+      <device>/dev/disk/by-id/wwn-0x5000c500fixed0001</device>
+      <use>all</use>
+    </drive>
+  </partitioning>
+  <networking>
+    <dns>
+      <hostname>web-01</hostname>
+    </dns>
+    <dhcp_options>
+      <dhclient_client_id/>
+    </dhcp_options>
+  </networking>
+  <scripts>
+    <chroot-scripts config:type="list">
+      <script>
+        <chrooted config:type="boolean">true</chrooted>
+        <filename>lober-post.sh</filename>
+        <interpreter>shell</interpreter>
+        <source><![CDATA[
+GW='http://gw.internal'
+ART='http://ng.internal/artifacts'
+TASK='42'
+TOKEN='install-tok-fixed-0000000000000000'
+SEQ=0
+
+signal() {
+  local phase="$1" rc="${2:-0}" log="${3:-/dev/null}" digest="${4:-}"
+  SEQ=$((SEQ+1))
+  local q="$GW/v1/signal/$TASK/$TOKEN/$phase?rc=$rc&seq=$SEQ"
+  if [ -n "$digest" ]; then
+    q="$q&digest=$digest"
+  fi
+  for i in 1 2 3; do
+    curl -fsS -m 10 -X POST "$q" \
+      -H 'Content-Type: text/plain' --data-binary "@$log" && return 0
+    sleep $((i*3))
+  done
+  logger -t lober "signal failed: $phase rc=$rc"
+  return 0
+}
+
+run_hook() {
+  local digest="$1" required="$2" timeout_sec="$3"
+  curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
+  echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
+  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  local rc=${PIPESTATUS[0]}
+  signal "hook-report" "$rc" /tmp/h.log "$digest"
+  [ "$rc" -eq 0 ] || [ "$required" != "true" ]
+}
+signal "post-start" 0
+mkdir -p /root/.ssh && chmod 700 /root/.ssh
+cat >> /root/.ssh/authorized_keys <<'LOBER_SSH_AUTHORIZED_KEYS_EOF'
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ5ZDhhOWMwZTNiNGY1YzZkN2E4YjljMGUzYjRmNWM2 ops@lober
+LOBER_SSH_AUTHORIZED_KEYS_EOF
+chmod 600 /root/.ssh/authorized_keys
+mkdir -p /var/lib/lober /var/lib/lober/hooks
+
+install -m 600 /dev/null /var/lib/lober/finalize.token
+echo 'finalize-tok-fixed-0000000000000000' > /var/lib/lober/finalize.token
+
+install -m 600 /dev/null /var/lib/lober/params.env
+cat > /var/lib/lober/params.env <<'LOBER_PARAMS_EOF'
+LOBER_CONTRACT_VERSION=''
+LOBER_TASK_ID='42'
+LOBER_SN='SN-FIXED-0001'
+LOBER_MAC=''
+LOBER_UUID=''
+LOBER_HOSTNAME='web-01'
+LOBER_OS_FAMILY='suse'
+LOBER_OS_VERSION=''
+LOBER_ARCH=''
+LOBER_DISKS=''
+LOBER_DISK_PRIMARY='/dev/disk/by-id/wwn-0x5000c500fixed0001'
+LOBER_NICS=''
+LOBER_RAM_MB=''
+LOBER_CPU_CORES=''
+LOBER_VENDOR=''
+LOBER_PRODUCT=''
+LOBER_BIZ_IP='10.20.0.15'
+LOBER_BIZ_GW=''
+LOBER_BIZ_MASK=''
+LOBER_ARTIFACT_BASE='http://ng.internal/artifacts'
+LOBER_GATEWAY_BASE='http://gw.internal'
+LOBER_RACK=''
+LOBER_ROW=''
+LOBER_DC=''
+LOBER_PARAMS_EOF
+
+cat > /var/lib/lober/hooks/manifest <<'LOBER_MANIFEST_EOF'
+LOBER_MANIFEST_EOF
+
+cat > /usr/local/sbin/lober-init.sh <<'LOBER_INIT_EOF'
+#!/bin/bash
+. /var/lib/lober/params.env
+
+GW='http://gw.internal'
+ART='http://ng.internal/artifacts'
+TASK='42'
+TOKEN='install-tok-fixed-0000000000000000'
+SEQ=0
+
+signal() {
+  local phase="$1" rc="${2:-0}" log="${3:-/dev/null}" digest="${4:-}"
+  SEQ=$((SEQ+1))
+  local q="$GW/v1/signal/$TASK/$TOKEN/$phase?rc=$rc&seq=$SEQ"
+  if [ -n "$digest" ]; then
+    q="$q&digest=$digest"
+  fi
+  for i in 1 2 3; do
+    curl -fsS -m 10 -X POST "$q" \
+      -H 'Content-Type: text/plain' --data-binary "@$log" && return 0
+    sleep $((i*3))
+  done
+  logger -t lober "signal failed: $phase rc=$rc"
+  return 0
+}
+
+run_hook() {
+  local digest="$1" required="$2" timeout_sec="$3"
+  curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
+  echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
+  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  local rc=${PIPESTATUS[0]}
+  signal "hook-report" "$rc" /tmp/h.log "$digest"
+  [ "$rc" -eq 0 ] || [ "$required" != "true" ]
+}
+
+signal "booted" 0
+signal "init-start" 0
+
+signal "init-done" 0
+signal "ready" 0
+
+shred -u /var/lib/lober/params.env /var/lib/lober/finalize.token
+rm -f /var/lib/lober/init.pending
+sed -i '/rootpw\|--iscrypted\|inst.ks=/d' /root/anaconda-ks.cfg 2>/dev/null
+LOBER_INIT_EOF
+chmod 755 /usr/local/sbin/lober-init.sh
+
+cat > /etc/systemd/system/lober-init.service <<'LOBER_UNIT_EOF'
+[Unit]
+Description=Lober OS init
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/var/lib/lober/init.pending
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lober-init.sh
+StandardOutput=journal+console
+[Install]
+WantedBy=multi-user.target
+LOBER_UNIT_EOF
+
+systemctl enable lober-init.service
+touch /var/lib/lober/init.pending
+signal "post-done" 0
+signal "rebooting" 0
+]]></source>
+      </script>
+    </chroot-scripts>
+  </scripts>
+</profile>
