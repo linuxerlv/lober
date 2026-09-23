@@ -21,6 +21,7 @@ type fakeArtifactSetStore struct {
 
 	state          model.ArtifactSetState
 	manifestSHA256 string
+	failReason     string
 	osFamily       model.OSFamily
 	paths          model.ArtifactPaths
 
@@ -35,7 +36,7 @@ func newFakeArtifactSetStore() *fakeArtifactSetStore {
 	return &fakeArtifactSetStore{state: model.ArtifactSetImporting}
 }
 
-func (f *fakeArtifactSetStore) UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256 string) (model.ArtifactSet, error) {
+func (f *fakeArtifactSetStore) UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256, reason string) (model.ArtifactSet, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stateUpdateCalls++
@@ -44,7 +45,8 @@ func (f *fakeArtifactSetStore) UpdateArtifactSetState(ctx context.Context, id st
 	}
 	f.state = state
 	f.manifestSHA256 = manifestSHA256
-	return model.ArtifactSet{ID: id, State: f.state, ManifestSHA256: f.manifestSHA256}, nil
+	f.failReason = reason
+	return model.ArtifactSet{ID: id, State: f.state, ManifestSHA256: f.manifestSHA256, FailReason: f.failReason}, nil
 }
 
 func (f *fakeArtifactSetStore) SetArtifactSetContent(ctx context.Context, id string, osFamily model.OSFamily, paths model.ArtifactPaths) (model.ArtifactSet, error) {

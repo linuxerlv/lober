@@ -107,7 +107,7 @@ func TestArtifact_CreateThenImportCompletes_BecomesReady(t *testing.T) {
 	ts := newTestServer(t)
 	importer := &fakeArtifactImporter{
 		onTrigger: func(ctx context.Context, artifactSetID, isoPath string) {
-			if _, err := ts.Store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetReady, "sha256-abc"); err != nil {
+			if _, err := ts.Store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetReady, "sha256-abc", ""); err != nil {
 				t.Errorf("假导入器写回 ready 失败: %v", err)
 			}
 		},
@@ -144,19 +144,20 @@ func TestArtifact_CreateThenImportCompletes_BecomesReady(t *testing.T) {
 // 失败」，而不是重新验证 imports.Job 自己的失败写回逻辑（那部分已经在
 // internal/imports/job_test.go 里被覆盖）。
 //
-// 注意（contractGaps）：model.ArtifactSet 没有专门的「失败原因」字段
-// （见 internal/core/model/inventory.go），因此本测试断言的是「state
-// 变为 failed」这一现有字段能表达的最大程度，不断言任何原因文本被
-// 持久化——这与 internal/imports/job.go 的 fail 方法文档记录的契约缺口
-// 是同一处缺口，不是本文件重复发现了一个新缺口。
+// 本测试曾经断言「state 变为 failed」是现有字段能表达的最大程度，不断言
+// 任何原因文本（model.ArtifactSet 当时没有专门的失败原因字段）——这一轮
+// 契约变更给 ArtifactSet 补上了 FailReason 字段并接通了控制台响应，本测试
+// 现在断言原因文本确实能被运维在列表响应里看到，这正是本次改动的核心
+// 目的（t01 记录的契约缺口在这里被真正闭环）。
 func TestArtifact_CreateThenImportFails_BecomesFailed(t *testing.T) {
 	ts := newTestServer(t)
+	const wantReason = "识别不出 OS 家族: 未知的 ISO 结构"
 	importer := &fakeArtifactImporter{
 		onTrigger: func(ctx context.Context, artifactSetID, isoPath string) {
 			// 失败时只调 UpdateArtifactSetState，不调 SetArtifactSetContent
 			// ——与 imports.Job.fail 的分工一致（manifestSHA256 传空字符串，
-			// 不复用它承载错误文本，理由见 job.go 文件末尾契约缺口说明）。
-			if _, err := ts.Store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetFailed, ""); err != nil {
+			// 不复用它承载错误文本；reason 走新增的第五个参数）。
+			if _, err := ts.Store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetFailed, "", wantReason); err != nil {
 				t.Errorf("假导入器写回 failed 失败: %v", err)
 			}
 		},
@@ -181,6 +182,57 @@ func TestArtifact_CreateThenImportFails_BecomesFailed(t *testing.T) {
 	}
 	if listed.Data[0].State != string(model.ArtifactSetFailed) {
 		t.Errorf("导入失败后 state 应为 failed，不应卡在 importing，实际 %q", listed.Data[0].State)
+	}
+	if listed.Data[0].FailReason != wantReason {
+		t.Errorf("导入失败后列表响应应带上具体原因，want %q, got %q —— "+
+			"运维在页面上只看到一个 failed 而不知道为什么，是本次改动要解决的核心问题",
+			wantReason, listed.Data[0].FailReason)
+	}
+}
+
+// TestArtifact_CreateThenImportSucceeds_FailReasonEmpty 锁住「导入成功后
+// FailReason 为空」——即便这是一次失败重试后的成功（模拟一次先失败再
+// 成功的场景），成功路径必须清空上一次遗留的失败原因，不能让运维看到一个
+// state=ready 却还挂着旧错误文本的制品集。
+func TestArtifact_CreateThenImportSucceeds_FailReasonEmpty(t *testing.T) {
+	ts := newTestServer(t)
+	importer := &fakeArtifactImporter{
+		onTrigger: func(ctx context.Context, artifactSetID, isoPath string) {
+			// 模拟先失败一次（写入一条原因），再重试成功——成功路径必须
+			// 覆盖掉这条旧原因，不能让它残留。
+			if _, err := ts.Store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetFailed, "", "第一次尝试失败"); err != nil {
+				t.Fatalf("模拟首次失败写回失败: %v", err)
+			}
+			if _, err := ts.Store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetReady, "sha256-retry-ok", ""); err != nil {
+				t.Errorf("假导入器写回 ready 失败: %v", err)
+			}
+		},
+	}
+	ts.Server.deps.ArtifactImporter = importer
+
+	tok := ts.login("eve-admin")
+	rr := ts.doJSON("POST", "/console/v1/artifact-sets", tok, map[string]string{
+		"sourcePath": "/data/isos/retry.iso", "name": "retry",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("登记失败: %d, body=%s", rr.Code, rr.Body.String())
+	}
+
+	rr = ts.doJSON("GET", "/console/v1/artifact-sets", tok, nil)
+	var listed struct {
+		Data []artifactSetItem `json:"data"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &listed)
+	if len(listed.Data) != 1 {
+		t.Fatalf("列表应有 1 条，实际 %d", len(listed.Data))
+	}
+	if listed.Data[0].State != string(model.ArtifactSetReady) {
+		t.Errorf("重试成功后 state 应为 ready，实际 %q", listed.Data[0].State)
+	}
+	if listed.Data[0].FailReason != "" {
+		t.Errorf("重试成功后 FailReason 应被清空，实际残留 %q —— "+
+			"运维会看到一个已经 ready 但还挂着上一次失败原因的制品集，误以为它仍有问题",
+			listed.Data[0].FailReason)
 	}
 }
 

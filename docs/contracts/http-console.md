@@ -46,6 +46,45 @@
 > `internal/console`（新增 `Deps.AuditQuery`、`handleHookAudit`）。
 > **不影响** `internal/core/model`、`internal/store/sqlite/schema`
 > （`audit_log` 表结构不变，本次只是第一次真正读写它）。
+>
+> **变更记录 3：`ArtifactSetItem` 新增 `failReason` 字段。** 原因：导入 job
+> 失败时此前只能把制品集置为 `failed`，失败原因无处承载——运维在
+> `GET /artifact-sets` 列表里只看到一个没有信息量的 `"failed"`，不知道是
+> ISO 路径打不开、识别不出 OS 家族、抽取失败还是 manifest 生成失败，而
+> 这四种失败的处置方式完全不同（这是 t01 记录的契约缺口，本次由编排方
+> 核实后授权补上）。按 M1 的五步契约变更流程执行：`model.ArtifactSet`
+> 新增 `FailReason` 字段；`contract.ArtifactSetStore.UpdateArtifactSetState`
+> 签名新增第四个参数 `reason string`（原三参数签名废弃）；
+> `internal/core/contract/conformance` 新增/改写断言（原文完整往返含中文、
+> 引号、换行；`SetArtifactSetContent` 与 `UpdateArtifactSetState` 仍然互不
+> 覆盖对方负责的字段）；`internal/core/fake`、`internal/store/sqlite`
+> 各自跟进实现；`internal/imports/job.go` 的 `fail` 方法把原因一并写回
+> 持久化层（此前只能通过返回 `error` 向上传播，进程重启后不可查）；
+> `internal/console/artifact.go` 的 `handleCreateArtifactSet` 触发路径与
+> `artifactSetItem` 响应结构同步新增字段。
+>
+> **`internal/store/sqlite/schema` 的说明（未变更但需要读者知道）：**
+> `artifact_sets` 表没有专属的失败原因列，且本次任务不允许 `ALTER TABLE`
+> （schema 是数据契约）。SQLite 实现把 `FailReason` 编码进既有的
+> `paths_json` 列（该列的 JSON 形态从「只装 `ArtifactPaths`」扩展为「同时
+> 装 `ArtifactPaths` 与 `FailReason` 的信封结构体」），`UpdateArtifactSetState`
+> 与 `SetArtifactSetContent` 因此都变成先读出该列已有内容、只改自己负责
+> 的那一半、再整体写回（read-modify-write），不再是改动前那种各自一条
+> 独立 `UPDATE` 语句。这是一个真实的权衡（详见实现该任务的 contractGaps
+> 记录）：conformance 套件已覆盖两个方法互不覆盖对方字段这条断言，两个
+> 实现都通过，但该列的读改写耦合本身是本次变更引入的新复杂度，若未来
+> `artifact_sets` 表允许迁移，给 `FailReason` 补一个专属列、恢复两个方法
+> 各自独立的 `UPDATE` 语句，是这个权衡的正解方向。
+>
+> 影响模块：`internal/core/model`（`ArtifactSet.FailReason`）；
+> `internal/core/contract`（`ArtifactSetStore.UpdateArtifactSetState` 签名
+> 变更）；`internal/core/contract/conformance`；`internal/core/fake`；
+> `internal/store/sqlite`（`paths_json` 列的 JSON 形态扩展，schema 本身
+> 不变）；`internal/imports/job.go`（仅 `fail` 方法与两处成功路径调用点，
+> 不涉及分派逻辑）；`internal/console`（`artifactSetItem`、
+> `handleCreateArtifactSet` 触发路径）。**不影响**
+> `internal/store/sqlite/schema`（`artifact_sets` 表结构本身不变，只是
+> 既有列 `paths_json` 装的 JSON 形态扩展了）。
 
 ## 响应包裹格式
 
@@ -272,9 +311,14 @@ token 无效）时返回 HTTP `401`，body 仍为上述失败形态。
   "osFamily": "rhel", "osVersion": "string", "arch": "x86_64", "firmware": "any",
   "sourceIsoSha256": "string", "state": "importing",
   "manifestSha256": "string",
+  "failReason": "string",
   "paths": {"kernel": "string", "initrd": ["string"], "repo": "string", "extra": {}}
 }
 ```
+
+`failReason` 是本文档「变更记录 3」新增字段：`state = failed` 时为导入 job
+失败的具体原因（如「识别不出 OS 家族」「抽取内核/initrd/仓库树失败」），
+其它状态下通常为空字符串。
 
 `state` 取值域为 `model.ArtifactSetState`（`importing`/`ready`/`failed`/
 `deprecated`）。

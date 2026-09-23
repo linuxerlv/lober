@@ -72,6 +72,7 @@ func RunConformanceSuite(t *testing.T, newStore func() contract.Store) {
 	t.Run("hook按digest反查改一个字节即查不到", func(t *testing.T) { testHookLookupByDigestIsExact(t, newStore) })
 	t.Run("制品导入写回OSFamily与Paths完整往返", func(t *testing.T) { testArtifactSetContentRoundTrip(t, newStore) })
 	t.Run("导入失败只改状态不清空已写入的Paths", func(t *testing.T) { testArtifactSetStateUpdateDoesNotClobberPaths(t, newStore) })
+	t.Run("导入失败原因原文完整往返含中文引号换行", func(t *testing.T) { testArtifactSetFailReasonRoundTrip(t, newStore) })
 	t.Run("审计写入后能按target查回", func(t *testing.T) { testAuditAppendThenListByTarget(t, newStore) })
 	t.Run("审计detail原文完整往返", func(t *testing.T) { testAuditDetailRoundTrip(t, newStore) })
 	t.Run("审计按时间倒序且limit生效", func(t *testing.T) { testAuditOrderedDescendingWithLimit(t, newStore) })
@@ -968,21 +969,31 @@ func testArtifactSetStateUpdateDoesNotClobberPaths(t *testing.T, newStore func()
 
 	// 模拟导入 job 后续步骤失败（比如 manifest 校验不过），只调用状态更新
 	// 方法，不应触及已经写入的 Paths。
-	updated, err := store.UpdateArtifactSetState(ctx, created.ID, model.ArtifactSetFailed, "manifest-sha-abc")
+	const failReason = "抽取内核/initrd/仓库树失败: open rocky9.4/vmlinuz: no such file or directory"
+	updated, err := store.UpdateArtifactSetState(ctx, created.ID, model.ArtifactSetFailed, "manifest-sha-abc", failReason)
 	if err != nil {
 		t.Fatalf("UpdateArtifactSetState 失败: %v", err)
 	}
 	if updated.State != model.ArtifactSetFailed {
 		t.Errorf("UpdateArtifactSetState 之后 State = %q, want %q", updated.State, model.ArtifactSetFailed)
 	}
+	if updated.FailReason != failReason {
+		t.Errorf("UpdateArtifactSetState 的返回值 FailReason = %q, want %q —— "+
+			"运维在控制台看到的失败原因来自这次写回的返回值/重新查询结果，"+
+			"若返回值里没带上，前端拿不到任何具体信息", updated.FailReason, failReason)
+	}
 
 	got, err := store.GetArtifactSet(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("GetArtifactSet 失败: %v", err)
 	}
+	if got.FailReason != failReason {
+		t.Errorf("重新查询后 FailReason = %q, want %q —— 失败原因未能持久化，"+
+			"运维刷新页面后就再也看不到这次失败的具体原因", got.FailReason, failReason)
+	}
 	if diff := cmp.Diff(paths, got.Paths); diff != "" {
 		t.Errorf("UpdateArtifactSetState 之后 Paths 被改变（-want +got）:\n%s —— "+
-			"SPEC §2.1：UpdateArtifactSetState 只应改 State 与 ManifestSHA256，"+
+			"SPEC §2.1：UpdateArtifactSetState 只应改 State、ManifestSHA256 与 FailReason，"+
 			"绝不能触及 Paths；这正是它与 SetArtifactSetContent 分成两个方法的全部理由——"+
 			"导入失败时 Paths 可能只写了一半，一旦被状态更新方法覆盖成空值，"+
 			"运维会看到一个「失败了但之前的产物也丢了」的制品集", diff)
@@ -991,6 +1002,46 @@ func testArtifactSetStateUpdateDoesNotClobberPaths(t *testing.T, newStore func()
 		t.Errorf("UpdateArtifactSetState 之后 OSFamily = %q, want 保持 %q 不变 —— "+
 			"OSFamily 同样是 SetArtifactSetContent 的写回内容，状态更新不应触及它",
 			got.OSFamily, model.OSFamilyRHEL)
+	}
+}
+
+// testArtifactSetFailReasonRoundTrip 验证失败原因原文完整往返，含中文、
+// 引号、换行——失败原因来自 fmt.Sprintf 包裹的底层 error（imports/job.go
+// 的 fail 方法），底层 error 可能来自文件系统路径（含中文目录名）、
+// 命令输出（可能带引号）或多行 stderr，任何一种字符若在编解码过程中被
+// 截断或转义错误，运维看到的原因就会失真甚至截断到看不出真正原因。
+func testArtifactSetFailReasonRoundTrip(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+
+	created, err := store.CreateArtifactSet(ctx, model.ArtifactSet{
+		ID:        "artifact-fail-reason",
+		Name:      "rocky9.4",
+		OSVersion: "9.4",
+		Arch:      model.ArchX86_64,
+		Firmware:  model.FirmwareAny,
+		State:     model.ArtifactSetImporting,
+	})
+	if err != nil {
+		t.Fatalf("CreateArtifactSet 失败: %v", err)
+	}
+
+	reason := "识别不出 OS 家族: open \"/data/isos/未命名 光盘.iso\": 权限不足\n" +
+		"（第二行：气隙环境常见问题，运维手填路径时容易带上全角空格或引号）"
+
+	if _, err := store.UpdateArtifactSetState(ctx, created.ID, model.ArtifactSetFailed, "", reason); err != nil {
+		t.Fatalf("UpdateArtifactSetState 失败: %v", err)
+	}
+
+	got, err := store.GetArtifactSet(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetArtifactSet 失败: %v", err)
+	}
+	if got.FailReason != reason {
+		t.Errorf("FailReason 原文往返后不一致（want %q, got %q）—— "+
+			"含中文、引号、换行的原文一旦在编解码时被截断或转义错误，"+
+			"运维看到的失败原因会失真，反而比完全没有原因更容易误导排障方向",
+			reason, got.FailReason)
 	}
 }
 

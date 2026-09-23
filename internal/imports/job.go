@@ -25,8 +25,15 @@ import (
 // 设计）：导入失败时只调 UpdateState，不调 SetContent——失败时 Paths
 // 可能尚未写入或只写了一半，绝不能被状态更新覆盖成半成品（任务 11：
 // 失败时已写入的路径不被清空）。
+//
+// UpdateArtifactSetState 的第五个参数（reason）是本次契约变更新增
+// （见 contract.ArtifactSetStore 的文档与 t01 记录的契约缺口）：本文件
+// 的 fail 方法藉此把具体失败原因写回持久化层，供控制台展示给运维——
+// 这是「让导入失败的原因能被运维看到」这个任务的最后一步（改接口 → 改
+// conformance 断言 → 改内存实现 → 改 SQLite 实现 → 接上调用方，本接口
+// 与下面的 fail 方法就是第五步）。
 type artifactSetUpdater interface {
-	UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256 string) (model.ArtifactSet, error)
+	UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256, reason string) (model.ArtifactSet, error)
 	SetArtifactSetContent(ctx context.Context, id string, osFamily model.OSFamily, paths model.ArtifactPaths) (model.ArtifactSet, error)
 }
 
@@ -148,7 +155,10 @@ func (j *Job) Run(ctx context.Context, artifactSetID, isoPath, destDir string) e
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
 	}
 
-	if _, err := j.store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetReady, manifest.SHA256); err != nil {
+	// reason 传空字符串：成功路径没有失败原因，且这一步顺带清空了此前
+	// 若有过失败重试留下的旧 FailReason——制品集导入成功后，运维不应再
+	// 在控制台看到一条属于上一次失败尝试的陈旧原因文本。
+	if _, err := j.store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetReady, manifest.SHA256, ""); err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回就绪状态失败: %v", err))
 	}
 
@@ -193,7 +203,9 @@ func (j *Job) RunRHEL(ctx context.Context, artifactSetID, isoPath, destDir strin
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
 	}
 
-	if _, err := j.store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetReady, manifest.SHA256); err != nil {
+	// reason 传空字符串，理由与 Run 方法同一处调用点相同：成功路径没有
+	// 失败原因，顺带清空上一次失败尝试留下的陈旧 FailReason。
+	if _, err := j.store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetReady, manifest.SHA256, ""); err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回就绪状态失败: %v", err))
 	}
 
@@ -236,13 +248,22 @@ func errIsUnsupported(err error) bool {
 // （不调用 SetArtifactSetContent）——失败时已写入的路径不被清空（任务 11
 // 明确要求：这两个方法分工，失败路径只改状态，不触及 Paths）。
 //
-// 具体的失败原因文本目前只能通过本方法的返回 error 向上传播（调用方，
-// 即控制台 handler，负责决定这段文本最终展示在哪里）——manifest_sha256
-// 字段被复用为「空字符串」，不塞入错误原因文本：该字段的语义是清单校验值，
+// reason 现在同时经两条路径向上传播（本次契约变更前只有下面这一条）：
+//  1. 持久化进制品集的 FailReason 字段（经 UpdateArtifactSetState 的第五
+//     个参数），供控制台 GET /artifact-sets 读出、供运维在页面上直接看到
+//     ——这是本次契约变更新增的路径，解决 t01 记录的缺口（导入失败原因
+//     此前无处承载，运维只能看到一个没有信息量的 "failed"）。
+//  2. 本方法的返回 error（调用方目前是 cmd/lober/importrunner.go，写进
+//     slog 供运维查日志兜底）——继续保留，双路径互为补充，日志路径不因为
+//     有了持久化路径就删除：进程重启后 slog 历史仍可能比数据库记录更早
+//     被运维发现。
+//
+// manifest_sha256 字段不复用为承载原因文本：该字段的语义是清单校验值，
 // 塞入不相关的错误文本会让将来某次「校验完整性」端点意外读到一段错误
-// 消息当作 sha256 使用（详见本文件末尾的契约缺口说明）。
+// 消息当作 sha256 使用——这条约束在新增 FailReason 字段后依然成立，
+// FailReason 有了专属位置，manifest_sha256 更没有理由再被挪用。
 func (j *Job) fail(ctx context.Context, artifactSetID, reason string) error {
-	if _, err := j.store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetFailed, ""); err != nil {
+	if _, err := j.store.UpdateArtifactSetState(ctx, artifactSetID, model.ArtifactSetFailed, "", reason); err != nil {
 		return fmt.Errorf("imports: 导入失败（原因: %s），且写回 failed 状态本身也失败: %w", reason, err)
 	}
 	return fmt.Errorf("imports: 导入失败: %s", reason)
@@ -253,18 +274,3 @@ func (j *Job) fail(ctx context.Context, artifactSetID, reason string) error {
 // 断言目标，这里留一个空块位置提示读者：Extractor/artifactSetUpdater
 // 两个接口的实现者分别是 MountExtractor（extract.go）与真实 Store，
 // 不需要在这里重复断言）。
-
-// 契约缺口：model.ArtifactSet 没有专门的「导入失败原因」字段
-// （见 internal/core/model/inventory.go 的 ArtifactSet 结构体：只有
-// State/ManifestSHA256/Paths 三项，没有类似 Task.FailureDetail 的字段），
-// contract.ArtifactSetStore.UpdateArtifactSetState 的签名也只接受
-// (state, manifestSHA256) 两个参数，没有第三个「原因」参数可传。计划
-// 任务 11 要求「失败时要把原因写进制品集的错误字段，供 UI 展示」，但
-// M1 没有定义这个字段。
-//
-// 保守处理：本文件不擅自复用 ManifestSHA256 字段承载错误文本（那会让
-// 「校验完整性」端点读到一段错误消息当作 sha256 值使用，是错误值污染
-// 契约字段的反面教材）。改为让 fail 方法的返回 error 携带完整原因文本，
-// 由调用方（控制台 handler，M6/M8）决定原因文本的展示位置——若 M6 需要
-// 把这段文本持久化以便 UI 刷新后仍能看到，那需要 M1 给 ArtifactSet 或
-// ArtifactSetStore 补一个字段/参数，这正是本契约缺口的正解方向。

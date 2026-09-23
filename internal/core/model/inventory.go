@@ -115,6 +115,14 @@ type ArtifactSet struct {
 	State           ArtifactSetState
 	ManifestSHA256  string
 	Paths           ArtifactPaths
+
+	// FailReason 是导入失败时的具体原因（本次契约变更新增，t01 记录的
+	// 契约缺口：此前 State 只能置 failed，运维不知道是路径打不开、识别不出
+	// 家族、抽取失败还是 manifest 生成失败，处置方式对每一种都不同）。
+	// 非 failed 状态下本字段通常为空字符串——空字符串表示「没有失败原因」，
+	// 不是一个需要特殊解析的哨兵值。写回走
+	// contract.ArtifactSetStore.UpdateArtifactSetState 的新增第四个参数。
+	FailReason string
 }
 
 // MatchesFirmware 判定该制品集能否发给某固件模式的机器。any 对两种固件
