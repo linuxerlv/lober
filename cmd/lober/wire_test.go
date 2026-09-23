@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/lober/lober/internal/config"
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/statemachine"
 	"github.com/lober/lober/internal/store/sqlite"
 )
 
@@ -312,6 +314,210 @@ func TestBuildApp_RootSSHPublicKeysWiredToGatewayAnswer(t *testing.T) {
 	if strings.Contains(string(body), "REPLACE-ME") {
 		t.Errorf("应答文件正文仍含旧占位公钥标记 REPLACE-ME，说明占位值未被真实配置值替换，"+
 			"got body:\n%s", body)
+	}
+}
+
+// TestBuildApp_AdmissionLimitPropagatedToStatemachinePackage 验证装配点
+// 把 cfg.Scan.AdmissionLimit 传给了 statemachine.SetGlobalAdmissionLimit
+// （Phase 4 新增，SPEC §10 失败模式 11）——这是 StartBoot 的准入检查实际
+// 生效的上限来源（见 internal/statemachine/admission.go 的
+// globalAdmissionLimit 文档：跨越 StartBoot 调用点与本装配点两个不同
+// 代码位置共享同一个值，用包级 atomic 变量传递）。用一个恰好等于配置值
+// 的并发场景间接验证：造够配置的上限数量的 booting 任务后，再用
+// app.StateMachine.StartBoot 引导下一台，若配置确实生效，这一次必须被
+// 准入检查拒绝。
+//
+// 测试结束前恢复默认值——globalAdmissionLimit 是 internal/statemachine
+// 包级状态，跨测试用例共享（本测试文件与该包的其它测试共享同一个进程），
+// 若不恢复会让测试顺序影响其它用例的结果。
+func TestBuildApp_AdmissionLimitPropagatedToStatemachinePackage(t *testing.T) {
+	defer statemachine.SetGlobalAdmissionLimit(20)
+
+	cfg := testConfig(t)
+	cfg.Scan.AdmissionLimit = 2
+	app := buildAppWithDBForTest(t, cfg)
+	ctx := context.Background()
+
+	artifact := model.ArtifactSet{
+		ID: "artifact-admission-probe", OSFamily: model.OSFamilyRHEL,
+		Arch: model.ArchX86_64, Firmware: model.FirmwareAny, State: model.ArtifactSetReady,
+	}
+	if _, err := app.Store.CreateArtifactSet(ctx, artifact); err != nil {
+		t.Fatalf("CreateArtifactSet 失败: %v", err)
+	}
+
+	// 造 2 台（等于配置的上限）已在 booting 的任务。
+	for i := 0; i < 2; i++ {
+		taskID := "task-admission-probe-occupying-" + string(rune('a'+i))
+		if _, err := app.Store.CreateTask(ctx, model.Task{
+			ID: taskID, ArtifactSetID: artifact.ID, State: model.TaskStatePending, CurrentPhase: model.PhasePending,
+		}); err != nil {
+			t.Fatalf("CreateTask 失败: %v", err)
+		}
+		if _, err := app.StateMachine.StartBoot(ctx, taskID, model.ArchX86_64, model.FirmwareUEFI); err != nil {
+			t.Fatalf("占位任务 %s 的 StartBoot 失败: %v", taskID, err)
+		}
+	}
+
+	// 第三台：若 cfg.Scan.AdmissionLimit=2 确实传给了 statemachine 包，
+	// 这次 StartBoot 必须被准入检查拒绝；若装配点忘记调用
+	// SetGlobalAdmissionLimit（仍是默认值 20），这次会成功，测试失败并
+	// 清楚指出「配置的并发上限没有生效」。
+	pendingID := "task-admission-probe-pending"
+	if _, err := app.Store.CreateTask(ctx, model.Task{
+		ID: pendingID, ArtifactSetID: artifact.ID, State: model.TaskStatePending, CurrentPhase: model.PhasePending,
+	}); err != nil {
+		t.Fatalf("CreateTask 失败: %v", err)
+	}
+	if _, err := app.StateMachine.StartBoot(ctx, pendingID, model.ArchX86_64, model.FirmwareUEFI); err == nil {
+		t.Fatalf("cfg.Scan.AdmissionLimit=2 且已有 2 台在装时，第 3 台 StartBoot 未被准入检查" +
+			"拒绝——说明 buildAppWithDB 没有把配置的并发上限传给 statemachine.SetGlobalAdmissionLimit")
+	}
+}
+
+// TestBuildApp_AutoRetryWiredIntoScanTimeouts 验证 app.StateMachine 是
+// autoRetryScanDecorator（Phase 4 新增，实现计划 phase4-01 任务 4）：
+// 调用它的 ScanTimeouts 方法，除了跑既有的超时扫描，还应该按
+// cfg.Scan.AutoRetryEnabled/AutoRetryMaxAttempts 驱动一轮
+// AutoRetryFailedTasks。用一个已经是 failed、失败原因在白名单内
+// （boot_timeout）的任务验证：cfg.Scan.AutoRetryEnabled=true 时，调用
+// app.StateMachine.ScanTimeouts 之后该任务应该被重置回 pending。
+func TestBuildApp_AutoRetryWiredIntoScanTimeouts(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Scan.AutoRetryEnabled = true
+	cfg.Scan.AutoRetryMaxAttempts = 1
+	app := buildAppWithDBForTest(t, cfg)
+	ctx := context.Background()
+
+	artifact := model.ArtifactSet{
+		ID: "artifact-autoretry-wire", OSFamily: model.OSFamilyRHEL,
+		Arch: model.ArchX86_64, Firmware: model.FirmwareAny, State: model.ArtifactSetReady,
+	}
+	if _, err := app.Store.CreateArtifactSet(ctx, artifact); err != nil {
+		t.Fatalf("CreateArtifactSet 失败: %v", err)
+	}
+	taskID := "task-autoretry-wire"
+	if _, err := app.Store.CreateTask(ctx, model.Task{
+		ID: taskID, ArtifactSetID: artifact.ID, State: model.TaskStateFailed,
+		CurrentPhase: model.PhasePackages, AttemptCount: 1,
+		FailureReason: model.FailureReasonBootTimeout,
+	}); err != nil {
+		t.Fatalf("CreateTask 失败: %v", err)
+	}
+
+	if _, err := app.StateMachine.ScanTimeouts(ctx, app.Clock.Now()); err != nil {
+		t.Fatalf("ScanTimeouts 返回了错误: %v", err)
+	}
+
+	got, err := app.Store.GetTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTask 失败: %v", err)
+	}
+	if got.State != model.TaskStatePending {
+		t.Errorf("cfg.Scan.AutoRetryEnabled=true 时，调用 app.StateMachine.ScanTimeouts 之后"+
+			"failure_reason=boot_timeout 的任务 State = %q, want %q——说明装配点没有把"+
+			"AutoRetryFailedTasks 接进 ScanTimeouts 的调用路径", got.State, model.TaskStatePending)
+	}
+}
+
+// TestBuildApp_AutoRetryDisabledByDefaultConfig 是上一条的对照组：
+// cfg.Scan.AutoRetryEnabled 保持零值 false（testConfig 不显式设置）时，
+// 调用 ScanTimeouts 不应该触发任何自动重试——默认关闭是计划任务 4 刻意
+// 的设计决定。
+func TestBuildApp_AutoRetryDisabledByDefaultConfig(t *testing.T) {
+	cfg := testConfig(t) // 不设置 Scan.AutoRetryEnabled，保持零值 false
+	app := buildAppWithDBForTest(t, cfg)
+	ctx := context.Background()
+
+	artifact := model.ArtifactSet{
+		ID: "artifact-autoretry-disabled-wire", OSFamily: model.OSFamilyRHEL,
+		Arch: model.ArchX86_64, Firmware: model.FirmwareAny, State: model.ArtifactSetReady,
+	}
+	if _, err := app.Store.CreateArtifactSet(ctx, artifact); err != nil {
+		t.Fatalf("CreateArtifactSet 失败: %v", err)
+	}
+	taskID := "task-autoretry-disabled-wire"
+	if _, err := app.Store.CreateTask(ctx, model.Task{
+		ID: taskID, ArtifactSetID: artifact.ID, State: model.TaskStateFailed,
+		CurrentPhase: model.PhasePackages, AttemptCount: 1,
+		FailureReason: model.FailureReasonBootTimeout,
+	}); err != nil {
+		t.Fatalf("CreateTask 失败: %v", err)
+	}
+
+	if _, err := app.StateMachine.ScanTimeouts(ctx, app.Clock.Now()); err != nil {
+		t.Fatalf("ScanTimeouts 返回了错误: %v", err)
+	}
+
+	got, err := app.Store.GetTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTask 失败: %v", err)
+	}
+	if got.State != model.TaskStateFailed {
+		t.Errorf("cfg.Scan.AutoRetryEnabled 为默认 false 时，任务 State = %q, want 保持 %q 不变——"+
+			"自动重装是需要运维明确同意的行为，默认必须关闭", got.State, model.TaskStateFailed)
+	}
+}
+
+// TestBuildApp_AlertingNotifyWiredAheadOfBuiltinNotify 验证装配点用
+// provider.NewAlertingNotify 包了一层内置 Notify（Phase 4 新增，实现计划
+// phase4-01 任务 5），再传给 provider.RegisterLifecycleHooks——这是
+// internal/provider/notify.go 自己文档记录的契约缺口的落地方式。
+//
+// 内置 Notify（builtinNotify）的 Emit 直接调用 log.Printf 落一行结构化
+// 日志，没有其它可观察的副作用（它本身不落库、不发 HTTP），因此本测试
+// 用 log.SetOutput 捕获标准 log 包的输出来断言：一个不可重装失败原因
+// （reboot_timeout）的 task.failed 事件经过完整的装配链路（EventBus →
+// RegisterLifecycleHooks 订阅的 onTaskFailed → AlertingNotify.Emit 组装
+// 消息 → 内置 Notify.Emit 落日志）之后，日志行里必须含 AlertingNotify
+// 组装的「请勿重装」文案——若装配点忘记用 NewAlertingNotify 包一层、直接
+// 把裸的 providers.Notify 传给 RegisterLifecycleHooks，日志行只会是
+// builtinNotify.Emit 原始打印的 event/task_id/detail 三元组，不会出现
+// 「请勿重装」这个由 AlertingNotify.buildMessage 才会产出的措辞。
+func TestBuildApp_AlertingNotifyWiredAheadOfBuiltinNotify(t *testing.T) {
+	var buf strings.Builder
+	prevOutput := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prevOutput)
+		log.SetFlags(prevFlags)
+	}()
+
+	cfg := testConfig(t)
+	app := buildAppWithDBForTest(t, cfg)
+	ctx := context.Background()
+
+	artifact := model.ArtifactSet{
+		ID: "artifact-alerting-wire", OSFamily: model.OSFamilyRHEL,
+		Arch: model.ArchX86_64, Firmware: model.FirmwareAny, State: model.ArtifactSetReady,
+	}
+	if _, err := app.Store.CreateArtifactSet(ctx, artifact); err != nil {
+		t.Fatalf("CreateArtifactSet 失败: %v", err)
+	}
+	taskID := "task-alerting-wire"
+	created, err := app.Store.CreateTask(ctx, model.Task{
+		ID: taskID, ArtifactSetID: artifact.ID, State: model.TaskStateRebooting,
+		CurrentPhase: model.PhaseRebooting, PhaseEnteredAt: app.Clock.Now(),
+	})
+	if err != nil {
+		t.Fatalf("CreateTask 失败: %v", err)
+	}
+
+	failed, err := app.StateMachine.Fail(ctx, created.ID, model.FailureReasonRebootTimeout, model.FailureDetail{Phase: model.PhaseRebooting})
+	if err != nil {
+		t.Fatalf("Fail 失败: %v", err)
+	}
+	app.Events.Publish(contract.LifecycleEventTaskFailed, failed)
+
+	logged := buf.String()
+	if !strings.Contains(logged, "请勿重装") {
+		t.Errorf("task.failed（failure_reason=reboot_timeout）事件经过完整装配链路之后，"+
+			"日志输出未含「请勿重装」文案，got log=%q——说明装配点没有用"+
+			"provider.NewAlertingNotify 包住传给 RegisterLifecycleHooks 的 Notify 实例"+
+			"（只有 AlertingNotify.buildMessage 会产出这个措辞，裸的内置 Notify 只会"+
+			"打印 event/task_id/detail 三元组）", logged)
 	}
 }
 

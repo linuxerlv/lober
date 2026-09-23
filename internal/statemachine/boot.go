@@ -1,18 +1,23 @@
 // 本文件实现开始引导 StartBoot（任务 4）与标记应答文件已取
-// MarkAnswerFetched（任务 5）。依据 SPEC §3.4、§4.2、§4.4、§4.6。
+// MarkAnswerFetched（任务 5）。依据 SPEC §3.4、§4.2、§4.4、§4.6、§10。
 //
 // StartBoot 是 §0.1 的范围起点：这一个方法里的顺序错了，后果是「不该装
-// 的机器被装了」或「该装的机器三次机会被白白消耗」。五步顺序不能变：
+// 的机器被装了」或「该装的机器三次机会被白白消耗」。步骤顺序不能变：
 //  1. 确认任务仍是 pending（防御性检查）
 //  2. 跑 precheck（必须在 attempt++ 之前）
 //  3. precheck 不过 → 置 failed，不消耗 attempt
-//  4. attempt++；超上限 → 置 failed（不签 token）
-//  5. 签 token、CAS 到 booting（同一次转换里完成）
+//  4. 并发准入检查（Phase 4 新增，SPEC §10 失败模式 11）：precheck 已经
+//     通过之后、attempt++ 之前，确认当前在装机器数没有打满配置的并发
+//     上限——超限时排队（不消耗 attempt、不置 failed），见本文件下方
+//     准入检查段落的详细注释
+//  5. attempt++；超上限 → 置 failed（不签 token）
+//  6. 签 token、CAS 到 booting（同一次转换里完成）
 package statemachine
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 
 	"github.com/lober/lober/internal/core/contract"
@@ -24,6 +29,19 @@ import (
 // 判成 failed）。不导出为 contract 层的 sentinel error——调用方（网关）
 // 只需要知道这次调用没有生效，不需要用 errors.Is 区分具体原因。
 var errTaskNotPending = errors.New("statemachine: 任务已不是 pending，不接受开始引导")
+
+// errAdmissionQueued 是 StartBoot 因并发准入上限被打满而拒绝本次引导时
+// 包装进返回错误里的标记（用 %w 包装，调用方可用 errors.Is 精确识别）。
+//
+// 导出判定意义上不导出为 contract 层 sentinel：目前唯一的调用方（网关的
+// handleBootGrant）对 StartBoot 返回的任何 error 已经统一回退到 no_task
+// 载荷，不需要区分「排队」与「precheck 失败」——两者对网关这一层的处理
+// 结果本来就相同（都是回 no_task，机器都会继续 PXE 轮询）。这里仍然定义
+// 一个可被 errors.Is 识别的标记，是为了让本模块自己的测试能精确断言
+// 「StartBoot 因为准入被拒绝，而不是因为别的原因返回了错误」，以及为
+// 未来若网关想要区分这两种情形（例如排队场景要在 no_task 的 echo 行外
+// 追加提示）留一个不需要改错误处理骨架就能识别的钩子。
+var errAdmissionQueued = errors.New("statemachine: 并发装机已达上限，本次引导请求排队")
 
 // StartBoot 处理 /v1/boot 命中 pending 任务后的推进（SPEC §4.2）。
 func (m *Machine) StartBoot(ctx context.Context, taskID string, actualArch model.Arch, actualFirmware model.FirmwareMode) (model.Task, error) {
@@ -63,6 +81,32 @@ func (m *Machine) StartBoot(ctx context.Context, taskID string, actualArch model
 			Phase:   current.CurrentPhase,
 			LogTail: detailMessage,
 		}, m.clock.Now())
+	}
+
+	// 第 3.5 步（并发准入检查，Phase 4 新增）：precheck 已经通过，
+	// 说明这台机器身份合法且架构/固件与制品匹配——但在真正消耗 attempt、
+	// 签发装机 token 之前，还要确认当前「同时在装的机器数」没有打满配置的
+	// 上限（SPEC §10 失败模式 11：并发装机打满 HTTP，实际是带宽争抢，
+	// 表现成一批机器一起阶段超时失败）。
+	//
+	// 放在 precheck 之后、attempt++ 之前：precheck 失败是「重试必然同样
+	// 失败」，必须先于准入检查判断（不能让一台架构不匹配的机器仅仅因为
+	// 「凑巧赶上有空位」就白白消耗一次装机 token）；attempt++ 在准入检查
+	// 之后，因为超限本身不是这台机器的过错，不能消耗它的重试机会。
+	//
+	// 拒绝时的处理：返回一个不经过 failTask 的普通 error——任务原样留在
+	// pending（不改状态、不改 attempt、不产生任何写操作，AdmissionController.
+	// Check 本身是纯读操作）。网关侧（internal/gateway/boot.go 的
+	// handleBootGrant）对 StartBoot 返回 error 的既有处理是统一回退到
+	// no_task 载荷（sanboot），这正是「让机器继续 PXE 轮询、下一轮再来」
+	// 这个诉求在不改动 gateway 任何代码的前提下最保守的实现方式——见本次
+	// 任务返回值 notes 对这个选择的完整说明（为什么不新签一个 sleep+chain
+	// 的 iPXE 脚本）。
+	if decision, err := newAdmissionControllerFromGlobalLimit(m.store).Check(ctx); err != nil {
+		return model.Task{}, err
+	} else if !decision.Admitted {
+		return model.Task{}, fmt.Errorf("statemachine: 并发装机已达上限（当前在装 %d 台，上限 %d 台），"+
+			"本次引导请求排队，不消耗 attempt、不置 failed: %w", decision.InFlight, decision.Limit, errAdmissionQueued)
 	}
 
 	// 第 4/5 步：attempt++；超上限则置 failed（不签 token）；否则签发

@@ -308,6 +308,60 @@ func TestDefaults_默认值被正确应用(t *testing.T) {
 	}
 }
 
+// TestDefaults_并发上限与自动重试上限默认值 验证 Phase 4 新增的两个 Scan
+// 字段的默认值：AdmissionLimit 未配置时落到 20（与
+// internal/statemachine/admission.go 的 defaultAdmissionLimit 取相同
+// 数值），AutoRetryMaxAttempts 未配置时落到 1（计划任务 4「建议自动只
+// 重试一次」），AutoRetryEnabled 未配置时落到 false（默认关闭，是这三个
+// 字段里唯一一个零值本身就是期望默认值的字段，不需要 applyDefaults 特殊
+// 处理）。
+func TestDefaults_并发上限与自动重试上限默认值(t *testing.T) {
+	cfg, err := Parse(strings.NewReader(minimalYAML))
+	if err != nil {
+		t.Fatalf("Parse(最小配置) 返回错误: %v", err)
+	}
+
+	if cfg.Scan.AdmissionLimit != defaultAdmissionLimitConfigDefault {
+		t.Errorf("Scan.AdmissionLimit 默认值 = %d, want %d（SPEC §10 失败模式 11："+
+			"未显式配置时必须落到一个生效中的保守上限，不能静默变成不限）",
+			cfg.Scan.AdmissionLimit, defaultAdmissionLimitConfigDefault)
+	}
+	if cfg.Scan.AutoRetryEnabled {
+		t.Errorf("Scan.AutoRetryEnabled 默认值 = true, want false（计划任务 4：" +
+			"自动重装是需要运维明确同意的行为，默认必须关闭）")
+	}
+	if cfg.Scan.AutoRetryMaxAttempts != defaultAutoRetryMaxAttempts {
+		t.Errorf("Scan.AutoRetryMaxAttempts 默认值 = %d, want %d（计划任务 4："+
+			"建议自动只重试一次，之后必须人工介入）",
+			cfg.Scan.AutoRetryMaxAttempts, defaultAutoRetryMaxAttempts)
+	}
+}
+
+// TestParse_显式配置的并发上限与自动重试字段被保留 是上一条的对照组：
+// 运维显式写了非默认值时，Parse 必须原样保留，不能被 applyDefaults 覆盖
+// 掉——这是 applyDefaults 文档自己的约定（只填充「未提供」的字段）。
+func TestParse_显式配置的并发上限与自动重试字段被保留(t *testing.T) {
+	yaml := minimalYAML + `
+scan:
+  admission_limit: 8
+  auto_retry_enabled: true
+  auto_retry_max_attempts: 2
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 失败: %v", err)
+	}
+	if cfg.Scan.AdmissionLimit != 8 {
+		t.Errorf("Scan.AdmissionLimit = %d, want 8（显式配置值被默认值覆盖了）", cfg.Scan.AdmissionLimit)
+	}
+	if !cfg.Scan.AutoRetryEnabled {
+		t.Errorf("Scan.AutoRetryEnabled = false, want true（显式配置值被覆盖了）")
+	}
+	if cfg.Scan.AutoRetryMaxAttempts != 2 {
+		t.Errorf("Scan.AutoRetryMaxAttempts = %d, want 2（显式配置值被默认值覆盖了）", cfg.Scan.AutoRetryMaxAttempts)
+	}
+}
+
 // TestValidate_ByModel策略不给型号串被拒绝 与 TestValidate_ByModel策略给了型号串则接受
 // 锁住计划任务 15 最具体的一条业务校验：选了 by-model 必须同时给型号串——
 // 不给的运行期表现是「所有机器的磁盘规划都失败」，不如启动就拒绝。

@@ -42,6 +42,7 @@ package statemachine
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
@@ -122,6 +123,63 @@ func NewAdmissionController(store contract.TaskStore) *AdmissionController {
 // 加锁是不必要的复杂度。
 func (a *AdmissionController) SetLimit(limit int) {
 	a.limit = limit
+}
+
+// globalAdmissionLimit 是 StartBoot（boot.go）在准入检查这一步实际使用的
+// 上限来源，用 atomic.Int64 而不是普通 int 字段——原因见下。
+//
+// 为什么需要一个包级变量而不是把 *AdmissionController 存成 Machine 的
+// 字段：Machine 的结构体定义与六个依赖的构造签名在 machine.go（本任务的
+// 文件归属不含 machine.go，见任务顶部铁律 1「归属文件清单」），无法在
+// 不改动 machine.go 的前提下给 Machine 加一个新字段或给 New() 加第七个
+// 构造参数。而 AdmissionController 本身只依赖 contract.TaskStore——
+// StartBoot 已经持有 m.store（类型是更宽的 contract.Store，天然满足
+// TaskStore），因此 StartBoot 可以在每次调用时用 m.store 现场构造一个
+// AdmissionController，不需要 Machine 持有它作为字段；唯一还缺的是
+// 「配置的上限值」这个数字本身要从某处传进来——globalAdmissionLimit 就是
+// 那个传递通道：装配点（cmd/lober/wire.go）读到配置后调用
+// SetGlobalAdmissionLimit 写一次，StartBoot 每次调用时读一次。
+//
+// 用 atomic.Int64 而不是普通 int + 包级 var：并发装机场景下，Check 会被
+// 大量 goroutine（多个同时到达的 /v1/boot 请求）并发读取；若配置热更新
+// 或多个测试并行修改这个值，普通 int 的读写在 -race 下会被判定为数据
+// 竞争。atomic.Int64 是本文件顶部 SetLimit 方法自己文档里提到的「若需要
+// 支持运行期热调整，需要改成 atomic.Int64」这条——这里正是那个场景：
+// globalAdmissionLimit 与实例字段 limit 不同，它确实会被多个 goroutine
+// 并发访问（每个 HTTP 请求对应的 goroutine 都会在 StartBoot 里读它）。
+//
+// 初始值即 defaultAdmissionLimit——未经装配点调用 SetGlobalAdmissionLimit
+// 时，StartBoot 的准入检查仍然生效于一个保守的默认上限，不会因为「忘记
+// 装配」而静默变成不限（这与 NewAdmissionController 默认落到
+// defaultAdmissionLimit、而不是 0，是同一条设计原则）。
+var globalAdmissionLimit atomic.Int64
+
+func init() {
+	globalAdmissionLimit.Store(int64(defaultAdmissionLimit))
+}
+
+// SetGlobalAdmissionLimit 供装配点（cmd/lober/wire.go）在读到配置中的
+// 并发上限之后调用一次，覆盖 StartBoot 准入检查实际生效的上限。0 表示
+// 不限（与 AdmissionController.SetLimit(0) 同一条语义，向后兼容未显式
+// 配置上限的部署）。
+//
+// 并发安全：可以在运行期任意时刻调用（不仅是启动装配阶段）而不需要额外
+// 加锁——底层是 atomic.Int64，与 StartBoot 里的读取操作天然互斥于同一个
+// 内存字（不会读到一半新一半旧的字节）。
+func SetGlobalAdmissionLimit(limit int) {
+	globalAdmissionLimit.Store(int64(limit))
+}
+
+// newAdmissionControllerFromGlobalLimit 用 store 与当前的
+// globalAdmissionLimit 现场构造一个 AdmissionController，供 StartBoot
+// （boot.go）在准入检查这一步调用。每次调用都现场构造而不缓存实例：
+// AdmissionController 本身不持有任何跨调用状态（limit 之外没有其它字段
+// 需要保留，Check 是纯读操作），现场构造的成本是一次结构体字面量分配，
+// 可忽略不计，换来的是不需要在 Machine 上增加任何字段。
+func newAdmissionControllerFromGlobalLimit(store contract.TaskStore) *AdmissionController {
+	a := NewAdmissionController(store)
+	a.SetLimit(int(globalAdmissionLimit.Load()))
+	return a
 }
 
 // Check 判定当前是否可以继续放行一次装机引导（在签发 token 之前调用）。
