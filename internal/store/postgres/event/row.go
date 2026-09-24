@@ -19,15 +19,26 @@ import (
 // 唯一索引 idx_task_events_task_seq 建在 (task_id, seq) 上，无 WHERE 条件
 // （与 tasks 表那三个 partial index 不同）。索引名在本文件是字面量字符串
 // ——Go 的 struct tag 是字面常量，不能在 tag 里引用包外常量拼接——但必须与
-// pgerr.IdxTaskEventsTaskSeq 的字面值一致：pgerr.Translate 未来补上 23505
-// 分支时按 ConstraintName 判定，两处字面量不一致会让该分支静默失效（计划
-// 任务 2 风险提示明确点出的隐患）。row_test.go 的
-// TestIndexNameMatchesPgerrConstant 断言两处字面值相等，防止将来改名时
-// 漏改一处。
+// pgerr.IdxTaskEventsTaskSeq 的字面值一致：pgerr.Translate 按 ConstraintName
+// 判定 23505 冲突，两处字面量不一致会让该分支静默失效（计划任务 2 风险提示
+// 明确点出的隐患）。row_test.go 的 TestIndexNameMatchesPgerrConstant 断言
+// 两处字面值相等，防止将来改名时漏改一处。
+//
+// # 复合索引必须两个字段都标 tag，且用 priority 定列序
+//
+// GORM 的复合索引是「同名 index 出现在多个字段上」这一事实拼出来的，靠
+// priority 决定列序（schema/index.go 按 priority 排序）。只在 Seq 上标而
+// 漏掉 TaskID，建出来的是单列 UNIQUE (seq)——AutoMigrate 不会报错，两处
+// 注释也照样写着「(task_id, seq)」，但机器侧的信号 seq 是每个任务各自从 1
+// 开始的，于是**任意两个任务并发装机时，第二个任务的第一条事件就会撞上
+// 第一个任务的 seq=1 而被误判为重复投递**。单任务测试永远发现不了：
+// store_test.go 里每个用例都只用一个 task_id。
+// TestUniqueIndexIsCompositeAcrossTasks 用两个不同任务写同一个 seq 来锁住
+// 这条，TestModels_UniqueIndexColumns 直接断言 indexdef 的列集合。
 type row struct {
 	ID         int64  `gorm:"column:id;primaryKey"`
-	TaskID     string `gorm:"column:task_id;not null"`
-	Seq        int    `gorm:"column:seq;not null;index:idx_task_events_task_seq,unique"`
+	TaskID     string `gorm:"column:task_id;not null;index:idx_task_events_task_seq,unique,priority:1"`
+	Seq        int    `gorm:"column:seq;not null;index:idx_task_events_task_seq,unique,priority:2"`
 	TS         int64  `gorm:"column:ts;not null"`
 	Phase      string `gorm:"column:phase;not null"`
 	Level      string `gorm:"column:level;not null"`

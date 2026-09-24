@@ -182,6 +182,15 @@ AutoMigrate 从八个聚合包收集的 model 建表建索引。`001_init.sql` �
 partial 索引靠 index tag 表达 —— PG 驱动的 `CreateIndex` 会输出 `WHERE` 子句
 （`postgres/migrator.go`），GORM 核心的通用 migrator 不会，所以这条只在 PG 上成立。
 
+**复合索引要求每个参与列都标同名 tag 并用 `priority` 定列序。** GORM 的复合
+索引是「同名 index 出现在多个字段上」这个事实拼出来的，只标一个字段会静默建成
+单列索引。`idx_task_events_task_seq` 在实现期正是这样踩过一次：漏标 `TaskID`
+后建成 `UNIQUE (seq)` 单列，而机器侧的信号 seq 是每个任务各自从 1 开始编号的，
+后果是**任意两个任务并发装机时，第二个任务的第一条事件就撞上第一个任务的
+seq=1 被误判为重复投递**，调用方按契约把 `ErrDuplicateSeq` 当正常路径继续走，
+整个事件流静默丢失且不报错。单任务测试永远发现不了这一类退化，所以校验器
+除了 WHERE 还必须比**列集合与列序**（见下）。
+
 **只有 `idx_tasks_sn_active` 的条件里含逗号**，需要用反斜杠转义。GORM 的 tag
 解析按逗号切选项（`schema/index.go` 的 `parseFieldIndexes`），但 `ParseTagSetting`
 支持用尾部反斜杠跨过分隔符（`schema/utils.go:23-26`）：
@@ -201,8 +210,21 @@ WHERE 截断成半句或整条丢掉，索引退化成无条件唯一索引。�
 建任务直接失败。
 
 所以 `Open` 在 AutoMigrate 之后跑一次 schema 校验：查 `pg_indexes.indexdef`，
-对上表四个索引断言存在、是 unique、且 WHERE 条件与上表字面一致（第四个断言
-没有 WHERE）。启动时与测试里都跑。
+对上表四个索引断言存在、是 unique、**列集合与列序**符合、且 WHERE 条件与上表
+字面一致（第四个断言没有 WHERE）。启动时与测试里都跑。
+
+两处实现期发现、写计划时没预料到的细节：
+
+- **查询必须显式加 `schemaname = current_schema()` 过滤。** `pg_indexes` 是
+  横跨全库所有 schema 的系统视图。每个测试用例都建一个独立 schema，生产库也
+  可能有历史遗留 schema，不加这个条件会把同名表的同名索引一起查回来，按索引名
+  去重时保留哪一行取决于 map 遍历顺序 —— 实测症状是「明明在当前 schema 把索引
+  删了，校验却因为看见别的 schema 里那份同名索引而误判通过」。
+- **PG 会规范化 WHERE 与列清单**，比较必须照实际输出写，不能凭猜：
+  `!=` → `<>`；字符串字面量加类型标注 `''` → `''::text`；
+  `NOT IN (a, b)` → `<> ALL (ARRAY[a, b])`；每个比较表达式外层加一对括号。
+  例如 `idx_tasks_sn_active` 的实际 `indexdef` 是
+  `WHERE ((state <> ALL (ARRAY['done'::text, 'failed'::text])) AND (host_sn <> ''::text))`。
 
 ## 7. 错误映射
 
@@ -313,6 +335,18 @@ schema 演进时只能加列；改列型或删列要手工介入。评审时已�
 替代方案，决策是选 AutoMigrate，此处仅记录后果：对装机系统而言 schema 升级
 出错的后果是整个机房装不了机，因此后续任何改列型或删列的变更都应当单独评审，
 不能依赖 AutoMigrate 自动完成。
+
+**AutoMigrate 也不修改已存在的索引 —— 实现期已实测确认。** 这条比「不删列」
+更容易踩：修正了 index tag 之后，新建的数据库会得到正确的索引，而**已经存在
+那个索引的数据库不会被更新**，AutoMigrate 看到同名索引已存在就跳过，不报错。
+实现期就真实发生过一次：`idx_task_events_task_seq` 的 tag 漏标了 `TaskID`
+字段，先建出了单列 `UNIQUE (seq)`；tag 改对之后，已有库里那个退化索引原地
+不动，是 §6 的启动校验把它拦下来的（校验失败信息直接指出期望 `(task_id, seq)`
+实际 `(seq)`），修复靠手工 `DROP INDEX` 再让 AutoMigrate 重建。
+
+因此运维上要记住：**改索引定义等于一次需要手工介入的迁移**。升级时的正确
+顺序是先 `DROP INDEX` 再启动新版本，而不是指望启动过程自己收敛。启动校验
+是这条约束的兜底，不是替代品。
 
 **部署形态变了。** 原来是单文件 SQLite，零外部服务依赖，符合 air-gapped 内网
 的部署预期。现在 lober 多一个 PostgreSQL 服务依赖，部署文档与运维手册需要补

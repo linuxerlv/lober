@@ -23,6 +23,7 @@ package event
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -64,6 +65,81 @@ func sampleEvent(taskID string, seq int) model.TaskEvent {
 		RC:         0,
 		HookDigest: "sha256:deadbeef",
 		Source:     model.EventSourceSignal,
+	}
+}
+
+// TestUniqueIndexIsCompositeAcrossTasks 验证去重索引是 (task_id, seq) 复合
+// 唯一索引，而不是 seq 单列唯一。
+//
+// # 为什么这条是回归测试而不是普通用例
+//
+// 首版实现把索引 tag 只标在 Seq 字段上（漏了 TaskID），AutoMigrate 照样
+// 成功，建出来的是单列 UNIQUE (seq)。本文件其余全部用例都只用一个
+// task_id，因此没有一条能发现它。真实后果是：机器侧的信号 seq 由每个任务
+// 各自从 1 开始编号，两个任务并发装机时，第二个任务的第一条事件（seq=1）
+// 会撞上第一个任务的 seq=1，被 AppendEvent 误判为「机器侧重试造成的重复
+// 投递」而拒绝写入——事件流从第一条起就丢，且调用方按契约会把
+// ErrDuplicateSeq 当成正常路径继续走，完全不报错。
+//
+// 本用例用两个不同任务写同一个 seq 值，两次都必须成功。
+func TestUniqueIndexIsCompositeAcrossTasks(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	const sharedSeq = 1
+	if _, err := s.AppendEvent(ctx, sampleEvent("task-alpha", sharedSeq)); err != nil {
+		t.Fatalf("AppendEvent(task-alpha, seq=%d) 失败: %v", sharedSeq, err)
+	}
+
+	_, err := s.AppendEvent(ctx, sampleEvent("task-beta", sharedSeq))
+	if err != nil {
+		t.Fatalf("AppendEvent(task-beta, seq=%d) = %v, want nil —— "+
+			"不同任务用同一个 seq 必须都能写入。去重索引若退化成 seq 单列唯一，"+
+			"任意两个任务并发装机时第二个任务的第一条事件就会被误判为重复投递", sharedSeq, err)
+	}
+
+	// 两条事件各自归属自己的任务，互不串台。
+	for _, taskID := range []string{"task-alpha", "task-beta"} {
+		list, listErr := s.ListEvents(ctx, taskID, contract.EventFilter{})
+		if listErr != nil {
+			t.Fatalf("ListEvents(%s) 失败: %v", taskID, listErr)
+		}
+		if len(list) != 1 {
+			t.Errorf("ListEvents(%s) 返回 %d 条，want 1", taskID, len(list))
+		}
+	}
+}
+
+// TestModels_UniqueIndexColumns 直接断言 AutoMigrate 建出的
+// idx_task_events_task_seq 覆盖 (task_id, seq) 两列且顺序正确。
+//
+// 与上面那条业务侧回归测试互补：这条查 pg_indexes 的结构事实，即使将来
+// 有人把业务用例改错或删掉，索引形态仍被钉住；而业务侧那条说明的是这个
+// 结构为什么重要。组合器的 verifyIndexes 按计划只校验「存在、唯一、WHERE
+// 条件」不校验列集合，所以列集合这一层必须在这里锁。
+func TestModels_UniqueIndexColumns(t *testing.T) {
+	db := pgtest.NewDB(t, Models()...)
+
+	var indexdef string
+	err := db.Raw(`SELECT indexdef FROM pg_indexes
+		WHERE schemaname = current_schema() AND tablename = 'task_events' AND indexname = ?`,
+		pgerr.IdxTaskEventsTaskSeq).Scan(&indexdef).Error
+	if err != nil {
+		t.Fatalf("查 pg_indexes 失败: %v", err)
+	}
+	if indexdef == "" {
+		t.Fatalf("未找到索引 %s —— AutoMigrate 没建出来", pgerr.IdxTaskEventsTaskSeq)
+	}
+
+	// PG 规范化后的形态：CREATE UNIQUE INDEX ... USING btree (task_id, seq)
+	const wantCols = "(task_id, seq)"
+	if !strings.Contains(indexdef, wantCols) {
+		t.Errorf("索引 %s 的列集合不含 %s\n实际 indexdef: %s\n"+
+			"只标在 Seq 字段上会建出单列 UNIQUE (seq)，需要 TaskID 与 Seq 两个字段都标同名 index tag 并用 priority 定列序",
+			pgerr.IdxTaskEventsTaskSeq, wantCols, indexdef)
+	}
+	if !strings.Contains(indexdef, "CREATE UNIQUE INDEX") {
+		t.Errorf("索引 %s 不是唯一索引，indexdef: %s", pgerr.IdxTaskEventsTaskSeq, indexdef)
 	}
 }
 
