@@ -23,44 +23,76 @@ type Extractor interface {
 	Open(ctx context.Context, isoPath string) (fs.FS, error)
 }
 
-// MountExtractor 是 Extractor 的真实实现：通过挂载 ISO 文件到一个临时
-// 挂载点、再用 os.DirFS 包装该挂载点，得到 fs.FS 视图。
+// MountExtractor 是 Extractor 的真实实现：直接在用户态解析 ISO 9660
+// 镜像的字节内容，得到 fs.FS 视图（本轮 m3 轨实现，取代此前的骨架）。
 //
-// 选挂载而不是解压：挂载零磁盘占用（ISO 本身已经是完整的文件系统镜像），
-// 解压需要额外的磁盘空间存一份解压后的副本，对几 GB 级别的 ISO 是不必要
-// 的开销——真正需要落盘的产物（kernel/initrd/仓库树）由后续的抽取逻辑
-// 选择性复制，不是把整个 ISO 无差别解压一遍。
+// 为什么不是真的 mount(8)：读 ISO 内容不需要挂载——ISO 9660 是有公开
+// 规范的文件系统格式（ECMA-119），可以纯用户态解析，不需要 Linux 特权
+// 或 loop 设备。真的调用 mount(8) 在本仓库当前的 Windows 开发环境里
+// 连语义都不成立，会导致这部分代码永远无法在本机验证（违反「完成前必须
+// 真的执行验证」的铁律）。方向选择与论证的完整版本见
+// iso9660.go 文件头注释与 docs/real-machine/17-iso读取实现.md。
 //
-// mount/umount 是操作系统命令而非本文件自己实现文件系统解析：ISO9660/
-// UDF 格式的解析细节完全交给操作系统内核，这是最低风险的选择——手写
-// 一个 ISO9660 解析器的正确性风险远大于调用系统已经充分测试过的挂载
-// 支持。这也是为什么 MountExtractor 不参与任何单元测试（任务 9 要求
-// 「不依赖真 ISO」），它只在集成环境里被真实使用，单元测试全部针对
-// Extractor 接口的假实现。
+// 名字仍叫 MountExtractor（而不是改名为 ISO9660Extractor 之类）：本任务
+// 授权范围是「实现 MountExtractor.Open」，不改 Extractor 接口，改名字
+// 会影响调用方的构造函数名（NewMountExtractor），那超出了「只写你拥有
+// 的文件」的边界——cmd/lober 装配点如果已经引用了 NewMountExtractor
+// 这个名字，改名就是破坏性变更。
 type MountExtractor struct {
-	// mountPointBase 是挂载点的父目录，真实挂载点会在其下创建一个以
-	// ISO 内容摘要或时间戳命名的子目录。留空则使用系统临时目录。
+	// mountPointBase 是历史遗留字段：早期骨架设计假设需要一个挂载点
+	// 父目录。当前实现（纯用户态解析）不需要任何挂载点，本字段不再被
+	// Open 使用，但保留字段本身与 NewMountExtractor 的签名不变——删掉
+	// 它会改变构造函数签名，任何现有调用方 NewMountExtractor(x) 都要
+	// 跟着改，这超出「不得让任何现存测试变红」的授权（本包内的
+	// TestExtract_MountExtractorNotYetImplemented 就是这样一个现有
+	// 调用方，见 extract_test.go）。
 	mountPointBase string
 }
 
-// NewMountExtractor 构造一个真实的挂载式抽取器。
+// NewMountExtractor 构造一个真实的 ISO 9660 抽取器。
 func NewMountExtractor(mountPointBase string) *MountExtractor {
 	return &MountExtractor{mountPointBase: mountPointBase}
 }
 
-// Open 挂载 isoPath 并返回其文件系统视图。
+// Open 打开 isoPath 对应的本地文件，解析其 ISO 9660 内容，返回文件系统
+// 视图。
 //
-// 当前实现：本模块只交付「导入 job 使用抽取器接口」这个骨架，真实挂载
-// 命令（mount -o loop）依赖具体运行环境的特权与工具链（Linux 下的
-// mount(8)，在本仓库当前的 Windows 开发环境里连语义都不成立），且计划
-// 任务 9/10/11 的测试要求全部通过内存文件系统验证、明确不依赖真 ISO。
-// 因此 MountExtractor.Open 目前返回「未实现」错误，真正的 mount/umount
-// 调用留给部署环境适配（不改变 Extractor 接口，只需替换本结构体的方法体）。
+// 用 OpenISO9660File 而不是「os.Open 一次拿到 *os.File，把它整个生命
+// 周期传给 OpenISO9660」：本函数不持有跨越整个 fs.FS 生命周期的文件
+// 描述符（完整论证见下方 OpenISO9660File 调用处的注释与
+// iso9660.go 里 OpenISO9660File 的文档）。同时，真实发行版 ISO 动辄
+// 几 GB，OpenISO9660 内部通过 io.ReaderAt 做扇区级随机读取，不要求
+// （也不应该）把整份 ISO 一次性读进内存。
 func (m *MountExtractor) Open(ctx context.Context, isoPath string) (fs.FS, error) {
-	return nil, fmt.Errorf("imports: MountExtractor.Open 尚未实现真实挂载逻辑"+
-		"（ISO=%q）——本模块交付的是抽取器接口与基于内存文件系统的识别/抽取逻辑，"+
-		"真实的 mount(8) 调用依赖部署环境（Linux 特权、loop 设备），"+
-		"留给部署适配阶段接入，不改变 Extractor 接口本身", isoPath)
+	// OpenISO9660File 本身不接受 ctx（它是纯同步的字节解析，没有可取消的
+	// IO 等待点——每次 ReadAt 都是对本地文件的一次性开-读-关，不是网络
+	// 调用），因此本函数只在解析开始前检查一次 ctx 是否已经被取消，不在
+	// 解析过程中反复检查：调用方若在 Job.Run 尚未真正开始抽取前就取消了
+	// ctx，这里能省掉一次注定失败的解析；若在解析过程中取消，本函数仍会
+	// 解析完成才返回——真实 ISO 目录树的解析耗时是毫秒级（只解析目录
+	// 记录，不读文件内容），这个不可中断的窗口远小于后续抽取步骤（复制
+	// 内核/initrd/仓库树，那部分同样不接受 ctx，见 manifest.go 的
+	// copyTreeFromFS），保持与既有代码同样的取消粒度。
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("imports: 打开 ISO 前 context 已取消: %w", err)
+	}
+
+	// 用 OpenISO9660File 而不是「os.Open 一次、把 *os.File 传给
+	// OpenISO9660」：后者会让返回的 fs.FS 在整个生命周期内占着一个操作
+	// 系统文件描述符，而 Extractor 接口没有对应的 Close 方法、job.go
+	// （本任务不拥有）也从未调用任何清理——这在 Windows 下会直接表现为
+	// 「文件正在被使用，无法删除/移动」（本包的
+	// TestExtract_MountExtractorReadsRealISO9660File 在开发过程中就
+	// 真实触发过这个问题：t.TempDir() 清理时报
+	// ERROR_SHARING_VIOLATION）。OpenISO9660File 按需开关文件，不持有
+	// 跨越整个 fs.FS 生命周期的文件描述符，完整论证见 iso9660.go 里
+	// OpenISO9660File 的文档注释。
+	fsys, err := OpenISO9660File(isoPath)
+	if err != nil {
+		return nil, fmt.Errorf("imports: 解析 ISO 9660 内容失败（路径 %q): %w", isoPath, err)
+	}
+
+	return fsys, nil
 }
 
 // 编译期断言：MountExtractor 必须满足 Extractor。
