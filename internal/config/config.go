@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -213,11 +214,44 @@ type Console struct {
 	TokenTTL time.Duration `yaml:"token_ttl"`
 }
 
-// Store 是持久化层的三个路径：数据库、制品、日志。
+// Store 是持久化层的三个路径：数据库、制品、日志，加本轮新增的第四个
+// 可选路径 WindowsSourcesPath。
 type Store struct {
 	DBPath       string `yaml:"db_path"`
 	ArtifactPath string `yaml:"artifact_path"`
 	LogPath      string `yaml:"log_path"`
+
+	// WindowsSourcesPath 是 Windows 外部文件（wimboot/BCD/boot.sdi/
+	// boot.wim）的基目录，供 cmd/lober/winsources.go 的
+	// fileWindowsSourcesResolver 按约定拼出四个文件各自的路径（本轮
+	// n2/m2 轨新增，解除 imports.Job.ConfigureWindows 的生产装配缺口）。
+	//
+	// 这四个文件不在 ISO 里，是运维单独准备、scp 到本机某个目录的
+	// （extract_windows.go 的 WindowsExternalSources 文档）；本字段就是
+	// 「去哪个目录找」这个约定的唯一配置入口，与 SPEC §2.1「气隙环境下
+	// ISO 以登记服务器本地路径为主」是同一种运维模式的延伸（几 GB/几百 MB
+	// 的文件走浏览器上传体验很差，scp 到指定目录再让服务读取更实际）。
+	//
+	// 可选字段：留空表示「本部署不导入 Windows」，这是合法状态（不是每
+	// 个部署都需要 Windows 家族，SPEC §2.1 os_family 六个取值里 Windows
+	// 只是其中之一），Parse 与 Validate 都不会因为留空而报错——见
+	// winsources.go 的 fileWindowsSourcesResolver：若真的对 Windows 家族
+	// 触发导入却没配置本字段，job.go 的 runWindows 在
+	// ConfigureWindows 未被调用时已经会报出明确错误，不需要 config 包
+	// 提前用一个「必填」校验重复拦这条路径。
+	//
+	// 显式配置（非空）时，Validate 会校验该路径必须真实存在且是一个
+	// 目录（见 Validate 方法）——但不会像 ArtifactPath/LogPath 那样在
+	// wire.go 用 ensureDir 自动创建：这个目录的内容由运维在 lober 进程
+	// 之外手工放进去，自动 mkdir 出一个空目录只会把「运维忘记准备文件」
+	// 这个错误从「启动时目录不存在」推迟成「导入时四个文件缺失」，报错
+	// 时机变晚、结论不变，不如启动时就在 -check 模式拦住。
+	//
+	// 目录内部的具体布局约定（何时按 <本目录>/wimboot 找、何时按
+	// <本目录>/<artifact_set_id>/BCD 找）在 winsources.go 的
+	// fileWindowsSourcesResolver 文档里详细论证，config 包本身不关心
+	// 布局细节，只负责「这个基目录本身是否可用」这一层。
+	WindowsSourcesPath string `yaml:"windows_sources_path"`
 }
 
 // Scan 是超时扫描循环的配置。字段包含 Phase 4 新增的两组运维开关：并发
@@ -470,6 +504,32 @@ func hasPort(addr string) bool {
 	return err == nil
 }
 
+// validateWindowsSourcesPath 校验 Store.WindowsSourcesPath（本轮新增）：
+// 留空视为「本部署不导入 Windows」，合法，直接放行（字段文档已详述理由）；
+// 非空时必须真实存在且是一个目录——用 os.Stat 而不是自动创建，因为这个
+// 目录的内容（wimboot/BCD/boot.sdi/boot.wim）由运维在 lober 之外手工放
+// 进去，Validate 自动 mkdir 出一个空目录只会把「运维忘记准备文件」这个
+// 错误从「启动时目录不存在」推迟到「导入时四个文件缺失」，不如现在就
+// 拦住（fail-fast，呼应 -check 模式的设计目的）。
+func validateWindowsSourcesPath(path string) error {
+	if path == "" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("config: store.windows_sources_path 配置为 %q 但无法访问: %w"+
+			"（这个目录不由 lober 自动创建——它的内容由运维手工 scp 进去，"+
+			"目录不存在通常意味着运维忘了准备或路径写错了，宁可在启动时拒绝，"+
+			"也不要留到某次 Windows 导入才发现）", path, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("config: store.windows_sources_path 配置为 %q，但它不是一个目录"+
+			"（是一个普通文件）——resolver 会在这个路径下按 artifact_set_id 拼接子目录，"+
+			"指向文件会导致拼接产出一个含糊的运行期错误，应在启动时明确拒绝", path)
+	}
+	return nil
+}
+
 // Validate 执行计划任务 15 规定的四类启动校验。任一类不通过即返回非 nil
 // 错误，错误信息里包含具体哪个字段、为什么不合法，供运维直接定位。
 func (c *Config) Validate() error {
@@ -502,6 +562,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Store.LogPath == "" {
 		return fmt.Errorf("config: store.log_path 不能为空")
+	}
+	if err := validateWindowsSourcesPath(c.Store.WindowsSourcesPath); err != nil {
+		return err
 	}
 
 	if len(c.Auth.Users) == 0 {

@@ -23,6 +23,7 @@
 1. [部署顺序（八步）](#1-部署顺序八步)
 2. [三处必改的配置](#2-三处必改的配置)
 3. [TFTP 二进制：放哪四个文件](#3-tftp-二进制放哪四个文件)
+3b. [Windows 外部文件：放哪四个文件](#3b-windows-外部文件放哪四个文件)
 4. [选哪套 DHCP 配置](#4-选哪套-dhcp-配置)
 5. [实机核对清单](#5-实机核对清单)
 6. [验证部署成功的标志](#6-验证部署成功的标志)
@@ -167,6 +168,11 @@ VLAN 上的地址（或 nginx 配置被改动），防火墙仍能拦住，不�
 **这三处任何一处配错，服务大概率仍然「看起来正常启动」**——这正是为什么
 值得单独列出来反复强调，而不是假设运维看一眼配置样例的注释就会记住。
 
+**第四项可选配置（不属于上表，因为它的失败模式相反——配错会直接拒绝
+启动，不会静默）：** 若这套部署需要导入 Windows 制品集，还需要配置
+`store.windows_sources_path`，见[第 3b 节](#3b-windows-外部文件放哪四个文件)。
+不导入 Windows 的部署可以完全忽略这一项。
+
 ---
 
 ## 3. TFTP 二进制：放哪四个文件
@@ -184,6 +190,113 @@ TFTP 根目录需要放置 BIOS/IA32 UEFI/x64 UEFI/ARM64 UEFI 四个 iPXE 官方
 - **四个文件的 sha256 必须在下载后立即计算并记录**（`deploy/dnsmasq/README.md`
   末尾有一张待填表格）——**在这四个值填入之前，不要认为 TFTP 二进制已经
   过校验**。带进内网前后各校验一次，确认传输过程没有损坏或被替换。
+
+---
+
+## 3b. Windows 外部文件：放哪四个文件
+
+Windows 制品集需要 `wimboot`/`BCD`/`boot.sdi`/`boot.wim` 四个文件，且
+**它们不在 Windows 安装 ISO 里**（SPEC §2.1、附录 A.4-A.6）——ISO 只提供
+`sources/install.wim`（用于识别与最终安装），这四个文件来自运维单独准备
+的 WinPE 构建与 iPXE 项目，必须手工放到指定位置，登记 `artifact_set`
+之前就要准备好。
+
+### 目录约定
+
+配置项 `store.windows_sources_path`（`internal/config/config.go` 的
+`Store.WindowsSourcesPath`）指定一个基目录，四个文件按下面的固定位置
+放置——**不是四个都放同一层**，这是本节要论证的核心决策：
+
+```
+<store.windows_sources_path>/
+├── wimboot                          ← 共享，一份即可
+├── <artifact_set_id_A>/
+│   ├── BCD
+│   ├── boot.sdi
+│   └── boot.wim
+└── <artifact_set_id_B>/
+    ├── BCD
+    ├── boot.sdi
+    └── boot.wim
+```
+
+### 为什么 wimboot 单独放一层，而不是每个制品集各放一份
+
+**判据：wimboot 是通用引导器，与 Windows 版本、与固件都无关；
+BCD/boot.sdi/boot.wim 三者来自具体一次 WinPE 构建，且 boot.wim 的位宽
+必须与固件匹配**（SPEC §2.1：同一 Windows 版本要按固件各导一个
+`artifact_set`）。
+
+- `wimboot`（iPXE 项目提供的引导器二进制，§4.5 菜单的 `kernel` 行）：
+  同一份二进制能引导任意版本、任意固件的 WinPE，本质与 TFTP 目录里的
+  `snponly.efi`/`undionly.kpxe` 是同一类"通用引导链组件"，因此放在基
+  目录下，全部制品集共享。
+- `BCD`/`boot.sdi`/`boot.wim`：三者是**某一次具体 WinPE 构建的产物**，
+  `boot.wim` 的固件位宽必须与该 `artifact_set` 登记时声明的
+  `firmware` 字段一致（`internal/imports/extract_windows.go` 的
+  `ExtractWindows` 会拿两者比对，不一致直接拒绝导入）——这三者天然是
+  "每个 artifact_set 各自一份"，放在以 `artifact_set_id` 命名的子目录
+  里，与该制品集的登记记录一一对应。
+
+若不做这个区分（四个文件都塞进每个 `<artifact_set_id>/` 子目录），代价
+是运维每准备一个新的 `artifact_set`（哪怕只是同一个 WinPE 换个固件）都
+要重新复制一份完全相同的 `wimboot`——不仅浪费磁盘，未来升级 iPXE 版本
+的 `wimboot` 时还要记得给每个制品集都换一遍，容易漏改。拆成两层后，
+升级 `wimboot` 只需替换基目录下那一份文件，全部制品集立即生效。
+
+### 运维操作序列（气隙环境下的实际步骤）
+
+与 SPEC §2.1「气隙环境下 ISO 以登记服务器本地路径为主……运维 scp 到
+指定目录再登记更实际」是同一种运维模式，这四个文件同理：
+
+1. 若基目录下 `wimboot` 已存在（多数情况——同一套 iPXE 部署长期不变），
+   跳过这一步；否则从 iPXE 项目官方发布物获取一次，`scp` 到
+   `<基目录>/wimboot`。
+2. `mkdir -p <基目录>/<artifact_set_id>/`——`artifact_set_id` 需与稍后
+   在控制台登记该制品集时使用的 ID **完全一致**（这是运维自己保证的
+   约定，系统不会替你核对两者是否匹配；ID 由控制台创建制品集时分配，
+   建议先在控制台创建好、拿到真实 ID 后再建这个目录，而不是先猜一个
+   ID）。
+3. 用 DISM 或类似工具构建好这次的 `boot.wim`（含 `unattend.xml` 的
+   封装逻辑是导入期职责之外的人工前置步骤，见
+   `internal/imports/extract_windows.go` 文件头注释），连同对应的
+   `BCD`、`boot.sdi` 一并 `scp` 到 `<基目录>/<artifact_set_id>/`。
+4. 确认四个文件都能被 lober 进程的运行用户读取（权限与
+   `store.artifact_path` 的约定类似，见`docs/contracts/filesystem.md`）。
+
+### 校验时机与失败模式
+
+- **`store.windows_sources_path` 留空是合法状态**（不是每个部署都导入
+  Windows），`config.Validate()` 不会因此拒绝启动。
+- **一旦配置了这个字段，它必须指向一个真实存在的目录**——
+  `config.Validate()` 会在启动时（`-check` 模式同样生效）拒绝一个不
+  存在或指向普通文件的路径。这个目录本身**不会被 lober 自动创建**
+  （与 `store.artifact_path`/`store.log_path` 不同）：它的内容由运维
+  在 lober 之外手工放进去，自动建出一个空目录只会把"忘记准备文件"这个
+  错误从"启动时目录不存在"推迟到"导入时报错四个文件缺失"，不如现在
+  就拦住。
+- **四个文件缺任一个，导入时都会明确报错并指出缺的是哪一个**——不会
+  静默用一组默认路径继续（`cmd/lober/winsources.go`
+  `fileWindowsSourcesResolver` 的行为，供 `internal/imports/job.go`
+  的 `Job.Run` 在识别到 Windows 家族时据此让整个导入失败）。
+
+### 已知缺口：固件位宽探测目前信任登记声明，不解析 boot.wim 二进制
+
+真实解析 WIM 格式（微软的复合文件二进制容器）需要专门的库（wimlib 一类），
+不在本项目允许的依赖白名单内。生产环境的 `WimArchDetector` 实现
+（`cmd/lober/wimarch.go` 的 `storeBackedWimArchDetector`）目前不读取
+`boot.wim` 的二进制内容，而是信任该 `artifact_set` 登记时运维填写的
+`firmware` 字段——这个字段本身就是 SPEC §2.1 要求的显式声明。
+
+**代价：** `ExtractWindows` 里"探测到的固件与声明的固件比对，不一致则
+拒绝"这道校验，在当前实现下永远比对成功（因为两边读的是同一个来源）。
+若运维手动把 `boot.wim` 放错了固件目录（例如把 BIOS 版的 `boot.wim`
+放进了声明为 UEFI 的 `artifact_set_id` 子目录），**当前实现不会拦住这
+个错误**，会在机器实际引导 WinPE 时才暴露。真正独立于声明值的位宽探测
+（读 `boot.wim` 内部的架构标识）留待未来接入 WIM 解析能力时再补，不需要
+改动 `WimArchDetector` 接口本身。运维在完成第 3 步的 `scp` 之后，建议
+人工核对一遍"这次构建的 WinPE 是给哪个固件用的"与"放进了哪个
+`artifact_set_id` 子目录"两者是否对应，作为这道校验的临时替代。
 
 ---
 
@@ -443,5 +556,9 @@ log，见 `docs/contracts/http-machine.md`「约定 2」）。
 - `scripts/mkuser/main.go`（`go run ./scripts/mkuser -user <名字>` 生成
   bcrypt 哈希；`-stdin` 开关仅供自动化测试非交互造用户）
 - `internal/config/config.go`（配置结构的权威定义）
+- `cmd/lober/winsources.go`（Windows 外部文件目录约定的实现，
+  `fileWindowsSourcesResolver`）、`cmd/lober/wimarch.go`（固件位宽探测器
+  `storeBackedWimArchDetector`，见[第 3b 节](#3b-windows-外部文件放哪四个文件)
+  末尾的已知缺口说明）
 - `docs/contracts/http-machine.md`、`docs/contracts/filesystem.md`
-- `docs/superpowers/specs/SPEC.md` §0.1、§1.4、§1.6、附录 B
+- `docs/superpowers/specs/SPEC.md` §0.1、§1.4、§1.6、§2.1、附录 A.4-A.6、附录 B

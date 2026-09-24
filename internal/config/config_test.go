@@ -7,6 +7,8 @@
 package config
 
 import (
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -888,5 +890,137 @@ func TestDefaults_SecureLinkTTL显式配置不被覆盖(t *testing.T) {
 	}
 	if got, want := cfg.Gateway.SecureLinkTTL.String(), "5m0s"; got != want {
 		t.Errorf("Gateway.SecureLinkTTL = %s, want %s（显式配置的值不应被默认值覆盖）", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// store.windows_sources_path（本轮 m2 轨新增：Windows 外部文件目录配置项）
+// ---------------------------------------------------------------------------
+//
+// wimboot/BCD/boot.sdi/boot.wim 四个文件不在 ISO 里，运维需要单独准备并
+// scp 到登记服务器本地某个目录（SPEC §2.1「气隙环境下 ISO 以登记服务器
+// 本地路径为主」，这四个文件同理）。本字段是运维告诉 lober「去哪个目录找
+// 这些文件」的唯一配置入口，见 cmd/lober/winsources.go 的
+// fileWindowsSourcesResolver 如何消费这个路径。
+
+// TestParse_WindowsSourcesPath未配置时留空 锁住「这是可选字段」这条设计：
+// 不是每个部署都会导入 Windows（SPEC §2.1 windows 只是 os_family 六个
+// 取值之一），未显式配置本字段时 Parse 不应报错、字段应保持空字符串——
+// 空字符串本身就是「未配置 Windows 导入」的合法状态，不该被当成配置遗漏。
+func TestParse_WindowsSourcesPath未配置时留空(t *testing.T) {
+	cfg, err := Parse(strings.NewReader(minimalYAML))
+	if err != nil {
+		t.Fatalf("Parse(最小配置) 返回错误: %v", err)
+	}
+	if cfg.Store.WindowsSourcesPath != "" {
+		t.Errorf("Store.WindowsSourcesPath = %q，want 空字符串；"+
+			"未配置 Windows 外部文件目录应是合法状态（不是每个部署都导入 Windows）",
+			cfg.Store.WindowsSourcesPath)
+	}
+}
+
+// TestParse_WindowsSourcesPath可显式配置 锁住字段能正常解析出运维填写的
+// 路径值，供后续 Validate 与生产装配点（wire.go 的 newWindowsSourcesResolver）
+// 读取。
+func TestParse_WindowsSourcesPath可显式配置(t *testing.T) {
+	yaml := strings.Replace(minimalYAML,
+		"store:\n",
+		"store:\n  windows_sources_path: \"/srv/lober/windows-sources\"\n", 1)
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if got, want := cfg.Store.WindowsSourcesPath, "/srv/lober/windows-sources"; got != want {
+		t.Errorf("Store.WindowsSourcesPath = %q, want %q", got, want)
+	}
+}
+
+// TestValidate_WindowsSourcesPath未配置时不被拒绝 锁住「可选」这条设计
+// 在 Validate 层同样成立：最小配置（未设置本字段）必须继续通过 Validate，
+// 否则本次新增字段会破坏所有既有不需要 Windows 导入能力的部署配置——这是
+// 铁律「改动既有函数时不得让任何现存测试变红」在新增可选字段场景下的
+// 直接体现。
+func TestValidate_WindowsSourcesPath未配置时不被拒绝(t *testing.T) {
+	cfg, err := Parse(strings.NewReader(minimalYAML))
+	if err != nil {
+		t.Fatalf("Parse(最小配置) 返回错误: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() 拒绝了未配置 windows_sources_path 的最小配置: %v；"+
+			"该字段是可选的，不应影响不需要 Windows 导入能力的部署", err)
+	}
+}
+
+// TestValidate_WindowsSourcesPath配置了但目录不存在时被拒绝 锁住「配置了
+// 就必须真实存在」这条 fail-fast 设计：该目录由运维在 lober 之外手工
+// scp 文件进去，Go 进程绝不应该像 store.artifact_path 那样自动 mkdir——
+// 自动建出一个空目录只会把「运维忘记准备文件」这个错误从「启动时目录
+// 不存在」推迟成「导入时四个文件都缺失」，报错时机变晚但结论完全一样，
+// 不如在启动时（-check 模式）就把这类配置错误拦住，让运维在装机现场
+// 之前发现，而不是导入 ISO 时才发现（呼应 job.go runWindows 与
+// extract_windows.go ExtractWindows「缺任一文件都要在导入时报错」的
+// 同一种设计精神，往前推到配置校验这一层）。
+func TestValidate_WindowsSourcesPath配置了但目录不存在时被拒绝(t *testing.T) {
+	yaml := strings.Replace(minimalYAML,
+		"store:\n",
+		"store:\n  windows_sources_path: \"/this/path/should/not/exist/on/any/test/runner\"\n", 1)
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() 未拒绝一个不存在的 store.windows_sources_path；" +
+			"配置了但目录不存在时必须在启动时拒绝（fail-fast），不能留到导入期才发现")
+	}
+	if !strings.Contains(err.Error(), "windows_sources_path") {
+		t.Errorf("Validate() 的错误信息 %q 未提及 windows_sources_path，"+
+			"运维需要能从错误信息直接定位到是哪个字段配错了", err.Error())
+	}
+}
+
+// TestValidate_WindowsSourcesPath配置了且目录存在时通过 是上一条的对照
+// 组：目录真实存在时 Validate 必须放行，不能因为目录是空的（还没放任何
+// 文件）就拒绝——「目录存在但文件不全」是导入期 WindowsSourcesResolver/
+// ExtractWindows 的校验职责（见 job.go 的 runWindows 契约），config.Validate
+// 只负责校验目录本身这一层，不越权检查目录内容。
+func TestValidate_WindowsSourcesPath配置了且目录存在时通过(t *testing.T) {
+	dir := t.TempDir()
+	yaml := strings.Replace(minimalYAML,
+		"store:\n",
+		"store:\n  windows_sources_path: "+strconv.Quote(dir)+"\n", 1)
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() 拒绝了一个真实存在的 store.windows_sources_path 目录: %v", err)
+	}
+}
+
+// TestValidate_WindowsSourcesPath配置了但指向普通文件时被拒绝 锁住「必须
+// 是目录，不能是文件」这条校验——resolver 会在这个路径下按
+// <artifact_set_id> 拼子目录，若配置指向的是一个普通文件，那个拼接会在
+// 运行期产生一个「文件当目录用」的含糊错误，不如在启动时用 os.Stat 的
+// IsDir() 明确拒绝。
+func TestValidate_WindowsSourcesPath配置了但指向普通文件时被拒绝(t *testing.T) {
+	dir := t.TempDir()
+	filePath := dir + "/not-a-directory.txt"
+	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("测试准备阶段写文件失败: %v", err)
+	}
+	yaml := strings.Replace(minimalYAML,
+		"store:\n",
+		"store:\n  windows_sources_path: "+strconv.Quote(filePath)+"\n", 1)
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() 未拒绝一个指向普通文件（而非目录）的 store.windows_sources_path")
+	}
+	if !strings.Contains(err.Error(), "windows_sources_path") {
+		t.Errorf("Validate() 的错误信息 %q 未提及 windows_sources_path", err.Error())
 	}
 }

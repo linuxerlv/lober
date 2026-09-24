@@ -576,7 +576,16 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 	// internal/imports.Job.Run，把制品根目录（cfg.Store.ArtifactPath）
 	// 与真实挂载式抽取器接到一起——这是本轮任务要接上的关键断口：此前
 	// 登记端点把状态写成 importing 就结束了，没有任何东西触发导入 job。
-	importer := newImportRunner(st, nil, cfg.Store.ArtifactPath)
+	//
+	// 第四个参数 cfg.Store.WindowsSourcesPath（本轮 m2 轨新增）是
+	// Windows 外部文件（wimboot/BCD/boot.sdi/boot.wim）的基目录——
+	// importRunner.TriggerImport 会用它构造 fileWindowsSourcesResolver
+	// 并调用 imports.Job.ConfigureWindows，解除 job.go runWindows 的
+	// MVP 封锁错误（见 winsources.go、wimarch.go 文件头注释）。可能是
+	// 空字符串（该字段可选，见 config.go 的字段文档），此时对非 Windows
+	// 家族的导入没有任何影响，只有真正识别到 Windows 家族时才会在
+	// resolver 内部报出「未配置」错误。
+	importer := newImportRunner(st, nil, cfg.Store.ArtifactPath, cfg.Store.WindowsSourcesPath)
 
 	// verifier 是 console.ArtifactVerifier 的生产实现（见 verifier.go）：
 	// 校验端点触发后，另起 goroutine 重算 manifest 并与已登记的
