@@ -66,6 +66,13 @@ import (
 // （RHEL/Debian/Ubuntu/SUSE/ESXi/Windows 安装源）无一例外使用 2048）。
 const iso9660SectorSize = 2048
 
+// minDirRecordLen 是一条目录记录的定长部分字节数（ECMA-119 §9.1：偏移 0 到 32
+// 的固定字段加上 1 字节文件名，最短的合法记录就是 "." 与 ".." 那两条）。
+//
+// 它同时是**扇区尾部填充的判据**：剩余字节少于这个数时，那段尾巴必然是填充而
+// 不是一条记录（记录不得跨逻辑块，§6.8.1）。见 scanDirectorySector。
+const minDirRecordLen = 34
+
 // iso9660SystemAreaSectors 是系统区占用的扇区数（ECMA-119 §6.2.1：
 // 第 0-15 扇区保留给系统区，不属于 ISO 9660 数据结构本身），卷描述符序列
 // 从第 16 扇区开始。
@@ -322,9 +329,15 @@ type dirRecordFields struct {
 // 要求记录总长为偶数）与系统使用区（Rock Ridge 等扩展字段所在，本模块
 // 不解析，直接按记录总长跳过）。
 func parseDirectoryRecord(buf []byte) (dirRecordFields, int, error) {
-	if len(buf) < 34 {
+	if len(buf) < minDirRecordLen {
+		// 走到这里说明调用方传进了一段短于一条记录的尾巴。**扇区尾部的填充
+		// 不该走到这里**——那是 scanDirectorySector 的循环条件负责挡掉的正常
+		// 情况（见那个函数的文档）。因此这里保留报错：它现在的含义是
+		// 「调用方违反了本函数的契约」，而不是「ISO 坏了」。
 		return dirRecordFields{}, 0, fmt.Errorf(
-			"目录记录长度 %d 字节小于最小定长部分 34 字节——ISO 已截断或损坏", len(buf))
+			"目录记录长度 %d 字节小于最小定长部分 %d 字节——调用方应当先确认"+
+				"剩余空间足够一条记录（扇区尾部的填充由 scanDirectorySector 负责跳过）",
+			len(buf), minDirRecordLen)
 	}
 
 	recLen := int(buf[0])
@@ -536,29 +549,65 @@ func readDirectoryTree(r io.ReaderAt, extent, size uint32, parent *iso9660Entry,
 		if sectorEnd > len(data) {
 			sectorEnd = len(data)
 		}
-		sector := data[sectorStart:sectorEnd]
-
-		offset := 0
-		for offset < len(sector) {
-			rec, recLen, err := parseDirectoryRecord(sector[offset:])
-			if err != nil {
-				return fmt.Errorf("解析目录记录失败（扇区内偏移 %d）: %w", offset, err)
+		recs, err := scanDirectorySector(data[sectorStart:sectorEnd])
+		if err != nil {
+			return fmt.Errorf("扫描目录扇区失败（数据区内偏移 %d）: %w", sectorStart, err)
+		}
+		for _, rec := range recs {
+			if rec.name == "." || rec.name == ".." {
+				continue
 			}
-			if recLen == 0 {
-				break // 本扇区剩余部分是填充，换下一扇区
+			if err := addChildEntry(r, rec, parent, useUTF16, depth); err != nil {
+				return err
 			}
-
-			if rec.name != "." && rec.name != ".." {
-				if err := addChildEntry(r, rec, parent, useUTF16, depth); err != nil {
-					return err
-				}
-			}
-
-			offset += recLen
 		}
 	}
 
 	return nil
+}
+
+// scanDirectorySector 扫描单个目录扇区，返回其中的全部目录记录。
+//
+// 两个收尾条件，缺一个都会在真实 ISO 上出问题：
+//
+//  1. **长度字节为 0**：ECMA-119 §6.8.1.1 显式定义的「本扇区剩余是填充」哨兵。
+//  2. **剩余字节不足一条记录的定长部分（34 字节）**：目录记录不得跨逻辑块
+//     （§6.8.1），因此扇区尾部凑不满一条记录的那几个字节必然是填充。
+//
+// **第 2 条曾经缺失，那是一个在真实 ISO 上必然触发的阻断性 bug。** 扫描循环
+// 原本的条件是 offset < len(sector)，于是尾部只剩 18 字节时仍去解析，撞上
+// parseDirectoryRecord 的「len(buf) < 34 即报错」防御检查，整个导入以
+// 「ISO 已截断或损坏」告终——而那 18 字节是完全正常的填充。
+//
+// 它此前没被发现，是因为全部导入测试用的都是合成镜像（buildISO9660 恰好没造出
+// 尾部落在 1..33 字节这个区间的扇区）或 fstest.MapFS，而 e2e 脚本一律绕过导入
+// 直接写库。**真 ISO 从未走过这条路**，直到对着一份 OpenCloudOS 9.6 镜像跑
+// TestRealISO_OpenAndIdentify 才暴露出来。
+//
+// 后果的严重性：导入是全部六个 OS 家族装机链路的第一步，这一步失败则一台机器
+// 都装不出来。
+//
+// 真正的损坏仍然拒绝：一条记录声明的长度超出扇区剩余空间时返回错误，不静默
+// 截断——那与「尾部填充」是两回事，放行会让一棵读错的目录树被当成正常结果，
+// 症状是后续找不到某个特征文件，而原因在更下面一层。
+func scanDirectorySector(sector []byte) ([]dirRecordFields, error) {
+	var recs []dirRecordFields
+
+	// 循环条件是 offset+minDirRecordLen <= len(sector) 而不是 offset < len(sector)：
+	// 后者会把尾部那几个字节的填充当成一条待解析的记录。
+	for offset := 0; offset+minDirRecordLen <= len(sector); {
+		rec, recLen, err := parseDirectoryRecord(sector[offset:])
+		if err != nil {
+			return nil, fmt.Errorf("解析目录记录失败（扇区内偏移 %d）: %w", offset, err)
+		}
+		if recLen == 0 {
+			break // 长度 0 哨兵：本扇区剩余部分是填充
+		}
+		recs = append(recs, rec)
+		offset += recLen
+	}
+
+	return recs, nil
 }
 
 // addChildEntry 把一条已解析的目录记录转换为 iso9660Entry 并挂到
