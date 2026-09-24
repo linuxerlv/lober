@@ -58,21 +58,29 @@ func (s *Store) AppendEvent(ctx context.Context, event model.TaskEvent) (model.T
 // appendNonSignalEvent 处理 event.Seq <= 0 的分支：在一个事务里读取该任务
 // 当前最小 seq 再减一，写入分配后的负数序号。
 //
-// 分配算法与 sqlite/event.go 的 allocateAndInsertNonSignalEvent 保持同样
-// 语义（计划任务 7 风险提示要求）：COALESCE(MIN(seq), 0) - 1——该任务还
-// 没有任何事件时 MIN(seq) 是 SQL NULL，COALESCE 归零后再减一得到 -1，作为
-// 第一个非信号序号。递减而非递增：信号序号天然是正数且递增，两个序号
-// 空间永不相交，都保持"新事件序号在数轴上更远离 0"这一单调性质。
+// 分配算法与旧实现 sqlite/event.go（已移除）的
+// allocateAndInsertNonSignalEvent 保持同样语义（计划任务 7 风险提示要求）：
+// min(seq) - 1，且该任务还没有任何事件时（min 为 SQL NULL）取 0 - 1 = -1
+// 作为第一个非信号序号。递减而非递增：信号序号天然是正数且递增，两个序号
+// 空间永不相交，都保持「新事件序号在数轴上更远离 0」这一单调性质。
 //
-// 用显式事务保证"取值"与"写入"之间不被并发的另一次非信号事件写入插队，
+// 用 Select("COALESCE(MIN(seq), 0) - 1") 而不是裸 SQL 字符串：GORM 的聚合
+// 查询没有 Min 这样的专用方法，聚合表达式本身只能写成字符串，但表名、
+// WHERE 条件与扫描目标都走 GORM，不拼接任何用户输入。COALESCE 是必需的
+// ——空表的 MIN 返回 SQL NULL，直接扫进 int 会报类型错误而不是得到 0。
+//
+// 用显式事务保证「取值」与「写入」之间不被并发的另一次非信号事件写入插队，
 // 否则两次并发调用会算出同一个候选负数序号而互相撞在同一个唯一索引上。
 func (s *Store) appendNonSignalEvent(ctx context.Context, event model.TaskEvent) (model.TaskEvent, error) {
 	var assigned model.TaskEvent
 
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var newSeq int
-		sqlRow := tx.Raw(`SELECT COALESCE(MIN(seq), 0) - 1 FROM task_events WHERE task_id = ?`, event.TaskID).Row()
-		if err := sqlRow.Scan(&newSeq); err != nil {
+		err := tx.Model(&row{}).
+			Where("task_id = ?", event.TaskID).
+			Select("COALESCE(MIN(seq), 0) - 1").
+			Scan(&newSeq).Error
+		if err != nil {
 			return fmt.Errorf("分配非信号事件序号失败: %w", err)
 		}
 
