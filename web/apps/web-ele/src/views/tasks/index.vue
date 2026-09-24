@@ -24,11 +24,12 @@ import type { VbenFormSchema } from '@vben/common-ui';
  * proxyConfig.ajax.query 把契约的裸数组包成 { items } 喂给 vxe-table
  * （契约约定 2：data 就是数组，不带总数，前端做客户端分页）。
  */
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
 
 import {
+  ElAlert,
   ElButton,
   ElMessage,
   ElMessageBox,
@@ -217,15 +218,27 @@ const filterFormSchema: VbenFormSchema[] = [
   },
 ];
 
+const route = useRoute();
+const router = useRouter();
+
+/**
+ * 失败分布报表的下钻落点（P4-04 任务 3）：报表页点某个失败原因跳到这里，
+ * 带 `?failureReason=precheck`，列表据此过滤。
+ *
+ * 从 URL 取而不是做成筛选表单的一项：它不是日常筛选维度（运维平时按状态和 SN
+ * 找任务），而是报表下钻这一条路径专用的。**不接这个参数的话下钻等于没过滤**，
+ * 而那正是计划里「不可下钻的失败分布只是一个数字」要避免的情形。
+ */
+const drillDownReason = String(route.query.failureReason ?? '');
+
 async function queryTasks(formValues: Record<string, any>) {
   const params: Record<string, string> = {};
   if (formValues.state) params.state = formValues.state;
   if (formValues.sn) params.sn = formValues.sn;
+  if (drillDownReason) params.failureReason = drillDownReason;
   const items = await requestClient.get<TaskItem[]>('/tasks', { params });
   return { items };
 }
-
-const router = useRouter();
 
 const [Grid, gridApi] = useVbenVxeGrid<TaskItem>({
   formOptions: {
@@ -335,6 +348,19 @@ async function onCancel(row: TaskItem) {
     <template #extra>
       <ElButton type="primary" @click="goToNew">建任务</ElButton>
     </template>
+
+    <!-- 从失败分布报表下钻进来时给一条明示：列表已被 URL 上的失败原因过滤。
+         不提示的话运维会以为「这个原因只有这几个任务」，而实际上是筛选条件在
+         URL 里、筛选表单上看不到。 -->
+    <ElAlert
+      v-if="drillDownReason"
+      :closable="false"
+      class="mb-4"
+      type="info"
+    >
+      已按失败原因 <strong>{{ drillDownReason }}</strong> 过滤（从失败分布报表
+      下钻而来）。去掉地址栏的 <code>?failureReason=</code> 即可看全部任务。
+    </ElAlert>
 
     <Grid>
       <template #state="{ row }">

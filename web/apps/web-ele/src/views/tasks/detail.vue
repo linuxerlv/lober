@@ -27,7 +27,7 @@ import {
 import { useRoute, useRouter } from 'vue-router';
 
 import { useAppConfig } from '@vben/hooks';
-import { useAccessStore } from '@vben/stores';
+import { useAccessStore, useUserStore } from '@vben/stores';
 
 import {
   ElAlert,
@@ -58,6 +58,7 @@ defineOptions({ name: 'TaskDetail' });
 const route = useRoute();
 const router = useRouter();
 const accessStore = useAccessStore();
+const userStore = useUserStore();
 const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
 
 const taskId = computed(() => String(route.params.id));
@@ -241,6 +242,28 @@ function backToList() {
   router.push('/tasks');
 }
 
+/**
+ * 溯源视图（端点 34）只对 admin 开放。这里据此决定按钮是否渲染——渲染一个
+ * 点下去必然 403 的按钮只会制造困惑，而不是"更方便发现功能"。
+ */
+const canViewProvenance = computed(() =>
+  userStore.userRoles.includes('admin'),
+);
+
+/**
+ * 跳到报表页的溯源标签并带上当前任务 id。
+ *
+ * 用 query 传 id 而不是新建一个 /tasks/:id/provenance 路由：溯源的四块内容与
+ * 报表页的其它三个标签共用同一套时间范围控件与导出逻辑，拆成独立页面要把那些
+ * 复制一遍。
+ */
+function goProvenance() {
+  router.push({
+    name: 'ReportsIndex',
+    query: { tab: 'provenance', taskId: taskId.value },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 生命周期
 // ---------------------------------------------------------------------------
@@ -267,7 +290,17 @@ onBeforeUnmount(() => {
 <template>
   <div class="p-4">
     <div class="mb-4 flex items-center justify-between">
-      <ElButton @click="backToList">返回列表</ElButton>
+      <div class="flex items-center gap-2">
+        <ElButton @click="backToList">返回列表</ElButton>
+        <!-- 溯源直达入口（P4-04 任务 5）：事故排查时运维是从任务详情页开始
+             的，所以主入口挂在这里，不只在报表页。报表页那一栏是给「只记得
+             大概时间、要先在审计里找到任务 id」那条路径用的。
+             只对 admin 显示——端点 34 要求 roleAdmin，对其他角色显示一个点
+             下去必然 403 的按钮只会制造困惑。 -->
+        <ElButton v-if="canViewProvenance" @click="goProvenance">
+          查看溯源
+        </ElButton>
+      </div>
       <ElTag
         :type="
           streamState === 'open'
