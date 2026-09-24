@@ -197,3 +197,70 @@ func sha256Hex(t *testing.T, data []byte) string {
 	}
 	return sum
 }
+
+// TestExtractRHEL_RepoPointsAtDeclaredRepository 验证 Paths.Repo 指向
+// .treeinfo 声明的 repository 子目录，而不是 ISO 根。
+//
+// **这是真实 RHEL 9 系 ISO 上的一个阻断性 bug。** RHEL 9 及其衍生（Rocky、
+// AlmaLinux、OpenCloudOS）把仓库放在 BaseOS/ 下，ISO 根目录**没有**
+// repodata/；.treeinfo 用 `[general] repository = BaseOS` 与
+// `[variant-BaseOS] repository = BaseOS` 权威地声明了这一点。
+//
+// Repo 硬编码成 "repo/"（即 ISO 根的副本）的后果有两层，都是硬失败：
+//
+//  1. 渲染器把它拼成 kickstart 的 `url --url=.../repo/` 交给 anaconda，而那个
+//     目录下没有 repodata/ —— 装机在第一次取仓库元数据时就失败。
+//  2. 更早一层：statemachine 的 precheck 按家族判据查 <repo>/repodata/repomd.xml
+//     （RPM-MD 家族），查不到就拒签装机 token，机器连菜单都拿不到。
+//
+// 实测依据：对一份真实 OpenCloudOS 9.6 镜像跑导入，抽出的 repo/ 下是
+// [.discinfo BaseOS EFI Minimal boot images media.repo]，repodata 在
+// repo/BaseOS/repodata/。
+func TestExtractRHEL_RepoPointsAtDeclaredRepository(t *testing.T) {
+	treeinfo := `[general]
+family = OpenCloudOS
+version = 9.6
+arch = x86_64
+repository = BaseOS
+
+[images-x86_64]
+kernel = images/pxeboot/vmlinuz
+initrd = images/pxeboot/initrd.img
+`
+	root := fstest.MapFS{
+		".treeinfo":                          &fstest.MapFile{Data: []byte(treeinfo)},
+		"images/pxeboot/vmlinuz":             &fstest.MapFile{Data: []byte("k")},
+		"images/pxeboot/initrd.img":          &fstest.MapFile{Data: []byte("i")},
+		"BaseOS/repodata/repomd.xml":         &fstest.MapFile{Data: []byte("<repomd/>")},
+		"BaseOS/Packages/bash-5.2-1.el9.rpm": &fstest.MapFile{Data: []byte("rpm")},
+	}
+
+	paths, err := ExtractRHEL(root, t.TempDir())
+	if err != nil {
+		t.Fatalf("ExtractRHEL 失败: %v", err)
+	}
+	if paths.Repo != "repo/BaseOS/" {
+		t.Errorf("Paths.Repo = %q, want \"repo/BaseOS/\" —— .treeinfo 声明了 "+
+			"repository = BaseOS，仓库元数据在那个子目录下而不是 ISO 根；"+
+			"指向根目录会让 anaconda 取不到 repodata，也会让 precheck 拒签 token",
+			paths.Repo)
+	}
+}
+
+// TestExtractRHEL_RepoFallsBackToRootWhenNoRepositoryDeclared 验证 .treeinfo
+// 没有声明 repository 时退回 ISO 根。
+//
+// 老的树（RHEL 7 系与一些精简介质）确实把 repodata 放在根目录、且 .treeinfo
+// 里没有 repository 键。不能因为要修 RHEL 9 就把那些树一起弄坏——两种布局都
+// 真实存在，判据只能来自 .treeinfo 自己的声明。
+func TestExtractRHEL_RepoFallsBackToRootWhenNoRepositoryDeclared(t *testing.T) {
+	// sampleTreeinfo() 不含 repository 键，正好是这个情形。
+	paths, err := ExtractRHEL(sampleRHELRoot(), t.TempDir())
+	if err != nil {
+		t.Fatalf("ExtractRHEL 失败: %v", err)
+	}
+	if paths.Repo != "repo/" {
+		t.Errorf("Paths.Repo = %q, want \"repo/\" —— .treeinfo 未声明 repository 时"+
+			"仓库就在根，退回根目录；否则会把 RHEL 7 系那类布局弄坏", paths.Repo)
+	}
+}

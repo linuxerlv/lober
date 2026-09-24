@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -30,6 +31,15 @@ import (
 type treeinfoImages struct {
 	Kernel string
 	Initrd string
+
+	// Repository 是 .treeinfo 声明的仓库子目录（相对 ISO 根），空串表示仓库
+	// 就在根目录。
+	//
+	// **这个字段的存在理由是一个真实 ISO 上的阻断性 bug。** RHEL 9 及其衍生
+	// （Rocky、AlmaLinux、OpenCloudOS）把仓库放在 BaseOS/ 下，ISO 根目录
+	// 没有 repodata/；而老的 RHEL 7 系与一些精简介质确实把 repodata 放在根。
+	// 两种布局都真实存在，唯一可靠的判据是 .treeinfo 自己的声明——猜不得。
+	Repository string
 }
 
 // parseTreeinfo 解析 .treeinfo 文本（INI 格式），从形如
@@ -45,6 +55,7 @@ type treeinfoImages struct {
 // 要求：特征文件格式异常时返回错误）。
 func parseTreeinfo(data []byte) (treeinfoImages, error) {
 	sections := parseINI(string(data))
+	repository := treeinfoRepository(sections)
 
 	for name, kv := range sections {
 		if !strings.HasPrefix(name, "images-") {
@@ -55,11 +66,46 @@ func parseTreeinfo(data []byte) (treeinfoImages, error) {
 		if kernel == "" || initrd == "" {
 			continue // 该镜像段本身不完整，继续找下一个（真实 ISO 常有多个镜像段，如 images-xen）
 		}
-		return treeinfoImages{Kernel: kernel, Initrd: initrd}, nil
+		return treeinfoImages{Kernel: kernel, Initrd: initrd, Repository: repository}, nil
 	}
 
 	return treeinfoImages{}, fmt.Errorf("imports: .treeinfo 中没有找到含完整 kernel/initrd 的镜像段" +
 		"（形如 [images-<arch>]）——特征文件格式异常，不猜测默认路径")
+}
+
+// treeinfoRepository 从 .treeinfo 里取仓库子目录，取不到返回空串（表示仓库
+// 在 ISO 根）。
+//
+// 两处来源，按优先级：
+//
+//  1. `[general] repository`——productmd 为兼容 pre-productmd 的 treeinfo 保留
+//     的那一段，真实 RHEL 9 系镜像里就有（实测 OpenCloudOS 9.6：
+//     `repository = BaseOS`）。
+//  2. `[variant-<主变体>] repository`——productmd 的正式位置。主变体名取
+//     `[general] variant`。
+//
+// 先查 general 是因为它是扁平的一个键，不需要先知道主变体叫什么；查不到再按
+// variant 绕一圈。两者通常一致（实测那份镜像两处都是 BaseOS）。
+//
+// 刻意不遍历「所有 variant-* 段，随便取一个有 repository 的」：一份 DVD 常有
+// 多个变体（BaseOS 与 AppStream，或 BaseOS 与 Minimal），而 map 遍历顺序随机，
+// 那样会让同一份 ISO 两次导入得到不同的仓库路径——一种只在换了机器或换了 Go
+// 版本之后才显现的不确定性。
+func treeinfoRepository(sections map[string]map[string]string) string {
+	general := sections["general"]
+
+	if repo := strings.TrimSpace(general["repository"]); repo != "" && repo != "." {
+		return repo
+	}
+
+	variant := strings.TrimSpace(general["variant"])
+	if variant == "" {
+		return ""
+	}
+	if repo := strings.TrimSpace(sections["variant-"+variant]["repository"]); repo != "" && repo != "." {
+		return repo
+	}
+	return ""
 }
 
 // parseINI 是一个刻意从简的 INI 解析器：只支持 "[section]" 段头与
@@ -154,10 +200,26 @@ func ExtractRHEL(root fs.FS, destDir string) (model.ArtifactPaths, error) {
 		return model.ArtifactPaths{}, fmt.Errorf("imports: 建仓库树失败: %w", err)
 	}
 
+	// Repo 指向 .treeinfo 声明的 repository 子目录，不是 ISO 根的副本。
+	//
+	// 整棵树仍然完整复制到 repo/ 下（AppStream、Minimal、images、EFI 都保留，
+	// 将来若要装第二个仓库或取 stage2 镜像都还在），只是**对外声明的仓库位置**
+	// 落到真正含 repodata/ 的那一层。
+	//
+	// 不这么做的后果有两层，都是硬失败（实测依据见
+	// TestExtractRHEL_RepoPointsAtDeclaredRepository）：渲染器会把
+	// `url --url=.../repo/` 交给 anaconda 而那里没有 repodata；更早一层，
+	// statemachine 的 precheck 查 <repo>/repodata/repomd.xml 查不到就拒签
+	// 装机 token，机器连引导菜单都拿不到。
+	repoRel := repoDestName + "/"
+	if images.Repository != "" {
+		repoRel = path.Join(repoDestName, images.Repository) + "/"
+	}
+
 	return model.ArtifactPaths{
 		Kernel: kernelDestName,
 		Initrd: []string{initrdDestName},
-		Repo:   repoDestName + "/",
+		Repo:   repoRel,
 	}, nil
 }
 
