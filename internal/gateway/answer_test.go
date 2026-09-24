@@ -309,6 +309,12 @@ func TestAnswer_NonUbuntuMetaDataStill404(t *testing.T) {
 // 拿到 404——现场表现与 meta-data 404 同一类："引导器/安装器某一步取不到
 // 文件"，且 internal/render/renderer.go 里能正确渲染这份内容的
 // AssembleESXiKickstart 分支在 ks.cfg 这条路径上完全是死代码。
+//
+// 本测试只覆盖 ks.cfg 这一个文件名的放行，不再在同一循环里断言 boot.cfg——
+// boot.cfg 的正确渲染需要磁盘上真实存在原始模板文件（esxi_bootcfg.go 接入
+// 后的行为），那部分的完整覆盖（三处改写、读盘失败降级等）放在
+// esxi_bootcfg_test.go，用专门的 fixture 落盘构造，与本测试的"文件名是否
+// 被放行"这一单一关注点分开，避免两个不同维度的断言混在一次请求里。
 func TestAnswer_ESXiKsCfgIsServed(t *testing.T) {
 	fx := newAnswerFixture(t, model.TaskStateBooting)
 	// 把制品集改成 ESXi（夹具默认造的是 RHEL）。
@@ -320,14 +326,10 @@ func TestAnswer_ESXiKsCfgIsServed(t *testing.T) {
 	renderer := newRendererStub()
 	fx.deps.Renderer = renderer
 
-	for _, file := range []string{"boot.cfg", "ks.cfg"} {
-		t.Run(file, func(t *testing.T) {
-			_, status := doAnswer(t, fx.deps, fx.task.ID, "fixed-install-token", file)
-			if status != http.StatusOK {
-				t.Errorf("ESXi 取 %s 状态码 = %d, want 200 —— boot.cfg 的 ks= 参数指向 ks.cfg，"+
-					"取不到会导致装机在引导参数解析或 kickstart 执行这一步失败", file, status)
-			}
-		})
+	_, status := doAnswer(t, fx.deps, fx.task.ID, "fixed-install-token", "ks.cfg")
+	if status != http.StatusOK {
+		t.Errorf("ESXi 取 ks.cfg 状态码 = %d, want 200 —— boot.cfg 的 ks= 参数指向 ks.cfg，"+
+			"取不到会导致装机在引导参数解析或 kickstart 执行这一步失败", status)
 	}
 }
 

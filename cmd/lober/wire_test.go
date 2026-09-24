@@ -317,6 +317,106 @@ func TestBuildApp_RootSSHPublicKeysWiredToGatewayAnswer(t *testing.T) {
 	}
 }
 
+// TestBuildApp_ESXiBootCfgWiredThroughRealRenderer 是本轮任务的核心端到端
+// 验证：cfg.Store.ArtifactPath 与 render.RenderESXiBootCfg 必须真的从装配
+// 点传到了 GatewayServer，取 boot.cfg 拿到的是三处改写后的真实引导参数
+// 文件，而不是（修复前的）kickstart 正文。
+//
+// 与 TestBuildApp_RootSSHPublicKeysWiredToGatewayAnswer 同一模式：不直接
+// 读取 gateway.Server 的私有字段（没有导出访问器），用真实的 buildApp 装配
+// 出完整的 App，在制品根目录下真实落盘一份原始 boot.cfg 模板，再走一次
+// 完整的 HTTP 请求——这是唯一能在 cmd/lober 这一层证明"gateway.Deps.
+// ArtifactRoot 与 RenderESXiBootCfg 这两个新字段真的被 wire.go 正确注入、
+// 且注入的是真实的 render.RenderESXiBootCfg 而非某个占位实现"的方式。
+func TestBuildApp_ESXiBootCfgWiredThroughRealRenderer(t *testing.T) {
+	cfg := testConfig(t)
+	app := buildAppWithDBForTest(t, cfg)
+	ctx := context.Background()
+
+	host := model.Host{SN: "SN-ESXI-1", MAC: "aa:bb:cc:dd:ee:01", UUID: "uuid-esxi-1", Arch: model.ArchX86_64, Firmware: model.FirmwareUEFI}
+	if _, err := app.Store.UpsertHost(ctx, host); err != nil {
+		t.Fatalf("UpsertHost 失败: %v", err)
+	}
+
+	setID := "art-esxi-wire-1"
+	artifact := model.ArtifactSet{
+		ID: setID, Name: "esxi8", OSFamily: model.OSFamilyESXi, OSVersion: "8.0",
+		Arch: model.ArchX86_64, Firmware: model.FirmwareUEFI, State: model.ArtifactSetReady,
+		Paths: model.ArtifactPaths{Extra: map[string]string{
+			"mboot.efi": "mboot.efi",
+			"boot.cfg":  "boot.cfg",
+		}},
+	}
+	if _, err := app.Store.CreateArtifactSet(ctx, artifact); err != nil {
+		t.Fatalf("CreateArtifactSet 失败: %v", err)
+	}
+
+	tpl := model.Template{ID: "tpl-esxi-wire-1", Name: "esxi8", ArtifactSetID: setID, Version: 1, State: model.TemplateStateActive}
+	if _, err := app.Store.CreateTemplate(ctx, tpl); err != nil {
+		t.Fatalf("CreateTemplate 失败: %v", err)
+	}
+
+	task := model.Task{
+		ID: "task-esxi-wire-1", HostSN: "SN-ESXI-1", HostMAC: "aa:bb:cc:dd:ee:01", HostUUID: "uuid-esxi-1",
+		TemplateID: "tpl-esxi-wire-1", TemplateVersion: 1, ArtifactSetID: setID,
+		State: model.TaskStateBooting, CurrentPhase: model.PhaseBooting,
+		Token:          "install-tok-esxi-wire-1",
+		TokenExpiresAt: time.Now().Add(time.Hour).Unix(),
+	}
+	if _, err := app.Store.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask 失败: %v", err)
+	}
+
+	// 在制品根目录下真实落盘一份原始 boot.cfg 模板——与
+	// TestAssemblyPrechecker_UsesInjectedFilesystemNotEmptyFS 同一手法，
+	// 路径遵循 docs/contracts/filesystem.md 硬约束 1：
+	// <ArtifactPath>/<制品集ID>/boot.cfg。
+	rawBootCfg := "bootstate=0\n" +
+		"prefix=\n" +
+		"kernel=b.b00\n" +
+		"kernelopt=cdromBoot ks=cdrom:/KS.CFG\n" +
+		"modules=/b.b00 --- jumpstrt.gz\n" +
+		"build=8.0.0\n"
+	mustWriteFile(t, filepath.Join(cfg.Store.ArtifactPath, setID, "boot.cfg"), rawBootCfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/answer/task-esxi-wire-1/install-tok-esxi-wire-1/boot.cfg", nil)
+	rec := httptest.NewRecorder()
+	app.GatewayServer.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("读取响应体失败: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/answer boot.cfg 状态码 = %d, want %d，body:\n%s", resp.StatusCode, http.StatusOK, body)
+	}
+
+	bodyStr := string(body)
+	if strings.Contains(bodyStr, "install ") || strings.Contains(bodyStr, "rootpw") {
+		t.Errorf("boot.cfg 响应体含 kickstart 指令，说明仍走了修复前的错误路径"+
+			"（AssembleESXiKickstart），而不是 render.RenderESXiBootCfg，got body:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "prefix=http://") {
+		t.Errorf("boot.cfg 响应体的 prefix= 应改写成 HTTP 路径，got body:\n%s", bodyStr)
+	}
+	var kernelOptLine string
+	for _, line := range strings.Split(bodyStr, "\n") {
+		if strings.HasPrefix(line, "kernelopt=") {
+			kernelOptLine = line
+		}
+	}
+	if !strings.HasSuffix(kernelOptLine, "/ks.cfg") {
+		t.Errorf("boot.cfg 响应体的 kernelopt= 行应以 ks.cfg 的完整 URL 结尾，got kernelopt 行=%q, "+
+			"full body:\n%s", kernelOptLine, bodyStr)
+	}
+	if strings.Contains(bodyStr, "--- /") {
+		t.Errorf("boot.cfg 响应体的 modules= 行仍含前导斜杠，got body:\n%s", bodyStr)
+	}
+}
+
 // TestBuildApp_AdmissionLimitPropagatedToStatemachinePackage 验证装配点
 // 把 cfg.Scan.AdmissionLimit 传给了 statemachine.SetGlobalAdmissionLimit
 // （Phase 4 新增，SPEC §10 失败模式 11）——这是 StartBoot 的准入检查实际
