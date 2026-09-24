@@ -18,10 +18,12 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/lober/lober/internal/config"
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/provider/loader"
+	grpcloader "github.com/lober/lober/internal/provider/loader/grpc"
 )
 
 // defaultTCPHeartbeatPort 是 tcp 心跳探测器在 config 未提供端口字段时使用
@@ -66,7 +68,7 @@ func NewProviders(cfg config.Provider, hosts hostLister) (Providers, error) {
 		return Providers{}, err
 	}
 
-	resolver, err := newResolverFromConfig(cfg.Resolver)
+	resolver, err := newResolverFromConfig(cfg.Resolver, cfg.ResolverScriptPath)
 	if err != nil {
 		return Providers{}, err
 	}
@@ -123,7 +125,7 @@ func newIPAMFromConfig(kind string, loaderCfg config.LoaderConfig) (contract.IPA
 	switch kind {
 	case "static":
 		return newStaticIPAM(nil), nil
-	case "exec", "http":
+	case "exec", "http", "grpc":
 		caller, err := newLoaderCaller(kind, loaderCfg)
 		if err != nil {
 			return nil, fmt.Errorf("provider: 构造 IPAM 加载器失败: %w", err)
@@ -131,7 +133,7 @@ func newIPAMFromConfig(kind string, loaderCfg config.LoaderConfig) (contract.IPA
 		return loader.NewIPAMAdapter(caller), nil
 	default:
 		return nil, fmt.Errorf("provider: 未知的 IPAM 选择项 %q，MVP 内置 static，"+
-			"另支持 exec/http 两种加载器（SPEC §7.2）", kind)
+			"另支持 exec/http/grpc 三种加载器（SPEC §7.2）", kind)
 	}
 }
 
@@ -140,7 +142,7 @@ func newDNSFromConfig(kind string, loaderCfg config.LoaderConfig) (contract.DNSP
 	switch kind {
 	case "noop":
 		return newNoopDNS(), nil
-	case "exec", "http":
+	case "exec", "http", "grpc":
 		caller, err := newLoaderCaller(kind, loaderCfg)
 		if err != nil {
 			return nil, fmt.Errorf("provider: 构造 DNS 加载器失败: %w", err)
@@ -148,7 +150,7 @@ func newDNSFromConfig(kind string, loaderCfg config.LoaderConfig) (contract.DNSP
 		return loader.NewDNSAdapter(caller), nil
 	default:
 		return nil, fmt.Errorf("provider: 未知的 DNS 选择项 %q，MVP 内置 noop，"+
-			"另支持 exec/http 两种加载器（SPEC §7.2）", kind)
+			"另支持 exec/http/grpc 三种加载器（SPEC §7.2）", kind)
 	}
 }
 
@@ -174,8 +176,17 @@ func newLoaderCaller(kind string, loaderCfg config.LoaderConfig) (loader.Caller,
 		return loader.NewExecLoader(loader.ExecConfig{Command: loaderCfg.Command, Args: loaderCfg.Args}, sharedCfg)
 	case "http":
 		return loader.NewHTTPLoader(loader.HTTPConfig{URL: loaderCfg.URL}, sharedCfg)
+	case "grpc":
+		// 熔断与重试**直接复用 sharedCfg**（P3-04 任务 4 明确要求：不要为
+		// gRPC 写第二套熔断）——breaker 是按扩展点的失败语义分流的（§7.4），
+		// 与加载方式无关。
+		//
+		// 插件路径取 loaderCfg.Command：那个字段对 exec 是「要执行的命令」，
+		// 对 grpc 是「指向版本目录的符号链接」，两者在语义上都是「可执行文件
+		// 的位置」，复用同一字段比新增一个只对一种类型有意义的字段更清楚。
+		return grpcloader.New(grpcloader.PluginConfig{BinaryPath: loaderCfg.Command}, sharedCfg)
 	default:
-		return nil, fmt.Errorf("provider: newLoaderCaller 收到不支持的 kind %q（只接受 exec/http，"+
+		return nil, fmt.Errorf("provider: newLoaderCaller 收到不支持的 kind %q（只接受 exec/http/grpc，"+
 			"调用方应该已经用 switch 排除了其它取值——走到这里说明调用处有 bug）", kind)
 	}
 }
@@ -186,12 +197,26 @@ func newLoaderCaller(kind string, loaderCfg config.LoaderConfig) (loader.Caller,
 // 规则）——config.Provider 没有规则表文件路径字段（见 resolver.go 顶部
 // 契约缺口说明），工厂无法从配置读到真实规则，因此不能在这里编造一份
 // 看起来更完整但实际来源不明的规则表。
-func newResolverFromConfig(kind string) (contract.TemplateResolver, error) {
+func newResolverFromConfig(kind, scriptPath string) (contract.TemplateResolver, error) {
 	switch kind {
 	case "rule-based":
 		return NewTemplateResolver(nil), nil
+	case "starlark":
+		// 脚本在**启动时**读取并编译（NewStarlarkTemplateResolver 内部完成）：
+		// 语法错误与「没有 resolve 函数」这类问题因此在进程起来时就暴露，而不是
+		// 等运维建第一个任务时才发现。
+		if scriptPath == "" {
+			return nil, fmt.Errorf("provider: Resolver 选了 starlark 但没有配 " +
+				"provider.resolver_script_path")
+		}
+		script, err := os.ReadFile(scriptPath)
+		if err != nil {
+			return nil, fmt.Errorf("provider: 读 Starlark 决策脚本 %q 失败: %w", scriptPath, err)
+		}
+		return NewStarlarkTemplateResolver(string(script))
 	default:
-		return nil, fmt.Errorf("provider: 未知的 Resolver 选择项 %q，MVP 只内置 rule-based 一种实现", kind)
+		return nil, fmt.Errorf("provider: 未知的 Resolver 选择项 %q，"+
+			"支持 rule-based（内置规则表）与 starlark（脚本决策，SPEC §7.6）", kind)
 	}
 }
 
@@ -215,7 +240,7 @@ func newHeartbeatFromConfig(mode string, loaderCfg config.LoaderConfig) (contrac
 		return newICMPHeartbeat(), nil
 	case "off":
 		return offHeartbeat{}, nil
-	case "exec", "http":
+	case "exec", "http", "grpc":
 		caller, err := newLoaderCaller(mode, loaderCfg)
 		if err != nil {
 			return nil, fmt.Errorf("provider: 构造心跳加载器失败: %w", err)

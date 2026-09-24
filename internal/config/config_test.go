@@ -661,14 +661,25 @@ provider:
 	}
 }
 
-// TestValidate_loader段type不合法被拒绝 验证 type 字段本身写了一个不在
-// exec/http 白名单内的值（如 grpc，Phase 3 未实现）时被拒绝。
+// TestValidate_loader段type不合法被拒绝 验证 type 字段写了一个不在
+// exec/http/grpc 白名单内的值时被拒绝。
+//
+// 取值故意选 "starlark"：它是一个**看起来像**合法取值的词（SPEC §7.2 与 §7.6
+// 里都出现过，而 §7.6 的 Starlark 确实是本仓库支持的东西——只不过它是
+// provider.resolver 的取值，不是加载器类型）。用这种「近似正确」的值比用
+// "bogus" 更能验证白名单真的在起作用。
+//
+// 本测试早先用的是 "grpc"，注释写着「grpc 是 Phase 3 未实现」。P3-04 落地
+// 之后 grpc 进了白名单，这条测试**仍然是绿的但原因变了**——它不再命中白名单
+// 检查，而是命中下一条「type 与 selection 不一致」的检查（selection 写的是
+// exec），而那条已经由上面一个测试单独覆盖。于是白名单拒绝路径静默失去了覆盖。
+// 换成一个真正不在白名单里的取值，这条才回到它本来要测的东西。
 func TestValidate_loader段type不合法被拒绝(t *testing.T) {
 	yaml := minimalYAML + `
 provider:
   ipam: "exec"
   ipam_loader:
-    type: "grpc"
+    type: "starlark"
     command: "/etc/lober/providers/ipam.sh"
 `
 	cfg, err := Parse(strings.NewReader(yaml))
@@ -676,7 +687,8 @@ provider:
 		t.Fatalf("Parse 阶段就失败: %v", err)
 	}
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() 未拒绝 ipam_loader.type=grpc（grpc 是 Phase 3，本版本未实现，SPEC §7.2）")
+		t.Fatal("Validate() 未拒绝 ipam_loader.type=starlark —— starlark 是 " +
+			"provider.resolver 的取值，不是加载器类型，白名单必须拦住它")
 	}
 }
 
@@ -927,5 +939,49 @@ func TestDefaults_SecureLinkTTL显式配置不被覆盖(t *testing.T) {
 	}
 	if got, want := cfg.Gateway.SecureLinkTTL.String(), "5m0s"; got != want {
 		t.Errorf("Gateway.SecureLinkTTL = %s, want %s（显式配置的值不应被默认值覆盖）", got, want)
+	}
+}
+
+// TestValidate_grpc加载器缺command被拒绝 验证选了 grpc 加载器却没给插件路径时
+// 在启动校验就被拒绝。
+//
+// 这条抓的是 validateLoaderSelection 的准入门：它原先只对 exec/http 生效
+// （selection 不是这两者就直接 return nil），于是 grpc 被加进白名单之后，
+// 一份 grpc 配置会完全跳过校验——缺 command、type 拼错都不报，要等到工厂
+// 构造时才发现，而那时的错误信息来自 loader/grpc 而不是 config，运维看不出
+// 是配置漏了一项。
+func TestValidate_grpc加载器缺command被拒绝(t *testing.T) {
+	yaml := minimalYAML + `
+provider:
+  ipam: "grpc"
+  ipam_loader:
+    type: "grpc"
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() 未拒绝 grpc 加载器缺 command（插件路径）的配置 —— " +
+			"grpc 的 command 字段是那个指向版本目录的符号链接，缺了它工厂无从拉起插件")
+	}
+}
+
+// TestValidate_grpc加载器齐备被接受 是上面那条的对照组：type 与 selection 一致、
+// command 给了插件路径时必须通过校验。
+func TestValidate_grpc加载器齐备被接受(t *testing.T) {
+	yaml := minimalYAML + `
+provider:
+  ipam: "grpc"
+  ipam_loader:
+    type: "grpc"
+    command: "/etc/lober/providers/ipam/current"
+`
+	cfg, err := Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse 阶段就失败: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() 拒绝了一份齐备的 grpc 加载器配置: %v", err)
 	}
 }

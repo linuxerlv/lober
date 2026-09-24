@@ -105,13 +105,18 @@ var heartbeatModes = map[string]bool{
 	"http": true,
 }
 
-// loaderTypes 是 LoaderConfig.Type 的合法取值白名单（SPEC §7.2：exec 与
-// http 两种通用加载器，本次任务落地；grpc/starlark 是 Phase 3，不在此
-// 白名单内——config 包在 Type 字段这一层就拒绝，不留到 factory.go 才
-// 发现「这个类型还没实现」）。
+// loaderTypes 是 LoaderConfig.Type 的合法取值白名单（SPEC §7.2 的三种通用
+// 加载器）。config 包在 Type 字段这一层就拒绝非法取值，不留到 factory.go
+// 才发现「这个类型还没实现」。
+//
+// grpc 是 P3-04 落地的第三种。**它的开工前提并未满足**（§7.2 的判据是「有真
+// 逻辑的集成而 exec/http 已经撑不住」，而本系统尚未投产、没有任何生产使用
+// 记录）——实现是在使用者知情后按指令做的，判断记录见
+// docs/phase3-grpc-starlark-判断.md，包括「将来确认不需要时就删掉」那一条。
 var loaderTypes = map[string]bool{
 	"exec": true,
 	"http": true,
+	"grpc": true,
 }
 
 // diskPolicies 是磁盘策略的白名单，取自 model.DiskPolicy 的五个具名取值
@@ -223,6 +228,23 @@ type Store struct {
 	Postgres     Postgres `yaml:"postgres"`
 	ArtifactPath string   `yaml:"artifact_path"`
 	LogPath      string   `yaml:"log_path"`
+
+	// ImageSignaturePublicKeyPath 是镜像直写通道的签名公钥文件路径
+	// （PEM 编码的 PKIX ECDSA 公钥，即 cosign.pub）。P3-03 任务 3、SPEC §9.6。
+	//
+	// **留空是合法配置**，含义是「本部署不使用镜像直写通道」——installer 驱动
+	// 通道不需要任何签名。因此本字段不参与非空校验：绝大多数部署只用 installer
+	// 驱动通道（那是兜底通道，永远可用），为一条可选通道的配置项去卡启动校验
+	// 会让所有不用它的部署都得填一个假路径。
+	//
+	// 但一旦要导入镜像直写制品集，本项就**必须**配上：
+	// internal/imports.VerifyManifestSignature 在公钥为空时**拒绝导入**而不是
+	// 跳过校验——「没有公钥就不校验」会让签名机制在配置漏项时静默失效，系统
+	// 照常工作但不再校验任何东西（§9.1 默认拒绝）。
+	//
+	// 公钥**从配置文件读，不从网络取**（§9.6、计划任务 3 第 2 条）：取公钥的
+	// 通道若不可信，整个签名机制就没有意义。
+	ImageSignaturePublicKeyPath string `yaml:"image_signature_public_key_path"`
 }
 
 // Postgres 是数据库连接参数。
@@ -335,10 +357,15 @@ type User struct {
 // Validate 里做「选了 exec 必须给 command、选了 http 必须给 url」这类
 // 结构性校验，不做"选择项字符串必须在某个白名单内"的封闭校验——具体某个
 // 字符串是否被工厂认可（factory.go 的 switch）是 internal/provider 的职责，
-// config 包不重复维护第二份白名单。Resolver 目前仍只有 rule-based 一种
-// 内置实现，没有 exec/http 支持（docs/phase2-loader-需求依据.md 第 4 节：
-// TemplateResolver 是纯决策接口，刻意不提供 Ping，不适合套加载器，本任务
-// 未对 Resolver 增加加载器选项，与该结论保持一致）。DiskPolicy 与
+// config 包不重复维护第二份白名单。
+//
+// Resolver 有两种取值：rule-based（内置规则表）与 starlark（脚本决策，
+// P3-04 落地）。**仍然没有 exec/http 支持**，那个结论未变
+// （docs/phase2-loader-需求依据.md 第 4 节：TemplateResolver 是纯决策接口，
+// 刻意不提供 Ping，不适合套加载器）——starlark 不是加载器，它是在进程内求值的
+// 一个决策后端，不引入外部进程也不做 IO，与「纯决策」的定位一致。
+//
+// DiskPolicy 与
 // HeartbeatMode 的「模式」这一层不同：它们的合法值在 MVP 阶段就是确定且
 // 封闭的（前者取自 model.DiskPolicy，加 exec/http 属于扩展 HeartbeatMode
 // 的合法值集合），因此在这里做白名单校验（heartbeatModes 已扩展，见下）。
@@ -346,6 +373,17 @@ type Provider struct {
 	IPAM     string `yaml:"ipam"`
 	DNS      string `yaml:"dns"`
 	Resolver string `yaml:"resolver"`
+
+	// ResolverScriptPath 是 Starlark 决策脚本的路径，仅当 Resolver 为
+	// "starlark" 时使用、且此时必须非空（见 Validate）。
+	//
+	// **它的开工前提并未满足**：§7.6 的引入信号是「规则表开始长出嵌套条件」，
+	// 而本仓库的规则表是平的、且在生产路径上根本没被使用。实现是在使用者知情
+	// 后按指令做的，判断记录见 docs/phase3-grpc-starlark-判断.md。
+	//
+	// 脚本必须自包含（不允许 load 外部模块）、不能有副作用，形状要求见
+	// internal/provider/starlark.go 的包文档。
+	ResolverScriptPath string `yaml:"resolver_script_path"`
 
 	// DiskPolicy 默认 largest（SPEC §2.3、计划任务 15）。
 	DiskPolicy model.DiskPolicy `yaml:"disk_policy"`
@@ -679,7 +717,15 @@ func (c *Config) Validate() error {
 // "provider.ipam"），loaderFieldName 是加载器参数段在 YAML 里的字段名
 // （如 "ipam_loader"）——两者都只用于拼错误信息，不参与判断逻辑。
 func validateLoaderSelection(fieldPrefix, selection, loaderFieldName string, loaderCfg LoaderConfig) error {
-	if selection != "exec" && selection != "http" {
+	// 准入门必须覆盖**全部**加载器取值。漏一个的后果不是「那种配置不被校验」
+	// 而更糟：它会完全跳过下面的全部检查（缺 type、type 拼错、type 与 selection
+	// 不一致、缺 command/url），于是一份残缺的配置顺利通过启动校验，要等到工厂
+	// 构造或运行期第一次调用才失败——而那时的错误来自 loader 包而不是 config，
+	// 运维看不出是配置漏了一项。
+	//
+	// grpc 是 P3-04 加的第三种，加白名单时必须同时加到这里（本轮就漏过一次，
+	// 由 TestValidate_grpc加载器缺command被拒绝 抓住）。
+	if !loaderTypes[selection] {
 		return nil
 	}
 
@@ -689,8 +735,8 @@ func validateLoaderSelection(fieldPrefix, selection, loaderFieldName string, loa
 			"加载器没有正确初始化，SPEC §7.2）", fieldPrefix, selection, loaderFieldName, selection)
 	}
 	if !loaderTypes[loaderCfg.Type] {
-		return fmt.Errorf("config: %s.type 取值 %q 不合法，必须是 exec/http 之一"+
-			"（grpc/starlark 是 Phase 3，本版本未实现，SPEC §7.2）", loaderFieldName, loaderCfg.Type)
+		return fmt.Errorf("config: %s.type 取值 %q 不合法，必须是 exec/http/grpc 之一"+
+			"（SPEC §7.2 的三种通用加载器）", loaderFieldName, loaderCfg.Type)
 	}
 	if loaderCfg.Type != selection {
 		return fmt.Errorf("config: %s 选择了 %q，但 %s.type 取值 %q 与之不一致"+
@@ -710,6 +756,20 @@ func validateLoaderSelection(fieldPrefix, selection, loaderFieldName string, loa
 			return fmt.Errorf("config: %s 缺少 url 字段"+
 				"（type 是 http 时必须提供目标地址，不能等到运行期第一次调用才发现，"+
 				"SPEC §7.2）", loaderFieldName)
+		}
+	case "grpc":
+		// grpc 复用 command 字段承载插件路径：对 exec 它是「要执行的命令」，
+		// 对 grpc 是「指向版本目录的符号链接」，两者语义上都是「可执行文件的
+		// 位置」，复用同一字段比新增一个只对一种类型有意义的字段更清楚。
+		//
+		// 这里只校验非空。「必须是符号链接且指向一个可执行文件」那层由
+		// internal/provider/loader/grpc.resolvePluginBinary 在工厂构造时判定
+		// ——config 包不碰文件系统（Validate 是纯函数，测试里不需要造文件）。
+		if loaderCfg.Command == "" {
+			return fmt.Errorf("config: %s 缺少 command 字段"+
+				"（type 是 grpc 时 command 是插件的路径，必须是一个指向版本目录的"+
+				"符号链接，形如 /etc/lober/providers/ipam/current —— §7.3 第一项要求"+
+				"原子替换，见 internal/provider/loader/grpc 的说明）", loaderFieldName)
 		}
 	}
 
