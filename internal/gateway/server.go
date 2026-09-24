@@ -72,6 +72,42 @@ type Deps struct {
 	SecureLinkEnabled bool
 	SecureLinkSecret  SecureLinkSecret
 	SecureLinkTTL     time.Duration
+
+	// ArtifactRoot 是制品根目录（磁盘路径，与 internal/config.Store.
+	// ArtifactPath 同一个值），供 handleAnswer 在 ESXi 家族的 boot.cfg
+	// 请求上读出「导入时保存的原始引导参数文件模板」文本——那份文本只在
+	// 磁盘上存在，ArtifactSet.Paths.Extra["boot.cfg"]（model.RenderContext
+	// 能拿到的输入）只是相对路径字符串，不是文件内容（见
+	// esxi_bootcfg.go 文件头注释）。
+	//
+	// 与 Bases.ArtifactBase 是两个不同维度的东西：Bases.ArtifactBase 是
+	// 给机器用的 HTTP 基址（拼 URL），本字段是本进程自己读盘用的本地
+	// 文件系统路径——网关此前只做 HTTP 层的事、不碰本地磁盘，这是它第一次
+	// 需要读盘，因此原有的六个 Store 接口字段与 Bases 都不能替代它。
+	//
+	// 空字符串表示未注入（例如某些测试或部署形态不需要它）：此时 ESXi 的
+	// boot.cfg 请求走 handleAnswer 的降级路径（500 + TaskEvent，见
+	// esxi_bootcfg.go），不会静默返回 kickstart 正文——那正是本字段加入
+	// 之前的错误行为。
+	ArtifactRoot string
+
+	// RenderESXiBootCfg 是 internal/render.RenderESXiBootCfg 的注入点：
+	// 网关不能直接 import internal/render（那是一次跨模块 import，
+	// internal/archtest 的 TestModulesDoNotImportEachOther 会拦住——
+	// render 与 gateway 是 M2-M8 七个互斥模块中的两个，即使这次的需求是
+	// 「网关读盘、渲染器改写」这种看起来自然的分工，网关也只能通过接口/
+	// 函数值间接引用渲染逻辑，不能直接 import 它的包）。
+	//
+	// 签名与 internal/render.RenderESXiBootCfg(template, bootCfgURLBase,
+	// answerFileURL string) (string, error) 逐字符一致，因此装配点
+	// （cmd/lober/wire.go，全仓唯一豁免跨模块 import 的包）只需要写
+	// `RenderESXiBootCfg: render.RenderESXiBootCfg` 一行即可完成注入，
+	// 不需要包一层适配函数。
+	//
+	// 为 nil 时（测试未注入、或某些部署形态不需要）handleAnswer 对 ESXi
+	// 的 boot.cfg 请求走降级路径（500 + TaskEvent），不会 panic、也不会
+	// 静默返回 kickstart 正文。
+	RenderESXiBootCfg func(template, bootCfgURLBase, answerFileURL string) (string, error)
 }
 
 // Server 持有全部依赖，实现 http.Handler（内部用标准库 ServeMux 路由）。

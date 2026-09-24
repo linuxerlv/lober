@@ -13,6 +13,11 @@
 // 文本原因 + 一条 level=error 的 TaskEvent。这与实现计划任务 6 文字描述的
 // 「渲染失败 → 200 加注释文本」不同——冻结契约文档优先，偏差已记入本模块
 // 返回值的 contractGaps。
+//
+// ESXi 家族的 boot.cfg 请求走一条专属分支（esxi_bootcfg.go）：它需要读盘
+// 取出导入时保存的原始引导参数文件模板再做三处改写，不能走
+// s.deps.Renderer.RenderAnswerFile 那条零 IO 的通用路径——错误响应形态
+// 与通用路径完全一致，只是渲染这一步换了实现，见 handleAnswer 内部分支。
 package gateway
 
 import (
@@ -89,7 +94,18 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	content, err := s.deps.Renderer.RenderAnswerFile(renderCtx, file)
+	// ESXi 的 boot.cfg 是本次改动新增的专属分支：它是 mboot.efi 的引导
+	// 参数文件本身，需要读出导入时保存的原始模板做三处改写（prefix=/
+	// kernelopt= 的 ks=/modules= 去前导斜杠），这份改写逻辑需要读盘，
+	// 不能走 s.deps.Renderer.RenderAnswerFile 那条零 IO 的路径——
+	// ks.cfg（同一家族的第二候选文件名，指向独立的 kickstart 方言正文）
+	// 不受影响，仍走下面的通用分支（见 esxi_bootcfg.go 文件头注释）。
+	var content string
+	if renderCtx.Artifact.OSFamily == model.OSFamilyESXi && file == "boot.cfg" {
+		content, err = s.renderESXiBootCfgResponse(ctx, renderCtx)
+	} else {
+		content, err = s.deps.Renderer.RenderAnswerFile(renderCtx, file)
+	}
 	if err != nil {
 		// 渲染本身出错（模板/参数问题）：500，body 为简短纯文本原因；
 		// 同时记一条 TaskEvent（level=error）。
@@ -139,10 +155,9 @@ func answerFileContentType(family model.OSFamily) string {
 // 返回的唯一值）是 mboot.efi 的引导参数文件本身，其 kernelopt= 行的 ks= 参数
 // 指向另一份独立的文件——ESXi 自己的 kickstart 方言正文，真实部署里这两个
 // 文件从来不是同一个（见 internal/render/esxi.go 文件头注释）。只放行 boot.cfg
-// 的后果是 ks.cfg 请求拿到 404，internal/render/renderer.go 里能正确渲染
-// kickstart 正文的 AssembleESXiKickstart 分支永远走不到 ks.cfg 这条路径
-// （它目前仍会被 boot.cfg 请求触发，产出内容错误但这是另一个已记录的契约
-// 缺口，见 renderer.go 文件末尾）。
+// 的后果是 ks.cfg 请求拿到 404。boot.cfg 请求本身自 esxi_bootcfg.go 接入后
+// 已经改走专属的读盘改写路径（handleAnswer 内部分支），不再触发
+// AssembleESXiKickstart——两个文件名各自对应各自正确的内容。
 //
 // 这两条放行都必须窄：只对各自的家族、且只多放行那一个具体名字。
 // 路径段来自机器请求，放宽成模糊匹配或按扩展名猜测等于让机器自己指定要取

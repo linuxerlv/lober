@@ -564,6 +564,23 @@ func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
 		SecureLinkEnabled: cfg.Gateway.SecureLinkEnabled,
 		SecureLinkSecret:  gateway.SecureLinkSecret(cfg.Gateway.SecureLinkSecret),
 		SecureLinkTTL:     cfg.Gateway.SecureLinkTTL,
+
+		// ArtifactRoot 与 RenderESXiBootCfg 是本轮任务要接上的断口：ESXi
+		// 的 boot.cfg 请求需要读出导入时保存的原始引导参数文件模板再做
+		// 三处改写（prefix=/kernelopt= 的 ks=/modules= 去前导斜杠），
+		// 渲染器包不能自己读盘（零 IO、纯函数的约束），网关也不能直接
+		// import internal/render（跨模块 import，会被 internal/archtest
+		// 的 TestModulesDoNotImportEachOther 拦住）——cmd/lober 是全仓
+		// 唯一豁免这条限制的包，因此读盘发生在 gateway 层（Deps.
+		// ArtifactRoot 提供根目录），改写函数在这里原样注入（签名逐字符
+		// 一致，不需要包一层适配），网关本身对 internal/render 零依赖。
+		//
+		// cfg.Store.ArtifactPath 与 assemblyPrechecker.artifactRoot、
+		// importRunner.artifactRoot（本文件下方的 importer 构造处）取
+		// 同一个配置值——三处都需要把「制品根目录」与「具体某个制品集的
+		// ID」拼成该制品集自己的子目录，只是拼接时机不同。
+		ArtifactRoot:      cfg.Store.ArtifactPath,
+		RenderESXiBootCfg: render.RenderESXiBootCfg,
 	})
 
 	authUsers := make([]console.AuthUser, 0, len(cfg.Auth.Users))
