@@ -229,7 +229,7 @@ token 无效/过期）永远返回真实的 HTTP `401`，body 仍为上述失败
 | # | 方法 | 路径 | 权限 | 返回 |
 |---|---|---|---|---|
 | 21 | POST | `/console/v1/tasks` | `operator`（`task:create`） | 新建的 `TaskItem`（`state = pending`） |
-| 22 | GET | `/console/v1/tasks?state=&sn=` | 已登录 | `TaskItem[]` |
+| 22 | GET | `/console/v1/tasks?state=&sn=&failureReason=` | 已登录 | `TaskItem[]`（`failureReason` 是失败分布报表的下钻入口，P4-04） |
 | 23 | GET | `/console/v1/tasks/{id}/events` | 已登录 | `TaskEventItem[]` |
 | 24 | GET | `/console/v1/tasks/{id}/stream` | 已登录 | SSE 事件流（不套响应包裹，见「约定 4」） |
 | 25 | POST | `/console/v1/tasks/{id}/retry` | `operator`（`task:retry`） | 更新后的 `TaskItem` |
@@ -240,6 +240,44 @@ token 无效/过期）永远返回真实的 HTTP `401`，body 仍为上述失败
 | # | 方法 | 路径 | 权限 | 返回 |
 |---|---|---|---|---|
 | 27 | POST | `/console/v1/disk-policy/dryrun` | 已登录 | `DiskPlanResult` |
+
+### 审计与报表（8 个，P4-04）
+
+编号 30-37，追加在末尾不重排（与变更记录 1 同一条理由：重排会让已有评审记录里
+的端点编号失去指代意义）。
+
+**八条全部要求 `admin` 角色**，走 `handleFuncRole(roleAdmin)` 而不是权限码。
+理由：审计记录含全体操作人的动作明细，报表含全局装机数据。P4-04 任务 1 建议过
+「管理员与审计角色」两者皆可，但 §9.4 没有定义审计角色 —— 新增一项角色是契约
+变更，**先只给管理员**，等真有专职审计人员时再议。
+
+时间范围参数在四处统一为 `since` / `until`（Unix 秒，**闭区间**）。闭区间这一点
+与 `AuditFilter` 一致是刻意的：运维在同一个页面的不同标签上看同一个时间窗口，
+包含性不同会让边界记录在一处出现、另一处消失，而那种差异极难被当成 bug 报出来。
+
+| # | 方法 | 路径 | 权限 | 返回 |
+|---|---|---|---|---|
+| 30 | GET | `/console/v1/audit?actor=&action=&target=&since=&until=&limit=` | `admin` | `AuditRecordItem[]`（四项条件按「与」相交） |
+| 31 | GET | `/console/v1/reports/provisioning?since=&until=` | `admin` | `ProvisioningReport`（按状态分组计数） |
+| 32 | GET | `/console/v1/reports/failures?since=&until=` | `admin` | `FailureReport`（按失败原因分组，含占比与可重装标记） |
+| 33 | GET | `/console/v1/reports/phase-durations?since=&until=` | `admin` | `PhaseDurationReport`（中位数 / P95 / 最大值） |
+| 34 | GET | `/console/v1/tasks/{id}/provenance` | `admin` | `TaskProvenance`（五块：创建信息、pin 三项、时间线、失败详情、后续操作） |
+| 35 | GET | `/console/v1/audit/export?<同 30>` | `admin` | **CSV 下载**（不套响应包裹） |
+| 36 | GET | `/console/v1/reports/provisioning/export?<同 31>` | `admin` | **CSV 下载** |
+| 37 | GET | `/console/v1/tasks/{id}/provenance/export` | `admin` | **CSV 下载** |
+
+三条 CSV 端点（35-37）是本文档里除 SSE（端点 24）之外**唯一不套 `{code,data,
+message}` 响应包裹**的一组 —— 响应体是「UTF-8 BOM + CSV 文本」，套信封就没法
+直接下载成文件。两者不套包裹的理由不同：SSE 是长连接逐条推送，CSV 是文件下载。
+
+CSV 的三条约定：**带 UTF-8 BOM**（中文 Windows 上 Excel 读无 BOM 的 UTF-8 会按
+GBK 解，表头全乱码）；**列名中文、文件名英文加时间戳**（列名面向运维，文件名要
+避免跨平台编码问题）；**单次上限 10 万行，越界拒绝并提示缩小时间范围，不截断**
+（一个被静默截断的导出文件看起来是完整的，交给审计方之后才发现缺行）。
+
+导出端点会写审计（动作名 `audit.export` / `report.export` /
+`provenance.export`）——这是全文档里唯一记审计的读操作：把数据导出带走是敏感
+动作，不记的话审计链正好在最关键的这一步断掉。
 
 ---
 

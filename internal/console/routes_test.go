@@ -27,50 +27,76 @@ type contractEndpoint struct {
 	path   string // 用 "{id}" 占位，测试里替换成一个已存在的资源 id
 	isList bool   // 是否为「data 应为数组、无总数」的列表端点（约定 2）
 	isSSE  bool   // SSE 端点不套响应包裹
+
+	// isCSV 标记 CSV 下载端点。它们与 SSE 同理不套 JSON 响应包裹——响应体是
+	// 「BOM + CSV 文本」，套信封就没法直接下载成文件了（P4-04 任务 4）。
+	// 单独一个字段而不是复用 isSSE：两者不套包裹的**理由不同**（SSE 是长连接
+	// 逐条推送，CSV 是文件下载），混用一个字段会让后来者以为导出端点也是流式
+	// 事件推送。
+	isCSV bool
 }
 
 // allContractEndpoints 与 docs/contracts/http-console.md「端点总表」
-// 29 条逐一对应（28 条冻结 + 本次契约变更新增的 GET /hooks/{id}/audit，
-// 编号 29——上一轮补 reject 端点时留了一条明确的教训：「上一轮就是漏了
-// 这一步，那张表会静默少测一个端点而不会变红」，本轮新增端点时同一时刻
-// 把这张表也改掉，不留给下一轮）。
+// 37 条逐一对应（29 条既有 + P4-04 新增的 8 条，编号 30-37）。
+//
+// 那条教训重复过两次，写在这里免得再有第三次：「上一轮就是漏了这一步，那张表
+// 会静默少测一个端点而不会变红」。新增端点时必须同一个 commit 改三处——
+// routes()（server.go）、本表、docs/contracts/http-console.md 的端点总表。
+// 少改任何一处都不会有任何测试变红。
 var allContractEndpoints = []contractEndpoint{
-	{"POST", "/auth/login", false, false},
-	{"GET", "/user/info", false, false},
-	{"GET", "/auth/codes", false, false},
-	{"POST", "/auth/logout", false, false},
-	{"GET", "/hosts", true, false},
-	{"POST", "/hosts", false, false},
-	{"POST", "/artifact-sets", false, false},
-	{"GET", "/artifact-sets", true, false},
-	{"POST", "/artifact-sets/{id}/verify", false, false},
-	{"DELETE", "/artifact-sets/{id}", false, false},
-	{"POST", "/hooks", false, false},
-	{"GET", "/hooks", true, false},
-	{"PUT", "/hooks/{id}", false, false},
-	{"POST", "/hooks/{id}/validate", false, false},
-	{"GET", "/hooks/{id}/versions", true, false},
-	{"POST", "/hooks/{id}/approve", false, false},
-	{"POST", "/hooks/{id}/reject", false, false},
-	{"GET", "/hooks/{id}/audit", true, false},
-	{"POST", "/templates", false, false},
-	{"PUT", "/templates/{id}", false, false},
-	{"GET", "/templates/{id}/form-schema", false, false},
-	{"POST", "/templates/{id}/preview", false, false},
-	{"POST", "/tasks", false, false},
-	{"GET", "/tasks", true, false},
-	{"GET", "/tasks/{id}/events", true, false},
-	{"GET", "/tasks/{id}/stream", false, true},
-	{"POST", "/tasks/{id}/retry", false, false},
-	{"POST", "/tasks/{id}/cancel", false, false},
-	{"POST", "/disk-policy/dryrun", false, false},
+	{"POST", "/auth/login", false, false, false},
+	{"GET", "/user/info", false, false, false},
+	{"GET", "/auth/codes", false, false, false},
+	{"POST", "/auth/logout", false, false, false},
+	{"GET", "/hosts", true, false, false},
+	{"POST", "/hosts", false, false, false},
+	{"POST", "/artifact-sets", false, false, false},
+	{"GET", "/artifact-sets", true, false, false},
+	{"POST", "/artifact-sets/{id}/verify", false, false, false},
+	{"DELETE", "/artifact-sets/{id}", false, false, false},
+	{"POST", "/hooks", false, false, false},
+	{"GET", "/hooks", true, false, false},
+	{"PUT", "/hooks/{id}", false, false, false},
+	{"POST", "/hooks/{id}/validate", false, false, false},
+	{"GET", "/hooks/{id}/versions", true, false, false},
+	{"POST", "/hooks/{id}/approve", false, false, false},
+	{"POST", "/hooks/{id}/reject", false, false, false},
+	{"GET", "/hooks/{id}/audit", true, false, false},
+	{"POST", "/templates", false, false, false},
+	{"PUT", "/templates/{id}", false, false, false},
+	{"GET", "/templates/{id}/form-schema", false, false, false},
+	{"POST", "/templates/{id}/preview", false, false, false},
+	{"POST", "/tasks", false, false, false},
+	{"GET", "/tasks", true, false, false},
+	{"GET", "/tasks/{id}/events", true, false, false},
+	{"GET", "/tasks/{id}/stream", false, true, false},
+	{"POST", "/tasks/{id}/retry", false, false, false},
+	{"POST", "/tasks/{id}/cancel", false, false, false},
+	{"POST", "/disk-policy/dryrun", false, false, false},
+
+	// P4-04 新增八条（编号 30-37）：审计查询、三张报表、任务溯源，与三个
+	// CSV 导出入口。全部要求 roleAdmin——本测试用 eve-admin 登录，天然满足。
+	{"GET", "/audit", true, false, false},
+	{"GET", "/reports/provisioning", false, false, false},
+	{"GET", "/reports/failures", false, false, false},
+	{"GET", "/reports/phase-durations", false, false, false},
+	{"GET", "/tasks/{id}/provenance", false, false, false},
+	{"GET", "/audit/export", false, false, true},
+	{"GET", "/reports/provisioning/export", false, false, true},
+	{"GET", "/tasks/{id}/provenance/export", false, false, true},
 }
 
-// TestRoutes_AllContractEndpointsReachable 断言 29 条端点全部注册且不是
-// 404——即便业务逻辑因为占位 id 不存在而返回业务错误码，只要不是 HTTP
-// 404，就说明路由本身被正确注册（404 只可能来自 net/http.ServeMux 找
-// 不到匹配的路由，业务层的「找不到资源」走的是 apierr 的 CodeNotFound、
-// HTTP 状态码固定 200，两者不会混淆）。
+// TestRoutes_AllContractEndpointsReachable 断言全部端点都注册了且不是 404
+// ——即便业务逻辑因为占位 id 不存在而返回业务错误码，只要不是 HTTP 404，就
+// 说明路由本身被正确注册（404 只可能来自 gin 的路由树找不到匹配项，业务层的
+// 「找不到资源」走 apierr 的 CodeNotFound，两者的 HTTP 状态码碰巧都是 404，
+// 但后者的响应体里有 code=1004；本测试只判「路由存在」，因此用 admin 登录
+// 绕开权限这个变量，且不区分这两种 404 之外的任何状态码）。
+//
+// 注意这里与 apierr 映射的一处交叠：CodeNotFound 现在真实返回 HTTP 404
+// （gin 迁移契约 §0 纠正了「状态码固定 200」那处过期认知），所以「资源不
+// 存在」也会是 404。本测试靠 seedRouteAuditFixtures 预先建好占位资源来避开
+// 这个交叠——夹具漏建某个资源时，本测试会因为业务 404 而误报「路由未注册」。
 func TestRoutes_AllContractEndpointsReachable(t *testing.T) {
 	ts := newTestServer(t)
 	tok := ts.login("eve-admin") // admin 聚合全部权限码，绕开权限检查这个变量
@@ -163,7 +189,9 @@ func TestRoutes_AllEndpointsExceptSSEUseEnvelope(t *testing.T) {
 	seedRouteAuditFixtures(t, ts)
 
 	for _, ep := range allContractEndpoints {
-		if ep.isSSE {
+		// SSE 与 CSV 下载都不套信封，理由各不相同（见 contractEndpoint 的
+		// 字段注释）。
+		if ep.isSSE || ep.isCSV {
 			continue
 		}
 		t.Run(ep.method+" "+ep.path, func(t *testing.T) {

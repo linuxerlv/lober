@@ -8,6 +8,7 @@ package console
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -58,6 +59,65 @@ type taskItem struct {
 	FailureDetail   *failureDetailItem `json:"failureDetail"`
 }
 
+// checkTemplateChannel 校验模板声明的交付通道与它 pin 的制品集一致，且镜像
+// 直写通道的制品集三项齐备（P3-03 任务 5）。
+//
+// 两条各有实在的后果：
+//
+//   - 通道不符：机器会拿到一份与它引导的环境不匹配的东西。声明镜像直写但制品集
+//     是 installer 的，机器引导的是一个没有 installer 的最小环境，却收到一份
+//     kickstart——症状是卡在那里什么也不做直到超时。
+//   - 镜像三项缺失：装机走到写盘环节才发现，而那时盘可能已经被动过，留下一台
+//     状态不明的机器。
+//
+// **错误文案给出可行的下一步**（计划任务 5 的明确要求）：「该版本尚未封装镜像，
+// 可改用 installer 驱动」——而不只是报「通道不符」。这一条决定运维是自己解决
+// 还是来找开发。
+func checkTemplateChannel(tpl model.Template, artifact model.ArtifactSet) error {
+	want := tpl.Channel.Normalize()
+	got := artifact.Channel.Normalize()
+
+	if want != got {
+		if want.IsImageWrite() {
+			return apierr.New(http.StatusConflict, apierr.CodeConflict,
+				fmt.Sprintf("该模板声明走镜像直写通道，但它绑定的制品集 %q 属于 %s 通道"+
+					"——该版本尚未封装镜像。可把模板的 channel 改成 %q（installer 驱动，"+
+					"兜底通道，对新版本总是可用），或先用封装流水线产出镜像制品集后再建任务。",
+					artifact.ID, got, model.ChannelInstaller))
+		}
+		return apierr.New(http.StatusConflict, apierr.CodeConflict,
+			fmt.Sprintf("该模板声明走 %s 通道，但它绑定的制品集 %q 属于 %s 通道，两者不符"+
+				"——请把模板的 channel 改成 %q，或改绑一个 %s 通道的制品集。",
+				want, artifact.ID, got, got, want))
+	}
+
+	if want.IsImageWrite() && artifact.Image == nil {
+		return apierr.New(http.StatusConflict, apierr.CodeConflict,
+			fmt.Sprintf("制品集 %q 标为镜像直写通道，但镜像三项（镜像文件、校验值与签名、"+
+				"分区布局）缺失——这份制品集的导入没有走完。请重新导入，或把模板的 channel "+
+				"改成 %q 并改绑一个 installer 驱动通道的制品集。",
+				artifact.ID, model.ChannelInstaller))
+	}
+	return nil
+}
+
+// toFailureDetailItem 把 §3.5 的六个失败诊断字段转成响应形态。nil 进 nil 出
+// ——未失败的任务没有失败详情，响应里该是 null 而不是一个六个字段全空的对象
+// （前端据此判断「要不要显示失败面板」）。
+//
+// 抽成函数供 toTaskItem 与溯源视图（provenance.go）共用：两处给出的失败详情
+// 必须逐字段一致，否则任务详情页与溯源页会对同一次失败给出两种说法。
+func toFailureDetailItem(d *model.FailureDetail) *failureDetailItem {
+	if d == nil {
+		return nil
+	}
+	return &failureDetailItem{
+		Phase: string(d.Phase), ExitCode: d.ExitCode,
+		HookDigest: d.HookDigest, LogTail: d.LogTail,
+		SyslogTail: d.SyslogTail, SinceLastSig: d.SinceLastSig,
+	}
+}
+
 type failureDetailItem struct {
 	Phase        string `json:"phase"`
 	ExitCode     int    `json:"exitCode"`
@@ -80,14 +140,7 @@ func toTaskItem(tk model.Task) taskItem {
 	if resolved == nil {
 		resolved = map[string]string{}
 	}
-	var detail *failureDetailItem
-	if tk.FailureDetail != nil {
-		detail = &failureDetailItem{
-			Phase: string(tk.FailureDetail.Phase), ExitCode: tk.FailureDetail.ExitCode,
-			HookDigest: tk.FailureDetail.HookDigest, LogTail: tk.FailureDetail.LogTail,
-			SyslogTail: tk.FailureDetail.SyslogTail, SinceLastSig: tk.FailureDetail.SinceLastSig,
-		}
-	}
+	detail := toFailureDetailItem(tk.FailureDetail)
 	return taskItem{
 		ID: tk.ID, CreatedAt: tk.CreatedAt, CreatedBy: tk.CreatedBy,
 		HostSN: tk.HostSN, HostMAC: tk.HostMAC, HostUUID: tk.HostUUID,
@@ -177,6 +230,14 @@ func (s *Server) handleCreateTask(c *gin.Context) {
 		return
 	}
 
+	// 第 2.5 步：交付通道的交叉校验（P3-03 任务 5）。放在这里而不是渲染阶段：
+	// 渲染发生在机器已经上电、已经取到引导菜单之后，那时报错只会留下一台卡住
+	// 的机器；建任务时拦下来的成本是零。
+	if err := checkTemplateChannel(tpl, artifact); err != nil {
+		apierr.Fail(c, err)
+		return
+	}
+
 	// 第 3 步：校验固件兼容（§4.6 末段：库内记录值的校验有价值但不能
 	// 替代引导时的校验，这里先拦一道）。
 	if !model.FirmwareCompatible(artifact.OSFamily, host.Firmware) {
@@ -254,6 +315,10 @@ func (s *Server) handleListTasks(c *gin.Context) {
 	filter := contract.TaskFilter{
 		State:  model.TaskState(c.Query("state")),
 		HostSN: c.Query("sn"),
+		// failureReason 是失败分布报表的下钻目标（P4-04 任务 3）：报表上点
+		// 「precheck 失败 12 次」跳到这里，看是哪 12 个任务、是不是同一个人
+		// 建的。不加这一维，那张报表就只是一个数字。
+		FailureReason: model.FailureReason(c.Query("failureReason")),
 	}
 	tasks, err := s.deps.Tasks.ListTasks(c.Request.Context(), filter)
 	if err != nil {

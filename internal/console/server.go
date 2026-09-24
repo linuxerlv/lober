@@ -284,4 +284,7 @@ func (s *Server) routes() {
 	s.routesTemplate()
 	s.routesTask()
 	s.routesDiskDryRun()
+	s.routesReport()
+	s.routesProvenance()
+	s.routesExport()
 }
