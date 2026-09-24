@@ -50,6 +50,10 @@ type templateItem struct {
 	RequiredFormFields []string      `json:"requiredFormFields"`
 	Version            int           `json:"version"`
 	State              string        `json:"state"`
+
+	// Channel 是交付通道（P3-03 任务 5）。响应里总是显式给出归一化后的值
+	// （空值会被存储层折叠成 installer），前端不需要自己判断「空表示什么」。
+	Channel string `json:"channel"`
 }
 
 type hookRefItem struct {
@@ -83,6 +87,7 @@ func toTemplateItem(tpl model.Template) templateItem {
 		KernelArgs: tpl.KernelArgs, DiskPolicy: string(tpl.DiskPolicy),
 		OnFailure: string(tpl.OnFailure), RequiredFormFields: fields,
 		Version: tpl.Version, State: string(tpl.State),
+		Channel: string(tpl.Channel.Normalize()),
 	}
 }
 
@@ -97,6 +102,16 @@ type templateWriteRequest struct {
 	DiskPolicy         string           `json:"diskPolicy"`
 	OnFailure          string           `json:"onFailure"`
 	RequiredFormFields []string         `json:"requiredFormFields"`
+
+	// Channel 可选，留空即 installer 驱动通道（P3-03 任务 5 的默认值决定：
+	// 默认选兜底通道——它对新 OS 版本与特殊机型总是可用，而镜像直写要求那个
+	// 版本已经封装过；默认选一个可能没有制品的通道会让建任务失败，而运维
+	// 不一定知道为什么）。
+	//
+	// 不用 binding:"oneof=..." 标签：那样空值也要显式列进白名单，而 oneof 对
+	// 空字符串的处理容易让人误读。校验走 model.DeliveryChannel.Valid()，错误
+	// 文案里能带上「合法取值是哪两个」。
+	Channel string `json:"channel"`
 }
 
 type hookRefRequest struct {
@@ -190,6 +205,24 @@ func bindTemplateWriteRequest(c *gin.Context) (templateWriteRequest, error) {
 	return req, nil
 }
 
+// validateTemplateChannel 白名单校验模板的交付通道取值（P3-03 任务 5）。
+//
+// 空串合法（等价于 installer 驱动通道，见 model.DeliveryChannel.Normalize）。
+// 非法取值必须拒绝：放过一个拼错的值（比如写成 "image" 而正确的是
+// "image-write"）会让建任务走到一条不存在的通道上，而那个错误要到渲染阶段才
+// 暴露——那时机器已经上电了。
+//
+// 错误文案里列出合法取值：运维拼错时最想知道的就是「那正确的是什么」。
+func validateTemplateChannel(raw string) error {
+	if model.DeliveryChannel(raw).Valid() {
+		return nil
+	}
+	return apierr.New(http.StatusBadRequest, apierr.CodeBadRequest,
+		fmt.Sprintf("channel 取值 %q 不合法，必须是 %q（兜底通道，留空即此值）"+
+			"或 %q（镜像直写）之一",
+			raw, model.ChannelInstaller, model.ChannelImageWrite))
+}
+
 // handleCreateTemplate 处理 POST /templates。
 func (s *Server) handleCreateTemplate(c *gin.Context) {
 	req, err := bindTemplateWriteRequest(c)
@@ -205,6 +238,10 @@ func (s *Server) handleCreateTemplate(c *gin.Context) {
 		apierr.Fail(c, apierr.New(http.StatusBadRequest, apierr.CodeBadRequest, "name 不能为空"))
 		return
 	}
+	if err := validateTemplateChannel(req.Channel); err != nil {
+		apierr.Fail(c, err)
+		return
+	}
 
 	refs, verr := s.resolveHookRefs(c.Request.Context(), req.HookRefs, req.ArtifactSetID)
 	if verr != nil {
@@ -217,6 +254,7 @@ func (s *Server) handleCreateTemplate(c *gin.Context) {
 		AnswerTemplate: req.AnswerTemplate, HookRefs: refs, KernelArgs: req.KernelArgs,
 		DiskPolicy: model.DiskPolicy(req.DiskPolicy), OnFailure: model.OnFailurePolicy(req.OnFailure),
 		RequiredFormFields: req.RequiredFormFields, Version: 1, State: model.TemplateStateDraft,
+		Channel: model.DeliveryChannel(req.Channel),
 	}
 	created, err := s.deps.Templates.CreateTemplate(c.Request.Context(), tpl)
 	if err != nil {
@@ -252,6 +290,7 @@ func (s *Server) handleUpdateTemplate(c *gin.Context) {
 		AnswerTemplate: req.AnswerTemplate, HookRefs: refs, KernelArgs: req.KernelArgs,
 		DiskPolicy: model.DiskPolicy(req.DiskPolicy), OnFailure: model.OnFailurePolicy(req.OnFailure),
 		RequiredFormFields: req.RequiredFormFields, Version: current.Version + 1, State: model.TemplateStateDraft,
+		Channel: model.DeliveryChannel(req.Channel),
 	}
 	created, err := s.deps.Templates.CreateTemplate(c.Request.Context(), next)
 	if err != nil {

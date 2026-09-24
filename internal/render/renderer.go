@@ -37,6 +37,16 @@ func (r *Renderer) RenderMenu(ctx model.RenderContext) (string, error) {
 //     方言正文，与 meta-data 同构）。
 //  2. 文件名通过后，再按家族分派到具体渲染逻辑。
 func (r *Renderer) RenderAnswerFile(ctx model.RenderContext, fileName string) (string, error) {
+	// 通道分派在家族分派之前：镜像直写通道**不产出应答文件**，它产出的是一份
+	// 写盘脚本，且与 OS 家族无关（写的是块设备，不跑 installer）。
+	//
+	// 顺序不能反：若先按家族分派，一个镜像直写的 RHEL 制品集会被渲染成
+	// kickstart——机器拿到一份 installer 的应答文件，而它引导的是一个没有
+	// installer 的最小环境，症状是卡在那里什么也不做直到超时。
+	if ctx.Artifact.Channel.IsImageWrite() {
+		return ImageWriteScript(ctx)
+	}
+
 	if err := validateAnswerFileName(ctx, fileName); err != nil {
 		return "", err
 	}
