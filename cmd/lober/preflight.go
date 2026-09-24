@@ -76,7 +76,7 @@ func preflightCheck(ctx context.Context, lister artifactSetLister, files fs.FS) 
 			if p.relPath == "" {
 				continue
 			}
-			checkedPath, err := checkArtifactPathExists(files, p.diskPath)
+			checkedPath, err := checkArtifactPathExists(files, p.diskPath, set.OSFamily)
 			if err != nil {
 				issues = append(issues, preflightIssue{
 					ArtifactSetID:   set.ID,
@@ -130,24 +130,47 @@ func artifactCheckPaths(artifactSetID string, p model.ArtifactPaths) []artifactP
 	return out
 }
 
-// repoMetadataFile 是仓库目录下用来判定「仓库真正可用」的元数据文件相对
-// 路径——空目录能 stat 成功但对 installer 毫无用处，检查目录本身等于
-// 没检查（计划任务 2「设计要点」，与 internal/statemachine/precheck.go
-// 的同名约定保持一致）。
-const repoMetadataFile = "repodata/repomd.xml"
-
 // checkArtifactPathExists 判定给定路径在 files 中是否存在。路径以斜杠
-// 结尾则视为目录，检查其下的 repodata/repomd.xml；否则直接检查该文件
-// 本身。返回值 checkedPath 是实际被 fs.Stat 校验的那个路径——目录形式
-// 会展开成 repodata/repomd.xml 的完整路径，供调用方在问题报告里给出
-// 精确位置，而不是只报「repo/ 这个目录缺失」这种运维还要再反查一层的
-// 信息。
-func checkArtifactPathExists(files fs.FS, p string) (checkedPath string, err error) {
-	target := p
-	if strings.HasSuffix(p, "/") {
-		dir := strings.TrimSuffix(p, "/")
-		target = path.Join(dir, repoMetadataFile)
+// 结尾则视为仓库目录，按 family 查 model.RepoIndexPattern 校验其索引入口；
+// 否则直接检查该文件本身。
+//
+// 返回值 checkedPath 是实际被校验的那个路径——目录形式会展开成「仓库目录 +
+// 该家族的索引入口判据」的完整路径，供调用方在问题报告里给出精确位置，而不
+// 是只报「repo/ 这个目录缺失」这种运维还要再反查一层的信息。展开后的路径对
+// APT 家族含通配符（形如 set-x/repo/dists/*/Release），那正是要告诉运维的
+// 信息：期望在这个位置有一个匹配它的文件。
+//
+// 判据为什么按家族分流、以及那张表本身都在 model.RepoIndexPattern：它是 OS
+// 家族的固有属性，且引导时校验（internal/statemachine/precheck.go）与 verify
+// 端点（verifier.go，经 checkArtifactPathExistsUnderRoot 复用本函数）消费同
+// 一条规则。**此前这条常量被复制了三份**，Debian 的 APT 仓库树永远没有
+// repodata/repomd.xml，于是三处一起误报，一处修好另两处照旧——见
+// docs/real-machine/12-e2e-debian.md。
+//
+// 家族在表里查不到时返回错误而非放行：「无法确认仓库可用」与「确认仓库不
+// 可用」在这一层同样处置（§9.1 默认拒绝）。
+func checkArtifactPathExists(files fs.FS, p string, family model.OSFamily) (checkedPath string, err error) {
+	if !strings.HasSuffix(p, "/") {
+		_, err = fs.Stat(files, p)
+		return p, err
 	}
-	_, err = fs.Stat(files, target)
-	return target, err
+
+	dir := strings.TrimSuffix(p, "/")
+	pattern, ok := model.RepoIndexPattern(family)
+	if !ok {
+		return p, fmt.Errorf("不知道 %q 家族的仓库索引入口是哪个文件，无法确认这份仓库对 installer 可用"+
+			"（需要在 model.RepoIndexPattern 里为该家族补一条判据）", family)
+	}
+	target := path.Join(dir, pattern)
+
+	// fs.Glob 对不含通配符的 pattern 退化成一次 fs.Stat（返回空匹配而非
+	// 错误），因此 RPM-MD 那条固定路径与 APT 那条 glob 走同一段代码。
+	matches, globErr := fs.Glob(files, target)
+	if globErr != nil {
+		return target, fmt.Errorf("匹配仓库索引入口 %q 失败: %w", target, globErr)
+	}
+	if len(matches) == 0 {
+		return target, fmt.Errorf("仓库目录下找不到 %q（%s 家族的软件包索引入口）", target, family)
+	}
+	return target, nil
 }

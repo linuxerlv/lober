@@ -110,7 +110,7 @@ func (v *artifactVerifier) runVerify(ctx context.Context, artifactSetID string) 
 		if p.relPath == "" {
 			continue
 		}
-		if checkedPath, statErr := checkArtifactPathExistsUnderRoot(v.artifactRoot, p.diskPath); statErr != nil {
+		if checkedPath, statErr := checkArtifactPathExistsUnderRoot(v.artifactRoot, p.diskPath, set.OSFamily); statErr != nil {
 			slog.Error("校验制品集完整性失败：文件缺失",
 				slog.String("artifact_set_id", artifactSetID),
 				slog.String("artifact_set_name", set.Name),
@@ -162,10 +162,15 @@ func (v *artifactVerifier) runVerify(ctx context.Context, artifactSetID string) 
 // checkArtifactPathExistsUnderRoot 是 preflight.go 的
 // checkArtifactPathExists 的薄包装：把「制品根目录」与「制品集内相对
 // 路径」拼成 os.DirFS(artifactRoot) 视角下的路径后，委托给同一个存在性
-// 判定函数——不重复实现「路径以斜杠结尾则视为目录、改查
-// repodata/repomd.xml」这条判定规则，preflight.go 已经写过一次。
-func checkArtifactPathExistsUnderRoot(artifactRoot, diskPath string) (checkedPath string, err error) {
-	return checkArtifactPathExists(os.DirFS(artifactRoot), diskPath)
+// 判定函数——不重复实现「路径以斜杠结尾则视为仓库目录、改查该家族的索引
+// 入口」这条判定规则，preflight.go 已经写过一次。
+//
+// family 必须一路传到底，不能在这一层省掉：索引入口按 OS 家族不同
+// （RPM-MD 的 repodata/repomd.xml vs APT 的 dists/<suite>/Release，见
+// model.RepoIndexPattern）。省掉它就退回到「一条常量通吃」，那正是被修掉的
+// 那个 Debian bug。
+func checkArtifactPathExistsUnderRoot(artifactRoot, diskPath string, family model.OSFamily) (checkedPath string, err error) {
+	return checkArtifactPathExists(os.DirFS(artifactRoot), diskPath, family)
 }
 
 var _ console.ArtifactVerifier = (*artifactVerifier)(nil)

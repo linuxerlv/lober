@@ -294,36 +294,26 @@ for rel in linux initrd.gz repo/dists/stable/Release repo/pool/main/b/bash/bash_
 done
 
 # ---------------------------------------------------------------------------
-# 真实发现（阻断性 bug，非本脚本的绕法）：internal/statemachine/precheck.go
-# 的 checkArtifactFiles/checkPathExists 与 cmd/lober/preflight.go 的
-# checkArtifactPathExists 都硬编码把 "repodata/repomd.xml" 当作"仓库目录
-# 真正可用"的判据（repoMetadataFile 常量），对结尾带斜杠的 ArtifactPaths
-# 字段（Kernel/Initrd 都不带斜杠，只有 Repo 会触发这条路径）一律拼这个
-# yum/dnf 专属的元数据文件名去 fs.Stat，不按 OS 家族分支。
+# 历史记录（该 bug 已修复，本处不再需要任何绕法）：
 #
-# 这对 RHEL 是对的（ExtractRHEL 产出的 repo/ 下真的有 repodata/repomd.xml），
-# 但 Debian 的 repo/ 下是 dists/+pool/ 两棵树（ExtractDebian 的产出结构），
-# 从未也不会有 repodata/ 这个目录——这意味着任何 Debian 任务在
-# /v1/boot 命中时，Machine.Check → checkArtifactFiles 这一步会 100% 无
-# 例外地判定"制品文件不存在"并拒绝签发 token，与本次登记的制品集内容是否
-# 真实完整无关。本脚本实测复现（未加下面的临时补洞时）：任务被状态机置
-# failed，failure_detail.LogTail 逐字符为
-# `制品文件 "repo/" 在盘上不存在: GetFileAttributesEx repo/repodata/repomd.xml: ...`。
+# 本脚本首轮运行时发现一个阻断性 bug——仓库可用性判据被硬编码成
+# "repodata/repomd.xml"（RPM-MD/yum 专属产物），且这条常量被复制在三处：
+# internal/statemachine/precheck.go 的引导时校验、cmd/lober/preflight.go 的
+# 启动自检、cmd/lober/verifier.go 的 verify 端点。Debian 的 repo/ 下是
+# dists/+pool/ 两棵 APT 树，从来不会有 repodata/ 这个目录，于是**任何**
+# Debian 任务在 /v1/boot 命中时都会被判定为"制品文件不存在"而拒签 token，
+# 与制品集内容是否真实完整无关。当时实测的失败详情逐字符为：
+# `制品文件 "repo/" 在盘上不存在: GetFileAttributesEx repo/repodata/repomd.xml: ...`
 #
-# 这不是 Ubuntu 同款问题——ExtractUbuntu 从不设置 ArtifactPaths.Repo（零值
-# 空字符串，artifactCheckPaths 对空字符串直接跳过），只有 Debian（与未来
-# 若 SUSE 的 Repo 字段也指向非 yum 树）会撞上这条硬编码。
+# 修复方式：判据收敛成 model.RepoIndexPattern 一份（按 OS 家族查表——
+# RPM-MD 家族用 repodata/repomd.xml，APT 家族用 dists/*/Release 这个 glob，
+# suite 名随版本变所以不能写死），三处调用点全部改为查它。此处原有的
+# 「手工造一个假 repo/repodata/repomd.xml」补洞随之删除：夹具产出的
+# dists/stable/Release 现在就是被正式认可的 APT 索引入口，不需要伪造任何
+# 文件即可通过 precheck。
 #
-# 本脚本在这里补一个仅用于打通阶段 7-9 验证（菜单/preseed 内容/信号机制）
-# 的诊断性 workaround——手动在磁盘上补出 repo/repodata/repomd.xml，让
-# precheck 这一步误判为"存在"从而放行。这不代表真实 Debian ISO 会有这个
-# 文件，纯粹是为了绕开一个已确认的阻断性 bug 继续验证渲染器/信号链路；
-# 该 bug 本身已完整记入本任务返回值的 findings，交给编排方处理（不在本
-# 验证轨修 Go 代码）。删除下面三行、直接继续跑，就是该 bug 未修复时的
-# 真实生产行为：Debian 装机 100% 卡在 precheck，永远拿不到装机菜单。
-mkdir -p "${DEST_DIR}/repo/repodata"
-printf '<?xml version="1.0"?><repomd xmlns="http://linux.duke.edu/metadata/repo"></repomd>' \
-	>"${DEST_DIR}/repo/repodata/repomd.xml"
+# 保留这段说明而不是直接删空：它记录了「同一条规则被复制三份，一处修好
+# 另两处照旧」这个教训，以及为什么判据必须按家族分流。
 
 TEMPLATE_CREATE_RESP="$(curl -fsS -X POST "${CONSOLE_BASE}/templates" \
 	-H "${AUTH_HEADER}" -H 'Content-Type: application/json' \

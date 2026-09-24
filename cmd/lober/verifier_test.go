@@ -122,7 +122,8 @@ func TestArtifactVerifier_RunVerify_PassesWhenTreeMatchesManifest(t *testing.T) 
 
 	store := newFakeVerifierStore(model.ArtifactSet{
 		ID: "set-ok", Name: "rhel9-x86_64", State: model.ArtifactSetReady,
-		Paths: paths, ManifestSHA256: sha,
+		OSFamily: model.OSFamilyRHEL,
+		Paths:    paths, ManifestSHA256: sha,
 	})
 	v := newArtifactVerifier(store, root)
 
@@ -156,7 +157,8 @@ func TestArtifactVerifier_RunVerify_FailsWhenFileContentChanged(t *testing.T) {
 
 	store := newFakeVerifierStore(model.ArtifactSet{
 		ID: "set-tampered", Name: "rhel9-x86_64", State: model.ArtifactSetReady,
-		Paths: paths, ManifestSHA256: sha, // sha 是篡改前的基准值，此刻与磁盘不匹配
+		OSFamily: model.OSFamilyRHEL,
+		Paths:    paths, ManifestSHA256: sha, // sha 是篡改前的基准值，此刻与磁盘不匹配
 	})
 	v := newArtifactVerifier(store, root)
 
@@ -194,7 +196,8 @@ func TestArtifactVerifier_RunVerify_FailsWhenFileMissing(t *testing.T) {
 
 	store := newFakeVerifierStore(model.ArtifactSet{
 		ID: "set-missing", Name: "rhel9-x86_64", State: model.ArtifactSetReady,
-		Paths: paths, ManifestSHA256: sha,
+		OSFamily: model.OSFamilyRHEL,
+		Paths:    paths, ManifestSHA256: sha,
 	})
 	v := newArtifactVerifier(store, root)
 
@@ -217,7 +220,10 @@ func TestCheckArtifactPathExistsUnderRoot_ReportsExactMissingPath(t *testing.T) 
 		t.Fatalf("删除文件失败: %v", err)
 	}
 
-	checkedPath, err := checkArtifactPathExistsUnderRoot(root, filepath.ToSlash(filepath.Join("set-precise", "initrd.img")))
+	// 家族传 RHEL：本用例查的是一个普通文件路径（不带结尾斜杠），走不到
+	// 按家族分流的仓库索引判据那一支，传哪个家族都不影响结果——但参数不能
+	// 省，见 checkArtifactPathExistsUnderRoot 的文档。
+	checkedPath, err := checkArtifactPathExistsUnderRoot(root, filepath.ToSlash(filepath.Join("set-precise", "initrd.img")), model.OSFamilyRHEL)
 	if err == nil {
 		t.Fatalf("initrd.img 已被删除，checkArtifactPathExistsUnderRoot 应返回错误")
 	}
