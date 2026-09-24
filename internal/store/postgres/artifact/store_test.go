@@ -20,7 +20,7 @@ import (
 
 // minimalTemplateRow 是 templates 表的最小行结构体，只声明
 // DeleteArtifactSet 引用检查用到的四列（id、version、artifact_set_id、
-// state），字段与列名严格对应 schema/001_init.sql 的 templates 表。
+// state），字段与列名严格对应 schema/001_init.sql（已移除） 的 templates 表。
 //
 // 为什么不 import template 包：那会让两个聚合包互相耦合，而按聚合拆包的
 // 全部意义就是它们彼此独立（设计文档 §3）。template 包同样用一个

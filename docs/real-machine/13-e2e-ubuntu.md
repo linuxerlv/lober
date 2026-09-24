@@ -1,5 +1,10 @@
 # Ubuntu 端到端验证（scripts/e2e-ubuntu.sh）
 
+> **数据层迁移说明**：本文记录的是数据层仍为 SQLite 时的情况，数据层已于
+> 2026-09-24 迁移到 GORM + PostgreSQL（见
+> `docs/superpowers/specs/2026-09-24-gorm-postgres-migration-design.md`），
+> 正文保留当时原貌，未作修改。
+
 > 验证环境：Windows 11 Pro 10.0.26200 主机，Git Bash（MSYS）+ Go 1.26.4
 > （go1.26.4 windows/amd64），2026-09-23。
 >

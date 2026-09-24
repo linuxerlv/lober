@@ -38,7 +38,9 @@ import (
 // 的 fail 方法藉此把具体失败原因写回持久化层，供控制台展示给运维——
 // 这是「让导入失败的原因能被运维看到」这个任务的最后一步（改接口 → 改
 // conformance 断言 → 改内存实现 → 改 SQLite 实现 → 接上调用方，本接口
-// 与下面的 fail 方法就是第五步）。
+// 与下面的 fail 方法就是第五步）。当时改的 SQLite 实现现已整体移除、
+// 换成 internal/store/postgres，但这里记的是该步骤发生时的真实顺序，
+// 不因后续迁移而改写。
 type artifactSetUpdater interface {
 	GetArtifactSet(ctx context.Context, id string) (model.ArtifactSet, error)
 	UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256, reason string) (model.ArtifactSet, error)

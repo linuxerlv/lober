@@ -1,7 +1,7 @@
 // 本文件定义 tasks 表的行结构体、索引 tag、与 model.Task 的双向映射，
 // 对应实现计划任务 3、4、5（三个任务合并交付），依据设计文档 §5、§6。
 //
-// 列名、类型与顺序对应 internal/store/sqlite/schema/001_init.sql 的
+// 列名、类型与顺序对应 internal/store/sqlite/schema/001_init.sql（已移除）的
 // tasks 表（旧 schema 是列名与类型的事实来源，本次迁移前不删）。
 package task
 

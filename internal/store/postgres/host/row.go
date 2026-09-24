@@ -1,7 +1,7 @@
 // 本文件定义 hosts 表的 GORM row 类型，与 model.Host 之间的互转。
 // 对应实现计划任务 8 三分之一（host 聚合），依据 SPEC §4.3。
 //
-// 列名与类型的事实来源是 internal/store/sqlite/schema/001_init.sql：
+// 列名与类型的事实来源是 internal/store/sqlite/schema/001_init.sql（已移除）：
 //
 //	CREATE TABLE hosts (
 //	    sn              TEXT NOT NULL,

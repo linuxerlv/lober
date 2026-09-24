@@ -213,8 +213,8 @@ func (a *AdmissionController) Check(ctx context.Context) (AdmissionDecision, err
 // 用两次 ListTasks（contract.TaskFilter 只支持单个 State 过滤，见
 // internal/core/contract/store.go）而不是一次性拿全部任务再在 Go 里过滤：
 // 任务表是百级，两次窄查询与一次全表扫描的成本量级相同，但窄查询让 Store
-// 实现（尤其 SQLite）有机会用状态列上的索引，且不需要把无关状态的任务
-// 也传输回内存。
+// 实现（如 internal/store/postgres）有机会用状态列上的索引，且不需要把
+// 无关状态的任务也传输回内存。
 func (a *AdmissionController) countInFlightTasks(ctx context.Context) (int, error) {
 	total := 0
 	for _, state := range admissionCountedStates {

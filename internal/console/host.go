@@ -66,7 +66,8 @@ func hostID(h model.Host) string {
 // 不能直接调用 HostStore.GetHost(id)——GetHost 的 id 取法是「由实现决定」
 // （contract.HostStore 文档明确说明），fake.Store 的具体实现用一个带前缀
 // 的内部 key（"sn:xxx"/"mac:xxx"/"uuid:xxx"），与 hostID() 返回的裸值不
-// 是同一个字符串，SQLite 实现的主键形态目前也未知。本函数改用
+// 是同一个字符串，postgres.Store 的主键形态（hosts 表的 mac 列裸值）与之
+// 也不一致。本函数改用
 // FindHostByIdentity——它的判据是 contract 明确文档化的 SN→MAC→UUID
 // 回退（identityMatches 语义），任何符合契约的 Store 实现都必须支持这个
 // 判据，因此这是唯一能在不依赖具体实现细节的前提下，把 hostID() 算出的

@@ -1,5 +1,5 @@
 // 本文件定义 audit_log 表在 GORM 下的行结构体，对应实现计划任务 8 的
-// audit 三分之一。列名、类型与索引以 internal/store/sqlite/schema/001_init.sql
+// audit 三分之一。列名、类型与索引以 internal/store/sqlite/schema/001_init.sql（已移除）
 // 第 174-181 行为事实来源，字段语义以 internal/core/contract/store.go 的
 // AuditRecord 与 AuditStore 文档为事实来源。
 package audit
@@ -18,7 +18,7 @@ import (
 //
 // Detail 字段用 pgtype.JSON[string] 而不是裸 string 加 GORM 的
 // serializer 标签：AuditRecord.Detail 本身是自由文本（不是结构化数据），
-// 但按旧实现（internal/store/sqlite/audit.go）的约定，落库时仍需要
+// 但按旧实现（internal/store/sqlite/audit.go（已移除））的约定，落库时仍需要
 // JSON 编码进 detail_json 这个 jsonb 列——JSON.Value/Scan 对一个字符串
 // 值编码/解码得到的正是"该字符串的 JSON 字面量"，与旧实现的
 // encodeJSON(record.Detail)/decodeJSON(detailJSON, &rec.Detail) 语义

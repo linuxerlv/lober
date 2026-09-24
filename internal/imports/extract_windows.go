@@ -229,6 +229,7 @@ func copyLocalFile(src, dest string) error {
 //    fakeWimArchDetector）。真实的 WIM 格式（复合文件二进制或新版 XML
 //    索引）解析需要专门的库或工具（如调用 wimlib 或解析 WIM 头部的
 //    Architecture 字段），且不在本模块允许的依赖白名单内
-//    （modernc.org/sqlite、go-cmp、uuid、yaml.v3、golang.org/x/crypto、
-//    golang.org/x/net 均不含 WIM 解析能力）。真实实现需要在部署适配阶段
-//    补上一个满足 WimArchDetector 接口的具体类型，不改变接口本身。
+//    （gorm.io/gorm、gorm.io/driver/postgres、go-cmp、uuid、yaml.v3、
+//    golang.org/x/crypto、golang.org/x/net 均不含 WIM 解析能力）。真实实现
+//    需要在部署适配阶段补上一个满足 WimArchDetector 接口的具体类型，不
+//    改变接口本身。

@@ -1,7 +1,7 @@
 // 本文件实现 contract.TaskStore 的八个方法，对应实现计划任务 3、4、5
 // （三个任务合并交付）。签名与语义完全照抄
 // internal/core/contract/store.go:87-141，参考语义抄
-// internal/store/sqlite/task.go 的既有实现（SQL 方言不同，业务判断
+// internal/store/sqlite/task.go（已移除）的既有实现（SQL 方言不同，业务判断
 // 一致）。
 package task
 

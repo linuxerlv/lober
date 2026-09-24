@@ -172,7 +172,8 @@ func TestAdmissionController_CountIsCorrectAfterRestart(t *testing.T) {
 	mustCreateTaskInState(t, store, "task-before-2", model.TaskStateInstalling)
 
 	// 第二个 AdmissionController 实例（全新的进程内状态）模拟「重启后」
-	// ——但共享同一个 store，就像重启后重新连接同一个 SQLite 文件。
+	// ——但共享同一个 store，就像重启后重新连上同一个 PostgreSQL 库：
+	// 进程内状态清零，但库里的数据原样还在。
 	after := NewAdmissionController(store)
 	after.SetLimit(2)
 

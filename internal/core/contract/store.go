@@ -6,8 +6,8 @@
 // 查询——窄依赖让每个模块的测试替身只实现自己用到的那几个方法。
 //
 // AuditStore 是本次契约变更新增的成员（见 docs/real-machine/05-审计持久化.md）：
-// audit_log 表在 M1 就已建好（internal/store/sqlite/schema/001_init.sql），
-// 但此前没有任何窄接口把它纳入 Store——审计记录因此只能写进 log/slog，
+// audit_log 表在 M1 就已建好，但此前没有任何窄接口把它纳入 Store——
+// 审计记录因此只能写进 log/slog，
 // 写了就查不回来。补上本接口后，两层缺口（只写不查、写的地方绕开了
 // Store 抽象）都在契约层面消除，具体落地见 AuditStore 类型文档。
 package contract
@@ -353,9 +353,18 @@ type Store interface {
 // TxRunner 是事务运行接口：在单个数据库事务里执行 fn，fn 内部对同一事务
 // 可见的 Store 做多次操作，fn 返回错误则整个事务回滚。
 //
-// 实现必须拒绝嵌套调用（fn 内部再次调用 RunInTx）——SQLite 是单写者模型，
-// 嵌套事务会等待自己持有的锁，直接死锁。拒绝的具体形式（返回 error 还是
-// panic）由实现自行决定，但绝不能让嵌套调用静默地在同一个连接上排队等待。
+// 实现必须拒绝嵌套调用（fn 内部再次调用 RunInTx）。原因取决于底层引擎，
+// 但两种都不可接受：
+//
+//   - 单写者引擎（如 SQLite，连接池上限 1）下，嵌套事务会等待自己持有的
+//     连接，直接死锁，表现为整个进程卡住无响应。
+//   - PostgreSQL 这类放开连接池的引擎下不会死锁，后果更隐蔽：嵌套调用会
+//     静默开出一个**独立**事务，外层回滚时内层已经提交，原子性失效且不
+//     报任何错。建任务要原子写入 task 与首条 event，这种静默失效会留下
+//     「有任务没有事件」或反之的残缺数据。
+//
+// 拒绝的具体形式（返回 error 还是 panic）由实现自行决定，但绝不能让嵌套
+// 调用静默地跑起来——无论是排队等待还是另开一个事务。
 type TxRunner interface {
 	RunInTx(ctx context.Context, fn func(ctx context.Context, store Store) error) error
 }

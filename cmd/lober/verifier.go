@@ -171,7 +171,7 @@ func checkArtifactPathExistsUnderRoot(artifactRoot, diskPath string) (checkedPat
 var _ console.ArtifactVerifier = (*artifactVerifier)(nil)
 
 // 编译期确认 contract.ArtifactSetStore 是 artifactVerifierStore 的超集
-// （装配点传入的是 *sqlite.Store，天然满足更宽的 contract.ArtifactSetStore
+// （装配点传入的是 *postgres.Store，天然满足更宽的 contract.ArtifactSetStore
 // 接口，这里只是留一个可读的静态断言，说明「窄接口」这个设计选择不会在
 // 装配点造成类型不兼容）。
 var _ artifactVerifierStore = (contract.ArtifactSetStore)(nil)

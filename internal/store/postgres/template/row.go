@@ -5,7 +5,7 @@
 // 两张表归一个包：TemplateStore 这一个接口同时覆盖模板与它的 hook 引用
 // 列表，切分依据是契约边界不是表数量（设计文档 §3）。
 //
-// 列名与类型的事实来源是 internal/store/sqlite/schema/001_init.sql：
+// 列名与类型的事实来源是 internal/store/sqlite/schema/001_init.sql（已移除）：
 //
 //	CREATE TABLE templates (
 //	    id                      TEXT NOT NULL,
@@ -165,7 +165,7 @@ func (r templateHookRefRow) toModel() model.HookRef {
 //
 // ParamsDefaults 为 nil 时写入一个空 map 而不是 SQL NULL，与 toModel 的
 // 归一化配对，也与 params_defaults_json 列 NOT NULL DEFAULT '{}' 的既有
-// schema 约定一致（001_init.sql）。
+// schema 约定一致（001_init.sql（已移除））。
 func hookRefFromModel(templateID string, templateVersion int, ref model.HookRef) templateHookRefRow {
 	params := ref.ParamsDefaults
 	if params == nil {

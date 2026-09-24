@@ -191,7 +191,7 @@ func (s *Server) handleCreateArtifactSet(w http.ResponseWriter, r *http.Request)
 	// Deps.ArtifactImporter 判空：可为 nil（测试或某些部署形态可能不需要
 	// 触发能力，与 Deps.EventBus 同一种「按需注入、handler 调用前判空」
 	// 的接缝设计），为 nil 时制品集会停留在 importing，直到有人用
-	// sqlite3 CLI 或未来的手工修复路径把它推进——这不是本次改动引入的
+	// psql CLI 或未来的手工修复路径把它推进——这不是本次改动引入的
 	// 新风险，是「没有导入触发」这一断口在 Deps.ArtifactImporter 缺省时
 	// 的自然延续。
 	if s.deps.ArtifactImporter != nil {

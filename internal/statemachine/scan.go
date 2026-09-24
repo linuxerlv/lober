@@ -347,8 +347,9 @@ func (m *Machine) appendAutoRetryMarkerEvent(ctx context.Context, task model.Tas
 // 「新建一个字段」这种口子。contract.EventFilter 也只支持 AfterSeq 这一
 // 个过滤维度（没有按 Message 内容或来源过滤的能力，见 store.go），因此
 // 这里能做到的最保守方式是：取回该任务的全部事件（ListEvents 不分页，
-// 见 sqlite/event.go 的实现——一次性返回全部匹配行，不会漏计），在内存
-// 里数出 Message 含 autoRetryEventMarker 标记的条数。
+// 见 internal/store/postgres/event/store.go 的实现——一次性返回全部
+// 匹配行，不会漏计），在内存里数出 Message 含 autoRetryEventMarker
+// 标记的条数。
 //
 // 这不是理论上最高效的实现（任务事件很多时每次扫描都要整表取回），但
 // 任务事件表本身就是「百级任务 × 个位数事件」的量级（§2.5 的信号点加

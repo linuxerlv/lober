@@ -1,5 +1,10 @@
 # M2 SQLite 存储层 实现计划
 
+> **数据层迁移说明**：本文是 SQLite 存储层的实现计划，数据层已于
+> 2026-09-24 迁移到 GORM + PostgreSQL（见
+> `docs/superpowers/specs/2026-09-24-gorm-postgres-migration-design.md`），
+> 正文保留当时原貌，未作修改。
+
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）
 > 或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 >

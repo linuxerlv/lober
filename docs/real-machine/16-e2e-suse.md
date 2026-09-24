@@ -1,5 +1,10 @@
 # SUSE 端到端验证报告
 
+> **数据层迁移说明**：本文记录的是数据层仍为 SQLite 时的情况，数据层已于
+> 2026-09-24 迁移到 GORM + PostgreSQL（见
+> `docs/superpowers/specs/2026-09-24-gorm-postgres-migration-design.md`），
+> 正文保留当时原貌，未作修改。
+
 对应分支 `feat/n8-suse-e2e`。验证方式：`scripts/e2e-suse.sh`（curl 模拟机器
 打点，本地跑通全链路，不碰硬件），结构照抄 `scripts/e2e.sh`（RHEL 基线）与
 `scripts/e2e-debian.sh` 的形状写（本轮未修改它们一个字符）。已连续跑两次，

@@ -9,6 +9,15 @@
 > （inventory.go）、`Hook`/`Template`/`HookRef`（authoring.go）、`TaskEvent`
 > （event.go）。
 >
+> **读下方变更记录前请注意：** 数据层此后已从 `internal/store/sqlite` 迁移到
+> `internal/store/postgres`（GORM + PostgreSQL），`internal/store/sqlite` 全
+> 目录（含 `schema/001_init.sql`）已删除。下方各条变更记录中出现的
+> `internal/store/sqlite`、SQLite 实现、`schema/001_init.sql` 等提法，记录的
+> 是**这些变更被提出时的真实模块影响分析**，按当时的实现如实书写，此后不
+> 再回改——它们现在应读作「旧 SQLite 实现（已移除，功能已由
+> `internal/store/postgres` 承接）」。这些条目的因果说明（为什么要在那些模块
+> 做那些改动）仍然成立，只是承接模块换了名字。
+>
 > **变更记录：新增 `POST /hooks/{id}/reject`（驳回 hook 审批）。** 原因：本
 > 文档冻结时全文搜索 reject / 驳回 / decline 零匹配——`POST /hooks/{id}/approve`
 > 只能把 hook 从 `draft` 推进到 `review` 再到 `active`，一旦提交 `review`

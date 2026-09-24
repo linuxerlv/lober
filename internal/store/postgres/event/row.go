@@ -7,7 +7,7 @@ import (
 	"github.com/lober/lober/internal/core/model"
 )
 
-// row 是 task_events 表的一行，字段与列一一对应 schema/001_init.sql 的
+// row 是 task_events 表的一行，字段与列一一对应 schema/001_init.sql（已移除） 的
 // task_events 表（旧 schema 是本次迁移列名/类型的事实来源）。
 //
 // id 用 bigserial：ListEvents 按 id 排序而非 seq（见 store.go 的说明），

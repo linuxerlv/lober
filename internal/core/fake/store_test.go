@@ -2,8 +2,8 @@
 // §2.7、§3.3、§3.4、§3.6、§4.3、§4.4、§4.7、§5.5、§12.8。
 //
 // 主体断言全部委托给 conformance.RunConformanceSuite——它是 Store 的可执行
-// 行为契约，内存实现与将来的 SQLite 实现（M2）跑同一套断言，保证 M3-M8
-// 用内存实现写的测试换成 SQLite 后行为不变（计划任务 16）。
+// 行为契约，内存实现与 internal/store/postgres 实现跑同一套断言，保证
+// M3-M8 用内存实现写的测试换成 PostgreSQL 实现后行为不变（计划任务 16）。
 //
 // 本文件额外补的几条断言是 conformance 套件不覆盖的、内存实现自身特有的
 // 风险点：深拷贝（计划任务 17 设计要点明确要求，返回内部指针会让一个测试
@@ -205,12 +205,13 @@ func TestStore_满足组合接口与事务运行接口(t *testing.T) {
 }
 
 // TestStore_RunInTx_拒绝嵌套调用 锁住 TxRunner 契约明确要求的行为：实现
-// 必须拒绝嵌套调用（fn 内部再次调用 RunInTx）——真实 SQLite 实现下嵌套会
-// 死锁；内存实现虽然退化为直接执行、没有真正的锁等待风险，但契约要求所有
-// 实现都拒绝嵌套，否则依赖内存实现写测试的模块（M3-M8）观察到的行为会与
-// 换成 SQLite 后的行为不一致——这正是 conformance 机制存在的意义，
-// 但事务嵌套这条不属于 Store 接口方法，conformance 套件不覆盖，因此在本
-// 文件单独锁住。
+// 必须拒绝嵌套调用（fn 内部再次调用 RunInTx）——真实 internal/store/postgres
+// 实现下嵌套会静默开出一个独立事务，外层回滚时内层已经提交，原子性无声
+// 失效且不报任何错（见该包 tx.go 的文件头注释）；内存实现虽然退化为直接
+// 执行、不存在这个风险，但契约要求所有实现都拒绝嵌套，否则依赖内存实现
+// 写测试的模块（M3-M8）观察到的行为会与换成 PostgreSQL 实现后的行为不
+// 一致——这正是 conformance 机制存在的意义，但事务嵌套这条不属于 Store
+// 接口方法，conformance 套件不覆盖，因此在本文件单独锁住。
 func TestStore_RunInTx_拒绝嵌套调用(t *testing.T) {
 	ctx := context.Background()
 	store := NewStore()
@@ -222,9 +223,10 @@ func TestStore_RunInTx_拒绝嵌套调用(t *testing.T) {
 		if innerErr == nil {
 			t.Error("嵌套调用 RunInTx 未返回错误，want 拒绝——" +
 				"contract.TxRunner 明确要求实现必须拒绝嵌套调用，" +
-				"真实 SQLite 实现下嵌套会在单写者模型上死锁，" +
+				"真实 internal/store/postgres 实现下嵌套会静默开出一个独立事务，" +
+				"外层回滚时内层已经提交，原子性无声失效且不报任何错，" +
 				"内存实现必须表现出同样的拒绝行为，否则依赖它写的测试" +
-				"在换成 SQLite 后会突然死锁")
+				"在换成 PostgreSQL 实现后会静默丢失原子性保证")
 		}
 		return nil
 	})

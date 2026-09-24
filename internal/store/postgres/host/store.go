@@ -4,7 +4,7 @@
 // hosts 表的主键是 mac（不是 sn）：白牌机 SN 可能留空、可能填占位字符串、
 // 甚至整批重复，给 sn 建唯一索引会让整批白牌机入库失败，症状是 discovery
 // 同步静默丢主机——sn 上只建普通索引，语义与旧实现
-// internal/store/sqlite/host.go 一致，详见 row.go 文件头注释。
+// internal/store/sqlite/host.go（已移除）一致，详见 row.go 文件头注释。
 package host
 
 import (
@@ -39,7 +39,7 @@ func Models() []any {
 // UpsertHost 按 mac（hosts 表主键）落库或更新一条主机记录。arch 与
 // firmware 是必填列，空值在写入时报错而不是存进去——存进去的后果是
 // 建任务时过滤不出可装的 OS，而那个错误要等机器引导时才被 §4.6 拦下
-// （与旧实现 internal/store/sqlite/host.go 同一约束）。
+// （与旧实现 internal/store/sqlite/host.go（已移除）同一约束）。
 func (s *Store) UpsertHost(ctx context.Context, h model.Host) (model.Host, error) {
 	if h.Arch == "" {
 		return model.Host{}, fmt.Errorf("postgres: UpsertHost 拒绝写入：arch 为空（SPEC §4.3 末条要求必填）")

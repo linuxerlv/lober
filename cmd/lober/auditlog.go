@@ -5,11 +5,11 @@
 // # 本次契约变更前的状态（第一层缺口，已修补）
 //
 // 此前唯一的生产实现只把审计记录写进 log/slog（标准错误，交给 journald
-// 收），从不写 internal/store/sqlite/schema/001_init.sql 第 174 行早已
+// 收），从不写 internal/store/postgres/audit/row.go 的 GORM model tag
 // 建好的 audit_log 表——那张表建了却从未被使用。本文件现在改为落库
-// （委托给 contract.AuditStore，M2 sqlite 实现见
-// internal/store/sqlite/audit.go），slog 降级为兜底（见下方 dbAuditLogger
-// 的文档）。取舍理由与影响范围详见 docs/real-machine/05-审计持久化.md。
+// （委托给 contract.AuditStore，实现见
+// internal/store/postgres/audit/store.go），slog 降级为兜底（见下方
+// dbAuditLogger 的文档）。取舍理由与影响范围详见 docs/real-machine/05-审计持久化.md。
 package main
 
 import (

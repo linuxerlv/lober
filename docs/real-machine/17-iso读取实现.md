@@ -1,5 +1,10 @@
 # 17 ISO 内容读取：给 MountExtractor 接上真实的 ISO 9660 解析
 
+> **数据层迁移说明**：本文记录的是数据层仍为 SQLite 时的情况，数据层已于
+> 2026-09-24 迁移到 GORM + PostgreSQL（见
+> `docs/superpowers/specs/2026-09-24-gorm-postgres-migration-design.md`），
+> 正文保留当时原貌，未作修改。
+
 > 本文档记录 m3-mount-extractor 这次工作：把 `internal/imports/extract.go`
 > 的 `MountExtractor.Open` 从骨架（固定返回「尚未实现」错误）接上真实的
 > ISO 内容读取。依据：实现计划任务 9 的骨架说明、SPEC §2.1 的特征文件表。

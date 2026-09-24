@@ -23,7 +23,7 @@ import (
 // 由另一个 agent 并行开发，import 会撞上未完成的代码，也会让两个聚合包
 // 互相耦合（任务简报「注意」一节的要求）。这个匿名结构体只声明
 // DeleteTemplate 引用检查用到的三列（template_id、template_version、
-// state），字段与列名严格对应 schema/001_init.sql 的 tasks 表，但不追求
+// state），字段与列名严格对应 schema/001_init.sql（已移除） 的 tasks 表，但不追求
 // 还原 tasks 表的全部列——AutoMigrate 会照单建列，测试只需要这三列真实
 // 存在并可写入即可。
 type minimalTaskRow struct {

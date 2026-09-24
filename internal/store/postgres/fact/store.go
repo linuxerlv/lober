@@ -53,7 +53,7 @@ func (s *Store) MergeFacts(ctx context.Context, taskID string, facts map[string]
 
 	// ON CONFLICT (task_id, key) DO UPDATE SET value = excluded.value,
 	// updated_at = excluded.updated_at —— 与旧实现
-	// internal/store/sqlite/fact.go 的 ON CONFLICT 语句同一语义，只是
+	// internal/store/sqlite/fact.go（已移除）的 ON CONFLICT 语句同一语义，只是
 	// 用 GORM 的 clause 表达、且一次调用批量写入本次调用的全部键（不逐键
 	// 单独发一条语句），减少往返次数。
 	err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
@@ -69,7 +69,7 @@ func (s *Store) MergeFacts(ctx context.Context, taskID string, facts map[string]
 // GetFacts 返回该任务当前的全部 facts（早先写入的合并结果）。任务不存在
 // 或尚无任何 fact 时返回空 map 而不是错误或 nil——facts 是纯粹的 KV
 // 存储，没有「facts 集合不存在」这个错误态，只有「facts 集合是空的」
-// （SPEC §5.5，与旧实现 internal/store/sqlite/fact.go 的 GetFacts 同一
+// （SPEC §5.5，与旧实现 internal/store/sqlite/fact.go（已移除）的 GetFacts 同一
 // 语义）。
 func (s *Store) GetFacts(ctx context.Context, taskID string) (map[string]string, error) {
 	var rows []factRow

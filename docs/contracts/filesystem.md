@@ -8,11 +8,10 @@
 > `internal/core/model`：`ArtifactSet`/`ArtifactPaths`（inventory.go）、
 > `Hook`（authoring.go）。
 
-## 总览：三棵服务端树 + 一棵目标机树
+## 总览：两棵服务端树 + 一棵目标机树
 
 ```
 服务端（运行 Go 与 nginx 的主机）
-├── /var/lib/lober/db/          数据库（SQLite），仅 Go 进程读写
 ├── /var/lib/lober/log/         日志（syslog 落盘、task 日志正文），仅 Go 进程读写
 └── /srv/lober/                 制品（nginx 直发），需 nginx 可读
     ├── artifacts/               对应 nginx location /artifacts/
@@ -22,24 +21,35 @@
 └── /var/lib/lober/              见 SPEC §5.8，firstboot 脚手架落地点
 ```
 
-服务端三棵树刻意分开挂载点前缀（`/var/lib/lober/` 与 `/srv/lober/`），
-理由见「约定：权限」——数据库与日志绝不能被 nginx worker 进程读到，
-而制品必须能被 nginx worker 进程读到，混在同一棵树下容易在权限收紧时
-一次改错。
+**数据库不再是本地文件树的一部分。** 数据层已从本地 SQLite 迁移到外部
+PostgreSQL 服务（连接参数见 `store.postgres` 配置项），不占用本机磁盘路径，
+因此不在上面的服务端目录树里列出——它是一个独立的网络服务，不是这台主机
+上的一棵目录树。连带影响：
+
+- **备份对象从「拷 `.db` 文件」变成「`pg_dump` 这个库」。** 原先备份只需
+  停机或用 SQLite 在线备份 API 拷走 `lober.db`；现在要用 `pg_dump`（或
+  连续归档 WAL）对着 PostgreSQL 服务做逻辑/物理备份，备份脚本与恢复演练
+  都要跟着换。
+- **原「db 文件仅 Go 进程读写、nginx worker 无权访问」的权限约定，改为
+  「PG 账号只授予这一个库的权限，不要复用其它业务账号」**——见下方
+  「约定：权限」表。
+
+服务端剩下两棵本机目录树刻意分开挂载点前缀（`/var/lib/lober/log/` 与
+`/srv/lober/`），理由见「约定：权限」——日志绝不能被 nginx worker 进程
+读到，而制品必须能被 nginx worker 进程读到，混在同一棵树下容易在权限
+收紧时一次改错。
 
 ---
 
 ## 服务端布局
 
-### 1. 数据库树 `/var/lib/lober/db/`
+### 1. 数据库：外部 PostgreSQL 服务，不是本机目录树
 
-```
-/var/lib/lober/db/
-└── lober.db              SQLite 主文件（WAL 模式会伴生 lober.db-wal、lober.db-shm）
-```
-
-仅 Go 进程读写；`.gitignore` 已覆盖 `.db`/`-wal`/`-shm` 三个文件
-（M1 任务 1 产出）。
+数据层由 GORM 连接外部 PostgreSQL（连接参数 `store.postgres`：host/port/
+user/password/dbname/sslmode/search_path），表结构由 GORM model tag 与
+`AutoMigrate` 生成，不再有 `/var/lib/lober/db/` 这样的本机路径、也没有
+`.gitignore` 需要覆盖的 `.db`/`-wal`/`-shm` 文件——这些都是本地 SQLite
+时代的产物，随实现一起移除。部署与权限层面的处理见文末「约定：权限」表。
 
 ### 2. 日志树 `/var/lib/lober/log/`
 
@@ -190,12 +200,12 @@ SPEC §5.8 的 firstboot 脚手架，由渲染器在 `%post` 阶段生成并写�
 
 ---
 
-## 约定：权限（三个目录，逐条冻结）
+## 约定：权限（两个本机目录 + 一个数据库账号，逐条冻结）
 
-| 目录 | 属主/权限模型 | 理由 |
+| 对象 | 属主/权限模型 | 理由 |
 |---|---|---|
-| `/var/lib/lober/db/` | 仅 Go 进程所属用户可读写，其它用户（含 nginx worker）无权限 | 数据库含任务的 `token`/`finalizeToken` 等敏感字段，绝不能被 nginx worker 进程意外读取或被同机其它服务扫到 |
-| `/var/lib/lober/log/` | 仅 Go 进程所属用户可读写 | 日志正文可能含安装期敏感信息（如 kickstart 渲染失败时的参数回显），与数据库同等对待 |
+| PostgreSQL 账号（连 `store.postgres` 指向的库） | 只授予这一个库（`dbname`）的权限，**不要复用其它业务已有的数据库账号** | 数据库含任务的 `token`/`finalizeToken` 等敏感字段；本机文件系统时代靠「目录仅 Go 进程可读写」隔离，迁到外部服务后隔离手段变成账号粒度——权限过宽的账号一旦泄露或被其它服务误用，暴露面从「这台主机」扩大到「整个 PostgreSQL 实例上的其它库」 |
+| `/var/lib/lober/log/` | 仅 Go 进程所属用户可读写 | 日志正文可能含安装期敏感信息（如 kickstart 渲染失败时的参数回显），与数据库敏感字段同等对待 |
 | `/srv/lober/`（`artifacts/`、`repo/`） | Go 进程所属用户可写（导入/注册时落盘），nginx worker 用户需可读 | nginx 按 SPEC §1.4 直接 `alias` 发盘（不经 Go 反代），worker 进程必须有读权限；反之 nginx worker **不需要写权限**——制品是只读服务的静态文件，让 nginx 有写权限没有任何功能收益，反而扩大攻击面（若 nginx 存在漏洞被利用，写权限意味着可以篡改制品内容影响所有后续装机） |
 
 **部署期核对项（不做运行期检测）：** Go 进程与 nginx worker 若以不同系统

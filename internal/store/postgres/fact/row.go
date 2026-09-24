@@ -1,5 +1,5 @@
 // 本文件定义 task_facts 表的 GORM 行结构体，对应实现计划任务 7 后半段，
-// 依据 SPEC §5.5、schema/001_init.sql 的 task_facts 表。
+// 依据 SPEC §5.5、schema/001_init.sql（已移除） 的 task_facts 表。
 //
 // facts 是纯粹的 (task_id, key) -> value KV 存储，不对应 model 包里的
 // 具名类型（见 internal/core/model/facts.go 文件头注释：该文件只定义

@@ -13,7 +13,7 @@ import (
 )
 
 // hookRow 是 hooks 表的行结构体，字段与列一一对应旧 schema
-// （internal/store/sqlite/schema/001_init.sql 的 hooks 表）。
+// （internal/store/sqlite/schema/001_init.sql（已移除）的 hooks 表）。
 type hookRow struct {
 	ID      string `gorm:"column:id;primaryKey"`
 	Version int    `gorm:"column:version;primaryKey"`

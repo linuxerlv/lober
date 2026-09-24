@@ -1,6 +1,6 @@
 // 本文件实现 contract.AuditStore：人面操作审计记录的落库与查询，对应
 // 实现计划任务 8 的 audit 三分之一。语义抄自旧实现
-// internal/store/sqlite/audit.go，接口签名抄自
+// internal/store/sqlite/audit.go（已移除），接口签名抄自
 // internal/core/contract/store.go 的 AuditStore。
 package audit
 
@@ -49,7 +49,7 @@ func (s *Store) AppendAudit(ctx context.Context, record contract.AuditRecord) er
 
 // ListAudit 按过滤条件列出审计记录，按 (ts DESC, id DESC) 排序——先按
 // 写入时刻倒序，同一时刻多条记录再按自增 id 倒序（后写入的排前面），
-// 与旧实现 internal/store/sqlite/audit.go 的排序约定一致：时间戳精度是
+// 与旧实现 internal/store/sqlite/audit.go（已移除）的排序约定一致：时间戳精度是
 // 秒，同一秒内并发写入并不罕见，光按 ts 排序在同秒记录之间顺序不确定，
 // 有下游断言依赖"同一秒内后写入的排前面"这一具体顺序。
 //

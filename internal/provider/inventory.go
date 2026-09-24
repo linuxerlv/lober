@@ -31,8 +31,8 @@ type builtinInventory struct {
 // contract.HostStore——依赖窄接口是计划任务 10 对 Store 拆分窄接口族的
 // 同一条设计原则在调用方的体现：本实现只用得到 FindHostByIdentity 一个
 // 方法，没有理由要求调用方传入实现了全部四个 HostStore 方法的对象。
-// contract.HostStore 的具体实现（无论是 fake.Store 还是将来的 SQLite
-// 实现）天然满足 hostLister，调用方直接传即可，不需要额外适配。
+// contract.HostStore 的具体实现（无论是 fake.Store 还是 postgres.Store）
+// 天然满足 hostLister，调用方直接传即可，不需要额外适配。
 func NewBuiltinInventory(hosts hostLister) contract.InventoryProviderV1 {
 	return &builtinInventory{hosts: hosts}
 }

@@ -36,7 +36,7 @@ var heartbeatProbeableStates = []model.TaskState{
 
 // heartbeatTaskLister 是 runHeartbeatLoop 依赖的最窄接口：只需要按状态
 // 列出任务这一个方法（与 scanner.go 的 timeoutScanner 同一种设计——测试
-// 不必搭出整个 Store 实现）。*sqlite.Store 天然满足，contract.Store 组合
+// 不必搭出整个 Store 实现）。*postgres.Store 天然满足，contract.Store 组合
 // 接口的这一个方法即可，装配点直接传 app.Store。
 type heartbeatTaskLister interface {
 	ListTasks(ctx context.Context, filter contract.TaskFilter) ([]model.Task, error)

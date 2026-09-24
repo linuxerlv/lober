@@ -1,5 +1,10 @@
 # PXE 引导实测报告
 
+> **数据层迁移说明**：本文记录的是数据层仍为 SQLite 时的情况，数据层已于
+> 2026-09-24 迁移到 GORM + PostgreSQL（见
+> `docs/superpowers/specs/2026-09-24-gorm-postgres-migration-design.md`），
+> 正文保留当时原貌，未作修改。
+
 验证环境：两台 QEMU（WHPX 加速）虚拟机通过 `-netdev socket` 接成同一个虚拟
 二层网段（`10.20.20.0/24`），不经过 Windows 宿主机的任何桥接。服务端 VM
 是 Debian 13 (trixie)，装 `dnsmasq 2.91`（DHCP/TFTP）与 Debian 官方

@@ -2,10 +2,10 @@
 // 对应实现计划任务 17，依据 SPEC §2.5、§2.6、§2.7、§3.3、§3.4、§3.6、§4.3、
 // §4.4、§4.7、§5.5、§12.8。
 //
-// 存在的唯一理由：M3-M8 六个模块的测试都用它，不需要等 M2 的 SQLite 实现
+// 存在的唯一理由：M3-M8 六个模块的测试都用它，不需要等 M2 的持久化实现
 // 就能开工——这是整个并行方案成立的关键（计划任务 17）。它必须通过
-// internal/core/contract/conformance 的可执行行为契约套件，且在换成 SQLite
-// 实现后，依赖它写的测试行为不应改变。
+// internal/core/contract/conformance 的可执行行为契约套件，且换成
+// internal/store/postgres 实现后，依赖它写的测试行为不应改变。
 //
 // 设计要点（计划任务 17）：
 //   - 所有返回值必须深拷贝：返回内部指针会让一个测试里的修改渗进另一个
@@ -13,11 +13,11 @@
 //   - 身份查找与 partial unique index 的语义要手工模拟：遍历时跳过空键、
 //     只匹配 pending、判重时只看非终态任务——这些在 SQL 里由索引保证，
 //     内存实现要显式写。
-//   - 改运行时字段时若携带状态就返回错误，与将来的 SQLite 实现行为一致。
-//     model.TaskMutation 类型本身不含 State 字段，因此本实现天然不存在
-//     写 state 列的路径，不需要额外的运行期校验。
+//   - 改运行时字段时若携带状态就返回错误，与 internal/store/postgres 实现
+//     行为一致。model.TaskMutation 类型本身不含 State 字段，因此本实现
+//     天然不存在写 state 列的路径，不需要额外的运行期校验。
 //   - 事务运行在内存实现里退化为直接执行（单进程单锁），但仍必须拒绝
-//     嵌套调用，保证行为与真实 SQLite 实现一致。
+//     嵌套调用，保证行为与真实 internal/store/postgres 实现一致。
 //   - 非信号事件用递减的负数序号，与信号的正序号天然不冲突。
 package fake
 
@@ -42,8 +42,9 @@ type Store struct {
 	tasks    map[string]model.Task // key: task id
 	hosts    map[string]model.Host // key: host id（本实现取 SN 非空则用 SN，否则用 MAC，否则用 UUID）
 	artifact map[string]model.ArtifactSet
-	// hooks 以 "id@version" 为主键，与 SQLite 实现的 (id, version) 复合主键
-	// 语义对齐（计划任务 13：hooks 的主键是 (id, version)）。
+	// hooks 以 "id@version" 为主键，与 internal/store/postgres/hook 实现的
+	// (id, version) 复合主键语义对齐（计划任务 13：hooks 的主键是
+	// (id, version)）。
 	hooks map[string]model.Hook
 	// hooksByDigest 是 digest 到 hook 的反查索引，key 为完整 digest 字符串。
 	hooksByDigest map[string]model.Hook
@@ -223,8 +224,8 @@ func copyTaskEvent(e model.TaskEvent) model.TaskEvent {
 }
 
 // hookKey 与 templateKey 构造 hooks/templates map 的复合主键
-// "id@version"，与计划任务 13 的 SQLite schema（hooks 主键 (id, version)）
-// 语义对齐。
+// "id@version"，与计划任务 13 的 schema（hooks 主键 (id, version)，现由
+// internal/store/postgres/hook 的 GORM model tag 定义）语义对齐。
 func hookKey(id string, version int) string {
 	return id + "@" + strconv.Itoa(version)
 }
@@ -271,9 +272,9 @@ func identityMatches(querySN, queryMAC, queryUUID string, candidateSN, candidate
 // 返回 contract.ErrActiveTaskExists（§3.6 的 partial unique index 在应用层
 // 的体现）。
 //
-// 判重只看非终态任务、且只按 HostSN 判重——与 SQLite 实现计划里
-// 「tasks 上按 SN 的 partial unique index，条件是状态不在终态集合内」完全
-// 对齐（计划任务 13）。注意这条判重刻意只比较 HostSN 本身（不经过
+// 判重只看非终态任务、且只按 HostSN 判重——与 internal/store/postgres/task
+// 实现里「tasks 上按 SN 的 partial unique index，条件是状态不在终态集合内」
+// 完全对齐（计划任务 13）。注意这条判重刻意只比较 HostSN 本身（不经过
 // identityMatches 的空键跳过逻辑）：空 SN 的任务之间不应互相冲突（一批
 // SN 留空的白牌机各自建任务时不能被这条唯一性约束互相拦住），这与
 // FindPendingTaskByIdentity 的「空 SN 不匹配」是同一个方向的两种体现——
@@ -456,9 +457,10 @@ func (s *Store) GetTaskByToken(ctx context.Context, token string, purpose model.
 
 	// 过期判据用真实 time.Now()：GetTaskByToken 的签名不接受任何时钟/时间
 	// 参数（见 contract.TaskStore 文档），§4.4 的 TTL 是真实墙钟时间窗口，
-	// 这与将来 SQLite 实现里 `WHERE expires_at > strftime('%s','now')` 的
+	// 这与 internal/store/postgres/task 实现里同样用 `expiresAt <
+	// time.Now().Unix()` 在应用层判断过期（而非交给 SQL 的 WHERE 条件）的
 	// 行为一致——两个实现必须对「过期」给出相同判据，否则 conformance
-	// 机制保证的「内存实现测试换成 SQLite 后行为不变」就是空话。
+	// 机制保证的「内存实现测试换成 PostgreSQL 实现后行为不变」就是空话。
 	//
 	// conformance 套件的 fixedNow 已改为在套件加载时锚定真实 time.Now()
 	// （见 conformance/store.go），不再是编译期硬编码的历史常量，因此不会
@@ -980,10 +982,10 @@ func (s *Store) ListAudit(ctx context.Context, filter contract.AuditFilter) ([]c
 	// 按 TS 倒序：最新的在前（§9.4 的审计用途是事后追责）。out 此时已经是
 	// 反向写入顺序（见上面的反向遍历），sort.SliceStable 只按 TS 比较、
 	// 对相等的元素保持 out 当前的相对顺序不变——两者合起来，同一时刻多条
-	// 记录之间的顺序就是「后写入的排前面」，与 SQLite 实现的
-	// "ORDER BY ts DESC, id DESC" 一致（sqlite/audit.go：id 自增，DESC
-	// 即后写入的行排前面）。若改成正向遍历 s.audit 再排序，稳定排序会让
-	// 同一时刻的记录保持「先写入的排前面」，与 SQLite 的行为相反——这正是
+	// 记录之间的顺序就是「后写入的排前面」，与 internal/store/postgres/audit
+	// 实现的 "ORDER BY ts DESC, id DESC" 一致（id 是 bigserial 自增主键，
+	// DESC 即后写入的行排前面）。若改成正向遍历 s.audit 再排序，稳定排序会
+	// 让同一时刻的记录保持「先写入的排前面」，与该实现的行为相反——这正是
 	// 本函数曾经的实现方式，直到一条覆盖同秒多条记录的测试才把它证伪。
 	sort.SliceStable(out, func(i, j int) bool { return out[i].TS > out[j].TS })
 
@@ -999,9 +1001,11 @@ func (s *Store) ListAudit(ctx context.Context, filter contract.AuditFilter) ([]c
 
 // RunInTx 在内存实现里退化为直接执行 fn（单进程单锁，没有中途失败需要
 // 回滚的持久化）。仍必须拒绝嵌套调用（fn 内部再次调用 RunInTx）——真实
-// SQLite 实现下嵌套会在单写者模型上死锁，内存实现必须表现出同样的拒绝
-// 行为，否则依赖它写测试的模块换成 SQLite 后会观察到不同的行为
-// （contract.TxRunner 文档明确要求）。
+// internal/store/postgres 实现下嵌套会静默开出一个独立事务，外层回滚时
+// 内层已经提交，原子性无声失效且不报任何错（比死锁更危险，见
+// internal/store/postgres/tx.go 的文件头注释），内存实现必须表现出同样的
+// 拒绝行为，否则依赖它写测试的模块换成 PostgreSQL 实现后会观察到不同的
+// 行为（contract.TxRunner 文档明确要求）。
 func (s *Store) RunInTx(ctx context.Context, fn func(ctx context.Context, store contract.Store) error) error {
 	s.txMu.Lock()
 	if s.inTx {

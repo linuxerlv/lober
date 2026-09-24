@@ -1,5 +1,10 @@
 # Lober MVP 实现计划索引
 
+> **数据层迁移说明**：本文记录的是数据层仍为 SQLite 时的情况，数据层已于
+> 2026-09-24 迁移到 GORM + PostgreSQL（见
+> `docs/superpowers/specs/2026-09-24-gorm-postgres-migration-design.md`），
+> 正文保留当时原貌，未作修改。
+
 > SPEC `SPEC.md` 0.4 版的 Phase 1 MVP（§11）拆成九份模块计划。每份都能独立开发、独立验证。
 > **执行者请从 `2026-09-20-lober-mvp-01-contracts.md` 开始** —— 它是其余八份的前置。
 

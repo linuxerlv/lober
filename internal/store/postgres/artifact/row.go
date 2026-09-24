@@ -3,7 +3,7 @@
 //
 // 为什么 FailReason 有专属列而不是像旧 SQLite 实现那样塞进 paths_json
 // 信封：旧实现受"schema 是数据契约、本次任务不允许 ALTER TABLE"的约束
-// （见 internal/store/sqlite/artifact.go 文件头），只能把 FailReason 编码
+// （见 internal/store/sqlite/artifact.go（已移除）文件头），只能把 FailReason 编码
 // 进本该只装 ArtifactPaths 的既有列，两个写方法因此都要做
 // read-modify-write。本次迁移的schema真源是 GORM model tag + AutoMigrate
 // （设计文档 §0、§1），不存在"不能加列"的约束，FailReason 直接给一个

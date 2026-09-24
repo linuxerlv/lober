@@ -4,7 +4,7 @@
 // 构造顺序有依赖（计划任务 1「实现流程」）：
 //  1. 建三个存储目录（先建目录再开库——目录不存在时失败点会推迟到第一条
 //     日志写入，那时机器已经在装了）
-//  2. 开 SQLite 并跑迁移
+//  2. 连 PostgreSQL 并跑 AutoMigrate
 //  3. 构造基础件：系统时钟、Store、日志存储、事件总线
 //  4. 构造状态机的四个依赖：token 签发器、precheck 器、日志存储、事件总线
 //  5. 构造渲染器（无依赖，纯函数）
@@ -512,7 +512,7 @@ func buildAppWithDB(cfg *config.Config, db *gorm.DB) (*App, error) {
 	// 第 5 步：构造渲染器（无依赖，纯函数）。
 	renderer := &render.Renderer{}
 
-	// 第 6 步：按配置构造七个 provider。hosts 窄接口由 *sqlite.Store 天然
+	// 第 6 步：按配置构造七个 provider。hosts 窄接口由 *postgres.Store 天然
 	// 满足（它实现了 contract.HostStore，是 provider.hostLister 的超集）。
 	providers, err := provider.NewProviders(cfg.Provider, st)
 	if err != nil {

@@ -1,10 +1,11 @@
 // Package conformance 是 Store 的可执行行为契约（对应实现计划任务 16）。
 //
 // 它是库代码，不是 _test.go——要能被 internal/core/fake 与
-// internal/store/sqlite 两个实现包的测试 import，所以必须独立编译。导出的
-// RunConformanceSuite 接收一个「造一个空 Store」的工厂函数与 *testing.T，
-// 内部用 t.Run 跑全部子测试。内存实现与 SQLite 实现跑同一套断言——于是
-// 并行模块用内存实现写的测试，在换成 SQLite 后行为不会变。
+// internal/store/postgres 两个实现包的测试 import，所以必须独立编译。导出
+// 的 RunConformanceSuite 接收一个「造一个空 Store」的工厂函数与
+// *testing.T，内部用 t.Run 跑全部子测试。内存实现与 PostgreSQL 实现跑同
+// 一套断言——于是并行模块用内存实现写的测试，在换成 PostgreSQL 后行为
+// 不会变。
 //
 // 依据 SPEC §2.5、§2.6、§2.7、§3.3、§3.4、§3.6、§4.3、§4.4、§4.7、§5.5、
 // §12.8。
@@ -32,9 +33,10 @@ import (
 // 可重复」的真实意图。
 //
 // 不能是编译期硬编码的历史常量：contract.Store.GetTaskByToken 的签名不
-// 接受时钟参数（见 store.go 接口文档），任何实现（fake 或未来的 SQLite）
-// 判断 token 是否过期时只能读真实 time.Now()。若 fixedNow 固定在过去某个
-// 具体时刻，「未过期」用例构造出的 expiresAt = fixedNow+90min 会随套件
+// 接受时钟参数（见 store.go 接口文档），任何实现（fake 或
+// internal/store/postgres）判断 token 是否过期时只能读真实 time.Now()。
+// 若 fixedNow 固定在过去某个具体时刻，「未过期」用例构造出的
+// expiresAt = fixedNow+90min 会随套件
 // 运行日期后移而不断远离真实现在，最终变成过去时刻，被判定为「已过期」
 // ——这不是被测代码的 bug，是共享测试夹具的时间基准与被测实现的真实时钟
 // 之间存在漂移。用 var（而非 const）初始化为 time.Now().Unix()：每次运行
@@ -49,7 +51,7 @@ var fixedNow = time.Now().Unix()
 //
 //	func TestConformance(t *testing.T) {
 //	    conformance.RunConformanceSuite(t, func() contract.Store {
-//	        return fake.NewStore() // 或 sqlite 实现的等价构造函数
+//	        return fake.NewStore() // 或 postgres 实现的等价构造函数
 //	    })
 //	}
 func RunConformanceSuite(t *testing.T, newStore func() contract.Store) {
@@ -1170,16 +1172,17 @@ func testAuditOrderedDescendingWithLimit(t *testing.T, newStore func() contract.
 
 // testAuditSameTimestampOrderedByInsertionDesc 验证同一时刻（TS 相等）
 // 写入的多条记录之间的顺序：必须是「后写入的排前面」，与
-// SQLite 实现文档写明的 "ORDER BY ts DESC, id DESC" 语义一致（id 自增，
-// DESC 即后写入的行排前面）。
+// internal/store/postgres/audit 实现的 "ORDER BY ts DESC, id DESC" 语义
+// 一致（id 是 bigserial 自增主键，DESC 即后写入的行排前面；旧 SQLite 实现
+// （已移除）当年同样是这个语义）。
 //
 // 这条断言存在的理由：时间戳精度是秒，同一秒内并发写入并不罕见（审计
 // 中间件与 handler 内部的额外一条 Log 调用，见 hook.go
 // handleRejectHook，可能落在同一秒）。此前 fake 实现用
 // sort.SliceStable 只比较 TS，对相等的元素保持切片原有顺序（先写入的
-// 排前面），与 SQLite 的实际行为相反——但 testAuditOrderedDescendingWithLimit
-// 只覆盖了三个不同 TS 的场景，从未触发这条分叉，直到本次核对独立复现
-// 才发现。
+// 排前面），与「后写入排前面」的实际行为相反——但
+// testAuditOrderedDescendingWithLimit 只覆盖了三个不同 TS 的场景，从未
+// 触发这条分叉，直到本次核对独立复现才发现。
 func testAuditSameTimestampOrderedByInsertionDesc(t *testing.T, newStore func() contract.Store) {
 	ctx := context.Background()
 	store := newStore()
@@ -1207,8 +1210,8 @@ func testAuditSameTimestampOrderedByInsertionDesc(t *testing.T, newStore func() 
 	for i, want := range wantOrder {
 		if got[i].Actor != want {
 			t.Errorf("同一时刻多条记录，第 %d 条 Actor = %q, want %q —— "+
-				"同一秒内后写入的记录应排在前面（与 SQLite 的 id DESC 一致），"+
-				"顺序错了会让运维在并发驳回场景下看到过时的记录排在最前",
+				"同一秒内后写入的记录应排在前面（与 internal/store/postgres/audit 的 "+
+				"id DESC 一致），顺序错了会让运维在并发驳回场景下看到过时的记录排在最前",
 				i, got[i].Actor, want)
 		}
 	}

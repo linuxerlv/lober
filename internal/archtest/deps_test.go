@@ -96,7 +96,7 @@ func repoRoot(t *testing.T) string {
 // internalImports 从三种 import 列表里筛出「项目内」的那部分（以 modulePath
 // 为前缀），去重后按字典序排列。
 //
-// 只看项目内 import：标准库与第三方依赖（modernc.org/sqlite、go-cmp 等）
+// 只看项目内 import：标准库与第三方依赖（gorm.io/gorm、go-cmp 等）
 // 不受本守卫约束，混进结果只会让断言失败信息淹没在噪声里。
 func internalImports(p pkgInfo) []string {
 	seen := make(map[string]bool)
@@ -218,7 +218,7 @@ func equalStrings(a, b []string) bool {
 // ---------------------------------------------------------------------------
 
 // moduleGroups 是「模块名 → 该模块下所有包路径前缀」的白名单，对应实现
-// 计划索引文档「模块清单」表里 M2-M8 七个包路径列（store/sqlite、
+// 计划索引文档「模块清单」表里 M2-M8 七个包路径列（store/postgres、
 // statemachine、render、gateway、console、provider、imports）。
 //
 // 之所以是「模块名 → 多个前缀」而不是「包路径 → 模块名」的反向映射：

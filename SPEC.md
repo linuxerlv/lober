@@ -7,6 +7,11 @@
 | 状态 | 待评审 |
 | 目标环境 | 裸金属数据中心，内网完全离线（air-gapped） |
 
+> **0.5 修订**（数据层落地情况，非设计变更）：**数据库已从 §1.1／§11 设想的
+> 「SQLite（MVP）→ PostgreSQL」直接落地为 PostgreSQL + GORM**，未经过 SQLite
+> 这一中间阶段——§1.1 组件表与 §11 Phase 1 范围表中的「数据库」行按此更新，
+> 仅更正与实现不符的技术选型描述，不改变本节所处的设计层论证。
+>
 > **0.4 修订**（删除 armed，评审时重点看）：**`armed` 状态与 arm / disarm 动作整体删除** —— 建任务即授权，`pending` 任务直接接受引导请求（§3.2）。范围明确为 **`booting` 到 `done`**（§0.1）。`/v1/boot` 查不到任务时返回 `no_task`，不建任务、不记状态、不告警（§4.2）。连带改动：§9.1 四道闸门变三道、§8.2 删两个端点、§12.5 删 `task:arm` 权限码并把确认要求搬到建任务表单、§11 Phase 1 状态机列表、附录 C 换词条。
 >
 > 评审时请特别看 **§3.2 末段的残留风险**与 **§10 新增的失败模式 2b**：删掉 armed 把防误装全部压到「建任务时选对机器」这一个点上，因此 §4.3 的「SN 从清单选取 + MAC 双因子」由建议升为硬要求。
@@ -101,7 +106,7 @@
 | Go 网关 | 引导决策、应答文件渲染、信号接收、状态机 | 是 |
 | Go 控制台 | 清单、模板、hook、ISO、任务管理，SSE 日志流 | 是 |
 | 控制台 WebUI | 人面界面，vue-vben-admin 5.x 的 `apps/web-ele`（Element Plus）精简后内嵌进 Go 二进制 | 是（见 §12） |
-| 数据库 | 清单、状态、事件、审计 | SQLite（MVP）→ PostgreSQL |
+| 数据库 | 清单、状态、事件、审计 | PostgreSQL（GORM + AutoMigrate，见 0.5 修订） |
 
 网关与控制台是**同一个二进制的两个 listener**，不是两个进程。理由：状态机必须有唯一所有者，两个进程会立即撞上状态转换竞态与 reconcile 循环重复执行。代码层面按 `internal/gateway` 和 `internal/console` 分包，进程层面不分。
 
@@ -1457,7 +1462,7 @@ cosign 的 keyless 模式依赖 Fulcio（需外网 OIDC）与 Rekor（透明日�
 | DHCP | dnsmasq 静态配置，TFTP + BIOS/UEFI PXE 两条路径；option 93 映射按 §1.3 全配（含 7/9 双值与未知架构不兜底）。**一次性部署动作，属范围外（§0.1）** —— 现场逐架构实测一遍即固定，不进 CI、不做运行期检测 |
 | nginx | 制品静态服务 + API 反代，两个 server 块绑具体 IP |
 | Go | 单二进制两 listener，绑 127.0.0.1 |
-| 数据库 | SQLite |
+| 数据库 | PostgreSQL（实际落地未经过 SQLite 阶段，见 0.5 修订） |
 | OS | 单一发行版（建议 Rocky 9），安装器驱动 + kickstart |
 | 状态机 | `pending → booting → installing → rebooting → initializing → done` + failed。**无 armed**（§3.2）；`/v1/boot` 查不到任务返回 `no_task`（§4.2） |
 | 引导校验 | §4.6 的 arch / 固件模式 / 制品完整性三项硬拒绝。**单 OS 阶段就要做** —— 它属于安全闸门（§10 失败模式 4b），不是多 OS 才需要的功能 |

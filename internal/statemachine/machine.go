@@ -89,8 +89,9 @@ func New(
 //
 // taskLocks 是一个只增不减的 map：本模块的任务数量在单个进程生命周期内
 // 是有限的（不是无界生成的临时 key），不会造成内存泄漏意义上的问题；
-// 与 SQLite 版正式实现的行为差异（真正的跨进程 CAS）在契约缺口里已经
-// 说明。
+// 与持久化 Store 正式实现（当时是 SQLite 版，现已换成
+// internal/store/postgres）的行为差异（真正的跨进程 CAS）在契约缺口里
+// 已经说明。
 func (m *Machine) lockTask(taskID string) *sync.Mutex {
 	m.taskLocksMu.Lock()
 	defer m.taskLocksMu.Unlock()

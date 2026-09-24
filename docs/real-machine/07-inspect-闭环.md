@@ -1,5 +1,10 @@
 # 07 inspect 硬件采集接线：让服务端决策真的用上采集数据
 
+> **数据层迁移说明**：本文记录的是数据层仍为 SQLite 时的情况，数据层已于
+> 2026-09-24 迁移到 GORM + PostgreSQL（见
+> `docs/superpowers/specs/2026-09-24-gorm-postgres-migration-design.md`），
+> 正文保留当时原貌，未作修改。
+
 > 本文档记录 P2-02（t12-inspect-wire 轨）的接线修复：`render/inspect.go`
 > 渲染的采集脚本上报的 facts，从"格式对得上但没人读"到"真的驱动磁盘/网卡
 > 决策，决策结果真的写进最终应答文件"。

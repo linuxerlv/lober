@@ -1,5 +1,10 @@
 # Windows 家族端到端验证报告
 
+> **数据层迁移说明**：本文记录的是数据层仍为 SQLite 时的情况，数据层已于
+> 2026-09-24 迁移到 GORM + PostgreSQL（见
+> `docs/superpowers/specs/2026-09-24-gorm-postgres-migration-design.md`），
+> 正文保留当时原貌，未作修改。
+
 验证方式：`scripts/e2e-windows.sh`（照 `scripts/e2e.sh` RHEL 基线的九阶段
 结构编写，本报告只是把该脚本的运行结果与发现整理成可读文档，不重复脚本内
 已有的详细注释）。本轮**不是真机 PXE 测试**（不同于

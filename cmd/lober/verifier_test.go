@@ -16,7 +16,7 @@ import (
 
 // fakeVerifierStore 是 artifactVerifierStore 的可控测试替身：内存里存一
 // 份制品集记录，记录每次 UpdateArtifactSetState 调用的参数——不需要真的
-// 搭 sqlite.Store 或 fake.Store 的完整 contract.ArtifactSetStore（那要求
+// 搭 postgres.Store 或 fake.Store 的完整 contract.ArtifactSetStore（那要求
 // 实现七个本类型完全不需要的方法）。
 type fakeVerifierStore struct {
 	mu sync.Mutex
