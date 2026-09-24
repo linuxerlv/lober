@@ -47,7 +47,24 @@ type Config struct {
 	// 权限的操作，静默创建会掩盖「schema 名拼错」这类配置错误（症状会变成
 	// 「库突然是空的」而不是一句明确的报错）。
 	SearchPath string
+
+	// MaxOpenConns 是连接池上限，零值取 defaultMaxOpenConns（25）。
+	//
+	// 生产环境用默认值即可。需要显式压小的场景是测试：go test 按 CPU 核数
+	// 并行跑包，cmd/lober 有 5 个用例各走一次完整的 Open，若每次都按 25 开池，
+	// 单这一个包的峰值就是 125 条连接，超过 PostgreSQL 默认的 max_connections
+	// （100，其中 3 个还留给超级用户）——实测表现为 SQLSTATE 53300，且每次
+	// 失败的包都不一样，看起来像随机故障而不是资源耗尽。
+	//
+	// 做成配置项而不是在测试里改全局默认值：并行测试之间没有「当前值」这个
+	// 共享概念，改全局会让两个包互相覆盖。
+	MaxOpenConns int
 }
+
+// defaultMaxOpenConns 是连接池上限的默认值。取 25 是个保守选择：设计文档
+// §12「真并发首次出现」只说明了池子放开后的后果，没有定具体上限；生产环境
+// 需要调整时应当从 config 提上来，本包只负责给一个不至于把库打满的默认值。
+const defaultMaxOpenConns = 25
 
 // dsn 把 Config 拼接成 gorm.io/driver/postgres 接受的连接串。
 func (c Config) dsn() string {
@@ -99,12 +116,19 @@ func Open(cfg Config) (*gorm.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("postgres.Open: 取底层 *sql.DB 失败: %w", err)
 	}
-	const (
-		maxOpenConns = 25
-		maxIdleConns = 5
-	)
-	sqlDB.SetMaxOpenConns(maxOpenConns)
-	sqlDB.SetMaxIdleConns(maxIdleConns)
+	maxOpen := cfg.MaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = defaultMaxOpenConns
+	}
+	// 空闲连接数取上限的五分之一但至少 1：空闲池大于上限没有意义，而 0 会让
+	// 每次查询都重新建连接（TCP 握手 + PG 的认证往返），在超时扫描这种周期
+	// 性轮询的场景下是纯粹的浪费。
+	maxIdle := maxOpen / 5
+	if maxIdle < 1 {
+		maxIdle = 1
+	}
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetMaxIdleConns(maxIdle)
 
 	if err := db.AutoMigrate(AllModels()...); err != nil {
 		return nil, fmt.Errorf("postgres.Open: AutoMigrate 失败: %w", err)

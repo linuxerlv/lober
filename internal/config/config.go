@@ -251,6 +251,12 @@ type Postgres struct {
 	// 一个 schema 比各自一个 database 更容易做备份与权限。注意 lober
 	// 不会自动创建这个 schema，需要预先建好。
 	SearchPath string `yaml:"search_path"`
+
+	// MaxOpenConns 是连接池上限，留空（零值）取实现侧的默认值 25。
+	// 同一个 PG 实例上跑多套 lober、或该实例的 max_connections 被调小时，
+	// 需要显式压低这个值，否则多套实例的池子加起来会打满连接槽。
+	// 不参与非空校验：零值是合法的「用默认值」。
+	MaxOpenConns int `yaml:"max_open_conns"`
 }
 
 // Scan 是超时扫描循环的配置。字段包含 Phase 4 新增的两组运维开关：并发

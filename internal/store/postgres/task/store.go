@@ -104,9 +104,38 @@ func (s *Store) ListTasks(ctx context.Context, filter contract.TaskFilter) ([]mo
 	if filter.HostSN != "" {
 		q = q.Where("host_sn = ?", filter.HostSN)
 	}
+	// 失败原因过滤是失败分布报表「下钻」那一步的支撑（P4-04 任务 3）。
+	if filter.FailureReason != "" {
+		q = q.Where("failure_reason = ?", filter.FailureReason)
+	}
+	// 创建时间是**闭区间**，与 audit 的 ts 区间语义一致——两处是运维在两个
+	// 界面上看同一个时间窗口，包含性不同会让边界记录在一处出现、另一处消失
+	// （contract.TaskFilter 的字段文档说明了为什么必须相同）。
+	//
+	// 必须先转成 time.Time 再进 WHERE：created_at 是 timestamptz 列（设计
+	// 文档 §5 的类型映射），而 filter 里是 Unix 秒。直接把 int64 交给 pgx
+	// 会报「unable to encode 1790245501 into binary format for timestamptz
+	// (OID 1184): cannot find encode plan」——pgx 不做这个隐式转换，也不该做。
+	// 上面三个条件之所以不需要转，是因为 state/host_sn/failure_reason 都是
+	// TEXT 列。用 .UTC() 与写入侧保持同一时区约定（Unix 秒本身无时区，
+	// timestamptz 存绝对时刻，往返不丢信息）。
+	if filter.CreatedSinceTS != 0 {
+		q = q.Where("created_at >= ?", time.Unix(filter.CreatedSinceTS, 0).UTC())
+	}
+	if filter.CreatedUntilTS != 0 {
+		q = q.Where("created_at <= ?", time.Unix(filter.CreatedUntilTS, 0).UTC())
+	}
+
+	// Limit 零值取 M1 的默认上限（保持本方法一直以来的行为）；显式传入的
+	// 值原样生效，允许超过 1000——CSV 导出需要一次取远超 1000 行，那是调用
+	// 方知情的选择（contract.TaskFilter.Limit 文档）。
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = defaultLimit
+	}
 
 	var rows []taskRow
-	if err := q.Order("created_at DESC, id DESC").Limit(defaultLimit).Find(&rows).Error; err != nil {
+	if err := q.Order("created_at DESC, id DESC").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, pgerr.Translate(err, "ListTasks")
 	}
 

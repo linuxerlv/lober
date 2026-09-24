@@ -452,13 +452,14 @@ func buildApp(cfg *config.Config) (*App, error) {
 // 装配点做一次显式翻译是这个项目里 contract 层之外的一贯做法。
 func pgConfig(c config.Postgres) postgres.Config {
 	return postgres.Config{
-		Host:       c.Host,
-		Port:       c.Port,
-		User:       c.User,
-		Password:   c.Password,
-		DBName:     c.DBName,
-		SSLMode:    c.SSLMode,
-		SearchPath: c.SearchPath,
+		Host:         c.Host,
+		Port:         c.Port,
+		User:         c.User,
+		Password:     c.Password,
+		DBName:       c.DBName,
+		SSLMode:      c.SSLMode,
+		SearchPath:   c.SearchPath,
+		MaxOpenConns: c.MaxOpenConns,
 	}
 }
 

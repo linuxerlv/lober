@@ -124,6 +124,23 @@ func NewDB(t *testing.T, models ...any) *gorm.DB {
 		t.Fatalf("连接 PostgreSQL 失败（DSN 取自环境变量 %s）: %v —— "+
 			"请确认目标实例可达、DSN 格式正确", dsnEnvVar, err)
 	}
+	// adminDB 的池上限必须压到 1，理由是连接总量而不是 search_path。
+	//
+	// go test 默认按 CPU 核数并行跑包（本项目有 9 个包在用这个夹具），每个
+	// 包内的用例又各自调一次 NewDB。GORM 默认不限池上限，adminDB 会随查询
+	// 长出多条连接，于是并行峰值轻易超过 PostgreSQL 的 max_connections
+	// （默认 100，其中 3 个还留给超级用户）——实测表现为
+	// `SQLSTATE 53300: remaining connection slots are reserved for roles
+	// with the SUPERUSER attribute`，且失败的包每次都不一样，看起来像随机
+	// 故障而不是资源耗尽。
+	//
+	// adminDB 只跑 CREATE SCHEMA 与 DROP SCHEMA 两条语句，一条连接绰绰有余。
+	// 下面那个 dbWithSchema 同样限 1（但那是为了 search_path 不漂移，理由
+	// 不同，见该处注释）。
+	if adminSQL, sqlErr := adminDB.DB(); sqlErr == nil {
+		adminSQL.SetMaxOpenConns(1)
+		adminSQL.SetMaxIdleConns(1)
+	}
 
 	schemaName := newSchemaName(t)
 	if err := adminDB.Exec(fmt.Sprintf(`CREATE SCHEMA "%s"`, schemaName)).Error; err != nil {
@@ -211,6 +228,12 @@ func NewSchema(t *testing.T) (dsn, schema string) {
 	if err != nil {
 		t.Fatalf("连接 PostgreSQL 失败（DSN 取自环境变量 %s）: %v —— "+
 			"请确认目标实例可达、DSN 格式正确", dsnEnvVar, err)
+	}
+	// 池上限压到 1，理由与 NewDB 里的 adminDB 完全相同（并行测试的连接
+	// 总量会打满 max_connections，见那处的长注释）。
+	if adminSQL, sqlErr := adminDB.DB(); sqlErr == nil {
+		adminSQL.SetMaxOpenConns(1)
+		adminSQL.SetMaxIdleConns(1)
 	}
 
 	schema = newSchemaName(t)

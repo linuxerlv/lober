@@ -66,6 +66,12 @@ func testPostgres(t *testing.T) config.Postgres {
 		DBName:     strings.TrimPrefix(u.Path, "/"),
 		SSLMode:    sslMode,
 		SearchPath: schema,
+		// 池上限压到 2：本文件有 5 个用例各走一次完整的 buildApp（含
+		// postgres.Open），若用生产默认值 25，单这一个包的峰值就是 125 条
+		// 连接，超过 PostgreSQL 默认的 max_connections（100）—— 实测报
+		// SQLSTATE 53300，且并行下每次失败的包都不一样。
+		// 装配点测试只验「接缝接上了」，不压并发，2 条足够。
+		MaxOpenConns: 2,
 	}
 }
 

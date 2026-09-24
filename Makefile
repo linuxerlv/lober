@@ -13,7 +13,7 @@
 # check 目标串起格式化检查、vet、两轮测试——每个任务的最后一步都应该跑它，
 # 是 M1 收口验收清单里「make check 全绿」这一条的唯一入口。
 
-.PHONY: build test race vet fmt check
+.PHONY: build test race vet fmt check openapi
 
 # build 编译全部包，只为验证「能编译」，不产出可执行文件路径（cmd/lober
 # 还未创建；等 M9 装配完成后可以在这里加 -o 指定输出路径，但那是 M9 的
@@ -56,3 +56,32 @@ fmt:
 # Make 会立即停止并保留清晰的「哪个目标失败」信息，比一整行命令失败后
 # 只看到最后一条错误更容易定位。
 check: fmt vet test race
+
+# openapi 用 swag（github.com/swaggo/swag，注解式 OpenAPI/Swagger 生成器）
+# 解析 internal/console 下全部 handler 文件顶部的 @Summary/@Router 等注释，
+# 产出 docs/openapi/{docs.go,swagger.json,swagger.yaml}。用 `go run
+# module@version` 而不是要求开发者提前 `go install` 一个全局二进制——与
+# 本文件其余目标一致的既有偏好（build/test/vet 都是直接调用 go 自带命令，
+# 不依赖任何预装的第三方 CLI），版本号锁定 v1.16.6 避免「本机装的 swag
+# 版本」与「生成结果」不一致。
+#
+# 不放进 check 依赖链：check 是每次改动后都要跑的日常验证，但 OpenAPI
+# 文档只在 handler 的注解变化时才需要重新生成，且 swag init 需要网络
+# 拉取模块（首次运行未命中本地缓存时）——把它塞进 check 会让日常开发的
+# 反馈循环多一个不必要的、可能因网络问题失败的环节。
+openapi:
+	go run github.com/swaggo/swag/cmd/swag@v1.16.6 init \
+		--generalInfo openapi.go \
+		--dir internal/console \
+		--output docs/openapi \
+		--outputTypes go,json,yaml \
+		--packageName openapi
+
+# 本文件刻意没有 gen 目标：曾评估过 gorm.io/gen 的类型安全 DAO，实测后放弃。
+# 理由不是「用不惯」而是结构性的：gen 的生成产物在**运行时** import
+# gorm.io/gen，而 gen → gorm.io/datatypes → gorm.io/driver/mysql，于是
+# MySQL 驱动与整个代码生成器（parser/template/generate）会被链进生产二进制
+# ——一个 PostgreSQL 专用的装机系统里塞进 MySQL 驱动是纯粹的膨胀。
+# 代价还不止依赖：task 聚合从 486 行变成 1193 行（多出 585 行生成代码 +
+# 包结构从 2 个文件散成 4 处），换来的只是字段名的编译期检查，而 gen 本身
+# 仍是 0.x。手写 GORM 链式调用配合 conformance 套件已经够用。
