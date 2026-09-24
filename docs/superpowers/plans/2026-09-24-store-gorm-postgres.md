@@ -58,6 +58,8 @@ internal/store/postgres/
 - 修改：`go.mod` —— 加三个直接依赖，暂不删 modernc.org/sqlite（旧包还在跑，任务 12 才删）
 - 创建：`internal/store/postgres/testdb_test.go` —— 测试夹具，仅测试可见
 
+**前提：** `gorm.io/gorm v1.31.2` 已经是直接依赖，靠 `internal/deps/deps.go` 的空白 import 锚定（打了 `//go:build tools` tag，不参与常规编译）。本任务只需补 `gorm.io/driver/postgres@v1.6.3` 与 `github.com/jackc/pgx/v5@v5.11.0`。
+
 **接口契约：**
 
 ```go
@@ -71,7 +73,7 @@ func newTestDB(t *testing.T) *gorm.DB
 
 - [ ] **红：** 写一个只调用 `newTestDB` 并查 `current_schema()` 的测试，断言返回的 schema 名是刚建的那个（证明 `search_path` 真的生效，而不是静默落在 public 上 —— 落在 public 会让所有测试共享一张表，隔离失效且症状是随机失败）。运行 `/d/golang/bin/go test ./internal/store/postgres/ -run TestTestDB -v`，预期 FAIL（包不存在）。
 
-- [ ] **绿：** `/d/golang/bin/go get gorm.io/gorm@v1.31.2 gorm.io/driver/postgres@v1.6.3 github.com/jackc/pgx/v5@v5.11.0` 后实现夹具。预期 1 passed。再故意 unset `LOBER_TEST_PG_DSN` 跑一次，确认是 FAIL 而不是 SKIP。
+- [ ] **绿：** `/d/golang/bin/go get gorm.io/driver/postgres@v1.6.3 github.com/jackc/pgx/v5@v5.11.0` 后实现夹具。预期 1 passed。再故意 unset `LOBER_TEST_PG_DSN` 跑一次，确认是 FAIL 而不是 SKIP。
 
 - [ ] **重构 + commit：** `/d/golang/bin/go build ./... && /d/golang/bin/go vet ./...` 通过后 commit（`test(store): PG 测试夹具，每测试独立 schema`）。
 
@@ -401,6 +403,7 @@ func TestConformance(t *testing.T)   // 调 conformance.RunConformanceSuite
 - 修改：`cmd/lober/wire_test.go:528` —— 内存 SQLite 换成测试 schema
 - 修改：`deploy/lober.yaml.example:176` —— db_path 换成 postgres 段
 - 删除：`internal/store/sqlite/` 整个目录（21 个 Go 文件 + `schema/001_init.sql`）
+- 修改：`internal/deps/deps.go` —— 删掉 gorm 的空白 import（真实代码已 import，锚点不再需要）；**保留 gin 那一行**，HTTP 层迁移不在本计划范围内，整个文件与目录留给那件事收尾时删
 - 修改：`go.mod` / `go.sum` —— 删 modernc 系
 
 **接口契约：**
@@ -462,6 +465,7 @@ type Postgres struct {
 - [ ] `internal/store/postgres` 的 conformance 套件子测试数量与 `internal/core/fake` 跑出的一致
 - [ ] `grep -rn "store/sqlite" --include=*.go .` 无结果
 - [ ] `grep -rn "modernc" go.mod` 无结果
+- [ ] `grep -n "gorm" internal/deps/deps.go` 无结果，但 gin 那一行还在（gorm 锚点已由真实 import 取代，gin 的留给 HTTP 层迁移）
 - [ ] `grep -rniE "SELECT |INSERT INTO|UPDATE .* SET|DELETE FROM" internal/store/postgres/ --include=*.go` 只剩 `Where` 条件片段与 `pg_indexes` 校验查询，无拼接式的数据操作 SQL
 - [ ] 手工验证索引未退化：连到一个刚 `Open` 过的库，`SELECT indexdef FROM pg_indexes WHERE tablename IN ('tasks','task_events')`，肉眼确认四个唯一索引的 WHERE 与设计文档 §6 的表一致
 - [ ] 手工验证「装完的机器能重装」：建任务 → CAS 到 done → 同 SN 再建任务，第二次必须成功。这是 partial index 生效的端到端证据，也是索引退化后唯一的业务症状
