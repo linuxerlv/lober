@@ -91,6 +91,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# 数据库辅助库：连接参数、schema 隔离、制品集/模板的状态推进。
+# 见 scripts/e2e/lib-db.sh 的文件头：数据层迁到 PostgreSQL 之后，连接方式、
+# schema 隔离与「paths_json 拆成四列」这三处变化收在那一份库里，不逐脚本重复。
+. "${SCRIPT_DIR}/e2e/lib-db.sh"
+db_require
+
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/lober-e2e-suse.XXXXXX")"
 
 to_win_path() {
@@ -102,7 +108,6 @@ to_win_path() {
 }
 
 WORKDIR_WIN="$(to_win_path "${WORKDIR}")"
-DB_PATH="${WORKDIR_WIN}/db/lober.db"
 ARTIFACT_ROOT="${WORKDIR_WIN}/artifacts"
 LOG_ROOT="${WORKDIR_WIN}/log"
 CONFIG_PATH="${WORKDIR_WIN}/lober.yaml"
@@ -125,6 +130,7 @@ cleanup() {
 		wait "${SERVER_PID}" 2>/dev/null || true
 	fi
 	rm -rf "${WORKDIR}"
+	db_schema_drop
 	exit "${exit_code}"
 }
 trap cleanup EXIT INT TERM
@@ -168,7 +174,11 @@ echo "工作目录: ${WORKDIR}"
 # 阶段 1：造假 SUSE ISO 内容树、二进制、admin 用户、配置
 # ---------------------------------------------------------------------------
 
-mkdir -p "${WORKDIR_WIN}/db" "${ARTIFACT_ROOT}" "${LOG_ROOT}"
+mkdir -p "${ARTIFACT_ROOT}" "${LOG_ROOT}"
+
+# 本次运行专用的 schema，必须在服务启动之前建好——服务起来时 AutoMigrate 会在
+# search_path 指向的 schema 里建表，schema 不存在时启动直接失败。
+db_schema_create
 
 ARTIFACT_SET_ID="e2e-suse-leap156-x86_64"
 bash "${SCRIPT_DIR}/e2e/mkfixture-suse.sh" "${ARTIFACT_ROOT}" "${ARTIFACT_SET_ID}"
@@ -193,10 +203,7 @@ gateway:
 console:
   listen: "127.0.0.1:${CONSOLE_PORT}"
   token_secret: "e2e-suse-test-secret"
-store:
-  db_path: "${DB_PATH}"
-  artifact_path: "${ARTIFACT_ROOT}"
-  log_path: "${LOG_ROOT}"
+$(db_config_fragment "${ARTIFACT_ROOT}" "${LOG_ROOT}")
 scan:
   interval: "2s"
 auth:
@@ -274,7 +281,7 @@ CREATED_ARTIFACT_ID="$(json_field "${ARTIFACT_CREATE_RESP}" "id")"
 IMPORT_STATE_AFTER_WAIT=""
 for _ in 1 2 3 4 5 6 7 8; do
 	sleep 0.5
-	IMPORT_STATE_AFTER_WAIT="$(sqlite3 "${DB_PATH}" "SELECT state FROM artifact_sets WHERE id='${CREATED_ARTIFACT_ID}';")"
+	IMPORT_STATE_AFTER_WAIT="$(db_value "SELECT state FROM artifact_sets WHERE id='${CREATED_ARTIFACT_ID}';")"
 	[ "${IMPORT_STATE_AFTER_WAIT}" != "importing" ] && break
 done
 echo "真实导入路径观测：等待 4 秒后状态=${IMPORT_STATE_AFTER_WAIT}" >&2
@@ -285,7 +292,7 @@ if [ "${IMPORT_STATE_AFTER_WAIT}" = "ready" ]; then
 	echo "沿用这条真实产出的制品集继续后续阶段。" >&2
 	DEST_DIR="${ARTIFACT_ROOT}/${CREATED_ARTIFACT_ID}"
 elif [ "${IMPORT_STATE_AFTER_WAIT}" = "failed" ]; then
-	FAIL_DETAIL="$(sqlite3 "${DB_PATH}" "SELECT failure_detail FROM artifact_sets WHERE id='${CREATED_ARTIFACT_ID}';" 2>/dev/null || echo "(无 failure_detail 字段或查询失败)")"
+	FAIL_DETAIL="$(db_value "SELECT fail_reason FROM artifact_sets WHERE id='${CREATED_ARTIFACT_ID}';" 2>/dev/null || echo "(无 failure_detail 字段或查询失败)")"
 	echo "真实导入路径确认走不通：job 已异步执行并自行判定 failed，详情=${FAIL_DETAIL}" >&2
 	echo "与读代码分析一致（cmd/lober/wire.go 把 extractor 参数传 nil，落到" >&2
 	echo "imports.NewMountExtractor(\"\")，其 Open 方法无条件返回" >&2
@@ -307,13 +314,18 @@ elif [ "${IMPORT_STATE_AFTER_WAIT}" = "failed" ]; then
 	cp -r "${SRC_ISO_DIR}/repodata" "${DEST_DIR}/repo/repodata"
 	cp -r "${SRC_ISO_DIR}/suse" "${DEST_DIR}/repo/suse"
 
-	PATHS_JSON='{"Kernel":"linux","Initrd":["initrd"],"Repo":"repo/","Extra":{}}'
-	sqlite3 "${DB_PATH}" "UPDATE artifact_sets SET state='ready', os_family='suse', os_version='leap15.6', arch='x86_64', firmware='any', paths_json='${PATHS_JSON}' WHERE id='${CREATED_ARTIFACT_ID}';"
+	# 四个路径参数对应 PostgreSQL 侧的四列（paths_kernel / paths_initrd /
+	# paths_repo / paths_extra）。SQLite 时代是一个 paths_json 列装整个
+	# ArtifactPaths 的 JSON，迁移后拆开了——拆列这件事只在 lib-db.sh 的
+	# db_artifact_ready 里落一次。
+	db_artifact_ready "${CREATED_ARTIFACT_ID}" suse leap15.6 x86_64 any \
+		linux '["initrd"]' 'repo/' '{}' \
+		|| fail "阶段4: 制品集未能推进到 ready"
 else
 	fail "阶段4: 真实导入路径的状态既非 ready 也非 failed（当前=${IMPORT_STATE_AFTER_WAIT}），前提判断与实际观测不一致，需要人工复核"
 fi
 
-READY_CHECK="$(sqlite3 "${DB_PATH}" "SELECT state FROM artifact_sets WHERE id='${CREATED_ARTIFACT_ID}';")"
+READY_CHECK="$(db_value "SELECT state FROM artifact_sets WHERE id='${CREATED_ARTIFACT_ID}';")"
 [ "${READY_CHECK}" = "ready" ] || fail "阶段4: 制品集未能推进到 ready（当前=${READY_CHECK}）"
 
 for rel in linux initrd repo/repodata/repomd.xml; do
@@ -326,8 +338,8 @@ TEMPLATE_CREATE_RESP="$(curl -fsS -X POST "${CONSOLE_BASE}/templates" \
 TEMPLATE_ID="$(json_field "${TEMPLATE_CREATE_RESP}" "id")"
 [ -n "${TEMPLATE_ID}" ] || fail "阶段4: 创建模板失败，响应=${TEMPLATE_CREATE_RESP}"
 
-sqlite3 "${DB_PATH}" "UPDATE templates SET state='active' WHERE id='${TEMPLATE_ID}';"
-ACTIVE_CHECK="$(sqlite3 "${DB_PATH}" "SELECT state FROM templates WHERE id='${TEMPLATE_ID}';")"
+db_exec "UPDATE templates SET state='active' WHERE id='${TEMPLATE_ID}';"
+ACTIVE_CHECK="$(db_value "SELECT state FROM templates WHERE id='${TEMPLATE_ID}';")"
 [ "${ACTIVE_CHECK}" = "active" ] || fail "阶段4: 模板未能推进到 active（当前=${ACTIVE_CHECK}）"
 
 pass "阶段4: 主机=${HOST_ID}、制品集=${CREATED_ARTIFACT_ID}（ready）、模板=${TEMPLATE_ID}（active）均已就位"

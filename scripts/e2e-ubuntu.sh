@@ -43,6 +43,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# 数据库辅助库：连接参数、schema 隔离、制品集/模板的状态推进。
+# 见 scripts/e2e/lib-db.sh 的文件头：数据层迁到 PostgreSQL 之后，连接方式、
+# schema 隔离与「paths_json 拆成四列」这三处变化收在那一份库里，不逐脚本重复。
+. "${SCRIPT_DIR}/e2e/lib-db.sh"
+db_require
+
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/lober-e2e-ubuntu.XXXXXX")"
 
 to_win_path() {
@@ -54,7 +60,6 @@ to_win_path() {
 }
 
 WORKDIR_WIN="$(to_win_path "${WORKDIR}")"
-DB_PATH="${WORKDIR_WIN}/db/lober.db"
 ARTIFACT_ROOT="${WORKDIR_WIN}/artifacts"
 LOG_ROOT="${WORKDIR_WIN}/log"
 CONFIG_PATH="${WORKDIR_WIN}/lober.yaml"
@@ -90,6 +95,7 @@ cleanup() {
 		wait "${SERVER_PID}" 2>/dev/null || true
 	fi
 	rm -rf "${WORKDIR}"
+	db_schema_drop
 	exit "${exit_code}"
 }
 trap cleanup EXIT INT TERM
@@ -133,7 +139,11 @@ echo "工作目录: ${WORKDIR}"
 # 阶段 1：造假 Ubuntu 制品树、建临时目录、构建二进制、造 admin 用户、写配置
 # ---------------------------------------------------------------------------
 
-mkdir -p "${WORKDIR_WIN}/db" "${ARTIFACT_ROOT}" "${LOG_ROOT}"
+mkdir -p "${ARTIFACT_ROOT}" "${LOG_ROOT}"
+
+# 本次运行专用的 schema，必须在服务启动之前建好——服务起来时 AutoMigrate 会在
+# search_path 指向的 schema 里建表，schema 不存在时启动直接失败。
+db_schema_create
 
 ARTIFACT_SET_ID="e2e-ubuntu2404-x86_64"
 bash "${SCRIPT_DIR}/e2e/mkfixture-ubuntu.sh" "${ARTIFACT_ROOT}" "${ARTIFACT_SET_ID}"
@@ -158,10 +168,7 @@ gateway:
 console:
   listen: "127.0.0.1:${CONSOLE_PORT}"
   token_secret: "e2e-test-secret"
-store:
-  db_path: "${DB_PATH}"
-  artifact_path: "${ARTIFACT_ROOT}"
-  log_path: "${LOG_ROOT}"
+$(db_config_fragment "${ARTIFACT_ROOT}" "${LOG_ROOT}")
 scan:
   interval: "2s"
 auth:
@@ -249,10 +256,17 @@ mv "${ARTIFACT_ROOT}/${ARTIFACT_SET_ID}" "${ARTIFACT_ROOT}/${CREATED_ARTIFACT_ID
 # 值）。这三个路径都会被 internal/statemachine/precheck.go 的
 # checkArtifactFiles 在真实文件系统上逐一 stat，因此 mkfixture-ubuntu.sh
 # 造出的文件必须真实存在于这些相对路径下——已在阶段 1 造好。
-PATHS_JSON='{"Kernel":"vmlinuz","Initrd":["initrd"],"Repo":"","Extra":{"squashfs":"casper/filesystem.squashfs"}}'
-sqlite3 "${DB_PATH}" "UPDATE artifact_sets SET state='ready', os_family='ubuntu', os_version='24.04', arch='x86_64', firmware='any', paths_json='${PATHS_JSON}' WHERE id='${CREATED_ARTIFACT_ID}';"
+# 四个路径参数对应 PostgreSQL 侧的四列（paths_kernel / paths_initrd /
+# paths_repo / paths_extra）。SQLite 时代是一个 paths_json 列装整个
+# ArtifactPaths 的 JSON，迁移后拆开了——拆列这件事只在 lib-db.sh 的
+# db_artifact_ready 里落一次。
+# Ubuntu 的 Repo 是空串（squashfs 介质没有可浏览的仓库树，见
+# imports/extract_ubuntu.go），squashfs 路径走 Extra。
+db_artifact_ready "${CREATED_ARTIFACT_ID}" ubuntu 24.04 x86_64 any \
+	vmlinuz '["initrd"]' '' '{"squashfs":"casper/filesystem.squashfs"}' \
+	|| fail "阶段4: 制品集未能推进到 ready"
 
-READY_CHECK="$(sqlite3 "${DB_PATH}" "SELECT state FROM artifact_sets WHERE id='${CREATED_ARTIFACT_ID}';")"
+READY_CHECK="$(db_value "SELECT state FROM artifact_sets WHERE id='${CREATED_ARTIFACT_ID}';")"
 [ "${READY_CHECK}" = "ready" ] || fail "阶段4: 制品集未能推进到 ready（当前=${READY_CHECK}）"
 
 TEMPLATE_CREATE_RESP="$(curl -fsS -X POST "${CONSOLE_BASE}/templates" \
@@ -261,8 +275,8 @@ TEMPLATE_CREATE_RESP="$(curl -fsS -X POST "${CONSOLE_BASE}/templates" \
 TEMPLATE_ID="$(json_field "${TEMPLATE_CREATE_RESP}" "id")"
 [ -n "${TEMPLATE_ID}" ] || fail "阶段4: 创建模板失败，响应=${TEMPLATE_CREATE_RESP}"
 
-sqlite3 "${DB_PATH}" "UPDATE templates SET state='active' WHERE id='${TEMPLATE_ID}';"
-ACTIVE_CHECK="$(sqlite3 "${DB_PATH}" "SELECT state FROM templates WHERE id='${TEMPLATE_ID}';")"
+db_exec "UPDATE templates SET state='active' WHERE id='${TEMPLATE_ID}';"
+ACTIVE_CHECK="$(db_value "SELECT state FROM templates WHERE id='${TEMPLATE_ID}';")"
 [ "${ACTIVE_CHECK}" = "active" ] || fail "阶段4: 模板未能推进到 active（当前=${ACTIVE_CHECK}）"
 
 pass "阶段4: 主机=${HOST_ID}、制品集=${CREATED_ARTIFACT_ID}（ready，Ubuntu 24.04）、模板=${TEMPLATE_ID}（active）均已就位"
@@ -486,7 +500,7 @@ GOEOF
 pass "阶段8b: 真实取到的 user-data 已用 yaml.v3 解析校验通过（不是"看起来缩进对"，是真的解析成功），early-commands/late-commands/identity/ssh 四个必需大键均存在"
 
 # finalize token：与 e2e.sh 相同的取法（直接查库），理由不重复。
-FINALIZE_TOKEN="$(sqlite3 "${DB_PATH}" "SELECT finalize_token FROM tasks WHERE id='${TASK2_ID}';")"
+FINALIZE_TOKEN="$(db_value "SELECT finalize_token FROM tasks WHERE id='${TASK2_ID}';")"
 [ -n "${FINALIZE_TOKEN}" ] || fail "阶段8: 无法从数据库取得 finalize token（任务应已在阶段7的 /v1/boot 命中路径签发）"
 
 send_signal() {
@@ -566,7 +580,7 @@ echo "  [pre-start → pre-done → packages-start → packages-done → post-st
 echo "  [booted → init-start → init-done → ready]（重启后四信号，finalize token） → done"
 echo ""
 echo "各阶段验证结果："
-sqlite3 "${DB_PATH}" "SELECT '  state='||state||' current_phase='||current_phase||' attempt_count='||attempt_count||' last_seq='||last_seq FROM tasks WHERE id='${TASK2_ID}';"
+db_task_summary "${TASK2_ID}"
 echo ""
 if [ "${#KNOWN_ISSUES[@]}" -eq 0 ]; then
 	echo "=== 全部九个阶段（含四条负面用例）验证通过，未发现新增问题 ==="

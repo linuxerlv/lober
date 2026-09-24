@@ -55,6 +55,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# 数据库辅助库：连接参数、schema 隔离、制品集/模板的状态推进。
+# 见 scripts/e2e/lib-db.sh 的文件头：数据层迁到 PostgreSQL 之后，连接方式、
+# schema 隔离与「paths_json 拆成四列」这三处变化收在那一份库里，不逐脚本重复。
+. "${SCRIPT_DIR}/e2e/lib-db.sh"
+db_require
+
 # ---------------------------------------------------------------------------
 # 可覆盖的环境变量（运行环境相关，不能硬编码）
 # ---------------------------------------------------------------------------
@@ -97,7 +103,6 @@ if [ "${CONSOLE_IP}" = "${MACHINE_IP}" ]; then
 fi
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/lober-e2e-nginx.XXXXXX")"
-DB_PATH="${WORKDIR}/db/lober.db"
 ARTIFACT_ROOT="${WORKDIR}/artifacts"
 LOG_ROOT="${WORKDIR}/log"
 CONFIG_PATH="${WORKDIR}/lober.yaml"
@@ -123,6 +128,7 @@ cleanup() {
 		sudo "${NGINX_BIN}" -s stop -c "${NGINX_MAIN_CONF}" 2>/dev/null || true
 	fi
 	rm -rf "${WORKDIR}"
+	db_schema_drop
 	exit "${exit_code}"
 }
 trap cleanup EXIT INT TERM
@@ -199,10 +205,7 @@ gateway:
 console:
   listen: "127.0.0.1:${CONSOLE_BACKEND_PORT}"
   token_secret: "e2e-nginx-test-secret"
-store:
-  db_path: "${DB_PATH}"
-  artifact_path: "${ARTIFACT_ROOT}"
-  log_path: "${LOG_ROOT}"
+$(db_config_fragment "${ARTIFACT_ROOT}" "${LOG_ROOT}")
 scan:
   interval: "2s"
 auth:
@@ -318,15 +321,20 @@ CREATED_ARTIFACT_ID="$(json_field "${ARTIFACT_CREATE_RESP}" "id")"
 [ -n "${CREATED_ARTIFACT_ID}" ] || fail "阶段5: 登记制品集失败，响应=${ARTIFACT_CREATE_RESP}"
 mv "${ARTIFACT_ROOT}/${ARTIFACT_SET_ID}" "${ARTIFACT_ROOT}/${CREATED_ARTIFACT_ID}"
 
-PATHS_JSON='{"Kernel":"vmlinuz","Initrd":["initrd.img"],"Repo":"repo/","Extra":{}}'
-sqlite3 "${DB_PATH}" "UPDATE artifact_sets SET state='ready', os_family='rhel', os_version='9.4', arch='x86_64', firmware='any', paths_json='${PATHS_JSON}' WHERE id='${CREATED_ARTIFACT_ID}';"
+# 四个路径参数对应 PostgreSQL 侧的四列（paths_kernel / paths_initrd /
+# paths_repo / paths_extra）。SQLite 时代是一个 paths_json 列装整个
+# ArtifactPaths 的 JSON，迁移后拆开了——拆列这件事只在 lib-db.sh 的
+# db_artifact_ready 里落一次。
+db_artifact_ready "${CREATED_ARTIFACT_ID}" rhel 9.4 x86_64 any \
+	vmlinuz '["initrd.img"]' 'repo/' '{}' \
+	|| fail "阶段4: 制品集未能推进到 ready"
 
 TEMPLATE_CREATE_RESP="$(curl -fsS -X POST "${CONSOLE_BASE}/templates" \
 	-H "${AUTH_HEADER}" -H 'Content-Type: application/json' \
 	-d "{\"name\":\"e2e-nginx-rocky94\",\"artifactSetId\":\"${CREATED_ARTIFACT_ID}\",\"answerTemplate\":\"\",\"hookRefs\":[],\"kernelArgs\":\"\",\"diskPolicy\":\"largest\",\"onFailure\":\"halt\",\"requiredFormFields\":[]}")"
 TEMPLATE_ID="$(json_field "${TEMPLATE_CREATE_RESP}" "id")"
 [ -n "${TEMPLATE_ID}" ] || fail "阶段5: 创建模板失败，响应=${TEMPLATE_CREATE_RESP}"
-sqlite3 "${DB_PATH}" "UPDATE templates SET state='active' WHERE id='${TEMPLATE_ID}';"
+db_exec "UPDATE templates SET state='active' WHERE id='${TEMPLATE_ID}';"
 
 TASK_CREATE_RESP="$(curl -fsS -X POST "${CONSOLE_BASE}/tasks" \
 	-H "${AUTH_HEADER}" -H 'Content-Type: application/json' \

@@ -71,6 +71,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# 数据库辅助库：连接参数、schema 隔离、制品集/模板的状态推进。
+# 见 scripts/e2e/lib-db.sh 的文件头：数据层迁到 PostgreSQL 之后，连接方式、
+# schema 隔离与「paths_json 拆成四列」这三处变化收在那一份库里，不逐脚本重复。
+. "${SCRIPT_DIR}/e2e/lib-db.sh"
+db_require
+
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/lober-e2e-win.XXXXXX")"
 
 # to_win_path：与 scripts/e2e.sh 同一个真实踩过的坑，同一个修法（见那边的
@@ -85,7 +91,6 @@ to_win_path() {
 }
 
 WORKDIR_WIN="$(to_win_path "${WORKDIR}")"
-DB_PATH="${WORKDIR_WIN}/db/lober.db"
 ARTIFACT_ROOT="${WORKDIR_WIN}/artifacts"
 LOG_ROOT="${WORKDIR_WIN}/log"
 CONFIG_PATH="${WORKDIR_WIN}/lober.yaml"
@@ -110,6 +115,7 @@ cleanup() {
 		wait "${SERVER_PID}" 2>/dev/null || true
 	fi
 	rm -rf "${WORKDIR}"
+	db_schema_drop
 	exit "${exit_code}"
 }
 trap cleanup EXIT INT TERM
@@ -153,7 +159,11 @@ echo "工作目录: ${WORKDIR}"
 # 阶段 1：造制品树（UEFI/BIOS 各一份）、构建二进制、造 admin 用户、写配置
 # ---------------------------------------------------------------------------
 
-mkdir -p "${WORKDIR_WIN}/db" "${ARTIFACT_ROOT}" "${LOG_ROOT}"
+mkdir -p "${ARTIFACT_ROOT}" "${LOG_ROOT}"
+
+# 本次运行专用的 schema，必须在服务启动之前建好——服务起来时 AutoMigrate 会在
+# search_path 指向的 schema 里建表，schema 不存在时启动直接失败。
+db_schema_create
 
 ARTIFACT_SET_UEFI_FIXTURE="e2e-win2022-uefi"
 ARTIFACT_SET_BIOS_FIXTURE="e2e-win2022-bios"
@@ -181,10 +191,7 @@ gateway:
 console:
   listen: "127.0.0.1:${CONSOLE_PORT}"
   token_secret: "e2e-win-test-secret"
-store:
-  db_path: "${DB_PATH}"
-  artifact_path: "${ARTIFACT_ROOT}"
-  log_path: "${LOG_ROOT}"
+$(db_config_fragment "${ARTIFACT_ROOT}" "${LOG_ROOT}")
 scan:
   interval: "2s"
 auth:
@@ -275,11 +282,19 @@ register_windows_artifact_set() {
 
 	mv "${ARTIFACT_ROOT}/${fixture_dir_name}" "${ARTIFACT_ROOT}/${created_id}"
 
-	paths_json='{"Kernel":"","Initrd":[],"Repo":"","Extra":{"wimboot":"wimboot","BCD":"BCD","boot.sdi":"boot.sdi","boot.wim":"boot.wim"}}'
-	sqlite3 "${DB_PATH}" "UPDATE artifact_sets SET state='ready', os_family='windows', os_version='2022', arch='x86_64', firmware='${firmware}', paths_json='${paths_json}' WHERE id='${created_id}';"
+	# 四个路径参数对应 PostgreSQL 侧的四列（paths_kernel / paths_initrd /
+	# paths_repo / paths_extra）。SQLite 时代是一个 paths_json 列装整个
+	# ArtifactPaths 的 JSON，迁移后拆开了——拆列这件事只在 lib-db.sh 的
+	# db_artifact_ready 里落一次。
+	# Windows 制品集没有内核与仓库（只产出 Extra 里的一组 wimboot 文件，
+	# 见 imports/extract_windows.go），前者传空串、initrd 传空数组——那与
+	# 真实抽取器的产出一致，不是凑数。
+	db_artifact_ready "${created_id}" windows 2022 x86_64 "${firmware}" \
+		'' '[]' '' '{"wimboot":"wimboot","BCD":"BCD","boot.sdi":"boot.sdi","boot.wim":"boot.wim"}' \
+		|| fail "阶段4: 制品集未能推进到 ready"
 
 	local ready_check
-	ready_check="$(sqlite3 "${DB_PATH}" "SELECT state FROM artifact_sets WHERE id='${created_id}';")"
+	ready_check="$(db_value "SELECT state FROM artifact_sets WHERE id='${created_id}';")"
 	[ "${ready_check}" = "ready" ] || fail "阶段4: 制品集 ${name} 未能推进到 ready（当前=${ready_check}）"
 
 	echo "${created_id}"
@@ -301,9 +316,9 @@ create_active_template() {
 	template_id="$(json_field "${create_resp}" "id")"
 	[ -n "${template_id}" ] || fail "阶段4: 创建模板 ${name} 失败，响应=${create_resp}"
 
-	sqlite3 "${DB_PATH}" "UPDATE templates SET state='active' WHERE id='${template_id}';"
+	db_exec "UPDATE templates SET state='active' WHERE id='${template_id}';"
 	local active_check
-	active_check="$(sqlite3 "${DB_PATH}" "SELECT state FROM templates WHERE id='${template_id}';")"
+	active_check="$(db_value "SELECT state FROM templates WHERE id='${template_id}';")"
 	[ "${active_check}" = "active" ] || fail "阶段4: 模板 ${name} 未能推进到 active（当前=${active_check}）"
 
 	echo "${template_id}"
@@ -387,14 +402,14 @@ pass "阶段6d: precheck 失败（非 reboot_timeout/init_timeout）的任务允
 # 制品集，那会破坏任务的可复现性——见 internal/render/winpe.go
 # RenderWindowsMenu 注释）。用阶段6d 已经 retry 回 pending 的 TASK_BIOS_ID
 # （该任务 pin 的是 BIOS 制品集），故意上报 plat=efi 制造固件不符。
-BIOS_TASK_ATTEMPT_BEFORE="$(sqlite3 "${DB_PATH}" "SELECT attempt_count FROM tasks WHERE id='${TASK_BIOS_ID}';")"
+BIOS_TASK_ATTEMPT_BEFORE="$(db_value "SELECT attempt_count FROM tasks WHERE id='${TASK_BIOS_ID}';")"
 FIRMWARE_MISMATCH_BOOT="$(curl -fsS "${GW_BASE}/v1/boot?sn=${HOST_BIOS_SN}&mac=${HOST_BIOS_MAC}&uuid=&arch=x86_64&plat=efi")"
 echo "${FIRMWARE_MISMATCH_BOOT}" | grep -q "sanboot --no-describe --drive 0x80" \
 	|| fail "阶段6e: 固件不符未回 sanboot，响应=${FIRMWARE_MISMATCH_BOOT}"
 TASK_BIOS_AFTER_FW_FAIL="$(curl -fsS "${CONSOLE_BASE}/tasks?sn=${HOST_BIOS_SN}" -H "${AUTH_HEADER}")"
 echo "${TASK_BIOS_AFTER_FW_FAIL}" | grep -q '"failureReason":"precheck"' \
 	|| fail "阶段6e: 固件不符后任务的 failureReason 字段未见 precheck，响应=${TASK_BIOS_AFTER_FW_FAIL}"
-BIOS_TASK_ATTEMPT_AFTER="$(sqlite3 "${DB_PATH}" "SELECT attempt_count FROM tasks WHERE id='${TASK_BIOS_ID}';")"
+BIOS_TASK_ATTEMPT_AFTER="$(db_value "SELECT attempt_count FROM tasks WHERE id='${TASK_BIOS_ID}';")"
 [ "${BIOS_TASK_ATTEMPT_AFTER}" = "${BIOS_TASK_ATTEMPT_BEFORE}" ] \
 	|| fail "阶段6e: 固件不符本应不消耗 attempt_count，但从 ${BIOS_TASK_ATTEMPT_BEFORE} 变成了 ${BIOS_TASK_ATTEMPT_AFTER}"
 pass "阶段6e:【Windows 特有】固件（BIOS 任务遇到 UEFI 上报）不符 → 回 sanboot、任务置 failed、不消耗 attempt_count（当前值=${BIOS_TASK_ATTEMPT_AFTER}）"
@@ -420,15 +435,15 @@ TASK_SUCCESS_CREATE_RESP="$(curl -fsS -X POST "${CONSOLE_BASE}/tasks" \
 TASK_ID="$(json_field "${TASK_SUCCESS_CREATE_RESP}" "id")"
 [ -n "${TASK_ID}" ] || fail "阶段7: 为成功路径新建任务失败，响应=${TASK_SUCCESS_CREATE_RESP}"
 
-ATTEMPT_BEFORE="$(sqlite3 "${DB_PATH}" "SELECT attempt_count FROM tasks WHERE id='${TASK_ID}';")"
-STATE_BEFORE="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK_ID}';")"
+ATTEMPT_BEFORE="$(db_value "SELECT attempt_count FROM tasks WHERE id='${TASK_ID}';")"
+STATE_BEFORE="$(db_value "SELECT state FROM tasks WHERE id='${TASK_ID}';")"
 [ "${STATE_BEFORE}" = "pending" ] || fail "阶段7: 新建任务的初始状态应为 pending，实际=${STATE_BEFORE}"
 
 UEFI_MENU="$(curl -fsS "${GW_BASE}/v1/boot?sn=${HOST_UEFI_SN}&mac=${HOST_UEFI_MAC}&uuid=&arch=x86_64&plat=efi")"
 
-STATE_AFTER="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK_ID}';")"
-ATTEMPT_AFTER="$(sqlite3 "${DB_PATH}" "SELECT attempt_count FROM tasks WHERE id='${TASK_ID}';")"
-SIGNED_TOKEN="$(sqlite3 "${DB_PATH}" "SELECT token FROM tasks WHERE id='${TASK_ID}';")"
+STATE_AFTER="$(db_value "SELECT state FROM tasks WHERE id='${TASK_ID}';")"
+ATTEMPT_AFTER="$(db_value "SELECT attempt_count FROM tasks WHERE id='${TASK_ID}';")"
+SIGNED_TOKEN="$(db_value "SELECT token FROM tasks WHERE id='${TASK_ID}';")"
 
 # 断言 1：任务状态机侧已推进——precheck 通过、StartBoot 成功提交、
 # attempt_count 被消耗、token 已签发（这几条在分派接线前后都应成立，与
@@ -515,7 +530,7 @@ pass "阶段7: 要素齐全的 UEFI 机器请求 /v1/boot——任务推进到 b
 ANSWER_URL="${GW_BASE}/v1/answer/${TASK_ID}/${SIGNED_TOKEN}/unattend.xml"
 ANSWER_HTTP_CODE="$(curl -s -o "${WORKDIR_WIN}/answer_body.txt" -w '%{http_code}' "${ANSWER_URL}")"
 ANSWER_BODY="$(cat "${WORKDIR_WIN}/answer_body.txt")"
-STATE_AFTER_ANSWER_ATTEMPT="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK_ID}';")"
+STATE_AFTER_ANSWER_ATTEMPT="$(db_value "SELECT state FROM tasks WHERE id='${TASK_ID}';")"
 
 [ "${ANSWER_HTTP_CODE}" = "200" ] || fail "阶段8a: 取应答文件失败，HTTP ${ANSWER_HTTP_CODE}，body=${ANSWER_BODY}"
 [ -n "${ANSWER_BODY}" ] || fail "阶段8a: 应答文件内容为空，url=${ANSWER_URL}"
@@ -610,7 +625,7 @@ pass "阶段8a: 取应答文件 unattend.xml 成功（HTTP 200，Content-Type=ap
 # 真实签发的值，验证信号端点本身能否用它认证。
 # ---------------------------------------------------------------------------
 
-FINALIZE_TOKEN="$(sqlite3 "${DB_PATH}" "SELECT finalize_token FROM tasks WHERE id='${TASK_ID}';")"
+FINALIZE_TOKEN="$(db_value "SELECT finalize_token FROM tasks WHERE id='${TASK_ID}';")"
 [ -n "${FINALIZE_TOKEN}" ] || fail "阶段8: 无法从数据库取得 finalize token（应已在阶段7的 /v1/boot 命中路径签发）"
 
 send_signal() {
@@ -657,7 +672,7 @@ pass "阶段8c: 重启后四个信号（booted/init-start/init-done/ready，Wind
 
 wait_for_task_state() {
 	local want="$1"
-	sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK_ID}';" | grep -qx "${want}"
+	db_value "SELECT state FROM tasks WHERE id='${TASK_ID}';" | grep -qx "${want}"
 }
 poll_until "任务达到终态 done" 10 wait_for_task_state "done"
 pass "阶段9a: 任务达到终态 done"
@@ -669,7 +684,7 @@ pass "阶段9a: 任务达到终态 done"
 REBOOT_AFTER_DONE="$(curl -fsS "${GW_BASE}/v1/boot?sn=${HOST_UEFI_SN}&mac=${HOST_UEFI_MAC}&uuid=&arch=x86_64&plat=efi")"
 echo "${REBOOT_AFTER_DONE}" | grep -q "sanboot --no-describe --drive 0x80" \
 	|| fail "阶段9b: 装完的机器再次引导未回 sanboot，响应=${REBOOT_AFTER_DONE}"
-DONE_STATE_CHECK="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK_ID}';")"
+DONE_STATE_CHECK="$(db_value "SELECT state FROM tasks WHERE id='${TASK_ID}';")"
 [ "${DONE_STATE_CHECK}" = "done" ] || fail "阶段9b: 断言前置条件被破坏——任务状态应仍是 done，实际=${DONE_STATE_CHECK}（说明上面这次 /v1/boot 请求本身改变了任务状态，需要核查是不是 FindPendingTaskByIdentity 命中了不该命中的任务）"
 pass "阶段9b: 装完的机器再次引导拿到 sanboot（不是装机菜单，不循环重装；已用状态查询确认任务确实处于终态 done）"
 
@@ -692,6 +707,6 @@ echo "  [pre-start → pre-done → packages-start → packages-done → post-st
 echo "  [booted → init-start → init-done → ready]（重启后四信号，finalize token） → done"
 echo ""
 echo "各阶段验证结果："
-sqlite3 "${DB_PATH}" "SELECT '  state='||state||' current_phase='||current_phase||' attempt_count='||attempt_count||' last_seq='||last_seq FROM tasks WHERE id='${TASK_ID}';"
+db_task_summary "${TASK_ID}"
 echo ""
 echo "=== Windows 家族九阶段验证结束：分派已接线，wimboot 菜单/固件选键/unattend.xml/信号通道/状态机/终态收敛/双固件准入全部验证通过（导入识别仍被 mvpUnsupportedFamilies 挡着，制品集经 sqlite3 绕过，见文件头「已知限制」第 2 条） ==="

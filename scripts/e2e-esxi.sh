@@ -82,6 +82,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# 数据库辅助库：连接参数、schema 隔离、制品集/模板的状态推进。
+# 见 scripts/e2e/lib-db.sh 的文件头：数据层迁到 PostgreSQL 之后，连接方式、
+# schema 隔离与「paths_json 拆成四列」这三处变化收在那一份库里，不逐脚本重复。
+. "${SCRIPT_DIR}/e2e/lib-db.sh"
+db_require
+
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/lober-e2e-esxi.XXXXXX")"
 
 to_win_path() {
@@ -93,7 +99,6 @@ to_win_path() {
 }
 
 WORKDIR_WIN="$(to_win_path "${WORKDIR}")"
-DB_PATH="${WORKDIR_WIN}/db/lober.db"
 ARTIFACT_ROOT="${WORKDIR_WIN}/artifacts"
 LOG_ROOT="${WORKDIR_WIN}/log"
 CONFIG_PATH="${WORKDIR_WIN}/lober.yaml"
@@ -154,6 +159,7 @@ cleanup() {
 		wait "${SERVER_PID}" 2>/dev/null || true
 	fi
 	rm -rf "${WORKDIR}"
+	db_schema_drop
 	exit "${exit_code}"
 }
 trap cleanup EXIT INT TERM
@@ -206,7 +212,11 @@ echo "工作目录: ${WORKDIR}"
 # 阶段 1：造 ESXi 假制品树、建临时目录、构建二进制、造 admin 用户、写配置
 # ---------------------------------------------------------------------------
 
-mkdir -p "${WORKDIR_WIN}/db" "${ARTIFACT_ROOT}" "${LOG_ROOT}"
+mkdir -p "${ARTIFACT_ROOT}" "${LOG_ROOT}"
+
+# 本次运行专用的 schema，必须在服务启动之前建好——服务起来时 AutoMigrate 会在
+# search_path 指向的 schema 里建表，schema 不存在时启动直接失败。
+db_schema_create
 
 ARTIFACT_SET_ID="e2e-esxi8-x86_64"
 bash "${SCRIPT_DIR}/e2e/mkfixture-esxi.sh" "${ARTIFACT_ROOT}" "${ARTIFACT_SET_ID}"
@@ -231,10 +241,7 @@ gateway:
 console:
   listen: "127.0.0.1:${CONSOLE_PORT}"
   token_secret: "e2e-esxi-test-secret"
-store:
-  db_path: "${DB_PATH}"
-  artifact_path: "${ARTIFACT_ROOT}"
-  log_path: "${LOG_ROOT}"
+$(db_config_fragment "${ARTIFACT_ROOT}" "${LOG_ROOT}")
 scan:
   interval: "2s"
 auth:
@@ -327,10 +334,18 @@ finding "阶段4: 制品集登记→导入 job 路径对 ESXi 走不通——" \
 # internal/imports/extract_esxi.go 顶部注释第 5 条）。Extra 的键名与
 # internal/statemachine/precheck.go 的 checkArtifactFiles 只关心值本身
 # （相对路径），键名任意——这里用与磁盘上文件名一致的键，可读性最好。
-PATHS_JSON='{"Kernel":"","Initrd":null,"Repo":"","Extra":{"mboot.efi":"mboot.efi","boot.cfg":"boot.cfg","jumpstrt.gz":"jumpstrt.gz","useropts.gz":"useropts.gz","k.b00":"k.b00","chain.b00":"chain.b00"}}'
-sqlite3 "${DB_PATH}" "UPDATE artifact_sets SET state='ready', os_family='esxi', os_version='8.0', arch='x86_64', firmware='uefi', paths_json='${PATHS_JSON}' WHERE id='${CREATED_ARTIFACT_ID}';"
+# 四个路径参数对应 PostgreSQL 侧的四列（paths_kernel / paths_initrd /
+# paths_repo / paths_extra）。SQLite 时代是一个 paths_json 列装整个
+# ArtifactPaths 的 JSON，迁移后拆开了——拆列这件事只在 lib-db.sh 的
+# db_artifact_ready 里落一次。
+# ESXi 同 Windows：没有内核与仓库，只产出 Extra 里的一组引导文件。
+# initrd 传 'null' 而不是 '[]'——SQLite 时代这里写的就是 JSON null，
+# 保持同一个语义（jsonb 存 null，解回 Go 是 nil 切片）。
+db_artifact_ready "${CREATED_ARTIFACT_ID}" esxi 8.0 x86_64 uefi \
+	'' 'null' '' '{"mboot.efi":"mboot.efi","boot.cfg":"boot.cfg","jumpstrt.gz":"jumpstrt.gz","useropts.gz":"useropts.gz","k.b00":"k.b00","chain.b00":"chain.b00"}' \
+	|| fail "阶段4: 制品集未能推进到 ready"
 
-READY_CHECK="$(sqlite3 "${DB_PATH}" "SELECT state FROM artifact_sets WHERE id='${CREATED_ARTIFACT_ID}';")"
+READY_CHECK="$(db_value "SELECT state FROM artifact_sets WHERE id='${CREATED_ARTIFACT_ID}';")"
 [ "${READY_CHECK}" = "ready" ] || fail "阶段4: 制品集未能推进到 ready（当前=${READY_CHECK}）"
 
 TEMPLATE_CREATE_RESP="$(curl -fsS -X POST "${CONSOLE_BASE}/templates" \
@@ -339,8 +354,8 @@ TEMPLATE_CREATE_RESP="$(curl -fsS -X POST "${CONSOLE_BASE}/templates" \
 TEMPLATE_ID="$(json_field "${TEMPLATE_CREATE_RESP}" "id")"
 [ -n "${TEMPLATE_ID}" ] || fail "阶段4: 创建模板失败，响应=${TEMPLATE_CREATE_RESP}"
 
-sqlite3 "${DB_PATH}" "UPDATE templates SET state='active' WHERE id='${TEMPLATE_ID}';"
-ACTIVE_CHECK="$(sqlite3 "${DB_PATH}" "SELECT state FROM templates WHERE id='${TEMPLATE_ID}';")"
+db_exec "UPDATE templates SET state='active' WHERE id='${TEMPLATE_ID}';"
+ACTIVE_CHECK="$(db_value "SELECT state FROM templates WHERE id='${TEMPLATE_ID}';")"
 [ "${ACTIVE_CHECK}" = "active" ] || fail "阶段4: 模板未能推进到 active（当前=${ACTIVE_CHECK}）"
 
 pass "阶段4: 主机=${HOST_ID}、制品集=${CREATED_ARTIFACT_ID}（ready，esxi/8.0/uefi）、模板=${TEMPLATE_ID}（active）均已就位"
@@ -454,7 +469,7 @@ pass "阶段6e:【ESXi特有】BIOS 请求装 ESXi → 硬拒绝（precheck.chec
 # attempt_count 仍是初始值（0），且这是 TASK2_ID 第二次触发 precheck 拒绝
 # （6c 架构不符 + 6e 固件不符），若 attempt_count 被错误递增，这里会看到
 # 非零值。
-TASK2_ATTEMPT_COUNT="$(sqlite3 "${DB_PATH}" "SELECT attempt_count FROM tasks WHERE id='${TASK2_ID}';")"
+TASK2_ATTEMPT_COUNT="$(db_value "SELECT attempt_count FROM tasks WHERE id='${TASK2_ID}';")"
 [ "${TASK2_ATTEMPT_COUNT}" = "0" ] || fail "阶段6e: precheck 拒绝（架构+固件共两次）后 attempt_count=${TASK2_ATTEMPT_COUNT}, want 0——precheck 失败不应消耗 attempt"
 pass "阶段6e复查: 两次 precheck 拒绝（arch、firmware）均未消耗 attempt_count（仍为 0）"
 
@@ -472,13 +487,13 @@ RETRY2_RESP="$(curl -fsS -X POST "${CONSOLE_BASE}/tasks/${TASK2_ID}/retry" -H "$
 RETRY2_STATE="$(json_field "${RETRY2_RESP}" "state")"
 [ "${RETRY2_STATE}" = "pending" ] || fail "阶段7: 固件不符任务 retry 后状态 = ${RETRY2_STATE}, want pending，响应=${RETRY2_RESP}"
 
-ATTEMPT_BEFORE="$(sqlite3 "${DB_PATH}" "SELECT attempt_count FROM tasks WHERE id='${TASK2_ID}';")"
+ATTEMPT_BEFORE="$(db_value "SELECT attempt_count FROM tasks WHERE id='${TASK2_ID}';")"
 
 ESXI_MENU="$(curl -fsS "${GW_BASE}/v1/boot?sn=${HOST2_SN}&mac=${HOST2_MAC}&uuid=&arch=x86_64&plat=efi")"
 
-ATTEMPT_AFTER="$(sqlite3 "${DB_PATH}" "SELECT attempt_count FROM tasks WHERE id='${TASK2_ID}';")"
-STATE_AFTER="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK2_ID}';")"
-SIGNED_TOKEN="$(sqlite3 "${DB_PATH}" "SELECT token FROM tasks WHERE id='${TASK2_ID}';")"
+ATTEMPT_AFTER="$(db_value "SELECT attempt_count FROM tasks WHERE id='${TASK2_ID}';")"
+STATE_AFTER="$(db_value "SELECT state FROM tasks WHERE id='${TASK2_ID}';")"
+SIGNED_TOKEN="$(db_value "SELECT token FROM tasks WHERE id='${TASK2_ID}';")"
 
 # 断言 1：任务状态机侧已推进——precheck 通过、attempt 已消耗、state 已变
 # 成 booting、token 已签发（与 scripts/e2e.sh 阶段7 同一断言）。
@@ -519,7 +534,7 @@ pass "阶段7: 要素齐全的 UEFI 机器请求 /v1/boot——任务推进到 b
 ANSWER_URL="${GW_BASE}/v1/answer/${TASK2_ID}/${SIGNED_TOKEN}/boot.cfg"
 ANSWER_HTTP_CODE="$(curl -s -o "${WORKDIR_WIN}/answer_body.txt" -w '%{http_code}' "${ANSWER_URL}")"
 ANSWER_BODY="$(cat "${WORKDIR_WIN}/answer_body.txt")"
-STATE_AFTER_ANSWER="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK2_ID}';")"
+STATE_AFTER_ANSWER="$(db_value "SELECT state FROM tasks WHERE id='${TASK2_ID}';")"
 
 [ "${ANSWER_HTTP_CODE}" = "200" ] || fail "阶段8: 取应答文件失败，HTTP ${ANSWER_HTTP_CODE}，body=${ANSWER_BODY}"
 [ -n "${ANSWER_BODY}" ] || fail "阶段8: 应答文件内容为空，url=${ANSWER_URL}"
@@ -589,7 +604,7 @@ pass "阶段8a: 取 ks.cfg 成功，内容是 ESXi kickstart 正文（install/%f
 # token 应能发任意 signal，finalize token 越权发 install 阶段信号应被拒。
 # ---------------------------------------------------------------------------
 
-FINALIZE_TOKEN="$(sqlite3 "${DB_PATH}" "SELECT finalize_token FROM tasks WHERE id='${TASK2_ID}';")"
+FINALIZE_TOKEN="$(db_value "SELECT finalize_token FROM tasks WHERE id='${TASK2_ID}';")"
 [ -n "${FINALIZE_TOKEN}" ] || fail "阶段8: 无法从数据库取得 finalize token（应已在阶段7的 /v1/boot 命中路径签发）"
 
 send_signal() {
@@ -630,7 +645,7 @@ pass "阶段8c: 重启后四个信号（booted/init-start/init-done/ready，ESXi
 
 wait_for_task_state() {
 	local want="$1"
-	sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK2_ID}';" | grep -qx "${want}"
+	db_value "SELECT state FROM tasks WHERE id='${TASK2_ID}';" | grep -qx "${want}"
 }
 poll_until "任务达到终态 done" 10 wait_for_task_state "done"
 pass "阶段9a: 任务达到终态 done"
@@ -640,7 +655,7 @@ pass "阶段9a: 任务达到终态 done"
 REBOOT_AFTER_DONE="$(curl -fsS "${GW_BASE}/v1/boot?sn=${HOST2_SN}&mac=${HOST2_MAC}&uuid=&arch=x86_64&plat=efi")"
 echo "${REBOOT_AFTER_DONE}" | grep -q "sanboot --no-describe --drive 0x80" \
 	|| fail "阶段9b: 装完的机器再次引导未回 sanboot，响应=${REBOOT_AFTER_DONE}"
-DONE_STATE_CHECK="$(sqlite3 "${DB_PATH}" "SELECT state FROM tasks WHERE id='${TASK2_ID}';")"
+DONE_STATE_CHECK="$(db_value "SELECT state FROM tasks WHERE id='${TASK2_ID}';")"
 [ "${DONE_STATE_CHECK}" = "done" ] || fail "阶段9b: 断言前置条件被破坏——任务状态应仍是 done，实际=${DONE_STATE_CHECK}"
 pass "阶段9b: 装完的机器再次引导拿到 sanboot（不是装机菜单，不循环重装；已用状态查询确认任务确实处于终态 done）"
 
@@ -662,7 +677,7 @@ echo "  installing（/v1/answer 渲染出 ESXi kickstart 正文——不是改�
 echo "  pre-start（install token 验证）→ [booted → init-start → init-done → ready]（重启后四信号，%firstboot 原生发出） → done"
 echo ""
 echo "各阶段验证结果："
-sqlite3 "${DB_PATH}" "SELECT '  state='||state||' current_phase='||current_phase||' attempt_count='||attempt_count||' last_seq='||last_seq FROM tasks WHERE id='${TASK2_ID}';"
+db_task_summary "${TASK2_ID}"
 echo ""
 echo "=== ESXi 家族九阶段验证结束：分派已接线，菜单形态/固件硬拒绝/信号通道/状态机/终态收敛全部验证通过。" \
 	"两处此前记录的 Go 侧缺口都已修复：1) boot.cfg 现在返回经三处改写的引导参数文件
