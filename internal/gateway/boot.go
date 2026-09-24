@@ -9,6 +9,8 @@ package gateway
 import (
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
 )
@@ -30,14 +32,17 @@ type bootProbe struct {
 // parseBootProbe 从请求的 query 参数解析出 bootProbe。五个参数全部可能为
 // 空（白牌机 SN 可能留空，计划任务 4 测试要点），本函数不做任何校验，
 // 校验交给后续步骤按需处理。
-func parseBootProbe(r *http.Request) bootProbe {
-	q := r.URL.Query()
+//
+// 用 c.Query 而不是 c.Request.URL.Query() 手动取值：语义等价（gin 内部
+// 也是解析同一个 url.Values），但 c.Query 是 gin 惯用写法，且不需要为
+// 五个字段各自处理 map 查找。
+func parseBootProbe(c *gin.Context) bootProbe {
 	return bootProbe{
-		sn:      q.Get("sn"),
-		mac:     q.Get("mac"),
-		uuid:    q.Get("uuid"),
-		rawArch: q.Get("arch"),
-		rawPlat: q.Get("plat"),
+		sn:      c.Query("sn"),
+		mac:     c.Query("mac"),
+		uuid:    c.Query("uuid"),
+		rawArch: c.Query("arch"),
+		rawPlat: c.Query("plat"),
 	}
 }
 
@@ -47,9 +52,9 @@ func parseBootProbe(r *http.Request) bootProbe {
 // 约定 1（不可违反）：始终返回 HTTP 200。本函数的所有分支必须收敛到
 // writeNoTaskScript 或渲染菜单成功这两种结果，不存在任何提前 return 出
 // 非 200 状态码的路径。
-func (s *Server) handleBoot(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	probe := parseBootProbe(r)
+func (s *Server) handleBoot(c *gin.Context) {
+	ctx := c.Request.Context()
+	probe := parseBootProbe(c)
 
 	// 步骤 1-2（计划任务 4）：按身份查 pending 任务；查不到 → no_task，
 	// 到此为止，不产生任何 Store 记录（约定 2：这一支不写 TaskEvent、
@@ -61,7 +66,7 @@ func (s *Server) handleBoot(w http.ResponseWriter, r *http.Request) {
 		// 400（FindPendingTaskByIdentity 对全空键、任意格式的字符串键都
 		// 只会返回 contract.ErrNotFound，不会返回别的错误类型，因此这里
 		// 不需要区分 err 的具体种类）。
-		writeNoTaskScript(w, probe.sn)
+		writeNoTaskScript(c, probe.sn)
 		return
 	}
 
@@ -96,7 +101,7 @@ func (s *Server) handleBoot(w http.ResponseWriter, r *http.Request) {
 		_, _ = s.deps.StateMachine.Fail(ctx, task.ID, model.FailureReasonPrecheck, model.FailureDetail{
 			Phase: task.CurrentPhase,
 		})
-		writeNoTaskScript(w, probe.sn)
+		writeNoTaskScript(c, probe.sn)
 		return
 	}
 
@@ -109,11 +114,11 @@ func (s *Server) handleBoot(w http.ResponseWriter, r *http.Request) {
 		// 个 no_task 载荷，为避免签发 token 给一个连身份都报不全的探测，
 		// 这里选择不调用状态机、直接返回 no_task（与「查询参数格式错误
 		// 视为查不到」的错误行为条款保持一致，不产生失败记录）。
-		writeNoTaskScript(w, probe.sn)
+		writeNoTaskScript(c, probe.sn)
 		return
 	}
 
-	s.handleBootGrant(w, r, task, probe.sn, actualArch, actualFirmware)
+	s.handleBootGrant(c, task, probe.sn, actualArch, actualFirmware)
 }
 
 // writeNoTaskScript 写出「约定 2」冻结的 no_task 载荷：HTTP 200、
@@ -122,10 +127,14 @@ func (s *Server) handleBoot(w http.ResponseWriter, r *http.Request) {
 //
 // serial 用于 echo 行里回显机器序列号，便于运维在 nginx access log 之外，
 // 从机器自己的控制台看到这行输出（contract.NoTaskScript 文档）。
-func writeNoTaskScript(w http.ResponseWriter, serial string) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(contract.NoTaskScript(serial)))
+//
+// 用 c.Data 而不是 c.String：contract.NoTaskScript 产出的 iPXE 脚本里带
+// echo 行回显 serial，serial 来自机器请求、内容不受控，若恰好含 %
+// （如某些白牌机把整段固件信息塞进 SN 字段），c.String(code, body) 会把
+// 它当格式串解析——迁移契约 §6 明确点名的陷阱，此处不能心存僥幸假设
+// serial 不含 %。
+func writeNoTaskScript(c *gin.Context, serial string) {
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(contract.NoTaskScript(serial)))
 }
 
 // handleBootGrant 处理命中任务且 MAC 双因子通过之后的推进（计划任务 5）：
@@ -145,8 +154,8 @@ func writeNoTaskScript(w http.ResponseWriter, serial string) {
 // 失败原因回显不同来源的序列号」这种内部不一致：机器控制台上看到的
 // echo 值会随失败原因在「自己刚发出的 sn」与「服务端库里记录的 HostSN」
 // 之间跳变，而 §4.2 的四种失败情形本应共享完全相同形态的载荷。
-func (s *Server) handleBootGrant(w http.ResponseWriter, r *http.Request, task model.Task, probeSN string, actualArch model.Arch, actualFirmware model.FirmwareMode) {
-	ctx := r.Context()
+func (s *Server) handleBootGrant(c *gin.Context, task model.Task, probeSN string, actualArch model.Arch, actualFirmware model.FirmwareMode) {
+	ctx := c.Request.Context()
 	updated, err := s.deps.StateMachine.StartBoot(ctx, task.ID, actualArch, actualFirmware)
 	if err != nil {
 		// StartBoot 内部已经把 precheck 错误、attempt 超限都处理成状态机
@@ -155,7 +164,7 @@ func (s *Server) handleBootGrant(w http.ResponseWriter, r *http.Request, task mo
 		// 需要再区分错误的具体类型（计划任务 5「失败则按类型处置：
 		// precheck 错误与 attempt 超限都回 no_task 载荷，任务已被状态机
 		// 置 failed」）。
-		writeNoTaskScript(w, probeSN)
+		writeNoTaskScript(c, probeSN)
 		return
 	}
 
@@ -179,13 +188,13 @@ func (s *Server) handleBootGrant(w http.ResponseWriter, r *http.Request, task mo
 		// 渲染上下文构造失败（模板/制品/主机查不到等基础设施性问题）：
 		// 约定 1 要求始终 200，即使装配数据本身不完整，也必须给出机器能
 		// 消费的合法脚本，不能让机器停在非 200 上等人。
-		writeNoTaskScript(w, probeSN)
+		writeNoTaskScript(c, probeSN)
 		return
 	}
 
 	menu, err := s.deps.Renderer.RenderMenu(renderCtx)
 	if err != nil {
-		writeNoTaskScript(w, probeSN)
+		writeNoTaskScript(c, probeSN)
 		return
 	}
 
@@ -195,22 +204,25 @@ func (s *Server) handleBootGrant(w http.ResponseWriter, r *http.Request, task mo
 	// siglink.go 文件头注释：渲染器本身保持纯函数、不持有密钥，签名是
 	// 网关对渲染产出的一次后处理。
 	//
-	// 必须用 clientIP(r) 而不是 r.RemoteAddr 本身——§1.6/§9.3 的陷阱：
-	// nginx 校验时看到的是真实客户端 IP，Go 若直接用自己看到的 peer
-	// （nginx 之后是 loopback），两侧 HMAC 永远对不上，机器取制品即
-	// 403。clientIP 已经实现了「仅当直连 peer 是 loopback 时才信任
-	// X-Real-IP」这条判断，此处直接复用。
+	// 必须用 clientIP(c.Request) 而不是 c.Request.RemoteAddr 本身——
+	// §1.6/§9.3 的陷阱：nginx 校验时看到的是真实客户端 IP，Go 若直接用
+	// 自己看到的 peer（nginx 之后是 loopback），两侧 HMAC 永远对不上，
+	// 机器取制品即 403。clientIP 已经实现了「仅当直连 peer 是 loopback
+	// 时才信任 X-Real-IP」这条判断，此处直接复用——clientIP 本身签名不变
+	// （仍接收 *http.Request），gin 的 c.Request 就是那个底层请求对象，
+	// 不需要改 clientip.go。
 	if s.deps.SecureLinkEnabled {
 		expiresAt := s.deps.Clock.Now() + int64(s.deps.SecureLinkTTL.Seconds())
-		menu = signLargeArtifactURLs(menu, renderCtx, s.deps.SecureLinkSecret, clientIP(r), expiresAt)
+		menu = signLargeArtifactURLs(menu, renderCtx, s.deps.SecureLinkSecret, clientIP(c.Request), expiresAt)
 	}
 
 	// 记录本次请求的客户端 IP 与任务的关联，供 syslog 接收器归档使用
 	// （见 syslog.go 文件头注释）。装机阶段机器还在装机 VLAN，此时的
 	// clientIP 大概率就是稍后 installer 发 syslog 时的源 IP。
-	s.rememberClientTask(clientIP(r), updated.ID, updated.CurrentPhase)
+	s.rememberClientTask(clientIP(c.Request), updated.ID, updated.CurrentPhase)
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(menu))
+	// menu 是渲染器产出的 iPXE 菜单文本，可能含 % （某些家族的内核参数
+	// 拼接方式）；用 c.Data 而不是 c.String(code, menu) 避免把 menu 当
+	// 格式串解析（迁移契约 §6 的红线）。
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(menu))
 }

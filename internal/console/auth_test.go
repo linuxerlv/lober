@@ -3,7 +3,9 @@
 package console
 
 import (
+	"bytes"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -54,6 +56,67 @@ func TestAuth_LoginSuccessAndFailure(t *testing.T) {
 	if messages[0] != messages[1] {
 		t.Errorf("失败响应不应区分「用户不存在」与「密码错误」，但两条消息不同："+
 			"密码错误=%q，用户不存在=%q —— 区分会帮攻击者做用户名枚举", messages[0], messages[1])
+	}
+}
+
+// TestAuth_LoginRejectsEmptyCredentials 锁住「用户名或密码为空时登录请求
+// 被 gin binding 挡在 handler 之前，回 422 + CodeValidationFailed」——这是
+// gin 迁移新增的传输层校验（迁移契约 §7：auth.go 原本 0 个手写校验点，本次
+// 用 binding:"required" 标签补上「非空」这条校验，不是从手写代码搬运过来
+// 的既有行为）。
+func TestAuth_LoginRejectsEmptyCredentials(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]string
+	}{
+		{"用户名为空", map[string]string{"username": "", "password": "password123"}},
+		{"密码为空", map[string]string{"username": "bob-operator", "password": ""}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ts := newTestServer(t)
+			rr := ts.doJSON("POST", "/console/v1/auth/login", "", c.body)
+			if rr.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("%s：期望 HTTP 422，实际 %d，body=%s", c.name, rr.Code, rr.Body.String())
+			}
+			var env struct {
+				Code int `json:"code"`
+			}
+			decodeJSON(t, rr.Body.Bytes(), &env)
+			if env.Code != int(apierr.CodeValidationFailed) {
+				t.Errorf("%s：期望 code=CodeValidationFailed(%d)，实际 %d", c.name, apierr.CodeValidationFailed, env.Code)
+			}
+		})
+	}
+}
+
+// TestAuth_LoginRejectsMalformedJSON 锁住「请求体不是合法 JSON」这条分支
+// ——本轮迁移把解析载体从 json.NewDecoder 换成 c.ShouldBindJSON，语法错误
+// 的 error 类型不是 validator.ValidationErrors，必须单独判断分流到
+// CodeBadRequest，否则会被 apierr.Fail 的兜底分支误判成 CodeInternal（同
+// artifact.go 的 TestArtifact_CreateRejectsMalformedJSON，两处是同一类
+// 问题的独立修正）。用 httptest.NewRequest 直接发裸 body，不能用
+// doJSON——它总是先把 body 序列化成合法 JSON。/auth/login 是公开端点，
+// 不需要携带 token。
+func TestAuth_LoginRejectsMalformedJSON(t *testing.T) {
+	ts := newTestServer(t)
+
+	req := httptest.NewRequest("POST", "/console/v1/auth/login", bytes.NewReader([]byte("{not valid json")))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "203.0.113.1:12345"
+	rr := httptest.NewRecorder()
+	ts.Server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("请求体不是合法 JSON 应回 HTTP 400，实际 %d，body=%s", rr.Code, rr.Body.String())
+	}
+	var env struct {
+		Code int `json:"code"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &env)
+	if env.Code != int(apierr.CodeBadRequest) {
+		t.Errorf("请求体不是合法 JSON 应回 CodeBadRequest(%d)，实际 code=%d，body=%s",
+			apierr.CodeBadRequest, env.Code, rr.Body.String())
 	}
 }
 
@@ -143,6 +206,12 @@ func TestRBAC_RoleCodes(t *testing.T) {
 
 // TestRBAC_OperatorCannotWriteHook 锁住「operator 调写 hook 的端点被拒
 // 403」。
+//
+// HTTP 状态码断言在 gin 迁移中从 200 改为 403：迁移契约 §2 冻结的错误码表
+// 明确 CodeForbidden → HTTP 403，且 §0 指出「HTTP 状态码固定 200」是过期
+// 文档认知，本次迁移要让状态码开始反映真实语义，不是本测试自行变更判定
+// 标准。requireCode/requireRole（rbac.go）已改为传 http.StatusForbidden，
+// 见迁移契约 §5 骨架 agent 的交付范围。
 func TestRBAC_OperatorCannotWriteHook(t *testing.T) {
 	ts := newTestServer(t)
 	tok := ts.login("bob-operator")
@@ -150,10 +219,8 @@ func TestRBAC_OperatorCannotWriteHook(t *testing.T) {
 	rr := ts.doJSON("POST", "/console/v1/hooks", tok, map[string]any{
 		"name": "x", "stage": "pre", "interpreter": "bash", "body": "#!/bin/bash\n",
 	})
-	if rr.Code != http.StatusOK {
-		// 契约要求 HTTP 状态码固定 200（认证失败是唯一例外），授权失败
-		// 靠 body 里的 code 字段表达。
-		t.Fatalf("授权失败应仍是 HTTP 200（契约的 HTTP 状态码约定），实际 %d", rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("授权失败应回 HTTP 403（迁移契约 §2 冻结的状态码表），实际 %d", rr.Code)
 	}
 	var env struct {
 		Code int `json:"code"`
@@ -165,7 +232,7 @@ func TestRBAC_OperatorCannotWriteHook(t *testing.T) {
 }
 
 // TestRBAC_ViewerCannotCallWriteEndpoints 锁住「viewer 调任何写端点被拒」，
-// 用建任务端点代表写端点。
+// 用建任务端点代表写端点。HTTP 状态码断言同上一测试的说明，改为 403。
 func TestRBAC_ViewerCannotCallWriteEndpoints(t *testing.T) {
 	ts := newTestServer(t)
 	tok := ts.login("alice-viewer")
@@ -173,6 +240,9 @@ func TestRBAC_ViewerCannotCallWriteEndpoints(t *testing.T) {
 	rr := ts.doJSON("POST", "/console/v1/tasks", tok, map[string]any{
 		"hostId": "whatever", "templateId": "whatever",
 	})
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("授权失败应回 HTTP 403（迁移契约 §2 冻结的状态码表），实际 %d", rr.Code)
+	}
 	var env struct {
 		Code int `json:"code"`
 	}

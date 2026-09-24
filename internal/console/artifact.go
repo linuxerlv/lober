@@ -7,11 +7,12 @@ package console
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	"github.com/lober/lober/internal/apierr"
 	"github.com/lober/lober/internal/core/contract"
@@ -80,11 +81,15 @@ type ArtifactVerifier interface {
 }
 
 // routesArtifactSet 注册制品集四个端点。
+//
+// 路径参数语法从 "{id}" 换成 ":id"——这是 gin 路由声明本身的语法差异
+// （迁移契约 §4：「gin 的 :param 只是路由声明语法，不改 URL 本身」），
+// 对外可见的 URL（如 /console/v1/artifact-sets/abc/verify）一个字节不变。
 func (s *Server) routesArtifactSet() {
-	s.handleFunc("POST", "/artifact-sets", codeArtifactImport, "artifact_set.create", s.handleCreateArtifactSet)
-	s.handleFunc("GET", "/artifact-sets", "", "", s.handleListArtifactSets)
-	s.handleFunc("POST", "/artifact-sets/{id}/verify", codeArtifactImport, "artifact_set.verify", s.handleVerifyArtifactSet)
-	s.handleFunc("DELETE", "/artifact-sets/{id}", codeArtifactImport, "artifact_set.delete", s.handleDeleteArtifactSet)
+	s.handle("POST", "/artifact-sets", codeArtifactImport, "artifact_set.create", s.handleCreateArtifactSet)
+	s.handle("GET", "/artifact-sets", "", "", s.handleListArtifactSets)
+	s.handle("POST", "/artifact-sets/:id/verify", codeArtifactImport, "artifact_set.verify", s.handleVerifyArtifactSet)
+	s.handle("DELETE", "/artifact-sets/:id", codeArtifactImport, "artifact_set.delete", s.handleDeleteArtifactSet)
 }
 
 // artifactSetItem 是响应形态，字段名与 model.ArtifactSet 对应。
@@ -157,18 +162,25 @@ type createArtifactSetRequest struct {
 // manifest/状态写回逻辑由装配点注入的 ArtifactImporter 实现完成——控制台
 // 只负责落库与触发，状态更新走 ArtifactSetStore.UpdateArtifactSetState，
 // 不在本 handler 内同步执行导入）。
-func (s *Server) handleCreateArtifactSet(w http.ResponseWriter, r *http.Request) {
+//
+// sourcePath/name 两条非空校验没有改用 gin binding 的 required 标签：
+// required 只拒绝字面空字符串，不拒绝纯空格（如 "   "），而这里迁移前
+// 用的是 strings.TrimSpace(x) == ""，校验强度更严。迁移契约 §7 明确
+// 「校验条件一条都不能少」，标签表达不了原有强度时必须留在 handler 里
+// 用 Go 代码做，不能为了「全用标签」反而弱化校验，因此这两条继续手写。
+func (s *Server) handleCreateArtifactSet(c *gin.Context) {
 	var req createArtifactSetRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "请求体不是合法的 JSON"))
+	if err := c.ShouldBindJSON(&req); err != nil {
+		bindErr := bindJSONError(err)
+		apierr.Fail(c, bindErr)
 		return
 	}
 	if strings.TrimSpace(req.SourcePath) == "" {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "sourcePath 不能为空"))
+		apierr.Fail(c, apierr.New(http.StatusBadRequest, apierr.CodeBadRequest, "sourcePath 不能为空"))
 		return
 	}
 	if strings.TrimSpace(req.Name) == "" {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "name 不能为空"))
+		apierr.Fail(c, apierr.New(http.StatusBadRequest, apierr.CodeBadRequest, "name 不能为空"))
 		return
 	}
 
@@ -177,9 +189,9 @@ func (s *Server) handleCreateArtifactSet(w http.ResponseWriter, r *http.Request)
 		Name:  req.Name,
 		State: model.ArtifactSetImporting,
 	}
-	created, err := s.deps.ArtifactSets.CreateArtifactSet(r.Context(), set)
+	created, err := s.deps.ArtifactSets.CreateArtifactSet(c.Request.Context(), set)
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 
@@ -195,27 +207,52 @@ func (s *Server) handleCreateArtifactSet(w http.ResponseWriter, r *http.Request)
 	// 新风险，是「没有导入触发」这一断口在 Deps.ArtifactImporter 缺省时
 	// 的自然延续。
 	if s.deps.ArtifactImporter != nil {
-		s.deps.ArtifactImporter.TriggerImport(context.WithoutCancel(r.Context()), created.ID, req.SourcePath)
+		s.deps.ArtifactImporter.TriggerImport(context.WithoutCancel(c.Request.Context()), created.ID, req.SourcePath)
 	}
 
-	apierr.WriteOK(w, toArtifactSetItem(created))
+	apierr.OK(c, toArtifactSetItem(created))
+}
+
+// bindJSONError 把 c.ShouldBindJSON 的返回值分流成两类：
+//
+//  1. validator.ValidationErrors（结构体标签校验失败）：原样返回，交给
+//     apierr.Fail 识别并翻译成中文（422 + CodeValidationFailed，迁移
+//     契约 §3）。
+//  2. 其余情况（JSON 语法错误、类型不匹配等解码阶段失败）：改写成
+//     CodeBadRequest（400），不能直接把 err 交给 apierr.Fail——它未被
+//     任何已知 sentinel 或 *Error 识别，会落进「未识别错误」兜底分支
+//     变成 CodeInternal（500），而请求体格式错误是客户端的错，不是
+//     服务端内部错误，混进 1000 会让前端把「你传错了」误报成「服务器
+//     炸了」。
+//
+// 本文件的两个 create/无请求体端点里只有 createArtifactSetRequest 会经过
+// c.ShouldBindJSON，且该结构体目前没有任何 binding 标签（两条校验强度
+// 都超出标签表达能力，见 handleCreateArtifactSet 的说明），因此分支 1
+// 在当前代码路径下不会真正触发——保留这层判断是为了不让本函数的正确性
+// 依赖于「未来没有人给这个请求体加 binding 标签」这一隐含假设。
+func bindJSONError(err error) error {
+	var ve validator.ValidationErrors
+	if errors.As(err, &ve) {
+		return err
+	}
+	return apierr.New(http.StatusBadRequest, apierr.CodeBadRequest, "请求体不是合法的 JSON")
 }
 
 // handleListArtifactSets 处理 GET /artifact-sets。
-func (s *Server) handleListArtifactSets(w http.ResponseWriter, r *http.Request) {
-	sets, err := s.deps.ArtifactSets.ListArtifactSets(r.Context())
+func (s *Server) handleListArtifactSets(c *gin.Context) {
+	sets, err := s.deps.ArtifactSets.ListArtifactSets(c.Request.Context())
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 	items := make([]artifactSetItem, 0, len(sets))
 	for _, a := range sets {
 		items = append(items, toArtifactSetItem(a))
 	}
-	apierr.WriteOK(w, items)
+	apierr.OK(c, items)
 }
 
-// handleVerifyArtifactSet 处理 POST /artifact-sets/{id}/verify：触发一次
+// handleVerifyArtifactSet 处理 POST /artifact-sets/:id/verify：触发一次
 // 真正的 manifest 重算，校验制品完整性（SPEC §8.2「重算 sha256 校验完整
 // 性」；docs/contracts/http-console.md 同一定义）。
 //
@@ -231,10 +268,13 @@ func (s *Server) handleListArtifactSets(w http.ResponseWriter, r *http.Request) 
 // 重算，这与「校验能力缺省时端点应表现为不阻塞、不报错」的既有降级预期
 // 一致（任务要求的「verifier 为 nil 时的降级行为」，参照
 // handleCreateArtifactSet 对 ArtifactImporter 判空的既有处理）。
-func (s *Server) handleVerifyArtifactSet(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if _, err := s.deps.ArtifactSets.GetArtifactSet(r.Context(), id); err != nil {
-		writeInternal(w, err)
+func (s *Server) handleVerifyArtifactSet(c *gin.Context) {
+	// c.Param("id") 取路径参数——gin 接管路由后 r.PathValue("id") 在
+	// ":id" 语法登记的路由下永远取不到值（迁移契约 §5、audit.go 同一处
+	// 说明），必须改用 gin.Context.Param。
+	id := c.Param("id")
+	if _, err := s.deps.ArtifactSets.GetArtifactSet(c.Request.Context(), id); err != nil {
+		apierr.Fail(c, err)
 		return
 	}
 
@@ -242,41 +282,51 @@ func (s *Server) handleVerifyArtifactSet(w http.ResponseWriter, r *http.Request)
 	// context.WithoutCancel 剥离本次 HTTP 请求的生命周期，否则响应写出、
 	// 请求结束后 ctx 被取消，goroutine 里刚起步的重算就可能被牵连中断。
 	if s.deps.ArtifactVerifier != nil {
-		s.deps.ArtifactVerifier.TriggerVerify(context.WithoutCancel(r.Context()), id)
+		s.deps.ArtifactVerifier.TriggerVerify(context.WithoutCancel(c.Request.Context()), id)
 	}
 
-	apierr.WriteOK(w, nil)
+	apierr.OK(c, nil)
 }
 
-// handleDeleteArtifactSet 处理 DELETE /artifact-sets/{id}。
+// handleDeleteArtifactSet 处理 DELETE /artifact-sets/:id。
 //
 // 前置条件（§2.7）：仅 state=deprecated 且未被任何 active template 引用
 // 时可删除。ArtifactSetStore.DeleteArtifactSet 已经实现了引用检查（返回
 // contract.ErrStillReferenced），本 handler 补上「state != deprecated」
 // 这一层——Store 契约本身不检查调用方是否先确认了 state，是 handler 的
 // 职责。
-func (s *Server) handleDeleteArtifactSet(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+func (s *Server) handleDeleteArtifactSet(c *gin.Context) {
+	id := c.Param("id")
 
-	set, err := s.deps.ArtifactSets.GetArtifactSet(r.Context(), id)
+	set, err := s.deps.ArtifactSets.GetArtifactSet(c.Request.Context(), id)
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 	if set.State != model.ArtifactSetDeprecated {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeConflict,
+		// state 检查是本 handler 的职责（Store 契约不检查调用方是否先
+		// 确认了 state），迁移契约 §2 冻结 CodeConflict → HTTP 409（不是
+		// 迁移前遗留的 http.StatusOK 占位值），因此这里改用真实 409。
+		apierr.Fail(c, apierr.New(http.StatusConflict, apierr.CodeConflict,
 			"只有已停用（deprecated）的制品集才能删除，请先停用"))
 		return
 	}
 
-	if err := s.deps.ArtifactSets.DeleteArtifactSet(r.Context(), id); err != nil {
+	if err := s.deps.ArtifactSets.DeleteArtifactSet(c.Request.Context(), id); err != nil {
 		if errors.Is(err, contract.ErrStillReferenced) {
-			apierr.WriteError(w, apierr.New(http.StatusConflict, apierr.CodeStillReferenced,
+			// 保留制品集专属文案（比 apierr.go sentinelMappings 里
+			// ErrStillReferenced 的通用文案「该对象仍被…」更具体，指明是
+			// 「制品集」），不改用 apierr.Fail(c, err) 走通用 sentinel
+			// 分支——契约没有冻结 message 的具体文本，但这条更精确的
+			// 提示是既有行为，迁移不应该在没有人要求的情况下把它降级成
+			// 通用文案。HTTP 状态码/业务码与 sentinel 映射表完全一致
+			// （409 + CodeStillReferenced），只是文案来源不同。
+			apierr.Fail(c, apierr.New(http.StatusConflict, apierr.CodeStillReferenced,
 				"该制品集仍被启用中的模板引用，无法删除"))
 			return
 		}
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
-	apierr.WriteOK(w, nil)
+	apierr.OK(c, nil)
 }

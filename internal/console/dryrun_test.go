@@ -160,6 +160,16 @@ func TestParseDisksFact_EmptyFactsReturnsEmptyNotError(t *testing.T) {
 }
 
 // TestDryRun_UnknownPolicyRejected 锁住「未知策略名被拒」。
+//
+// gin 迁移后这条校验从手写的 map 查表改成了 binding:"oneof=..." 标签
+// （dryrun.go 的 diskDryRunRequest 文档有说明），因此判定路径变成
+// gin/validator 的 validator.ValidationErrors，apierr.Fail 按迁移契约
+// §3 把它翻译成 422 + CodeValidationFailed，不再是手写校验时代的
+// 200 + CodeBadRequest——这是把校验从 Go 代码换成标签的直接后果（契约
+// §3 明确写了 Fail 要识别 validator.ValidationErrors），不是本次改动
+// 意外弱化了这条校验：未知策略名依然会被拒绝，只是拒绝时携带的状态码/
+// 业务码从「参数错误」类换成了「校验失败」类，语义上更贴切（这本来就是
+// 一条格式/取值校验，不是查库之后才能判定的业务冲突）。
 func TestDryRun_UnknownPolicyRejected(t *testing.T) {
 	ts := newTestServer(t)
 	tok := ts.login("bob-operator")
@@ -167,11 +177,39 @@ func TestDryRun_UnknownPolicyRejected(t *testing.T) {
 	rr := ts.doJSON("POST", "/console/v1/disk-policy/dryrun", tok, map[string]any{
 		"diskPolicy": "not-a-real-policy",
 	})
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Errorf("未知策略名应回 HTTP 422，实际 %d, body=%s", rr.Code, rr.Body.String())
+	}
 	var env struct {
 		Code int `json:"code"`
 	}
 	decodeJSON(t, rr.Body.Bytes(), &env)
-	if env.Code != int(apierr.CodeBadRequest) {
-		t.Errorf("未知策略名应回 CodeBadRequest(%d)，实际 code=%d", apierr.CodeBadRequest, env.Code)
+	if env.Code != int(apierr.CodeValidationFailed) {
+		t.Errorf("未知策略名应回 CodeValidationFailed(%d)，实际 code=%d", apierr.CodeValidationFailed, env.Code)
+	}
+}
+
+// TestDryRun_EmptyPolicyRejected 锁住「diskPolicy 缺失或空串被拒」——
+// diskDryRunRequest.DiskPolicy 的 binding:"required" 标签顶替的是原来
+// 手写的 strings.TrimSpace(req.DiskPolicy)=="" 判断，同样走 422 +
+// CodeValidationFailed（见上面 TestDryRun_UnknownPolicyRejected 的
+// 说明：本文件里凡是从手写校验搬到 binding 标签的检查，判定路径都统一
+// 变成 validator.ValidationErrors）。
+func TestDryRun_EmptyPolicyRejected(t *testing.T) {
+	ts := newTestServer(t)
+	tok := ts.login("bob-operator")
+
+	rr := ts.doJSON("POST", "/console/v1/disk-policy/dryrun", tok, map[string]any{
+		"diskPolicy": "",
+	})
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Errorf("diskPolicy 为空应回 HTTP 422，实际 %d, body=%s", rr.Code, rr.Body.String())
+	}
+	var env struct {
+		Code int `json:"code"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &env)
+	if env.Code != int(apierr.CodeValidationFailed) {
+		t.Errorf("diskPolicy 为空应回 CodeValidationFailed(%d)，实际 code=%d", apierr.CodeValidationFailed, env.Code)
 	}
 }

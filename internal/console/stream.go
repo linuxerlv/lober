@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
 )
@@ -22,15 +24,18 @@ import (
 // 间隔取 1-2 秒）。
 const streamPollInterval = 1500 * time.Millisecond
 
-// routesStream 单独注册 SSE 端点——它不走 handleFunc（不套响应包裹，且
-// 认证仍然按 Authorization 头校验，本函数手动做认证检查而不是复用
-// requireAuth 中间件，因为认证失败时的响应体形态与其它端点一致，仍然是
-// apierr 的 Envelope，只有「认证通过之后」的正常响应才不套包裹）。
+// routesStream 单独注册 SSE 端点。它仍然要求已登录（用 s.handle 而不是
+// s.handlePublic），但不套 apierr 的响应包裹——认证失败时 requireAuth
+// 中间件走 apierr.Abort，响应体仍然是标准 Envelope；只有「认证通过
+// 之后」的正常响应才不走 apierr.OK（那会写一个完整的 JSON 信封并结束
+// 响应，与 SSE 逐条推送的长连接语义冲突，见迁移契约 §4「特别注意」）。
+// code、action 都传空——本端点不要求特定权限码，也不记审计（契约 §4
+// 冻结表：GET /tasks/:id/stream 两列都是 "—"）。
 func (s *Server) routesStream() {
-	s.handleFunc("GET", "/tasks/{id}/stream", "", "", s.handleTaskStream)
+	s.handle("GET", "/tasks/:id/stream", "", "", s.handleTaskStream)
 }
 
-// handleTaskStream 处理 GET /tasks/{id}/stream。
+// handleTaskStream 处理 GET /tasks/:id/stream。
 //
 // 五条实现要点（计划任务 7）：
 //  1. 三个响应头：Content-Type、Cache-Control、X-Accel-Buffering
@@ -39,14 +44,28 @@ func (s *Server) routesStream() {
 //  3. 每条事件后必须 flush
 //  4. 任务进终态时发一条终态事件后主动关流
 //  5. 客户端断开时要能退出循环——监听请求上下文的取消
-func (s *Server) handleTaskStream(w http.ResponseWriter, r *http.Request) {
-	taskID := r.PathValue("id")
+//
+// 不走 apierr.OK/Fail：那两者内部调用 c.JSON，会写一个完整的 JSON 信封
+// 并结束响应，与本端点「保持连接、逐条推送」的语义冲突（迁移契约 §4）。
+// 直接操作 c.Writer（gin.ResponseWriter）：它是 http.ResponseWriter 的
+// 超集，本文件原有的 Header()/WriteHeader()/Write() 调用方式不需要改
+// 写法，只是换了持有者。
+//
+// gin.ResponseWriter 接口本身声明了 http.Flusher（迁移契约之外的一个
+// 事实：gin 的封装决定的，见 gin/response_writer.go），因此
+// c.Writer.(http.Flusher) 这个类型断言在 gin 下恒真，不会再像标准库时代
+// 那样在「底层写入器不支持 Flush」时失败——gin.ResponseWriter.Flush()
+// 内部自己会判断底层是否真的实现 http.Flusher，不支持时静默空操作。
+// 保留这个断言只是防御性写法（万一某个未来版本的 gin 改变这个接口
+// 约定），生产环境走标准库 net/http.Server 时底层一定支持 Flush，测试
+// 里的 flushRecorder 也显式实现了 Flush，因此这条曾经的「显式报错」
+// 路径在 gin 之下已经是不可达分支，不是本次改动主动去掉了一层校验。
+func (s *Server) handleTaskStream(c *gin.Context) {
+	taskID := c.Param("id")
 
+	w := c.Writer
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		// 测试或部署环境的 ResponseWriter 不支持 Flush 时，SSE 的核心特性
-		// （逐条推送）无法工作，直接报错比默默退化成一次性响应更安全——
-		// 运维会看到明确的错误而不是「日志看起来冻住了」却毫无线索。
 		http.Error(w, "本响应写入器不支持流式推送", http.StatusInternalServerError)
 		return
 	}
@@ -57,7 +76,7 @@ func (s *Server) handleTaskStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	afterSeq := parseLastEventID(r.Header.Get("Last-Event-ID"))
+	afterSeq := parseLastEventID(c.GetHeader("Last-Event-ID"))
 
 	// pushed 记录本连接已推送过的事件 Seq。单靠 afterSeq 水位不够：
 	// contract.EventStore 规定 Seq 非正数表示非信号来源的事件（扫描循环判
@@ -71,7 +90,7 @@ func (s *Server) handleTaskStream(w http.ResponseWriter, r *http.Request) {
 	// 就剪掉正 Seq 的历史，去重集合只兜非正 Seq 那部分。
 	pushed := make(map[int]struct{})
 
-	ctx := r.Context()
+	ctx := c.Request.Context()
 	ticker := time.NewTicker(streamPollInterval)
 	defer ticker.Stop()
 

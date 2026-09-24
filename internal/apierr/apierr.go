@@ -1,9 +1,18 @@
 // Package apierr 实现人面（控制台）响应包裹与错误码映射。对应实现计划
-// 任务 14，依据 SPEC §8.2、§12.5。
+// 任务 14，依据 SPEC §8.2、§12.5；gin 适配层见 gin.go，依据
+// docs/superpowers/specs/2026-09-24-gin-migration-contract.md。
 //
-// SPEC §12.5：vben 的默认响应拦截器按 codeField:'code' / dataField:'data'
-// / successCode:0 解包响应体。照它做可以不改前端框架代码，升级上游时无
-// 冲突——这是本包存在的全部理由。
+// 本包存在的理由：HTTP 状态码与 Envelope.Code 是两个消费者各取所需，
+// 不是冗余字段。状态码给 curl、网关、监控、gin 的日志中间件识别粗粒度
+// 的成功/失败；Envelope.Code 给前端区分同一状态码下的不同业务分支
+// （例如 409 下 1005/1006/1007/1008 是四种不同的 UI 提示）。删掉任何
+// 一边都会丢信息，这是两个字段必须并存的原因。
+//
+// 前端曾经只读 Envelope.Code、完全忽略 HTTP 状态码（vben 上游的
+// defaultResponseInterceptor 按 codeField:'code'/successCode:0 解包），
+// 这一度让状态码显得多余。迁移后前端改用自写拦截器：HTTP 2xx 判成功，
+// 非 2xx 再读 body.code 细分同状态码下的具体原因——状态码与 code 从此
+// 各司其职，不再是「为了迁就 vben 才双写一份」的冗余设计。
 //
 // 机器面不适用本包：那边是 iPXE 与 busybox curl，响应保持纯文本裸响应
 // （SPEC §6.2），不走本包的 Envelope。

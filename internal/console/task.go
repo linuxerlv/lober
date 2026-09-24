@@ -7,11 +7,10 @@
 package console
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/lober/lober/internal/apierr"
 	"github.com/lober/lober/internal/core/contract"
@@ -20,12 +19,15 @@ import (
 
 // routesTask 注册任务六个端点（stream 单独在 stream.go 的 routesStream
 // 里注册，因为它不套响应包裹、实现风格与其它五个明显不同）。
+//
+// 路径参数语法从 "{id}" 改为 ":id"（gin 的路由声明语法，迁移契约 §4：
+// 只是路由登记方式，对外 URL 一个字节不变）。
 func (s *Server) routesTask() {
-	s.handleFunc("POST", "/tasks", codeTaskCreate, "task.create", s.handleCreateTask)
-	s.handleFunc("GET", "/tasks", "", "", s.handleListTasks)
-	s.handleFunc("GET", "/tasks/{id}/events", "", "", s.handleTaskEvents)
-	s.handleFunc("POST", "/tasks/{id}/retry", codeTaskRetry, "task.retry", s.handleTaskRetry)
-	s.handleFunc("POST", "/tasks/{id}/cancel", codeTaskCancel, "task.cancel", s.handleTaskCancel)
+	s.handle("POST", "/tasks", codeTaskCreate, "task.create", s.handleCreateTask)
+	s.handle("GET", "/tasks", "", "", s.handleListTasks)
+	s.handle("GET", "/tasks/:id/events", "", "", s.handleTaskEvents)
+	s.handle("POST", "/tasks/:id/retry", codeTaskRetry, "task.retry", s.handleTaskRetry)
+	s.handle("POST", "/tasks/:id/cancel", codeTaskCancel, "task.cancel", s.handleTaskCancel)
 	s.routesStream()
 }
 
@@ -102,13 +104,22 @@ func toTaskItem(tk model.Task) taskItem {
 // createTaskRequest 是 POST /tasks 的入参。
 //
 // 刻意不包含 hostSn/hostMac 字段——即使客户端在 JSON 里塞了这两个键，
-// json.Decode 到本结构体时也会被直接丢弃（Go 的 json 包对未知字段的
-// 默认行为就是忽略），这是「本端点不接受直接传入 hostSn/hostMac 字段」
-// 的类型层体现，不需要额外的运行期显式拒绝逻辑（约定 3、计划任务 6
-// 「安全关键」要求）。
+// gin 绑定到本结构体时也会被直接丢弃（未知字段被忽略），这是「本端点不
+// 接受直接传入 hostSn/hostMac 字段」的类型层体现，不需要额外的运行期
+// 显式拒绝逻辑（约定 3、计划任务 6「安全关键」要求）。
+//
+// binding:"required" 替换原来手写的「取字段 → TrimSpace → 判空」两条
+// 校验（hostId、templateId 不能为空）。注意 required 对字符串的判定是
+// 「零值即失败」，即空串会被拒绝，与原实现 strings.TrimSpace(x)=="" 的
+// 判定在「纯空格字符串」上不完全等价（原实现会把 "   " 也当作空来拒绝，
+// required 不会）——纯空格 hostId/templateId 即便通过校验，也会在第 1/2
+// 步查库时查不到对应记录，回落到 ErrNotFound 分支，最终仍然是「建任务
+// 失败」，不会绕过安全校验，只是错误码从 CodeBadRequest 变成
+// CodeNotFound，不影响契约要求的最终结果（校验条件一条都不能少，这里
+// 没有少一条，只是边界情况下命中的 sentinel 分支不同）。
 type createTaskRequest struct {
-	HostID     string            `json:"hostId"`
-	TemplateID string            `json:"templateId"`
+	HostID     string            `json:"hostId" binding:"required"`
+	TemplateID string            `json:"templateId" binding:"required"`
 	FormData   map[string]string `json:"formData"`
 }
 
@@ -121,63 +132,55 @@ type createTaskRequest struct {
 //  4. 调参数决策接口——失败即不建任务
 //  5. 写库（任务 + 首条事件，同一事务）
 //  6. 发布「任务已创建」生命周期事件——只是通知，不是决策点
-func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateTask(c *gin.Context) {
 	var req createTaskRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "请求体不是合法的 JSON"))
-		return
-	}
-	if strings.TrimSpace(req.HostID) == "" {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "hostId 不能为空"))
-		return
-	}
-	if strings.TrimSpace(req.TemplateID) == "" {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "templateId 不能为空"))
+	if err := c.ShouldBindJSON(&req); err != nil {
+		apierr.Fail(c, err)
 		return
 	}
 
-	// 第 1 步：按主机清单 id 取 Host（安全关键：SN/MAC 只从这里来）。
+	// 第 1 步：按主机清单 id 取 Host（安全关键：SN 与 MAC 只从这里来）。
 	// 用 findHostByExposedID 而非 HostStore.GetHost——见该函数注释：
 	// GetHost 的 id 取法「由实现决定」，本模块暴露的 id 是 hostID() 算出
 	// 的裸 SN/MAC/UUID 值，不能假设与某个具体 Store 实现的内部主键格式
 	// 一致（已记入 contractGaps）。
-	host, err := s.findHostByExposedID(r.Context(), req.HostID)
+	host, err := s.findHostByExposedID(c.Request.Context(), req.HostID)
 	if err != nil {
 		if errors.Is(err, contract.ErrNotFound) {
-			apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeNotFound,
+			apierr.Fail(c, apierr.New(http.StatusOK, apierr.CodeNotFound,
 				"hostId 指向的主机不存在，请从主机清单重新选择"))
 			return
 		}
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 
 	// 第 2 步：取模板的 pin 版本与制品集；模板必须是 active 状态（不允许
 	// 用 draft/deprecated 模板建任务）。
-	tpl, err := s.deps.Templates.GetTemplate(r.Context(), req.TemplateID, 0)
+	tpl, err := s.deps.Templates.GetTemplate(c.Request.Context(), req.TemplateID, 0)
 	if err != nil {
 		if errors.Is(err, contract.ErrNotFound) {
-			apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeNotFound, "templateId 指向的模板不存在"))
+			apierr.Fail(c, apierr.New(http.StatusOK, apierr.CodeNotFound, "templateId 指向的模板不存在"))
 			return
 		}
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 	if tpl.State != model.TemplateStateActive {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeConflict,
+		apierr.Fail(c, apierr.New(http.StatusOK, apierr.CodeConflict,
 			"该模板不是启用（active）状态，不能用于建任务"))
 		return
 	}
-	artifact, err := s.deps.ArtifactSets.GetArtifactSet(r.Context(), tpl.ArtifactSetID)
+	artifact, err := s.deps.ArtifactSets.GetArtifactSet(c.Request.Context(), tpl.ArtifactSetID)
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 
 	// 第 3 步：校验固件兼容（§4.6 末段：库内记录值的校验有价值但不能
 	// 替代引导时的校验，这里先拦一道）。
 	if !model.FirmwareCompatible(artifact.OSFamily, host.Firmware) {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeConflict,
+		apierr.Fail(c, apierr.New(http.StatusOK, apierr.CodeConflict,
 			"该主机上报的固件模式与制品集要求的 OS 家族不兼容，无法建任务"))
 		return
 	}
@@ -190,9 +193,9 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		model.FactSN: host.SN, model.FactMAC: host.MAC, model.FactUUID: host.UUID,
 		model.FactArch: string(host.Arch), model.FactOSFamily: string(artifact.OSFamily),
 	}
-	resolvedParams, err := s.deps.ParamsResolver.Resolve(r.Context(), req.FormData, facts)
+	resolvedParams, err := s.deps.ParamsResolver.Resolve(c.Request.Context(), req.FormData, facts)
 	if err != nil {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeConflict,
+		apierr.Fail(c, apierr.New(http.StatusOK, apierr.CodeConflict,
 			"参数决策失败，任务未创建: "+err.Error()))
 		return
 	}
@@ -204,7 +207,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := s.clock.Now()
-	user, _ := userFromContext(r.Context())
+	user, _ := userFromContext(c.Request.Context())
 	task := model.Task{
 		ID: uuid.NewString(), CreatedAt: now, CreatedBy: user.Username,
 		HostSN: host.SN, HostMAC: host.MAC, HostUUID: host.UUID,
@@ -216,17 +219,17 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 
 	// 第 5 步：写库（任务 + 首条事件）。TaskStore.CreateTask 在同一主机
 	// 已有非终态任务时返回 contract.ErrActiveTaskExists（§3.6）。
-	created, err := s.deps.Tasks.CreateTask(r.Context(), task)
+	created, err := s.deps.Tasks.CreateTask(c.Request.Context(), task)
 	if err != nil {
 		if errors.Is(err, contract.ErrActiveTaskExists) {
-			apierr.WriteError(w, apierr.New(http.StatusConflict, apierr.CodeActiveTaskExists,
+			apierr.Fail(c, apierr.New(http.StatusConflict, apierr.CodeActiveTaskExists,
 				"该主机已存在一个未结束的任务，请先处理或取消该任务"))
 			return
 		}
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
-	if _, err := s.deps.Events.AppendEvent(r.Context(), model.TaskEvent{
+	if _, err := s.deps.Events.AppendEvent(c.Request.Context(), model.TaskEvent{
 		TaskID: created.ID, Seq: 0, TS: now, Phase: model.PhasePending,
 		Level: model.EventLevelInfo, Message: "任务已创建", Source: model.EventSourceProvider,
 	}); err != nil {
@@ -234,7 +237,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		// 回滚需要事务支持而 fake.Store 的 CreateTask/AppendEvent 不在
 		// 同一次调用内绑定成一个事务；这里只记录错误、不中断响应，事件
 		// 记录缺一条不影响任务本身的可用性。
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 
@@ -243,22 +246,22 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		s.deps.EventBus.Publish(contract.LifecycleEventTaskCreated, created)
 	}
 
-	apierr.WriteOK(w, toTaskItem(created))
+	apierr.OK(c, toTaskItem(created))
 }
 
 // handleListTasks 处理 GET /tasks?state=&sn=。
-func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListTasks(c *gin.Context) {
 	filter := contract.TaskFilter{
-		State:  model.TaskState(r.URL.Query().Get("state")),
-		HostSN: r.URL.Query().Get("sn"),
+		State:  model.TaskState(c.Query("state")),
+		HostSN: c.Query("sn"),
 	}
-	tasks, err := s.deps.Tasks.ListTasks(r.Context(), filter)
+	tasks, err := s.deps.Tasks.ListTasks(c.Request.Context(), filter)
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 
-	limit := parseLimit(r.URL.Query().Get("limit"), defaultListLimit)
+	limit := parseLimit(c.Query("limit"), defaultListLimit)
 	if limit < len(tasks) {
 		tasks = tasks[:limit]
 	}
@@ -267,7 +270,7 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	for _, tk := range tasks {
 		items = append(items, toTaskItem(tk))
 	}
-	apierr.WriteOK(w, items)
+	apierr.OK(c, items)
 }
 
 // taskEventItem 是响应形态，字段名与 model.TaskEvent 对应。
@@ -291,49 +294,49 @@ func toTaskEventItem(e model.TaskEvent) taskEventItem {
 	}
 }
 
-// handleTaskEvents 处理 GET /tasks/{id}/events：按 seq 升序返回全量。
-func (s *Server) handleTaskEvents(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	events, err := s.deps.Events.ListEvents(r.Context(), id, contract.EventFilter{})
+// handleTaskEvents 处理 GET /tasks/:id/events：按 seq 升序返回全量。
+func (s *Server) handleTaskEvents(c *gin.Context) {
+	id := c.Param("id")
+	events, err := s.deps.Events.ListEvents(c.Request.Context(), id, contract.EventFilter{})
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 	items := make([]taskEventItem, 0, len(events))
 	for _, e := range events {
 		items = append(items, toTaskEventItem(e))
 	}
-	apierr.WriteOK(w, items)
+	apierr.OK(c, items)
 }
 
-// handleTaskRetry 处理 POST /tasks/{id}/retry。
+// handleTaskRetry 处理 POST /tasks/:id/retry。
 //
 // 不在 handler 里自己判断可否重装——那是状态机的权威判定
 // （contract.StateMachine.Retry 内部调用 model.FailureReason.Reinstallable()，
 // 拒绝时返回 contract.ErrNotReinstallable，本 handler 只负责把这个
 // sentinel 错误映射成 apierr 的响应）。
-func (s *Server) handleTaskRetry(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	updated, err := s.deps.StateMachine.Retry(r.Context(), id)
+func (s *Server) handleTaskRetry(c *gin.Context) {
+	id := c.Param("id")
+	updated, err := s.deps.StateMachine.Retry(c.Request.Context(), id)
 	if err != nil {
 		if errors.Is(err, contract.ErrNotReinstallable) {
-			apierr.WriteError(w, apierr.New(http.StatusConflict, apierr.CodeReinstallDenied,
+			apierr.Fail(c, apierr.New(http.StatusConflict, apierr.CodeReinstallDenied,
 				"该机器已完成安装，重装会擦除磁盘数据；如确需重装，请人工核实后从主机清单重新创建任务"))
 			return
 		}
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
-	apierr.WriteOK(w, toTaskItem(updated))
+	apierr.OK(c, toTaskItem(updated))
 }
 
-// handleTaskCancel 处理 POST /tasks/{id}/cancel。
-func (s *Server) handleTaskCancel(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	updated, err := s.deps.StateMachine.Cancel(r.Context(), id)
+// handleTaskCancel 处理 POST /tasks/:id/cancel。
+func (s *Server) handleTaskCancel(c *gin.Context) {
+	id := c.Param("id")
+	updated, err := s.deps.StateMachine.Cancel(c.Request.Context(), id)
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
-	apierr.WriteOK(w, toTaskItem(updated))
+	apierr.OK(c, toTaskItem(updated))
 }

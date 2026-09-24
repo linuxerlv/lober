@@ -131,6 +131,65 @@ func TestHost_UnknownArchRejected(t *testing.T) {
 	}
 }
 
+// TestHost_UnknownFirmwareRejected 锁住「枚举外的固件值被拒」，与
+// TestHost_UnknownArchRejected 对称——arch 与 firmware 都是白名单枚举，
+// 迁移到 gin binding 的 oneof 标签后两者必须同样严格，不能只覆盖其中一个。
+func TestHost_UnknownFirmwareRejected(t *testing.T) {
+	ts := newTestServer(t)
+	tok := ts.login("eve-admin")
+
+	rr := ts.doJSON("POST", "/console/v1/hosts", tok, map[string]string{
+		"sn": "SN-BAD-FW", "mac": "aa:bb:cc:dd:ee:ff", "arch": "x86_64", "firmware": "coreboot",
+	})
+	var env struct {
+		Code int `json:"code"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &env)
+	if env.Code == int(apierr.CodeOK) {
+		t.Errorf("枚举外的 firmware 值应被拒，实际成功")
+	}
+}
+
+// TestHost_MissingSNRejected 锁住「缺 sn 回校验错误」。迁移前 handleCreateHost
+// 对 sn 有独立的手写判空（见迁移契约 §7 host.go 的校验清单），迁移到 binding
+// 标签后必须保留这条，不能只靠「sn 恰好没在别处被用到」而侥幸通过。
+func TestHost_MissingSNRejected(t *testing.T) {
+	ts := newTestServer(t)
+	tok := ts.login("eve-admin")
+
+	rr := ts.doJSON("POST", "/console/v1/hosts", tok, map[string]string{
+		"mac": "aa:bb:cc:dd:ee:ff", "arch": "x86_64", "firmware": "uefi",
+	})
+	var env struct {
+		Code int `json:"code"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &env)
+	if env.Code == int(apierr.CodeOK) {
+		t.Errorf("缺 sn 应回校验错误，实际成功")
+	}
+}
+
+// TestHost_MissingMACRejected 锁住「缺 mac（空串）回校验错误」，与
+// TestHost_InvalidMACRejected（mac 非空但格式不合法）是两条不同的校验
+// 路径：空串在归一化之前就该被 required 挡住，不能等流到 NormalizeMAC
+// 才发现问题（NormalizeMAC("") 恰好也返回空串，两条路径不测清楚容易让人
+// 误以为「判空」这一步已经被格式校验隐含覆盖，从而在未来重构时被删掉）。
+func TestHost_MissingMACRejected(t *testing.T) {
+	ts := newTestServer(t)
+	tok := ts.login("eve-admin")
+
+	rr := ts.doJSON("POST", "/console/v1/hosts", tok, map[string]string{
+		"sn": "SN-NO-MAC", "arch": "x86_64", "firmware": "uefi",
+	})
+	var env struct {
+		Code int `json:"code"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &env)
+	if env.Code == int(apierr.CodeOK) {
+		t.Errorf("缺 mac 应回校验错误，实际成功")
+	}
+}
+
 // TestHost_SearchMatchesThreeFieldsCaseInsensitive 锁住「搜索对三个字段
 // 都生效且大小写不敏感」。
 func TestHost_SearchMatchesThreeFieldsCaseInsensitive(t *testing.T) {

@@ -7,39 +7,40 @@
 package console
 
 import (
-	"encoding/json"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/lober/lober/internal/apierr"
 	"github.com/lober/lober/internal/core/contract"
-	"github.com/lober/lober/internal/core/model"
 )
 
 // routesDiskDryRun 注册磁盘 dry-run 端点。
 func (s *Server) routesDiskDryRun() {
-	s.handleFunc("POST", "/disk-policy/dryrun", "", "", s.handleDiskDryRun)
-}
-
-// validDiskPolicies 是 diskPolicy 字段的白名单，取自 model.DiskPolicy 的
-// 五个具名取值（与 config 包的同名白名单保持一致的取值集合，但 console
-// 不 import config，因此本地独立声明——两处都是「引用 model 常量构造
-// 白名单」，不是拼写字面量，不会走散）。
-var validDiskPolicies = map[string]bool{
-	string(model.DiskPolicyFirst):    true,
-	string(model.DiskPolicyLargest):  true,
-	string(model.DiskPolicyByModel):  true,
-	string(model.DiskPolicyRAID1SSD): true,
-	string(model.DiskPolicyByHook):   true,
+	s.handle("POST", "/disk-policy/dryrun", "", "", s.handleDiskDryRun)
 }
 
 // diskDryRunRequest 是入参：策略名与一批模拟的硬件采集结果（facts，键名
 // 形如真机采集脚本实际产出的 LOBER_INSPECT_DISK_<n>_<field>，见
 // parseDisksFact 的文档）。
+//
+// binding 标签替换原来手写的两条校验（diskPolicy 不能为空、取值必须在
+// 白名单内）：required 顶替空值判定，oneof 顶替 validDiskPolicies 那张
+// map——五个取值直接抄 model.DiskPolicy 的五个具名常量值（authoring.go），
+// binding tag 是字面量字符串，不能引用 Go 常量，因此这里没有取消「白名单
+// 取值与 model 常量同源」这条注释所述的保证，只是把「同源」这件事从
+// map 初始化搬到了肉眼核对 tag 字面量与常量定义（两处任何一边改动都需要
+// 人工同步，与迁移前 map 初始化用常量、之后写字面量相比，多了一点点
+// 走散风险，但 dryrun_test.go 的 TestDryRun_UnknownPolicyRejected 会在
+// 两者不一致时立刻测试失败，不是无保护的裸字面量）。facts 字段没有
+// 校验标签——它的合法性检查（分组、字段齐备、类型转换）依赖动态 map
+// 遍历与查库无关的纯计算，标签表达不了，留在 parseDisksFact 里用 Go
+// 代码做（契约 §7：标签表达不了的留在 handler 里）。
 type diskDryRunRequest struct {
-	DiskPolicy string            `json:"diskPolicy"`
+	DiskPolicy string            `json:"diskPolicy" binding:"required,oneof=first largest by-model raid1-ssd by-hook"`
 	Facts      map[string]string `json:"facts"`
 }
 
@@ -69,28 +70,19 @@ type diskPlanResult struct {
 // 这是当前模块边界下的真实代价，不是本文件的选择失误。若未来这个格式
 // 升级为冻结契约，正解是把分组解析逻辑收敛到 model 或 contract 包一次，
 // 两个模块的调用点都改为调用公共实现。
-func (s *Server) handleDiskDryRun(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleDiskDryRun(c *gin.Context) {
 	var req diskDryRunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "请求体不是合法的 JSON"))
-		return
-	}
-	if strings.TrimSpace(req.DiskPolicy) == "" {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "diskPolicy 不能为空"))
-		return
-	}
-	if !validDiskPolicies[req.DiskPolicy] {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest,
-			"diskPolicy 取值不合法，必须是 first/largest/by-model/raid1-ssd/by-hook 之一"))
+	if err := c.ShouldBindJSON(&req); err != nil {
+		apierr.Fail(c, err)
 		return
 	}
 
 	disks := parseDisksFact(req.Facts)
-	layout, err := s.deps.DiskPlanner.Plan(r.Context(), disks, contract.DiskIntent{
+	layout, err := s.deps.DiskPlanner.Plan(c.Request.Context(), disks, contract.DiskIntent{
 		Policy: req.DiskPolicy, Params: req.Facts,
 	})
 	if err != nil {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeInternal, "磁盘规划失败: "+err.Error()))
+		apierr.Fail(c, apierr.New(http.StatusOK, apierr.CodeInternal, "磁盘规划失败: "+err.Error()))
 		return
 	}
 
@@ -102,7 +94,7 @@ func (s *Server) handleDiskDryRun(w http.ResponseWriter, r *http.Request) {
 		}
 		reasons = append(reasons, sel.Reason)
 	}
-	apierr.WriteOK(w, diskPlanResult{ChosenDisk: chosen, Reasoning: strings.Join(reasons, "; ")})
+	apierr.OK(c, diskPlanResult{ChosenDisk: chosen, Reasoning: strings.Join(reasons, "; ")})
 }
 
 // inspectDiskKeyPrefix 是采集专用键前缀，必须与

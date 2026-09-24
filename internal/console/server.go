@@ -8,8 +8,11 @@
 package console
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/lober/lober/internal/apierr"
 	"github.com/lober/lober/internal/core/contract"
@@ -123,10 +126,15 @@ const defaultSessionTTL = 12 * time.Hour
 
 // Server 持有全部依赖与内部状态（会话表），实现 http.Handler 供
 // cmd/lober 挂载到 /console/v1 前缀下。
+//
+// mux 换成 *gin.Engine 是本次 gin 迁移骨架的核心改动（迁移契约 §5），但
+// Server 对外仍然实现 http.Handler——ServeHTTP 直接委托给 engine，装配点
+// cmd/lober 与全部既有测试按 http.Handler 用它这一点完全不变（gin.Engine
+// 本身就实现 ServeHTTP，这不是新增能力，只是内部换了实现）。
 type Server struct {
 	deps     Deps
 	sessions *sessionStore
-	mux      *http.ServeMux
+	engine   *gin.Engine
 
 	clock            contract.Clock
 	sessionTTL       time.Duration
@@ -135,10 +143,27 @@ type Server struct {
 
 // NewServer 用给定依赖构造一个 Server 并完成路由注册。
 func NewServer(deps Deps) *Server {
+	// gin.SetMode 是包级全局状态：ReleaseMode 关掉 debug 模式启动时打印
+	// 全部路由表的行为（迁移契约 §5）——debug 模式的路由表会淹掉
+	// go test -v 的输出，生产环境也不该跑 debug 模式。测试环境如需
+	// TestMode（避免警告噪音）由测试自己的 init() 设置，这里统一设成
+	// ReleaseMode 是生产默认值，不因为在测试里跑就退让。
+	gin.SetMode(gin.ReleaseMode)
+
+	engine := gin.New()
+	// 用 gin.New() 而不是 gin.Default()：后者自带 Logger 与 Recovery 中间件
+	// （迁移契约 §5）。Logger 会往 stdout 打 gin 自己格式的访问日志，与
+	// 项目统一用 log/slog 的方向冲突，形成两套并行日志输出。Recovery
+	// 也不能用默认版本——默认版本恢复 panic 后写一个纯文本 500，不是本
+	// 项目的 Envelope 信封，前端拦截器解析不出 code 字段。ginRecovery
+	// 是本文件下面的替代实现，恢复 panic 后走 apierr.Abort，保证响应
+	// 形态与其它错误路径一致。
+	engine.Use(ginRecovery())
+
 	s := &Server{
 		deps:     deps,
 		sessions: newSessionStore(),
-		mux:      http.NewServeMux(),
+		engine:   engine,
 		clock:    deps.Clock,
 	}
 	if s.sessionTTL = deps.SessionTTL; s.sessionTTL <= 0 {
@@ -151,56 +176,88 @@ func NewServer(deps Deps) *Server {
 	return s
 }
 
-// ServeHTTP 实现 http.Handler，直接委托给内部 mux。
+// ServeHTTP 实现 http.Handler，直接委托给内部 gin 引擎。
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.mux.ServeHTTP(w, r)
+	s.engine.ServeHTTP(w, r)
 }
 
-// handleFunc 是路由注册的公共封装：统一加上 /console/v1 前缀，并按
-// needAuth/needCode 组合中间件链。中间件顺序固定为
-// 审计 → 授权 → 认证 → 业务 handler（Go 的 http.Handler 包装顺序是
-// 「外层先执行」，因此写法上按「先认证、再授权、最后审计」的语义反过来
-// 嵌套：requireAuth 包 requireCode 包 audit 包 handlerFunc？——不，见下方
-// 实际实现：中间件从外到内依次是 requireAuth（最外层先跑）、requireCode、
-// audit、handlerFunc（最内层）。这与计划任务 1「先认证再授权」、计划任务 2
-// 「审计记录里要有已确定的操作人」的顺序要求一致：审计中间件必须在认证
-// 之后才能读到 context 里的用户身份。
-func (s *Server) handleFunc(method, pattern string, code string, action string, h http.HandlerFunc) {
-	var handler http.Handler = h
-	if action != "" {
-		handler = s.auditMiddleware(action, handler)
+// ginRecovery 是接了 apierr.Abort 的 panic 恢复中间件（迁移契约 §5）：
+// gin 默认的 Recovery 恢复后写一段纯文本 500，不是本项目的 JSON 信封，
+// 前端拦截器读不到 code 字段就会把「服务端崩溃」误判成「网络层错误」，
+// 走不到统一的错误提示逻辑。本实现恢复后改走 apierr.Abort，保证 panic
+// 与其它错误路径一样返回 {code:1000,data:null,message:"..."} 信封，且
+// 原始 panic 值只进 slog（与 apierr 包「未识别错误不进响应体」的安全
+// 边界保持一致方向，不把 panic 携带的任意内容吐给客户端）。
+func ginRecovery() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("控制台 handler panic，已恢复", slog.Any("panic", rec), slog.String("path", c.Request.URL.Path))
+				apierr.Abort(c, apierr.New(http.StatusInternalServerError, apierr.CodeInternal,
+					"服务器内部错误，请联系管理员并提供操作时间以便查询日志"))
+			}
+		}()
+		c.Next()
 	}
+}
+
+// handle 注册一个业务端点：要求已登录；code 非空时检查权限码；action 非空
+// 时写审计（迁移契约 §5）。等价于迁移前的 handleFunc，参数含义逐一对应。
+//
+// 权限码是按端点分配的，不是按前缀（迁移契约 §4）——例如 /hooks 下
+// create/update/validate 要 codeHookWrite，approve/reject 不要，因此本
+// 函数必须支持逐端点指定，不能套 gin RouterGroup 的层级中间件。中间件
+// 注册顺序沿用迁移前 handleFunc 的语义：requireAuth 最先跑，其次
+// requireCode，最后 auditMiddleware，业务 handler 在最内层——这与「先
+// 认证再授权」「审计记录里要有已确定的操作人」的顺序要求一致：审计中间件
+// 必须在认证之后才能读到 context 里的用户身份。gin 的 Use 是按注册顺序
+// 依次执行（不是标准库 http.Handler 那种反向嵌套），因此这里的调用顺序
+// 直接就是执行顺序，不需要像迁移前那样反着包一层。
+func (s *Server) handle(method, path, code, action string, h gin.HandlerFunc) {
+	handlers := []gin.HandlerFunc{s.requireAuth()}
 	if code != "" {
-		handler = s.requireCode(code)(handler)
+		handlers = append(handlers, s.requireCode(code))
 	}
-	// 全部业务端点都要求已登录（viewer 只读也需要登录才能看到数据，
-	// §12.5：viewer 角色可见全部路由，但路由本身仍在登录墙之后）。
-	handler = s.requireAuth(handler)
-
-	full := "/console/v1" + pattern
-	s.mux.Handle(method+" "+full, handler)
-}
-
-// handleFuncPublic 注册一个不需要认证的端点（目前只有登录本身）。
-func (s *Server) handleFuncPublic(method, pattern string, h http.HandlerFunc) {
-	full := "/console/v1" + pattern
-	s.mux.Handle(method+" "+full, h)
-}
-
-// handleFuncRole 与 handleFunc 类似，但按角色名而非权限码卡门（见
-// requireRole 的说明：少数端点的权限表述是「某个角色才能做」）。
-func (s *Server) handleFuncRole(method, pattern string, role string, action string, h http.HandlerFunc) {
-	var handler http.Handler = h
 	if action != "" {
-		handler = s.auditMiddleware(action, handler)
+		handlers = append(handlers, s.auditMiddleware(action))
 	}
-	if role != "" {
-		handler = s.requireRole(role)(handler)
-	}
-	handler = s.requireAuth(handler)
+	handlers = append(handlers, h)
 
-	full := "/console/v1" + pattern
-	s.mux.Handle(method+" "+full, handler)
+	full := "/console/v1" + path
+	s.engine.Handle(method, full, handlers...)
+}
+
+// handlePublic 注册一个不需要认证的端点（目前只有登录本身，迁移契约 §5）。
+func (s *Server) handlePublic(method, path string, h gin.HandlerFunc) {
+	full := "/console/v1" + path
+	s.engine.Handle(method, full, h)
+}
+
+// handleFuncRole 与 handle 类似，但按角色名而非权限码卡门（见 requireRole
+// 的说明：少数端点的权限表述是「某个角色才能做」）。
+//
+// 契约缺口说明：迁移契约 §4/§5 冻结的 29 端点表与骨架 API 都没有覆盖
+// POST /templates、PUT /templates/{id} 这两个端点——它们在迁移前的代码里
+// 就通过 handleFuncRole/requireRole 按 roleAdmin 卡门，不是本次改动引入
+// 的新机制。template.go 属于六个资源域文件之一，本 agent 不能修改它的
+// 调用点；若骨架只提供契约 §5 列出的 handle/handlePublic，这两个端点会
+// 因为没有对应的注册方式而编译失败或需要 template.go 自行发明等价机制，
+// 等于把「按角色卡门」这个既有业务语义在迁移中悄悄丢掉。保留本函数是
+// 「不改任何业务语义」这条硬约束下唯一不动 template.go 的选择；已在本
+// 任务的交付报告里作为契约缺口单独列出，供主会话核对是否需要补一份契约
+// 修订。
+func (s *Server) handleFuncRole(method, path string, role string, action string, h gin.HandlerFunc) {
+	handlers := []gin.HandlerFunc{s.requireAuth()}
+	if role != "" {
+		handlers = append(handlers, s.requireRole(role))
+	}
+	if action != "" {
+		handlers = append(handlers, s.auditMiddleware(action))
+	}
+	handlers = append(handlers, h)
+
+	full := "/console/v1" + path
+	s.engine.Handle(method, full, handlers...)
 }
 
 // writeInternal 是 handler 内部遇到不属于任何已知 sentinel 的错误时的
@@ -211,18 +268,15 @@ func writeInternal(w http.ResponseWriter, err error) {
 	apierr.WriteError(w, err)
 }
 
-// routes 注册 /console/v1 下的全部端点。按资源分组，组内按
-// docs/contracts/http-console.md 的端点总表顺序排列，方便逐条核对。
-//
-// 按计划任务顺序逐步补全：本行以下的分组随任务 3-8 依次实现，实现前
-// 该分组的注册语句被注释掉（handler 方法尚不存在，注册会导致编译失败），
-// 每完成一个任务就取消对应分组的注释。
+// routes 只管分组与公共前缀（迁移契约 §5）：具体端点由六个资源域各自的
+// routesXxx() 注册，本函数只负责调用它们，调用关系照旧不变——六个资源域
+// 文件本身不属于本 agent 的改动范围。
 func (s *Server) routes() {
 	// 认证：登录本身不需要认证；其余三个只需要已登录，无特定权限码。
-	s.handleFuncPublic("POST", "/auth/login", s.handleLogin)
-	s.handleFunc("GET", "/user/info", "", "", s.handleUserInfo)
-	s.handleFunc("GET", "/auth/codes", "", "", s.handleAuthCodes)
-	s.handleFunc("POST", "/auth/logout", "", "", s.handleLogout)
+	s.handlePublic("POST", "/auth/login", s.handleLogin)
+	s.handle("GET", "/user/info", "", "", s.handleUserInfo)
+	s.handle("GET", "/auth/codes", "", "", s.handleAuthCodes)
+	s.handle("POST", "/auth/logout", "", "", s.handleLogout)
 
 	s.routesHost()
 	s.routesArtifactSet()

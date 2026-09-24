@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
 )
@@ -110,10 +112,12 @@ type Deps struct {
 	RenderESXiBootCfg func(template, bootCfgURLBase, answerFileURL string) (string, error)
 }
 
-// Server 持有全部依赖，实现 http.Handler（内部用标准库 ServeMux 路由）。
+// Server 持有全部依赖，实现 http.Handler（内部路由换成 gin 引擎，见本文件
+// 顶部 gin 迁移契约 §6：gateway 只换传输层，不走 JSON 信封、不改状态码
+// 语义、对外零变化）。
 type Server struct {
-	deps Deps
-	mux  *http.ServeMux
+	deps   Deps
+	engine *gin.Engine
 
 	// clientTaskMu/clientTaskMap 是进程内的「客户端 IP → 任务」归档映射，
 	// 只服务于 syslog 接收器（见 syslog.go 文件头注释里的契约缺口说明：
@@ -127,25 +131,40 @@ type Server struct {
 // NewServer 构造一个 Server 并注册全部路由。deps 的字段均不做 nil 校验——
 // 那是装配点（cmd/lober，M9）的职责，网关本身假定收到的依赖已经装配完整
 // （与 M1 其它契约实现的分工一致）。
+//
+// 用 gin.New() 而非 gin.Default()：后者自带的 Logger/Recovery 中间件会
+// 往 stdout 打 gin 自己格式的访问日志与全局路由表，与本项目的 log/slog
+// 及测试输出冲突（同一决策 console 骨架也遵循，见迁移契约 §5）。gateway
+// 的应答内容是纯文本、按字节被固件与安装器消费，一旦 handler panic，
+// 默认的 http.Server 行为是整条连接直接断开（没有任何 gin 中间件介入），
+// 这与迁移前 net/http + ServeMux 的行为完全一致——因此这里不像 console
+// 那样需要自定义 Recovery（那是为了把 panic 转成统一 JSON 信封，gateway
+// 没有信封，没有这个需求，加了反而是行为变化）。
 func NewServer(deps Deps) *Server {
-	s := &Server{deps: deps, mux: http.NewServeMux()}
+	gin.SetMode(gin.ReleaseMode)
+	engine := gin.New()
+	s := &Server{deps: deps, engine: engine}
 	s.routes()
 	return s
 }
 
-// ServeHTTP 实现 http.Handler，直接委托给内部的 ServeMux。
+// ServeHTTP 实现 http.Handler，直接委托给内部的 gin 引擎（gin.Engine 本身
+// 实现 http.Handler，装配点 cmd/lober 与全部测试按 http.Handler 用它，
+// 这一点迁移前后不变）。
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.mux.ServeHTTP(w, r)
+	s.engine.ServeHTTP(w, r)
 }
 
 // routes 注册六条机器面 HTTP 路由（syslog 是独立的 UDP 监听器，不在这个
-// ServeMux 里，见 syslog.go）。路径与方法逐字对应
-// docs/contracts/http-machine.md 的端点总表，不自行发明路径形态。
+// 引擎里，见 syslog.go）。路径与方法逐字对应
+// docs/contracts/http-machine.md 的端点总表，不自行发明路径形态；
+// {task}/{token}/{file}/{phase} 换成 gin 的 :task/:token/:file/:phase
+// 只是路由声明语法，对外 URL 一个字节不变（迁移契约 §6）。
 func (s *Server) routes() {
-	s.mux.HandleFunc("GET /boot.ipxe", s.handleBootScript)
-	s.mux.HandleFunc("GET /v1/boot", s.handleBoot)
-	s.mux.HandleFunc("GET /v1/answer/{task}/{token}/{file}", s.handleAnswer)
-	s.mux.HandleFunc("POST /v1/signal/{task}/{token}/{phase}", s.handleSignal)
-	s.mux.HandleFunc("POST /v1/facts/{task}/{token}", s.handleFactsWrite)
-	s.mux.HandleFunc("GET /v1/facts/{task}/{token}", s.handleFactsRead)
+	s.engine.GET("/boot.ipxe", s.handleBootScript)
+	s.engine.GET("/v1/boot", s.handleBoot)
+	s.engine.GET("/v1/answer/:task/:token/:file", s.handleAnswer)
+	s.engine.POST("/v1/signal/:task/:token/:phase", s.handleSignal)
+	s.engine.POST("/v1/facts/:task/:token", s.handleFactsWrite)
+	s.engine.GET("/v1/facts/:task/:token", s.handleFactsRead)
 }

@@ -26,6 +26,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
 )
@@ -83,22 +85,24 @@ func parseSignalQuery(r *http.Request) (rc, seq int, ok bool) {
 	return rc, seq, true
 }
 
-// handleSignal 处理 POST /v1/signal/{task}/{token}/{phase}。
-func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
+// handleSignal 处理 POST /v1/signal/:task/:token/:phase（对外 URL 仍是
+// /v1/signal/{task}/{token}/{phase}）。
+func (s *Server) handleSignal(c *gin.Context) {
+	r := c.Request
 	ctx := r.Context()
-	pathTaskID := r.PathValue("task")
-	token := r.PathValue("token")
-	phase := model.SignalKind(r.PathValue("phase"))
+	pathTaskID := c.Param("task")
+	token := c.Param("token")
+	phase := model.SignalKind(c.Param("phase"))
 
 	// 步骤 1（契约文档「处理流程」）：校验 token。按 token 查任务，两种
 	// 用途都试：先当装机 token 查，查不到再当 finalize token 查。
 	task, purpose, err := lookupTaskByEitherTokenPurpose(ctx, s.deps.TaskStore, token)
 	if err != nil {
-		w.WriteHeader(http.StatusForbidden)
+		c.Status(http.StatusForbidden)
 		return
 	}
 	if task.ID != pathTaskID {
-		w.WriteHeader(http.StatusForbidden)
+		c.Status(http.StatusForbidden)
 		return
 	}
 
@@ -106,7 +110,7 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	// 来自 URL 路径段，不查表校验等于让机器指定自己的阶段。
 	entry, ok := model.LookupSignal(phase)
 	if !ok {
-		w.WriteHeader(http.StatusBadRequest)
+		c.Status(http.StatusBadRequest)
 		return
 	}
 
@@ -114,13 +118,13 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	// （§6.4：finalize token 写在目标系统的磁盘上、TTL 24 小时，拿到它就
 	// 能伪造整个装机流程的信号）。
 	if purpose == model.TokenPurposeFinalize && !model.FinalizeCanSend(phase) {
-		w.WriteHeader(http.StatusForbidden)
+		c.Status(http.StatusForbidden)
 		return
 	}
 
 	rc, seq, ok := parseSignalQuery(r)
 	if !ok {
-		w.WriteHeader(http.StatusBadRequest)
+		c.Status(http.StatusBadRequest)
 		return
 	}
 
@@ -129,7 +133,7 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	// 整个信号——上报失败绝不中断装机。
 	digest := ""
 	if phase == model.SignalHookReport {
-		raw := r.URL.Query().Get("digest")
+		raw := c.Query("digest")
 		if isValidHookDigest(raw) {
 			digest = raw
 		}
@@ -181,5 +185,5 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 
 	// 返回 200，无论信号是否被接受——机器侧的 signal() 会重试三次，序号
 	// 重复是正常现象而不是错误路径。
-	w.WriteHeader(http.StatusOK)
+	c.Status(http.StatusOK)
 }

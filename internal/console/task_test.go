@@ -93,6 +93,41 @@ func TestTask_RequestBodySNFieldIgnored(t *testing.T) {
 	}
 }
 
+// TestTask_MissingRequiredFieldsRejected 锁住「hostId/templateId 缺失时
+// 建任务被拒」——createTaskRequest 的 binding:"required" 标签顶替的是
+// 原来手写的 strings.TrimSpace(...)=="" 两条判断（task.go 的
+// createTaskRequest 文档有说明）。gin binding 失败走
+// validator.ValidationErrors 路径，apierr.Fail 按迁移契约 §3 统一翻译成
+// 422 + CodeValidationFailed，与 dryrun.go 同类型标签校验的判定路径
+// 一致（见 dryrun_test.go 的 TestDryRun_EmptyPolicyRejected）。
+func TestTask_MissingRequiredFieldsRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"缺 hostId", map[string]any{"templateId": "tpl-x"}},
+		{"缺 templateId", map[string]any{"hostId": "host-x"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ts := newTestServer(t)
+			tok := ts.login("bob-operator")
+
+			rr := ts.doJSON("POST", "/console/v1/tasks", tok, c.body)
+			if rr.Code != http.StatusUnprocessableEntity {
+				t.Errorf("%s 应回 HTTP 422，实际 %d, body=%s", c.name, rr.Code, rr.Body.String())
+			}
+			var env struct {
+				Code int `json:"code"`
+			}
+			decodeJSON(t, rr.Body.Bytes(), &env)
+			if env.Code != int(apierr.CodeValidationFailed) {
+				t.Errorf("%s 应回 CodeValidationFailed(%d)，实际 code=%d", c.name, apierr.CodeValidationFailed, env.Code)
+			}
+		})
+	}
+}
+
 // TestTask_ParamResolveFailureLeavesNoTaskInStore 锁住「参数决策失败时
 // Store 里不得出现任何任务」——这是 §7.4 的执行点。
 func TestTask_ParamResolveFailureLeavesNoTaskInStore(t *testing.T) {

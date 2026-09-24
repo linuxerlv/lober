@@ -7,7 +7,6 @@ import { useAppConfig } from '@vben/hooks';
 import { preferences } from '@vben/preferences';
 import {
   authenticateResponseInterceptor,
-  defaultResponseInterceptor,
   errorMessageResponseInterceptor,
   RequestClient,
 } from '@vben/request';
@@ -18,6 +17,10 @@ import { ElMessage } from 'element-plus';
 import { useAuthStore } from '#/store';
 
 import { refreshTokenApi } from './core';
+import {
+  normalizeErrorResponseInterceptor,
+  statusCodeResponseInterceptor,
+} from './response-interceptor';
 
 const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
 
@@ -71,14 +74,16 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
     },
   });
 
-  // 处理返回的响应数据格式
-  client.addResponseInterceptor(
-    defaultResponseInterceptor({
-      codeField: 'code',
-      dataField: 'data',
-      successCode: 0,
-    }),
-  );
+  // 处理返回的响应数据格式：HTTP 2xx 判成功并解包 data，非 2xx 按状态码
+  // 判失败（替代 vben 上游只读 body.code 的 defaultResponseInterceptor，
+  // 原因见 ./response-interceptor.ts 文件头注释）。
+  client.addResponseInterceptor(statusCodeResponseInterceptor());
+
+  // 非 2xx 的失败响应在此补一份 friendlyMessage/bizCode，供
+  // authenticateResponseInterceptor 之后的下游（包括各调用方）使用；
+  // 必须紧跟在 statusCodeResponseInterceptor 之后注册，保证后面的拦截器
+  // 与调用方看到的都是补齐后的 error。
+  client.addResponseInterceptor(normalizeErrorResponseInterceptor());
 
   // token过期的处理
   client.addResponseInterceptor(

@@ -8,10 +8,13 @@ package console
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 
 	"github.com/lober/lober/internal/apierr"
 	"github.com/lober/lober/internal/core/model"
@@ -22,8 +25,8 @@ func (s *Server) routesHost() {
 	// 查询只读，已登录（含 viewer）即可；录入需要 artifact:import——手工
 	// 录入是「运维手工补数据」的兜底路径，与制品导入同一类操作，不为此
 	// 单独发明一个权限码。
-	s.handleFunc("GET", "/hosts", "", "", s.handleListHosts)
-	s.handleFunc("POST", "/hosts", codeArtifactImport, "host.create", s.handleCreateHost)
+	s.handle("GET", "/hosts", "", "", s.handleListHosts)
+	s.handle("POST", "/hosts", codeArtifactImport, "host.create", s.handleCreateHost)
 }
 
 // hostListItem 是主机清单一行的响应形态，字段名与 model.Host 逐一对应
@@ -109,16 +112,16 @@ const defaultListLimit = 1000
 // 文本搜索在本 handler 层做，不下推到 Store（M1 契约已说明）：取回后在
 // Go 里对 SN/MAC/机架位做大小写不敏感的子串匹配，主机数是百级，这个代价
 // 可以接受。
-func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
-	hosts, err := s.deps.Hosts.ListHosts(r.Context())
+func (s *Server) handleListHosts(c *gin.Context) {
+	hosts, err := s.deps.Hosts.ListHosts(c.Request.Context())
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 
-	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
-	limit := parseLimit(r.URL.Query().Get("limit"), defaultListLimit)
-	offset := parseNonNegativeInt(r.URL.Query().Get("offset"), 0)
+	q := strings.ToLower(strings.TrimSpace(c.Query("q")))
+	limit := parseLimit(c.Query("limit"), defaultListLimit)
+	offset := parseNonNegativeInt(c.Query("offset"), 0)
 
 	matched := make([]model.Host, 0, len(hosts))
 	for _, h := range hosts {
@@ -143,7 +146,7 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	for _, h := range matched {
 		items = append(items, toHostListItem(h))
 	}
-	apierr.WriteOK(w, items)
+	apierr.OK(c, items)
 }
 
 // hostMatchesQuery 判定 h 是否匹配文本搜索 q（q 已经是小写、已 trim）。
@@ -185,69 +188,50 @@ func parseNonNegativeInt(raw string, def int) int {
 }
 
 // createHostRequest 是 POST /hosts 的入参，字段名与契约逐字对应。
-type createHostRequest struct {
-	SN       string `json:"sn"`
-	MAC      string `json:"mac"`
-	UUID     string `json:"uuid"`
-	Arch     string `json:"arch"`
-	Firmware string `json:"firmware"`
-	Rack     string `json:"rack"`
-}
-
-// validArchValues 与 validFirmwareValues 是 arch/firmware 字段的白名单
-// ——取值必须是 M1 枚举内的字面量，不接受自由文本（计划任务 3 校验三）。
 //
-// firmware 的机器可上报子集不含 any（http-console.md §2 明确：any 只在
-// ArtifactSet 上出现，Host 上报的固件模式永远是 bios 或 uefi 之一）。
-var validArchValues = map[string]bool{
-	string(model.ArchX86_64): true,
-	string(model.ArchARM64):  true,
-}
-
-var validFirmwareValues = map[string]bool{
-	string(model.FirmwareBIOS): true,
-	string(model.FirmwareUEFI): true,
+// binding 标签对照迁移前的手写校验（迁移契约 §7、本任务 validationRules
+// 字段有逐条对照）：
+//   - sn/mac：required 承担原来的判空分支。mac 的格式校验（能否归一化为
+//     合法值）标签表达不了——validator 内置的 mac 标签基于 net.ParseMAC，
+//     不认识「无分隔的十二位十六进制」这种格式（TestHost_MACNormalization
+//     明确要求这种格式必须被接受），因此 mac 格式校验留在 handler 里用
+//     model.NormalizeMAC 做，不套 mac 标签。
+//   - arch/firmware：required 加 oneof 一次表达「必填 + 取值必须在 M1
+//     枚举内」两条规则——原代码是两个独立的 if，标签层没有必要拆成两个
+//     标签，oneof 失败时 validator 报的就是同一个字段上的同一次绑定失败，
+//     语义没有被合并弱化。
+type createHostRequest struct {
+	SN       string `json:"sn" binding:"required"`
+	MAC      string `json:"mac" binding:"required"`
+	UUID     string `json:"uuid"`
+	Arch     string `json:"arch" binding:"required,oneof=x86_64 arm64"`
+	Firmware string `json:"firmware" binding:"required,oneof=bios uefi"`
+	Rack     string `json:"rack"`
 }
 
 // handleCreateHost 处理 POST /hosts：手工录入兜底（§7.4）。
 //
-// 三条校验（计划任务 3）：
-//  1. MAC 归一化后入库，非法值回校验错误
-//  2. arch 与 firmware 必填
-//  3. 取值必须是 M1 枚举内的字面量
-func (s *Server) handleCreateHost(w http.ResponseWriter, r *http.Request) {
+// 校验分两层（迁移契约 §7）：
+//  1. sn/mac 必填、arch/firmware 必填且取值在 M1 枚举内——交给
+//     createHostRequest 的 binding 标签，ShouldBindJSON 失败时返回
+//     validator.ValidationErrors，交给 apierr.Fail 翻译成中文 422 响应。
+//  2. mac 归一化后是否合法——标签表达不了（见 createHostRequest 的字段
+//     注释），留在这里用 Go 代码判断，命中时用 *apierr.Error 构造
+//     一个独立的校验失败响应。
+func (s *Server) handleCreateHost(c *gin.Context) {
 	var req createHostRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "请求体不是合法的 JSON"))
-		return
-	}
-
-	if strings.TrimSpace(req.SN) == "" {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "sn 不能为空"))
-		return
-	}
-	if strings.TrimSpace(req.MAC) == "" {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "mac 不能为空"))
-		return
-	}
-	if req.Arch == "" {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest,
-			"arch 不能为空（缺少它会让建任务时无法过滤可选 OS 列表）"))
-		return
-	}
-	if !validArchValues[req.Arch] {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest,
-			"arch 取值不合法，必须是 x86_64 或 arm64"))
-		return
-	}
-	if req.Firmware == "" {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest,
-			"firmware 不能为空（缺少它会让 §4.6 固件兼容校验形同虚设）"))
-		return
-	}
-	if !validFirmwareValues[req.Firmware] {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest,
-			"firmware 取值不合法，必须是 bios 或 uefi"))
+	if err := c.ShouldBindJSON(&req); err != nil {
+		var validationErrs validator.ValidationErrors
+		if errors.As(err, &validationErrs) {
+			apierr.Fail(c, err)
+			return
+		}
+		// 不是字段级校验失败，是请求体本身不是合法 JSON（或类型不匹配到
+		// 无法反序列化）——这两种错误 apierr.Fail 会当成未识别错误落进
+		// CodeInternal/500（见 apierr/gin.go resolveFailure 的判定顺序），
+		// 但请求体格式错是客户端的问题，不该记 500；这里用 CodeBadRequest
+		// 显式区分。
+		apierr.Fail(c, apierr.New(http.StatusBadRequest, apierr.CodeBadRequest, "请求体不是合法的 JSON"))
 		return
 	}
 
@@ -257,7 +241,7 @@ func (s *Server) handleCreateHost(w http.ResponseWriter, r *http.Request) {
 		// 非法值静默存成空值）。apierr 没有专门的 MAC 校验错误码（见
 		// contractGaps），用 CodeBadRequest 承载，message 里写明具体
 		// 原因。
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest,
+		apierr.Fail(c, apierr.New(http.StatusBadRequest, apierr.CodeBadRequest,
 			"mac 格式不合法，无法归一化为标准形式"))
 		return
 	}
@@ -272,10 +256,10 @@ func (s *Server) handleCreateHost(w http.ResponseWriter, r *http.Request) {
 		LastSeenAt: s.clock.Now(),
 	}
 
-	created, err := s.deps.Hosts.UpsertHost(r.Context(), host)
+	created, err := s.deps.Hosts.UpsertHost(c.Request.Context(), host)
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
-	apierr.WriteOK(w, toHostListItem(created))
+	apierr.OK(c, toHostListItem(created))
 }

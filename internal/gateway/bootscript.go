@@ -13,6 +13,8 @@ package gateway
 import (
 	"fmt"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
 )
 
 // bootScriptTemplate 是 GET /boot.ipxe 的响应体模板：shebang 加一行 chain
@@ -36,9 +38,15 @@ const bootScriptTemplate = "#!ipxe\n" +
 //
 // 本端点不存在运行期错误路径（docs/contracts/http-machine.md 端点 1
 // 「错误行为」：它不查库、不做任何判断，渲染失败在部署期就会被发现）。
-func (s *Server) handleBootScript(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
+//
+// 用 c.Data 而不是 c.String：body 本身虽然此刻不含 %，但这里的格式化
+// （bootScriptTemplate 的唯一一处 %s 替换）已经在 fmt.Sprintf 里完成，
+// 交给 c.Data 的是已经拼好的最终字节序列，不需要 gin 再做一次格式化——
+// 这与 answer.go/facts.go/signal.go 统一遵循「c.String 的第二参数会被当
+// 格式串」这条迁移契约 §6 的红线（gin 迁移最容易静默出错的一点）保持
+// 同一种写法，即使本端点当前不含 %，也不给未来的模板改动留隐患。
+func (s *Server) handleBootScript(c *gin.Context) {
 	// 网关地址从配置的基址来，不写死（§1.5）。
-	fmt.Fprintf(w, bootScriptTemplate, s.deps.Bases.GatewayBase)
+	body := fmt.Sprintf(bootScriptTemplate, s.deps.Bases.GatewayBase)
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(body))
 }

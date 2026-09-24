@@ -6,21 +6,35 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	"github.com/lober/lober/internal/apierr"
 	"github.com/lober/lober/internal/core/model"
 )
 
 // routesTemplate 注册模板四个端点。
+//
+// POST /templates、PUT /templates/{id} 仍用 handleFuncRole/roleAdmin——
+// 这两个端点不在迁移契约 §4 冻结的 29 条列表里（契约缺口，server.go 的
+// handleFuncRole 文档与本任务报告的 blockers 已记录），保留按角色卡门是
+// 「不改任何业务语义」这条硬约束下唯一的选择。
+//
+// GET .../form-schema、POST .../preview 是契约 §4 冻结的两个端点，权限码
+// 与审计动作列都是「—」，改用骨架新 API s.handle(method, path, "", "", h)——
+// 与迁移前 s.handleFunc(method, path, "", "", h) 语义逐一对应（都是「只要
+// 已登录，不要求权限码，不写审计」），只是骨架方法名从 handleFunc 换成了
+// handle（契约 §5）。
 func (s *Server) routesTemplate() {
 	s.handleFuncRole("POST", "/templates", roleAdmin, "template.create", s.handleCreateTemplate)
-	s.handleFuncRole("PUT", "/templates/{id}", roleAdmin, "template.update", s.handleUpdateTemplate)
-	s.handleFunc("GET", "/templates/{id}/form-schema", "", "", s.handleTemplateFormSchema)
-	s.handleFunc("POST", "/templates/{id}/preview", "", "", s.handleTemplatePreview)
+	s.handleFuncRole("PUT", "/templates/:id", roleAdmin, "template.update", s.handleUpdateTemplate)
+	s.handle("GET", "/templates/:id/form-schema", "", "", s.handleTemplateFormSchema)
+	s.handle("POST", "/templates/:id/preview", "", "", s.handleTemplatePreview)
 }
 
 // templateItem 是响应形态，字段名与 model.Template 对应。
@@ -105,7 +119,7 @@ func (s *Server) resolveHookRefs(ctx context.Context, refs []hookRefRequest, art
 	if artifactSetID != "" {
 		set, err := s.deps.ArtifactSets.GetArtifactSet(ctx, artifactSetID)
 		if err != nil {
-			return nil, apierr.New(http.StatusOK, apierr.CodeNotFound, "artifactSetId 指向的制品集不存在")
+			return nil, apierr.New(http.StatusNotFound, apierr.CodeNotFound, "artifactSetId 指向的制品集不存在")
 		}
 		artifactFamily = set.OSFamily
 	}
@@ -118,7 +132,7 @@ func (s *Server) resolveHookRefs(ctx context.Context, refs []hookRefRequest, art
 		// draft」的版本）。
 		hooks, err := s.deps.Hooks.ListHooks(ctx)
 		if err != nil {
-			return nil, apierr.New(http.StatusOK, apierr.CodeInternal, "查询 hook 失败")
+			return nil, apierr.New(http.StatusInternalServerError, apierr.CodeInternal, "查询 hook 失败")
 		}
 		var active *model.Hook
 		for i := range hooks {
@@ -129,17 +143,17 @@ func (s *Server) resolveHookRefs(ctx context.Context, refs []hookRefRequest, art
 			}
 		}
 		if active == nil {
-			return nil, apierr.New(http.StatusOK, apierr.CodeNotFound,
+			return nil, apierr.New(http.StatusNotFound, apierr.CodeNotFound,
 				fmt.Sprintf("hookId=%s 没有已激活（active）的版本，无法引用", ref.HookID))
 		}
 
 		if ref.Stage != "" && ref.Stage != string(active.Stage) {
-			return nil, apierr.New(http.StatusOK, apierr.CodeBadRequest,
+			return nil, apierr.New(http.StatusBadRequest, apierr.CodeBadRequest,
 				fmt.Sprintf("hookId=%s 引用声明的 stage=%q 与该 hook 实际声明的 stage=%q 不一致",
 					ref.HookID, ref.Stage, active.Stage))
 		}
 		if artifactSetID != "" && !active.SupportsFamily(artifactFamily) {
-			return nil, apierr.New(http.StatusOK, apierr.CodeBadRequest,
+			return nil, apierr.New(http.StatusBadRequest, apierr.CodeBadRequest,
 				fmt.Sprintf("hookId=%s 不支持制品集的 OS 家族 %q（家族限制在这里才能判定："+
 					"hook 自己的家族列表为空表示不限，模板绑定了具体制品集时才有判定基准）",
 					ref.HookID, artifactFamily))
@@ -153,21 +167,48 @@ func (s *Server) resolveHookRefs(ctx context.Context, refs []hookRefRequest, art
 	return out, nil
 }
 
-// handleCreateTemplate 处理 POST /templates。
-func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
+// bindTemplateWriteRequest 用 gin 的 ShouldBindJSON 解析
+// POST /templates、PUT /templates/{id} 共用的请求体，返回一个可以直接
+// 交给 apierr.Fail 的 error（迁移契约 §3：Fail 认得 validator.ValidationErrors
+// 与 *apierr.Error 两种）。
+//
+// templateWriteRequest 目前没有任何 binding 标签，ShouldBindJSON 唯一
+// 可能失败的路径是请求体本身不是合法 JSON（decodeJSON 内部先解码、解码
+// 成功后才跑 validate()，见 gin binding/json.go）——因此这里直接判定
+// 「非 validator.ValidationErrors 即视为解析失败」，用固定文案回 400，
+// 与迁移前 json.NewDecoder(r.Body).Decode 出错时的响应码、文案完全一致
+// （迁移契约 §2：不改任何观察得到的错误响应内容）。
+func bindTemplateWriteRequest(c *gin.Context) (templateWriteRequest, error) {
 	var req templateWriteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "请求体不是合法的 JSON"))
+	if err := c.ShouldBindJSON(&req); err != nil {
+		var ve validator.ValidationErrors
+		if errors.As(err, &ve) {
+			return req, err
+		}
+		return req, apierr.New(http.StatusBadRequest, apierr.CodeBadRequest, "请求体不是合法的 JSON")
+	}
+	return req, nil
+}
+
+// handleCreateTemplate 处理 POST /templates。
+func (s *Server) handleCreateTemplate(c *gin.Context) {
+	req, err := bindTemplateWriteRequest(c)
+	if err != nil {
+		apierr.Fail(c, err)
 		return
 	}
+	// strings.TrimSpace 判空留在 Go 代码里，不改用 binding:"required"——
+	// 该标签只判断零值，"   " 这种全空白字符串不是零值、不会被标签拦下，
+	// 换成标签会悄悄弱化这条校验（迁移契约 §7：标签表达不了的校验条件
+	// 不能因为「换成标签」就放弱）。
 	if strings.TrimSpace(req.Name) == "" {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "name 不能为空"))
+		apierr.Fail(c, apierr.New(http.StatusBadRequest, apierr.CodeBadRequest, "name 不能为空"))
 		return
 	}
 
-	refs, verr := s.resolveHookRefs(r.Context(), req.HookRefs, req.ArtifactSetID)
+	refs, verr := s.resolveHookRefs(c.Request.Context(), req.HookRefs, req.ArtifactSetID)
 	if verr != nil {
-		apierr.WriteError(w, verr)
+		apierr.Fail(c, verr)
 		return
 	}
 
@@ -177,32 +218,32 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		DiskPolicy: model.DiskPolicy(req.DiskPolicy), OnFailure: model.OnFailurePolicy(req.OnFailure),
 		RequiredFormFields: req.RequiredFormFields, Version: 1, State: model.TemplateStateDraft,
 	}
-	created, err := s.deps.Templates.CreateTemplate(r.Context(), tpl)
+	created, err := s.deps.Templates.CreateTemplate(c.Request.Context(), tpl)
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
-	apierr.WriteOK(w, toTemplateItem(created))
+	apierr.OK(c, toTemplateItem(created))
 }
 
 // handleUpdateTemplate 处理 PUT /templates/{id}：建新版本。
-func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	current, err := s.deps.Templates.GetTemplate(r.Context(), id, 0)
+func (s *Server) handleUpdateTemplate(c *gin.Context) {
+	id := c.Param("id")
+	current, err := s.deps.Templates.GetTemplate(c.Request.Context(), id, 0)
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 
-	var req templateWriteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeBadRequest, "请求体不是合法的 JSON"))
+	req, err := bindTemplateWriteRequest(c)
+	if err != nil {
+		apierr.Fail(c, err)
 		return
 	}
 
-	refs, verr := s.resolveHookRefs(r.Context(), req.HookRefs, req.ArtifactSetID)
+	refs, verr := s.resolveHookRefs(c.Request.Context(), req.HookRefs, req.ArtifactSetID)
 	if verr != nil {
-		apierr.WriteError(w, verr)
+		apierr.Fail(c, verr)
 		return
 	}
 
@@ -212,12 +253,12 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		DiskPolicy: model.DiskPolicy(req.DiskPolicy), OnFailure: model.OnFailurePolicy(req.OnFailure),
 		RequiredFormFields: req.RequiredFormFields, Version: current.Version + 1, State: model.TemplateStateDraft,
 	}
-	created, err := s.deps.Templates.CreateTemplate(r.Context(), next)
+	created, err := s.deps.Templates.CreateTemplate(c.Request.Context(), next)
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
-	apierr.WriteOK(w, toTemplateItem(created))
+	apierr.OK(c, toTemplateItem(created))
 }
 
 // fixedFormFields 是表单 schema 三段聚合的第一段：固定字段（§8.3）。
@@ -281,27 +322,31 @@ func buildFormSchema(tpl model.Template, hooks []model.Hook) (map[string]json.Ra
 }
 
 // handleTemplateFormSchema 处理 GET /templates/{id}/form-schema。
-func (s *Server) handleTemplateFormSchema(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	tpl, err := s.deps.Templates.GetTemplate(r.Context(), id, 0)
+func (s *Server) handleTemplateFormSchema(c *gin.Context) {
+	id := c.Param("id")
+	tpl, err := s.deps.Templates.GetTemplate(c.Request.Context(), id, 0)
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
-	hooks, err := s.deps.Hooks.ListHooks(r.Context())
+	hooks, err := s.deps.Hooks.ListHooks(c.Request.Context())
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 	merged, err := buildFormSchema(tpl, hooks)
 	if err != nil {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeInternal, err.Error()))
+		// 聚合失败视为服务端内部状态异常（500/CodeInternal）：走到这里说明
+		// 某个 active hook 的 params_schema 超出 §12.7 子集，本该在 hook
+		// 注册期就被拦下（jsonschema.go 的 validateParamsSchemaSubset），
+		// 不是这次请求的输入本身有问题，因此不用 400/404。
+		apierr.Fail(c, apierr.New(http.StatusInternalServerError, apierr.CodeInternal, err.Error()))
 		return
 	}
 	// 本端点「不套 {code,data,message} 之外的额外包装」——data 本身就是
-	// merged，与其它端点一样走 apierr.WriteOK，data 字段的值就是可直接
-	// 喂给前端 schema-to-form 映射层的 JSON Schema，没有再嵌一层。
-	apierr.WriteOK(w, merged)
+	// merged，与其它端点一样走 apierr.OK，data 字段的值就是可直接喂给
+	// 前端 schema-to-form 映射层的 JSON Schema，没有再嵌一层。
+	apierr.OK(c, merged)
 }
 
 // previewRequest 是 POST /templates/{id}/preview 的入参。
@@ -327,21 +372,21 @@ var fakePreviewHost = model.Host{
 // handleTemplatePreview 处理 POST /templates/{id}/preview：用假数据构造
 // 渲染上下文调渲染器，返回应答文件与引导菜单两段纯文本。不建任务、不签
 // token、不落库（计划任务 5 明确要求）。
-func (s *Server) handleTemplatePreview(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	tpl, err := s.deps.Templates.GetTemplate(r.Context(), id, 0)
+func (s *Server) handleTemplatePreview(c *gin.Context) {
+	id := c.Param("id")
+	tpl, err := s.deps.Templates.GetTemplate(c.Request.Context(), id, 0)
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
-	artifact, err := s.deps.ArtifactSets.GetArtifactSet(r.Context(), tpl.ArtifactSetID)
+	artifact, err := s.deps.ArtifactSets.GetArtifactSet(c.Request.Context(), tpl.ArtifactSetID)
 	if err != nil {
-		writeInternal(w, err)
+		apierr.Fail(c, err)
 		return
 	}
 
 	var req previewRequest
-	_ = json.NewDecoder(r.Body).Decode(&req) // preview 入参整体可选，解析失败按空 body 处理
+	_ = c.ShouldBindJSON(&req) // preview 入参整体可选，解析失败按空 body 处理，与迁移前行为一致
 
 	// 修复：这里曾直接调用 HostStore.GetHost(req.HostID)——但 req.HostID
 	// 是前端从 GET /hosts 拿到的暴露 id（hostID() 算出的裸 SN/MAC/UUID
@@ -353,7 +398,7 @@ func (s *Server) handleTemplatePreview(w http.ResponseWriter, r *http.Request) {
 	// identityMatches 语义，不依赖任何具体 Store 实现的内部 key 格式。
 	host := fakePreviewHost
 	if req.HostID != "" {
-		if h, err := s.findHostByExposedID(r.Context(), req.HostID); err == nil {
+		if h, err := s.findHostByExposedID(c.Request.Context(), req.HostID); err == nil {
 			host = h
 		}
 	}
@@ -380,23 +425,23 @@ func (s *Server) handleTemplatePreview(w http.ResponseWriter, r *http.Request) {
 
 	answerFileName, ok := ctx.AnswerFileName()
 	if !ok {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeInternal,
+		apierr.Fail(c, apierr.New(http.StatusInternalServerError, apierr.CodeInternal,
 			"该制品集的 OS 家族未知，无法确定应答文件名"))
 		return
 	}
 
 	answerFile, err := s.deps.Renderer.RenderAnswerFile(ctx, answerFileName)
 	if err != nil {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeInternal, "渲染应答文件失败: "+err.Error()))
+		apierr.Fail(c, apierr.New(http.StatusInternalServerError, apierr.CodeInternal, "渲染应答文件失败: "+err.Error()))
 		return
 	}
 	bootMenu, err := s.deps.Renderer.RenderMenu(ctx)
 	if err != nil {
-		apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeInternal, "渲染引导菜单失败: "+err.Error()))
+		apierr.Fail(c, apierr.New(http.StatusInternalServerError, apierr.CodeInternal, "渲染引导菜单失败: "+err.Error()))
 		return
 	}
 
-	apierr.WriteOK(w, previewResult{AnswerFile: answerFile, BootMenu: bootMenu, Warnings: []string{}})
+	apierr.OK(c, previewResult{AnswerFile: answerFile, BootMenu: bootMenu, Warnings: []string{}})
 }
 
 // sortedHookRefsForPreview 汇总模板全部阶段的 hook 引用，按阶段+顺序排好

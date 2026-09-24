@@ -23,15 +23,18 @@ package gateway
 import (
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/lober/lober/internal/core/model"
 )
 
-// handleAnswer 处理 GET /v1/answer/{task}/{token}/{file}。
-func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	pathTaskID := r.PathValue("task")
-	token := r.PathValue("token")
-	file := r.PathValue("file")
+// handleAnswer 处理 GET /v1/answer/:task/:token/:file（对外 URL 仍是
+// /v1/answer/{task}/{token}/{file}，:param 只是 gin 路由声明语法）。
+func (s *Server) handleAnswer(c *gin.Context) {
+	ctx := c.Request.Context()
+	pathTaskID := c.Param("task")
+	token := c.Param("token")
+	file := c.Param("file")
 
 	// 认证：token 存在、TokenPurpose == TokenPurposeInstall、未过期、与
 	// 路径中的 {task} 匹配、且 model.AnswerFileServable(task.State) 为真。
@@ -40,7 +43,7 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	// 回 403，不需要区分具体原因。
 	task, err := s.deps.TaskStore.GetTaskByToken(ctx, token, model.TokenPurposeInstall)
 	if err != nil {
-		w.WriteHeader(http.StatusForbidden)
+		c.Status(http.StatusForbidden)
 		return
 	}
 
@@ -49,14 +52,14 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	// 路径里那个 id 会被用于构造渲染上下文，不一致时会渲染出张冠李戴的
 	// 内容。
 	if task.ID != pathTaskID {
-		w.WriteHeader(http.StatusForbidden)
+		c.Status(http.StatusForbidden)
 		return
 	}
 
 	// 状态门控：仅 booting 与 installing 可服务。用状态而非一次性失效——
 	// 一次性失效会直接掐死正常重试。
 	if !model.AnswerFileServable(task.State) {
-		w.WriteHeader(http.StatusForbidden)
+		c.Status(http.StatusForbidden)
 		return
 	}
 
@@ -71,7 +74,7 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		// 403 处理最接近契约文档「token 校验失败」这一档——不满足
 		// AnswerFileServable 判定所需的完整任务数据，视为不满足服务
 		// 条件。
-		w.WriteHeader(http.StatusForbidden)
+		c.Status(http.StatusForbidden)
 		return
 	}
 
@@ -83,14 +86,14 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	// 对但渲染本身出错」这两种契约要求不同状态码的情形。
 	wantFile, ok := renderCtx.AnswerFileName()
 	if !ok || !answerFileNameAllowed(renderCtx, file, wantFile) {
-		w.WriteHeader(http.StatusNotFound)
+		c.Status(http.StatusNotFound)
 		return
 	}
 
 	// 调状态机标记应答文件已取（它幂等：booting → installing；已经在
 	// installing 或之后视为已处理过，直接返回当前任务、不报错）。
 	if _, err := s.deps.StateMachine.MarkAnswerFetched(ctx, task.ID); err != nil {
-		w.WriteHeader(http.StatusForbidden)
+		c.Status(http.StatusForbidden)
 		return
 	}
 
@@ -114,19 +117,20 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 			Message: "应答文件渲染失败: " + err.Error(),
 			Source:  model.EventSourceProvider,
 		})
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("应答文件渲染失败，请联系运维核查任务与模板配置\n"))
+		c.Data(http.StatusInternalServerError, "text/plain; charset=utf-8",
+			[]byte("应答文件渲染失败，请联系运维核查任务与模板配置\n"))
 		return
 	}
 
 	// 记录本次请求的客户端 IP 与任务的关联，供 syslog 接收器归档使用
 	// （见 syslog.go 文件头注释）。
-	s.rememberClientTask(clientIP(r), task.ID, task.CurrentPhase)
+	s.rememberClientTask(clientIP(c.Request), task.ID, task.CurrentPhase)
 
-	w.Header().Set("Content-Type", answerFileContentType(renderCtx.Artifact.OSFamily))
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(content))
+	// content 是应答文件正文（kickstart/preseed/autoyast），必须用 c.Data
+	// 而不是 c.String(code, content)——kickstart 的 %packages/%post 段会被
+	// c.String 当格式串解析，产出一份损坏但不报错的应答文件（迁移契约 §6
+	// 明确点名的最容易静默出错的一点）。
+	c.Data(http.StatusOK, answerFileContentType(renderCtx.Artifact.OSFamily), []byte(content))
 }
 
 // answerFileContentType 按 OS 家族返回应答文件的 Content-Type（契约文档

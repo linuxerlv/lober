@@ -8,6 +8,8 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/lober/lober/internal/apierr"
 )
 
@@ -104,23 +106,35 @@ func userFromContext(ctx context.Context) (sessionUser, bool) {
 }
 
 // requireAuth 是认证中间件：校验 Authorization 头里的 token，无 token 或
-// 无效/过期 token 一律回未认证（HTTP 401，apierr.CodeUnauthenticated）。
+// 无效/过期 token 一律回未认证（HTTP 401，apierr.CodeUnauthenticated），
+// 走 apierr.Abort（迁移契约 §5「认证中间件的状态码」）——Abort 会调
+// c.Abort()，让 gin 不再执行本请求链路上排在后面的中间件与业务 handler，
+// 与迁移前「不调用 next.ServeHTTP 即中断」的效果一致。
 //
 // 认证失败与授权失败必须用不同的错误码（计划任务 1 明确要求）：前者说明
 // 「该重新登录」，后者说明「登录了但没权限」，UI 的处置不同（前者跳转登录
 // 页，后者提示联系管理员）。
-func (s *Server) requireAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := bearerToken(r)
+//
+// 已认证用户身份仍然存进 context.Context（而不是改用 gin 惯用的
+// c.Set/c.Get）：userFromContext 的签名是 func(context.Context)
+// (sessionUser, bool)，六个资源域文件（hook.go、task.go、auth.go 等）
+// 里已有的调用点全部传入 r.Context()／c.Request.Context()，本 agent 不能
+// 改这些调用点；c.Request.Context() 返回的仍是标准 context.Context，
+// 直接复用 context.WithValue 能让这些既有调用点在它们各自迁移到
+// gin.HandlerFunc 之后不需要再改一次 userFromContext 的签名或调用方式。
+func (s *Server) requireAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := bearerToken(c.Request)
 		user, ok := s.sessions.lookup(token, s.clock.Now())
 		if !ok {
-			apierr.WriteError(w, apierr.New(http.StatusUnauthorized, apierr.CodeUnauthenticated,
+			apierr.Abort(c, apierr.New(http.StatusUnauthorized, apierr.CodeUnauthenticated,
 				"未登录或登录状态已过期，请重新登录"))
 			return
 		}
-		ctx := context.WithValue(r.Context(), ctxKeyUser{}, user)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+		ctx := context.WithValue(c.Request.Context(), ctxKeyUser{}, user)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}
 }
 
 // bearerToken 从 Authorization 头取出 Bearer token。头部缺失、格式不是
@@ -152,48 +166,59 @@ func hasRole(roles []string, target string) bool {
 // SPEC §8.2/http-console.md 里直接写的是 admin 角色，§9.4 的七个权限码
 // 表里并不存在一个 template:write 码，因此这类端点用角色名判断，不强行
 // 发明一个权限码只为了让所有端点都走 requireCode 这一条路径。
-func (s *Server) requireRole(role string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user, ok := userFromContext(r.Context())
-			if !ok {
-				apierr.WriteError(w, apierr.New(http.StatusUnauthorized, apierr.CodeUnauthenticated,
-					"未登录或登录状态已过期，请重新登录"))
-				return
-			}
-			if !hasRole(user.Roles, role) {
-				apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeForbidden,
-					"当前账号没有执行该操作所需的权限"))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
+//
+// 契约缺口：迁移契约 §5 冻结的骨架 API 没有列出 requireRole，只列了
+// requireAuth/requireCode——但 template.go（六个资源域文件之一，本 agent
+// 不能修改）的 routesTemplate() 仍然调用 handleFuncRole/requireRole 给
+// POST /templates、PUT /templates/{id} 卡门（这两个端点同样不在契约 §4
+// 冻结的 29 条列表里，见本任务报告的 blockers）。保留本函数是不动
+// template.go 调用点的唯一办法，见 server.go 的 handleFuncRole 说明。
+//
+// HTTP 状态码：迁移契约 §2 的错误码表冻结 CodeForbidden → HTTP 403，
+// 迁移前的实现固定传 http.StatusOK（与契约冻结的表不一致，见本任务报告
+// 的 blockers 第一条），本次迁移按契约 §2 改为真实的 403——这不是本
+// agent 自行变更业务语义，而是把响应状态码改成契约本身已经冻结、要求
+// 「前端开始使用」的值（契约 §0/§8）。
+func (s *Server) requireRole(role string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user, ok := userFromContext(c.Request.Context())
+		if !ok {
+			apierr.Abort(c, apierr.New(http.StatusUnauthorized, apierr.CodeUnauthenticated,
+				"未登录或登录状态已过期，请重新登录"))
+			return
+		}
+		if !hasRole(user.Roles, role) {
+			apierr.Abort(c, apierr.New(http.StatusForbidden, apierr.CodeForbidden,
+				"当前账号没有执行该操作所需的权限"))
+			return
+		}
+		c.Next()
 	}
 }
 
 // requireCode 是授权中间件工厂：返回一个中间件，要求当前用户（必须已经过
-// requireAuth）的权限码集合包含 code，否则回 403（apierr.CodeForbidden）。
+// requireAuth）的权限码集合包含 code，否则回 403（apierr.CodeForbidden，
+// HTTP 状态码同样按契约 §2 冻结的表改为真实 403，理由见 requireRole 的
+// 说明）。
 //
 // 必须放在 requireAuth 之后使用——本函数假设 context 里已经有用户身份，
 // 取不到时视为编程错误（中间件顺序装反了），同样回 403 而非 panic，因为
 // panic 会导致整个进程在一个请求处理上崩掉，这个代价与「装反了中间件顺序」
 // 这种本该在开发期用测试发现的错误不成比例。
-func (s *Server) requireCode(code string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user, ok := userFromContext(r.Context())
-			if !ok {
-				apierr.WriteError(w, apierr.New(http.StatusUnauthorized, apierr.CodeUnauthenticated,
-					"未登录或登录状态已过期，请重新登录"))
-				return
-			}
-			codes := codesForRoles(user.Roles)
-			if !hasCode(codes, code) {
-				apierr.WriteError(w, apierr.New(http.StatusOK, apierr.CodeForbidden,
-					"当前账号没有执行该操作所需的权限"))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
+func (s *Server) requireCode(code string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user, ok := userFromContext(c.Request.Context())
+		if !ok {
+			apierr.Abort(c, apierr.New(http.StatusUnauthorized, apierr.CodeUnauthenticated,
+				"未登录或登录状态已过期，请重新登录"))
+			return
+		}
+		codes := codesForRoles(user.Roles)
+		if !hasCode(codes, code) {
+			apierr.Abort(c, apierr.New(http.StatusForbidden, apierr.CodeForbidden,
+				"当前账号没有执行该操作所需的权限"))
+			return
+		}
+		c.Next()
 	}
 }

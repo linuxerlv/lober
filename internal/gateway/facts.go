@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/lober/lober/internal/core/model"
 )
 
@@ -63,54 +65,57 @@ func formatFactsBody(facts map[string]string) string {
 // authenticateFactsRequest 校验 facts 端点的 token（同信号端点：装机 token
 // 或 finalize token 均可）并交叉核对路径里的任务 id。ok 为 false 时调用方
 // 应回 403。
-func (s *Server) authenticateFactsRequest(r *http.Request) (model.Task, bool) {
-	pathTaskID := r.PathValue("task")
-	token := r.PathValue("token")
+func (s *Server) authenticateFactsRequest(c *gin.Context) (model.Task, bool) {
+	pathTaskID := c.Param("task")
+	token := c.Param("token")
 
-	task, _, err := lookupTaskByEitherTokenPurpose(r.Context(), s.deps.TaskStore, token)
+	task, _, err := lookupTaskByEitherTokenPurpose(c.Request.Context(), s.deps.TaskStore, token)
 	if err != nil || task.ID != pathTaskID {
 		return model.Task{}, false
 	}
 	return task, true
 }
 
-// handleFactsWrite 处理 POST /v1/facts/{task}/{token}：body 是纯文本，每行
-// 一个键值对，覆盖式合并进该任务的 facts 存储。
-func (s *Server) handleFactsWrite(w http.ResponseWriter, r *http.Request) {
-	task, ok := s.authenticateFactsRequest(r)
+// handleFactsWrite 处理 POST /v1/facts/:task/:token（对外 URL 仍是
+// /v1/facts/{task}/{token}）：body 是纯文本，每行一个键值对，覆盖式合并
+// 进该任务的 facts 存储。
+func (s *Server) handleFactsWrite(c *gin.Context) {
+	task, ok := s.authenticateFactsRequest(c)
 	if !ok {
-		w.WriteHeader(http.StatusForbidden)
+		c.Status(http.StatusForbidden)
 		return
 	}
 
 	var bodyText string
-	if r.Body != nil {
-		raw, _ := io.ReadAll(r.Body)
+	if c.Request.Body != nil {
+		raw, _ := io.ReadAll(c.Request.Body)
 		bodyText = string(raw)
 	}
 
 	facts := parseFactsBody(bodyText)
-	_ = s.deps.FactStore.MergeFacts(r.Context(), task.ID, facts)
+	_ = s.deps.FactStore.MergeFacts(c.Request.Context(), task.ID, facts)
 
-	w.WriteHeader(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-// handleFactsRead 处理 GET /v1/facts/{task}/{token}：返回该任务当前全部
-// facts 的 key=value 逐行纯文本。
-func (s *Server) handleFactsRead(w http.ResponseWriter, r *http.Request) {
-	task, ok := s.authenticateFactsRequest(r)
+// handleFactsRead 处理 GET /v1/facts/:task/:token（对外 URL 仍是
+// /v1/facts/{task}/{token}）：返回该任务当前全部 facts 的 key=value
+// 逐行纯文本。
+func (s *Server) handleFactsRead(c *gin.Context) {
+	task, ok := s.authenticateFactsRequest(c)
 	if !ok {
-		w.WriteHeader(http.StatusForbidden)
+		c.Status(http.StatusForbidden)
 		return
 	}
 
-	facts, err := s.deps.FactStore.GetFacts(r.Context(), task.ID)
+	facts, err := s.deps.FactStore.GetFacts(c.Request.Context(), task.ID)
 	if err != nil {
-		w.WriteHeader(http.StatusForbidden)
+		c.Status(http.StatusForbidden)
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(formatFactsBody(facts)))
+	// facts 的 value 来自机器上报，内容不受控，可能含 %；用 c.Data 而不是
+	// c.String(code, body) 避免被当格式串解析（迁移契约 §6 的红线，与
+	// answer.go 的 kickstart 正文是同一类风险）。
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(formatFactsBody(facts)))
 }

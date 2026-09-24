@@ -119,6 +119,8 @@ gin 的 `:param` 只是路由声明语法，不改 URL 本身。
 | POST | `/hooks/:id/approve` | — | hook.approve | handleApproveHook |
 | POST | `/hooks/:id/reject` | — | hook.reject | handleRejectHook |
 | GET | `/hooks/:id/audit` | — | — | handleHookAudit |
+| POST | `/templates` | **roleAdmin** | template.create | handleCreateTemplate |
+| PUT | `/templates/:id` | **roleAdmin** | template.update | handleUpdateTemplate |
 | GET | `/templates/:id/form-schema` | — | — | handleTemplateFormSchema |
 | POST | `/templates/:id/preview` | — | — | handleTemplatePreview |
 | POST | `/tasks` | codeTaskCreate | task.create | handleCreateTask |
@@ -131,6 +133,19 @@ gin 的 `:param` 只是路由声明语法，不改 URL 本身。
 
 **全部业务端点都要求已登录**（viewer 只读也要登录，SPEC §12.5）。`/auth/login` 是
 唯一的公开端点。权限码为 `—` 表示只要求登录、无特定权限码。
+
+**两种授权维度并存**，不要合并：大多数端点按**权限码**授权（`requireCode`），
+但 `POST /templates` 与 `PUT /templates/:id` 按**角色**授权（`requireRole(roleAdmin)`）。
+因此骨架除了 `handle` 还要保留一个按角色的注册函数：
+
+```go
+func (s *Server) handleFuncRole(method, path, role, action string, h gin.HandlerFunc)
+func (s *Server) requireRole(role string) gin.HandlerFunc
+```
+
+（本条是契约 v1.0 的遗漏，实现期由骨架 agent 发现并正确保留了这两个符号，
+v1.1 补正。教训：写契约时"29 个端点"这个数字来自 `grep handleFunc`，漏掉了用
+`handleFuncRole` 注册的两个 —— 统计路由时要覆盖全部注册函数，不能只数一个。）
 
 **权限码是按端点分配的，不是按前缀** —— 例如 `/hooks` 下 create/update/validate 要
 `codeHookWrite`，而 approve/reject 不要权限码（只记审计）。因此不能简单套 gin 的

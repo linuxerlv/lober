@@ -113,30 +113,65 @@
 {"code": <非零错误码>, "data": null, "message": "<可展示的中文错误说明>"}
 ```
 
-HTTP 状态码固定为 `200`（框架侧按 body 里的 `code` 字段判定成功与否，不看
-HTTP 状态码）；唯一例外是认证中间件本身拒绝请求（未带 `Authorization` 头或
-token 无效）时返回 HTTP `401`，body 仍为上述失败形态。
+**HTTP 状态码按错误码表真实返回，不固定为 `200`**（`internal/apierr/apierr.go`
+的 `sentinelMappings`、`WriteError`/`Fail`/`Abort` 均按传入的状态码写出，
+`writeEnvelope`/`c.JSON` 从不改写它）：`CodeNotFound` → 404，`CodeConflict`/
+`CodeActiveTaskExists`/`CodeStillReferenced`/`CodeReinstallDenied` → 409，
+`CodeValidationFailed` → 422，`CodeUnauthenticated` → 401，`CodeForbidden` →
+403，`CodeInternal`/未识别错误 → 500，成功 → 200。完整对照见下方错误码表。
+`code` 字段的作用不是让客户端「不看状态码」，而是**区分同一状态码下的不同
+业务分支**——例如 409 下 `CodeConflict`/`CodeActiveTaskExists`/
+`CodeStillReferenced`/`CodeReinstallDenied` 是四种不同的失败原因，仅凭状态码
+分不出来，需要 `code` 再细分一层。
+
+（历史遗留：本文档更早版本在此处写的是「HTTP 状态码固定为 `200`」，这是一处
+过期表述，与代码不符——之所以长期没被发现，是因为前端此前用的 vben
+`defaultResponseInterceptor` 只读 `body.code` 判定成功与否，完全忽略 HTTP
+状态码，看不出后端其实一直在给真实状态码。这不是「后端曾经固定返回 200，
+后来改了」，而是「后端一直如此，只是前端没用到」。）
+
+截至本次纠错，`internal/console` 正在从 `net/http` 迁移到 gin
+（`docs/superpowers/specs/2026-09-24-gin-migration-contract.md`），部分
+handler 的校验/业务错误分支仍手写 `apierr.New(http.StatusOK, ...)` 硬编码了
+`200`，还没有换成错误码表对应的真实状态码；另一部分分支（含已迁移完成的
+文件与部分 sentinel error 直通路径）已经是真实状态码。**这是一个逐文件、
+逐分支推进的迁移过程，具体到某一文件某一行是否已经是真实状态码会随迁移
+进度持续变化，本文档不追踪这个进度、不列举文件名**——请以 `internal/console`
+当时的代码为准（搜索 `apierr.New(http.StatusOK,` 即可看到尚未迁移的分支）。
+**唯一恒定不变的例外**：认证中间件本身拒绝请求（未带 `Authorization` 头或
+token 无效/过期）永远返回真实的 HTTP `401`，body 仍为上述失败形态——这条
+从迁移前到迁移后都没变过。
 
 ## 错误码表
 
-> **偏差声明：** 计划要求错误码表引用 `internal/apierr`。截至本任务执行时，
-> `internal/apierr` 包尚未创建（M1 任务 1 的产出文件清单里没有它，SPEC.md
-> 全文也没有列出具体的十个码）。下表是本任务按 SPEC §8.2/§9.1/§9.4 涉及的
-> 失败场景设计的十个错误码，供 M6 在创建 `internal/apierr` 时直接采用；
-> 若 `internal/apierr` 已存在具体实现，以其为准，本表需同步更新。
+> **本表与 `internal/apierr/apierr.go` 的 `Code` 常量逐一对照，以该文件为
+> 唯一真源。** 该包早已存在（不是本文档更早版本记录的「尚未创建」状态——
+> 那段偏差声明已过期并在本次纠错中删除）。下表的 code 数值、常量名、
+> HTTP 状态码均直接抄自 `apierr.go` 的常量定义与 `sentinelMappings`/
+> `resolveFailure` 里的映射关系，不是按 SPEC 场景重新设计的一套；若两者
+> 后续出现分歧，以 `apierr.go` 代码为准，本表需同步更新。
 
-| code | 常量名建议 | 含义 | 典型触发端点 |
-|---|---|---|---|
-| 0 | `CodeOK` | 成功 | 全部 |
-| 1001 | `CodeInvalidParam` | 请求参数格式错误或缺失必填字段 | 全部有入参的端点 |
-| 1002 | `CodeUnauthorized` | 未登录或 token 失效 | 全部（中间件） |
-| 1003 | `CodeForbidden` | 已登录但权限不足（§9.4 角色/权限码不满足） | 建任务、hook 编辑/审批、provider 配置、模板变更 |
-| 1004 | `CodeNotFound` | 目标资源不存在（host/artifact-set/hook/template/task id 找不到） | 全部按 id 操作的端点 |
-| 1005 | `CodeConflict` | 状态冲突，操作在当前状态下不允许（如对非终态模板执行删除、对非 `rebooting`/`initializing` 超时失败执行 retry 之外的合法拒绝） | `DELETE artifact-sets/{id}`、`DELETE templates/{id}`（引用完整性）、`retry` |
-| 1006 | `CodeMACInvalid` | MAC 地址经 `model.NormalizeMAC` 归一化后为空（格式不合法） | `POST /hosts` |
-| 1007 | `CodeValidationFailed` | hook/模板校验失败（`bash -n`/shellcheck/`params_schema` 超出子集） | `POST /hooks/{id}/validate` |
-| 1008 | `CodeReferencedResource` | 资源仍被引用，无法删除（§2.7 引用完整性） | `DELETE artifact-sets/{id}` |
-| 1009 | `CodeInternal` | 服务端内部错误（渲染失败、存储层错误等未归类情形） | 全部 |
+| code | 常量名 | 约定 HTTP 状态码 | 含义 | 典型触发端点/场景 |
+|---|---|---|---|---|
+| 0 | `CodeOK` | 200 | 成功 | 全部 |
+| 1000 | `CodeInternal` | 500 | 服务端内部错误：未识别的错误统一落在这里，响应体只给通用文案，细节只进 `log/slog`（不可破的安全边界，见 `apierr.go` 注释） | 全部（兜底） |
+| 1001 | `CodeBadRequest` | 400 | 请求参数格式或语义不合法（JSON 解析失败、必填字段为空、取值不在枚举内、MAC 归一化后为空等——`apierr` 没有专门的 MAC 校验码，MAC 格式错误也走本码） | 全部有入参的端点，如 `POST /hosts`、`POST /tasks` |
+| 1002 | `CodeUnauthenticated` | 401 | 未登录或 token 失效/过期 | 全部（`requireAuth` 中间件） |
+| 1003 | `CodeForbidden` | 403 | 已登录但权限不足（角色或权限码不满足），或审批人等于作者等业务性禁止 | 建任务、hook 写/审批/驳回、模板变更等 |
+| 1004 | `CodeNotFound` | 404 | 目标资源不存在（host/artifact-set/hook/template/task id 找不到） | 全部按 id 操作的端点 |
+| 1005 | `CodeConflict` | 409 | 状态冲突：操作在当前状态下不允许（如对非 deprecated 制品集删除、对非 active 模板建任务、模板/固件不兼容、hook 不在可驳回/可审批状态） | `DELETE /artifact-sets/{id}`、`POST /tasks`、`POST /hooks/{id}/approve`、`POST /hooks/{id}/reject` 等 |
+| 1006 | `CodeActiveTaskExists` | 409 | 该主机已存在一个未结束（非终态）的任务 | `POST /tasks` |
+| 1007 | `CodeStillReferenced` | 409 | 资源仍被引用，无法删除（§2.7 引用完整性） | `DELETE /artifact-sets/{id}` |
+| 1008 | `CodeReinstallDenied` | 409 | 拒绝重装：`failureReason` 对应 `Reinstallable() == false` | `POST /tasks/{id}/retry` |
+| 1009 | `CodeValidationFailed` | 422 | hook/模板/入参校验失败（`bash -n`/shellcheck/`paramsSchema` 超出子集，或 gin `validator.ValidationErrors`） | `POST /hooks/{id}/validate`、已接入 gin binding 校验的端点 |
+
+「约定 HTTP 状态码」一列是错误码表冻结的**目标语义**（迁移契约 §2），与前一节
+「响应包裹格式」呼应：迁移完成后每个 code 的调用点都应该带这个状态码。但
+`internal/console` 从 `net/http` 迁到 gin 是逐文件、逐分支推进的（见前一节），
+某个具体调用点在某一时刻是否已经带上这个状态码、还是仍暂时硬编码 `200`，
+会随迁移进度持续变化——本表不追踪、不穷举这个进度，请直接读
+`internal/console` 当时的代码确认（搜 `apierr.New(` 或 `apierr.Fail(`
+调用点的第一个参数）。
 
 ---
 
@@ -219,8 +254,9 @@ token 无效）时返回 HTTP `401`，body 仍为上述失败形态。
 **成功：** `data = { "accessToken": string }`。不做 refresh token
 （`enableRefreshToken` 默认 false），单 access token（SPEC §12.5）。
 
-**失败：** 用户名或密码错误 → `CodeUnauthorized`（`message` 统一为「用户名或密码
-错误」，不区分「用户不存在」与「密码错误」两种情况，避免帮攻击者做用户名枚举）。
+**失败：** 用户名或密码错误 → `CodeUnauthenticated`（HTTP 401；`message` 统一为
+「用户名或密码错误」，不区分「用户不存在」与「密码错误」两种情况，避免帮攻击者
+做用户名枚举）。
 
 #### `GET /user/info`
 
@@ -303,8 +339,9 @@ token 无效）时返回 HTTP `401`，body 仍为上述失败形态。
 也必填；`uuid` 可选（SPEC §4.3 的三个查找键容忍留空，但 SN/MAC 是主要判据）。
 
 **处理：** MAC 入库前经 `model.NormalizeMAC` 归一化；归一化结果为空串
-（格式不合法）→ 拒绝，返回 `CodeMACInvalid`，**不接受空 MAC 入库**
-（model 包作者说明第 5 点：不能把非法值静默存成空值）。
+（格式不合法）→ 拒绝，返回 `CodeBadRequest`（`apierr` 没有专门的 MAC 校验
+错误码，`host.go` 用 `CodeBadRequest` 承载，`message` 里写明具体原因），
+**不接受空 MAC 入库**（model 包作者说明第 5 点：不能把非法值静默存成空值）。
 
 **成功：** `data = HostListItem`（含服务端分配的 `id`）。
 
@@ -361,7 +398,7 @@ template 引用时可删除。
 | 情形 | code |
 |---|---|
 | `state != deprecated` | `CodeConflict` |
-| 仍被引用 | `CodeReferencedResource` |
+| 仍被引用 | `CodeStillReferenced`（HTTP 409） |
 
 ---
 
@@ -711,7 +748,7 @@ Schema，不再嵌一层。
 ### 约定 1：主机清单两个端点
 
 见「2. 主机清单」整节。**字段名与 `model.Host` 逐一对应，不另起名字**——
-`arch` 与 `firmware` 必填，MAC 入库前归一化、非法值拒绝（`CodeMACInvalid`）。
+`arch` 与 `firmware` 必填，MAC 入库前归一化、非法值拒绝（`CodeBadRequest`）。
 **`GET /hosts` 是建任务页 SN 字段的唯一数据源**，不接受自由文本；`q` 文本搜索
 参数不是便利功能，是删掉 armed 状态后唯一的人工确认点在主机规模超过一页时
 仍然可用的必要条件（SPEC §9.1、§10 失败模式 2b）。

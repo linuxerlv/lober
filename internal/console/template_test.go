@@ -4,6 +4,8 @@ package console
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/lober/lober/internal/apierr"
@@ -67,6 +69,65 @@ func TestTemplate_UpdateCreatesNewVersion(t *testing.T) {
 	decodeJSON(t, rr.Body.Bytes(), &updated)
 	if updated.Data.Version != 2 {
 		t.Errorf("更新后 version 应为 2，实际 %d", updated.Data.Version)
+	}
+}
+
+// TestTemplate_CreateRejectsWhitespaceOnlyName 锁住「name 全是空白字符时
+// 仍被拒」。这条区分手写校验（strings.TrimSpace 判空）与 gin
+// binding:"required" 标签：后者只判断零值，"   " 不是空字符串、不会触发
+// required 标签，若迁移时误以为标签能完全替代这处手写校验，这条会先失败
+// （迁移契约 §7：标签表达不了的校验条件必须留在 handler 里，不能因为
+// 「换成标签」而悄悄弱化）。
+func TestTemplate_CreateRejectsWhitespaceOnlyName(t *testing.T) {
+	ts := newTestServer(t)
+	set := seedActiveArtifactSet(t, ts, "as-name-ws", model.OSFamilyRHEL)
+	tok := ts.login("eve-admin")
+
+	rr := ts.doJSON("POST", "/console/v1/templates", tok, map[string]any{
+		"name": "   ", "artifactSetId": set.ID, "answerTemplate": "# ks\n",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("name 全空白时 HTTP 状态码 = %d, want %d（迁移契约 §2：CodeBadRequest 对应 400）",
+			rr.Code, http.StatusBadRequest)
+	}
+	var env struct {
+		Code int `json:"code"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &env)
+	if env.Code == int(apierr.CodeOK) {
+		t.Errorf("name 全是空白字符时应被拒，实际成功——说明校验被 gin binding:\"required\" 标签" +
+			"静默弱化了（该标签不认为 \"   \" 是零值）")
+	}
+}
+
+// TestTemplate_CreateRejectsMalformedJSONBody 锁住「请求体不是合法 JSON
+// 时返回 400 + CodeBadRequest，且不是 500」——迁移前用手写
+// json.NewDecoder().Decode 判断解析错误，迁移后换成 gin 的
+// c.ShouldBindJSON，这条测试确保换绑定方式后这个分支还在同一个错误码上，
+// 不会因为 gin 把解析错误和 panic 混在一起处理而退化成未识别的内部错误。
+func TestTemplate_CreateRejectsMalformedJSONBody(t *testing.T) {
+	ts := newTestServer(t)
+	tok := ts.login("eve-admin")
+
+	// 不用 ts.doJSON——它总是先 json.Marshal 一个合法的 Go 值，构造不出
+	// 「请求体本身就不是合法 JSON」这种输入，这里手写请求体是恰当的做法，
+	// 不是绕开共享 helper。
+	req := httptest.NewRequest("POST", "/console/v1/templates", strings.NewReader("{not valid json"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.RemoteAddr = "203.0.113.1:12345"
+	rr := httptest.NewRecorder()
+	ts.Server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("请求体不是合法 JSON 时 HTTP 状态码 = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+	var env struct {
+		Code int `json:"code"`
+	}
+	decodeJSON(t, rr.Body.Bytes(), &env)
+	if env.Code != int(apierr.CodeBadRequest) {
+		t.Errorf("请求体不是合法 JSON 时业务码 = %d, want %d（CodeBadRequest）", env.Code, int(apierr.CodeBadRequest))
 	}
 }
 
@@ -145,6 +206,14 @@ func TestTemplate_FormSchemaRejectsHookOutsideSubset(t *testing.T) {
 	decodeJSON(t, rr.Body.Bytes(), &created)
 
 	rr = ts.doJSON("GET", "/console/v1/templates/"+created.Data.ID+"/form-schema", tok, nil)
+	// HTTP 状态码必须与 CodeInternal 对应的 500 一致（迁移契约 §2 冻结的
+	// 错误码表）：聚合失败是服务端内部状态异常（active hook 的 params_schema
+	// 本不该出现子集外字段，走到这里说明注册期校验被绕过），不是客户端
+	// 输入错误，用 500 而不是 400/404 才与「谁的责任」对应。
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("聚合结果超出子集时 HTTP 状态码 = %d, want %d（迁移契约 §2：CodeInternal 对应 500）",
+			rr.Code, http.StatusInternalServerError)
+	}
 	var env struct {
 		Code int `json:"code"`
 	}
@@ -267,6 +336,12 @@ func TestTemplate_SaveRejectsUnknownHookDigest(t *testing.T) {
 		"name": "tpl-5", "artifactSetId": set.ID,
 		"hookRefs": []map[string]any{{"hookId": "no-such-hook", "stage": "post", "order": 10}},
 	})
+	// HTTP 状态码必须是 404（迁移契约 §2：CodeNotFound 对应 404）——引用的
+	// hookId 没有 active 版本，本质是「引用了不存在的资源」，不是 200。
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("引用不存在的 hook 时 HTTP 状态码 = %d, want %d（迁移契约 §2：CodeNotFound 对应 404）",
+			rr.Code, http.StatusNotFound)
+	}
 	var env struct {
 		Code int `json:"code"`
 	}
@@ -289,6 +364,13 @@ func TestTemplate_SaveRejectsIncompatibleFamily(t *testing.T) {
 		"name": "tpl-6", "artifactSetId": set.ID,
 		"hookRefs": []map[string]any{{"hookId": hook.ID, "stage": "post", "order": 10}},
 	})
+	// HTTP 状态码必须是 400（迁移契约 §2：CodeBadRequest 对应 400）——家族
+	// 不兼容是请求本身的语义错误（客户端传的 hookRefs 与 artifactSetId
+	// 组合不合法），不是服务端内部错误也不是「资源不存在」。
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("hook 家族不兼容时 HTTP 状态码 = %d, want %d（迁移契约 §2：CodeBadRequest 对应 400）",
+			rr.Code, http.StatusBadRequest)
+	}
 	var env struct {
 		Code int `json:"code"`
 	}

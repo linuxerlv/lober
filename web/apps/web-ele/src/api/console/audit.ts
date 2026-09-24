@@ -35,11 +35,13 @@ export interface AuditListParams {
  * 没有审计记录时返回空数组，不是错误。
  *
  * 权限：hook-author（hook:write）或 hook-approver（hook:approve）之一，
- * admin 通过聚合权限码天然满足。无权限时服务端返回
- * `{code: 1003, data: null}`（HTTP 状态码仍是 200，见响应包裹格式约定），
- * 会被 requestClient 的默认响应拦截器识别为失败并 throw——调用方需要
- * 用 err.response?.data?.code === 1003 区分「无权限」与其它失败，不要
- * 笼统展示成「加载失败」。
+ * admin 通过聚合权限码天然满足。无权限时服务端返回 HTTP 403、
+ * `{code: 1003, data: null}`（状态码与 code 是真实值，不是固定 200，
+ * 见 docs/superpowers/specs/2026-09-24-gin-migration-contract.md §0），
+ * 会被 requestClient 的响应拦截器识别为失败并 throw——调用方需要用
+ * err.response?.data?.code === 1003（或等价地 err.response?.status === 403，
+ * 但 403 下只有这一种业务分支，不需要额外区分）区分「无权限」与其它
+ * 失败，不要笼统展示成「加载失败」。
  */
 export async function getHookAuditApi(id: string, params?: AuditListParams) {
   return requestClient.get<AuditRecordItem[]>(`/hooks/${id}/audit`, {
