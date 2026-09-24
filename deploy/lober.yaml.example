@@ -169,11 +169,36 @@ console:
   # 控制台 token 有效期，默认 12 小时（省略此字段等价于写 12h）。
   token_ttl: 12h
 
-# --- 存储（三个可写路径，逐条对应 docs/contracts/filesystem.md）----------
+# --- 存储（数据库 + 两个可写路径，逐条对应 docs/contracts/filesystem.md）--
 store:
-  # 仅 Go 进程读写，nginx worker 无权访问（含 task 的敏感字段，见
-  # filesystem.md「约定：权限」）。
-  db_path: "/var/lib/lober/db/lober.db"
+  # PostgreSQL 连接参数。数据库由 lober 独占，含 task 的敏感字段与全部
+  # 审计记录——PG 的账号只应授予这一个库的权限，不要复用其它业务的账号。
+  #
+  # 部署形态提示：lober 从此依赖一个外部 PostgreSQL 服务，不再是单文件
+  # 零依赖。备份对象从「拷一个 .db 文件」变成「pg_dump 这个库」，运维手册
+  # 需要相应更新。
+  postgres:
+    host: "127.0.0.1"
+    port: 5432
+    user: "lober"
+    dbname: "lober"
+
+    # 密码留空：生产环境应当用环境变量注入，不要写进本文件——配置文件会
+    # 进版本库、会被打包、会被 scp 到运维跳板机。本机开发若用 trust/peer
+    # 认证则本来就不需要密码。
+    password: ""
+
+    # sslmode 必须显式填写，lober 不给它默认值：静默默认成 disable 会让
+    # 一个本该加密的连接以明文跑起来且没有任何提示。同机部署走 unix
+    # socket 或 loopback 时 disable 是合理选择；跨机必须至少 require。
+    # 可选值：disable / allow / prefer / require / verify-ca / verify-full
+    sslmode: "disable"
+
+    # search_path 指定建表落在哪个 schema，留空表示用默认（通常 public）。
+    # 单实例部署留空即可。同一个 PG 上要跑多套 lober 时，给每套一个
+    # schema 比给每套一个 database 更容易做备份与权限。注意 lober 不会
+    # 自动创建这个 schema，需要预先建好。
+    search_path: ""
 
   # Go 进程写入（导入/注册落盘），nginx worker 需要读权限——nginx 按
   # SPEC §1.4 直接 alias 发盘，不经 Go 反代。两个系统用户建议加入同一个

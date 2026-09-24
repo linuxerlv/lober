@@ -16,7 +16,7 @@ import (
 // newTestStore 建一个独立 schema 的顶层 Store，供本文件各测试用例使用。
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	db := pgtest.NewDB(t, allModelsForTest()...)
+	db := pgtest.NewDB(t, AllModels()...)
 	return New(db)
 }
 

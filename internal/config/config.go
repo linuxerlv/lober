@@ -213,11 +213,44 @@ type Console struct {
 	TokenTTL time.Duration `yaml:"token_ttl"`
 }
 
-// Store 是持久化层的三个路径：数据库、制品、日志。
+// Store 是持久化层的配置：数据库连接与两个本地目录。
+//
+// 数据库从「一个 SQLite 文件路径」换成了一组 PostgreSQL 连接参数（见
+// docs/superpowers/specs/2026-09-24-gorm-postgres-migration-design.md §10）。
+// 连带的部署形态变化：lober 从此多一个外部服务依赖，不再是单文件零依赖，
+// 部署文档需要覆盖 PG 的安装、备份与凭据管理。
 type Store struct {
-	DBPath       string `yaml:"db_path"`
-	ArtifactPath string `yaml:"artifact_path"`
-	LogPath      string `yaml:"log_path"`
+	Postgres     Postgres `yaml:"postgres"`
+	ArtifactPath string   `yaml:"artifact_path"`
+	LogPath      string   `yaml:"log_path"`
+}
+
+// Postgres 是数据库连接参数。
+//
+// 用结构化字段而不是一整条 DSN 字符串：逐项校验才能给出「哪个字段没填」
+// 这种能直接定位的错误，一条拼好的 DSN 只能报「连不上」。这与本文件其余
+// 配置组的风格一致。
+//
+// Password 刻意允许为空且不参与非空校验——生产环境应当用环境变量注入而不是
+// 写进 lober.yaml（配置文件会进版本库、会被打包、会被 scp 到运维跳板机），
+// 且本机开发常用 trust/peer 认证根本不需要密码。校验它非空会把「没配密码」
+// 和「故意不用密码」混为一谈。
+type Postgres struct {
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	DBName   string `yaml:"dbname"`
+	SSLMode  string `yaml:"sslmode"`
+
+	// SearchPath 指定建表与查询落在哪个 schema，留空表示用连接的默认
+	// search_path（通常是 public）。留空是单实例部署的正常选择，不参与
+	// 非空校验。
+	//
+	// 用得上它的是共享数据库部署：同一个 PG 实例跑多套 lober 时，各自
+	// 一个 schema 比各自一个 database 更容易做备份与权限。注意 lober
+	// 不会自动创建这个 schema，需要预先建好。
+	SearchPath string `yaml:"search_path"`
 }
 
 // Scan 是超时扫描循环的配置。字段包含 Phase 4 新增的两组运维开关：并发
@@ -494,9 +527,34 @@ func (c *Config) Validate() error {
 			"（SPEC §1.4：空值会产出形如 /artifacts/... 的相对 URL，iPXE 对它的解析行为不确定）")
 	}
 
-	if c.Store.DBPath == "" {
-		return fmt.Errorf("config: store.db_path 不能为空")
+	// PG 连接参数逐项校验（password 除外，见 Postgres 类型的文档）。
+	// 分别报错而不是合成一条「postgres 配置不完整」——运维看到的应该是
+	// 「哪个字段没填」，而不是再去逐项比对文档。
+	if c.Store.Postgres.Host == "" {
+		return fmt.Errorf("config: store.postgres.host 不能为空")
 	}
+	if c.Store.Postgres.Port <= 0 || c.Store.Postgres.Port > 65535 {
+		return fmt.Errorf("config: store.postgres.port = %d 不是合法端口（1-65535）", c.Store.Postgres.Port)
+	}
+	if c.Store.Postgres.User == "" {
+		return fmt.Errorf("config: store.postgres.user 不能为空")
+	}
+	if c.Store.Postgres.DBName == "" {
+		return fmt.Errorf("config: store.postgres.dbname 不能为空")
+	}
+	// sslmode 必须显式写出，不给默认值：静默默认成 disable 会让一个本该
+	// 加密的生产连接以明文跑起来且没有任何提示，而这类配置疏漏正是
+	// 「机器面永久明文、人面 HTTPS」这条部署决策之外不该再多出来的风险。
+	switch c.Store.Postgres.SSLMode {
+	case "disable", "allow", "prefer", "require", "verify-ca", "verify-full":
+	case "":
+		return fmt.Errorf("config: store.postgres.sslmode 不能为空" +
+			"（必须显式写出，避免静默按明文连接；内网可用 disable）")
+	default:
+		return fmt.Errorf("config: store.postgres.sslmode = %q 不是合法取值"+
+			"（disable/allow/prefer/require/verify-ca/verify-full）", c.Store.Postgres.SSLMode)
+	}
+
 	if c.Store.ArtifactPath == "" {
 		return fmt.Errorf("config: store.artifact_path 不能为空")
 	}

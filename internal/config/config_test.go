@@ -28,7 +28,12 @@ console:
   listen: "192.168.1.10:8081"
   token_secret: "test-secret-please-change"
 store:
-  db_path: "/var/lib/lober/lober.db"
+  postgres:
+    host: "127.0.0.1"
+    port: 5432
+    user: "lober"
+    dbname: "lober"
+    sslmode: "disable"
   artifact_path: "/srv/lober/artifacts"
   log_path: "/var/log/lober"
 auth:
@@ -148,16 +153,35 @@ func TestValidate_空基址被拒绝(t *testing.T) {
 	}
 }
 
-// TestValidate_空存储路径被拒绝 是上一条的姊妹断言：三个存储路径同样属于
-// 「非空即产出不确定行为」的一类，计划任务 15 把基址与存储路径归入同一类
+// TestValidate_空存储配置被拒绝 是上一条的姊妹断言：存储配置同样属于
+// 「非空即产出不确定行为」的一类，计划任务 15 把基址与存储配置归入同一类
 // 校验（第二类）。
-func TestValidate_空存储路径被拒绝(t *testing.T) {
+//
+// 数据库那部分从「一个 db_path」变成了一组 PG 连接参数，因此用例也从一条
+// 变成逐字段各一条。password 刻意不在此列——生产环境用环境变量注入、本机
+// 开发用 trust 认证，两种情况下空密码都是正常的（见 config.Postgres 文档）。
+// sslmode 额外多一条「非法取值」用例：它是枚举而非自由文本，写错一个词
+// （比如 required 而不是 require）必须在启动时就被拦住，不能等到连库时才
+// 以一个晦涩的驱动错误暴露。
+func TestValidate_空存储配置被拒绝(t *testing.T) {
 	cases := []struct {
 		name string
 		yaml string
 	}{
-		{"db_path为空", strings.Replace(minimalYAML,
-			`db_path: "/var/lib/lober/lober.db"`, `db_path: ""`, 1)},
+		{"postgres.host为空", strings.Replace(minimalYAML,
+			`    host: "127.0.0.1"`, `    host: ""`, 1)},
+		{"postgres.user为空", strings.Replace(minimalYAML,
+			`    user: "lober"`, `    user: ""`, 1)},
+		{"postgres.dbname为空", strings.Replace(minimalYAML,
+			`    dbname: "lober"`, `    dbname: ""`, 1)},
+		{"postgres.sslmode为空", strings.Replace(minimalYAML,
+			`    sslmode: "disable"`, `    sslmode: ""`, 1)},
+		{"postgres.sslmode非法取值", strings.Replace(minimalYAML,
+			`    sslmode: "disable"`, `    sslmode: "no-such-mode"`, 1)},
+		{"postgres.port为0", strings.Replace(minimalYAML,
+			`    port: 5432`, `    port: 0`, 1)},
+		{"postgres.port越界", strings.Replace(minimalYAML,
+			`    port: 5432`, `    port: 70000`, 1)},
 		{"artifact_path为空", strings.Replace(minimalYAML,
 			`artifact_path: "/srv/lober/artifacts"`, `artifact_path: ""`, 1)},
 		{"log_path为空", strings.Replace(minimalYAML,
@@ -212,7 +236,12 @@ console:
   listen: "192.168.1.10:8081"
   token_secret: "test-secret-please-change"
 store:
-  db_path: "/var/lib/lober/lober.db"
+  postgres:
+    host: "127.0.0.1"
+    port: 5432
+    user: "lober"
+    dbname: "lober"
+    sslmode: "disable"
   artifact_path: "/srv/lober/artifacts"
   log_path: "/var/log/lober"
 auth:
@@ -231,7 +260,12 @@ console:
   listen: "192.168.1.10:8081"
   token_secret: "test-secret-please-change"
 store:
-  db_path: "/var/lib/lober/lober.db"
+  postgres:
+    host: "127.0.0.1"
+    port: 5432
+    user: "lober"
+    dbname: "lober"
+    sslmode: "disable"
   artifact_path: "/srv/lober/artifacts"
   log_path: "/var/log/lober"
 auth:
@@ -250,7 +284,12 @@ console:
   listen: "192.168.1.10:8081"
   token_secret: "test-secret-please-change"
 store:
-  db_path: "/var/lib/lober/lober.db"
+  postgres:
+    host: "127.0.0.1"
+    port: 5432
+    user: "lober"
+    dbname: "lober"
+    sslmode: "disable"
   artifact_path: "/srv/lober/artifacts"
   log_path: "/var/log/lober"
 auth:

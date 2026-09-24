@@ -11,20 +11,17 @@ import (
 	"github.com/lober/lober/internal/store/postgres/pgtest"
 )
 
-// allModelsForTest 复用 open.go 的 allModels——两者必须是同一份清单，
-// 否则 verifyIndexes 的测试环境与 Open 的生产路径实际迁移的表集合就
-// 会不一致，校验器测出的「通过」不能代表 Open 场景下也通过。红灯步骤
-// 曾经在本文件独立声明过一份重复的清单（当时 open.go 还不存在），
-// 现在收敛成直接调用真实实现。
-func allModelsForTest() []any {
-	return allModels()
-}
+// 本文件与 store_test.go / tx_test.go 都直接用 AllModels()：测试环境与
+// Open 的生产路径必须迁移同一份表集合，否则校验器测出的「通过」不能代表
+// Open 场景下也通过。红灯步骤曾在本文件独立声明过一份重复清单（当时
+// open.go 还不存在），后来收敛成一个转发函数，现在 AllModels 已导出，
+// 连转发也不需要了。
 
 // TestVerifyIndexes_HappyPath 验证正常 AutoMigrate 之后四个索引都通过
 // 校验——这是校验器最基本的正向路径，但只有这一条远远不够（见下面的
 // 退化测试）。
 func TestVerifyIndexes_HappyPath(t *testing.T) {
-	db := pgtest.NewDB(t, allModelsForTest()...)
+	db := pgtest.NewDB(t, AllModels()...)
 
 	if err := verifyIndexes(db); err != nil {
 		t.Fatalf("正常 AutoMigrate 之后 verifyIndexes 应该通过，实际返回错误: %v", err)
@@ -41,7 +38,7 @@ func TestVerifyIndexes_HappyPath(t *testing.T) {
 // 「装完的机器再也不能重装」），只有专门针对校验器的这条负向测试才能
 // 在 CI 里抓住「校验器写松了」这个问题本身。
 func TestVerifyIndexes_DegradedWhereClause_ReturnsError(t *testing.T) {
-	db := pgtest.NewDB(t, allModelsForTest()...)
+	db := pgtest.NewDB(t, AllModels()...)
 
 	if err := db.Exec(`DROP INDEX idx_tasks_sn_active`).Error; err != nil {
 		t.Fatalf("DROP INDEX 失败: %v", err)
@@ -70,7 +67,7 @@ func TestVerifyIndexes_DegradedWhereClause_ReturnsError(t *testing.T) {
 // TestVerifyIndexes_MissingIndex_ReturnsError 覆盖索引整个不存在的
 // 情形（比 WHERE 退化更彻底的失效）。
 func TestVerifyIndexes_MissingIndex_ReturnsError(t *testing.T) {
-	db := pgtest.NewDB(t, allModelsForTest()...)
+	db := pgtest.NewDB(t, AllModels()...)
 
 	if err := db.Exec(`DROP INDEX idx_tasks_token`).Error; err != nil {
 		t.Fatalf("DROP INDEX 失败: %v", err)
@@ -89,7 +86,7 @@ func TestVerifyIndexes_MissingIndex_ReturnsError(t *testing.T) {
 // 但不是 unique 的退化情形——同样会让「同一主机两个非终态任务」这类
 // 业务约束失效，但退化方式与 WHERE 被截断不同，需要单独覆盖。
 func TestVerifyIndexes_NotUnique_ReturnsError(t *testing.T) {
-	db := pgtest.NewDB(t, allModelsForTest()...)
+	db := pgtest.NewDB(t, AllModels()...)
 
 	if err := db.Exec(`DROP INDEX idx_tasks_finalize_token`).Error; err != nil {
 		t.Fatalf("DROP INDEX 失败: %v", err)

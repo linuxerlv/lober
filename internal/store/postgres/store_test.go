@@ -20,7 +20,7 @@ import (
 // TestNew_AllEightEmbeddedStoresAreNonNil 用反射遍历 *Store 的匿名嵌入
 // 字段，断言每一个都是非 nil 指针。
 func TestNew_AllEightEmbeddedStoresAreNonNil(t *testing.T) {
-	db := pgtest.NewDB(t, allModelsForTest()...)
+	db := pgtest.NewDB(t, AllModels()...)
 	s := New(db)
 
 	v := reflect.ValueOf(*s)
@@ -56,7 +56,7 @@ func TestNew_AllEightEmbeddedStoresAreNonNil(t *testing.T) {
 // 一次八个聚合，作为反射断言之外的第二重证据——即便反射遍历漏掉了
 // 什么，真实调用一次也能兜住。
 func TestNew_TopLevelStoreCanCallEachAggregateWithoutPanic(t *testing.T) {
-	db := pgtest.NewDB(t, allModelsForTest()...)
+	db := pgtest.NewDB(t, AllModels()...)
 	s := New(db)
 	ctx := context.Background()
 

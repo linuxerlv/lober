@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -45,9 +46,11 @@ func TestRun_InvalidConfigPathFails(t *testing.T) {
 }
 
 // writeMinimalValidConfigFile 写一份能通过 config.Validate 的最小 YAML
-// 配置到 path，三个存储路径指向 dir 下的子目录。
+// 配置到 path：两个本地路径指向 dir 下的子目录，数据库指向一个用完即删的
+// 独立 PG schema（-check 会走完整装配，包括真的连库并跑 AutoMigrate）。
 func writeMinimalValidConfigFile(t *testing.T, path, dir string) {
 	t.Helper()
+	pg := testPostgres(t)
 	content := `
 gateway:
   listen: "127.0.0.1:18180"
@@ -60,7 +63,14 @@ console:
   listen: "127.0.0.1:18190"
   token_secret: "test-secret"
 store:
-  db_path: "` + filepath.ToSlash(filepath.Join(dir, "db", "lober.db")) + `"
+  postgres:
+    host: "` + pg.Host + `"
+    port: ` + strconv.Itoa(pg.Port) + `
+    user: "` + pg.User + `"
+    password: "` + pg.Password + `"
+    dbname: "` + pg.DBName + `"
+    sslmode: "` + pg.SSLMode + `"
+    search_path: "` + pg.SearchPath + `"
   artifact_path: "` + filepath.ToSlash(filepath.Join(dir, "artifacts")) + `"
   log_path: "` + filepath.ToSlash(filepath.Join(dir, "log")) + `"
 auth:

@@ -184,3 +184,50 @@ func NewDB(t *testing.T, models ...any) *gorm.DB {
 
 	return dbWithSchema
 }
+
+// NewSchema 建一个用完即删的空 schema，返回连接串与 schema 名，**不建任何
+// 表、不返回句柄**。
+//
+// 与 NewDB 的分工：NewDB 面向「我要一个能直接用的 Store」——它自己开连接、
+// 设 search_path、跑 AutoMigrate。NewSchema 面向「被测代码自己会开连接」
+// 的场景，典型是 cmd/lober 的装配点测试：那里要走 postgres.Open 完整的
+// 连库 → AutoMigrate → 索引校验路径（这正是它要验证的东西），因此不能
+// 拿一个别人开好的句柄，只需要一个干净的 schema 名连同凭据。
+//
+// 两者共用同一套 schema 命名与 DROP SCHEMA CASCADE 清理逻辑，隔离强度
+// 一致。调用方拿到 schema 名后应通过被测代码的配置项（如
+// postgres.Config.SearchPath）把它传进去。
+func NewSchema(t *testing.T) (dsn, schema string) {
+	t.Helper()
+
+	dsn, err := dsnFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adminDB, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("连接 PostgreSQL 失败（DSN 取自环境变量 %s）: %v —— "+
+			"请确认目标实例可达、DSN 格式正确", dsnEnvVar, err)
+	}
+
+	schema = newSchemaName(t)
+	if err := adminDB.Exec(fmt.Sprintf(`CREATE SCHEMA "%s"`, schema)).Error; err != nil {
+		t.Fatalf("CREATE SCHEMA %q 失败: %v —— 请确认 DSN 对应的账号"+
+			"具有建 schema 的权限", schema, err)
+	}
+
+	t.Cleanup(func() {
+		if err := adminDB.Exec(fmt.Sprintf(`DROP SCHEMA IF EXISTS "%s" CASCADE`, schema)).Error; err != nil {
+			t.Logf("清理 schema %q 失败: %v（不影响本次测试结果，但该 "+
+				"schema 可能残留，需要人工清理）", schema, err)
+		}
+		if sqlDB, err := adminDB.DB(); err == nil {
+			sqlDB.Close()
+		}
+	})
+
+	return dsn, schema
+}

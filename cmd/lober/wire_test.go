@@ -7,9 +7,11 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,12 +20,55 @@ import (
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/statemachine"
-	"github.com/lober/lober/internal/store/sqlite"
+	"github.com/lober/lober/internal/store/postgres"
+	"github.com/lober/lober/internal/store/postgres/pgtest"
 )
 
 // testConfig 构造一份能通过 config.Config.Validate 的最小配置，供
 // buildApp 系列测试使用。三个存储路径指向 t.TempDir()，不污染真实磁盘、
 // 不需要手工清理（t.TempDir 由测试框架自动回收）。
+// testPostgres 返回一份指向用完即删的独立 schema 的 PG 配置。
+//
+// 本文件有 5 个用例直接调 buildApp，走的是完整的生产装配路径（连库 →
+// AutoMigrate → 索引校验），因此不能像其它测试那样接一个别人开好的句柄，
+// 必须给它一组真实凭据。凭据从 LOBER_TEST_PG_DSN 解析，schema 由
+// pgtest.NewSchema 建好并在测试结束时 DROP CASCADE——不指定 SearchPath 的
+// 话这些用例会把八张表建到 public 里、彼此看见对方的数据，失败会表现成
+// 随机的顺序相关问题。
+func testPostgres(t *testing.T) config.Postgres {
+	t.Helper()
+
+	dsn, schema := pgtest.NewSchema(t)
+
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("解析 LOBER_TEST_PG_DSN 失败: %v —— 需要形如 "+
+			"postgres://user:pass@host:5432/dbname?sslmode=disable 的连接串", err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("从 DSN 解析端口失败（got %q）: %v", u.Port(), err)
+	}
+	password, _ := u.User.Password()
+
+	sslMode := u.Query().Get("sslmode")
+	if sslMode == "" {
+		// config 的校验要求 sslmode 必须显式写出（不给默认值，避免生产
+		// 环境静默按明文连接），DSN 里没写时这里补一个内网默认值。
+		sslMode = "disable"
+	}
+
+	return config.Postgres{
+		Host:       u.Hostname(),
+		Port:       port,
+		User:       u.User.Username(),
+		Password:   password,
+		DBName:     strings.TrimPrefix(u.Path, "/"),
+		SSLMode:    sslMode,
+		SearchPath: schema,
+	}
+}
+
 func testConfig(t *testing.T) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
@@ -42,7 +87,11 @@ func testConfig(t *testing.T) *config.Config {
 			TokenSecret: "test-secret",
 		},
 		Store: config.Store{
-			DBPath:       filepath.Join(dir, "db", "lober.db"),
+			// 真实连接参数从环境变量来，并指向一个用完即删的独立 schema
+			// ——本文件有 5 个用例直接调 buildApp（走完整的连库 +
+			// AutoMigrate + 索引校验路径），它们必须落在隔离 schema 里，
+			// 否则会把表留在 public 且互相看见对方的数据。
+			Postgres:     testPostgres(t),
 			ArtifactPath: filepath.Join(dir, "artifacts"),
 			LogPath:      filepath.Join(dir, "log"),
 		},
@@ -67,7 +116,7 @@ func TestBuildApp_AllSevenSeamsWired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildApp 失败: %v", err)
 	}
-	defer app.DB.Close()
+	defer closeDB(app.DB)
 
 	checks := []struct {
 		name string
@@ -137,7 +186,7 @@ func TestBuildApp_SchemaReadyAfterAssembly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildApp 失败: %v", err)
 	}
-	defer app.DB.Close()
+	defer closeDB(app.DB)
 
 	// 用 ListTasks 这个真实的 Store 查询验证 schema 已经就绪：若表不存在，
 	// 这里会直接返回 SQL 层的错误（"no such table"），而不是空切片。
@@ -147,17 +196,20 @@ func TestBuildApp_SchemaReadyAfterAssembly(t *testing.T) {
 }
 
 // TestBuildApp_StorageDirsAutoCreated 断言两个存储目录（制品、日志）被
-// 自动创建——数据库所在目录同理，由 sqlite.Open 隐式验证（打不开数据库
-// 文件本身就会导致 buildApp 报错）。
+// 自动创建。
+//
+// 数据库不再有「所在目录」这一说——它是外部的 PostgreSQL 服务而不是本地
+// 文件，连库失败本身就会让 buildApp 报错（postgres.Open 那一步），不需要
+// 也无法在这里检查目录。
 func TestBuildApp_StorageDirsAutoCreated(t *testing.T) {
 	cfg := testConfig(t)
 	app, err := buildApp(cfg)
 	if err != nil {
 		t.Fatalf("buildApp 失败: %v", err)
 	}
-	defer app.DB.Close()
+	defer closeDB(app.DB)
 
-	for _, dir := range []string{cfg.Store.ArtifactPath, cfg.Store.LogPath, filepath.Dir(cfg.Store.DBPath)} {
+	for _, dir := range []string{cfg.Store.ArtifactPath, cfg.Store.LogPath} {
 		info, err := os.Stat(dir)
 		if err != nil {
 			t.Errorf("目录 %s 未被自动创建: %v", dir, err)
@@ -199,7 +251,7 @@ func TestAssemblyPrechecker_UsesInjectedFilesystemNotEmptyFS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildApp 失败: %v", err)
 	}
-	defer app.DB.Close()
+	defer closeDB(app.DB)
 
 	// 在制品根目录下真实建出一套完整的最小制品文件（内核、initrd、仓库
 	// 元数据），与 model.ArtifactSet.Paths 的相对路径约定一致。
@@ -622,14 +674,16 @@ func TestBuildApp_AlertingNotifyWiredAheadOfBuiltinNotify(t *testing.T) {
 }
 
 // buildAppWithDBForTest 是给其它测试文件（server_test.go 等）复用的辅助：
-// 用内存 SQLite 快速装配一个 App，不落磁盘目录。
+// 在一个独立的 PostgreSQL schema 上快速装配一个 App，不落磁盘目录。
+//
+// PG 没有进程内存库这种东西（原来用的 file::memory:?cache=shared 随 SQLite
+// 一起没了），隔离靠 pgtest.NewDB 给每个测试建一个独立 schema、结束时
+// DROP SCHEMA CASCADE。代价是这些用例从此需要一个可达的 PostgreSQL：
+// 连不上时 pgtest 会 Fatal 而不是 Skip，这是刻意的——Skip 会让装配点的
+// 测试在零覆盖的情况下变绿。
 func buildAppWithDBForTest(t *testing.T, cfg *config.Config) *App {
 	t.Helper()
-	db, err := sqlite.Open("file::memory:?cache=shared")
-	if err != nil {
-		t.Fatalf("打开内存数据库失败: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := pgtest.NewDB(t, postgres.AllModels()...)
 
 	app, err := buildAppWithDB(cfg, db)
 	if err != nil {

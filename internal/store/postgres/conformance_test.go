@@ -23,11 +23,11 @@ import (
 // 测试留下的任务把后一个的前提破坏掉，且失败表现为随机顺序相关，极难定位。
 //
 // 走 pgtest.NewDB 而不是 Open：Open 连的是默认 schema（生产装配路径），
-// 测试需要的是一次性隔离 schema。两者建出的表结构同源（都来自 allModels），
+// 测试需要的是一次性隔离 schema。两者建出的表结构同源（都来自 AllModels），
 // 差别只在 schema 归属与生命周期。
 func newConformanceStore(t *testing.T) contract.Store {
 	t.Helper()
-	return New(pgtest.NewDB(t, allModels()...))
+	return New(pgtest.NewDB(t, AllModels()...))
 }
 
 // TestConformance 是本模块的验收标准：M1 的 RunConformanceSuite 在

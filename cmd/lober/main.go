@@ -69,7 +69,9 @@ func run(args []string) int {
 		slog.Error("装配失败", slog.Any("error", err))
 		return 1
 	}
-	defer app.DB.Close()
+	// *gorm.DB 没有 Close 方法（它是可复制的会话对象，不持有连接），
+	// 关闭要落到底层的连接池上，closeDB 负责取出来关。
+	defer closeDB(app.DB)
 
 	// 启动自检：制品完整性（任务 2）。发现问题只打日志，不阻止服务启动
 	// （docs/contracts/filesystem.md 硬约束 3：一个坏掉的制品集不该拖累

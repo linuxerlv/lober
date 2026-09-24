@@ -19,7 +19,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -33,6 +32,8 @@ import (
 	"sync"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/lober/lober/internal/config"
 	"github.com/lober/lober/internal/console"
 	consoleui "github.com/lober/lober/internal/console/ui"
@@ -42,7 +43,7 @@ import (
 	"github.com/lober/lober/internal/provider"
 	"github.com/lober/lober/internal/render"
 	"github.com/lober/lober/internal/statemachine"
-	"github.com/lober/lober/internal/store/sqlite"
+	"github.com/lober/lober/internal/store/postgres"
 )
 
 // App 持有装配完成后的全部组件，字段全部是 contract 的接口类型（除了
@@ -51,7 +52,7 @@ import (
 //
 // 字段导出：测试需要逐个断言七个接缝非空。
 type App struct {
-	DB *sql.DB
+	DB *gorm.DB
 
 	Store  contract.Store
 	Clock  contract.Clock
@@ -414,11 +415,10 @@ var _ contract.StateMachine = (*autoRetryScanDecorator)(nil)
 // 启动校验，只负责按已确认合法的配置构造组件；构造失败要给出能定位到
 // 具体依赖的错误（计划任务 1「构造失败要给出能定位到具体依赖的错误」）。
 func buildApp(cfg *config.Config) (*App, error) {
-	// 第 1 步：建三个存储目录。先建目录再开库——目录不存在时失败点会推迟到
-	// 第一条日志写入，那时机器已经在装了（计划任务 1「实现流程」第 1 步）。
-	if err := ensureDir("store.db_path 所在目录", filepath.Dir(cfg.Store.DBPath)); err != nil {
-		return nil, err
-	}
+	// 第 1 步：建两个本地存储目录。数据库不再需要建目录——它现在是外部的
+	// PostgreSQL 服务，不是本地文件（db_path 那一步随 SQLite 一起删掉了）。
+	// 制品与日志目录仍要先建再开库：目录不存在时失败点会推迟到第一条日志
+	// 写入，那时机器已经在装了（计划任务 1「实现流程」第 1 步）。
 	if err := ensureDir("store.artifact_path", cfg.Store.ArtifactPath); err != nil {
 		return nil, err
 	}
@@ -426,29 +426,59 @@ func buildApp(cfg *config.Config) (*App, error) {
 		return nil, err
 	}
 
-	// 第 2 步：开 SQLite 并跑迁移。dsn 形如 "file:/path/to/db.sqlite"——
-	// 不能漏 file: 前缀，sqlite.Open 内部会拼四个必需 pragma（M2 装配说明）。
-	dsn := "file:" + filepath.ToSlash(cfg.Store.DBPath)
-	db, err := sqlite.Open(dsn)
+	// 第 2 步：连 PostgreSQL、跑 AutoMigrate、校验索引。三件事都在
+	// postgres.Open 内部完成（见该函数文档）；索引校验会拦住「partial
+	// index 静默退化」这类不会被任何业务测试发现的问题。
+	db, err := postgres.Open(pgConfig(cfg.Store.Postgres))
 	if err != nil {
-		return nil, fmt.Errorf("cmd/lober: 打开数据库失败（dsn=%s）: %w", dsn, err)
+		return nil, fmt.Errorf("cmd/lober: 打开数据库失败（%s@%s:%d/%s）: %w",
+			cfg.Store.Postgres.User, cfg.Store.Postgres.Host,
+			cfg.Store.Postgres.Port, cfg.Store.Postgres.DBName, err)
 	}
 
 	app, err := buildAppWithDB(cfg, db)
 	if err != nil {
-		db.Close()
+		closeDB(db)
 		return nil, err
 	}
 	return app, nil
 }
 
-// buildAppWithDB 是 buildApp 去掉「开库」这一步的版本，供测试用内存
-// SQLite（file::memory:?cache=shared 之类）或已经打开的连接直接装配，
-// 不需要真的建目录、写文件——七个接缝是否接上与数据库物理位置无关。
-func buildAppWithDB(cfg *config.Config, db *sql.DB) (*App, error) {
+// pgConfig 把 config 包的 Postgres 配置翻译成 store 包的 Config。
+//
+// 两个结构体字段相同却不共用一个类型：config 包是「配置文件的形状」，
+// store 包是「连库需要的参数」，两者恰好一致是当下的事实而不是约定——让
+// store 包 import config 包会把一个数据访问层绑到具体的配置来源上，
+// 装配点做一次显式翻译是这个项目里 contract 层之外的一贯做法。
+func pgConfig(c config.Postgres) postgres.Config {
+	return postgres.Config{
+		Host:       c.Host,
+		Port:       c.Port,
+		User:       c.User,
+		Password:   c.Password,
+		DBName:     c.DBName,
+		SSLMode:    c.SSLMode,
+		SearchPath: c.SearchPath,
+	}
+}
+
+// closeDB 关闭 GORM 句柄底层的连接池。GORM 的 *gorm.DB 自身没有 Close
+// 方法（它是个可复制的会话对象，不是连接的所有者），要先取出底层的
+// *sql.DB。取不出来时无事可做——那说明连接池本身已经不可用，关闭它没有
+// 意义，也没有调用方能对这个错误做出反应。
+func closeDB(db *gorm.DB) {
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.Close() //nolint:errcheck // 关闭失败时没有可执行的补救动作，进程正在退出或已经在错误路径上
+	}
+}
+
+// buildAppWithDB 是 buildApp 去掉「开库」这一步的版本，供测试传一个已经
+// 打开的连接直接装配，不需要建目录、写文件——七个接缝是否接上与数据库
+// 在哪无关。
+func buildAppWithDB(cfg *config.Config, db *gorm.DB) (*App, error) {
 	// 第 3 步：构造基础件。
 	clock := systemClock{}
-	st := sqlite.New(db)
+	st := postgres.New(db)
 	events := provider.NewEventBus()
 
 	logs := newFileLogStore(cfg.Store.LogPath)
