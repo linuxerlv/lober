@@ -25,6 +25,8 @@ func TestTemplateRoundTrip(t *testing.T) {
 		{
 			name: "全字段填满",
 			tpl: model.Template{
+				// fromModel 写入时把通道零值归一化成 installer，往返回来必然是这个值。
+				Channel:            model.ChannelInstaller,
 				ID:                 "tpl-full",
 				Name:               "rocky9-desktop",
 				ArtifactSetID:      "artifact-rocky9",
@@ -40,6 +42,8 @@ func TestTemplateRoundTrip(t *testing.T) {
 		{
 			name: "RequiredFormFields 为空 slice 非 nil",
 			tpl: model.Template{
+				// fromModel 写入时把通道零值归一化成 installer，往返回来必然是这个值。
+				Channel:            model.ChannelInstaller,
 				ID:                 "tpl-empty-slice",
 				Name:               "esxi-min",
 				ArtifactSetID:      "artifact-esxi",
@@ -54,6 +58,8 @@ func TestTemplateRoundTrip(t *testing.T) {
 		{
 			name: "RequiredFormFields 为 nil",
 			tpl: model.Template{
+				// fromModel 写入时把通道零值归一化成 installer，往返回来必然是这个值。
+				Channel:        model.ChannelInstaller,
 				ID:             "tpl-nil-slice",
 				Name:           "win-basic",
 				ArtifactSetID:  "artifact-win",

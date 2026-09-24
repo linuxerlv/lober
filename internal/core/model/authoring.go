@@ -164,6 +164,20 @@ type Template struct {
 	OnFailure          OnFailurePolicy
 	RequiredFormFields []string
 
+	// Channel 声明本模板走哪条交付通道（P3-03 任务 5）。
+	//
+	// **零值等价于 ChannelInstaller**（与 ArtifactSet.Channel 同一套语义，见
+	// DeliveryChannel.Normalize）。默认选兜底通道是刻意的：installer 驱动对新
+	// OS 版本与特殊机型总是可用，而镜像直写要求那个版本已经被封装过——默认选
+	// 一个可能没有制品的通道会让建任务失败，而运维不一定知道为什么。
+	//
+	// 与 ArtifactSetID 的关系：模板已经 pin 了一个具体制品集，通道理论上由那个
+	// 制品集隐含。本字段仍然显式存在，作用是**建任务时的一道交叉校验**——两者
+	// 不符时在建任务阶段就拒绝，并给出可行的下一步（「该版本尚未封装镜像，可改用
+	// installer 驱动」）。不加这一维的话，错配要等到渲染阶段才暴露，那时机器已经
+	// 上电了。
+	Channel DeliveryChannel
+
 	Version int
 	State   TemplateState
 }

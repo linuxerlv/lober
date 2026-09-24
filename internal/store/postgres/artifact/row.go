@@ -38,6 +38,26 @@ type artifactSetRow struct {
 	// JSON 手法。
 	FailReason string `gorm:"column:fail_reason"`
 
+	// Channel 是交付通道（P3-03 任务 1）。
+	//
+	// **不设 default 也不设 not null**：历史行（Phase 1/2 导入的制品集）在
+	// AutoMigrate 加列之后这一列是 NULL 或空串，而 model 侧零值等价于
+	// installer 驱动通道（见 model.DeliveryChannel.Normalize），两边语义天然
+	// 对齐，不需要一次数据回填。给 default 'installer' 反而要考虑「已有行是否
+	// 被 AutoMigrate 回填」这个 GORM 行为差异——已存在的列 AutoMigrate 不会
+	// 改动（见 memory: AutoMigrate 的两个索引盲区），依赖它做回填不可靠。
+	Channel string `gorm:"column:channel"`
+
+	// Image 是镜像直写通道专有的三项，整体作为一个 JSONB 列。
+	//
+	// 为什么是 JSONB 而不是拆成七八个平铺列：这几项**只对镜像直写通道有意义**，
+	// 拆成平铺列会让 installer 驱动通道的每一行都带七八个恒为空的列；而
+	// PartitionLayout 内部还有一个变长的分区数组，平铺不了。
+	//
+	// nil 指针映射 SQL NULL（pgtype.JSON 的既有约定），于是「installer 驱动
+	// 通道没有这一项」与「镜像直写但字段全空」在库里是两种可区分的状态。
+	Image pgtype.JSON[*model.ImageArtifact] `gorm:"column:image_json;type:jsonb"`
+
 	// Paths 三个标量字段直接映射，Initrd/Extra 走 JSONB。
 	PathsKernel string             `gorm:"column:paths_kernel"`
 	PathsInitrd pgtype.StringSlice `gorm:"column:paths_initrd;type:jsonb"`
@@ -71,10 +91,14 @@ func fromModel(a model.ArtifactSet) artifactSetRow {
 		State:           string(a.State),
 		ManifestSHA256:  a.ManifestSHA256,
 		FailReason:      a.FailReason,
-		PathsKernel:     a.Paths.Kernel,
-		PathsInitrd:     pgtype.StringSlice(a.Paths.Initrd),
-		PathsRepo:       a.Paths.Repo,
-		PathsExtra:      pgtype.StringMap(a.Paths.Extra),
+		// 写入时归一化：零值折叠成 "installer"，库里不出现两种表示同一件事的
+		// 值。读取侧仍然容忍 NULL/空串（历史行就是那样），见 toModel。
+		Channel:     string(a.Channel.Normalize()),
+		Image:       pgtype.JSON[*model.ImageArtifact]{Val: a.Image},
+		PathsKernel: a.Paths.Kernel,
+		PathsInitrd: pgtype.StringSlice(a.Paths.Initrd),
+		PathsRepo:   a.Paths.Repo,
+		PathsExtra:  pgtype.StringMap(a.Paths.Extra),
 	}
 }
 
@@ -91,6 +115,10 @@ func (r artifactSetRow) toModel() model.ArtifactSet {
 		State:           model.ArtifactSetState(r.State),
 		ManifestSHA256:  r.ManifestSHA256,
 		FailReason:      r.FailReason,
+		// Normalize 把历史行的 NULL/空串折叠成 installer——那些行是 Phase 1/2
+		// 导入的，本来就属于 installer 驱动通道。
+		Channel: model.DeliveryChannel(r.Channel).Normalize(),
+		Image:   r.Image.Val,
 		Paths: model.ArtifactPaths{
 			Kernel: r.PathsKernel,
 			Initrd: []string(r.PathsInitrd),

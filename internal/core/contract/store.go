@@ -54,6 +54,36 @@ var (
 type TaskFilter struct {
 	State  model.TaskState // 零值表示不按状态过滤
 	HostSN string          // 零值表示不按 SN 过滤
+
+	// FailureReason 非空时只返回该失败原因的任务，供失败分布报表下钻用
+	// （P4-04 任务 3：看到「precheck 失败 12 次」之后要能点进去看是哪 12 个
+	// 任务、是不是同一个人建的）。不可下钻的失败分布只是一个数字。
+	FailureReason model.FailureReason
+
+	// CreatedSinceTS/CreatedUntilTS 非零时限定 CreatedAt 的**闭区间**
+	// [CreatedSinceTS, CreatedUntilTS]，供装机统计报表按时间段取数。
+	//
+	// 闭区间这一点与 AuditFilter.SinceTS/UntilTS 刻意保持一致：两处是运维
+	// 在两个界面上看同一个时间窗口，包含性不同会让边界上的记录在一处出现、
+	// 另一处消失，而那种差异极难被当成 bug 报出来。
+	//
+	// 两者都非零且 CreatedSinceTS > CreatedUntilTS 时闭区间本身为空，实现
+	// 返回空结果而不是报错（与 AuditFilter 同一处置）。
+	CreatedSinceTS int64
+	CreatedUntilTS int64
+
+	// Limit 限定返回条数，语义是「按 CreatedAt 倒序排好之后取前 Limit 条」，
+	// 即最新的若干条——不是「任取 Limit 条再排序」。报表与 CSV 导出的行数
+	// 上限靠它做规模保护（P4-04 任务 4）。
+	//
+	// **零值不是「不限制」**，而是取 M1 的默认上限 1000（这是 ListTasks 一
+	// 直以来的行为，本字段只是把它变成可被调用方覆盖的参数）。显式传大于
+	// 1000 的值是允许的：CSV 导出需要一次取出远超 1000 行，那是调用方明确
+	// 知情的选择，而不是忘了分页。
+	//
+	// 与 AuditFilter.Limit 的零值语义**刻意不同**（那边零值是真的不限制）：
+	// 两处的既有行为本就不同，统一它们会改掉其中一处已有调用方依赖的行为。
+	Limit int
 }
 
 // EventFilter 是事件查询的过滤条件。
@@ -70,6 +100,17 @@ type AuditFilter struct {
 	// Target 非空时只返回 Target 完全等于该值的记录（如某个 hook id）——
 	// 这是「查某条 hook 的驳回理由」这个用例需要的最小维度，不做子串匹配。
 	Target string
+
+	// Actor 非空时只返回该操作人的记录，**精确匹配不做子串**（P4-04 任务 2
+	// 的四项查询条件之一）。用例是人员变动或权限审查时回答「某个人做了
+	// 什么」。不做子串是因为查 "bob" 时把 "bobby" 的操作一并带出来，在追责
+	// 场景下是不可接受的误差。
+	Actor string
+
+	// Action 非空时只返回该动作类型的记录，同样精确匹配。用例是「把全部
+	// task.create 拉出来逐条核对」——§3.2 承认建任务即授权是残留风险，
+	// 事后复核靠的就是这一维。
+	Action string
 
 	// SinceTS/UntilTS 非零时限定 TS 的闭区间 [SinceTS, UntilTS]。两者
 	// 都非零且 SinceTS > UntilTS 时实现应返回空结果而不是报错——这是

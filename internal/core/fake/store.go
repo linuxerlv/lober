@@ -173,7 +173,33 @@ func copyArtifactPaths(p model.ArtifactPaths) model.ArtifactPaths {
 func copyArtifactSet(a model.ArtifactSet) model.ArtifactSet {
 	out := a
 	out.Paths = copyArtifactPaths(a.Paths)
+	out.Image = copyImageArtifact(a.Image)
 	return out
+}
+
+// copyImageArtifact 返回 *model.ImageArtifact 的一份独立拷贝。
+//
+// 两层引用都要处理：**Image 本身是指针**（结构体赋值只复制指针，调用方与库内
+// 会指向同一个 ImageArtifact），**内部的 Partitions 是切片**（复制结构体不复制
+// 底层数组）。漏掉任何一层，调用方改一下返回值就会渗透进库内。
+//
+// 这不是理论风险：写盘端持有 GetArtifactSet 的返回值，UncompressedSHA256 是
+// 它回读校验的比对对象，分区角色决定「把哪个分区扩展到整盘」——后者被改错是
+// 破坏性操作。
+//
+// nil 进 nil 出：installer 驱动通道的制品集这个字段就是 nil，不能被拷贝成一个
+// 零值结构体（那会让「镜像 sha256 是空串」这种非法状态看起来像合法数据）。
+func copyImageArtifact(img *model.ImageArtifact) *model.ImageArtifact {
+	if img == nil {
+		return nil
+	}
+	out := *img
+	if img.PartitionLayout.Partitions != nil {
+		parts := make([]model.Partition, len(img.PartitionLayout.Partitions))
+		copy(parts, img.PartitionLayout.Partitions)
+		out.PartitionLayout.Partitions = parts
+	}
+	return &out
 }
 
 // copyHookRefSlice 返回 []model.HookRef 的一份独立拷贝，每个元素的
@@ -324,7 +350,17 @@ func (s *Store) FindPendingTaskByIdentity(ctx context.Context, sn, mac, uuid str
 	return model.Task{}, contract.ErrNotFound
 }
 
-// ListTasks 按过滤条件列出任务。
+// ListTasks 按过滤条件列出任务，按 (CreatedAt DESC, ID DESC) 排序。
+//
+// 全部条件按「与」相交；零值维度不过滤。CreatedSinceTS/CreatedUntilTS 是
+// **闭区间**，与 AuditFilter 的时间语义一致（contract.TaskFilter 的字段文档
+// 说明了为什么两处必须相同）。
+//
+// 排序必须显式做：s.tasks 是 map，range 顺序在 Go 里是刻意随机化的，不排序
+// 的话 Limit 取到的是任意 N 条而不是最新 N 条。ID 作为第二键是为了让同一
+// CreatedAt 的多条任务有确定顺序——秒级时间戳下同秒建多个任务并不罕见
+// （批量建任务就是），只按 CreatedAt 排会让两次查询返回不同顺序，而
+// internal/store/postgres 侧有确定顺序，两个实现的行为就会分叉。
 func (s *Store) ListTasks(ctx context.Context, filter contract.TaskFilter) ([]model.Task, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -337,7 +373,29 @@ func (s *Store) ListTasks(ctx context.Context, filter contract.TaskFilter) ([]mo
 		if filter.HostSN != "" && tk.HostSN != filter.HostSN {
 			continue
 		}
+		if filter.FailureReason != "" && tk.FailureReason != filter.FailureReason {
+			continue
+		}
+		if filter.CreatedSinceTS != 0 && tk.CreatedAt < filter.CreatedSinceTS {
+			continue
+		}
+		if filter.CreatedUntilTS != 0 && tk.CreatedAt > filter.CreatedUntilTS {
+			continue
+		}
 		out = append(out, copyTask(tk))
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt != out[j].CreatedAt {
+			return out[i].CreatedAt > out[j].CreatedAt
+		}
+		return out[i].ID > out[j].ID
+	})
+
+	// 先排序再截断：Limit 的语义是「最新的 Limit 条」，倒过来做会退化成
+	// 「任取 Limit 条再排序」——那种错误在数据量小的时候完全看不出来。
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
 	}
 	return out, nil
 }
@@ -968,6 +1026,15 @@ func (s *Store) ListAudit(ctx context.Context, filter contract.AuditFilter) ([]c
 	for i := len(s.audit) - 1; i >= 0; i-- {
 		rec := s.audit[i]
 		if filter.Target != "" && rec.Target != filter.Target {
+			continue
+		}
+		// Actor 与 Action 都是精确匹配、且与其余条件按「与」相交——四项条件
+		// 里任何一项写成「或」都会让查询多带出大量不相关记录，运维在几十万条
+		// 里翻不出想要的那几条（contract.AuditFilter 的字段文档）。
+		if filter.Actor != "" && rec.Actor != filter.Actor {
+			continue
+		}
+		if filter.Action != "" && rec.Action != filter.Action {
 			continue
 		}
 		if filter.SinceTS != 0 && rec.TS < filter.SinceTS {

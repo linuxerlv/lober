@@ -153,6 +153,72 @@ func TestStore_深拷贝_ArtifactPaths不被外部修改渗透(t *testing.T) {
 	}
 }
 
+// TestStore_深拷贝_ImageArtifact不被外部修改渗透 锁住镜像直写通道三项
+// （model.ArtifactSet.Image）的深拷贝。
+//
+// 为什么这条单独立一个测试：Image 是**指针**字段，且内部还套一层
+// PartitionLayout.Partitions 切片。conformance 套件的
+// testArtifactSetImageRoundTrip 只验证「写进去什么读出来还是什么」，一份
+// 共享指针的浅拷贝**也能通过那条断言**——共享的后果要等到调用方改了返回值
+// 之后才显现。
+//
+// 后果的严重性与 ArtifactPaths 那条同级但更隐蔽：写盘端（P3-03 任务 4）持有
+// GetArtifactSet 的返回值，若它归一化了分区角色或改了一个路径，库内那份也跟着
+// 变，之后每一台走这个制品集的机器都拿到被改过的分区布局——而扩错分区是破坏性
+// 操作。
+func TestStore_深拷贝_ImageArtifact不被外部修改渗透(t *testing.T) {
+	ctx := context.Background()
+	store := NewStore()
+
+	created, err := store.CreateArtifactSet(ctx, model.ArtifactSet{
+		ID:       "artifact-deepcopy-image",
+		Name:     "rocky9.4-image",
+		Arch:     model.ArchX86_64,
+		Firmware: model.FirmwareUEFI,
+		State:    model.ArtifactSetReady,
+		Channel:  model.ChannelImageWrite,
+		Image: &model.ImageArtifact{
+			ImagePath:          "image.raw.zst",
+			SHA256:             "aa",
+			UncompressedSHA256: "bb",
+			PartitionLayout: model.PartitionLayout{
+				TableType: "gpt",
+				Partitions: []model.Partition{
+					{Number: 1, Filesystem: "vfat", Role: model.PartitionRoleESP},
+					{Number: 2, Filesystem: "xfs", Role: model.PartitionRoleRoot},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateArtifactSet 失败: %v", err)
+	}
+
+	got, err := store.GetArtifactSet(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetArtifactSet 失败: %v", err)
+	}
+	// 三处篡改：指针指向的结构体字段、切片元素、以及整个切片。
+	got.Image.UncompressedSHA256 = "已被外部篡改"
+	got.Image.PartitionLayout.Partitions[1].Role = model.PartitionRoleESP
+
+	again, err := store.GetArtifactSet(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("第二次 GetArtifactSet 失败: %v", err)
+	}
+	if again.Image.UncompressedSHA256 != "bb" {
+		t.Errorf("外部改了返回值的 Image.UncompressedSHA256 之后库内值变成 %q, want 保持 %q —— "+
+			"Image 是指针字段，结构体浅拷贝会让调用方与库内共享同一个 ImageArtifact；"+
+			"这个值是写盘回读校验的比对对象，被改掉等于校验失效",
+			again.Image.UncompressedSHA256, "bb")
+	}
+	if role := again.Image.PartitionLayout.Partitions[1].Role; role != model.PartitionRoleRoot {
+		t.Errorf("外部改了返回值的分区角色之后库内值变成 %q, want 保持 %q —— "+
+			"Partitions 切片被共享；分区角色决定「扩展哪个分区到整盘」，"+
+			"扩错分区是破坏性操作", role, model.PartitionRoleRoot)
+	}
+}
+
 // TestStore_深拷贝_GetFacts不被外部修改渗透 锁住 FactStore.GetFacts 的深
 // 拷贝——conformance 套件的 testMergeFactsIsMergeNotReplace 只验证合并语义
 // 本身，不验证「读出的 map 是否与内部存储共享引用」。

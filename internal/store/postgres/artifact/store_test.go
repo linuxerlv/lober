@@ -76,6 +76,9 @@ func TestCreateGetRoundTrip(t *testing.T) {
 		Firmware:        model.FirmwareAny,
 		SourceISOSHA256: "sha-abc",
 		State:           model.ArtifactSetImporting,
+		// Channel 显式写成 installer：写入时归一化（零值折叠成 installer），
+		// 往返回来必然是这个值。留零值会让下面两处 cmp.Diff 报一处预期内的差异。
+		Channel: model.ChannelInstaller,
 	}
 
 	created, err := store.CreateArtifactSet(ctx, set)

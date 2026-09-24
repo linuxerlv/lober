@@ -67,6 +67,15 @@ func (s *Store) ListAudit(ctx context.Context, filter contract.AuditFilter) ([]c
 	if filter.Target != "" {
 		query = query.Where("target = ?", filter.Target)
 	}
+	// Actor 与 Action 精确匹配，且与其余条件按「与」相交（不做子串——查
+	// "bob" 时把 "bobby" 的操作带出来在追责场景下不可接受，见
+	// contract.AuditFilter 的字段文档）。
+	if filter.Actor != "" {
+		query = query.Where("actor = ?", filter.Actor)
+	}
+	if filter.Action != "" {
+		query = query.Where("action = ?", filter.Action)
+	}
 	if filter.SinceTS != 0 {
 		query = query.Where("ts >= ?", filter.SinceTS)
 	}

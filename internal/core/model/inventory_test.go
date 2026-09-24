@@ -44,6 +44,154 @@ func TestFirmwareCompatible_UnknownFamilyRejected(t *testing.T) {
 	}
 }
 
+// TestDeliveryChannel_ZeroValueIsInstaller 验证通道字段的零值等价于
+// installer 驱动通道。
+//
+// 这是 P3-03 任务 1 的**兼容性要求**：Phase 1 与 Phase 2 导入的全部制品集
+// 都没有这个字段，反序列化出来是空字符串。零值必须等价于 installer 驱动，
+// 否则那些已有制品集会突然变成「通道未知」，选集逻辑一个都匹配不上——
+// 而那意味着升级之后所有装机任务立刻全部失败，且原因不在任何日志里。
+func TestDeliveryChannel_ZeroValueIsInstaller(t *testing.T) {
+	var zero DeliveryChannel
+	if !zero.IsInstaller() {
+		t.Errorf("DeliveryChannel(\"\").IsInstaller() = false, want true —— " +
+			"零值必须等价于 installer 驱动通道，否则 Phase 1/2 导入的制品集" +
+			"（库里那一列是空字符串）会在升级后全部选不中，所有装机任务立刻失败")
+	}
+	if zero.IsImageWrite() {
+		t.Errorf("DeliveryChannel(\"\").IsImageWrite() = true, want false")
+	}
+
+	// 显式取值各自成立。
+	if !ChannelInstaller.IsInstaller() || ChannelInstaller.IsImageWrite() {
+		t.Errorf("ChannelInstaller 的两个判定不自洽")
+	}
+	if !ChannelImageWrite.IsImageWrite() || ChannelImageWrite.IsInstaller() {
+		t.Errorf("ChannelImageWrite 的两个判定不自洽")
+	}
+}
+
+// TestDeliveryChannel_Normalize 验证归一化把零值折叠成 installer，供存储层
+// 与选集逻辑用同一个值比较。
+//
+// 有了 Normalize，「空字符串」与「installer」这两种表示同一件事的写法不会
+// 在比较时分叉——否则 `set.Channel == ChannelInstaller` 这种直觉写法会漏掉
+// 全部历史制品集，而 `set.Channel.IsInstaller()` 又要求每个调用点都记得用
+// 方法而不是等号。
+func TestDeliveryChannel_Normalize(t *testing.T) {
+	cases := []struct {
+		in   DeliveryChannel
+		want DeliveryChannel
+	}{
+		{"", ChannelInstaller},
+		{ChannelInstaller, ChannelInstaller},
+		{ChannelImageWrite, ChannelImageWrite},
+		// 未知取值原样返回，不静默折叠成 installer：静默折叠会让一个拼错的
+		// 通道名被当成兜底通道用，而运维以为自己选的是镜像直写。校验由
+		// Valid() 负责，Normalize 只管零值这一件事。
+		{DeliveryChannel("typo"), DeliveryChannel("typo")},
+	}
+	for _, c := range cases {
+		if got := c.in.Normalize(); got != c.want {
+			t.Errorf("DeliveryChannel(%q).Normalize() = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestDeliveryChannel_Valid 验证白名单校验：两个合法取值加零值通过，其余拒绝。
+func TestDeliveryChannel_Valid(t *testing.T) {
+	for _, ch := range []DeliveryChannel{"", ChannelInstaller, ChannelImageWrite} {
+		if !ch.Valid() {
+			t.Errorf("DeliveryChannel(%q).Valid() = false, want true", ch)
+		}
+	}
+	for _, ch := range []DeliveryChannel{"image", "installer-driven", "IMAGE_WRITE", "dd"} {
+		if ch.Valid() {
+			t.Errorf("DeliveryChannel(%q).Valid() = true, want false —— "+
+				"通道取值来自用户输入（模板上选），必须白名单校验；"+
+				"放过一个拼错的取值会让建任务走到一个不存在的通道上", ch)
+		}
+	}
+}
+
+// TestArtifactSet_MatchesChannel 验证五元组选集的第五维：同一 OS 版本的两条
+// 通道制品集能被分别选中，且不带通道条件的查询（历史四元组调用方）仍然工作。
+//
+// P3-03 任务 1 的选集要求：现在是五元组（家族、版本、架构、固件、通道），
+// 模板要能指定用哪条通道——同一个 OS 版本可能两条通道都有制品。
+func TestArtifactSet_MatchesChannel(t *testing.T) {
+	// 历史制品集：Channel 字段是零值（Phase 1/2 导入的那些）。
+	legacy := ArtifactSet{Firmware: FirmwareAny}
+	imageWrite := ArtifactSet{Firmware: FirmwareAny, Channel: ChannelImageWrite}
+
+	if !legacy.MatchesChannel(ChannelInstaller) {
+		t.Errorf("历史制品集（Channel 为零值）匹配 installer 通道失败 —— " +
+			"向后兼容要求它们被当作 installer 驱动通道")
+	}
+	if legacy.MatchesChannel(ChannelImageWrite) {
+		t.Errorf("历史制品集匹配上了 image-write 通道 —— 那会让「选镜像直写」" +
+			"错误命中一份没有镜像文件的 installer 制品集，装机走到一半才发现")
+	}
+	if !imageWrite.MatchesChannel(ChannelImageWrite) {
+		t.Errorf("镜像直写制品集匹配 image-write 通道失败")
+	}
+	if imageWrite.MatchesChannel(ChannelInstaller) {
+		t.Errorf("镜像直写制品集匹配上了 installer 通道")
+	}
+
+	// 不带通道条件（传零值）时视为「不按通道过滤」——历史四元组调用方不传
+	// 这一维，行为必须与加字段之前一致。
+	if !legacy.MatchesChannel("") || !imageWrite.MatchesChannel("") {
+		t.Errorf("传零值通道时应视为不过滤，两条通道的制品集都该匹配 —— " +
+			"这是四元组查询向后兼容的判据")
+	}
+}
+
+// TestRepoIndexPattern_PerFamilyPackageManagerFormat 验证仓库索引入口按
+// 家族给出各自包管理器的格式，而不是一条通吃的常量。
+//
+// 这条锁的是一个曾在真机上无条件必然触发的阻断性 bug：判据曾被硬编码成
+// repodata/repomd.xml（RPM-MD 专属），而 Debian/Ubuntu 的仓库树是 APT 的
+// dists/<suite>/，从不会有那个文件。制品完整性检查挡在签发装机 token 之前
+// （§4.6），于是**任何** Debian 任务在机器真正引导时都会被判定为「制品文件
+// 不存在」而拒绝。见 docs/real-machine/12-e2e-debian.md。
+//
+// Debian/Ubuntu 那条必须是 glob：suite 名随版本变（bookworm、trixie、
+// noble、sid……），写死某一版就是把这个 bug 换个形式留下来。
+func TestRepoIndexPattern_PerFamilyPackageManagerFormat(t *testing.T) {
+	cases := []struct {
+		family  OSFamily
+		want    string
+		wantOK  bool
+		because string
+	}{
+		{OSFamilyRHEL, "repodata/repomd.xml", true, "dnf/yum 读 RPM-MD 元数据入口"},
+		{OSFamilySUSE, "repodata/repomd.xml", true, "zypper 与 RHEL 共用 RPM-MD 格式"},
+		{OSFamilyDebian, "dists/*/Release", true, "APT 读 dists/<suite>/Release，suite 名随版本变"},
+		{OSFamilyUbuntu, "dists/*/Release", true, "Ubuntu 同为 APT 系"},
+		{OSFamilyWindows, "", false, "Windows 制品无仓库树，Repo 恒为空串"},
+		{OSFamilyESXi, "", false, "ESXi 制品只产出 Extra 里的一组文件"},
+	}
+	for _, c := range cases {
+		got, ok := RepoIndexPattern(c.family)
+		if ok != c.wantOK || got != c.want {
+			t.Errorf("RepoIndexPattern(%q) = (%q, %v), want (%q, %v) —— %s",
+				c.family, got, ok, c.want, c.wantOK, c.because)
+		}
+	}
+}
+
+// TestRepoIndexPattern_UnknownFamilyNotOK 验证未知家族返回 ok=false，让调用
+// 方能把「无法确认仓库可用」与「确认仓库不可用」区分开——两者在 §4.6 那一层
+// 都应当拒绝，但错误文案不同，运维需要知道是「配置漏了判据」还是「仓库真的
+// 缺索引」。与 FirmwareCompatible 对未知家族的处置方向一致：不静默接受。
+func TestRepoIndexPattern_UnknownFamilyNotOK(t *testing.T) {
+	if got, ok := RepoIndexPattern(OSFamily("plan9")); ok {
+		t.Errorf("RepoIndexPattern(\"plan9\") = (%q, true), want ok=false —— "+
+			"未知家族不能静默给出某个判据，那会让一份来源不明的仓库树被当作合法", got)
+	}
+}
+
 // TestArtifactSet_MatchesFirmware 验证制品集的固件匹配：any 匹配两者、
 // 指定固件只匹配自己（计划任务 6 设计要点）。
 func TestArtifactSet_MatchesFirmware(t *testing.T) {

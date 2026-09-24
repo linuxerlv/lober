@@ -19,6 +19,10 @@ import (
 // 切片与 Extra map——这两类字段最容易在序列化时掉字段。
 func TestRowRoundTrip_FullyPopulated(t *testing.T) {
 	want := model.ArtifactSet{
+		// Channel 显式写成 installer：fromModel 写入时归一化（零值折叠成
+		// installer，库里不出现两种表示同一件事的值），因此往返回来必然是这个
+		// 值，夹具里留零值会让 cmp.Diff 报一处预期内的差异。
+		Channel:         model.ChannelInstaller,
 		ID:              "artifact-rocky9",
 		Name:            "rocky9.4",
 		OSFamily:        model.OSFamilyRHEL,
@@ -53,6 +57,10 @@ func TestRowRoundTrip_FullyPopulated(t *testing.T) {
 // 「没填」与「填了空表单」会被混淆。
 func TestRowRoundTrip_EmptyJSONFields(t *testing.T) {
 	want := model.ArtifactSet{
+		// Channel 显式写成 installer：fromModel 写入时归一化（零值折叠成
+		// installer，库里不出现两种表示同一件事的值），因此往返回来必然是这个
+		// 值，夹具里留零值会让 cmp.Diff 报一处预期内的差异。
+		Channel:   model.ChannelInstaller,
 		ID:        "artifact-empty",
 		Name:      "empty-set",
 		OSFamily:  model.OSFamilyDebian,
@@ -79,6 +87,10 @@ func TestRowRoundTrip_EmptyJSONFields(t *testing.T) {
 // 是零值，Initrd/Extra 都是 nil。
 func TestRowRoundTrip_NilJSONFields(t *testing.T) {
 	want := model.ArtifactSet{
+		// Channel 显式写成 installer：fromModel 写入时归一化（零值折叠成
+		// installer，库里不出现两种表示同一件事的值），因此往返回来必然是这个
+		// 值，夹具里留零值会让 cmp.Diff 报一处预期内的差异。
+		Channel:   model.ChannelInstaller,
 		ID:        "artifact-nil-json",
 		Name:      "nil-json-set",
 		OSFamily:  model.OSFamilyWindows,
@@ -107,6 +119,10 @@ func TestRowRoundTrip_NilJSONFields(t *testing.T) {
 // 换行——FailReason 是自由文本，落库编码不能因为这些字符出错或截断。
 func TestRowRoundTrip_FailReasonWithSpecialChars(t *testing.T) {
 	want := model.ArtifactSet{
+		// Channel 显式写成 installer：fromModel 写入时归一化（零值折叠成
+		// installer，库里不出现两种表示同一件事的值），因此往返回来必然是这个
+		// 值，夹具里留零值会让 cmp.Diff 报一处预期内的差异。
+		Channel:    model.ChannelInstaller,
 		ID:         "artifact-fail-reason",
 		Name:       "failed-set",
 		OSFamily:   model.OSFamilyESXi,

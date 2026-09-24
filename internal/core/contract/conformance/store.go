@@ -17,6 +17,7 @@ package conformance
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,15 @@ func RunConformanceSuite(t *testing.T, newStore func() contract.Store) {
 	t.Run("审计查不到时返回空而不是错误", func(t *testing.T) { testAuditListEmptyIsNotError(t, newStore) })
 	t.Run("审计按时间范围过滤", func(t *testing.T) { testAuditFilterByTimeRange(t, newStore) })
 	t.Run("审计同一时刻多条记录按写入顺序倒序", func(t *testing.T) { testAuditSameTimestampOrderedByInsertionDesc(t, newStore) })
+	t.Run("审计按操作人过滤", func(t *testing.T) { testAuditFilterByActor(t, newStore) })
+	t.Run("审计按动作类型过滤", func(t *testing.T) { testAuditFilterByAction(t, newStore) })
+	t.Run("审计四项条件可组合", func(t *testing.T) { testAuditFilterCombined(t, newStore) })
+	t.Run("任务按创建时间范围过滤", func(t *testing.T) { testTaskFilterByCreatedRange(t, newStore) })
+	t.Run("任务按失败原因过滤", func(t *testing.T) { testTaskFilterByFailureReason(t, newStore) })
+	t.Run("任务列表按创建时间倒序且limit生效", func(t *testing.T) { testTaskListOrderedDescendingWithLimit(t, newStore) })
+	t.Run("制品集通道字段缺省为installer", func(t *testing.T) { testArtifactSetChannelDefaultsToInstaller(t, newStore) })
+	t.Run("镜像直写制品集三项完整往返", func(t *testing.T) { testArtifactSetImageRoundTrip(t, newStore) })
+	t.Run("同一OS版本两条通道制品集可分别选中", func(t *testing.T) { testArtifactSetBothChannelsCoexist(t, newStore) })
 }
 
 // ---------------------------------------------------------------------------
@@ -1272,4 +1282,403 @@ func tsList(records []contract.AuditRecord) []int64 {
 		out = append(out, r.TS)
 	}
 	return out
+}
+
+// testArtifactSetChannelDefaultsToInstaller 验证不显式指定通道时，存回来的
+// 制品集属于 installer 驱动通道。
+//
+// 这是 P3-03 任务 1 的**兼容性硬要求**：Phase 1 与 Phase 2 导入的全部制品集
+// 都没有这个字段。存储层若把零值原样存成空字符串、而选集逻辑又拿显式的
+// installer 去比对，那些历史制品集会在升级后一个都匹配不上——后果是升级完成
+// 的瞬间所有装机任务开始失败，而查询本身不报错，原因不会出现在任何日志里。
+//
+// 断言用 IsInstaller() 而不是 == ChannelInstaller：两种存法（存空串 / 存
+// "installer"）都算通过，本条要锁的是语义而不是存储表示。
+func testArtifactSetChannelDefaultsToInstaller(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+
+	created, err := store.CreateArtifactSet(ctx, model.ArtifactSet{
+		ID:        "artifact-default-channel",
+		Name:      "rocky9.4",
+		OSVersion: "9.4",
+		Arch:      model.ArchX86_64,
+		Firmware:  model.FirmwareAny,
+		State:     model.ArtifactSetReady,
+		// Channel 刻意不设，模拟 Phase 1/2 的既有数据。
+	})
+	if err != nil {
+		t.Fatalf("CreateArtifactSet 失败: %v", err)
+	}
+	if !created.Channel.IsInstaller() {
+		t.Errorf("CreateArtifactSet 返回的 Channel = %q，IsInstaller() 为假 —— "+
+			"零值必须等价于 installer 驱动通道", created.Channel)
+	}
+
+	got, err := store.GetArtifactSet(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetArtifactSet 失败: %v", err)
+	}
+	if !got.Channel.IsInstaller() {
+		t.Errorf("重新查询后 Channel = %q，IsInstaller() 为假 —— 历史制品集"+
+			"（库里该列为空）必须仍被当作 installer 驱动通道，否则升级后全部选不中", got.Channel)
+	}
+	if got.Image != nil {
+		t.Errorf("installer 驱动通道的制品集 Image = %+v, want nil —— "+
+			"nil 与「零值结构体」语义不同，后者会让「镜像 sha256 是空串」这种"+
+			"非法状态看起来像合法数据", got.Image)
+	}
+}
+
+// testArtifactSetImageRoundTrip 验证镜像直写制品集的三项（镜像文件与两个
+// 校验值、签名、分区布局）完整往返。
+//
+// 这几个字段是嵌套结构加切片，是 JSON 序列化最容易掉字段的形状。掉了的后果
+// 分两种，都很实在：掉 UncompressedSHA256 会让写盘端无从回读校验（P3-03 任务 4
+// 第 3 步），而那是发现静默写入错误的唯一手段；掉 PartitionLayout 会让写完盘
+// 之后不知道该扩哪个分区。
+func testArtifactSetImageRoundTrip(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+
+	image := &model.ImageArtifact{
+		ImagePath:             "image.raw.zst",
+		SHA256:                "aa" + strings.Repeat("0", 62),
+		UncompressedSHA256:    "bb" + strings.Repeat("0", 62),
+		SizeBytes:             1234567890,
+		UncompressedSizeBytes: 9876543210,
+		ManifestPath:          "manifest.yaml",
+		SignaturePath:         "manifest.yaml.sig",
+		PartitionLayout: model.PartitionLayout{
+			TableType: "gpt",
+			Partitions: []model.Partition{
+				{Number: 1, Filesystem: "vfat", Role: model.PartitionRoleESP},
+				{Number: 2, Filesystem: "xfs", Role: model.PartitionRoleRoot},
+			},
+		},
+	}
+
+	created, err := store.CreateArtifactSet(ctx, model.ArtifactSet{
+		ID:        "artifact-imagewrite",
+		Name:      "rocky9.4-image",
+		OSFamily:  model.OSFamilyRHEL,
+		OSVersion: "9.4",
+		Arch:      model.ArchX86_64,
+		Firmware:  model.FirmwareUEFI,
+		State:     model.ArtifactSetReady,
+		Channel:   model.ChannelImageWrite,
+		Image:     image,
+	})
+	if err != nil {
+		t.Fatalf("CreateArtifactSet（镜像直写）失败: %v", err)
+	}
+	if !created.Channel.IsImageWrite() {
+		t.Fatalf("创建后 Channel = %q, want image-write", created.Channel)
+	}
+
+	got, err := store.GetArtifactSet(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetArtifactSet 失败: %v", err)
+	}
+	if got.Image == nil {
+		t.Fatalf("重新查询后 Image 为 nil —— 镜像直写通道的三项没有持久化，" +
+			"写盘端拿不到校验值与分区布局，整条通道不可用")
+	}
+	if diff := cmp.Diff(image, got.Image); diff != "" {
+		t.Errorf("重新查询后 Image 与写入时不符（-want +got）:\n%s —— "+
+			"嵌套结构加切片是 JSON 往返最容易掉字段的形状；掉 UncompressedSHA256 "+
+			"会让写盘端无从回读校验（静默写入错误就查不出来了），掉 PartitionLayout "+
+			"会让写完盘不知道该扩哪个分区", diff)
+	}
+
+	// 根分区必须能被唯一定位——恰好一个 root 角色。
+	if _, ok := got.Image.PartitionLayout.RootPartition(); !ok {
+		t.Errorf("往返后 RootPartition() 定位失败 —— 分区角色字段没存住，" +
+			"扩展分区那一步会不知道扩哪个")
+	}
+}
+
+// testArtifactSetBothChannelsCoexist 验证同一个 OS 版本的两条通道制品集能共存
+// 且被分别选中（P3-03 任务 1 的五元组选集要求）。
+//
+// 同时验证四元组查询向后兼容：不带通道条件时两条都能查到。
+func testArtifactSetBothChannelsCoexist(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+
+	common := model.ArtifactSet{
+		OSFamily:  model.OSFamilyRHEL,
+		OSVersion: "9.4",
+		Arch:      model.ArchX86_64,
+		Firmware:  model.FirmwareAny,
+		State:     model.ArtifactSetReady,
+	}
+
+	installerSet := common
+	installerSet.ID = "artifact-coexist-installer"
+	installerSet.Name = "rocky9.4-installer"
+	if _, err := store.CreateArtifactSet(ctx, installerSet); err != nil {
+		t.Fatalf("CreateArtifactSet（installer）失败: %v", err)
+	}
+
+	imageSet := common
+	imageSet.ID = "artifact-coexist-image"
+	imageSet.Name = "rocky9.4-image"
+	imageSet.Channel = model.ChannelImageWrite
+	if _, err := store.CreateArtifactSet(ctx, imageSet); err != nil {
+		t.Fatalf("CreateArtifactSet（image-write）失败: %v", err)
+	}
+
+	all, err := store.ListArtifactSets(ctx)
+	if err != nil {
+		t.Fatalf("ListArtifactSets 失败: %v", err)
+	}
+
+	var installerMatches, imageMatches, unfilteredMatches int
+	for _, set := range all {
+		if set.OSVersion != "9.4" {
+			continue
+		}
+		if set.MatchesChannel(model.ChannelInstaller) {
+			installerMatches++
+		}
+		if set.MatchesChannel(model.ChannelImageWrite) {
+			imageMatches++
+		}
+		if set.MatchesChannel("") {
+			unfilteredMatches++
+		}
+	}
+
+	if installerMatches != 1 || imageMatches != 1 {
+		t.Errorf("同一 OS 版本下按通道选集命中数 = installer:%d image-write:%d, want 1 和 1 —— "+
+			"两条通道的制品集必须能被分别选中，否则「选镜像直写」会命中一份没有镜像"+
+			"文件的 installer 制品集，装机走到一半才发现",
+			installerMatches, imageMatches)
+	}
+	if unfilteredMatches != 2 {
+		t.Errorf("不带通道条件时命中 %d 条, want 2 —— 四元组查询向后兼容要求"+
+			"不传通道维度时两条通道都算匹配", unfilteredMatches)
+	}
+}
+
+// seedAuditMatrix 写入一组 actor × action 交叉的审计记录，供三条「按维度
+// 过滤」的子测试共用同一份数据。TS 逐条递增，便于顺序断言。
+func seedAuditMatrix(t *testing.T, store contract.Store) {
+	t.Helper()
+	ctx := context.Background()
+	records := []contract.AuditRecord{
+		{TS: fixedNow - 50, Actor: "alice", Action: "task.create", Target: "task-a", Detail: "d1"},
+		{TS: fixedNow - 40, Actor: "alice", Action: "task.cancel", Target: "task-a", Detail: "d2"},
+		{TS: fixedNow - 30, Actor: "bob", Action: "task.create", Target: "task-b", Detail: "d3"},
+		{TS: fixedNow - 20, Actor: "bob", Action: "hook.approve", Target: "hook-x", Detail: "d4"},
+		{TS: fixedNow - 10, Actor: "carol", Action: "task.create", Target: "task-c", Detail: "d5"},
+	}
+	for i, r := range records {
+		if err := store.AppendAudit(ctx, r); err != nil {
+			t.Fatalf("AppendAudit(#%d) 失败: %v", i, err)
+		}
+	}
+}
+
+// actorList 提取一组审计记录的 Actor，供断言失败信息打印实际查回的操作人。
+func actorList(records []contract.AuditRecord) []string {
+	out := make([]string, 0, len(records))
+	for _, r := range records {
+		out = append(out, r.Actor)
+	}
+	return out
+}
+
+// actionList 提取一组审计记录的 Action。
+func actionList(records []contract.AuditRecord) []string {
+	out := make([]string, 0, len(records))
+	for _, r := range records {
+		out = append(out, r.Action)
+	}
+	return out
+}
+
+// testAuditFilterByActor 验证按操作人过滤（精确匹配，不做子串）。
+//
+// 这是 §9.4 审计「人员变动或权限审查时要回答『某个人做了什么』」这个用例的
+// 最小维度。精确匹配而非子串：子串匹配会让查 "bob" 时把 "bobby" 的记录一并
+// 带出来，在追责场景下这是不可接受的误差。
+func testAuditFilterByActor(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+	seedAuditMatrix(t, store)
+
+	got, err := store.ListAudit(ctx, contract.AuditFilter{Actor: "alice"})
+	if err != nil {
+		t.Fatalf("ListAudit(Actor=alice) 失败: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListAudit(Actor=alice) 返回 %d 条（actors=%v）, want 2 —— "+
+			"按操作人过滤是「某个人做了什么」这个审计用例的最小维度",
+			len(got), actorList(got))
+	}
+	for _, r := range got {
+		if r.Actor != "alice" {
+			t.Errorf("ListAudit(Actor=alice) 返回了 Actor=%q 的记录 —— 必须精确匹配，"+
+				"不能把别人的操作混进追责结果里", r.Actor)
+		}
+	}
+}
+
+// testAuditFilterByAction 验证按动作类型过滤（精确匹配）。
+//
+// 用例：「全部的建任务记录」——§3.2 承认建任务即授权是残留风险，
+// 事后要能把全部 task.create 拉出来逐条核对。
+func testAuditFilterByAction(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+	seedAuditMatrix(t, store)
+
+	got, err := store.ListAudit(ctx, contract.AuditFilter{Action: "task.create"})
+	if err != nil {
+		t.Fatalf("ListAudit(Action=task.create) 失败: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("ListAudit(Action=task.create) 返回 %d 条（actions=%v）, want 3",
+			len(got), actionList(got))
+	}
+	for _, r := range got {
+		if r.Action != "task.create" {
+			t.Errorf("ListAudit(Action=task.create) 返回了 Action=%q 的记录", r.Action)
+		}
+	}
+}
+
+// testAuditFilterCombined 验证四项条件（操作人、动作、目标、时间范围）同时
+// 生效时按「与」语义相交，而不是任一命中即返回。
+//
+// 常用组合就是「某人某段时间的某类操作」，若实现把多个条件写成「或」，
+// 查询结果会多出大量不相关记录，运维在几十万条里翻不出想要的那几条。
+func testAuditFilterCombined(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+	seedAuditMatrix(t, store)
+
+	got, err := store.ListAudit(ctx, contract.AuditFilter{
+		Actor:   "bob",
+		Action:  "task.create",
+		SinceTS: fixedNow - 35,
+		UntilTS: fixedNow - 25,
+	})
+	if err != nil {
+		t.Fatalf("ListAudit(四项组合) 失败: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ListAudit(Actor=bob, Action=task.create, TS∈[now-35,now-25]) 返回 %d 条"+
+			"（actors=%v actions=%v）, want 1 —— 四项条件必须按「与」相交",
+			len(got), actorList(got), actionList(got))
+	}
+	if got[0].Target != "task-b" {
+		t.Errorf("组合过滤命中了 Target=%q, want task-b", got[0].Target)
+	}
+}
+
+// testTaskFilterByCreatedRange 验证任务按创建时间闭区间过滤。
+//
+// 这是装机统计报表的取数基础（「这个月装了多少台」）。区间语义与
+// AuditFilter.SinceTS/UntilTS 保持一致——**闭区间 [Since, Until]**，两处
+// 定死成同一种包含性，避免运维在两个查询界面上得到边界差一条的结果。
+func testTaskFilterByCreatedRange(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+
+	// 三个任务创建时间各差 10 秒；SN 各不相同，避开「同一 SN 只能有一个
+	// 非终态任务」的约束。
+	for i, createdAt := range []int64{fixedNow - 30, fixedNow - 20, fixedNow - 10} {
+		tk := newTestTask(string(rune('a' + i)))
+		tk.CreatedAt = createdAt
+		mustCreateTask(t, store, tk)
+	}
+
+	got, err := store.ListTasks(ctx, contract.TaskFilter{
+		CreatedSinceTS: fixedNow - 25,
+		CreatedUntilTS: fixedNow - 15,
+	})
+	if err != nil {
+		t.Fatalf("ListTasks(时间范围) 失败: %v", err)
+	}
+	if len(got) != 1 || got[0].CreatedAt != fixedNow-20 {
+		t.Errorf("ListTasks(CreatedSinceTS=%d, CreatedUntilTS=%d) 返回 %d 条, want 1 条 CreatedAt=%d —— "+
+			"闭区间语义要与 AuditFilter 一致，两处不一致会让同一时间窗口在两个界面上差一条",
+			fixedNow-25, fixedNow-15, len(got), fixedNow-20)
+	}
+}
+
+// testTaskFilterByFailureReason 验证任务按失败原因过滤。
+//
+// 这是失败分布报表「下钻」那一步的存储支撑（P4-04 任务 3：看到「precheck
+// 失败 12 次」之后要能点进去看是哪 12 个任务）。不可下钻的失败分布只是一个
+// 数字，看不出是同一个人建错了任务还是某个机型有问题。
+func testTaskFilterByFailureReason(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+
+	// 两个 precheck 失败、一个 boot_timeout 失败。CreateTask 要求初始状态
+	// pending，因此先建再推到 failed 并写入失败原因。
+	reasons := []model.FailureReason{
+		model.FailureReasonPrecheck,
+		model.FailureReasonPrecheck,
+		model.FailureReasonBootTimeout,
+	}
+	for i, reason := range reasons {
+		tk := mustCreateTask(t, store, newTestTask(string(rune('p'+i))))
+		failed, err := store.CASTaskState(ctx, tk.ID, model.TaskStatePending, tk.Version, model.TaskStateFailed)
+		if err != nil {
+			t.Fatalf("CASTaskState(#%d → failed) 失败: %v", i, err)
+		}
+		r := reason
+		if _, err := store.MutateTaskFields(ctx, failed.ID, model.TaskMutation{FailureReason: &r}); err != nil {
+			t.Fatalf("MutateTaskFields(#%d 写失败原因) 失败: %v", i, err)
+		}
+	}
+
+	got, err := store.ListTasks(ctx, contract.TaskFilter{FailureReason: model.FailureReasonPrecheck})
+	if err != nil {
+		t.Fatalf("ListTasks(FailureReason=precheck) 失败: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListTasks(FailureReason=precheck) 返回 %d 条, want 2 —— "+
+			"失败分布报表要能下钻到具体任务，这一步查不准下钻就是空的", len(got))
+	}
+	for _, tk := range got {
+		if tk.FailureReason != model.FailureReasonPrecheck {
+			t.Errorf("下钻结果里混入了 FailureReason=%q 的任务", tk.FailureReason)
+		}
+	}
+}
+
+// testTaskListOrderedDescendingWithLimit 验证任务列表按创建时间倒序，且
+// Limit 取最新的若干条。
+//
+// 倒序与 Limit 的组合语义必须定死：报表与导出都靠它做规模保护（P4-04 任务 4
+// 的行数上限），若实现是「先截断再排序」，运维拿到的会是任意 N 条而不是最新
+// N 条——那种错误在数据量小的时候完全看不出来。
+func testTaskListOrderedDescendingWithLimit(t *testing.T, newStore func() contract.Store) {
+	ctx := context.Background()
+	store := newStore()
+
+	for i, createdAt := range []int64{fixedNow - 30, fixedNow - 10, fixedNow - 20} {
+		tk := newTestTask(string(rune('x' + i)))
+		tk.CreatedAt = createdAt
+		mustCreateTask(t, store, tk)
+	}
+
+	got, err := store.ListTasks(ctx, contract.TaskFilter{Limit: 2})
+	if err != nil {
+		t.Fatalf("ListTasks(Limit=2) 失败: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListTasks(Limit=2) 返回 %d 条, want 2", len(got))
+	}
+	if got[0].CreatedAt != fixedNow-10 || got[1].CreatedAt != fixedNow-20 {
+		t.Errorf("ListTasks(Limit=2) 返回的 CreatedAt 顺序 = [%d, %d], want [%d, %d] —— "+
+			"必须是「按创建时间倒序之后取前 N 条」，不是「任取 N 条再排序」",
+			got[0].CreatedAt, got[1].CreatedAt, fixedNow-10, fixedNow-20)
+	}
 }

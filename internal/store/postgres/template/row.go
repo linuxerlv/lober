@@ -57,6 +57,11 @@ type templateRow struct {
 	RequiredFormFields pgtype.StringSlice `gorm:"column:required_form_fields_json;type:jsonb;default:'[]'"`
 
 	State string `gorm:"column:state;not null"`
+
+	// Channel 是交付通道（P3-03 任务 5）。不设 not null / default，理由与
+	// artifact_sets.channel 相同：历史行这一列为 NULL/空串，而 model 侧零值
+	// 等价于 installer 驱动通道，两边语义天然对齐，不需要数据回填。
+	Channel string `gorm:"column:channel"`
 }
 
 // TableName 固定表名为 templates，不用 GORM 的复数推导（与其它聚合包同一
@@ -80,6 +85,8 @@ func (r templateRow) toModel() model.Template {
 		RequiredFormFields: []string(r.RequiredFormFields),
 		Version:            r.Version,
 		State:              model.TemplateState(r.State),
+		// Normalize 把历史行的 NULL/空串折叠成 installer。
+		Channel: model.DeliveryChannel(r.Channel).Normalize(),
 	}
 }
 
@@ -97,6 +104,8 @@ func fromModel(tpl model.Template) templateRow {
 		OnFailure:          string(tpl.OnFailure),
 		RequiredFormFields: pgtype.StringSlice(tpl.RequiredFormFields),
 		State:              string(tpl.State),
+		// 写入时归一化，库里不出现两种表示同一件事的值。
+		Channel: string(tpl.Channel.Normalize()),
 	}
 }
 
