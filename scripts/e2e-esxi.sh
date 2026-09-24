@@ -534,46 +534,50 @@ text/plain*) ;;
 *) fail "阶段8: 应答文件 Content-Type=${ANSWER_CONTENT_TYPE}, want text/plain*" ;;
 esac
 
-# 【发现，已在文件头部「已知限制」第 3 条完整分析，这里坐实真实后果】：
-# 取到的 boot.cfg 内容实际上是 AssembleESXiKickstart 的产出——含 install/
-# rootpw/network/reboot 等 ESXi kickstart 指令，不含任何 prefix=/kernelopt=
-# /modules= 行（那些是 mboot.efi 解析 boot.cfg 需要的引导参数语法，与
-# kickstart 语法完全不同）。用内容特征区分两者，不满足于"能取到内容"：
-echo "${ANSWER_BODY}" | grep -q "^install " \
-	|| fail "阶段8: 取到的 boot.cfg 内容不含 'install ' 指令（ESXi kickstart 特征），" \
-		"说明 AssembleESXiKickstart 的产出形态发生了变化，需要重新核对本发现是否仍成立，内容=${ANSWER_BODY}"
-if echo "${ANSWER_BODY}" | grep -q "^prefix="; then
-	echo "[提示] 取到的 boot.cfg 内容意外含 prefix= 行，说明 RenderAnswerFile 对 ESXi 的" >&2
-	echo "       boot.cfg 分派可能已经改为调用 RenderESXiBootCfg，请重新核对本文件头部" >&2
-	echo "       「已知限制」第 3 条与 esxi.go 的契约缺口记录是否仍准确" >&2
+# boot.cfg 现在返回的是**真正的引导参数文件**（2026-09-24 修复：gateway 层
+# 读出导入时保存的原始模板，调注入的 RenderESXiBootCfg 做三处改写）。
+# 用内容特征区分两种语法，不满足于"能取到内容"——这个区分正是当初发现
+# 缺口的方式：kickstart 语法（install/rootpw/network）与引导参数语法
+# （prefix=/kernelopt=/modules=）完全不同，mboot.efi 只认后者。
+echo "${ANSWER_BODY}" | grep -q "^prefix=" 	|| fail "阶段8: boot.cfg 不含 prefix= 行——mboot.efi 靠它定位模块，缺了直接引导失败，内容=${ANSWER_BODY}"
+echo "${ANSWER_BODY}" | grep -q "^kernelopt=" 	|| fail "阶段8: boot.cfg 不含 kernelopt= 行——ks= 就写在这一行里，缺了脚本化安装无法启动（附录 A.8），内容=${ANSWER_BODY}"
+echo "${ANSWER_BODY}" | grep -q "^kernelopt=.*ks=" 	|| fail "阶段8: boot.cfg 的 kernelopt= 行不含 ks= 参数，内容=${ANSWER_BODY}"
+
+# 模块路径前的前导斜杠必须被去掉（SPEC §2.1 的三处改写之一，最容易漏的一条：
+# 漏了安装器找不到模块）。
+if echo "${ANSWER_BODY}" | grep -q "^modules=/"; then
+	fail "阶段8: boot.cfg 的 modules= 行仍以 / 开头——前导斜杠必须去掉，否则安装器找不到模块，内容=${ANSWER_BODY}"
 fi
-finding "阶段8: 请求 boot.cfg 实际收到的是 ESXi kickstart 正文（AssembleESXiKickstart 的产出，" \
-	"含 install/rootpw/network/reboot 等指令），不是经过 prefix=/kernelopt=/modules= 三处" \
-	"改写的引导参数文件（RenderESXiBootCfg 的产出，该函数在生产代码里零调用点）。" \
-	"真实部署场景下 mboot.efi 会尝试把这段 kickstart 文本当作 boot.cfg 解析，解析失败，" \
-	"比'装到一半停住'更早。已记入 findings，正解方向见 esxi.go 文件末尾"契约缺口 1"。"
 
-# 断言产出的不是 RHEL kickstart——不含 RHEL 特有的段落头/指令（anaconda
-# 的 %packages、sshkey 指令，esxi.go 已记录 ESXi kickstart 没有 sshkey
-# 等价指令）。
-echo "${ANSWER_BODY}" | grep -q "%packages" \
-	&& fail "阶段8: boot.cfg 响应含 RHEL kickstart 特征 %packages，说明被错误路由到了 AssembleKickstart，响应=${ANSWER_BODY}"
-echo "${ANSWER_BODY}" | grep -q "^sshkey " \
-	&& fail "阶段8: boot.cfg 响应含 RHEL 专属的 sshkey 指令（ESXi kickstart 没有这个指令），说明被错误路由到了 AssembleKickstart，响应=${ANSWER_BODY}"
+# 反向：boot.cfg **不应**含 kickstart 指令。这条是对修复的回归锁——
+# 修复前这里拿到的正是 kickstart 正文（install/rootpw/network/reboot）。
+echo "${ANSWER_BODY}" | grep -q "^install " 	&& fail "阶段8: boot.cfg 含 kickstart 的 install 指令，说明又退回到了返回 kickstart 正文的错误行为，内容=${ANSWER_BODY}"
 
-# ESXi 的阶段映射：post-nochroot 在 ESXi 上不存在（SPEC §5.2 表格该列是
-# "—"）。本任务模板未配任何 hook（阶段4建模板时 hookRefs 为空），因此
-# %pre/%post/%firstboot 段落各自的 hook 调用部分应为空，但 %firstboot 段落
-# 本身（原生支持，不需要 systemd oneshot 脚手架）必须存在。
-echo "${ANSWER_BODY}" | grep -q "%firstboot" \
-	|| fail "阶段8: boot.cfg 响应缺少 %firstboot 段落（ESXi 原生支持首次启动段），响应=${ANSWER_BODY}"
-echo "${ANSWER_BODY}" | grep -qi "post-nochroot\|%post --nochroot" \
-	&& fail "阶段8: boot.cfg 响应含 post-nochroot 相关内容，但该阶段在 ESXi 上不存在（SPEC §5.2），响应=${ANSWER_BODY}"
+pass "阶段8: 取 boot.cfg 成功，内容是引导参数文件（prefix= 与 kernelopt=ks= 齐全、modules= 无前导斜杠），不是 kickstart 正文"
+
+# ── 阶段 8a：ks.cfg 才是 kickstart 正文 ──
+# ESXi 的应答文件有两个：boot.cfg（引导参数，上面已验）与 ks.cfg（kickstart
+# 正文）。后者的放行与 Ubuntu 的 meta-data 同构（gateway/answer.go 的
+# answerFileNameAllowed 对 ESXi 额外放行 ks.cfg）。
+KS_URL="${GW_BASE}/v1/answer/${TASK2_ID}/${SIGNED_TOKEN}/ks.cfg"
+KS_BODY="$(curl -fsS "${KS_URL}")" || fail "阶段8a: 取 ks.cfg 失败，url=${KS_URL}"
+
+echo "${KS_BODY}" | grep -q "^install " 	|| fail "阶段8a: ks.cfg 不含 install 指令（ESXi kickstart 特征），内容=${KS_BODY}"
+
+# 断言不是 RHEL kickstart——不含 RHEL 特有的段落头与指令。
+echo "${KS_BODY}" | grep -q "%packages" 	&& fail "阶段8a: ks.cfg 含 RHEL kickstart 特征 %packages，说明被错误路由到了 AssembleKickstart，内容=${KS_BODY}"
+echo "${KS_BODY}" | grep -q "^sshkey " 	&& fail "阶段8a: ks.cfg 含 RHEL 专属的 sshkey 指令（ESXi kickstart 没有这个指令），内容=${KS_BODY}"
+
+# ESXi 的阶段映射：%firstboot 原生支持（不需要 systemd oneshot 脚手架），
+# post-nochroot 在 ESXi 上不存在（SPEC §5.2 表格该列是 "—"）。
+echo "${KS_BODY}" | grep -q "%firstboot" 	|| fail "阶段8a: ks.cfg 缺少 %firstboot 段落（ESXi 原生支持首次启动段），内容=${KS_BODY}"
+echo "${KS_BODY}" | grep -qi "post-nochroot\|%post --nochroot" 	&& fail "阶段8a: ks.cfg 含 post-nochroot 相关内容，但该阶段在 ESXi 上不存在（SPEC §5.2），内容=${KS_BODY}"
 
 # 重复取应答文件仍应成功（幂等，SPEC §6.3）。
-curl -fsS -o /dev/null "${ANSWER_URL}" || fail "阶段8: 重复取应答文件失败（应幂等成功）"
+curl -fsS -o /dev/null "${ANSWER_URL}" || fail "阶段8a: 重复取 boot.cfg 失败（应幂等成功）"
+curl -fsS -o /dev/null "${KS_URL}" || fail "阶段8a: 重复取 ks.cfg 失败（应幂等成功）"
 
-pass "阶段8: 取应答文件成功（HTTP 200，Content-Type=text/plain），内容是 ESXi kickstart 正文（install/%firstboot 齐全，不含 RHEL 特征 %packages/sshkey，不含 ESXi 不存在的 post-nochroot），任务进入 installing，重复取仍幂等成功。取到的不是改写后的 boot.cfg 引导参数文件，已记入 findings（见上方【发现】）"
+pass "阶段8a: 取 ks.cfg 成功，内容是 ESXi kickstart 正文（install/%firstboot 齐全，不含 RHEL 特征 %packages/sshkey，不含 ESXi 不存在的 post-nochroot），任务进入 installing，两个应答文件重复取均幂等成功"
 
 # ---------------------------------------------------------------------------
 # 阶段 8b/8c：装机期信号打点。ESXi 的 %firstboot 段落（esxiFirstbootSection）
@@ -661,6 +665,7 @@ echo "各阶段验证结果："
 sqlite3 "${DB_PATH}" "SELECT '  state='||state||' current_phase='||current_phase||' attempt_count='||attempt_count||' last_seq='||last_seq FROM tasks WHERE id='${TASK2_ID}';"
 echo ""
 echo "=== ESXi 家族九阶段验证结束：分派已接线，菜单形态/固件硬拒绝/信号通道/状态机/终态收敛全部验证通过。" \
-	"两个独立 Go 侧缺口已记入 findings：1) 应答文件端点对 boot.cfg 请求返回 kickstart 正文而非改写后的" \
-	"引导参数文件（RenderESXiBootCfg 零调用点）；2) 导入识别仍被 mvpUnsupportedFamilies 挡着，制品集经" \
-	"sqlite3 绕过 ==="
+	"两处此前记录的 Go 侧缺口都已修复：1) boot.cfg 现在返回经三处改写的引导参数文件
+#     （gateway 层读原始模板 + 注入的 RenderESXiBootCfg），ks.cfg 返回 kickstart 正文，
+#     两条路径各自有断言；2) ESXi 的导入封锁已解除（identify.go 返回 nil，job.go 有
+#     runESXi 分派）。制品集仍经 sqlite3 造，原因是 MountExtractor 需要真实 ISO 文件 ==="
