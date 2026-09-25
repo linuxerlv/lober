@@ -7,8 +7,8 @@
 package render
 
 import (
+	"encoding/base64"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -86,10 +86,18 @@ func decodeLateCommandScript(t *testing.T, late string) string {
 	}
 	encoded := rest[:end]
 
-	cmd := exec.Command("bash", "-c", "echo "+encoded+" | base64 -d")
-	out, err := cmd.Output()
+	// 用 Go 原生解码，不经 shell。此前写的是
+	// `exec.Command("bash","-c","echo "+encoded+" | base64 -d")`，而这段
+	// base64 会随 clientlib 增长——firstboot 脚手架把整个 clientlib 又嵌了
+	// 一层，编码后可达数万字符。超过 Windows 的命令行长度上限（约 32KB）后
+	// echo 被静默截断，解码出一段不完整的脚本，测试于是报「缺少信号
+	// post-start」之类——而信号其实就在脚本里，只是被截掉了。
+	//
+	// 排查这种失败要先怀疑渲染器、再怀疑 golden，最后才会想到是测试辅助函数
+	// 自己的长度上限，所以换成不依赖外部进程的实现。
+	out, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		t.Fatalf("base64 解码失败: %v", err)
+		t.Fatalf("base64 解码失败: %v（编码长度 %d）", err, len(encoded))
 	}
 	return string(out)
 }
