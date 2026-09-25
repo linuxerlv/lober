@@ -146,12 +146,29 @@ func unimplementedFamilyError(family model.OSFamily) error {
 // token 在路径段里、不在 query（SPEC §4.4）。
 func renderRockyMenu(ctx model.RenderContext) (string, error) {
 	kernelURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Kernel)
-	// inst.repo 指向**安装介质根**，不是包索引目录：anaconda 从这一层下面取
-	// stage2 运行时镜像（images/install.img）与 .treeinfo。真实 RHEL 9 系
-	// 布局下 repodata 在 BaseOS/ 下、images/ 在介质根，两者不是同一个目录
-	// ——指错的后果是 anaconda 取 stage2 时 404、任务停在 installing 不再
-	// 前进（见 model.ArtifactPaths.MediaRoot 的文档与实测记录）。
-	repoURL := ctx.SetRepoURL(ctx.Artifact.Paths.MediaRootOrRepo())
+
+	// stage2 与包仓库是**两个不同的位置**，各用一个参数指——真实 RHEL 9 系
+	// 介质上它们不是同一个目录，用一个参数指必然有一边取不到（两种错法都实测
+	// 过，症状不同但都是装机中止）：
+	//
+	//	inst.stage2  安装介质根（MediaRoot），其下有 images/install.img
+	//	             （installer 的运行时镜像）与 .treeinfo。
+	//	inst.repo    包仓库（Repo），其下有 repodata/repomd.xml。真实 RHEL 9
+	//	             系在 BaseOS/ 下，不在介质根。
+	//
+	// 错法一（只用 inst.repo 指包仓库）：anaconda 取 stage2 时
+	// `repo/BaseOS//images/install.img` 404，任务停在 installing/pre。
+	//
+	// 错法二（只用 inst.repo 指介质根）：stage2 取到了（install.img 200，
+	// 933MB），但装包阶段 `repo/repodata/repomd.xml` 404 重试四次，任务停在
+	// installing/packages，目标盘一个字节都没写。
+	//
+	// 两个参数各指各的位置才两边都对，这也是 anaconda 文档里网络安装的标准
+	// 写法。扁平布局（RHEL 7 系与精简介质，repodata 直接在介质根）下两者指向
+	// 同一个位置，那是正确的、不是退化。
+	stage2URL := ctx.SetRepoURL(ctx.Artifact.Paths.MediaRootOrRepo())
+	repoURL := ctx.SetRepoURL(ctx.Artifact.Paths.Repo)
+
 	answerFileName, ok := ctx.AnswerFileName()
 	if !ok {
 		return "", fmt.Errorf("render: 无法确定 OS 家族 %q 的应答文件名", ctx.Artifact.OSFamily)
@@ -171,11 +188,12 @@ func renderRockyMenu(ctx model.RenderContext) (string, error) {
 	}
 	return fmt.Sprintf(
 		"kernel %s \\\n"+
+			"  inst.stage2=%s \\\n"+
 			"  inst.repo=%s \\\n"+
 			"  inst.ks=%s inst.text ip=dhcp%s\n"+
 			"initrd %s\n"+
 			ipxeBootCommand,
-		kernelURL, repoURL, ksURL, kargs, initrdURL,
+		kernelURL, stage2URL, repoURL, ksURL, kargs, initrdURL,
 	), nil
 }
 

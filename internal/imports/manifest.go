@@ -194,8 +194,13 @@ func ExtractRHEL(root fs.FS, destDir string) (model.ArtifactPaths, error) {
 
 	const repoDestName = "repo"
 	repoDestDir := filepath.Join(destDir, repoDestName)
+	// 排除 kernel 与 initrd（它们已单独复制到 destDir 根、用固定文件名），
+	// 但**保留 .treeinfo**：anaconda 会从 inst.stage2 指向的介质根读它来确认
+	// 介质身份与变体布局，排除掉会让它在装包前先 404 一次（实测 2026-09-25：
+	// `repo//.treeinfo` 404 两次之后才去试 repodata）。它只有几百字节，留着
+	// 的代价可以忽略。
 	if err := copyTreeFromFS(root, ".", repoDestDir, map[string]bool{
-		".treeinfo": true, images.Kernel: true, images.Initrd: true,
+		images.Kernel: true, images.Initrd: true,
 	}); err != nil {
 		return model.ArtifactPaths{}, fmt.Errorf("imports: 建仓库树失败: %w", err)
 	}
