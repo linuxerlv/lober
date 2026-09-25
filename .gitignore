@@ -43,3 +43,5 @@ internal/console/ui/dist/
 
 # gosurgeon 的 uv 虚拟环境与锁文件（工具本身入库，环境不入库）
 /tools/gosurgeon/.venv/
+/tools/vmlab/.venv/
+/tools/vmlab/uv.lock
