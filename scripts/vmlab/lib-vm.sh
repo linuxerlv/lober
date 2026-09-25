@@ -179,7 +179,11 @@ vmlab_winpath() {
 		return 1
 	fi
 	if command -v cygpath >/dev/null 2>&1; then
-		cygpath -m "${input}"
+		# 带 -a 强制绝对化：cygpath 对相对输入原样返回相对形式，而 QEMU 会按
+		# 它自己的 cwd 去解析，那未必是调用方 shell 的 cwd。后续九个任务会有
+		# 很多新调用点，靠函数注释里一句「请传绝对路径」约束不如让函数自己
+		# 兜住。-a 对已是绝对路径的输入无副作用，对空串仍然报错（都已实测）。
+		cygpath -m -a "${input}"
 	else
 		# 非 MSYS 环境（真正的 Linux/macOS，理论上不会跑到这个分支，因为
 		# QEMU 走 WHPX 加速本就是 Windows 独有的场景）：路径解析本就一致，
