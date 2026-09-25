@@ -40,3 +40,6 @@ internal/console/ui/dist/
 # VM 实验床的运行期产物（串口日志、qemu 日志、队列状态、证据包）。跑一次装机
 # 就会产生几十 MB 日志与状态文件，都是过程产物，不入库。
 /.tmp/
+
+# gosurgeon 的 uv 虚拟环境与锁文件（工具本身入库，环境不入库）
+/tools/gosurgeon/.venv/

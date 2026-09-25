@@ -135,3 +135,122 @@ func TestKickstart_SignalsInsideSections(t *testing.T) {
 		}
 	}
 }
+
+// TestKickstart_PackagesStartBeforePackagesSection 锁住 packages-start 在
+// %pre 段末尾发出，而不是在某个 %post 段里。
+//
+// **kickstart 没有「装包开始」这个钩子。** anaconda 的段落只有 %pre（分区前）、
+// %post --nochroot 与 %post（都在装包之后），所以「装包即将开始」这个时刻只能
+// 由 %pre 的末尾代表——那正是 anaconda 接下来要去装包的前一刻。
+//
+// 把 packages-start 放进 %post 段的后果（实测 2026-09-26）：pre-start 与
+// pre-done 都正常到达，但 packages-start 永远不来，状态机停在 PhasePre 等到
+// §3.3 的 10 分钟预算耗尽：
+//
+//	pre-start?rc=0  →  hook-report?rc=0  →  pre-done?rc=0  →  （无）
+//	logTail: "阶段 pre 超时: 预算=10m0s 实际已过=615秒"
+//
+// 而 anaconda 其实正在装包——它要等装完才跑 %post，那时状态机早判失败了。
+func TestKickstart_PackagesStartBeforePackagesSection(t *testing.T) {
+	got, err := AssembleKickstart(minimalKickstartCtx())
+	if err != nil {
+		t.Fatalf("AssembleKickstart 失败: %v", err)
+	}
+
+	idxPreDone := strings.Index(got, `signal "pre-done"`)
+	idxPkgStart := strings.Index(got, `signal "packages-start"`)
+	idxPackages := strings.Index(got, "%packages")
+	idxFirstPost := strings.Index(got, "%post")
+
+	if idxPkgStart == -1 {
+		t.Fatalf("packages-start 缺失:\n%s", got)
+	}
+	if idxPreDone == -1 {
+		t.Fatalf("pre-done 缺失:\n%s", got)
+	}
+	// packages-start 必须在第一个 %post 之前——%post 跑在装包之后，放那里
+	// 等于永远不发。
+	if idxFirstPost != -1 && idxPkgStart > idxFirstPost {
+		t.Errorf("packages-start 落在 %%post 段之后（位置 %d > %d）——anaconda 的 "+
+			"%%post 跑在装包**之后**，状态机会停在 PhasePre 等到阶段预算耗尽",
+			idxPkgStart, idxFirstPost)
+	}
+	// 它应当紧跟在 pre-done 之后（同在 %pre 段末尾）。
+	if idxPkgStart < idxPreDone {
+		t.Errorf("packages-start 排在 pre-done 之前（%d < %d）——阶段顺序颠倒，"+
+			"§3.6 的只进不退判定会把 pre-done 当成回退丢弃", idxPkgStart, idxPreDone)
+	}
+	// 刻意不断言 packages-start 与 %packages 段的相对位置：%packages 是**声明**
+	// 段（告诉 anaconda 装哪些包），位置在 kickstart 主体靠前；%pre 是执行段，
+	// 写在其后。anaconda 的执行顺序是 %pre → 装包 → %post，与 %packages 这个
+	// 声明写在文件哪一行无关。用文本位置去断言执行顺序在这里是错的判据。
+	_ = idxPackages
+}
+
+// TestKickstart_PackagesDoneInPostSection 锁住 packages-done 在 %post 段里。
+//
+// 与 packages-start 相反：装包**结束**这个时刻只能由 %post 的开头代表，因为
+// anaconda 正是装完包才跑 %post。两个信号因此落在不同段落——这不是不对称的
+// 设计瑕疵，是 kickstart 的段落语义决定的。
+func TestKickstart_PackagesDoneInPostSection(t *testing.T) {
+	got, err := AssembleKickstart(minimalKickstartCtx())
+	if err != nil {
+		t.Fatalf("AssembleKickstart 失败: %v", err)
+	}
+	idxPkgDone := strings.Index(got, `signal "packages-done"`)
+	idxFirstPost := strings.Index(got, "%post")
+	if idxPkgDone == -1 {
+		t.Fatalf("packages-done 缺失:\n%s", got)
+	}
+	if idxFirstPost == -1 || idxPkgDone < idxFirstPost {
+		t.Errorf("packages-done 应在 %%post 段内发出（装完包才跑 %%post），"+
+			"实际位置 %d，第一个 %%post 在 %d", idxPkgDone, idxFirstPost)
+	}
+}
+
+// TestKickstart_SignalOrderIsMonotonic 锁住信号在 kickstart 里的出现顺序与
+// model.signalTable 的 Seq 单调一致。
+//
+// **这是 §3.6「只进不退」的直接要求。** statemachine/signal.go:78 的判据是
+// `entry.Seq <= current.LastSeq` 就丢弃——序号倒退的信号被当成重复/回退，
+// 静默忽略。所以渲染出的顺序必须与 Seq 升序一致，否则某些信号发了也不算：
+//
+//	pre-start 10 → pre-done 20 → packages-start 30 → packages-done 40
+//	→ post-start 50 → post-done 60 → rebooting 70
+//
+// 最容易踩的是 packages-done：装包结束这个时刻只能由 %post 的开头代表（见
+// TestKickstart_PackagesDoneInPostSection），而 post-start/post-done 也在
+// %post 段里——如果 packages-done 那段排在 hook 的 %post 段之后，它的 Seq 40
+// 就会撞上已经推到 60 的水位而被丢弃。
+func TestKickstart_SignalOrderIsMonotonic(t *testing.T) {
+	got, err := AssembleKickstart(minimalKickstartCtx())
+	if err != nil {
+		t.Fatalf("AssembleKickstart 失败: %v", err)
+	}
+
+	// 按 Seq 升序列出装机期信号，逐个取它在文本里的首次出现位置。
+	ordered := []model.SignalKind{
+		model.SignalPreStart, model.SignalPreDone,
+		model.SignalPackagesStart, model.SignalPackagesDone,
+		model.SignalPostStart, model.SignalPostDone,
+		model.SignalRebooting,
+	}
+
+	prevIdx, prevSig := -1, model.SignalKind("")
+	for _, sig := range ordered {
+		idx := strings.Index(got, `signal "`+string(sig)+`"`)
+		if idx == -1 {
+			t.Errorf("信号 %q 缺失", sig)
+			continue
+		}
+		if idx < prevIdx {
+			entry, _ := model.LookupSignal(sig)
+			prevEntry, _ := model.LookupSignal(prevSig)
+			t.Errorf("信号顺序倒退：%q（Seq=%d，位置 %d）出现在 %q（Seq=%d，位置 %d）"+
+				"之前。statemachine/signal.go 对 Seq 不大于当前水位的信号直接丢弃，"+
+				"所以这个信号发了也不算——状态机会卡在前一个阶段等到预算耗尽",
+				sig, entry.Seq, idx, prevSig, prevEntry.Seq, prevIdx)
+		}
+		prevIdx, prevSig = idx, sig
+	}
+}

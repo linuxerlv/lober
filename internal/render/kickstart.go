@@ -106,6 +106,17 @@ func RenderStageSection(ctx model.RenderContext, stage model.HookStage) string {
 	if leave != "" {
 		fmt.Fprintf(&b, "signal %q 0\n", leave)
 	}
+	// %pre 段末尾额外补发 packages-start：**kickstart 没有「装包开始」这个
+	// 钩子**。anaconda 的段落只有 %pre（分区前）与 %post/%post --nochroot
+	// （都在装包之后），所以「装包即将开始」只能由 %pre 的末尾代表——那正是
+	// anaconda 接下来要去装包的前一刻。
+	//
+	// 放进 %post 段的后果（实测 2026-09-26）：pre-start 与 pre-done 都正常
+	// 到达，packages-start 永远不来，状态机停在 PhasePre 等到 §3.3 的 10 分钟
+	// 预算耗尽判失败——而 anaconda 其实正在装包，它要等装完才跑 %post。
+	if stage == model.HookStagePre {
+		fmt.Fprintf(&b, "signal %q 0\n", model.SignalPackagesStart)
+	}
 	b.WriteString("%end\n")
 	return b.String()
 }
@@ -291,50 +302,53 @@ func AssembleKickstart(ctx model.RenderContext) (string, error) {
 	}
 	b.WriteString(pro)
 
+	// %pre 段先渲染（含 pre-start / pre-done / packages-start）。
+	b.WriteString(RenderStageSection(ctx, model.HookStagePre))
+
+	// packages-done 必须排在 %post 的 hook 段**之前**。
+	//
+	// 装包结束这个时刻只能由 %post 的开头代表——anaconda 正是装完包才跑
+	// %post。但 post-start / post-done 也在 %post 段里，而信号的 Seq 是
+	// packages-done=40 < post-start=50：statemachine/signal.go 对 Seq 不大于
+	// 当前水位的信号直接丢弃（§3.6 只进不退）。所以 packages-done 若排在
+	// hook 的 %post 段之后，它发了也不算，状态机会卡在 packages 阶段等到
+	// 阶段预算耗尽。
+	//
+	// 单独一段而不是并进 hook 的 %post 段：那个段只在有 post hook 时才渲染，
+	// 而这个信号与 hook 无关（见 RenderStageSection 里关于「信号是阶段边界
+	// 标记」的说明）。每段各自嵌一份 ClientLib，因为 anaconda 的每个段落是
+	// 独立脚本、不共享函数定义。
+	b.WriteString("%post\n")
+	b.WriteString(ClientLib(ctx))
+	fmt.Fprintf(&b, "signal %q 0\n", model.SignalPackagesDone)
+	b.WriteString("%end\n")
+
+	// 两个 post 阶段的 hook 段（%post --nochroot 与 %post，后者含
+	// post-start / post-done）。
 	for _, stage := range []model.HookStage{
-		model.HookStagePre, model.HookStagePostNoChroot, model.HookStagePost,
+		model.HookStagePostNoChroot, model.HookStagePost,
 	} {
 		b.WriteString(RenderStageSection(ctx, stage))
 	}
 
-	// firstboot 脚手架必须落在自己的 %post ... %end 段落里（SPEC §5.8 的
-	// 参考实现正是这样写的）——它需要写文件到目标系统的
-	// /var/lib/lober、/etc/systemd/system、/usr/local/sbin，这些路径只有
-	// 在某个 %post 段落内、chroot 进目标系统之后才有意义。写成不属于任何
-	// 段落的裸露文本，anaconda 会把它当成语法错误或直接忽略，firstboot
-	// 机制会在没有任何明显报错的情况下整体失效——这是最容易被忽略的一类
-	// bug，因为通过编译与单元断言都不会暴露，只有 golden file 的完整装配
-	// 顺序检查才能抓到。
-	// packages-start / packages-done 与 rebooting 三个信号不属于任何 hook
-	// 阶段，所以不经 RenderStageSection，在这里直接写：
-	//
-	//   packages-*  选包阶段的边界。%packages 不是 hook 阶段（没有对应的
-	//               HookStage），但 §3.3 给它独立的阶段预算，状态机需要这对
-	//               信号才能判断「装包是慢还是卡死」——离线仓库装几百个包
-	//               本来就慢，没有边界信号就只能按最坏情况给预算。
-	//   rebooting   装机结束、机器即将重启那一刻。状态机靠它把任务从
-	//               installing 推进到 rebooting，之后等 firstboot 的 booted。
-	//
-	// 都放在这个 %post 段里：它们需要 ClientLib 的 signal 函数，而 anaconda
-	// 的每个段落是独立脚本、不共享函数定义（见本文件顶部关于段落隔离的说明）。
-	b.WriteString("%post\n")
-	b.WriteString(ClientLib(ctx))
-	fmt.Fprintf(&b, "signal %q 0\n", model.SignalPackagesStart)
-	fmt.Fprintf(&b, "signal %q 0\n", model.SignalPackagesDone)
-	b.WriteString("%end\n")
-
+	// firstboot 脚手架必须落在自己的 %post ... %end 段落里（SPEC §5.8 的参考
+	// 实现正是这样写的）——它需要写文件到目标系统的 /var/lib/lober、
+	// /etc/systemd/system、/usr/local/sbin，这些路径只有在某个 %post 段落内、
+	// chroot 进目标系统之后才有意义。写成不属于任何段落的裸露文本，anaconda
+	// 会把它当成语法错误或直接忽略，firstboot 机制会在没有任何明显报错的情况
+	// 下整体失效——这是最容易被忽略的一类 bug，编译与单元断言都不会暴露，
+	// 只有 golden file 的完整装配顺序检查才能抓到。
 	b.WriteString("%post\n")
 	b.WriteString(FirstbootScaffold(ctx))
 	b.WriteString("%end\n")
 
-	// rebooting 单独一段，且必须排在 firstboot 脚手架之后：脚手架要把 unit
-	// 与脚本写进目标系统，写完才算「可以重启了」。顺序颠倒会让状态机在
-	// firstboot 还没装好时就以为进了 rebooting 阶段。
+	// rebooting 排在最后，且必须在 firstboot 脚手架之后：脚手架要把 unit 与
+	// 脚本写进目标系统，写完才算「可以重启了」。顺序颠倒会让状态机在 firstboot
+	// 还没装好时就以为进了 rebooting 阶段。
 	b.WriteString("%post\n")
 	b.WriteString(ClientLib(ctx))
 	fmt.Fprintf(&b, "signal %q 0\n", model.SignalRebooting)
 	b.WriteString("%end\n")
-
 	return b.String(), nil
 }
 
@@ -422,6 +436,9 @@ func stageBoundarySignals(stage model.HookStage) (enter, leave string, has bool)
 	switch stage {
 	case model.HookStagePre:
 		return string(model.SignalPreStart), string(model.SignalPreDone), true
+	// packages-start 由 AssembleKickstart 紧跟在 %pre 段之后补发，不放进这里
+	// 的 leave——leave 是单个信号，而 %pre 末尾要连发两个（见
+	// AssembleKickstart 里那段说明）。
 	case model.HookStagePost:
 		return string(model.SignalPostStart), string(model.SignalPostDone), true
 	default:
