@@ -51,7 +51,6 @@ class TargetVM:
         return f"{self.settings.paths.targets_dir}/{self.name}.qcow2"
 
     @property
-    @property
     def console_log(self) -> str:
         """当前一轮的串口日志路径。
 

@@ -154,7 +154,20 @@ const linuxConsoleArgs = "console=ttyS0,115200n8 console=tty0"
 //
 // 排在模板 KernelArgs 之前：运维想临时换回 inst.text 调试某台机器时，在
 // KernelArgs 里给一个就能覆盖（anaconda 对冲突的显示模式参数取最后一个）。
-const anacondaAutoArgs = "inst.cmdline plymouth.enable=0"
+const anacondaAutoArgs = "inst.cmdline inst.notmux plymouth.enable=0"
+
+// 为什么还要 inst.notmux：anaconda 默认把自己包在 tmux 里（实测串口上能看到
+// `Created slice system-anaconda-tmux.slice`），而 tmux 的输出不会进串口，
+// 于是它报错退出时串口上只有一段空白——实测 2026-09-26：日志从内核 42 秒直接
+// 跳到 251 秒，中间 209 秒的 anaconda 输出全部丢失，然后
+// `dracut Warning: Killing all remaining processes` → 重启。
+//
+// kickstart 的 `logging --host=` 指令也救不了：那是 anaconda **启动之后**才
+// 生效的转发，而它在启动阶段就失败了（实测服务端只收到 %pre hook 的输出，
+// anaconda 自己一条都没有）。
+//
+// notmux 让 anaconda 直接往控制台写，配合 console=ttyS0 才能看到失败原因。
+// 这不只是调试参数：真机排障同样依赖它，否则运维在 BMC 上看到的也是同一段空白。
 
 // esxiMbootEFIExtraKey 是 ArtifactPaths.Extra 中 ESXi 引导器文件的键名
 // （与 esxi.go／imports 侧对 mboot.efi 的约定键一致——ESXi 的制品集只有
