@@ -52,6 +52,26 @@ func RenderMenu(ctx model.RenderContext) (string, error) {
 	}
 }
 
+// ipxeBootCommand 是每份 iPXE 菜单的最后一行。
+//
+// **没有它，任何机器都装不上，而服务端侧看起来一切正常。** iPXE 的 kernel
+// 与 initrd 命令只是把文件加载进内存并设置引导参数，真正把控制权交给内核的
+// 是 boot。缺了它，iPXE 加载完镜像就走到脚本末尾，chain 返回后落到
+// /boot.ipxe 的 `|| shell` 或直接退出，机器回到固件引导顺序继续 PXE 轮询。
+//
+// 现场症状是「机器在 PXE 里反复转圈」——而 SPEC §0.1 恰好把这类现象划为
+// 范围外（判据在固件与 DHCP 里，本系统零可观测性），排查方向会被带去查
+// BIOS 设置、DHCP 配置、网线。同时服务端侧每一项指标都正常：任务进了
+// booting、nginx access log 里菜单请求 200、字节数也对。
+//
+// 实测（2026-09-25，QEMU BIOS 目标机走真实引导链）：目标机成功取到
+// /boot.ipxe 与 /v1/boot（429 字节菜单，不是 76 字节的 no_task），此后
+// vmlinuz 与 initrd.img 的 GET 一次都没出现过。
+//
+// 必须排在 initrd 行之后：iPXE 顺序执行，boot 之前 kernel 与 initrd 都要
+// 加载完，否则它拿一个不完整的引导上下文去跳转。
+const ipxeBootCommand = "boot\n"
+
 // esxiMbootEFIExtraKey 是 ArtifactPaths.Extra 中 ESXi 引导器文件的键名
 // （与 esxi.go／imports 侧对 mboot.efi 的约定键一致——ESXi 的制品集只有
 // 这一个 Extra 项要在菜单渲染时读取，boot.cfg 模板本身走应答文件分派，
@@ -111,7 +131,8 @@ func renderRockyMenu(ctx model.RenderContext) (string, error) {
 		"kernel %s \\\n"+
 			"  inst.repo=%s \\\n"+
 			"  inst.ks=%s inst.text ip=dhcp\n"+
-			"initrd %s\n",
+			"initrd %s\n"+
+			ipxeBootCommand,
 		kernelURL, repoURL, ksURL, initrdURL,
 	), nil
 }
@@ -140,7 +161,8 @@ func renderDebianMenu(ctx model.RenderContext) (string, error) {
 	return fmt.Sprintf(
 		"kernel %s auto=true priority=critical \\\n"+
 			"  preseed/url=%s\n"+
-			"initrd %s\n",
+			"initrd %s\n"+
+			ipxeBootCommand,
 		kernelURL, preseedURL, initrdURL,
 	), nil
 }
@@ -175,7 +197,8 @@ func renderUbuntuMenu(ctx model.RenderContext) (string, error) {
 
 	return fmt.Sprintf(
 		"kernel %s autoinstall ds=nocloud-net;s=%s ---\n"+
-			"initrd %s\n",
+			"initrd %s\n"+
+			ipxeBootCommand,
 		kernelURL, answerDirURL, initrdURL,
 	), nil
 }

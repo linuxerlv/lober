@@ -74,6 +74,9 @@ func RenderWindowsMenu(ctx model.RenderContext) (string, error) {
 	fmt.Fprintf(&b, "initrd %s       BCD\n", bcdURL)
 	fmt.Fprintf(&b, "initrd %s  boot.sdi\n", bootSDIURL)
 	fmt.Fprintf(&b, "initrd %s  boot.wim\n", bootWIMURL)
+	// boot 命令：没有它 iPXE 只加载 wimboot 与三个 initrd 却不执行，机器退回
+	// 固件引导顺序继续 PXE 轮询（完整论证见 menu.go 的 ipxeBootCommand）。
+	b.WriteString(ipxeBootCommand)
 	return b.String(), nil
 }
 

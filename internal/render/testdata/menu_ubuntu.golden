@@ -1,2 +1,3 @@
 kernel http://ng.internal/artifacts/as-ubuntu2404/vmlinuz autoinstall ds=nocloud-net;s=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/ ---
 initrd http://ng.internal/artifacts/as-ubuntu2404/initrd
+boot

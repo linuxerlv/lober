@@ -509,7 +509,8 @@ func RenderAutoYaSTMenu(ctx model.RenderContext) (string, error) {
 	return fmt.Sprintf(
 		"kernel %s \\\n"+
 			"  autoyast=%s\n"+
-			"initrd %s\n",
+			"initrd %s\n"+
+			ipxeBootCommand,
 		kernelURL, autoyastURL, initrdURL,
 	), nil
 }
