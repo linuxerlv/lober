@@ -124,11 +124,45 @@ func splitHostAndPath(rawURL string) (host, path string) {
 	return withoutScheme[:slashIdx], withoutScheme[slashIdx:]
 }
 
-// preseedPartitioning 渲染分区段落：用服务端决策的盘（by-id 标识，SPEC
-// §5.6），配方用 partman-auto 的 recipe 语法，单分区（MVP 范围，与
-// baseDirectives 的 RHEL 单分区策略一致）。
-func preseedPartitioning(ctx model.RenderContext) string {
+// preseedPartitioning 渲染分区段落：用服务端决策的盘（by-id 标识，SPEC §5.6），
+// 配方用 partman-auto 的 recipe 语法，单分区（MVP 范围，与 baseDirectives 的
+// RHEL 单分区策略一致）。
+//
+// **磁盘 fact 为空时报错，不渲染空值。** `d-i partman-auto/disk string `（空）
+// 会让 debian-installer 因无盘可分而停在分区界面等人，而那台机器没有人在看——
+// 现场症状是「装机卡住不动」，而服务端侧只能看到阶段超时。这与 kickstart 的
+// partitionDirectives 是同一条原则：渲染期报错能把失败挡在服务端、带着完整的
+// 任务上下文，渲染出空值则把失败推迟到目标机上，那时唯一的证据在 BMC 控制台。
+//
+// **by-hook 策略对 Debian 不适用，同样报错。** 这条与 kickstart 刻意不同：
+//
+//	kickstart  支持 %include，by-hook 能把选盘推到 %pre 阶段的 hook
+//	preseed    partman-auto/disk 直接吃路径，没有等价的延迟机制
+//	           （preseed/early_command 能跑脚本，但 partman 的 debconf 值在那
+//	           之前就已经读定了）
+//
+// 所以「Debian 模板配了 by-hook」是配置错误，必须在渲染期挡住并说清原因，
+// 否则运维会以为它像 RHEL 那样能用。Debian 家族要靠 inspect 阶段的硬件采集
+// （SPEC §11 Phase 2）把主盘送进 Facts。
+func preseedPartitioning(ctx model.RenderContext) (string, error) {
 	diskByID := ctx.Facts[model.FactDiskPrimary]
+
+	if ctx.Template.DiskPolicy == model.DiskPolicyByHook {
+		return "", fmt.Errorf("render: Debian 家族不支持 by-hook 磁盘策略——"+
+			"preseed 的 partman-auto/disk 直接吃磁盘路径，没有 kickstart 的 "+
+			"%%include 那种延迟机制（preseed/early_command 虽能跑脚本，但 partman "+
+			"的 debconf 值在那之前就已读定）。请把模板的磁盘策略改成 first / "+
+			"largest / by-model / raid1-ssd 之一，并确保 inspect 阶段把主盘送进 "+
+			"Facts[%s]", model.FactDiskPrimary)
+	}
+
+	if diskByID == "" {
+		return "", fmt.Errorf("render: 磁盘策略 %q 要求服务端已选定主盘，但 "+
+			"RenderContext.Facts[%s] 为空——渲染出 `partman-auto/disk string `"+
+			"（空值）会让 debian-installer 因无盘可分而停在分区界面等人，而那台"+
+			"机器没有人在看，服务端侧只能看到阶段超时。请让决策链把主盘送进 Facts",
+			ctx.Template.DiskPolicy, model.FactDiskPrimary)
+	}
 
 	var b strings.Builder
 	b.WriteString(debconfLine("d-i", "partman-auto/disk", "string", diskByID))
@@ -138,7 +172,7 @@ func preseedPartitioning(ctx model.RenderContext) string {
 	b.WriteString(debconfLine("d-i", "partman/choose_partition", "select", "finish"))
 	b.WriteString(debconfLine("d-i", "partman/confirm", "boolean", "true"))
 	b.WriteString(debconfLine("d-i", "partman/confirm_nooverwrite", "boolean", "true"))
-	return b.String()
+	return b.String(), nil
 }
 
 // preseedAccountAndPackages 渲染账户与软件包段落：root 不设可复用密码
@@ -459,7 +493,11 @@ func AssemblePreseed(ctx model.RenderContext) (string, error) {
 	b.WriteString(preseedLocalization())
 	b.WriteString(preseedNetwork(ctx))
 	b.WriteString(preseedMirror(ctx))
-	b.WriteString(preseedPartitioning(ctx))
+	partitioning, err := preseedPartitioning(ctx)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(partitioning)
 	b.WriteString(preseedAccountAndPackages())
 
 	early, err := earlyCommandValue(ctx)
