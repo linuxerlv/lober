@@ -71,7 +71,21 @@ func Identify(root fs.FS) (model.OSFamily, error) {
 	if exists(root, ".treeinfo") {
 		return model.OSFamilyRHEL, nil
 	}
-	if exists(root, ".disk/info") {
+	// Ubuntu 的判据是 casper/ 而**不是** .disk/info。
+	//
+	// .disk/info 原本是 Debian 的约定，Ubuntu 只是继承了它——真实 Debian ISO
+	// 同样有这个文件。用它判 Ubuntu 会把每一份真实 Debian 镜像都认成 Ubuntu，
+	// 接着 ExtractUbuntu 去找 casper/vmlinuz 失败，装机链路第一步就断
+	// （实测 debian-13.7.0-amd64-netinst.iso，见
+	// TestIdentify_RealDebianNetinstIsNotUbuntu）。
+	//
+	// 换成 casper/ 还有一层好处：**它让「识别出这个家族」蕴含「抽取器能抽出
+	// 东西」**——casper/vmlinuz 与 casper/*.squashfs 正是 ExtractUbuntu 要的
+	// 输入，识别判据与抽取前提对齐，不会出现「认出来了但抽不动」这种分裂。
+	//
+	// 顺序必须在 dists/ 之前：Ubuntu live-server 同样带 dists/ 与 pool/
+	// （它带一份离线安装用的 pool），排在后面会让 Ubuntu 被认成 Debian。
+	if existsDir(root, "casper") {
 		return model.OSFamilyUbuntu, nil
 	}
 	if existsDir(root, "dists") {

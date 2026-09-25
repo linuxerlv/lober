@@ -29,10 +29,26 @@ import (
 // Debian 菜单示例 `kernel .../linux` 三处都不一致，是一处真实 bug：
 // 用真实 Debian netinst ISO 目录树跑会在 install.<arch>/ 下找不到
 // vmlinuz 这个文件名，报"找不到内核"，而真实原因是文件名找错了）。
-const (
-	debianInstallerKernelName = "linux"
-	debianInstallerInitrdName = "initrd.gz"
-)
+// debianInstallerKernelNames 是 installer 目录下内核文件名的候选，**两种拼写
+// 都真实存在**，按顺序尝试：
+//
+//   - `vmlinuz` —— **ISO 布局**。实测 debian-13.7.0-amd64-netinst.iso 的
+//     install.amd/ 下是 [gtk/ initrd.gz vmlinuz xen/]。本抽取器读的就是 ISO，
+//     所以这个排在前面。
+//   - `linux` —— **netboot tarball 布局**。deb.debian.org 的
+//     debian-installer/amd64/ 里叫这个名字，SPEC §4.5 的 Debian 菜单示例
+//     `kernel .../linux` 说的是那一种。
+//
+// 历史教训：这里曾经只认 `vmlinuz`，commit f66f1f6 改成只认 `linux`，理由写的是
+// 「用真实 Debian netinst ISO 目录树跑会在 install.<arch>/ 下找不到 vmlinuz」
+// ——那个论断与真镜像相反，是从 SPEC 的菜单示例反推出来的，没有对着真 ISO 核过。
+// **两次都是「二选一」，而正确答案是「都要」。**
+//
+// 落盘的输出名与这里无关，固定是 `linux`（见 ExtractDebian 里的
+// kernelDestName，那一半 f66f1f6 改对了：菜单示例期望的就是它）。
+var debianInstallerKernelNames = []string{"vmlinuz", "linux"}
+
+const debianInstallerInitrdName = "initrd.gz"
 
 // findDebianInstallerFile 在 root 下递归查找名为 fileName 的文件，返回其
 // 相对路径。Debian 的 installer 子目录名随架构变化（`install.amd`、
@@ -75,6 +91,24 @@ func findDebianInstallerFile(root fs.FS, fileName string) (string, error) {
 	return found, nil
 }
 
+// findDebianKernel 按 debianInstallerKernelNames 的顺序逐个找内核，返回第一个
+// 命中的相对路径。
+//
+// 全部候选都找不到时，错误信息把**两种拼写都列出来**——只报最后一个候选会让
+// 运维以为「必须叫那个名字」，而实际上另一种布局同样受支持，真正的问题可能是
+// 这份 sourcePath 根本不是一份 Debian installer 介质。
+func findDebianKernel(root fs.FS) (string, error) {
+	for _, name := range debianInstallerKernelNames {
+		if p, err := findDebianInstallerFile(root, name); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("在 ISO 内容中找不到内核文件（已尝试 %v，"+
+		"真实路径形如 install.<arch>/vmlinuz 或 debian-installer/<arch>/linux）"+
+		"——这份介质可能不是一份 Debian installer 镜像",
+		debianInstallerKernelNames)
+}
+
 // ExtractDebian 执行 Debian 系的抽取（计划任务 5）：
 //  1. 递归查找内核（linux）与 initrd（initrd.gz），并校验 dists/ 存在
 //  2. 复制到 destDir 下，固定文件名 linux/initrd.gz（SPEC §4.5 的 Debian
@@ -86,7 +120,7 @@ func findDebianInstallerFile(root fs.FS, fileName string) (string, error) {
 //  3. 把 dists/ 与 pool/ 两棵仓库树都复制到 destDir/repo/ 下
 //  4. 返回 model.ArtifactPaths
 func ExtractDebian(root fs.FS, destDir string) (model.ArtifactPaths, error) {
-	kernelSrc, err := findDebianInstallerFile(root, debianInstallerKernelName)
+	kernelSrc, err := findDebianKernel(root)
 	if err != nil {
 		return model.ArtifactPaths{}, fmt.Errorf("imports: 查找 Debian 内核失败: %w", err)
 	}

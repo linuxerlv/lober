@@ -161,3 +161,53 @@ func TestExtractDebian_RepoTreeExcludesKernelAndInitrdSources(t *testing.T) {
 			"不应在 repo/ 下重复出现")
 	}
 }
+
+// TestExtractDebian_AcceptsBothKernelNames 验证 installer 目录下的内核文件名
+// 两种拼写都接受：`vmlinuz`（ISO 布局）与 `linux`（netboot tarball 布局）。
+//
+// **两者都真实存在，此前只认一种，于是真实 ISO 抽不出内核。**
+//
+//   - 实测 debian-13.7.0-amd64-netinst.iso：install.amd/ 下是
+//     [gtk/ initrd.gz vmlinuz xen/] —— 内核叫 **vmlinuz**。
+//   - 而 deb.debian.org 的 netboot tarball（debian-installer/amd64/）里叫
+//     **linux**，SPEC §4.5 的 Debian 菜单示例 `kernel .../linux` 说的是那一种。
+//
+// 本抽取器读的是 ISO，因此必须认 vmlinuz；但 netboot 布局也有人用来喂
+// sourcePath，所以两种都接受，而不是从一种改成另一种。
+//
+// 历史：commit f66f1f6 把搜索名从 vmlinuz 改成 linux，理由写的是「用真实
+// Debian netinst ISO 目录树跑会在 install.<arch>/ 下找不到 vmlinuz」——那个论断
+// 与真镜像相反，它是从 SPEC 的菜单示例反推的，没有对着真 ISO 核过。**落盘的
+// 输出名仍然是 linux**（那一半是对的，菜单示例期望的就是它），只有查找名要放宽。
+func TestExtractDebian_AcceptsBothKernelNames(t *testing.T) {
+	cases := map[string]string{
+		"ISO 布局用 vmlinuz":         "vmlinuz",
+		"netboot tarball 用 linux": "linux",
+	}
+	for name, kernelName := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := fstest.MapFS{
+				"install.amd/" + kernelName: &fstest.MapFile{Data: []byte("kernel-bytes")},
+				"install.amd/initrd.gz":     &fstest.MapFile{Data: []byte("initrd-bytes")},
+				"dists/trixie/Release":      &fstest.MapFile{Data: []byte("Suite: stable\n")},
+				"pool/main/b/bash/bash.deb": &fstest.MapFile{Data: []byte("deb")},
+			}
+			destDir := t.TempDir()
+
+			paths, err := ExtractDebian(root, destDir)
+			if err != nil {
+				t.Fatalf("ExtractDebian 失败（内核名 %q）: %v —— 两种拼写都是真实布局，"+
+					"只认一种会让另一种的镜像抽不出内核", kernelName, err)
+			}
+			// 落盘的输出名固定是 linux（SPEC §4.5 的 Debian 菜单示例），与 ISO 内
+			// 叫什么无关。
+			if paths.Kernel != "linux" {
+				t.Errorf("Paths.Kernel = %q, want \"linux\"（落盘输出名固定，"+
+					"与 ISO 内的拼写无关）", paths.Kernel)
+			}
+			if _, statErr := os.Stat(filepath.Join(destDir, "linux")); statErr != nil {
+				t.Errorf("内核未落盘: %v", statErr)
+			}
+		})
+	}
+}
