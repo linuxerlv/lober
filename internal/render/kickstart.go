@@ -175,8 +175,12 @@ func baseDirectives(ctx model.RenderContext) (string, error) {
 	b.WriteString("keyboard us\n")
 	b.WriteString("timezone UTC --utc\n")
 	b.WriteString("bootloader --location=mbr\n")
-	fmt.Fprintf(&b, "clearpart --all --drives=%s\n", diskByID)
-	fmt.Fprintf(&b, "part / --fstype=xfs --grow --ondisk=%s\n", diskByID)
+
+	partitioning, err := partitionDirectives(ctx.Template.DiskPolicy, diskByID)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(partitioning)
 	// 这是装机 VLAN 上安装器自身正在使用的网卡（机器正是通过它 PXE 引导
 	// 到这里的），激活它不违反 SPEC §5.7 的"业务网写配置但不激活"——那条
 	// 规则约束的是 %post 阶段用户 hook 可能配置的业务网（另一 VLAN），与
@@ -288,5 +292,70 @@ func AssembleKickstart(ctx model.RenderContext) (string, error) {
 	b.WriteString(FirstbootScaffold(ctx))
 	b.WriteString("%end\n")
 
+	return b.String(), nil
+}
+
+// ByHookPartitionIncludePath 是 by-hook 磁盘策略下，%pre 阶段的 hook 必须
+// 写出的分区指令文件路径，主体 kickstart 用 %include 引入它。
+//
+// 放在 /tmp 下而不是 /root 或别处：anaconda 的 %pre 运行在 installer 的
+// ramdisk 里，那时目标盘还没分区、没挂载，/tmp 是唯一确定可写的位置（这也
+// 是 anaconda 社区惯例 /tmp/part-include 的由来）。名字带 lober- 前缀是为了
+// 与运维自己的 %pre 产物区分开——同一个 %pre 段里可能还有别的 hook 在写文件。
+const ByHookPartitionIncludePath = "/tmp/lober-part-include"
+
+// partitionDirectives 渲染分区相关的指令，按磁盘策略分两条路径。
+//
+// **为什么必须分路径。** kickstart 是 anaconda 开始装机**之前**就要取到的
+// 完整文本，而 by-hook 策略的语义正是「服务端不选盘，交给 %pre 阶段的 hook
+// 动态决定」（provider/diskplanner.go 的 diskPlannerByHook）——此刻服务端
+// 手上没有任何硬件信息，写不出 --drives= 的值。此前这里无条件把
+// LOBER_DISK_PRIMARY 插进两行指令，by-hook 下渲染结果是：
+//
+//	clearpart --all --drives=
+//	part / --fstype=xfs --grow --ondisk=
+//
+// anaconda 拿到空的 --drives= 直接报错退出，也就是说 by-hook 这个
+// SPEC §2.3 列出的五个策略之一，在真实装机路径上从来不可用。这个缺口此前
+// 被两层掩盖：六个 e2e 脚本全都用 by-hook（它是无硬件事实时唯一能建出任务
+// 的策略），但只用 curl 核对 HTTP 状态码与状态机流转，从不把渲染结果交给
+// 真的 anaconda；而单元测试的 RenderContext 都手工塞了 LOBER_DISK_PRIMARY，
+// 走不到空值分支。
+//
+// 两条路径：
+//
+//   - by-hook：渲染 `%include <路径>`，由 %pre 阶段的 hook 写出真正的分区
+//     指令。这是 anaconda 的标准机制，也是这个策略唯一能落地的方式。
+//   - 其余四个策略：磁盘 fact 必须有值，没有就**报错**而不是渲染出空值。
+//     空值意味着决策链某处断了（resolve.go 算出了主盘却没送进 Facts，那是
+//     一个真实存在的断口，见该文件关于契约缺口的注释），渲染期报错能把失败
+//     挡在服务端、带着完整任务上下文；渲染出空值则把失败推迟到 anaconda
+//     启动之后，那时唯一的证据在目标机的 BMC 控制台上。
+func partitionDirectives(policy model.DiskPolicy, diskByID string) (string, error) {
+	if policy == model.DiskPolicyByHook {
+		var b strings.Builder
+		// 注释写进 kickstart 正文：anaconda 会把用过的 kickstart 存成
+		// /root/anaconda-ks.cfg，那是失败现场唯一能直接拿到的证据。hook
+		// 忘了写这个文件时，装机会以「%include 的文件不存在」失败，现场的人
+		// 必须能从 kickstart 本身看出这个文件该由谁产生，而不是去翻源码。
+		b.WriteString("# 分区指令由 %pre 阶段的 hook 写出（磁盘策略 by-hook）。\n")
+		b.WriteString("# 若本次装机以「" + ByHookPartitionIncludePath +
+			" 不存在」失败，说明模板引用的 pre hook 没有写这个文件。\n")
+		fmt.Fprintf(&b, "%%include %s\n", ByHookPartitionIncludePath)
+		return b.String(), nil
+	}
+
+	if diskByID == "" {
+		return "", fmt.Errorf("render: 磁盘策略 %q 要求服务端已选定主盘，但 "+
+			"RenderContext.Facts[%s] 为空——渲染出 `clearpart --all --drives=` "+
+			"这种空值指令会让 anaconda 在目标机上报错退出，那时唯一的证据在 BMC "+
+			"控制台上，因此这里直接拒绝渲染。要么让决策链把主盘送进 Facts，"+
+			"要么把模板的磁盘策略改成 by-hook（由 %%pre 阶段的 hook 选盘）",
+			policy, model.FactDiskPrimary)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "clearpart --all --drives=%s\n", diskByID)
+	fmt.Fprintf(&b, "part / --fstype=xfs --grow --ondisk=%s\n", diskByID)
 	return b.String(), nil
 }

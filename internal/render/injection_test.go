@@ -29,6 +29,11 @@ func injectionTestCtx() model.RenderContext {
 			},
 		},
 		Template: model.Template{
+			// 显式声明 by-hook：本文件测的是注入防护与文件名校验，不关心
+			// 分区方案。而「既不声明磁盘策略、Facts 里也没有主盘」是一个
+			// 不自洽的上下文——partitionDirectives 对它报错（拒绝渲染出
+			// `--drives=` 空值指令），所以夹具必须表明自己走哪条分区路径。
+			DiskPolicy:     model.DiskPolicyByHook,
 			ID:             "tpl-rocky9-inject",
 			AnswerTemplate: "%packages\n@core\n%end\n",
 		},
