@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"time"
 
 	"github.com/lober/lober/internal/core/contract"
 	"github.com/lober/lober/internal/core/model"
@@ -54,8 +55,15 @@ func (m *Machine) StartBoot(ctx context.Context, taskID string, actualArch model
 	if err != nil {
 		return model.Task{}, err
 	}
-	if current.State != model.TaskStatePending {
+	if !acceptsBootRequest(current.State) {
 		return model.Task{}, errTaskNotPending
+	}
+	// booting 状态的任务接受重试，但要先把「同一次引导的并发重复请求」与
+	// 「机器真的回来重试」区分开——判据是距上次进入该阶段的时间间隔，
+	// 见 minBootRetryInterval 的文档。
+	if current.State == model.TaskStateBooting &&
+		m.clock.Now()-current.PhaseEnteredAt < int64(minBootRetryInterval.Seconds()) {
+		return model.Task{}, errBootRetryTooSoon
 	}
 
 	// 第 2 步：跑 precheck。precheck 需要制品集，所以这里查库取它——
@@ -116,11 +124,15 @@ func (m *Machine) StartBoot(ctx context.Context, taskID string, actualArch model
 	// 文件末尾的契约缺口说明。
 	now := m.clock.Now()
 	result, err := m.casRetry(ctx, taskID, func(task model.Task) transitionDecision {
-		if task.State.IsTerminal() {
+		if !acceptsBootRequest(task.State) {
 			return transitionDecision{rejectErr: errTaskNotPending}
 		}
-		if task.State != model.TaskStatePending {
-			return transitionDecision{rejectErr: errTaskNotPending}
+		// 与上面第 1 步同样的去重判据，在 CAS 回调里再判一次：两步之间
+		// 有窗口，并发的第二个请求可能刚把任务推进到 booting。少了这一道，
+		// N 个并发请求会各签一个 token、attempt 加 N。
+		if task.State == model.TaskStateBooting &&
+			now-task.PhaseEnteredAt < int64(minBootRetryInterval.Seconds()) {
+			return transitionDecision{rejectErr: errBootRetryTooSoon}
 		}
 
 		nextAttempt := task.AttemptCount + 1
@@ -142,6 +154,13 @@ func (m *Machine) StartBoot(ctx context.Context, taskID string, actualArch model
 				AttemptCount:   &nextAttempt,
 				Token:          &token,
 				TokenExpiresAt: &expiresAt,
+				// 每次签发 token 都刷 PhaseEnteredAt：它既是 §3.3 阶段超时的
+				// 计时起点（每次重试都该重新计时，否则第二次引导一开始就
+				// 带着上一次已经耗掉的时间），也是 minBootRetryInterval
+				// 去重判据的基准。此前只在建任务时写过一次、之后永不更新，
+				// 于是 booting 阶段的 15 分钟预算从第一次引导起算，重试
+				// 继承了前一次的剩余时间。
+				PhaseEnteredAt: &now,
 			},
 			newState: model.TaskStateBooting,
 		}
@@ -227,3 +246,69 @@ func (m *Machine) MarkAnswerFetched(ctx context.Context, taskID string) (model.T
 // errAnswerBeforeBoot 是 MarkAnswerFetched 对 pending 任务的拒绝错误：
 // installer 不可能在签 token 之前起来。
 var errAnswerBeforeBoot = errors.New("statemachine: 任务尚未开始引导，不可能取到应答文件")
+
+// acceptsBootRequest 判定某个状态的任务是否接受 /v1/boot 引导请求。
+//
+// pending 与 booting 都接受，其余一律拒绝。
+//
+// **为什么 booting 也要接受。** SPEC 对引导重试有三处明文要求：
+//
+//	§3.3 阶段预算表   | booting | 15 min | 允许重试，attempt++ |
+//	§9.1 第三道闸门   同一任务窗口内菜单最多取 3 次，超过即 failed
+//	§4.4             「一次性失效会直接掐死正常重试」
+//
+// 只接受 pending 的后果是 MaxBootAttempts = 3 这个配额**一次都用不上**：第一次
+// 引导把任务推到 booting，机器再来就查不到任务、拿到 no_task。而 PXE 引导重试
+// 是常态而非异常——取 kernel 时网络抖动、initrd 校验失败、机器在 BIOS 里被人
+// 手动重启、iPXE 自己的 retry，任何一种都会让机器回来再问一次。
+//
+// 实测（2026-09-25，QEMU BIOS 目标机）：第一次引导成功取到菜单、任务进
+// booting；机器重试时 iPXE 屏显
+//
+//	http://gw.vmlab.internal/v1/boot... ok
+//	lober: no task for
+//	Booting from SAN device 0x80 failed: Input/output error
+//
+// 现场症状同样是「机器在 PXE 里转圈」，而服务端侧任务显示 booting、看起来一切
+// 正常，只是永远不会前进。
+//
+// **为什么不放宽到 installing 及之后。** 那些阶段机器已经在跑 installer 了，
+// 再发引导请求意味着它重启回到了 PXE——那是一次真实的异常，应当让阶段超时去
+// 判定失败并留下诊断信息，而不是静默重来一轮（重来会把 attempt 计数与阶段
+// 时间线都搅乱，失败时反而看不出到底发生了什么）。
+//
+// 终态（done / failed）绝不接受：done 的任务再接受引导会把一台已交付的生产机
+// 重新擦盘装机——这是本系统最严重的一种误操作，也是 §9.1 那三道闸门存在的
+// 首要理由。
+func acceptsBootRequest(state model.TaskState) bool {
+	return state == model.TaskStatePending || state == model.TaskStateBooting
+}
+
+// minBootRetryInterval 是两次引导请求之间的最短间隔。
+//
+// **它区分的是两件外观相同、语义完全相反的事：**
+//
+//   - 同一次引导的并发重复请求（毫秒级间隔）——必须去重。iPXE 在某些固件上
+//     会对同一个 URL 发两次，负载均衡重试、网络重传也会造成同样效果。不去重
+//     的后果是一次引导消耗多个 attempt 配额、签发多个 token（旧 token 并不
+//     失效，暴露面随之变大）。
+//   - 机器真的回来重试（秒级以上）——必须放行，这是 SPEC §3.3「booting |
+//     15 min | 允许重试，attempt++」明文要求的。
+//
+// 30 秒的依据：机器从取到菜单、下载 kernel/initrd（真实镜像 105MB 的 initrd
+// 在千兆网上也要几秒）、加载失败、重启回到 PXE、再走完一遍 DHCP，这一圈不可能
+// 在 30 秒内完成；而同一次引导的并发重复都在毫秒到秒级。两者之间有两个数量级
+// 的间隔，不是一个需要精调的阈值。
+//
+// 判据用 PhaseEnteredAt 而不是 TokenExpiresAt 或 StateUpdatedAt：前者恰好在
+// 每次成功签发 token 时被刷新（见本方法的 mutation），语义正是「上次引导是
+// 什么时候开始的」。
+const minBootRetryInterval = 30 * time.Second
+
+// errBootRetryTooSoon 表示引导请求来得太快，被判定为同一次引导的并发重复。
+//
+// 网关对 StartBoot 返回 error 的既有处理是回落到 no_task 载荷（sanboot），
+// 这对本情形恰好是对的：并发的那个重复请求本来就不该拿到第二份菜单，而真正
+// 在跑的那次引导已经拿到了。
+var errBootRetryTooSoon = errors.New("statemachine: 引导请求距上次不足最短重试间隔，" +
+	"判定为同一次引导的并发重复，不签发第二个 token")

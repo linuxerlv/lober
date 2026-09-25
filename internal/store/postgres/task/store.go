@@ -77,7 +77,11 @@ func (s *Store) FindPendingTaskByIdentity(ctx context.Context, sn, mac, uuid str
 		}
 		var row taskRow
 		err := s.db.WithContext(ctx).
-			Where("state = ? AND "+a.column+" = ?", model.TaskStatePending, a.key).
+			// pending 与 booting 都匹配：booting 任务必须接受重复引导请求，
+			// 否则 MaxBootAttempts=3 的重试配额一次都用不上（完整论证见
+			// statemachine.acceptsBootRequest 的文档与 SPEC §3.3／§9.1）。
+			Where("state IN (?, ?) AND "+a.column+" = ?",
+				model.TaskStatePending, model.TaskStateBooting, a.key).
 			First(&row).Error
 		if err == nil {
 			return row.toModel(), nil

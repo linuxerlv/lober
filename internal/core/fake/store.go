@@ -340,7 +340,11 @@ func (s *Store) FindPendingTaskByIdentity(ctx context.Context, sn, mac, uuid str
 	defer s.mu.RUnlock()
 
 	for _, tk := range s.tasks {
-		if tk.State != model.TaskStatePending {
+		// pending 与 booting 都匹配：booting 任务必须接受重复引导请求，否则
+		// MaxBootAttempts=3 的重试配额一次都用不上（见 SPEC §3.3／§9.1 与
+		// statemachine.acceptsBootRequest 的文档）。两个 Store 实现在这一点上
+		// 必须一致，否则 conformance 套件通过而生产路径失败。
+		if tk.State != model.TaskStatePending && tk.State != model.TaskStateBooting {
 			continue
 		}
 		if identityMatches(sn, mac, uuid, tk.HostSN, tk.HostMAC, tk.HostUUID) {
