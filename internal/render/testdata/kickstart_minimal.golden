@@ -64,7 +64,15 @@ run_hook() {
   local digest="$1" required="$2" timeout_sec="$3"
   curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
   echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
-  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  # timeout(1) 是 coreutils 的一部分，anaconda 的 installer ramdisk 里没有
+  # （实测 rc=127: timeout: command not found）。有就用，没有就裸跑——
+  # 宁可失去超时保护也不能让 hook 整体跑不起来。
+  if command -v timeout >/dev/null 2>&1; then
+    ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  else
+    logger -t lober "no timeout(1) in this environment, running hook $digest without time limit"
+    ( set -euo pipefail; bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  fi
   local rc=${PIPESTATUS[0]}
   signal "hook-report" "$rc" /tmp/h.log "$digest"
   [ "$rc" -eq 0 ] || [ "$required" != "true" ]
@@ -137,7 +145,15 @@ run_hook() {
   local digest="$1" required="$2" timeout_sec="$3"
   curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
   echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
-  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  # timeout(1) 是 coreutils 的一部分，anaconda 的 installer ramdisk 里没有
+  # （实测 rc=127: timeout: command not found）。有就用，没有就裸跑——
+  # 宁可失去超时保护也不能让 hook 整体跑不起来。
+  if command -v timeout >/dev/null 2>&1; then
+    ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  else
+    logger -t lober "no timeout(1) in this environment, running hook $digest without time limit"
+    ( set -euo pipefail; bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  fi
   local rc=${PIPESTATUS[0]}
   signal "hook-report" "$rc" /tmp/h.log "$digest"
   [ "$rc" -eq 0 ] || [ "$required" != "true" ]
