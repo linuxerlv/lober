@@ -31,3 +31,12 @@ internal/console/ui/dist/
 !internal/console/ui/dist/index.html
 !internal/console/ui/dist/_placeholder-keeps-embed-underscore-mode.js
 /.wf-*.js
+
+# Claude Code 的隔离工作区（EnterWorktree 建在这里）。必须被忽略：worktree 是
+# 完整的工作副本，不忽略会让它的全部内容出现在 git status 里，也会让 git 在
+# worktree 内向上发现父检出，导致命令写到 worktree 之外。
+/.claude/worktrees/
+
+# VM 实验床的运行期产物（串口日志、qemu 日志、队列状态、证据包）。跑一次装机
+# 就会产生几十 MB 日志与状态文件，都是过程产物，不入库。
+/.tmp/
