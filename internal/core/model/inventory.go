@@ -429,6 +429,14 @@ const (
 	ipxeBuildArchX86_64 = "x86_64"
 	ipxeBuildArchARM64  = "arm64"
 
+	// ipxeBuildArchI386 是 **32 位 BIOS 构建的 iPXE** 报的 buildarch
+	// （undionly.kpxe 就是这种构建，Debian 的 ipxe 包提供的正是它）。
+	// 2026-09-25 在 QEMU BIOS 目标机上实测确认。
+	ipxeBuildArchI386 = "i386"
+
+	// ipxeBuildArchAArch64 是 arm64 构建的另一种拼写（iPXE 源码里两种都有）。
+	ipxeBuildArchAArch64 = "aarch64"
+
 	ipxePlatformPCBIOS = "pcbios"
 	ipxePlatformEFI    = "efi"
 )
@@ -438,12 +446,27 @@ const (
 // 机器（§4.6 的 arch 一致性校验依赖这个映射的准确性）。
 func ParseIPXEBuildArch(raw string) (Arch, error) {
 	switch raw {
-	case ipxeBuildArchX86_64:
+	case ipxeBuildArchX86_64, ipxeBuildArchI386:
+		// i386 与 x86_64 都映射到 ArchX86_64：buildarch 描述的是 **iPXE
+		// 二进制自己的位宽**，不是 CPU 或目标 OS 的位宽。32 位 iPXE 能加载
+		// 64 位内核——实机正是这么跑的（undionly.kpxe 引导 x86_64 的
+		// vmlinuz，2026-09-25 实测）。
+		//
+		// 而 §4.6 第 1 条 arch 闸门要挡的是「x86_64 制品发给 arm64 机器，
+		// kernel 直接加载失败」这种真实的不兼容。用 buildarch 区分
+		// i386/x86_64 会把一个不存在的不兼容判成不兼容：机器拿到 no_task、
+		// 在 PXE 里反复轮询，而服务端按 §4.2 的约定不写任何事件表记录，
+		// 现场只能看到「机器转圈」，排查无从下手。
 		return ArchX86_64, nil
-	case ipxeBuildArchARM64:
+	case ipxeBuildArchARM64, ipxeBuildArchAArch64:
 		return ArchARM64, nil
 	default:
-		return "", fmt.Errorf("model: 无法识别的 iPXE buildarch 取值 %q（取值待实机核实，见 SPEC 附录 B）", raw)
+		// 认不出的值仍然报错。放宽 i386 不等于放宽一切：真出现没见过的架构
+		// （riscv64、loong64）时静默当成 x86_64，会让 kernel 在目标机上直接
+		// 加载失败——那是一个服务端毫无记录的失败，只能到 BMC 控制台看。
+		return "", fmt.Errorf("model: 无法识别的 iPXE buildarch 取值 %q"+
+			"（已知取值：x86_64 / i386 均为 64 位 x86 平台，arm64 / aarch64 为 arm64；"+
+			"新增架构时需同时确认 dnsmasq 的 option 93 映射，见 SPEC §1.3）", raw)
 	}
 }
 

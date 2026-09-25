@@ -265,3 +265,53 @@ func TestParseIPXEPlatform(t *testing.T) {
 			"无法映射的取值必须报错，否则 §4.6 的固件模式校验会把未知取值当作某个已知值处理")
 	}
 }
+
+// TestParseIPXEBuildArch_RealWorldValues 锁住 iPXE ${buildarch} 的真实取值。
+//
+// **i386 是实机核实出来的取值，不是推测。** 2026-09-25 在 QEMU BIOS 目标机
+// 上实测：dnsmasq 按 option 93 = 0 发 undionly.kpxe（Debian ipxe 包提供的
+// 32 位 BIOS 构建），那个 iPXE 实例的 ${buildarch} 报 `i386`，于是
+// /v1/boot 拿它去比对 x86_64 的制品集，返回 no_task——机器在 PXE 里转圈，
+// 服务端不留任何记录（§4.2 约定 no_task 不写事件表）。
+//
+// 原实现只认 x86_64 与 arm64，错误信息里写着「取值待实机核实，见 SPEC
+// 附录 B」——现在核实了。
+//
+// 为什么 i386 应当映射成 ArchX86_64 而不是新增一个架构：SPEC §4.6 第 1 条
+// 要的语义是「x86_64 制品别发给 arm64 机器，kernel 直接加载失败」，而 32 位
+// iPXE **能**加载 64 位内核（实机正是这么跑的：undionly.kpxe 引导
+// x86_64 的 vmlinuz）。buildarch 描述的是 iPXE 二进制自己的位宽，不是 CPU
+// 或目标 OS 的位宽，用它区分 x86_64/i386 会把一个不存在的不兼容判成不兼容。
+func TestParseIPXEBuildArch_RealWorldValues(t *testing.T) {
+	for raw, want := range map[string]Arch{
+		// 64 位 BIOS/UEFI 构建（snponly.efi、ipxe.efi）。
+		"x86_64": ArchX86_64,
+		// 32 位 BIOS 构建（undionly.kpxe）——实机报的就是这个值。
+		"i386":  ArchX86_64,
+		"arm64": ArchARM64,
+		// iPXE 源码里 arm64 构建也用 aarch64 这个别名。
+		"aarch64": ArchARM64,
+	} {
+		got, err := ParseIPXEBuildArch(raw)
+		if err != nil {
+			t.Errorf("ParseIPXEBuildArch(%q) 返回错误: %v——这是 iPXE 真实会报的值", raw, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("ParseIPXEBuildArch(%q) = %q，想要 %q", raw, got, want)
+		}
+	}
+}
+
+// TestParseIPXEBuildArch_UnknownStillRejected 锁住「认不出的值仍然报错」。
+//
+// 放宽 i386 不等于放宽一切：真出现一个没见过的架构（比如 riscv64）时，
+// 静默当成 x86_64 会让 kernel 在目标机上直接加载失败，那是一个服务端毫无
+// 记录的失败，只能到 BMC 控制台看。
+func TestParseIPXEBuildArch_UnknownStillRejected(t *testing.T) {
+	for _, raw := range []string{"riscv64", "loong64", "", "X86_64", "amd64"} {
+		if _, err := ParseIPXEBuildArch(raw); err == nil {
+			t.Errorf("ParseIPXEBuildArch(%q) 应报错——认不出的架构不能静默当成 x86_64", raw)
+		}
+	}
+}
