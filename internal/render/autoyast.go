@@ -506,11 +506,17 @@ func RenderAutoYaSTMenu(ctx model.RenderContext) (string, error) {
 	}
 	initrdURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Initrd[0])
 
+	// 模板声明的额外内核参数（Template.KernelArgs）。为空时 suffix 是空串，
+	// 输出与接线之前逐字节一致。
+	kargs, err := kernelArgsSuffix(ctx.Template.KernelArgs)
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf(
 		"kernel %s \\\n"+
-			"  autoyast=%s\n"+
+			"  autoyast=%s%s\n"+
 			"initrd %s\n"+
 			ipxeBootCommand,
-		kernelURL, autoyastURL, initrdURL,
+		kernelURL, autoyastURL, kargs, initrdURL,
 	), nil
 }

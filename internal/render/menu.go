@@ -6,6 +6,7 @@ package render
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/lober/lober/internal/core/model"
 )
@@ -127,13 +128,19 @@ func renderRockyMenu(ctx model.RenderContext) (string, error) {
 	}
 	initrdURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Initrd[0])
 
+	// 模板声明的额外内核参数（Template.KernelArgs）。为空时 suffix 是空串，
+	// 输出与接线之前逐字节一致。
+	kargs, err := kernelArgsSuffix(ctx.Template.KernelArgs)
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf(
 		"kernel %s \\\n"+
 			"  inst.repo=%s \\\n"+
-			"  inst.ks=%s inst.text ip=dhcp\n"+
+			"  inst.ks=%s inst.text ip=dhcp%s\n"+
 			"initrd %s\n"+
 			ipxeBootCommand,
-		kernelURL, repoURL, ksURL, initrdURL,
+		kernelURL, repoURL, ksURL, kargs, initrdURL,
 	), nil
 }
 
@@ -158,12 +165,18 @@ func renderDebianMenu(ctx model.RenderContext) (string, error) {
 	}
 	initrdURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Initrd[0])
 
+	// 模板声明的额外内核参数（Template.KernelArgs）。为空时 suffix 是空串，
+	// 输出与接线之前逐字节一致。
+	kargs, err := kernelArgsSuffix(ctx.Template.KernelArgs)
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf(
 		"kernel %s auto=true priority=critical \\\n"+
-			"  preseed/url=%s\n"+
+			"  preseed/url=%s%s\n"+
 			"initrd %s\n"+
 			ipxeBootCommand,
-		kernelURL, preseedURL, initrdURL,
+		kernelURL, preseedURL, kargs, initrdURL,
 	), nil
 }
 
@@ -195,10 +208,68 @@ func renderUbuntuMenu(ctx model.RenderContext) (string, error) {
 	}
 	initrdURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Initrd[0])
 
+	// 模板声明的额外内核参数（Template.KernelArgs）。为空时 suffix 是空串，
+	// 输出与接线之前逐字节一致。
+	kargs, err := kernelArgsSuffix(ctx.Template.KernelArgs)
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf(
-		"kernel %s autoinstall ds=nocloud-net;s=%s ---\n"+
+		"kernel %s autoinstall ds=nocloud-net;s=%s%s ---\n"+
 			"initrd %s\n"+
 			ipxeBootCommand,
-		kernelURL, answerDirURL, initrdURL,
+		kernelURL, answerDirURL, kargs, initrdURL,
 	), nil
+}
+
+// kernelArgsSuffix 把模板声明的 Template.KernelArgs 变成可直接拼在 kernel
+// 行末尾的片段（前导空格自带，为空时返回空串）。
+//
+// **为什么需要它。** Template.KernelArgs 此前定义了但全仓没有任何渲染代码
+// 读它：model 有字段、API 收得进来、store 落了 kernel_args 列、契约文档也
+// 冻结了它，而渲染器一行都不读——运维填了内核参数，装机时完全不生效，且
+// 没有任何地方报错或提示。
+//
+// 这个字段承载的正是「同一份 ISO 派生多个模板」这个模型里最需要的灵活性：
+// 制品集固定（一个 ISO 一套 kernel/initrd），而串口重定向
+// （console=ttyS0,115200n8）、网卡命名策略（net.ifnames=0）、显卡驱动黑
+// 名单、安装器调试开关都是内核命令行上的事，不同机型与用途要填不同的值。
+//
+// 刻意不做的事：**不让模板存整段 iPXE 脚本**。那等于把 kernel/initrd 的 URL
+// 拼接、token 注入、制品路径交给运维手写，而这些恰是服务端唯一有正确信息的
+// 部分（token 是本次引导当场签的，制品路径带 artifact_set ID）。手写一份就
+// 意味着每次改制品目录结构都要同步所有模板。模板只声明「追加这些参数」，
+// URL 拼接仍归服务端。
+func kernelArgsSuffix(args string) (string, error) {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		return "", nil
+	}
+	if err := validateKernelArgs(trimmed); err != nil {
+		return "", err
+	}
+	return " " + trimmed, nil
+}
+
+// validateKernelArgs 拒绝含换行的内核参数。
+//
+// 这是这条路径上唯一的安全校验，但它不可省：内核命令行与 inst.ks= 在同一
+// 行上，一个换行就能结束 kernel 命令并注入任意 iPXE 命令——而 iPXE 脚本里
+// 可以 chain 到任意 URL、可以 sanboot 本地盘。
+//
+// 模板由 admin 编写（§9.4 把模板与 provider 并列为需代码评审级别的写权限），
+// 但「需要评审的权限」不等于「可以跳过校验」：评审看的是意图，校验挡的是
+// 手误（从文档里复制粘贴带进了换行）与被篡改的模板内容。
+//
+// 只挡换行，不做参数白名单：内核命令行的合法取值集合由目标 OS 的内核与
+// 安装器决定，不是本系统能枚举的（inst.* 是 anaconda 的、preseed/* 是
+// debian-installer 的、各家还有大量驱动参数），做白名单只会在运维需要一个
+// 没被列进去的参数时逼他绕过这一层。
+func validateKernelArgs(args string) error {
+	if strings.ContainsAny(args, "\r\n") {
+		return fmt.Errorf("render: 模板的 KernelArgs 含换行符，拒绝渲染"+
+			"——内核命令行与 inst.ks= 在同一行上，换行能结束 kernel 命令并注入"+
+			"任意 iPXE 命令（chain 到任意 URL、sanboot 本地盘）。收到的值: %q", args)
+	}
+	return nil
 }
