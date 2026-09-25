@@ -926,7 +926,16 @@ func testArtifactSetContentRoundTrip(t *testing.T, newStore func() contract.Stor
 		},
 	}
 
-	updated, err := store.SetArtifactSetContent(ctx, created.ID, model.OSFamilyRHEL, paths)
+	// 身份三项与 paths 同批写入（SetArtifactSetContent 的契约）：arch 与
+	// firmware 是 precheck 两道硬闸门的比对对象，少写一列就会让制品集进到
+	// ready 却在每次引导被拒。
+	identity := model.ArtifactIdentity{
+		OSFamily:  model.OSFamilyRHEL,
+		OSVersion: "9.4",
+		Arch:      model.ArchX86_64,
+		Firmware:  model.FirmwareAny,
+	}
+	updated, err := store.SetArtifactSetContent(ctx, created.ID, identity, paths)
 	if err != nil {
 		t.Fatalf("SetArtifactSetContent 失败: %v", err)
 	}
@@ -940,6 +949,25 @@ func testArtifactSetContentRoundTrip(t *testing.T, newStore func() contract.Stor
 	}
 	if got.OSFamily != model.OSFamilyRHEL {
 		t.Errorf("重新查询后 OSFamily = %q, want %q —— 写回未能持久化", got.OSFamily, model.OSFamilyRHEL)
+	}
+	// arch/firmware/os_version 三列的持久化必须单独断言：它们是
+	// SetArtifactSetContent 契约的一部分，而 arch 与 firmware 正是
+	// statemachine precheck 两道硬闸门的比对对象（checkArch /
+	// MatchesFirmware）。任一列没落库，制品集仍能进 ready，却会在每次
+	// /v1/boot 被拒——这个组合此前真实存在过（导入路径从不写这三列，
+	// 而七个 e2e 脚本用 psql 直接 UPDATE 把它们补上了，于是缺口被掩盖）。
+	if got.Arch != model.ArchX86_64 {
+		t.Errorf("重新查询后 Arch = %q, want %q —— 空 arch 会让 precheck 的 "+
+			"checkArch 拿机器上报值与空串比对，必然拒绝每一次引导",
+			got.Arch, model.ArchX86_64)
+	}
+	if got.Firmware != model.FirmwareAny {
+		t.Errorf("重新查询后 Firmware = %q, want %q —— 空 firmware 不等于 any，"+
+			"MatchesFirmware 会拒绝两种固件的所有机器",
+			got.Firmware, model.FirmwareAny)
+	}
+	if got.OSVersion != "9.4" {
+		t.Errorf("重新查询后 OSVersion = %q, want %q", got.OSVersion, "9.4")
 	}
 	if diff := cmp.Diff(paths, got.Paths); diff != "" {
 		t.Errorf("重新查询后 Paths 与写入时不符（-want +got）:\n%s —— "+
@@ -975,7 +1003,16 @@ func testArtifactSetStateUpdateDoesNotClobberPaths(t *testing.T, newStore func()
 		Initrd: []string{"rocky9.4/initrd.img"},
 		Repo:   "rocky9.4/repo/",
 	}
-	if _, err := store.SetArtifactSetContent(ctx, created.ID, model.OSFamilyRHEL, paths); err != nil {
+	// 身份三项与 paths 同批写入（SetArtifactSetContent 的契约）：arch 与
+	// firmware 是 precheck 两道硬闸门的比对对象，少写一列就会让制品集进到
+	// ready 却在每次引导被拒。
+	identity := model.ArtifactIdentity{
+		OSFamily:  model.OSFamilyRHEL,
+		OSVersion: "9.4",
+		Arch:      model.ArchX86_64,
+		Firmware:  model.FirmwareAny,
+	}
+	if _, err := store.SetArtifactSetContent(ctx, created.ID, identity, paths); err != nil {
 		t.Fatalf("SetArtifactSetContent 失败: %v", err)
 	}
 

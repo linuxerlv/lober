@@ -213,6 +213,35 @@ type ArtifactPaths struct {
 	Extra  map[string]string // esxi: mboot.efi / boot.cfg 模板；windows: wimboot / BCD / boot.sdi / boot.wim
 }
 
+// ArtifactIdentity 是一次导入从 ISO 元数据里判定出的制品集身份，供
+// contract.ArtifactSetStore.SetArtifactSetContent 一次写入。
+//
+// **这个类型的存在理由是一个真实的链路断裂。** 在它出现之前，导入路径只写
+// OSFamily 与 Paths，Arch 与 Firmware 永远保持零值——而 statemachine 的
+// precheck 拿机器上报的 arch 与 ArtifactSet.Arch 直接比对（checkArch），
+// 拿 MatchesFirmware 判固件，两道闸门对空值必然拒绝。于是真实导入产出的
+// 制品集能进到 ready，却在每一次 /v1/boot 被拒。
+//
+// 这个缺口此前被七个 e2e 脚本完整掩盖：它们全都绕过导入，用 psql 直接
+// UPDATE artifact_sets 把 arch 与 firmware 填成 x86_64/any（见
+// scripts/e2e/lib-db.sh 的 db_artifact_ready），所以「导入管线已接上」这个
+// 结论一直只在单元测试层成立。
+type ArtifactIdentity struct {
+	OSFamily OSFamily
+
+	// OSVersion 是信息性字段，不参与选集与校验（选集看四元组：家族、
+	// 架构、固件、通道），失败诊断与控制台展示用。
+	OSVersion string
+
+	// Arch 参与 precheck 的第一道硬拒绝，必须非空。判定不出时导入应当
+	// 直接失败，不留空值——见 imports.ErrArchUndetectable 的文档。
+	Arch Arch
+
+	// Firmware 参与 precheck 的第二道硬拒绝。取值规则见 ArtifactSet.Firmware
+	// 的字段文档：Linux 四家 any，Windows 取实测位宽，ESXi 恒为 uefi。
+	Firmware FirmwareMode
+}
+
 // ArtifactSet 是一次 ISO 导入产出的制品集（§2.1）。
 type ArtifactSet struct {
 	ID   string

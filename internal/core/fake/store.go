@@ -683,7 +683,7 @@ func (s *Store) UpdateArtifactSetState(ctx context.Context, id string, state mod
 
 // SetArtifactSetContent 写回导入完成后才知道的内容：OSFamily 识别结果与
 // Paths。只改这两项，不触及 State/ManifestSHA256。
-func (s *Store) SetArtifactSetContent(ctx context.Context, id string, osFamily model.OSFamily, paths model.ArtifactPaths) (model.ArtifactSet, error) {
+func (s *Store) SetArtifactSetContent(ctx context.Context, id string, identity model.ArtifactIdentity, paths model.ArtifactPaths) (model.ArtifactSet, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -691,7 +691,10 @@ func (s *Store) SetArtifactSetContent(ctx context.Context, id string, osFamily m
 	if !ok {
 		return model.ArtifactSet{}, contract.ErrNotFound
 	}
-	a.OSFamily = osFamily
+	a.OSFamily = identity.OSFamily
+	a.OSVersion = identity.OSVersion
+	a.Arch = identity.Arch
+	a.Firmware = identity.Firmware
 	a.Paths = copyArtifactPaths(paths)
 	s.artifact[id] = a
 	return copyArtifactSet(a), nil

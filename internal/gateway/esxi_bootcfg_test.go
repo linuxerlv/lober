@@ -43,7 +43,7 @@ func newESXiBootCfgFixture(t *testing.T, writeTemplate bool) answerFixture {
 	fx := newAnswerFixture(t, model.TaskStateBooting)
 
 	if _, err := fx.store.SetArtifactSetContent(t.Context(), "art-1",
-		model.OSFamilyESXi, model.ArtifactPaths{Extra: map[string]string{"boot.cfg": "boot.cfg"}}); err != nil {
+		model.ArtifactIdentity{OSFamily: model.OSFamilyESXi, Arch: model.ArchX86_64, Firmware: model.FirmwareAny}, model.ArtifactPaths{Extra: map[string]string{"boot.cfg": "boot.cfg"}}); err != nil {
 		t.Fatalf("把制品集改成 ESXi 失败: %v", err)
 	}
 

@@ -98,12 +98,23 @@ func (s *Store) UpdateArtifactSetState(ctx context.Context, id string, state mod
 // 同样用 Select 显式指定列：Paths 的四个子字段（Kernel/Initrd/Repo/Extra）
 // 都可能是零值（空字符串、nil 切片、nil map），必须显式声明才能让「写入
 // 空值」这个操作本身生效，而不是被 GORM 的零值跳过规则悄悄吃掉。
-func (s *Store) SetArtifactSetContent(ctx context.Context, id string, osFamily model.OSFamily, paths model.ArtifactPaths) (model.ArtifactSet, error) {
+func (s *Store) SetArtifactSetContent(ctx context.Context, id string, identity model.ArtifactIdentity, paths model.ArtifactPaths) (model.ArtifactSet, error) {
+	// arch/firmware/os_version 三列必须与 os_family、paths 同批写入：precheck
+	// 的两道硬闸门直接比对 arch 与 firmware（statemachine/precheck.go 的
+	// checkArch / checkFirmware），少写任何一列都会让制品集进到 ready 却在
+	// 每次 /v1/boot 被拒。用 Select 显式列出全部列名，因为 GORM 的
+	// Updates(struct) 默认跳过零值字段——firmware 取 "any" 时非零没问题，
+	// 但 os_version 对 Debian 介质常常是空串，不显式 Select 就会被跳过，
+	// 留下上一次导入的旧值。
 	result := s.db.WithContext(ctx).Model(&artifactSetRow{}).
 		Where("id = ?", id).
-		Select("os_family", "paths_kernel", "paths_initrd", "paths_repo", "paths_extra").
+		Select("os_family", "os_version", "arch", "firmware",
+			"paths_kernel", "paths_initrd", "paths_repo", "paths_extra").
 		Updates(artifactSetRow{
-			OSFamily:    string(osFamily),
+			OSFamily:    string(identity.OSFamily),
+			OSVersion:   identity.OSVersion,
+			Arch:        string(identity.Arch),
+			Firmware:    string(identity.Firmware),
 			PathsKernel: paths.Kernel,
 			PathsInitrd: paths.Initrd,
 			PathsRepo:   paths.Repo,

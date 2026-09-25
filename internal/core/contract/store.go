@@ -232,7 +232,7 @@ type ArtifactSetStore interface {
 
 	// SetArtifactSetContent 写回导入完成后才知道的内容：OSFamily 识别结果与
 	// Paths。导入 job 成功路径调用本方法。
-	SetArtifactSetContent(ctx context.Context, id string, osFamily model.OSFamily, paths model.ArtifactPaths) (model.ArtifactSet, error)
+	SetArtifactSetContent(ctx context.Context, id string, identity model.ArtifactIdentity, paths model.ArtifactPaths) (model.ArtifactSet, error)
 
 	// DeleteArtifactSet 删除制品集。若仍被某个 active 状态的 template 引用，
 	// 返回 ErrStillReferenced（§2.7：只能 deprecate，不能删）。

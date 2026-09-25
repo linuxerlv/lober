@@ -44,7 +44,7 @@ import (
 type artifactSetUpdater interface {
 	GetArtifactSet(ctx context.Context, id string) (model.ArtifactSet, error)
 	UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256, reason string) (model.ArtifactSet, error)
-	SetArtifactSetContent(ctx context.Context, id string, osFamily model.OSFamily, paths model.ArtifactPaths) (model.ArtifactSet, error)
+	SetArtifactSetContent(ctx context.Context, id string, identity model.ArtifactIdentity, paths model.ArtifactPaths) (model.ArtifactSet, error)
 }
 
 // WindowsSourcesResolver 是「按制品集 ID 取 Windows 外部文件路径集合」的
@@ -229,7 +229,19 @@ func (j *Job) Run(ctx context.Context, artifactSetID, isoPath, destDir string) e
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("生成 manifest 失败: %v", err))
 	}
 
-	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, family, paths); err != nil {
+	// 判定身份三项（架构/版本/固件）。放在抽取之后、写回之前：判定只读
+	// 元数据、不依赖抽取产物，但失败时应当与抽取失败一样让整次导入失败，
+	// 而不是留下一个 arch 为空的制品集——那种制品集能进 ready，却会在每次
+	// /v1/boot 被 precheck 拒（见 identity.go 头部注释与 ErrArchUndetectable）。
+	// 声明固件传 FirmwareAny：本分支只处理 Linux 四家（Windows 与 ESXi 在
+	// 上面各有专门分派），而 firmwareFor 对这四家一律返回 any、忽略声明值
+	// ——一套 kernel/initrd 通吃 BIOS 与 UEFI，没有第二种取值可选。
+	identity, err := DetectIdentity(root, family, model.FirmwareAny)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("判定制品集身份失败: %v", err))
+	}
+
+	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, identity, paths); err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
 	}
 
@@ -278,7 +290,16 @@ func (j *Job) runWindows(ctx context.Context, artifactSetID string, root fs.FS, 
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("生成 manifest 失败: %v", err))
 	}
 
-	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, model.OSFamilyWindows, paths); err != nil {
+	// 判定身份三项（架构/版本/固件）。放在抽取之后、写回之前：判定只读
+	// 元数据、不依赖抽取产物，但失败时应当与抽取失败一样让整次导入失败，
+	// 而不是留下一个 arch 为空的制品集——那种制品集能进 ready，却会在每次
+	// /v1/boot 被 precheck 拒（见 identity.go 头部注释与 ErrArchUndetectable）。
+	identity, err := DetectIdentity(root, model.OSFamilyWindows, set.Firmware)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("判定制品集身份失败: %v", err))
+	}
+
+	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, identity, paths); err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
 	}
 
@@ -314,7 +335,16 @@ func (j *Job) runESXi(ctx context.Context, artifactSetID string, root fs.FS, des
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("生成 manifest 失败: %v", err))
 	}
 
-	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, model.OSFamilyESXi, paths); err != nil {
+	// 判定身份三项（架构/版本/固件）。放在抽取之后、写回之前：判定只读
+	// 元数据、不依赖抽取产物，但失败时应当与抽取失败一样让整次导入失败，
+	// 而不是留下一个 arch 为空的制品集——那种制品集能进 ready，却会在每次
+	// /v1/boot 被 precheck 拒（见 identity.go 头部注释与 ErrArchUndetectable）。
+	identity, err := DetectIdentity(root, model.OSFamilyESXi, set.Firmware)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("判定制品集身份失败: %v", err))
+	}
+
+	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, identity, paths); err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
 	}
 
@@ -358,7 +388,19 @@ func (j *Job) RunRHEL(ctx context.Context, artifactSetID, isoPath, destDir strin
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("生成 manifest 失败: %v", err))
 	}
 
-	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, family, paths); err != nil {
+	// 判定身份三项（架构/版本/固件）。放在抽取之后、写回之前：判定只读
+	// 元数据、不依赖抽取产物，但失败时应当与抽取失败一样让整次导入失败，
+	// 而不是留下一个 arch 为空的制品集——那种制品集能进 ready，却会在每次
+	// /v1/boot 被 precheck 拒（见 identity.go 头部注释与 ErrArchUndetectable）。
+	// 声明固件传 FirmwareAny：本分支只处理 Linux 四家（Windows 与 ESXi 在
+	// 上面各有专门分派），而 firmwareFor 对这四家一律返回 any、忽略声明值
+	// ——一套 kernel/initrd 通吃 BIOS 与 UEFI，没有第二种取值可选。
+	identity, err := DetectIdentity(root, family, model.FirmwareAny)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("判定制品集身份失败: %v", err))
+	}
+
+	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, identity, paths); err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
 	}
 
