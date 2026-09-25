@@ -51,8 +51,19 @@ class TargetVM:
         return f"{self.settings.paths.targets_dir}/{self.name}.qcow2"
 
     @property
+    @property
     def console_log(self) -> str:
+        """当前一轮的串口日志路径。
+
+        每轮一个带时间戳的文件、外加一个指向最新的固定名字。此前固定名字被
+        每轮 start() 删掉重建，于是上一轮的证据在下一轮开始时就没了——而装机
+        失败往往要跨轮次对比（这一轮卡在哪、上一轮同一位置报了什么），实测
+        因此丢过一次 anaconda 的错误输出。
+        """
         return f"{self.settings.paths.targets_dir}/{self.name}-console.log"
+
+    def archived_log(self, stamp: str) -> str:
+        return f"{self.settings.paths.targets_dir}/{self.name}-console-{stamp}.log"
 
     # --- 生命周期 -------------------------------------------------------
 
@@ -85,7 +96,10 @@ class TargetVM:
         log = Path(self.console_log)
         log.parent.mkdir(parents=True, exist_ok=True)
         if log.exists():
-            log.unlink()
+            # 归档上一轮而不是删掉：装机失败往往要跨轮次对比（这一轮卡在哪、
+            # 上一轮同一位置报了什么），实测因此丢过一次 anaconda 的错误输出。
+            stamp = time.strftime("%m%d-%H%M%S", time.localtime(log.stat().st_mtime))
+            log.replace(Path(self.archived_log(stamp)))
 
         args = [
             self.settings.paths.qemu,

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from vmlab.api import APIError, ConsoleAPI
-from vmlab.qemu import TargetVM, kill_target_vms
+from vmlab.qemu import TargetVM, kill_target_vms, running_vms
 from vmlab.server import VMServer
 
 # 装机期七个信号，按 model.signalTable 的 Seq 升序。状态机对 Seq 不大于当前
@@ -100,10 +100,25 @@ class InstallRunner:
     on_progress: Callable[[Progress], None] | None = None
 
     def run(self, host_sn: str, template_id: str, form_data: dict | None = None) -> InstallResult:
-        """建任务 → 起机 → 轮询到终态。"""
+        """清残留 → 建任务 → 起机 → 轮询到终态。
+
+        顺序有讲究：**必须先确认残留 VM 真的退出了，再建任务**。残留的目标机
+        在被杀掉之前可能再发一次 /v1/boot，那会消耗掉新任务的 pending 状态
+        （FindPendingTaskByIdentity 匹配 pending 与 booting 两种），于是真正的
+        目标机起来时拿到 no_task（实测 2026-09-26 踩过一次）。
+        """
         # 清残留目标机：它们占着 VM-S 的 socket listen 端口，新目标机会拿不到
-        # 网络（iPXE 报 No configuration methods succeeded）。
+        # 网络（iPXE 报 No configuration methods succeeded）；也可能抢走新任务。
         kill_target_vms()
+        for _ in range(20):
+            if self.vm.name not in running_vms():
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError(
+                f"目标机 {self.vm.name} 在 20 秒内没有退出——它会占着 socket "
+                "端口并可能抢走新任务，不能继续"
+            )
 
         self.api.cancel_active_tasks()
         task_id = self.api.create_task(host_sn, template_id, form_data or {"hostname": "vmlab-t01"})

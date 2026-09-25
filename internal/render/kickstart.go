@@ -202,6 +202,23 @@ func baseDirectives(ctx model.RenderContext) (string, error) {
 	b.WriteString("lang en_US.UTF-8\n")
 	b.WriteString("keyboard us\n")
 	b.WriteString("timezone UTC --utc\n")
+	// 安装源声明。**`inst.repo=` 内核参数不能替代它**：前者告诉 installer 去哪
+	// 取 stage2 与默认仓库，这一行是 kickstart 自己的安装源声明，%packages 装包
+	// 要用。anaconda 在 inst.cmdline（非交互）模式下遇到「要装包但没有安装源
+	// 声明」这种未应答的问题会立即退出，不等任何人。
+	//
+	// 实测（2026-09-26，QEMU BIOS 目标机）：repodata 的全部索引取到（200），
+	// 三分钟后机器重新 PXE 引导——anaconda 解完索引就退出了，任务停在
+	// installing/packages 直到阶段预算耗尽。
+	//
+	// 指向**包仓库**（Repo，有 repodata/）而不是介质根：anaconda 拿它当 yum
+	// 仓库根。Repo 为空时回落到 MediaRoot——极简介质的 .treeinfo 不声明
+	// repository，那时两者本就相同。
+	repoRel := ctx.Artifact.Paths.Repo
+	if repoRel == "" {
+		repoRel = ctx.Artifact.Paths.MediaRootOrRepo()
+	}
+	fmt.Fprintf(&b, "url --url=%s\n", ctx.SetRepoURL(repoRel))
 	b.WriteString("bootloader --location=mbr\n")
 
 	partitioning, err := partitionDirectives(ctx.Template.DiskPolicy, diskByID)
