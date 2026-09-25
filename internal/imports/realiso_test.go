@@ -101,6 +101,11 @@ func TestRealISO_JobRunProducesUsableArtifact(t *testing.T) {
 	destDir := t.TempDir()
 
 	store := newFakeArtifactSetStore()
+	// ESXi 的抽取器要求制品集声明 uefi（§0.3：ESXi 仅 UEFI，BIOS 路径明确排除），
+	// 而 fakeArtifactSetStore 的 declaredFirmware 默认是零值。**声明 uefi 而不是
+	// 跳过 ESXi**：那一步正是真实运维登记 ESXi 制品集时必须填的字段，跳过它等于
+	// 不测 ESXi 这条路径。其余家族不读这个字段，统一设置不影响它们。
+	store.declaredFirmware = model.FirmwareUEFI
 	job := NewJob(store, NewMountExtractor(""))
 
 	if err := job.Run(ctx, "real-iso-set", isoPath, destDir); err != nil {

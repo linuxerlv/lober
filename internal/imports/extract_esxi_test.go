@@ -29,16 +29,23 @@ updated=0
 `
 }
 
-// sampleESXiRoot 构造一份完整、可正常抽取的 ESXi ISO 内存文件系统：两个
-// 识别特征文件（boot.cfg + mboot.efi）加 boot.cfg 里列出的全部四个模块。
+// sampleESXiRoot 构造一份完整、可正常抽取的 ESXi ISO 内存文件系统。
+//
+// 三组文件，缺一组抽取就该失败：
+//   - boot.cfg 与 **efi/boot/bootx64.efi**（UEFI 引导器的真实路径，真实 ESXi
+//     ISO 里没有 mboot.efi——落盘名才是 mboot.efi，见 esxiUEFILoaderSrcPath）
+//   - boot.cfg 的 **kernel= 指向的文件**（独立于 modules=，此前夹具漏了它，
+//     而抽取器也漏了检查，两个漏洞互相掩盖）
+//   - modules= 列出的全部模块
 func sampleESXiRoot() fstest.MapFS {
 	return fstest.MapFS{
-		"boot.cfg":    &fstest.MapFile{Data: []byte(sampleESXiBootCfg())},
-		"mboot.efi":   &fstest.MapFile{Data: []byte("fake-mboot-efi-bytes")},
-		"jumpstrt.gz": &fstest.MapFile{Data: []byte("fake-jumpstrt")},
-		"useropts.gz": &fstest.MapFile{Data: []byte("fake-useropts")},
-		"k.b00":       &fstest.MapFile{Data: []byte("fake-kernel-module")},
-		"chain.b00":   &fstest.MapFile{Data: []byte("fake-chain-module")},
+		"boot.cfg":             &fstest.MapFile{Data: []byte(sampleESXiBootCfg())},
+		"efi/boot/bootx64.efi": &fstest.MapFile{Data: []byte("fake-mboot-efi-bytes")},
+		"b.b00":                &fstest.MapFile{Data: []byte("fake-kernel")},
+		"jumpstrt.gz":          &fstest.MapFile{Data: []byte("fake-jumpstrt")},
+		"useropts.gz":          &fstest.MapFile{Data: []byte("fake-useropts")},
+		"k.b00":                &fstest.MapFile{Data: []byte("fake-kernel-module")},
+		"chain.b00":            &fstest.MapFile{Data: []byte("fake-chain-module")},
 	}
 }
 
@@ -115,7 +122,7 @@ func TestExtractESXi_BootCfgOnDiskIsRawUnrewritten(t *testing.T) {
 
 func TestExtractESXi_MissingBootCfgFails(t *testing.T) {
 	root := fstest.MapFS{
-		"mboot.efi": &fstest.MapFile{Data: []byte("fake-mboot-efi-bytes")},
+		"efi/boot/bootx64.efi": &fstest.MapFile{Data: []byte("fake-mboot-efi-bytes")},
 	}
 	_, err := ExtractESXi(root, t.TempDir(), model.FirmwareUEFI)
 	if err == nil {
@@ -126,16 +133,21 @@ func TestExtractESXi_MissingBootCfgFails(t *testing.T) {
 	}
 }
 
+// TestExtractESXi_MissingMbootEFIFails 验证缺 UEFI 引导器时导入失败。
+//
+// 断言的路径是 **efi/boot/bootx64.efi**（ISO 内的真实位置）而不是 mboot.efi
+// （那是落盘名）。夹具与断言都改过一次：真实 ESXi ISO 里没有 mboot.efi，见
+// esxiUEFILoaderSrcPath 的文档与实测依据。
 func TestExtractESXi_MissingMbootEFIFails(t *testing.T) {
 	root := fstest.MapFS{
 		"boot.cfg": &fstest.MapFile{Data: []byte(sampleESXiBootCfg())},
 	}
 	_, err := ExtractESXi(root, t.TempDir(), model.FirmwareUEFI)
 	if err == nil {
-		t.Fatal("缺 mboot.efi 时应失败，got nil")
+		t.Fatal("缺 UEFI 引导器时应失败，got nil")
 	}
-	if !strings.Contains(err.Error(), "mboot.efi") {
-		t.Errorf("失败原因应提到 mboot.efi，got: %v", err)
+	if !strings.Contains(err.Error(), esxiUEFILoaderSrcPath) {
+		t.Errorf("失败原因应提到 %s（ISO 内的真实路径），got: %v", esxiUEFILoaderSrcPath, err)
 	}
 }
 
@@ -249,8 +261,8 @@ func TestExtractESXi_MissingMultipleModulesReportsFirst(t *testing.T) {
 
 func TestExtractESXi_EmptyModulesLineFails(t *testing.T) {
 	root := fstest.MapFS{
-		"boot.cfg":  &fstest.MapFile{Data: []byte("kernelopt=runweasel\nmodules=\n")},
-		"mboot.efi": &fstest.MapFile{Data: []byte("fake")},
+		"boot.cfg":             &fstest.MapFile{Data: []byte("kernelopt=runweasel\nmodules=\n")},
+		"efi/boot/bootx64.efi": &fstest.MapFile{Data: []byte("fake")},
 	}
 	_, err := ExtractESXi(root, t.TempDir(), model.FirmwareUEFI)
 	if err == nil {
@@ -260,11 +272,112 @@ func TestExtractESXi_EmptyModulesLineFails(t *testing.T) {
 
 func TestExtractESXi_MissingModulesLineFails(t *testing.T) {
 	root := fstest.MapFS{
-		"boot.cfg":  &fstest.MapFile{Data: []byte("kernelopt=runweasel\n")},
-		"mboot.efi": &fstest.MapFile{Data: []byte("fake")},
+		"boot.cfg":             &fstest.MapFile{Data: []byte("kernelopt=runweasel\n")},
+		"efi/boot/bootx64.efi": &fstest.MapFile{Data: []byte("fake")},
 	}
 	_, err := ExtractESXi(root, t.TempDir(), model.FirmwareUEFI)
 	if err == nil {
 		t.Fatal("boot.cfg 中没有 modules= 行时应失败，got nil")
+	}
+}
+
+// realESXiRoot 构造一份与真实 ESXi 7.0U3 ISO 同构的最小根目录。
+//
+// 关键结构（实测 VMware-ESXi-7.0U3v-24723872-x86_64.iso）：
+//   - UEFI 引导器在 efi/boot/bootx64.efi，**根目录没有 mboot.efi**
+//   - boot.cfg 的 kernel= 是**单独一行**，不在 modules= 里
+//   - mboot.c32 是 BIOS 路径的 syslinux 模块，与 UEFI 无关
+func realESXiRoot() fstest.MapFS {
+	bootCfg := `bootstate=0
+title=Loading ESXi installer
+timeout=5
+prefix=
+kernel=/b.b00
+kernelopt=runweasel cdromBoot
+modules=/jumpstrt.gz --- /useropts.gz --- /k.b00
+build=7.0.3-0.145.24723872
+updated=0
+`
+	return fstest.MapFS{
+		"boot.cfg":             &fstest.MapFile{Data: []byte(bootCfg)},
+		"b.b00":                &fstest.MapFile{Data: []byte("kernel")},
+		"jumpstrt.gz":          &fstest.MapFile{Data: []byte("m1")},
+		"useropts.gz":          &fstest.MapFile{Data: []byte("m2")},
+		"k.b00":                &fstest.MapFile{Data: []byte("m3")},
+		"efi/boot/bootx64.efi": &fstest.MapFile{Data: []byte("uefi-loader")},
+		"efi/boot/boot.cfg":    &fstest.MapFile{Data: []byte(bootCfg)},
+		"mboot.c32":            &fstest.MapFile{Data: []byte("bios-comboot")},
+	}
+}
+
+// TestExtractESXi_TakesUEFILoaderFromEFIBoot 验证 UEFI 引导器从
+// efi/boot/bootx64.efi 取，落盘名仍是 mboot.efi。
+//
+// **真实 ESXi ISO 里没有 mboot.efi。** UEFI 引导器按 UEFI 规范的可移动介质默认
+// 路径放在 efi/boot/bootx64.efi（固件自动发现那个路径）；根目录的 mboot.c32 是
+// BIOS 路径的 syslinux COMBOOT 模块，与 UEFI 无关。
+//
+// SPEC §0.3/§4.5 写的「mboot.efi」是 **PXE 部署时的惯例名字**——VMware 的 PXE
+// 文档让你把 bootx64.efi 复制出来用那个名字。因此落盘名保持 mboot.efi（渲染器
+// 与菜单形态不用改），只有**查找路径**要改。
+//
+// 这与 Debian 那个「ISO 内叫 vmlinuz、落盘叫 linux」是同一个模式：查找名与落盘
+// 名分开，两者都不是随便选的。
+func TestExtractESXi_TakesUEFILoaderFromEFIBoot(t *testing.T) {
+	destDir := t.TempDir()
+	paths, err := ExtractESXi(realESXiRoot(), destDir, model.FirmwareUEFI)
+	if err != nil {
+		t.Fatalf("ExtractESXi 失败: %v —— 真实 ESXi ISO 的 UEFI 引导器在 "+
+			"efi/boot/bootx64.efi，根目录没有 mboot.efi", err)
+	}
+
+	// 落盘名必须是 mboot.efi（SPEC §4.5 的菜单形态与渲染器都按这个名字）。
+	if got, ok := paths.Extra["mboot.efi"]; !ok || got != "mboot.efi" {
+		t.Errorf("Extra[\"mboot.efi\"] = %q（存在=%v）, want \"mboot.efi\" —— "+
+			"落盘名保持 mboot.efi，只有 ISO 内的查找路径不同", got, ok)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "mboot.efi")); err != nil {
+		t.Errorf("mboot.efi 未落盘: %v", err)
+	}
+}
+
+// TestExtractESXi_ExtractsKernelFromBootCfg 验证 boot.cfg 的 kernel= 行指向的
+// 文件也被抽取。
+//
+// **它此前被漏掉了。** required 列表是「mboot.efi + boot.cfg + modules」，而
+// 真实 boot.cfg 里 `kernel=/b.b00` 是**单独一行**，b.b00 不在 modules= 里
+// （实测那份镜像的 modules 从 /jumpstrt.gz 开始，整行没有 b.b00）。
+//
+// 漏掉内核的后果：引导时 mboot 去取 kernel= 指向的文件，404。而那个错误发生在
+// 机器已经上电、已经走到引导器的时候——正是 ExtractESXi 的注释自己说的「引导到
+// 某一步会停住且错误信息不会指出缺哪个文件」。
+func TestExtractESXi_ExtractsKernelFromBootCfg(t *testing.T) {
+	destDir := t.TempDir()
+	paths, err := ExtractESXi(realESXiRoot(), destDir, model.FirmwareUEFI)
+	if err != nil {
+		t.Fatalf("ExtractESXi 失败: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(destDir, "b.b00")); err != nil {
+		t.Errorf("boot.cfg 的 kernel= 指向的 b.b00 未被抽取: %v —— "+
+			"kernel 是 boot.cfg 里独立于 modules= 的一行，漏掉它会让引导器在取内核时 404，"+
+			"而那时机器已经上电了", err)
+	}
+	if got, ok := paths.Extra["b.b00"]; !ok || got != "b.b00" {
+		t.Errorf("Extra[\"b.b00\"] = %q（存在=%v）, want \"b.b00\"", got, ok)
+	}
+}
+
+// TestExtractESXi_RejectsMissingUEFILoader 验证 UEFI 引导器缺失时导入失败。
+//
+// 修「从新位置取」不能变成「取不到就跳过」——缺引导器的制品集是装不了的，
+// 必须在导入阶段就拒绝。
+func TestExtractESXi_RejectsMissingUEFILoader(t *testing.T) {
+	root := realESXiRoot()
+	delete(root, "efi/boot/bootx64.efi")
+
+	if _, err := ExtractESXi(root, t.TempDir(), model.FirmwareUEFI); err == nil {
+		t.Error("UEFI 引导器缺失时导入仍然成功 —— 缺引导器的制品集装不了，" +
+			"必须在导入阶段拒绝而不是留到引导时 404")
 	}
 }

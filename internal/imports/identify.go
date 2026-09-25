@@ -96,7 +96,17 @@ func Identify(root fs.FS) (model.OSFamily, error) {
 	if exists(root, "repodata/repomd.xml") && exists(root, "media.1/products") {
 		return model.OSFamilySUSE, nil
 	}
-	if exists(root, "boot.cfg") && exists(root, "mboot.efi") {
+	// ESXi：boot.cfg 加 UEFI 引导器。
+	//
+	// 引导器判据是 **efi/boot/bootx64.efi** 而不是 mboot.efi——真实 ESXi ISO 里
+	// 没有 mboot.efi，UEFI 引导器按 UEFI 规范放在那个默认路径下（SPEC 写的
+	// mboot.efi 是 PXE 部署时的惯例名字，见
+	// imports.esxiUEFILoaderSrcPath 的文档与实测依据）。
+	//
+	// 两个条件都要：单靠 boot.cfg 太弱（那个文件名不够独特），单靠
+	// efi/boot/bootx64.efi 更不行——**任何** UEFI 可引导镜像都有那个路径
+	// （Windows、Ubuntu、RHEL 的 ISO 全都有）。
+	if exists(root, "boot.cfg") && exists(root, esxiUEFILoaderSrcPath) {
 		return model.OSFamilyESXi, nil
 	}
 	if exists(root, "sources/install.wim") {

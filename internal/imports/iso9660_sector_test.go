@@ -121,3 +121,80 @@ func TestScanDirectorySector_RejectsTruncatedRecord(t *testing.T) {
 			"那是真正的损坏，必须拒绝；修「正常填充被误判」不能顺手把真损坏也放过")
 	}
 }
+
+// TestFinalizeEntryName_LowercasesPlainISO9660 验证只有原始 ISO 9660 名字
+// （无 Joliet、无 Rock Ridge）时，名字按 mount 惯例小写化。
+//
+// **这是真实 ESXi ISO 上的一个阻断性 bug。** ISO 9660 Level 1/2 的文件名只允许
+// 大写 D-characters（ECMA-119 §7.4.1），因此不带 Joliet/Rock Ridge 扩展的镜像
+// 里一切都是大写。实测 VMware-ESXi-7.0U3v ISO 的根目录 114 项**没有一项含小写
+// 字母**：BOOT.CFG、MBOOT.C32、JUMPSTRT.GZ、K.B00……
+//
+// 而 Linux 的 iso9660 驱动在没有那两个扩展时会把名字映射成小写（`mount -o
+// norock,nojoliet` 看到的就是小写），SPEC §2.1 的识别特征文件表与本仓库全部
+// extract_*.go 也都按小写写的（boot.cfg、mboot.efi、sources/install.wim、
+// .treeinfo…）。**两边对不上的后果是识别直接失败**：
+//
+//	识别 OS 家族失败: imports: 未能识别出任何已知 OS 家族
+//
+// 小写化而不是「识别时大小写不敏感查找」：后者只修了识别那一处，抽取器、
+// precheck、渲染器全都还按小写查文件，得逐处改一遍——而漏掉任何一处的症状都是
+// 一次含糊的「文件不存在」。在解析器这一层归一化，上面全部代码都不用动。
+//
+// Joliet 与 Rock Ridge 的名字**必须原样保留**：那些是真实的混合大小写名字
+// （.treeinfo、.disk/info、casper/ubuntu-server.squashfs），小写化它们会破坏
+// 已经工作的四个 Linux 家族。下面两条断言分别锁住这一点。
+func TestFinalizeEntryName_LowercasesPlainISO9660(t *testing.T) {
+	t.Run("纯ISO9660大写名小写化", func(t *testing.T) {
+		got, err := finalizeEntryName(dirRecordFields{name: "BOOT.CFG;1"}, false)
+		if err != nil {
+			t.Fatalf("finalizeEntryName 失败: %v", err)
+		}
+		if got != "boot.cfg" {
+			t.Errorf("finalizeEntryName(\"BOOT.CFG;1\") = %q, want \"boot.cfg\" —— "+
+				"ISO 9660 Level 1/2 的名字只允许大写，而 SPEC §2.1 的特征文件表与"+
+				"全部 extract_*.go 都按小写写；不归一化会让真实 ESXi ISO 识别失败", got)
+		}
+	})
+
+	t.Run("RockRidge名保留原样", func(t *testing.T) {
+		got, err := finalizeEntryName(dirRecordFields{
+			name:          "TREEINFO.;1",
+			rockRidgeName: ".treeinfo",
+		}, false)
+		if err != nil {
+			t.Fatalf("finalizeEntryName 失败: %v", err)
+		}
+		if got != ".treeinfo" {
+			t.Errorf("finalizeEntryName(RockRidge=.treeinfo) = %q, want \".treeinfo\" —— "+
+				"Rock Ridge 名是真实的 POSIX 名字，必须原样保留", got)
+		}
+	})
+
+	t.Run("Joliet名保留大小写", func(t *testing.T) {
+		// Joliet 是 UTF-16BE。构造 ".disk" 的 UTF-16BE 字节。
+		utf16Name := []byte{0, '.', 0, 'd', 0, 'i', 0, 's', 0, 'k'}
+		got, err := finalizeEntryName(dirRecordFields{name: string(utf16Name)}, true)
+		if err != nil {
+			t.Fatalf("finalizeEntryName 失败: %v", err)
+		}
+		if got != ".disk" {
+			t.Errorf("finalizeEntryName(Joliet) = %q, want \".disk\"", got)
+		}
+	})
+
+	t.Run("Joliet混合大小写不被改动", func(t *testing.T) {
+		// Ubuntu 的 casper/ 下有 ubuntu-server.squashfs 这类全小写名，但
+		// Windows/其它镜像的 Joliet 名可能含大写——Joliet 保留原样这一条要
+		// 明确锁住，否则「归一化」会悄悄改掉真实文件名。
+		utf16Name := []byte{0, 'R', 0, 'e', 0, 'a', 0, 'd', 0, 'M', 0, 'e'}
+		got, err := finalizeEntryName(dirRecordFields{name: string(utf16Name)}, true)
+		if err != nil {
+			t.Fatalf("finalizeEntryName 失败: %v", err)
+		}
+		if got != "ReadMe" {
+			t.Errorf("finalizeEntryName(Joliet \"ReadMe\") = %q, want \"ReadMe\" —— "+
+				"Joliet 名保留原样，归一化只对纯 ISO 9660 名生效", got)
+		}
+	})
+}

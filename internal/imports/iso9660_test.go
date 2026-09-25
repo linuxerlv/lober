@@ -891,12 +891,19 @@ func TestOpenISO9660_WithoutJolietUsesPlainTree(t *testing.T) {
 		t.Fatalf("OpenISO9660 失败: %v", err)
 	}
 
-	// 8.3 规范化：MBOOT.EFI（7 字符主文件名 <=8，EFI 扩展名 <=3，不需要
-	// 截断）与 BOOT.CFG。本解析器会自动剥离 ";1" 版本号后缀（见
-	// stripVersionSuffixASCII），因此这里按剥离后的名字查找——保留版本号
-	// 后缀不是本模块要暴露的语义，调用方（Identify/ExtractXxx）不需要
-	// 关心 ISO 9660 的版本号机制。
-	for _, name := range []string{"MBOOT.EFI", "BOOT.CFG"} {
+	// 8.3 规范化后是 MBOOT.EFI 与 BOOT.CFG，但**查找用小写**。
+	//
+	// 本测试的断言改过一次。它原先期望大写名，理由写的是「不能靠凑巧的文件名
+	// 掩盖『未做扩展时到底应该查什么名字』这个事实」——那个意图是对的，但给出
+	// 的答案被真镜像证伪了：Linux 的 iso9660 驱动在没有 Rock Ridge/Joliet 时
+	// 会把名字映射成小写，而 SPEC §2.1 的特征文件表与全部 extract_*.go 也都按
+	// 小写写。按大写查的直接后果是**真实 ESXi ISO 识别失败**（那份镜像没有
+	// 任何扩展，根目录 114 项全大写），见
+	// TestFinalizeEntryName_LowercasesPlainISO9660 里的实测依据。
+	//
+	// 版本号后缀 ";1" 仍然自动剥离（stripVersionSuffixASCII）——那不是本模块
+	// 要暴露的语义，调用方不需要关心 ISO 9660 的版本号机制。
+	for _, name := range []string{"mboot.efi", "boot.cfg"} {
 		if _, err := fs.Stat(fsys, name); err != nil {
 			t.Fatalf("纯 ISO 9660 树下 Stat %q 失败: %v", name, err)
 		}

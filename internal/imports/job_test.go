@@ -213,8 +213,8 @@ func TestJob_SetContentFailure_PathsNotClearedOnFailure(t *testing.T) {
 func TestJob_RunUnsupported_ESXi_NowRejectsAsCallerLogicError(t *testing.T) {
 	store := newFakeArtifactSetStore()
 	extractor := fakeExtractor{root: fstest.MapFS{
-		"boot.cfg":  &fstest.MapFile{Data: []byte("")},
-		"mboot.efi": &fstest.MapFile{Data: []byte("")},
+		"boot.cfg":             &fstest.MapFile{Data: []byte("")},
+		"efi/boot/bootx64.efi": &fstest.MapFile{Data: []byte("")},
 	}}
 	job := NewJob(store, extractor)
 

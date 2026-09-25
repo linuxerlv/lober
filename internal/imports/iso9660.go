@@ -657,7 +657,27 @@ func finalizeEntryName(rec dirRecordFields, useUTF16 bool) (string, error) {
 		return rec.rockRidgeName, nil
 	}
 	if !useUTF16 {
-		return stripVersionSuffixASCII(rec.name), nil
+		// 只有原始 ISO 9660 名字（既无 Rock Ridge 也无 Joliet）时按 mount 惯例
+		// **小写化**。
+		//
+		// ISO 9660 Level 1/2 的文件名只允许大写 D-characters（ECMA-119 §7.4.1），
+		// 因此不带那两个扩展的镜像里一切都是大写；而 Linux 的 iso9660 驱动在
+		// 这种情况下会把名字映射成小写（`mount -o norock,nojoliet` 看到的就是
+		// 小写），SPEC §2.1 的识别特征文件表与本仓库全部 extract_*.go 也都按
+		// 小写写的。
+		//
+		// **不归一化的后果是真实 ESXi ISO 识别直接失败**：实测
+		// VMware-ESXi-7.0U3v 的根目录 114 项没有一项含小写字母（BOOT.CFG、
+		// MBOOT.C32、JUMPSTRT.GZ……），而判据是 boot.cfg + mboot.efi。
+		//
+		// 选在这一层归一化而不是「识别时大小写不敏感查找」：后者只修识别那一处，
+		// 抽取器、precheck、渲染器全都还按小写查文件，要逐处改一遍——而漏掉任何
+		// 一处的症状都是一次含糊的「文件不存在」。
+		//
+		// 上面两个 return 分支（Rock Ridge 与 Joliet）刻意不做这个转换：那些是
+		// 真实的混合大小写名字（.treeinfo、.disk/info、casper/*.squashfs），
+		// 小写化会破坏已经工作的四个 Linux 家族。
+		return strings.ToLower(stripVersionSuffixASCII(rec.name)), nil
 	}
 	stripped := stripVersionSuffixUTF16BE([]byte(rec.name))
 	return decodeUTF16BE(stripped)

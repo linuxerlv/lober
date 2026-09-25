@@ -68,8 +68,8 @@ func TestIdentify_Debian(t *testing.T) {
 // 有人改了表以为解封了，实际没有。
 func TestIdentify_ESXi_NowSupported(t *testing.T) {
 	root := fstest.MapFS{
-		"boot.cfg":  &fstest.MapFile{Data: []byte("")},
-		"mboot.efi": &fstest.MapFile{Data: []byte("")},
+		"boot.cfg":             &fstest.MapFile{Data: []byte("")},
+		"efi/boot/bootx64.efi": &fstest.MapFile{Data: []byte("")},
 	}
 	family, err := Identify(root)
 	if err != nil {

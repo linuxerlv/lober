@@ -23,8 +23,33 @@ import (
 // 文件名（与 identify.go 的 Identify 函数使用的同一对特征文件一致，SPEC
 // §2.1 的特征文件表：ESXi 用 boot.cfg + mboot.efi）。
 const (
+	// esxiMbootEFIName 是 UEFI 引导器的**落盘名**，也是 SPEC §0.3/§4.5 与
+	// 渲染器菜单形态使用的名字。
 	esxiMbootEFIName = "mboot.efi"
-	esxiBootCfgName  = "boot.cfg"
+
+	// esxiUEFILoaderSrcPath 是 UEFI 引导器在 ISO 内的**真实路径**。
+	//
+	// **真实 ESXi ISO 里没有 mboot.efi。** UEFI 引导器按 UEFI 规范的可移动介质
+	// 默认路径放在 EFI/BOOT/BOOTX64.EFI（固件自动发现那个路径）；根目录的
+	// mboot.c32 是 BIOS 路径的 syslinux COMBOOT 模块，与 UEFI 无关。
+	//
+	// SPEC 写的「mboot.efi」是 **PXE 部署时的惯例名字**——VMware 的 PXE 文档
+	// 让运维把 bootx64.efi 复制出来用那个名字。因此落盘名保持 mboot.efi
+	// （渲染器与菜单形态一个字都不用改），只有查找路径按真实 ISO 来。
+	//
+	// 与 Debian 那个「ISO 内叫 vmlinuz、落盘叫 linux」是同一个模式：查找名与
+	// 落盘名分开，两者都不是随便选的。实测依据见
+	// TestExtractESXi_TakesUEFILoaderFromEFIBoot。
+	esxiUEFILoaderSrcPath = "efi/boot/bootx64.efi"
+
+	esxiBootCfgName = "boot.cfg"
+
+	// esxiBootCfgKernelKey 是 boot.cfg 里内核那一行的键名。
+	//
+	// 它**独立于 modules=**：实测真实 boot.cfg 是 `kernel=/b.b00`，而 modules=
+	// 那一行从 /jumpstrt.gz 开始、整行不含 b.b00。此前只抽 modules 会漏掉内核，
+	// 后果是引导器取内核时 404——而那时机器已经上电了。
+	esxiBootCfgKernelKey = "kernel"
 
 	// esxiBootCfgModulesKey / esxiModulesSeparator 是 boot.cfg 里
 	// modules= 行的键名与分隔符。与 internal/render/esxi.go 里同名
@@ -80,19 +105,42 @@ func ExtractESXi(root fs.FS, destDir string, declaredFirmware model.FirmwareMode
 		return model.ArtifactPaths{}, err
 	}
 
-	// 完整性校验：mboot.efi、boot.cfg 与全部模块文件都必须能在 root 中
-	// 找到，缺一个都整体失败并指出具体是哪一个（计划任务 1 明确要求，
-	// 不同于"缺了就跳过"——跳过会让引导到那一步才失败，且错误信息不会
-	// 指出缺哪个模块）。
-	required := make([]string, 0, len(modules)+2)
-	required = append(required, esxiMbootEFIName, esxiBootCfgName)
-	required = append(required, modules...)
-	for _, rel := range required {
-		if _, err := fs.Stat(root, rel); err != nil {
+	// kernel= 是 boot.cfg 里独立于 modules= 的一行，必须单独取。
+	//
+	// 漏掉它的后果：引导器去取 kernel= 指向的文件时 404，而那时机器已经上电、
+	// 已经走到引导器——正是本函数注释说的「引导到某一步会停住且错误信息不会
+	// 指出缺哪个文件」。实测真实 boot.cfg 是 `kernel=/b.b00`，而 modules= 那行
+	// 从 /jumpstrt.gz 开始、不含 b.b00。
+	kernelRel, err := parseESXiBootCfgKernel(string(bootCfgData))
+	if err != nil {
+		return model.ArtifactPaths{}, err
+	}
+
+	// copies 是「ISO 内源路径 → 落盘相对路径」的搬运清单。
+	//
+	// 用两列而不是一个路径列表：UEFI 引导器的源路径（efi/boot/bootx64.efi）与
+	// 落盘名（mboot.efi）**刻意不同**，见 esxiUEFILoaderSrcPath 的文档。其余
+	// 文件两者相同。
+	type copyItem struct{ src, dest string }
+	copies := make([]copyItem, 0, len(modules)+3)
+	copies = append(copies,
+		copyItem{src: esxiUEFILoaderSrcPath, dest: esxiMbootEFIName},
+		copyItem{src: esxiBootCfgName, dest: esxiBootCfgName},
+		copyItem{src: kernelRel, dest: kernelRel},
+	)
+	for _, m := range modules {
+		copies = append(copies, copyItem{src: m, dest: m})
+	}
+
+	// 完整性校验：引导器、boot.cfg、内核与全部模块文件都必须能在 root 中找到，
+	// 缺一个都整体失败并指出具体是哪一个（计划任务 1 明确要求，不同于"缺了就
+	// 跳过"——跳过会让引导到那一步才失败，且错误信息不会指出缺哪个文件）。
+	for _, it := range copies {
+		if _, err := fs.Stat(root, it.src); err != nil {
 			return model.ArtifactPaths{}, fmt.Errorf(
-				"imports: ESXi 制品集缺少文件 %q（%w）——boot.cfg 的 modules= 行列出了它，"+
-					"但 ISO 中找不到；ESXi 引导到某一步会停住且错误信息不会指出缺哪个文件，"+
-					"因此在导入阶段就要发现并拒绝", rel, err)
+				"imports: ESXi 制品集缺少文件 %q（%w）——它由 boot.cfg 的 kernel=/modules= 行"+
+					"或 UEFI 引导器的固定路径指定，但 ISO 中找不到；ESXi 引导到某一步会停住"+
+					"且错误信息不会指出缺哪个文件，因此在导入阶段就要发现并拒绝", it.src, err)
 		}
 	}
 
@@ -100,19 +148,42 @@ func ExtractESXi(root fs.FS, destDir string, declaredFirmware model.FirmwareMode
 		return model.ArtifactPaths{}, fmt.Errorf("imports: 创建制品目录 %q 失败: %w", destDir, err)
 	}
 
-	extra := make(map[string]string, len(required))
-	for _, rel := range required {
-		destPath := filepath.Join(destDir, filepath.FromSlash(rel))
+	extra := make(map[string]string, len(copies))
+	for _, it := range copies {
+		destPath := filepath.Join(destDir, filepath.FromSlash(it.dest))
 		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 			return model.ArtifactPaths{}, fmt.Errorf("imports: 创建目录 %q 失败: %w", filepath.Dir(destPath), err)
 		}
-		if err := copyFileFromFS(root, rel, destPath); err != nil {
-			return model.ArtifactPaths{}, fmt.Errorf("imports: 复制文件 %q 失败: %w", rel, err)
+		if err := copyFileFromFS(root, it.src, destPath); err != nil {
+			return model.ArtifactPaths{}, fmt.Errorf("imports: 复制文件 %q 失败: %w", it.src, err)
 		}
-		extra[rel] = rel
+		extra[it.dest] = it.dest
 	}
 
 	return model.ArtifactPaths{Extra: extra}, nil
+}
+
+// parseESXiBootCfgKernel 从 boot.cfg 里取 kernel= 那一行指向的文件路径。
+//
+// 返回值去掉前导斜杠（boot.cfg 里写的是 ISO 内绝对路径形式 `/b.b00`，而
+// fs.FS 的路径不接受前导斜杠）。缺 kernel= 行时报错而不是跳过：没有内核的
+// ESXi 制品集引导不起来，那是导入期就该拒绝的。
+func parseESXiBootCfgKernel(text string) (string, error) {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, esxiBootCfgKernelKey+"=") {
+			continue
+		}
+		v := strings.TrimSpace(strings.TrimPrefix(line, esxiBootCfgKernelKey+"="))
+		v = strings.TrimPrefix(v, "/")
+		if v == "" {
+			return "", fmt.Errorf("imports: boot.cfg 的 %s= 行为空——"+
+				"没有内核的 ESXi 制品集引导不起来", esxiBootCfgKernelKey)
+		}
+		return v, nil
+	}
+	return "", fmt.Errorf("imports: 原始 boot.cfg 中没有找到 %s= 行，"+
+		"这不是一份可用的 ESXi 引导配置", esxiBootCfgKernelKey)
 }
 
 // parseESXiBootCfgModules 从原始 boot.cfg 文本中解析出 modules= 行列出的
