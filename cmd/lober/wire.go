@@ -658,6 +658,10 @@ func buildAppWithDB(cfg *config.Config, db *gorm.DB) (*App, error) {
 
 		ArtifactImporter: importer,
 		ArtifactVerifier: verifier,
+		// hook 正文落盘：机器侧从 /artifacts/hooks/<digest>/script.sh 取脚本，
+		// 不注入这一项的后果是每次引用 hook 的装机都在 %pre 阶段卡到超时
+		// （见 console.HookPublisher 与 hookpublisher.go 的文档）。
+		HookPublisher: newHookPublisher(cfg.Store.ArtifactPath),
 	})
 
 	// 第 8 步：组装成一个持有全部组件的结构体返回。

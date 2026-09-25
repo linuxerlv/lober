@@ -105,6 +105,27 @@ type Deps struct {
 	// 真的触发任何重算（与 ArtifactImporter 同一种按需注入、判空降级的
 	// 接缝设计）。
 	ArtifactVerifier ArtifactVerifier
+
+	// HookPublisher 把 hook 正文落盘到制品树的 hooks/<digest>/script.sh。
+	//
+	// **它补的是一条断掉的链路。** docs/contracts/filesystem.md 第 4 节规定：
+	// Hook.Body 存数据库，但机器侧不从数据库取 hook，而是从
+	// /artifacts/hooks/<digest>/script.sh 取（SPEC §6.3）——数据库记录与磁盘
+	// 文件是同一份内容的两个副本，靠 BodySHA256 与目录名保持一致性可核对。
+	// 而此前全仓没有任何代码写那个文件。
+	//
+	// 实测（2026-09-25，QEMU 目标机走完整链路）：anaconda 取到 kickstart 后，
+	// %pre 段渲染出的 run_hook 去取脚本得到 404，required=true 的 hook 因此
+	// 失败，%pre 卡住，10 分钟后阶段超时（logTail：「阶段 pre 超时: 预算=10m0s
+	// 实际已过=613秒」），目标盘一个字节都没写入。
+	//
+	// 落盘时机是 hook **创建或产出新版本时**，不是审批通过时——preview 端点
+	// 需要在 hook 还是 draft 状态时就能取到内容做假数据渲染（契约文档原文）。
+	//
+	// 可为 nil（与 ArtifactImporter 同一种按需注入、调用前判空的接缝设计），
+	// 为 nil 时 hook 仍能创建但不落盘——那正是本缺口修复前的行为，保留它是
+	// 为了让不需要机器侧取 hook 的测试与部署形态不必装配这一项。
+	HookPublisher HookPublisher
 }
 
 // AuthUser 是 console 包认识的认证记录形态：用户名、bcrypt 哈希、角色

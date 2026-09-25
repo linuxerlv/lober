@@ -275,6 +275,15 @@ func (s *Server) handleCreateHook(c *gin.Context) {
 		writeInternal(c.Writer, err)
 		return
 	}
+
+	// 落盘正文：机器侧从 /artifacts/hooks/<digest>/script.sh 取脚本，不落盘
+	// 就是 404，required 的 hook 会让 %pre 卡到阶段超时（见 HookPublisher
+	// 的文档与实测记录）。失败则整体失败，不留「库里有、盘上没有」的状态。
+	if err := s.publishHookBody(c.Request.Context(), created); err != nil {
+		apierr.Fail(c, apierr.New(http.StatusInternalServerError, apierr.CodeInternal,
+			"hook 正文落盘失败，创建未完成（机器侧从制品树取脚本，不落盘会让装机在 %pre 阶段超时）: "+err.Error()))
+		return
+	}
 	apierr.OK(c, toHookItem(created))
 }
 
@@ -356,6 +365,15 @@ func (s *Server) handleUpdateHook(c *gin.Context) {
 	created, err := s.deps.Hooks.CreateHook(c.Request.Context(), next)
 	if err != nil {
 		writeInternal(c.Writer, err)
+		return
+	}
+
+	// 落盘正文：机器侧从 /artifacts/hooks/<digest>/script.sh 取脚本，不落盘
+	// 就是 404，required 的 hook 会让 %pre 卡到阶段超时（见 HookPublisher
+	// 的文档与实测记录）。失败则整体失败，不留「库里有、盘上没有」的状态。
+	if err := s.publishHookBody(c.Request.Context(), created); err != nil {
+		apierr.Fail(c, apierr.New(http.StatusInternalServerError, apierr.CodeInternal,
+			"hook 正文落盘失败，创建未完成（机器侧从制品树取脚本，不落盘会让装机在 %pre 阶段超时）: "+err.Error()))
 		return
 	}
 	apierr.OK(c, toHookItem(created))
@@ -764,4 +782,39 @@ func (s *Server) handleHookAudit(c *gin.Context) {
 		items = append(items, toAuditRecordItem(rec))
 	}
 	apierr.OK(c, items)
+}
+
+// HookPublisher 把 hook 正文落盘到制品树，供机器侧按 digest 取用。
+//
+// 机器侧的 run_hook（internal/render/clientlib.go）做的是：
+//
+//	curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
+//	echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
+//
+// 也就是内容寻址加校验：目录名就是正文的 sha256，机器取到后自己核对一遍。
+// 这条设计让 hook 分发不需要额外的完整性机制，但前提是那个文件真的存在。
+type HookPublisher interface {
+	// PublishHook 把 body 写到制品树的 hooks/<digest>/script.sh。
+	//
+	// digest 必须是 body 的 sha256（model.HookDigest 的产出），实现方应当
+	// 校验这一点——目录名与内容不符会让机器侧的 sha256sum -c 失败，而那个
+	// 失败发生在目标机上、只能到 BMC 控制台看。
+	//
+	// 必须幂等：同一个 digest 反复发布是常态（多个模板引用同一个 hook、
+	// 服务重启后重新发布），且同 digest 必定同内容（内容寻址），覆盖写与
+	// 跳过在语义上等价。
+	PublishHook(ctx context.Context, digest, body string) error
+}
+
+// publishHookBody 在创建或更新 hook 后把正文落盘，失败则让整个请求失败。
+//
+// 为什么失败必须阻断请求：不能留下「库里有、盘上没有」的状态——那正是本缺口
+// 修复前的形态，控制台显示 hook 创建成功、状态正常，而每一次引用它的装机都
+// 在 %pre 卡到阶段超时，失败信息里只有「阶段 pre 超时」，看不出是脚本 404。
+// 宁可创建失败让运维当场重试，也不要把一个用不了的 hook 留在库里。
+func (s *Server) publishHookBody(ctx context.Context, hook model.Hook) error {
+	if s.deps.HookPublisher == nil {
+		return nil
+	}
+	return s.deps.HookPublisher.PublishHook(ctx, hook.BodySHA256, hook.Body)
 }
