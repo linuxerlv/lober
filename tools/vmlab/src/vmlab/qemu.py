@@ -107,6 +107,16 @@ class TargetVM:
             f"socket,id=lan,connect=127.0.0.1:{self.settings.net.lan_port}",
             "-device",
             f"virtio-net-pci,netdev=lan,mac={self.mac}",
+            # 熵源。**没有它 installer 会挂在 sshd-keygen 上**：ECDSA/RSA 密钥
+            # 生成要从 /dev/random 取熵，而无 rng 设备的虚拟机里熵池补充极慢
+            # （实测 2026-09-26：串口停在 `Starting sshd-keygen@ecdsa.service`
+            # 七分钟无进展，anaconda 始终起不来）。VM-S 的启动脚本一开始就有
+            # 这个设备，目标机漏了。
+            #
+            # 真机不需要这条：现代 CPU 都有 RDRAND，内核直接用。这是虚拟化
+            # 环境的特有问题，因此属于测试床配置而非 lober 的缺陷。
+            "-device",
+            "virtio-rng-pci",
             "-boot",
             "n",
             "-display",
