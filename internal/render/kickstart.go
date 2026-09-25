@@ -78,7 +78,16 @@ func RenderStageSection(ctx model.RenderContext, stage model.HookStage) string {
 	// 决定"怎么把这些行嵌进 kickstart 的段落语法"——内容与嵌入方式的分离，
 	// 是 phase2-01 任务 1 抽出共用骨架的设计要点。
 	lines := StageHookCallLines(ctx.Hooks, stage)
-	if len(lines) == 0 {
+	enter, leave, hasSignals := stageBoundarySignals(stage)
+
+	// 此前这里是 `if len(lines) == 0 { return "" }`——没有 hook 的阶段整段
+	// 不渲染，阶段信号也跟着一起没了。而信号是**阶段边界标记**，与 hook 是
+	// 两件独立的事：不挂任何 hook 的模板同样需要状态机知道走到了哪一步。
+	//
+	// 实测后果（2026-09-26，QEMU 目标机）：pre hook 回报 rc=0 之后再无任何
+	// 信号，任务停在 installing/pre 直到 §3.3 的 10 分钟阶段预算耗尽判失败
+	// ——anaconda 其实在正常往下走，而状态机在等一个永远不会来的 pre-done。
+	if len(lines) == 0 && !hasSignals {
 		return ""
 	}
 
@@ -86,8 +95,16 @@ func RenderStageSection(ctx model.RenderContext, stage model.HookStage) string {
 	b.WriteString(header)
 	b.WriteString("\n")
 	b.WriteString(ClientLib(ctx))
+	if enter != "" {
+		fmt.Fprintf(&b, "signal %q 0\n", enter)
+	}
 	for _, line := range lines {
 		b.WriteString(line)
+	}
+	// leave 排在 hook 调用之后：顺序错了会让状态机以为本阶段已结束而 hook
+	// 还在跑，之后 hook 若失败会被归到下一个阶段，诊断信息指向错误的位置。
+	if leave != "" {
+		fmt.Fprintf(&b, "signal %q 0\n", leave)
 	}
 	b.WriteString("%end\n")
 	return b.String()
@@ -288,8 +305,34 @@ func AssembleKickstart(ctx model.RenderContext) (string, error) {
 	// 机制会在没有任何明显报错的情况下整体失效——这是最容易被忽略的一类
 	// bug，因为通过编译与单元断言都不会暴露，只有 golden file 的完整装配
 	// 顺序检查才能抓到。
+	// packages-start / packages-done 与 rebooting 三个信号不属于任何 hook
+	// 阶段，所以不经 RenderStageSection，在这里直接写：
+	//
+	//   packages-*  选包阶段的边界。%packages 不是 hook 阶段（没有对应的
+	//               HookStage），但 §3.3 给它独立的阶段预算，状态机需要这对
+	//               信号才能判断「装包是慢还是卡死」——离线仓库装几百个包
+	//               本来就慢，没有边界信号就只能按最坏情况给预算。
+	//   rebooting   装机结束、机器即将重启那一刻。状态机靠它把任务从
+	//               installing 推进到 rebooting，之后等 firstboot 的 booted。
+	//
+	// 都放在这个 %post 段里：它们需要 ClientLib 的 signal 函数，而 anaconda
+	// 的每个段落是独立脚本、不共享函数定义（见本文件顶部关于段落隔离的说明）。
+	b.WriteString("%post\n")
+	b.WriteString(ClientLib(ctx))
+	fmt.Fprintf(&b, "signal %q 0\n", model.SignalPackagesStart)
+	fmt.Fprintf(&b, "signal %q 0\n", model.SignalPackagesDone)
+	b.WriteString("%end\n")
+
 	b.WriteString("%post\n")
 	b.WriteString(FirstbootScaffold(ctx))
+	b.WriteString("%end\n")
+
+	// rebooting 单独一段，且必须排在 firstboot 脚手架之后：脚手架要把 unit
+	// 与脚本写进目标系统，写完才算「可以重启了」。顺序颠倒会让状态机在
+	// firstboot 还没装好时就以为进了 rebooting 阶段。
+	b.WriteString("%post\n")
+	b.WriteString(ClientLib(ctx))
+	fmt.Fprintf(&b, "signal %q 0\n", model.SignalRebooting)
 	b.WriteString("%end\n")
 
 	return b.String(), nil
@@ -358,4 +401,30 @@ func partitionDirectives(policy model.DiskPolicy, diskByID string) (string, erro
 	fmt.Fprintf(&b, "clearpart --all --drives=%s\n", diskByID)
 	fmt.Fprintf(&b, "part / --fstype=xfs --grow --ondisk=%s\n", diskByID)
 	return b.String(), nil
+}
+
+// stageBoundarySignals 返回某个 hook 阶段对应的进入/离开信号。
+//
+// 映射依据 SPEC §3.3 的阶段预算表与 model.SignalKind 的定义，也与其余四个
+// 家族的渲染器保持一致（autoinstall.go、autoyast.go、preseed.go、winpe.go
+// 各自在对应位置发同名信号）：
+//
+//	%pre              pre-start / pre-done
+//	%post --nochroot  无独立信号——它与 %post 同属「装完之后」这一段，状态机
+//	                  只认一对 post-start/post-done，多发一对会让 §3.6 的
+//	                  「只进不退」判定把第二次 post-start 当成回退
+//	%post             post-start / post-done
+//
+// packages-start / packages-done 与 rebooting 不在这里：前两个是选包阶段的
+// 边界（%packages 不是 hook 阶段，没有对应的 HookStage），rebooting 是整个
+// 装机结束、机器即将重启那一刻，三者都由 AssembleKickstart 直接写。
+func stageBoundarySignals(stage model.HookStage) (enter, leave string, has bool) {
+	switch stage {
+	case model.HookStagePre:
+		return string(model.SignalPreStart), string(model.SignalPreDone), true
+	case model.HookStagePost:
+		return string(model.SignalPostStart), string(model.SignalPostDone), true
+	default:
+		return "", "", false
+	}
 }
