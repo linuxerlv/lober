@@ -223,6 +223,32 @@ token 无效/过期）永远返回真实的 HTTP `401`，body 仍为上述失败
 | 18 | PUT | `/console/v1/templates/{id}` | `admin` | 新版本 `TemplateItem` |
 | 19 | GET | `/console/v1/templates/{id}/form-schema` | 已登录 | 聚合后的 JSON Schema |
 | 20 | POST | `/console/v1/templates/{id}/preview` | 已登录 | `PreviewResult` |
+| 20b | POST | `/console/v1/templates/{id}/state` | `admin` | 流转后的 `TemplateItem` |
+
+> **端点 20b 是补一条断掉的链路，不是新增能力。** 模板只能被创建成
+> `draft`（`handleCreateTemplate` 硬编码），而 `POST /tasks` 硬性要求
+> `state == active`，而此前冻结的四个模板端点里没有任何一个能改状态——
+> 于是**任何模板都永远无法用于建任务**。store 层的
+> `TemplateStore.UpdateTemplateState` 一直完备，缺的只是这个 HTTP 调用点。
+> `scripts/e2e.sh` 头部注释（第 24-29 行）早就记录了这个缺口，并用
+> `db_template_active` 直接写库绕过。
+>
+> **入参：** `{ "state": "draft|active|deprecated", "version": <int> }`。
+> `state` 只认这三个字面值，区分大小写、不 trim（容忍 `"ACTIVE"` 会让
+> 数据库里存的形态变得不可预测，而 `POST /tasks` 用 `!= active` 判定，
+> 一个拼错的值会让模板永久不可用且无处报错）。
+>
+> `version` 必填且参与乐观锁：与当前版本不符时返回 `CodeConflict`（409），
+> 不静默覆盖——两个人同时看着同一个 draft，一个先改了内容（version 前进）、
+> 另一个拿旧 version 点激活时，被激活的那一版就不是点击者看到的那一版，
+> 而模板内容决定分区方案与 hook 链。
+>
+> **失败：** 模板不存在 → `CodeNotFound`（404）；`state` 不在三值之内 →
+> `CodeBadRequest`（400）；`version` 不匹配 → `CodeConflict`（409）。
+>
+> 刻意**不**引入 hook 那样的双人复核：hook 是「一段任意 root 代码」，
+> 模板是「选哪套制品、引哪些已批准的 hook」，后者引用的 hook 本身已经过
+> 双人复核，再叠一层是重复确认（同 §0.2 删 `armed` 的理由）。
 
 ### 任务（7 个）
 
