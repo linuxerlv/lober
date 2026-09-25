@@ -146,7 +146,12 @@ func unimplementedFamilyError(family model.OSFamily) error {
 // token 在路径段里、不在 query（SPEC §4.4）。
 func renderRockyMenu(ctx model.RenderContext) (string, error) {
 	kernelURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Kernel)
-	repoURL := ctx.SetRepoURL(ctx.Artifact.Paths.Repo)
+	// inst.repo 指向**安装介质根**，不是包索引目录：anaconda 从这一层下面取
+	// stage2 运行时镜像（images/install.img）与 .treeinfo。真实 RHEL 9 系
+	// 布局下 repodata 在 BaseOS/ 下、images/ 在介质根，两者不是同一个目录
+	// ——指错的后果是 anaconda 取 stage2 时 404、任务停在 installing 不再
+	// 前进（见 model.ArtifactPaths.MediaRoot 的文档与实测记录）。
+	repoURL := ctx.SetRepoURL(ctx.Artifact.Paths.MediaRootOrRepo())
 	answerFileName, ok := ctx.AnswerFileName()
 	if !ok {
 		return "", fmt.Errorf("render: 无法确定 OS 家族 %q 的应答文件名", ctx.Artifact.OSFamily)

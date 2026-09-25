@@ -210,7 +210,33 @@ type ArtifactPaths struct {
 	Kernel string
 	Initrd []string
 	Repo   string
-	Extra  map[string]string // esxi: mboot.efi / boot.cfg 模板；windows: wimboot / BCD / boot.sdi / boot.wim
+
+	// MediaRoot 是**安装介质根**的相对路径，anaconda 的 inst.repo 指向它。
+	//
+	// 它与 Repo 是两个语义不同的路径，混用会让装机在取 stage2 时 404：
+	//
+	//	MediaRoot  安装介质根，其下有 images/install.img（installer 的 stage2
+	//	           运行时镜像）与 .treeinfo。anaconda 的 inst.repo 要这个。
+	//	Repo       包索引所在目录，其下有 repodata/repomd.xml。precheck 的制品
+	//	           完整性闸门（RepoIndexPattern）与包管理器要这个。
+	//
+	// 真实 RHEL 9 系布局下两者**不同**：repodata 在 BaseOS/ 下、images/ 在
+	// 介质根。老式扁平布局（RHEL 7 系与精简介质，repodata 直接在 ISO 根）下
+	// 两者相同。
+	//
+	// 实测（2026-09-25）：只有 Repo 一个字段时，菜单把 inst.repo 指向
+	// repo/BaseOS/，anaconda 在其下找不到 stage2：
+	//
+	//	".../repo/BaseOS//images/install.img"   404
+	//	".../repo/BaseOS//LiveOS/squashfs.img"  404
+	//	".../repo/BaseOS//.treeinfo"            404
+	//
+	// 任务停在 installing/pre 不再前进。
+	//
+	// **零值等价于 Repo**，这是兼容性要求：Phase 1/2 导入的制品集这一列为空，
+	// 读的时候一律经 MediaRootOrRepo()，不要直接用。
+	MediaRoot string
+	Extra     map[string]string // esxi: mboot.efi / boot.cfg 模板；windows: wimboot / BCD / boot.sdi / boot.wim
 }
 
 // ArtifactIdentity 是一次导入从 ISO 元数据里判定出的制品集身份，供
@@ -408,6 +434,18 @@ func (a ArtifactSet) MatchesChannel(want DeliveryChannel) bool {
 		return true
 	}
 	return a.Channel.Normalize() == want.Normalize()
+}
+
+// MediaRootOrRepo 返回安装介质根，MediaRoot 为空时回落到 Repo。
+//
+// 一律经这个方法读，不要直接用 MediaRoot：Phase 1/2 导入的制品集那一列是
+// 空字符串，直接用会渲染出空的 inst.repo——机器会拿到 `inst.repo=` 然后在
+// 找不到任何介质的情况下失败，而那个失败发生在目标机上、只能到 BMC 控制台看。
+func (p ArtifactPaths) MediaRootOrRepo() string {
+	if p.MediaRoot != "" {
+		return p.MediaRoot
+	}
+	return p.Repo
 }
 
 // MatchesFirmware 判定该制品集能否发给某固件模式的机器。any 对两种固件

@@ -109,16 +109,17 @@ func (s *Store) SetArtifactSetContent(ctx context.Context, id string, identity m
 	result := s.db.WithContext(ctx).Model(&artifactSetRow{}).
 		Where("id = ?", id).
 		Select("os_family", "os_version", "arch", "firmware",
-			"paths_kernel", "paths_initrd", "paths_repo", "paths_extra").
+			"paths_kernel", "paths_initrd", "paths_repo", "paths_media_root", "paths_extra").
 		Updates(artifactSetRow{
-			OSFamily:    string(identity.OSFamily),
-			OSVersion:   identity.OSVersion,
-			Arch:        string(identity.Arch),
-			Firmware:    string(identity.Firmware),
-			PathsKernel: paths.Kernel,
-			PathsInitrd: paths.Initrd,
-			PathsRepo:   paths.Repo,
-			PathsExtra:  paths.Extra,
+			OSFamily:       string(identity.OSFamily),
+			OSVersion:      identity.OSVersion,
+			Arch:           string(identity.Arch),
+			Firmware:       string(identity.Firmware),
+			PathsKernel:    paths.Kernel,
+			PathsInitrd:    paths.Initrd,
+			PathsRepo:      paths.Repo,
+			PathsMediaRoot: paths.MediaRoot,
+			PathsExtra:     paths.Extra,
 		})
 	if result.Error != nil {
 		return model.ArtifactSet{}, pgerr.Translate(result.Error, "SetArtifactSetContent")

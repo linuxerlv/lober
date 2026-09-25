@@ -62,7 +62,11 @@ type artifactSetRow struct {
 	PathsKernel string             `gorm:"column:paths_kernel"`
 	PathsInitrd pgtype.StringSlice `gorm:"column:paths_initrd;type:jsonb"`
 	PathsRepo   string             `gorm:"column:paths_repo"`
-	PathsExtra  pgtype.StringMap   `gorm:"column:paths_extra;type:jsonb"`
+	// PathsMediaRoot 是安装介质根（anaconda 的 inst.repo 指向它），与
+	// PathsRepo（包索引目录）是两个语义不同的路径——见
+	// model.ArtifactPaths.MediaRoot 的文档。纯新增列，不带 index 标签。
+	PathsMediaRoot string           `gorm:"column:paths_media_root;not null;default:''"`
+	PathsExtra     pgtype.StringMap `gorm:"column:paths_extra;type:jsonb"`
 }
 
 // TableName 固定表名为 artifact_sets，不依赖 GORM 的复数推导——推导规则
@@ -93,12 +97,13 @@ func fromModel(a model.ArtifactSet) artifactSetRow {
 		FailReason:      a.FailReason,
 		// 写入时归一化：零值折叠成 "installer"，库里不出现两种表示同一件事的
 		// 值。读取侧仍然容忍 NULL/空串（历史行就是那样），见 toModel。
-		Channel:     string(a.Channel.Normalize()),
-		Image:       pgtype.JSON[*model.ImageArtifact]{Val: a.Image},
-		PathsKernel: a.Paths.Kernel,
-		PathsInitrd: pgtype.StringSlice(a.Paths.Initrd),
-		PathsRepo:   a.Paths.Repo,
-		PathsExtra:  pgtype.StringMap(a.Paths.Extra),
+		Channel:        string(a.Channel.Normalize()),
+		Image:          pgtype.JSON[*model.ImageArtifact]{Val: a.Image},
+		PathsKernel:    a.Paths.Kernel,
+		PathsInitrd:    pgtype.StringSlice(a.Paths.Initrd),
+		PathsRepo:      a.Paths.Repo,
+		PathsMediaRoot: a.Paths.MediaRoot,
+		PathsExtra:     pgtype.StringMap(a.Paths.Extra),
 	}
 }
 
@@ -120,10 +125,11 @@ func (r artifactSetRow) toModel() model.ArtifactSet {
 		Channel: model.DeliveryChannel(r.Channel).Normalize(),
 		Image:   r.Image.Val,
 		Paths: model.ArtifactPaths{
-			Kernel: r.PathsKernel,
-			Initrd: []string(r.PathsInitrd),
-			Repo:   r.PathsRepo,
-			Extra:  map[string]string(r.PathsExtra),
+			Kernel:    r.PathsKernel,
+			Initrd:    []string(r.PathsInitrd),
+			Repo:      r.PathsRepo,
+			MediaRoot: r.PathsMediaRoot,
+			Extra:     map[string]string(r.PathsExtra),
 		},
 	}
 }

@@ -211,15 +211,26 @@ func ExtractRHEL(root fs.FS, destDir string) (model.ArtifactPaths, error) {
 	// `url --url=.../repo/` 交给 anaconda 而那里没有 repodata；更早一层，
 	// statemachine 的 precheck 查 <repo>/repodata/repomd.xml 查不到就拒签
 	// 装机 token，机器连引导菜单都拿不到。
-	repoRel := repoDestName + "/"
+	// mediaRootRel 是安装介质根（整棵 ISO 树的副本根），anaconda 的 inst.repo
+	// 指向它——stage2 运行时镜像 images/install.img 与 .treeinfo 都在这一层。
+	// repoRel 是包索引目录，precheck 与包管理器指向它。
+	//
+	// 真实 RHEL 9 系布局下两者不同（repodata 在 BaseOS/ 下、images/ 在根），
+	// 老式扁平布局（RHEL 7 系与精简介质）下相同。此前只有 Repo 一个字段承担
+	// 两种用途，结果 inst.repo 指向 repo/BaseOS/，anaconda 取 stage2 时三个
+	// 路径全部 404、任务停在 installing/pre 不再前进（实测依据见
+	// TestExtractRHEL_MediaRootHoldsStage2）。
+	mediaRootRel := repoDestName + "/"
+	repoRel := mediaRootRel
 	if images.Repository != "" {
 		repoRel = path.Join(repoDestName, images.Repository) + "/"
 	}
 
 	return model.ArtifactPaths{
-		Kernel: kernelDestName,
-		Initrd: []string{initrdDestName},
-		Repo:   repoRel,
+		Kernel:    kernelDestName,
+		Initrd:    []string{initrdDestName},
+		Repo:      repoRel,
+		MediaRoot: mediaRootRel,
 	}, nil
 }
 
