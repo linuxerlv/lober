@@ -33,6 +33,36 @@ import (
 //     ctx.ActualFirmware 校验（返回 ErrESXiRequiresUEFI），本分支不重复
 //     判断，直接把 ctx 转发过去。
 func RenderMenu(ctx model.RenderContext) (string, error) {
+	body, err := renderMenuBody(ctx)
+	if err != nil {
+		return "", err
+	}
+	// #!ipxe 加在这个统一出口，而不是让六个家族各自拼一遍：它是「iPXE 脚本」
+	// 这个产物的固有属性，与 OS 家族无关。六处各写一遍的话，新增家族时漏掉
+	// 一处的后果是那个家族的机器全部装不上，而症状（机器在 PXE 里转圈）指向
+	// 固件与 DHCP，排查不会怀疑渲染器。
+	return ipxeShebang + body, nil
+}
+
+// ipxeShebang 是 iPXE 脚本的首行声明。
+//
+// **iPXE 只有在首行是它时才把内容当脚本执行。** 缺了它，chain 拿到的是一坨
+// 无法识别的数据——不报错、不执行、直接返回，机器回落到固件引导顺序继续
+// PXE 轮询。
+//
+// 实测（2026-09-25，QEMU BIOS 目标机接真实服务端）：目标机反复取到 434 字节
+// 的完整菜单（kernel/initrd/boot 三行齐全、URL 全部正确、手动 curl 那几个
+// URL 都是 200，14.5MB 的 vmlinuz 与 105MB 的 initrd 都能下全），而 vmlinuz
+// 与 initrd.img 的 GET 一次都没从目标机发出过。
+//
+// 对照组说明了这个缺口的形状：no_task 那条路径（contract.NoTaskScript）一直
+// 带 #!ipxe，所以「查不到任务」时机器能正确执行 sanboot 回落；唯独**成功
+// 路径**的菜单没有——此前这个系统只有失败路径能被 iPXE 执行。
+const ipxeShebang = "#!ipxe\n"
+
+// renderMenuBody 按 OS 家族分派菜单正文（不含 #!ipxe 首行，那由 RenderMenu
+// 统一补）。
+func renderMenuBody(ctx model.RenderContext) (string, error) {
 	switch ctx.Artifact.OSFamily {
 	case model.OSFamilyRHEL:
 		return renderRockyMenu(ctx)

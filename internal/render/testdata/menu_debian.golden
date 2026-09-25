@@ -1,3 +1,4 @@
+#!ipxe
 kernel http://ng.internal/artifacts/as-debian12/linux auto=true priority=critical \
   preseed/url=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/preseed.cfg
 initrd http://ng.internal/artifacts/as-debian12/initrd.gz
