@@ -322,6 +322,11 @@ func AssembleKickstart(ctx model.RenderContext) (string, error) {
 	// %pre 段先渲染（含 pre-start / pre-done / packages-start）。
 	b.WriteString(RenderStageSection(ctx, model.HookStagePre))
 
+	// by-hook 策略的 %include 紧跟在 %pre 之后——anaconda 解析时就展开
+	// %include，而 %pre 是解析完成后才执行的，放在前面等于引用一个还不存在的
+	// 文件（见 byHookIncludeSection 的文档与实测记录）。
+	b.WriteString(byHookIncludeSection(ctx.Template.DiskPolicy))
+
 	// packages-done 必须排在 %post 的 hook 段**之前**。
 	//
 	// 装包结束这个时刻只能由 %post 的开头代表——anaconda 正是装完包才跑
@@ -407,16 +412,15 @@ const ByHookPartitionIncludePath = "/tmp/lober-part-include"
 //     启动之后，那时唯一的证据在目标机的 BMC 控制台上。
 func partitionDirectives(policy model.DiskPolicy, diskByID string) (string, error) {
 	if policy == model.DiskPolicyByHook {
-		var b strings.Builder
-		// 注释写进 kickstart 正文：anaconda 会把用过的 kickstart 存成
-		// /root/anaconda-ks.cfg，那是失败现场唯一能直接拿到的证据。hook
-		// 忘了写这个文件时，装机会以「%include 的文件不存在」失败，现场的人
-		// 必须能从 kickstart 本身看出这个文件该由谁产生，而不是去翻源码。
-		b.WriteString("# 分区指令由 %pre 阶段的 hook 写出（磁盘策略 by-hook）。\n")
-		b.WriteString("# 若本次装机以「" + ByHookPartitionIncludePath +
-			" 不存在」失败，说明模板引用的 pre hook 没有写这个文件。\n")
-		fmt.Fprintf(&b, "%%include %s\n", ByHookPartitionIncludePath)
-		return b.String(), nil
+		// by-hook 策略下这里**什么都不输出**：`%include` 必须排在 %pre 段之后，
+		// 由 AssembleKickstart 在那个位置追加（见 byHookIncludeSection 的文档）。
+		//
+		// anaconda 在**解析** kickstart 时就要展开 %include，而 %pre 是解析完成
+		// 之后才执行的——放在基础指令区（本函数的输出位置）时，它读到那一行时
+		// /tmp/lober-part-include 还不存在，于是在校验阶段就失败退出。实测
+		// （2026-09-26）：repodata 索引全部取到，anaconda 200 多秒后重启，目标盘
+		// 只有 192KB——分区从未执行过。
+		return "", nil
 	}
 
 	if diskByID == "" {
@@ -432,6 +436,32 @@ func partitionDirectives(policy model.DiskPolicy, diskByID string) (string, erro
 	fmt.Fprintf(&b, "clearpart --all --drives=%s\n", diskByID)
 	fmt.Fprintf(&b, "part / --fstype=xfs --grow --ondisk=%s\n", diskByID)
 	return b.String(), nil
+}
+
+// byHookIncludeSection 渲染 by-hook 策略下的 %include 行，**必须排在 %pre 段
+// 之后**。
+//
+// anaconda 解析 kickstart 时就展开 %include，而 %pre 在解析完成后才执行。放在
+// 前面等于引用一个还不存在的文件——实测（2026-09-26）anaconda 在校验阶段失败
+// 退出，分区从未执行，目标盘只有 192KB，而 %pre 明明成功跑完了（hook-report
+// rc=0，服务端收到了它打印的分区指令正文）。
+//
+// 注释与 %include 写在一起：anaconda 会把用过的 kickstart 存成
+// /root/anaconda-ks.cfg，那是失败现场唯一能直接拿到的证据。hook 忘了写那个
+// 文件时，装机会以「%include 的文件不存在」失败，现场的人必须能从 kickstart
+// 本身看出这个文件该由谁产生。
+func byHookIncludeSection(policy model.DiskPolicy) string {
+	if policy != model.DiskPolicyByHook {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("# 分区指令由 %pre 阶段的 hook 写出（磁盘策略 by-hook）。\n")
+	b.WriteString("# 本行必须排在 %pre 之后：anaconda 解析 kickstart 时就展开 %include，\n")
+	b.WriteString("# 而 %pre 是解析完成后才执行的。\n")
+	b.WriteString("# 若本次装机以「" + ByHookPartitionIncludePath +
+		" 不存在」失败，说明模板引用的 pre hook 没有写这个文件。\n")
+	fmt.Fprintf(&b, "%%include %s\n", ByHookPartitionIncludePath)
+	return b.String()
 }
 
 // stageBoundarySignals 返回某个 hook 阶段对应的进入/离开信号。
