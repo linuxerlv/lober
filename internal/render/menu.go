@@ -246,6 +246,24 @@ func renderRockyMenu(ctx model.RenderContext) (string, error) {
 	}
 	initrdURL := ctx.SetArtifactURL(ctx.Artifact.Paths.Initrd[0])
 
+	// installer 启动阶段的日志转发。**kickstart 的 `logging --host=` 指令救不了
+	// 启动阶段的失败**：那一行是 anaconda 启动之后才解析并生效的，而 installer
+	// 在启动阶段失败时它还没被读到。内核参数从 dracut 阶段就生效。
+	//
+	// 实测（2026-09-26）：串口时间戳从内核 40 秒直接跳到 254 秒，中间 213 秒的
+	// installer 输出一个字节都没留下，服务端同期只收到 %pre hook 的输出（那是
+	// 我们自己的 signal 函数发的）。「装机为什么失败」在缺这个参数时无法回答
+	// ——串口空白、syslog 空白、目标盘没挂载所以 /tmp 里的 anaconda.log 也
+	// 取不到。SPEC §10 的失败模式表要求把失败原因呈现给运维，而这条链路上它
+	// 根本不存在。
+	//
+	// SyslogHost 为空时整个参数省掉，不渲染 `inst.syslog=:514`：空主机名会让
+	// anaconda 每条日志都发失败一次，拖慢整个安装。
+	syslogArg := ""
+	if ctx.SyslogHost != "" {
+		syslogArg = fmt.Sprintf(" inst.syslog=%s:%d", ctx.SyslogHost, ctx.SyslogPort)
+	}
+
 	// 模板声明的额外内核参数（Template.KernelArgs）。为空时 suffix 是空串，
 	// 输出与接线之前逐字节一致。
 	kargs, err := kernelArgsSuffix(ctx.Template.KernelArgs)
@@ -256,10 +274,10 @@ func renderRockyMenu(ctx model.RenderContext) (string, error) {
 		"kernel %s \\\n"+
 			"  inst.stage2=%s \\\n"+
 			"  inst.repo=%s \\\n"+
-			"  inst.ks=%s "+anacondaAutoArgs+" ip=dhcp "+linuxConsoleArgs+"%s\n"+
+			"  inst.ks=%s "+anacondaAutoArgs+" ip=dhcp "+linuxConsoleArgs+"%s%s\n"+
 			"initrd %s\n"+
 			ipxeBootCommand,
-		kernelURL, stage2URL, repoURL, ksURL, kargs, initrdURL,
+		kernelURL, stage2URL, repoURL, ksURL, syslogArg, kargs, initrdURL,
 	), nil
 }
 
