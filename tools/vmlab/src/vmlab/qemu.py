@@ -41,7 +41,7 @@ class TargetVM:
 
     name: str = "t01"
     mac: str = "52:54:00:30:30:01"
-    memory_mb: int = 3072
+    memory_mb: int = 4096
     disk_gb: int = 12
     firmware: str = "bios"  # bios | uefi
     settings: object = SETTINGS

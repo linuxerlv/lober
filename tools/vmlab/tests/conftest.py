@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from vmlab import DISK_SELECT_HOOK, ConsoleAPI, VMServer
@@ -47,11 +49,14 @@ def rhel_artifact(api) -> dict:
 def disk_hook(api) -> dict:
     """选盘 hook，推到 active。
 
-    digest 是内容寻址的，同一份正文反复创建会命中同一个 digest——所以先找
-    现成的 active 版本，找不到才建。
+    **按 digest 复用而不是按名字**：digest 是正文的 sha256，内容一改它就变。
+    按名字找会拿到内容已过期的旧版本——实测踩过一次：给 hook 加了 biosboot 分区
+    之后，fixture 仍然复用着旧的那个（has_biosboot=False），于是装机继续以同一个
+    原因失败，而代码里明明已经改好了。
     """
+    want_digest = hashlib.sha256(DISK_SELECT_HOOK.encode("utf-8")).hexdigest()
     for h in api.call("GET", "/hooks"):
-        if h["name"] == "vmlab-diskselect" and h["state"] == "active":
+        if h["bodySha256"] == want_digest and h["state"] == "active":
             return h
     hook = api.create_hook(
         name="vmlab-diskselect",
