@@ -77,7 +77,7 @@ func TestKickstart_NonByHookHasNoIncludeOrdering(t *testing.T) {
 	if strings.Contains(got, "%include") {
 		t.Errorf("非 by-hook 策略不应渲染 %%include:\n%s", got[:400])
 	}
-	if !strings.Contains(got, "clearpart --all --drives=/dev/disk/by-id/wwn-0xabc") {
+	if !strings.Contains(got, "clearpart --all --initlabel --drives=/dev/disk/by-id/wwn-0xabc") {
 		t.Errorf("非 by-hook 策略应直接写分区指令:\n%s", got[:400])
 	}
 }

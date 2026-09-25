@@ -221,7 +221,7 @@ func baseDirectives(ctx model.RenderContext) (string, error) {
 	fmt.Fprintf(&b, "url --url=%s\n", ctx.SetRepoURL(repoRel))
 	b.WriteString("bootloader --location=mbr\n")
 
-	partitioning, err := partitionDirectives(ctx.Template.DiskPolicy, diskByID)
+	partitioning, err := partitionDirectives(ctx.Template.DiskPolicy, diskByID, ctx.ActualFirmware)
 	if err != nil {
 		return "", err
 	}
@@ -410,7 +410,7 @@ const ByHookPartitionIncludePath = "/tmp/lober-part-include"
 //     一个真实存在的断口，见该文件关于契约缺口的注释），渲染期报错能把失败
 //     挡在服务端、带着完整任务上下文；渲染出空值则把失败推迟到 anaconda
 //     启动之后，那时唯一的证据在目标机的 BMC 控制台上。
-func partitionDirectives(policy model.DiskPolicy, diskByID string) (string, error) {
+func partitionDirectives(policy model.DiskPolicy, diskByID string, firmware model.FirmwareMode) (string, error) {
 	if policy == model.DiskPolicyByHook {
 		// by-hook 策略下这里**什么都不输出**：`%include` 必须排在 %pre 段之后，
 		// 由 AssembleKickstart 在那个位置追加（见 byHookIncludeSection 的文档）。
@@ -433,7 +433,38 @@ func partitionDirectives(policy model.DiskPolicy, diskByID string) (string, erro
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "clearpart --all --drives=%s\n", diskByID)
+	fmt.Fprintf(&b, "clearpart --all --initlabel --drives=%s\n", diskByID)
+
+	// 按固件加引导分区。两种固件要的是**不同的东西**，给错或都给都会让
+	// anaconda 的存储校验失败：
+	//
+	//	BIOS + GPT  需要 1MiB 的 biosboot 分区。GRUB 把 core.img 写在那里——
+	//	            MBR 的 446 字节装不下它，而 GPT 没有 MBR 后面那段空隙。
+	//	UEFI        需要 /boot/efi 的 EFI 系统分区（vfat）。
+	//
+	// biosboot 这条是本轮实测中最后一个、也最难定位的缺口，因为症状指向别处：
+	// 校验失败后 anaconda 把错误挂在安装摘要屏等人处理（inst.text 下就停在
+	// 那里，inst.cmdline 下直接退出重启），而服务端侧看到的只是「packages 阶段
+	// 超时」——目标盘 192KB、包 0 个、repodata 索引全部 200。原文是：
+	//
+	//	Your BIOS-based system needs a special partition to boot from a GPT
+	//	disk label. To continue, please create a 1MiB 'biosboot' type
+	//	partition on the vda disk.
+	//
+	// 拿到这条信息花了六轮尝试（串口只有内核消息、kickstart 的 logging 指令在
+	// anaconda 启动前不生效、inst.syslog 同样没输出、journald 转发格式变了但
+	// 没有 anaconda 的行、最小化 kickstart 排除了渲染器内容问题），最后靠
+	// inst.sshd 登进 installer 读 /tmp/anaconda.log 才看到。
+	//
+	// clearpart 带 --initlabel 是前提：它建的是 GPT 标签，所以 BIOS 路径才需要
+	// biosboot。不带 --initlabel 时 anaconda 沿用盘上原有标签，而空白盘没有
+	// 标签会导致另一类失败。
+	if firmware == model.FirmwareUEFI {
+		fmt.Fprintf(&b, "part /boot/efi --fstype=efi --size=600 --ondisk=%s\n", diskByID)
+	} else {
+		fmt.Fprintf(&b, "part biosboot --fstype=biosboot --size=1 --ondisk=%s\n", diskByID)
+	}
+	fmt.Fprintf(&b, "part /boot --fstype=xfs --size=1024 --ondisk=%s\n", diskByID)
 	fmt.Fprintf(&b, "part / --fstype=xfs --grow --ondisk=%s\n", diskByID)
 	return b.String(), nil
 }
@@ -458,6 +489,13 @@ func byHookIncludeSection(policy model.DiskPolicy) string {
 	b.WriteString("# 分区指令由 %pre 阶段的 hook 写出（磁盘策略 by-hook）。\n")
 	b.WriteString("# 本行必须排在 %pre 之后：anaconda 解析 kickstart 时就展开 %include，\n")
 	b.WriteString("# 而 %pre 是解析完成后才执行的。\n")
+	b.WriteString("# 分区必须含引导分区，否则 anaconda 的存储校验会失败：\n")
+	b.WriteString("#   BIOS + GPT  需要 1MiB 的 biosboot 分区（GRUB 的 core.img 放那里）\n")
+	b.WriteString("#   UEFI        需要 /boot/efi 的 EFI 系统分区\n")
+	b.WriteString("# 实测原文：Your BIOS-based system needs a special partition to boot\n")
+	b.WriteString("# from a GPT disk label ... create a 1MiB 'biosboot' type partition。\n")
+	b.WriteString("# 缺了它 anaconda 会挂在安装摘要屏（inst.text）或直接退出重启\n")
+	b.WriteString("#（inst.cmdline），而服务端侧只看到「packages 阶段超时」。\n")
 	b.WriteString("# 若本次装机以「" + ByHookPartitionIncludePath +
 		" 不存在」失败，说明模板引用的 pre hook 没有写这个文件。\n")
 	fmt.Fprintf(&b, "%%include %s\n", ByHookPartitionIncludePath)

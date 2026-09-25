@@ -3,7 +3,9 @@ keyboard us
 timezone UTC --utc
 url --url=http://ng.internal/artifacts/as-rocky94/repo/
 bootloader --location=mbr
-clearpart --all --drives=/dev/disk/by-id/wwn-0x5000c500fixed0001
+clearpart --all --initlabel --drives=/dev/disk/by-id/wwn-0x5000c500fixed0001
+part biosboot --fstype=biosboot --size=1 --ondisk=/dev/disk/by-id/wwn-0x5000c500fixed0001
+part /boot --fstype=xfs --size=1024 --ondisk=/dev/disk/by-id/wwn-0x5000c500fixed0001
 part / --fstype=xfs --grow --ondisk=/dev/disk/by-id/wwn-0x5000c500fixed0001
 network --bootproto=dhcp --activate
 rootpw --lock

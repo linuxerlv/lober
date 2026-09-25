@@ -180,6 +180,11 @@ class InstallRunner:
 
 # --- 常用 hook 正文 ------------------------------------------------------
 
+# BIOS + GPT 必须有 1MiB 的 biosboot 分区（GRUB 的 core.img 放那里，MBR 的
+# 446 字节装不下、GPT 又没有 MBR 后那段空隙）。缺了它 anaconda 的存储校验
+# 直接失败并挂在安装摘要屏等人处理，而服务端侧只看到「packages 阶段超时」
+# ——本轮实测花了六轮才定位到这条。UEFI 目标机要改成 /boot/efi 的 ESP。
+#
 # by-hook 磁盘策略下，%pre 阶段的 hook 必须写出这个文件，主体 kickstart 用
 # %include 引入它。放在 /tmp 下是因为 %pre 运行在 installer 的 ramdisk 里，
 # 那时目标盘还没分区、没挂载。
@@ -220,6 +225,7 @@ echo "[lober] 选中磁盘: $DISK"
 
 cat > "$INCLUDE" <<EOF
 clearpart --all --initlabel --drives=$DISK
+part biosboot --fstype=biosboot --size=1 --ondisk=$DISK
 part /boot --fstype=xfs --size=1024 --ondisk=$DISK
 part / --fstype=xfs --grow --ondisk=$DISK
 EOF

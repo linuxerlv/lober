@@ -119,7 +119,7 @@ func TestKickstart_NonByHookWithDiskFactUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("渲染失败: %v", err)
 	}
-	if !strings.Contains(got, "clearpart --all --drives=/dev/disk/by-id/wwn-0xabc") {
+	if !strings.Contains(got, "clearpart --all --initlabel --drives=/dev/disk/by-id/wwn-0xabc") {
 		t.Errorf("有磁盘 fact 时应照原样渲染 clearpart，实际:\n%s", got)
 	}
 	if strings.Contains(got, "%include") {
