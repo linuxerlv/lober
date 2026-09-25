@@ -1,4 +1,4 @@
 #!ipxe
-kernel http://ng.internal/artifacts/as-ubuntu2404/vmlinuz autoinstall ds=nocloud-net;s=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/ ---
+kernel http://ng.internal/artifacts/as-ubuntu2404/vmlinuz autoinstall ds=nocloud-net;s=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/ console=ttyS0,115200n8 console=tty0 ---
 initrd http://ng.internal/artifacts/as-ubuntu2404/initrd
 boot

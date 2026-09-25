@@ -2,6 +2,6 @@
 kernel http://ng.internal/artifacts/as-rocky94/vmlinuz \
   inst.stage2=http://ng.internal/artifacts/as-rocky94/repo/ \
   inst.repo=http://ng.internal/artifacts/as-rocky94/repo/ \
-  inst.ks=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/ks.cfg inst.text ip=dhcp
+  inst.ks=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/ks.cfg inst.text ip=dhcp console=ttyS0,115200n8 console=tty0
 initrd http://ng.internal/artifacts/as-rocky94/initrd.img
 boot

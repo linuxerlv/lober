@@ -103,6 +103,29 @@ func renderMenuBody(ctx model.RenderContext) (string, error) {
 // 加载完，否则它拿一个不完整的引导上下文去跳转。
 const ipxeBootCommand = "boot\n"
 
+// linuxConsoleArgs 是四个 Linux 家族共用的控制台内核参数。
+//
+// **没有它，装机过程全程不可观测。** 实测（2026-09-26，QEMU BIOS 目标机）：
+// iPXE 的输出一直正常到 `Probing EDD ... ok`，内核接管后清屏，此后串口一个
+// 字节都没有——anaconda 在跑，但输出全部送到 tty1，而那块屏幕没人看得到。
+// 它卡在装包前的某处时，唯一能看到的只有「服务端没收到下一个信号」。
+//
+// 这不是「调试不便」这一级的问题：真机排障同样如此。SPEC §0.1 把 iPXE 之前的
+// 故障划为范围外、要求运维去 BMC 控制台看，而 BMC 的串口重定向拿到的正是
+// ttyS0——内核不往那里写，BMC 上也是一片空白。
+//
+// 两个 console= 都给：内核对重复的 console= 取并集（**所有**都收到内核消息），
+// 把**最后一个**当主控制台（交互用）。顺序是 ttyS0 在前、tty0 在后，于是有
+// 物理显示器的真机仍然在屏幕上看到交互界面，而串口/BMC 侧同时拿到完整日志。
+// 反过来写会让机房里的人对着黑屏。
+//
+// 115200n8 是 BMC 串口重定向的事实标准速率（IPMI SOL 与绝大多数厂商的默认
+// 值），也是 QEMU 的默认值，两边不需要额外配置就能对上。
+//
+// Windows 与 ESXi 不用这个常量：wimboot 与 mboot 各有自己的控制台机制
+// （BCD 的 bootdebug / boot.cfg 的 tty2Port），不是内核命令行上的事。
+const linuxConsoleArgs = "console=ttyS0,115200n8 console=tty0"
+
 // esxiMbootEFIExtraKey 是 ArtifactPaths.Extra 中 ESXi 引导器文件的键名
 // （与 esxi.go／imports 侧对 mboot.efi 的约定键一致——ESXi 的制品集只有
 // 这一个 Extra 项要在菜单渲染时读取，boot.cfg 模板本身走应答文件分派，
@@ -190,7 +213,7 @@ func renderRockyMenu(ctx model.RenderContext) (string, error) {
 		"kernel %s \\\n"+
 			"  inst.stage2=%s \\\n"+
 			"  inst.repo=%s \\\n"+
-			"  inst.ks=%s inst.text ip=dhcp%s\n"+
+			"  inst.ks=%s inst.text ip=dhcp "+linuxConsoleArgs+"%s\n"+
 			"initrd %s\n"+
 			ipxeBootCommand,
 		kernelURL, stage2URL, repoURL, ksURL, kargs, initrdURL,
@@ -226,7 +249,7 @@ func renderDebianMenu(ctx model.RenderContext) (string, error) {
 	}
 	return fmt.Sprintf(
 		"kernel %s auto=true priority=critical \\\n"+
-			"  preseed/url=%s%s\n"+
+			"  preseed/url=%s "+linuxConsoleArgs+"%s\n"+
 			"initrd %s\n"+
 			ipxeBootCommand,
 		kernelURL, preseedURL, kargs, initrdURL,
@@ -268,7 +291,7 @@ func renderUbuntuMenu(ctx model.RenderContext) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(
-		"kernel %s autoinstall ds=nocloud-net;s=%s%s ---\n"+
+		"kernel %s autoinstall ds=nocloud-net;s=%s "+linuxConsoleArgs+"%s ---\n"+
 			"initrd %s\n"+
 			ipxeBootCommand,
 		kernelURL, answerDirURL, kargs, initrdURL,

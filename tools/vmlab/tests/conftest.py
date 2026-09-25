@@ -35,7 +35,7 @@ def rhel_artifact(api) -> dict:
     复用而不是每次重导：一次导入要复制 1.6G（实测 30-40 秒），而制品集内容
     由 ISO 决定、不随代码变。若 lober 改动影响了导入产物，改名重跑即可。
     """
-    name = "opencloudos-9.6-vmlab"
+    name = "opencloudos-9.6-vmlab-v2"
     for a in api.call("GET", "/artifact-sets"):
         if a["name"] == name and a["state"] == "ready":
             return a

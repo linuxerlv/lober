@@ -109,10 +109,22 @@ def test_boot_menu_shape(api, rhel_template, rhel_host):
         f"菜单末行不是 boot——kernel/initrd 只加载不执行，机器会退回固件"
         f"引导顺序继续 PXE 轮询。实际:\n{menu}"
     )
-    assert "/repo/BaseOS/" not in menu.split("inst.ks=")[0], (
-        "inst.repo 指向了包索引目录（repo/BaseOS/）——anaconda 从 inst.repo "
-        "根下取 stage2（images/install.img），那里没有，会 404 后卡在 "
-        f"installing。实际:\n{menu}"
+    # inst.stage2 指介质根（有 images/install.img），inst.repo 指包仓库
+    # （有 repodata/repomd.xml）。两者在真实 RHEL 9 系介质上不是同一个目录，
+    # 用一个参数指必然有一边取不到——两种错法都实测过，见
+    # internal/render/menu_stage2_test.go 的记录。
+    kernel_line = menu.split("initrd")[0]
+    assert "inst.stage2=" in kernel_line, (
+        f"菜单缺 inst.stage2——anaconda 会退回从 inst.repo 根找 "
+        f"images/install.img，而包仓库在 BaseOS/ 下、那里没有。实际:\n{menu}"
+    )
+    assert "inst.repo=" in kernel_line, f"菜单缺 inst.repo:\n{menu}"
+    stage2 = kernel_line.split("inst.stage2=")[1].split()[0]
+    repo = kernel_line.split("inst.repo=")[1].split()[0]
+    assert stage2.endswith("/repo/"), f"inst.stage2 应指介质根，实际 {stage2}"
+    assert repo.endswith("/repo/BaseOS/"), (
+        f"inst.repo 应指包仓库（本 ISO 的 .treeinfo 声明 repository=BaseOS），"
+        f"实际 {repo}"
     )
     api.cancel_active_tasks()
 
