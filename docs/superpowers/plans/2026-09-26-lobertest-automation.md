@@ -463,6 +463,8 @@ def winpath(p: Path | str) -> str                # POSIX → Windows 路径，�
 ```
 
 - `start_target` 的 `firmware` 取 `bios` / `uefi`；`uefi` 时挂 `-drive if=pflash` 加 **每条目一份独立的可写 vars 副本**——共用会让引导项互相污染，且 QEMU 可能因文件被占用直接拒绝启动
+- **vars 副本必须从 `edk2-i386-vars.fd` 拷，不能自己造一个空文件或全零文件。** 本机没有 `edk2-x86_64-vars.fd`，这不是包装缺陷：QEMU 自己的 `share/qemu/firmware/60-edk2-x86_64.json` 声明 `executable` 是 `edk2-x86_64-code.fd`、`nvram-template` 是 `edk2-i386-vars.fd`——varstore 格式与架构无关，只发一份（aarch64 同理用 `edk2-arm-vars.fd`）。模板 540672 字节，偏移 0x28 处有 `_FVH` 固件卷签名；全零文件缺这个头，OVMF 会判 NVRAM 损坏或走重建路径。也不要「按 code.fd 大小创建」——code 与 vars 是两个独立 flash 设备，各按自己的文件大小映射，尺寸不必相同（3653632 vs 540672）。已存在时不覆盖（幂等，别冲掉 guest 已写入的 UEFI 变量）。
+  **方法论：** 缺配套文件时先翻工具链自己的元数据（这里是 firmware descriptor），不要凭推理造替代品
 - `start_target` 每次启动前先调 `kill_stale_targets`（约束 4）；`disk_serial` 非空时按约束 2 拆参数
 - `stop_target` 必须确认进程退出，不只是发信号：内存约束下一条目才能起
 - `kill_stale_targets` 按 `-name` 匹配命令行，与 `stop_target` 分开：后者管单个已知 entry，前者管「上一轮崩溃留下的、entry_id 已不可知的」进程
