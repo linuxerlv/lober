@@ -156,6 +156,13 @@ func writeStream(r io.Reader, dest string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("imports: 关闭临时文件（目标 %q）失败: %w", dest, err)
 	}
+	// os.CreateTemp 建的文件是 0600，而制品目录下的内核与 initrd 要被 nginx
+	// （另一个用户）读出去。实测漏了这一步的后果：制品集 ready、菜单渲染正确，
+	// 机器取内核时拿到 403，iPXE 报不出有用的信息。
+	// 既有的 copyFileFromFS 用 os.Create（0666 & ~umask），这里对齐成 0644。
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return fmt.Errorf("imports: 设置临时文件权限（目标 %q）失败: %w", dest, err)
+	}
 	if err := os.Rename(tmpName, dest); err != nil {
 		return fmt.Errorf("imports: 替换 %q 失败: %w", dest, err)
 	}
