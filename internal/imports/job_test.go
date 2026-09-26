@@ -436,7 +436,7 @@ func TestJob_Run_DispatchesRHELDebianUbuntuToTheirExtractors(t *testing.T) {
 			job := NewJob(store, extractor)
 			destDir := t.TempDir()
 
-			err := job.Run(context.Background(), "artifact-1", "/tmp/whatever.iso", destDir)
+			err := job.Run(context.Background(), "artifact-1", "/tmp/whatever.iso", destDir, Options{})
 			if err != nil {
 				t.Fatalf("%s 应成功分派到对应抽取器，got err: %v", tc.name, err)
 			}
@@ -470,7 +470,7 @@ func TestJob_Run_NotIdentified_FailsWithSpecificReason(t *testing.T) {
 	extractor := fakeExtractor{root: fstest.MapFS{"README.txt": &fstest.MapFile{Data: []byte("no markers")}}}
 	job := NewJob(store, extractor)
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/whatever.iso", t.TempDir())
+	err := job.Run(context.Background(), "artifact-1", "/tmp/whatever.iso", t.TempDir(), Options{})
 	if err == nil {
 		t.Fatal("识别不出家族时应返回错误")
 	}
@@ -563,7 +563,7 @@ func TestJob_Run_Windows_DispatchesToExtractWindows_UEFI(t *testing.T) {
 	job.ConfigureWindows(resolver, detector)
 	destDir := t.TempDir()
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", destDir)
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", destDir, Options{})
 	if err != nil {
 		t.Fatalf("Windows 声明 uefi 且探测结果一致时应导入成功，got err: %v", err)
 	}
@@ -600,7 +600,7 @@ func TestJob_Run_Windows_DispatchesToExtractWindows_BIOS(t *testing.T) {
 	job.ConfigureWindows(resolver, detector)
 	destDir := t.TempDir()
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", destDir)
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", destDir, Options{})
 	if err != nil {
 		t.Fatalf("Windows 声明 bios 且探测结果一致时应导入成功，got err: %v", err)
 	}
@@ -624,7 +624,7 @@ func TestJob_Run_Windows_DeclaredFirmwareAny_Rejected(t *testing.T) {
 	detector := fakeWimArchDetector{firmware: model.FirmwareUEFI}
 	job.ConfigureWindows(resolver, detector)
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir())
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir(), Options{})
 	if err == nil {
 		t.Fatal("制品集声明固件为 any 时应拒绝导入——SPEC §2.1：Windows 必须取具体固件值")
 	}
@@ -662,7 +662,7 @@ func TestJob_Run_Windows_MissingInstallWIM_FailsWithSpecificReason(t *testing.T)
 	detector := fakeWimArchDetector{firmware: model.FirmwareUEFI}
 	job.ConfigureWindows(resolver, detector)
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir())
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir(), Options{})
 	if err == nil {
 		t.Fatal("boot.wim 缺失时应返回明确错误")
 	}
@@ -688,7 +688,7 @@ func TestJob_Run_Windows_NotConfigured_FailsWithSpecificReason(t *testing.T) {
 	extractor := fakeExtractor{root: sampleWindowsRoot()}
 	job := NewJob(store, extractor) // 未调用 ConfigureWindows
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir())
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir(), Options{})
 	if err == nil {
 		t.Fatal("未配置 Windows 外部文件来源时应报错，不应静默成功或 panic")
 	}
@@ -717,7 +717,7 @@ func TestJob_Run_Windows_ResolverError_FailsWithSpecificReason(t *testing.T) {
 	detector := fakeWimArchDetector{firmware: model.FirmwareUEFI}
 	job.ConfigureWindows(resolver, detector)
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir())
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir(), Options{})
 	if err == nil {
 		t.Fatal("resolver 返回错误时应导致导入失败")
 	}
@@ -740,7 +740,7 @@ func TestJob_Run_Windows_GetArtifactSetError_FailsWithSpecificReason(t *testing.
 	detector := fakeWimArchDetector{firmware: model.FirmwareUEFI}
 	job.ConfigureWindows(resolver, detector)
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir())
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir(), Options{})
 	if err == nil {
 		t.Fatal("GetArtifactSet 失败时应导致导入失败，不能假设一个默认固件继续")
 	}

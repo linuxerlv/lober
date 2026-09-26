@@ -82,16 +82,20 @@ class ConsoleAPI:
 
     # --- 制品集 ---------------------------------------------------------
 
-    def import_artifact(self, source_path: str, name: str) -> str:
-        """登记并触发真实导入（imports.Job.Run），返回制品集 ID。
+    def import_artifact(
+        self, source_path: str, name: str, netboot_path: str | None = None
+    ) -> str:
+        """触发导入，返回制品集 id。
 
-        source_path 是 VM-S 内的路径。ISO 以只读 virtio 盘挂进 guest，所以传
-        /dev/vdb 即可——iso9660.go 的 perCallOpenReaderAt 每次 ReadAt 独立开关
-        文件、不校验「必须是普通文件」，块设备可直接读，省掉往 guest 里 scp
-        一份 1.6G。
+        netboot_path 给 Debian 家族用：netinst ISO 里的 install.amd/initrd.gz 是
+        光驱版 installer initrd，缺 network-preseed 与 net-retriever，PXE 引导起来
+        会停在「[!!] Detect and mount installation media」等人回答。能做网络安装的
+        initrd 由 Debian 单独分发在 netboot.tar.gz 里。
         """
-        data = self.call("POST", "/artifact-sets", {"sourcePath": source_path, "name": name})
-        return data["id"]
+        payload: dict[str, str] = {"sourcePath": source_path, "name": name}
+        if netboot_path:
+            payload["netbootPath"] = netboot_path
+        return self.call("POST", "/artifact-sets", payload)["id"]
 
     def artifact(self, artifact_id: str) -> dict:
         for a in self.call("GET", "/artifact-sets"):

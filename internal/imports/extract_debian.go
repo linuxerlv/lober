@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/lober/lober/internal/core/model"
 )
@@ -61,22 +62,39 @@ const debianInstallerInitrdName = "initrd.gz"
 // Debian installer 制品"（计划任务 5 测试要求第四条："缺关键文件时导入
 // 置失败且原因具体"）。
 func findDebianInstallerFile(root fs.FS, fileName string) (string, error) {
+	// 取**路径最浅**的那个命中，不是遍历序第一个。
+	//
+	// installer 目录下同名文件有多个变体，实测 Debian 13 netinst：
+	//
+	//	install.amd/initrd.gz        裸机 PXE 要的那个
+	//	install.amd/gtk/initrd.gz    图形版 installer（需要 framebuffer）
+	//	install.amd/xen/initrd.gz    Xen 专用
+	//
+	// fs.WalkDir 按字典序访问目录项，而 "gtk" < "initrd.gz"，于是它先下到 gtk/
+	// 里命中——取遍历序第一个会选中图形版。那个 installer 在无头机器上起不来
+	// （`Framebuffer not available; disabling graphical frontend` 之后行为与文本版
+	// 并不等价），而装机中的机器没有人在看。
+	//
+	// 变体一律在子目录里，所以「路径最浅」这条规则比维护一张变体黑名单更稳：
+	// 将来多出一个 install.amd/<新变体>/ 也不会误选。段数相同时按字典序取前者，
+	// 保证结果确定（同一份 ISO 反复导入必须选到同一个文件）。
 	var found string
+	foundDepth := -1
 	err := fs.WalkDir(root, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
-		}
-		if found != "" {
-			return fs.SkipAll
 		}
 		// dists/ 与 pool/ 是仓库树，体积巨大且不含内核/initrd，跳过以避免
 		// 无意义的深度遍历。
 		if d.IsDir() && (p == "dists" || p == "pool") {
 			return fs.SkipDir
 		}
-		if !d.IsDir() && path.Base(p) == fileName {
-			found = p
-			return fs.SkipAll
+		if d.IsDir() || path.Base(p) != fileName {
+			return nil
+		}
+		depth := strings.Count(p, "/")
+		if foundDepth < 0 || depth < foundDepth {
+			found, foundDepth = p, depth
 		}
 		return nil
 	})
@@ -149,7 +167,8 @@ func ExtractDebian(root fs.FS, destDir string) (model.ArtifactPaths, error) {
 	if err := copyFileFromFS(root, kernelSrc, filepath.Join(destDir, kernelDestName)); err != nil {
 		return model.ArtifactPaths{}, fmt.Errorf("imports: 复制内核文件失败（来源 %q）: %w", kernelSrc, err)
 	}
-	if err := copyFileFromFS(root, initrdSrc, filepath.Join(destDir, initrdDestName)); err != nil {
+	initrdDest := filepath.Join(destDir, initrdDestName)
+	if err := copyFileFromFS(root, initrdSrc, initrdDest); err != nil {
 		return model.ArtifactPaths{}, fmt.Errorf("imports: 复制 initrd 文件失败（来源 %q）: %w", initrdSrc, err)
 	}
 

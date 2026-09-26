@@ -126,8 +126,7 @@ class TargetVM:
             str(self.memory_mb),
             "-smp",
             "2",
-            "-drive",
-            self._disk_arg(),
+            *self._disk_args(),
             "-netdev",
             f"socket,id=lan,connect=127.0.0.1:{self.settings.net.lan_port}",
             "-device",
@@ -159,13 +158,22 @@ class TargetVM:
         handle = open(log, "wb")
         subprocess.Popen(args, stdout=handle, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
 
-    def _disk_arg(self) -> str:
-        """拼 -drive 的值。给了 disk_serial 就带上 serial=，guest 内因此有
-        /dev/disk/by-id/virtio-<serial> 链接。"""
-        arg = f"file={self.disk_path},if=virtio,format=qcow2"
-        if self.disk_serial:
-            arg += f",serial={self.disk_serial}"
-        return arg
+    def _disk_args(self) -> list[str]:
+        """拼磁盘相关的 QEMU 参数。
+
+        不给 disk_serial 时用 `-drive if=virtio` 的简写形式。
+
+        给了序列号就必须拆成 `-drive if=none` + 显式 `-device virtio-blk-pci`：
+        **serial 是设备属性，不是驱动属性**，写在 -drive 上 QEMU 直接拒绝启动
+        （`Block format 'qcow2' does not support the option 'serial'`），而 if=virtio
+        的简写形式把设备创建藏在了内部，没有地方挂这个属性。
+        """
+        if not self.disk_serial:
+            return ["-drive", f"file={self.disk_path},if=virtio,format=qcow2"]
+        return [
+            "-drive", f"file={self.disk_path},if=none,id=hd0,format=qcow2",
+            "-device", f"virtio-blk-pci,drive=hd0,serial={self.disk_serial}",
+        ]
 
     def console_tail(self, chars: int = 2000) -> str:
         """取串口日志尾部。日志里有 NUL 与 ANSI 转义，读时清掉 NUL。"""

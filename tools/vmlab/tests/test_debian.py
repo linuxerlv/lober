@@ -24,6 +24,19 @@ from vmlab import INSTALL_SIGNALS, InstallRunner, TargetVM
 # Debian netinst 挂在 VM-S 的第二块 virtio 盘上（vdb 是 OpenCloudOS）。
 ISO_DEVICE = "/dev/vdc"
 
+# netboot 制品包。**Debian 必须有它。** netinst ISO 里的 install.amd/initrd.gz 是
+# 光驱版 installer initrd：缺 network-preseed（于是菜单里的 preseed/url= 完全不会
+# 被读取，服务端连一次应答文件请求都收不到）与 net-retriever（于是 anna 没法从
+# 网络镜像取后续组件），PXE 引导起来停在
+#
+#     [!!] Detect and mount installation media
+#     Your installation media couldn't be mounted. ... Retry? <Yes> <No>
+#
+# 等人按回车，而装机中的机器没有人在看。能做网络安装的 initrd 由 Debian 单独分发
+# 在 dists/<suite>/main/installer-<arch>/current/images/netboot/netboot.tar.gz。
+# repo/ 树（dists/pool 软件包索引）仍然来自 ISO——netboot 包里没有它。
+NETBOOT_PATH = "/srv/lober/sources/debian-13-netboot.tar.gz"
+
 # 与 RHEL 用同一台目标机（串行排队，一次只跑一个家族），但 SN 不同——同一 SN
 # 只能有一个活跃任务（idx_tasks_sn_active），两个家族各用自己的主机记录更清晰。
 HOST_SN = "VMLAB-T02"
@@ -45,11 +58,11 @@ TASKSEL = "standard, ssh-server"
 @pytest.fixture(scope="session")
 def debian_artifact(api) -> dict:
     """导入 Debian netinst。"""
-    name = "debian-13.6.0-vmlab"
+    name = "debian-13.6.0-netboot-vmlab"
     for a in api.call("GET", "/artifact-sets"):
         if a["name"] == name and a["state"] == "ready":
             return a
-    artifact_id = api.import_artifact(ISO_DEVICE, name)
+    artifact_id = api.import_artifact(ISO_DEVICE, name, netboot_path=NETBOOT_PATH)
     return api.wait_artifact_ready(artifact_id, timeout=900)
 
 

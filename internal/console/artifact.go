@@ -52,7 +52,31 @@ type ArtifactImporter interface {
 	// 观察，与 docs/contracts/http-console.md 对 POST /artifact-sets 的
 	// 现有约定「导入是异步 job，本端点立即返回，进度由前端轮询观察」
 	// 完全一致，不需要新增端点）。
-	TriggerImport(ctx context.Context, artifactSetID, isoPath string)
+	TriggerImport(ctx context.Context, artifactSetID string, src ImportSource)
+}
+
+// ImportSource 是一次导入的来源。
+//
+// 用结构体而不是一个 isoPath 字符串：Debian 家族的 PXE 装机需要两个来源
+// （ISO 提供 dists/pool 软件包树，netboot 制品提供能做网络安装的 initrd），
+// 而这个集合以后还可能变（Windows 的驱动包、ESXi 的 VIB 源）。
+type ImportSource struct {
+	// ISOPath 是安装镜像的路径（文件或块设备）。
+	ISOPath string
+
+	// NetbootPath 是 netboot 制品包的路径，可空。
+	//
+	// **Debian 家族需要它。** netinst ISO 里的 install.amd/initrd.gz 是光驱版
+	// installer initrd，缺 network-preseed 与 net-retriever，PXE 引导起来会停在
+	// 「[!!] Detect and mount installation media」等人回答（实测 2026-09-26）。
+	// 能做网络安装的 initrd 由 Debian 单独分发在
+	// dists/<suite>/main/installer-<arch>/current/images/netboot/netboot.tar.gz，
+	// 不在 ISO 里——ISO 的 pool/ 里虽然有那两个组件的 udeb，但把它们装配成一个
+	// 可引导的 initrd 等于在导入路径里重造 debian-installer 的构建流程。
+	//
+	// 为空时沿用 ISO 内的 initrd；那个 initrd 不具备网络安装能力时，导入会以
+	// ErrInitrdCDOnly 失败并提示改用 netboot 制品。
+	NetbootPath string
 }
 
 // ArtifactVerifier 是控制台触发异步「重算 manifest 校验完整性」需要的
@@ -154,6 +178,10 @@ func toArtifactSetItem(a model.ArtifactSet) artifactSetItem {
 type createArtifactSetRequest struct {
 	SourcePath string `json:"sourcePath"`
 	Name       string `json:"name"`
+
+	// NetbootPath 是可选的 netboot 制品包路径，Debian 家族的 PXE 装机需要它
+	// （理由见 ImportSource.NetbootPath）。不传时沿用 ISO 内的 initrd。
+	NetbootPath string `json:"netbootPath"`
 }
 
 // handleCreateArtifactSet 处理 POST /artifact-sets：落库 state=importing
@@ -207,7 +235,10 @@ func (s *Server) handleCreateArtifactSet(c *gin.Context) {
 	// 新风险，是「没有导入触发」这一断口在 Deps.ArtifactImporter 缺省时
 	// 的自然延续。
 	if s.deps.ArtifactImporter != nil {
-		s.deps.ArtifactImporter.TriggerImport(context.WithoutCancel(c.Request.Context()), created.ID, req.SourcePath)
+		s.deps.ArtifactImporter.TriggerImport(context.WithoutCancel(c.Request.Context()), created.ID, ImportSource{
+			ISOPath:     req.SourcePath,
+			NetbootPath: strings.TrimSpace(req.NetbootPath),
+		})
 	}
 
 	apierr.OK(c, toArtifactSetItem(created))

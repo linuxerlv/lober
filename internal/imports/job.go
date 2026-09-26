@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 
 	"github.com/lober/lober/internal/core/model"
 )
@@ -172,7 +173,17 @@ var familyExtractors = map[model.OSFamily]familyExtractor{
 //
 // isoPath 是登记时运维填写的本地路径（气隙环境下以「登记服务器本地路径」
 // 为主，SPEC §2.1），destDir 是制品集在磁盘上的根目录。
-func (j *Job) Run(ctx context.Context, artifactSetID, isoPath, destDir string) error {
+// Options 是一次导入的可选项。
+//
+// 用结构体而不是继续加位置参数：这个集合以后还会变（Windows 的驱动包、ESXi 的
+// VIB 源），而 Job.Run 的调用现场散在装配点与测试里。
+type Options struct {
+	// NetbootPath 是 netboot 制品包的路径，可空。Debian 家族的 PXE 装机需要它
+	// ——理由见 console.ImportSource.NetbootPath 与 ExtractDebian 里的说明。
+	NetbootPath string
+}
+
+func (j *Job) Run(ctx context.Context, artifactSetID, isoPath, destDir string, opts Options) error {
 	importSemaphore <- struct{}{}
 	defer func() { <-importSemaphore }()
 
@@ -220,6 +231,20 @@ func (j *Job) Run(ctx context.Context, artifactSetID, isoPath, destDir string) e
 	}
 
 	paths, err := extract(root, destDir)
+	if err == nil && family == model.OSFamilyDebian && opts.NetbootPath == "" {
+		// 没给 netboot 制品：ISO 内那份 initrd 必须自己能做网络安装，否则机器
+		// 引导起来会停在交互对话框上等人（理由见 CheckInitrdNetInstallCapable）。
+		// 给了 netboot 制品时这一检查由 applyDebianNetboot 对换上来的那份做。
+		if len(paths.Initrd) > 0 {
+			err = CheckInitrdNetInstallCapable(filepath.Join(destDir, paths.Initrd[0]))
+		}
+	}
+	if err == nil && family == model.OSFamilyDebian && opts.NetbootPath != "" {
+		// Debian 的 netboot initrd 覆盖 ISO 内的那一份。必须在 extract 之后：
+		// extract 已经把 repo/ 树（dists/pool 软件包索引）建好了，这里只换内核与
+		// initrd 这两个引导期文件。
+		paths, err = applyDebianNetboot(opts.NetbootPath, destDir, paths)
+	}
 	if err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("抽取内核/initrd/仓库树失败: %v", err))
 	}
