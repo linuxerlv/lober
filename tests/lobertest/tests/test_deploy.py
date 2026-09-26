@@ -99,6 +99,14 @@ class _FakeSSH:
             return _FakeStdoutResult(self._is_active_output)
         raise AssertionError(f"未预期的命令: {cmd!r}")
 
+    def sudo(self, cmd: str, timeout: int = 120):
+        """实测订正：`_check_readiness` 判据 1 改成了 `ssh.sudo(...)`（provision
+        任务发现 `/etc/lober/lober.yaml` 是 root:lober 640，非 sudo 身份读不到，
+        `-check` 会在读配置这一步就被拒绝而不是真的验证配置内容）。真实 SSH.sudo
+        只是 `self.run(f"sudo {cmd}")` 的薄包装（见 ssh.py），本假对象同样委托给
+        run，保持与真实契约同一个行为形状，不需要另起一套判断逻辑。"""
+        return self.run(f"sudo {cmd}", timeout=timeout)
+
 
 class _FakeStdoutResult:
     def __init__(self, stdout: str):
@@ -184,17 +192,36 @@ def test_wait_ready_succeeds_when_all_three_criteria_pass():
 def test_render_config_output_accepted_by_lober_check(tmp_path):
     """类别 3：render_config 产出的 YAML 推到 VM-S 后能被
     `lober -config ... -check` 接受（退出 0）。需要一台已推好二进制的
-    VM-S，标 needs_vm。"""
+    VM-S，标 needs_vm。
+
+    实测订正（provision 任务第一次真连 VM-S 跑此测试时发现）：本用例原来
+    没有先建 schema，直接把指向 `lobertest_render_check` 这个 schema 名的
+    YAML 推上去跑 `-check`。`render_config` 的职责只是产出 YAML 正文，
+    不建 schema——`create_schema` 是独立的一步（`deploy.create_schema` 的
+    文档已经写明"lober 不会自动创建 search_path 指向的 schema"），调用方
+    必须自己先建。原用例漏了这一步，实测报
+    `ERROR: no schema has been selected to create in (SQLSTATE 3F000)`
+    ——AutoMigrate 阶段找不到任何有权限的 schema，`-check` 因此 rc=1，
+    但这个失败原因与"render_config 产出的字段形状对不对"这条本用例真正
+    要验证的东西无关，是用例自己漏了前置步骤导致的假红。补上
+    `create_schema`/`teardown_schema` 后，本用例才是在验证类别 3 本来
+    要验证的内容。
+    """
     from lobertest.config import load
     from lobertest.ssh import SSH
 
     settings = load(env={})
-    yaml_body = deploy.render_config(schema="lobertest_render_check", users=[])
+    schema_name = "lobertest_render_check"
+    yaml_body = deploy.render_config(schema=schema_name, users=[])
 
     with SSH(settings) as ssh:
-        remote_config = "/tmp/lobertest-render-check.yaml"
-        _push_text(ssh, yaml_body, remote_config)
-        result = ssh.sudo(f"/opt/lober/bin/lober -config {remote_config} -check")
+        try:
+            deploy.create_schema(ssh, schema_name)
+            remote_config = "/tmp/lobertest-render-check.yaml"
+            _push_text(ssh, yaml_body, remote_config)
+            result = ssh.sudo(f"/opt/lober/bin/lober -config {remote_config} -check")
+        finally:
+            deploy.teardown_schema(ssh, schema_name)
 
     assert result.rc == 0
 

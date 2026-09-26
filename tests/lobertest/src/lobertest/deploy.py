@@ -28,7 +28,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from lobertest.config import TEST_PASSWORD, TEST_USER_PREFIX, TEST_ROLES
+from lobertest.config import (
+    TEST_PASSWORD,
+    TEST_PG_PASSWORD,
+    TEST_ROOT_SSH_PUBLIC_KEY,
+    TEST_USER_PREFIX,
+    TEST_ROLES,
+)
 from lobertest.ssh import SSH
 
 
@@ -122,7 +128,23 @@ def cross_compile(repo_root: Path, out: Path) -> Path:
     这是整个工程的第一道闸门：失败时抛异常，消息带 go 的完整 stderr——
     `5089a86` 那类 GOOS 隐式约束错误就是靠这段输出定位的，不能只说
     「编译失败」。
+
+    实测订正（provision 任务的 provision.sh 第一次真的传相对路径进来时
+    发现）：`out` 必须先 `.resolve()` 成绝对路径再交给 `go build -o`。
+    `go build` 子进程的 `cwd` 是 `repo_root`，不是调用方 Python 进程自己
+    的当前工作目录——若 `out` 是相对路径（比如 `.tmp/lober-linux-amd64`），
+    `-o` 参数会相对 `repo_root` 解析，产物落在 `{repo_root}/.tmp/...`，
+    而不是调用方以为的"相对我自己 cwd 的 .tmp/..."。这在只用绝对路径
+    调用时（任务 5 原来的测试用例、本任务前面的手工验证）不会暴露——
+    两者都恰好传了绝对路径——直到 provision.sh 传入相对路径
+    `.tmp/lober-linux-amd64` 才第一次真正触发：脚本自己已经 `cd` 到
+    `tests/lobertest`，产物却出现在仓库根的 `.tmp/` 下，函数不报错、
+    返回值看起来正常，只是产物在一个调用方没预料到的位置——这正是最
+    隐蔽的一类 bug："看起来成功了，只是结果去了别的地方"。`resolve()`
+    让 `out` 的含义不再依赖子进程的 cwd 是什么，调用方传绝对路径还是
+    相对路径都产出同一个结果。
     """
+    out = out.resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
         ["go", "build", "-o", str(out), "./cmd/lober"],
@@ -156,16 +178,62 @@ def create_schema(ssh: SSH, name: str) -> None:
 
     用 `CREATE SCHEMA IF NOT EXISTS` 做到幂等：同名调用两次，第二次不
     报错。
+
+    实测订正一（provision 任务发现，原实现从未连过真实 VM-S）：命令必须
+    是 `sudo -u postgres psql ...`，不能是 `sudo psql -U postgres ...`。
+    这台 VM-S 的 pg_hba.conf 对本机 unix socket 连接用的是 `peer` 认证
+    ——peer 校验的是**发起连接的操作系统用户名**，与 psql 的 `-U` 参数
+    无关。`sudo psql -U postgres` 下，实际发起连接的进程属主是 root（sudo
+    默认切到 root，不是 postgres），`-U postgres` 只是告诉 psql "以
+    postgres 这个数据库角色身份连"，两者不是一回事——peer 认证看到的是
+    "谁在 connect()"，不是"你声称是谁"。报错现场是 `FATAL: Peer
+    authentication failed for user "postgres"`，容易误读成"postgres
+    这个角色密码错了"，但这条 peer 规则根本不检查密码，检查的是 OS 用户
+    与数据库角色名是否一致——root != postgres，无论 -U 怎么写都会失败。
+    `sudo -u postgres psql` 才会让发起连接的进程属主真的是 postgres，与
+    peer 规则要求的用户名一致。
+
+    实测订正二：显式指定 `-d lober_test`（固定数据库名，不是 `name`
+    本身）。`name` 是 schema 名，随每轮测试变化（"每轮一个独立 schema"，
+    设计文档 §3）；`render_config` 里的 `store.postgres.dbname` 是硬编码
+    字面量 `"lober_test"`，与 schema 名是两个独立的概念，不能假设两者
+    相同——第一次实现时误以为 `name` 同时是 db 名与 schema 名，实测直接
+    暴露：`psql -d lobertest` 报 `database "lobertest" does not exist`，
+    因为真正建出来的数据库叫 lober_test（下划线），根本没有一个叫
+    lobertest 的数据库。`CREATE SCHEMA` 建的 schema 归属于"当前连接的
+    数据库"，必须连到 lober.yaml 的 store.postgres.dbname 指向的那个
+    数据库，lober 进程才能看到这个 schema。
+
+    实测订正三：必须带 `AUTHORIZATION lober_test`，不能建成默认属主
+    （执行者 postgres）的 schema。裸 `CREATE SCHEMA IF NOT EXISTS lobertest`
+    建出的 schema 属主是 postgres，`\\dn+` 核实其 Access privileges 一栏
+    为空——即"除属主外任何角色零权限"，lober 进程实际连接用的角色是
+    lober_test（render_config 的 store.postgres.user），它对这个 schema
+    连 USAGE 都没有。表现是 AutoMigrate 阶段 `CREATE TABLE "tasks" (...)`
+    报 `ERROR: no schema has been selected to create in (SQLSTATE 3F000)`
+    ——这条报错字面意思是"没有可用于创建对象的 schema"，根源是
+    search_path 里唯一配置的 schema（lobertest）因为连接角色没有权限
+    访问，被 Postgres 从有效 search_path 中静默剔除，剔除后 search_path
+    变成空，"CREATE TABLE" 不知道该建在哪。`AUTHORIZATION lober_test`
+    让 lober_test 直接成为该 schema 的属主，属主对自己名下的 schema
+    天然有完整权限，不需要额外一条 GRANT。
     """
     ssh.sudo(
-        f'psql -U postgres -c "CREATE SCHEMA IF NOT EXISTS {_quote_ident(name)};"'
+        f'-u postgres psql -d lober_test '
+        f'-c "CREATE SCHEMA IF NOT EXISTS {_quote_ident(name)} AUTHORIZATION lober_test;"'
     ).check(f"建 schema {name}")
 
 
 def teardown_schema(ssh: SSH, name: str) -> None:
-    """删除 create_schema 建的 schema，级联删除其中全部对象。"""
+    """删除 create_schema 建的 schema，级联删除其中全部对象。
+
+    与 create_schema 同两个实测订正：`sudo -u postgres`（peer 认证）+
+    连到固定数据库 `lober_test`（不是 name 本身，见 create_schema 的
+    详细说明）。
+    """
     ssh.sudo(
-        f'psql -U postgres -c "DROP SCHEMA IF EXISTS {_quote_ident(name)} CASCADE;"'
+        f'-u postgres psql -d lober_test '
+        f'-c "DROP SCHEMA IF EXISTS {_quote_ident(name)} CASCADE;"'
     ).check(f"删 schema {name}")
 
 
@@ -196,7 +264,8 @@ gateway:
   gateway_base: "http://127.0.0.1:8180"
   artifact_base: "http://127.0.0.1:8181"
   syslog_listen: "127.0.0.1:8614"
-  root_ssh_public_keys: []
+  root_ssh_public_keys:
+    - "{TEST_ROOT_SSH_PUBLIC_KEY}"
 console:
   listen: "127.0.0.1:8190"
   token_secret: "lobertest-token-secret"
@@ -205,7 +274,7 @@ store:
     host: "127.0.0.1"
     port: 5432
     user: "lober_test"
-    password: ""
+    password: "{TEST_PG_PASSWORD}"
     dbname: "lober_test"
     sslmode: "disable"
     search_path: "{schema}"
@@ -249,20 +318,66 @@ def _render_users(users: list[TestUser]) -> str:
 
 def deploy(ssh: SSH, binary: Path, config: str) -> None:
     """推二进制 + 推配置 + 重启服务。不在本函数内等就绪——那是
-    wait_ready 的职责，调用方按需组合。"""
+    wait_ready 的职责，调用方按需组合。
+
+    实测订正（provision 任务发现，原实现从未连过真实 VM-S）：不能直接
+    `ssh.push` 到 `/opt/lober/bin/lober` 或 `/etc/lober/lober.yaml`。
+    `ssh.push` 走 SFTP，以 SSH 登录用户（`debian`）的身份写文件，而这两个
+    目标目录都是 `root:root 755`——`debian` 用户对它们既无写权限也不在
+    能写的组里。实测报 `PermissionError: [Errno 13] Permission denied`。
+
+    没有改成"给 debian 加权限"（比如 chown /opt/lober、/etc/lober 给
+    debian）：`ssh.push` 的文档约定是"目标目录不存在时不自动创建——静默
+    建目录会掩盖路径写错"，这条约定背后的意图是 push 应该是一个诚实反映
+    真实权限边界的操作，放宽系统目录权限会让"测试环境能直接写系统路径"
+    这件事本身变得不真实（生产部署里运维也不会给 SSH 登录用户开
+    /opt、/etc 的写权限）。
+
+    改成"先推到 debian 可写的临时路径，再 sudo mv 到位"：这是标准的
+    "非特权用户推送到特权路径"模式（chmod/chown 无法隔空作用于 SFTP
+    正在写的临时文件，必须落盘后再用 sudo 挪动）。mv 而不是 cp+rm：mv
+    在同一文件系统内是原子的，避免"文件已存在但内容只写了一半"这种
+    半推送状态被其它进程（比如刚好在这一刻探测 is-active 的另一个测试）
+    看到。
+    """
     ssh.sudo("systemctl stop lober || true").check("停止 lober")
-    ssh.push(binary, "/opt/lober/bin/lober")
+
+    staging_binary = "/tmp/lobertest-deploy-lober-binary"
+    ssh.push(binary, staging_binary)
+    ssh.sudo(f"mv {staging_binary} /opt/lober/bin/lober").check("移动二进制到位")
     ssh.sudo("chmod +x /opt/lober/bin/lober").check("赋予二进制可执行权限")
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8") as f:
         f.write(config)
         local_config_path = Path(f.name)
     try:
-        ssh.push(local_config_path, "/etc/lober/lober.yaml")
+        staging_config = "/tmp/lobertest-deploy-lober-config.yaml"
+        ssh.push(local_config_path, staging_config)
+        ssh.sudo(f"mv {staging_config} /etc/lober/lober.yaml").check("移动配置到位")
+        # 配置文件权限沿用既有约定（root:lober 640，见 /etc/lober/lober.yaml
+        # 实测的既有权限）：lober 进程以 lober 用户运行，需要能读但不需要
+        # 世界可读（配置里含数据库密码与 token_secret）。mv 之后文件的属主
+        # 变成 root（sudo 执行者），组保持临时文件创建时的属组，显式
+        # chown/chmod 一次以保证结果确定，不依赖临时文件当时恰好是什么权限。
+        ssh.sudo("chown root:lober /etc/lober/lober.yaml").check("设置配置文件属组")
+        ssh.sudo("chmod 640 /etc/lober/lober.yaml").check("设置配置文件权限")
     finally:
         local_config_path.unlink(missing_ok=True)
 
     ssh.sudo("systemctl daemon-reload").check("重载 systemd unit")
+
+    # 实测订正：先 reset-failed 再 restart。lober.service 配了
+    # StartLimitIntervalSec=300/StartLimitBurst=5（deploy/systemd/lober.service
+    # 的 [Unit] 段），若上一轮部署的配置有问题导致服务在 5 分钟内失败重启
+    # 超过 5 次，systemd 会记下"失败次数超限"的状态并拒绝再次启动，报
+    # `Start request repeated too quickly`——即使这一轮推的新配置已经修好了
+    # 根因，systemd 也不会自动清除这个计数器，`systemctl restart` 会直接
+    # 卡在这个拒绝上，看起来像新配置仍然有问题（实测正是这样撞上的：
+    # `-check` 手动跑已经 exit 0，但 restart 仍然失败，直到手动
+    # reset-failed 才恢复）。reset-failed 幂等——没有失败计数时执行它不是
+    # 错误，是空操作，因此可以无条件放在每次 deploy 里，不需要先判断是否
+    # 真的命中了限流。
+    ssh.sudo("systemctl reset-failed lober || true")
     ssh.sudo("systemctl restart lober").check("重启 lober")
 
 
@@ -299,7 +414,14 @@ def _check_readiness(ssh: SSH, console: _ConsoleLoginProbe) -> str | None:
     端口监听状态没有意义，因此三条按顺序短路检查而非并行跑三次远程
     命令。
     """
-    check_result = ssh.run("/opt/lober/bin/lober -config /etc/lober/lober.yaml -check")
+    # 实测订正：必须 sudo，不能是 ssh.run（普通用户身份）。
+    # /etc/lober/lober.yaml 的权限是 root:lober 640（deploy() 里显式设置，
+    # 与生产 systemd 单元里 lober 进程以 lober 用户运行这条约定一致）——
+    # SSH 登录用户 debian 不在 lober 组里，普通身份跑 -check 会在读配置
+    # 文件这一步就被拒绝，报的 rc 不是"配置有问题"，是"这个身份读不到
+    # 配置文件"，两种失败混在同一个 rc!=0 里会误导排查方向。用 sudo 才能
+    # 复现 systemd ExecStartPre 实际的读取身份。
+    check_result = ssh.sudo("/opt/lober/bin/lober -config /etc/lober/lober.yaml -check")
     if check_result.rc != 0:
         return f"判据 1（lober -check）未过：rc={check_result.rc}"
 

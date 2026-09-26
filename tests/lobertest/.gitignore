@@ -3,3 +3,12 @@ __pycache__/
 .pytest_cache/
 .venv/
 .tmp/
+
+# 私钥一律不入库。测试用的目标机 root 密钥放仓库外的
+# D:/qemu-vm/lobertest-keys/，由 config.target_root_key_path 引用。
+# 这几条是兜底：万一有人把密钥放进工程目录，也不会被提交。
+*_ed25519
+*_rsa
+*.pem
+*.key
+id_*

@@ -59,6 +59,32 @@ class Console:
         self._tokens[role] = tok
         return tok
 
+    def unauthenticated_login_status(self) -> int:
+        """向 `/auth/login` 发一个不带凭据的请求，返回原始 HTTP 状态码。
+
+        provision 任务补的方法：`deploy.wait_ready` 的判据 3（"未认证登录
+        拿到 4xx 而非连接错误"）需要它，但 `deploy.py` 的 `_ConsoleLoginProbe`
+        Protocol 只声明了类型契约，任务 3 完成时这个方法在真实 Console 上
+        从未实现过——provision 任务第一次真连 VM-S 跑 wait_ready 时才发现
+        缺失（`AttributeError`）。
+
+        故意不走 `unwrap`：`unwrap` 把非 2xx 响应体转换成 `APIError`
+        异常，而这里恰恰是"拿到 4xx"才算成功、"抛异常/连接失败"才算失败
+        ——语义与 `call()`/`token()` 的错误处理方向相反，不能复用它们，
+        必须直接读 `resp.status_code`。
+
+        请求体故意留空（不传 json=，不是传一个"错误密码"的 json）：
+        `/auth/login` 缺必填字段与"用户名密码不对"在语义上都应该是 4xx，
+        但缺字段这条路径离"网络能连通、协议在正常工作"这个判据的意图更
+        直接——不依赖任何测试账号是否存在、密码是否对，只依赖端点本身
+        会对不完整请求返回而不是挂起或 5xx。
+        """
+        resp = self._session.post(
+            f"{self._base_url}/auth/login",
+            timeout=self._timeout,
+        )
+        return resp.status_code
+
     def call(self, method: str, path: str, *, role: str = "admin", **kw: Any) -> Any:
         """对人面端点发一次请求并解包 Envelope。
 
