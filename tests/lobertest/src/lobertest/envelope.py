@@ -59,10 +59,19 @@ def unwrap(resp: requests.Response, what: str) -> Any:
             f"响应体不是合法 JSON：{truncated!r}",
         ) from None
 
-    if not resp.ok:
-        error = body.get("error") if isinstance(body, dict) else None
-        code = error.get("code") if isinstance(error, dict) else None
-        message = error.get("message") if isinstance(error, dict) else None
+    # 判定成败的唯一依据是 Envelope.code（顶层整数字段，0 即成功），不是
+    # HTTP 状态码。真实后端的 Envelope 是扁平形态
+    # {"code":整数,"data":...,"message":"..."}（internal/apierr.Envelope
+    # 的 JSON 定义，没有嵌套的 error 对象），且该后端故意让部分业务冲突
+    # 携带 HTTP 200（internal/console/task.go 的固件/家族不兼容判定用
+    # apierr.New(http.StatusOK, apierr.CodeConflict, ...)，apierr.Fail
+    # 原样把这个状态码写到响应行）。只按 resp.ok 判断会把「200 但
+    # code=1005」这种响应误判为成功（task 8 第一次真连 VM-S 才发现：
+    # 旧实现从未见过真实响应体，contract 是凭空编的 {"error":{"code":..}}
+    # 嵌套形状）。
+    code = body.get("code") if isinstance(body, dict) else None
+    if code != 0:
+        message = body.get("message") if isinstance(body, dict) else None
         raise APIError(
             what,
             resp.status_code,

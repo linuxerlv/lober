@@ -20,8 +20,14 @@ def _response(status_code: int, body: bytes, *, url: str = "https://console.exam
 
 
 def test_unwrap_2xx_valid_envelope_returns_data():
-    """2xx + 合法 Envelope → 返回 data 字段。"""
-    body = json.dumps({"data": {"id": "host-1"}}).encode("utf-8")
+    """2xx + 合法 Envelope → 返回 data 字段。
+
+    真实后端总是显式写出 code 字段（Go 的 int 零值在 JSON 里就是 0，
+    不是缺失——internal/apierr.Envelope 的 Code 字段没有
+    omitempty，序列化时永远出现），本用例的 fixture 因此显式带
+    "code": 0，不是省略它——省略这个字段在真实响应体里不会发生，
+    这不是本用例要验证的边界。"""
+    body = json.dumps({"code": 0, "data": {"id": "host-1"}, "message": ""}).encode("utf-8")
     resp = _response(200, body)
 
     result = unwrap(resp, "create host")
@@ -42,19 +48,65 @@ def test_unwrap_2xx_missing_data_field_raises_api_error():
 
 
 def test_unwrap_4xx_error_envelope_raises_api_error_with_code_from_body():
-    """4xx + 错误 Envelope → APIError，code 取自响应体。"""
-    body = json.dumps(
-        {"error": {"code": "sn_already_active", "message": "该 SN 已有活跃任务"}}
-    ).encode("utf-8")
+    """4xx + 错误 Envelope → APIError，code 取自响应体顶层 code 字段。
+
+    真实 Envelope 是扁平的 {"code":整数,"data":null,"message":"..."}
+    （internal/apierr.Envelope 的 JSON 定义，Code 字段直接挂在顶层，
+    没有嵌套的 error 对象——本用例原来断言的 {"error":{"code":...}}
+    形状是凭空编的契约，从未对照过真实响应体（task 8 第一次真连 VM-S
+    时，用 curl -X POST /auth/login -d '{}' 拿到的真实响应体是
+    {"code":1009,"data":null,"message":"username：不能为空；password：不能为空"}，
+    确认了这一点）。"""
+    body = json.dumps({"code": 1006, "data": None, "message": "该主机已存在一个未结束的任务"}).encode(
+        "utf-8"
+    )
     resp = _response(409, body)
 
     with pytest.raises(APIError) as exc_info:
         unwrap(resp, "create task")
 
     err = exc_info.value
-    assert err.code == "sn_already_active"
+    assert err.code == 1006
     assert err.http_status == 409
     assert "create task" in str(err)
+
+
+def test_unwrap_200_with_nonzero_code_raises_api_error():
+    """HTTP 200 但 Envelope.code 非零 → APIError。
+
+    这是本次修复要补的类别：本仓库的 handleCreateTask
+    （internal/console/task.go:244-248）对固件/家族不兼容这类业务冲突
+    故意用 `apierr.New(http.StatusOK, apierr.CodeConflict, ...)`
+    ——HTTP 200 承载业务失败码是这个后端的既有约定，不是本用例的臆造：
+    `apierr.Fail` 原样把 *Error 携带的 HTTPStatus 写到响应行
+    （internal/apierr/gin.go:70-73，`c.JSON(httpStatus, env)`）。旧实现
+    只按 `resp.ok`（2xx 与否）判定成功/失败，会把这种响应误判为成功
+    并把 data=null 当作正常结果返回——对应 L1 准入用例「arch 不兼容 →
+    拒绝」如果不修这里会假绿：create_task 不会抛，返回值是 None。"""
+    body = json.dumps(
+        {"code": 1005, "data": None, "message": "该主机上报的固件模式与制品集要求的 OS 家族不兼容，无法建任务"}
+    ).encode("utf-8")
+    resp = _response(200, body)
+
+    with pytest.raises(APIError) as exc_info:
+        unwrap(resp, "create task")
+
+    err = exc_info.value
+    assert err.code == 1005
+    assert err.http_status == 200
+    assert "不兼容" in str(err)
+
+
+def test_unwrap_200_zero_code_still_succeeds():
+    """回归护栏：修复「200 但 code 非零要抛」之后，正常的 200+code=0 响应
+    不能被误伤——真实成功响应的 code 字段是整数 0（CodeOK），不是缺失
+    这个字段。"""
+    body = json.dumps({"code": 0, "data": {"id": "host-1"}, "message": ""}).encode("utf-8")
+    resp = _response(200, body)
+
+    result = unwrap(resp, "create host")
+
+    assert result == {"id": "host-1"}
 
 
 def test_unwrap_non_json_body_raises_api_error_with_raw_text_fragment():
