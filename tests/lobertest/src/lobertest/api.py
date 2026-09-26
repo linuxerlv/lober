@@ -148,12 +148,20 @@ class Console:
     # artifact-set
     # ------------------------------------------------------------------
 
-    def import_artifact(self, source_path: str, name: str) -> str:
-        data = self.call(
-            "POST",
-            "/artifact-sets",
-            json={"sourcePath": source_path, "name": name},
-        )
+    def import_artifact(self, source_path: str, name: str, *, netboot_path: str | None = None) -> str:
+        """登记并触发导入。`netboot_path` 对应服务端
+        `console.ImportSource.NetbootPath`——Debian 家族需要它：netinst
+        ISO 自带的 initrd 是光驱版，不具备网络安装能力，缺这个参数会以
+        `ErrInitrdCDOnly` 失败（`internal/imports/job.go:234-237`），
+        任务 8 第一次真跑 Debian 主链路才需要用到，任务 3 完成时是纯
+        理论知识（旧 vmlab 从未真连过 VM-S）。不传时不在请求体里带
+        `netbootPath` 键（不是发一个空字符串）——这与 `create_host` 的
+        `disks` 参数是同一种约定（可选字段缺失时不出现在请求体，不占位
+        成空值）。"""
+        body: dict[str, Any] = {"sourcePath": source_path, "name": name}
+        if netboot_path is not None:
+            body["netbootPath"] = netboot_path
+        data = self.call("POST", "/artifact-sets", json=body)
         return data["id"]
 
     def wait_artifact_ready(self, artifact_id: str, timeout: int = _DEFAULT_ARTIFACT_TIMEOUT) -> dict:

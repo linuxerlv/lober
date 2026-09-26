@@ -358,6 +358,46 @@ def test_import_artifact_success(console, m):
     assert sent == {"sourcePath": "/data/iso/rhel9.iso", "name": "rhel9"}
 
 
+def test_import_artifact_without_netboot_path_omits_field(console, m):
+    """不传 netboot_path 时请求体不带 netbootPath 键（不是发一个空字符串）
+    ——这与既有的 test_import_artifact_success 是同一断言，本用例独立
+    写出是为了在下面 with_netboot_path 的对照用例旁边显式说明这条约定，
+    不依赖读者去翻另一个测试函数才能看到对比。"""
+    stub_login(m)
+    m.post(f"{CONSOLE_BASE}/artifact-sets", json=envelope_ok({"id": "as-1"}))
+
+    console.import_artifact("/data/iso/rhel9.iso", "rhel9")
+
+    sent = m.request_history[-1].json()
+    assert "netbootPath" not in sent
+
+
+def test_import_artifact_with_netboot_path_sends_field(console, m):
+    """任务 8 实测发现：Debian 家族的 netinst ISO 自带 initrd 是光驱版，
+    不具备网络安装能力，导入会以 ErrInitrdCDOnly 失败
+    （internal/imports/job.go:234-237）；必须额外传 netboot_path，服务端
+    才会用它覆盖 ISO 内的那份 initrd（console.ImportSource.NetbootPath，
+    internal/console/artifact.go 的 createArtifactSetRequest.NetbootPath
+    字段）。任务 3 完成 Console.import_artifact 时没有暴露这个参数——
+    当时这是纯理论知识（旧 vmlab 的 api.py 从未真连过 VM-S），任务 8
+    第一次真跑 Debian 主链路才需要用到它。"""
+    stub_login(m)
+    m.post(f"{CONSOLE_BASE}/artifact-sets", json=envelope_ok({"id": "as-1"}))
+
+    console.import_artifact(
+        "/srv/lober/sources/debian-netinst.iso",
+        "lobertest-debian",
+        netboot_path="/srv/lober/sources/debian-13-netboot.tar.gz",
+    )
+
+    sent = m.request_history[-1].json()
+    assert sent == {
+        "sourcePath": "/srv/lober/sources/debian-netinst.iso",
+        "name": "lobertest-debian",
+        "netbootPath": "/srv/lober/sources/debian-13-netboot.tar.gz",
+    }
+
+
 def test_wait_artifact_ready_polls_then_returns_ready_item(console, m, monkeypatch):
     stub_login(m)
     states = iter(["importing", "ready"])
