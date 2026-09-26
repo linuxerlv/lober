@@ -91,9 +91,25 @@ ssh-keygen -t ed25519 -N '' -C lobertest-target-root \
 | 项目 | 值 | 来源 |
 |---|---|---|
 | Windows 宿主 → VM-S SSH | `127.0.0.1:2222` → guest `10.10.10.10:22` | `start-vm.sh` 既有 hostfwd |
-| Windows 宿主 → VM-S 人面（console） | `127.0.0.1:8090` → guest `10.10.10.10:8090` | `start-vm.sh` 本次新增的第二条 hostfwd |
+| Windows 宿主 → VM-S 人面（console） | `127.0.0.1:8090` → guest `10.10.10.10:8090` | `start-vm.sh` 第二条 hostfwd |
+| Windows 宿主 → VM-S 机器面（gateway） | `127.0.0.1:8080` → guest `10.10.10.10:80` | `start-vm.sh` **第三条 hostfwd，2026-09-26 任务 8 新增** |
 | guest 内 nginx 机器面 | `10.10.10.10:80` → 反代 `127.0.0.1:8180`（lober gateway listener） | `nginx-lober.conf` |
 | guest 内 nginx 人面 | `10.10.10.10:8090` → 反代 `127.0.0.1:8190`（lober console listener） | `nginx-lober.conf` |
+
+**机器面那条 hostfwd 补的经过（值得记，因为症状会误导）：** 最初只有前两条转发，机器面
+从 Windows 宿主完全不可达 —— 直连 `127.0.0.1:80` 在 TCP 层就没人监听，`curl` 表现为
+**纯挂起到超时、零字节**，很容易被当成「服务响应慢」或「超时参数不够长」去调。任务 8
+用二分法一步定位：SSH 进 guest 直连 `127.0.0.1:8180`（lober 自己的 gateway listener）
+立刻拿到 200 与正确的 `#!ipxe` → 后端正常 → 问题 100% 在转发。
+
+注意 hostfwd 的目标地址必须写 `10.10.10.10:80` 而不是 `127.0.0.1:80`：nginx 按 SPEC
+「listen 写具体 IP 不写 0.0.0.0」绑的是 `10.10.10.10:80`，**guest 自己的 loopback 上
+没人听**（在 guest 内部打 `127.0.0.1:80` 实测 HTTP 000）。宿主侧用 8080 而非 80 是因为
+Windows 上 80 常被 IIS/System 占。
+
+`hostfwd` 是 QEMU 启动参数，不能热加载 —— 加这条要完整重启 VM-S。重启时若报
+`monitor telnet:127.0.0.1:4444: address in use`，是旧 QEMU 进程没退干净还占着 monitor
+端口，不是配置错。
 | Postgres 连接 | `127.0.0.1:5432`，db `lober_test`，角色 `lober_test` | 见下方 Postgres 一节 |
 
 ## config.py 改了什么、为什么

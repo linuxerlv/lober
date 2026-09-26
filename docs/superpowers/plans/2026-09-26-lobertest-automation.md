@@ -519,7 +519,9 @@ def console(deployed) -> Console
 - `deployed` 失败（尤其 `cross_compile` 失败）时整个 session 立刻停止
 - L1 的用例**只能看见 `console` 与 `deployed`**。不得引入 `qemu` 的 fixture——那是 L2/L3 的事
 
-**层间闸门（`pytest_collection_modifyitems` + 运行期钩子）：**
+**层间闸门（用 `pytest_runtest_setup`，不是 `pytest_collection_modifyitems`）：**
+
+订正：原文写 `pytest_collection_modifyitems`，那是错的 —— 它只在收集阶段跑一次，那时任何用例都还没执行，「L1 是否失败过」必然是空的。任务 8 用假 L1/L2 用例验证时真的观察到假 L2 没被跳过、直接执行并报错。正确的挂点是 `pytest_runtest_setup`（每个 item setup 前都触发）。这个坑值得写进 conftest 注释。
 - L1 有任何失败 → L2/L3 的用例打 **skip 而非 fail**。理由：接口层断了，装机与 UI 必然跟着断，再跑一小时没有信息量
 - L2/L3 默认不收集，要 `-m slow` 显式开
 
@@ -548,7 +550,15 @@ def console(deployed) -> Console
 
 主链路（`test_lifecycle.py`）：1) 六个家族各走完整链路；2) 应答文件形态按家族断言（kickstart / preseed / autoinstall / AutoYaST / unattend.xml / boot.cfg）；3) iPXE 菜单含 `#!ipxe` 首行与 boot 命令（`99b6ca7`、`4e32ed9` 的回归护栏）
 
-准入（`test_admission.py`）：4) 同一 SN 已有活跃任务时再建 → 拒绝；5) arch 不兼容 → 拒绝；6) attempt 配额耗尽 → 拒绝；7) 引用 draft 状态的 hook → 拒绝
+准入（`test_admission.py`）：4) 同一 SN 已有活跃任务时再建 → 拒绝；5) 固件不兼容 → 拒绝；6) attempt 配额耗尽 → 拒绝；7) 引用 draft 状态的 hook → 拒绝
+
+**实现后订正（任务 8 实测，四条）：**
+
+1. **没有独立的 arch 兼容检查。** 原文类别 5 写「arch 不兼容」，代码里只有 `model.FirmwareCompatible`（`inventory.go:122`）。而那张表里 rhel/debian/ubuntu/suse/windows 五家族都同时兼容 bios 与 uefi，**唯一受限的是 esxi（仅 uefi）** —— 所以这条规则要触发必须有 ESXi 制品。没有 ESXi ISO 时只能 skip，不要为了让它绿而改断言。
+2. **draft hook 的拒绝点在建模板，不在建任务。** `template.go:39` 的注释写明了这个分工：`handleCreateTemplate` 硬编码新模板为 draft，hook 引用校验在那一步（返回 404）。原文写「建任务时拒绝」是错的。
+3. **类别 6（attempt 配额）在 L1 没有公开入口可触发。** 判定发生在 `StartBoot` 里，唯一路径是反复调 `boot_menu` 让同一任务多次引导 —— 那是 L2 的重试语义。L1 只能 skip。
+4. **`sourcePath` 必须是 guest 路径。** 导入 job 跑在 guest 内的 lober 进程里，Windows 宿主路径对它不可见。ISO 要先推上去，且中转目录不能用 `/tmp`（tmpfs 只有 736M，推 1.7G 的 ISO 会写满），用 `/home/debian`。
+5. **`import_artifact` 对 Debian 需要 `netboot_path` 参数**绕开 `ErrInitrdCDOnly`。任务 3 时这是纯理论知识，第一次真跑才用得上。
 
 RBAC（`test_rbac.py`）：8) `viewer` 调 `/auth/codes` 拿到 `[]` 而非 `null`（`rbac.go:77-80` 明确要求）；9) `operator` 建任务成功、审批 hook 被拒；10) `hook-author` 写 hook 成功、审批被拒；11) `hook-approver` 审批成功、建任务被拒；12) `admin` 七个码全有
 
