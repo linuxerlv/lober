@@ -1,0 +1,28 @@
+[project]
+name = "lobertest"
+version = "0.1.0"
+description = "lober 三层自动化测试：接口 / 装机 / 前端，全部跑在 Linux VM 的真实部署上"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.34.2",
+    "paramiko>=5.0.0",
+    "pytest>=9.1.1",
+]
+
+[project.optional-dependencies]
+ui = [
+    "playwright>=1.55.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = [
+    "needs_vm: 需要能连通 VM-S 才能跑的用例",
+    "slow: L2/L3 用例，真实装机或前端构建，默认不收集，用 -m slow 显式开",
+]
