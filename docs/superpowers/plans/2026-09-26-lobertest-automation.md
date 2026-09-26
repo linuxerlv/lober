@@ -385,37 +385,53 @@ def bcrypt_hash(repo_root: Path, password: str) -> str
 - 测试：`tests/lobertest/tests/test_qemu.py`（参数拼装可纯单测；起 VM 的标 `needs_vm`）
 
 **已知事实（不要重新试错，来自 `[[qemu-local-vm]]` 与旧 harness）：**
-- WHPX 下 `-cpu max` 与 `-cpu host` 必然 `WHPX: Unexpected VP exit code 4`，串口零输出
+- WHPX 下 `-cpu max` 与 `-cpu host` 必然 `WHPX: Unexpected VP exit code 4`，串口零输出。**可用值是 `-cpu qemu64`**：名义上只到 x86-64-v1，但实测能跑 RHEL 9 系（glibc 的 v2 检查没触发）
 - 必须配 `-accel whpx,kernel-irqchip=off`，否则刷 `Ignoring request for interrupt vector 0`
 - QEMU 在 `D:\msys\ucrt64\bin`，用绝对路径调用
 - 受 15.5G 内存限制，同时只能跑一台目标机
+
+**六条从旧 harness 取证得来的硬约束（任务 2 删除前逐条核实过源码，都带真实报错）：**
+
+1. **`-serial file:` 在这个 QEMU 构建上写出 0 字节日志。** 必须用 `-nographic` 让串口走进程 stdout，再由 `subprocess` 重定向到文件。踩这个坑的后果是拿到空证据却以为装机没输出
+2. **`disk_serial` 必须拆成 `-drive if=none,id=hd0` + 独立 `-device virtio-blk-pci,drive=hd0,serial=...`。** serial 是设备属性不是驱动属性，写在 `-drive` 上 QEMU 直接拒绝启动（`Block format 'qcow2' does not support the option 'serial'`）。这是 Debian 家族服务端选盘依赖 `/dev/disk/by-id/virtio-<serial>` 的前提
+3. **必须给 `-device virtio-rng-pci`。** 否则 guest 内 sshd-keygen 从 `/dev/random` 取熵时因熵池补充极慢而挂起（实测卡 7 分钟无进展、无明确报错）。真机不需要，纯虚拟化环境特有
+4. **残留的目标机进程会占着 VM-S 的 socket listen 端口**，新目标机拿不到网络，症状是 iPXE 报 `No configuration methods succeeded`。更坏的情形是它偷走新任务的 pending 状态（`FindPendingTaskByIdentity` 匹配 pending+booting）。**按 `-name` 精确清理，不能按内存大小猜**——踩过一次：装到一半的目标机占 2.3GB，被「小于 1500MB」的过滤漏掉
+5. **MSYS 的 argv 翻译只作用于「整个参数就是一个 POSIX 绝对路径」的裸参数**，不作用于 `file=X` 这种复合参数内嵌的路径，与路径深浅无关。这是 `WinError 2` 的真实成因。统一用 `D:/...` 正斜杠形式
+6. **串口日志按 mtime 归档而非覆盖。** 装机失败常要跨轮次对比（这一轮卡在哪、上一轮到哪），旧 harness 有过一次因覆盖丢失 anaconda 错误输出的教训
 
 **接口契约：**
 
 ```python
 def start_server() -> Popen                      # VM-S；幂等（已在跑则返回现有句柄）
 def reset_overlay(entry_id: str, size: str) -> Path
-def start_target(entry_id: str, firmware: str, mem: str) -> Popen
+def start_target(entry_id: str, firmware: str, mem: str, disk_serial: str = "") -> Popen
 def stop_target(entry_id: str) -> None           # 确认进程真的退出
+def kill_stale_targets() -> list[int]            # 按 -name 清理全部残留，返回被杀的 PID
 def serial_log_path(entry_id: str) -> Path
+def archived_log_path(entry_id: str, stamp: str) -> Path
 def winpath(p: Path | str) -> str                # POSIX → Windows 路径，强制绝对化
 ```
 
 - `start_target` 的 `firmware` 取 `bios` / `uefi`；`uefi` 时挂 `-drive if=pflash` 加 **每条目一份独立的可写 vars 副本**——共用会让引导项互相污染，且 QEMU 可能因文件被占用直接拒绝启动
+- `start_target` 每次启动前先调 `kill_stale_targets`（约束 4）；`disk_serial` 非空时按约束 2 拆参数
 - `stop_target` 必须确认进程退出，不只是发信号：内存约束下一条目才能起
+- `kill_stale_targets` 按 `-name` 匹配命令行，与 `stop_target` 分开：后者管单个已知 entry，前者管「上一轮崩溃留下的、entry_id 已不可知的」进程
+- `serial_log_path` 在文件已存在时先归档到 `archived_log_path`（stamp 取旧文件的 mtime），不覆盖
 - `winpath` 强制绝对化（相对路径原样透给 QEMU 会以 QEMU 的 cwd 解析，那不是调用方期望的）
-- 串口重定向到文件，不依赖交互
 
-**要覆盖的输入类别（前三类纯逻辑，不起 VM）：**
+**要覆盖的输入类别（前六类纯逻辑，不起 VM）：**
 1. `start_target(firmware="uefi")` 的参数列表含 `pflash` 且 vars 路径含 `entry_id`
 2. `start_target(firmware="bios")` 的参数列表**不含** `pflash`
-3. 参数列表含 `-accel whpx,kernel-irqchip=off`，且 `-cpu` 不是 `max` 或 `host`
-4. `winpath("relative/x")` 产出绝对 Windows 路径
-5. `stop_target` 在进程已死时不抛（幂等，标 `needs_vm`）
+3. 参数列表含 `-accel whpx,kernel-irqchip=off`，且 `-cpu` **等于 `qemu64`**（不是「不等于 max/host」——护栏要锁住已验证可用的那个值，排除坏值会让下一个人以为随便换一个都行）
+4. 参数列表含 `-nographic` 与 `-device virtio-rng-pci`，且**不含** `-serial file:`（约束 1、3）
+5. `disk_serial` 非空时参数含 `if=none` 与独立的 `-device virtio-blk-pci,...,serial=`；为空时用 `if=virtio` 简写（约束 2）
+6. `winpath("relative/x")` 产出绝对 Windows 路径
+7. `serial_log_path` 在旧日志存在时把它归档且不删除（约束 6）
+8. `stop_target` 在进程已死时不抛（幂等，标 `needs_vm`）
 
-- [ ] **红：** 为五类写失败测试。运行 `uv run pytest tests/test_qemu.py -v -m 'not needs_vm'`，预期 FAIL。
+- [ ] **红：** 为八类写失败测试。运行 `uv run pytest tests/test_qemu.py -v -m 'not needs_vm'`，预期 FAIL。
 
-- [ ] **绿：** 实现到类别 1-4 全绿。**类别 3 是回归护栏**：它锁住的是已经踩过的坑，不是新功能。
+- [ ] **绿：** 实现到类别 1-7 全绿。**类别 3、4、5、7 是回归护栏**：它们锁住的是上面六条约束里已经踩过的坑，不是新功能。护栏失效的代价不是「测试变红」，是任务 9 花 20 分钟到 1 小时真实装机后拿到一份空证据或假失败。
 
 - [ ] **重构 + commit：** commit（`feat(lobertest): QEMU 生命周期与串口日志落盘`）。
 
@@ -504,6 +520,8 @@ def target(request, settings) -> TargetVM   # 按家族参数起目标机，用�
 证据二不能省：那串信号是我们自己渲染的脚本发出来的，全到齐只证明脚本跑完了，不证明系统是好的。它同时验证 `rootpw --lock` + 公钥注入是唯一登录通路。
 
 **失败时必须落的证据（缺一样都算测试工程的 bug）：** 目标机串口 log、qemu stderr、VM-S 的 `journalctl -u lober`、dnsmasq log、nginx access log、`events()` 的 JSON、目标机 overlay（保留不删）。
+
+**串口 log 这一样有两个前提，都在任务 7 的约束里，这里复述因为证据是本任务的验收项：** 它必须是 `-nographic` 经 subprocess 重定向来的（`-serial file:` 在这个 QEMU 构建上写出 0 字节），且上一轮的日志必须已被归档而非覆盖（跨轮次对比是定位「这一轮比上一轮早死在哪」的唯一手段）。拿到 0 字节串口 log 时先查这两条，不要当成「装机过程真的没有输出」。
 
 **要覆盖的输入类别：**
 1. RHEL BIOS 装完（**最小成功线**）
