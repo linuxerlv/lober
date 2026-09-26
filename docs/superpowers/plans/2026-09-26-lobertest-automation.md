@@ -194,6 +194,14 @@ class Console:
     def answer_file(self, task_id: str, token: str, filename: str) -> str
 ```
 
+**实现后订正（任务 3 已完成，以下为对照真实 handler 得到的事实，后续任务直接用，不要再从本计划的方法名反推路径）：**
+
+- **`GET /tasks/{id}` 不存在。** `internal/console/task.go:28-32` 只注册了五条：`POST /tasks`、`GET /tasks`、`GET /tasks/:id/events`、`POST /tasks/:id/retry`、`POST /tasks/:id/cancel`。所以 `wait_task_state` 是取列表按 id 过滤，与 `cancel_active_tasks` 同一做法。**任务 8 写轮询用例时别指望单点查询端点。**
+- **`Console.__init__` 实际签名是 `(base_url, gateway_base_url=None, *, timeout=30)`。** 机器面与人面是两个 base_url，而 `config.Settings` 里没有机器面字段（任务 1 已冻结），所以在构造时单独传。`gateway_base_url` 为 `None` 时调机器面方法明确抛 `ValueError`，不静默用错 URL。
+- **hook 的字段名是 `stage` 不是 `phase`**（`internal/console/hook.go:57`，对应 `model.HookStage`，取值 `pre`/`post-nochroot`/…）。Python 侧形参名保留 `phase` 可读，请求体必须发 `stage`。
+- **模板没有独立的 family 字段**，家族由 `artifactSetId` 决定（`template.go:55-65` 的字段表）。`create_template` 的 `family` 形参转成请求体的 `artifactSetId`。
+- **`token(role)` 的账号名约定 `lobertest-<role>` 内联在 `api.py` 里**，没有 import `deploy.py`——任务 6 顺序在后，反向依赖会让 L1 无法独立跑。这是两处之间唯一的耦合点，任务 6 若改前缀要同步改，`api.py` 里有注释标注。
+
 - `token(role)` 按角色缓存，同一 role 不重复登录
 - `call` 的 `role` 参数决定用哪个身份的 token；默认 `admin`
 - `wait_artifact_ready` 轮询到 `ready`；命中 `failed` 时**立即抛 `APIError` 并把 `FailReason` 放进消息**（不要等超时）。超时默认 600 秒——真 ISO 抽取实测 16.8 秒，但 Ubuntu 2.6G 镜像更久
@@ -459,6 +467,9 @@ def deployed(settings) -> DeployInfo    # 交叉编译 + 建 schema + 推送 + �
 @pytest.fixture(scope="session")
 def console(deployed) -> Console
 ```
+
+- `console` fixture 要同时给出人面与机器面两个 base_url（见任务 3 的实现后订正）：机器面用例（`boot_menu`/`answer_file`）缺了它会抛 `ValueError`
+- 轮询任务状态走 `GET /tasks` 列表按 id 过滤——没有单点查询端点
 
 - `deployed` 是 session 级：每轮 pytest 一次部署，不是每个用例一次
 - `deployed` 失败（尤其 `cross_compile` 失败）时整个 session 立刻停止
