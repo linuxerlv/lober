@@ -38,6 +38,28 @@ class Settings:
     schema: str = "lobertest"
 
 
+# 五个角色的测试账号凭据——唯一权威来源（任务 6）。`api.py`（登录）与
+# `deploy.py`（生成账号、写进 lober.yaml）都从这里 import，不再各自内联
+# 字面量。两边一旦各自记一份、又漂移出不同的值，症状是全部 L1 用例 401，
+# 且两处代码各自看起来都对，这种错误极难定位——这正是本模块存在的理由。
+#
+# TEST_USER_PREFIX 与 TEST_PASSWORD 是叶子常量（本模块不因此引入任何新
+# import，仍然只依赖标准库），不违反「叶子模块不 import 工程内其它模块」
+# 的约束；`api.py` 与 `deploy.py` 反过来 import 本模块是设计允许的方向
+# （config 是叶子，两个同级模块都可以 import 它）。
+TEST_USER_PREFIX = "lobertest-"
+
+# 明文密码：scripts/mkuser 要求至少 12 个字符（main.go 的 minPasswordLen），
+# 这里选的值远超这个下限，避免账号生成本身先撞到强度校验失败。
+TEST_PASSWORD = "LoberTest#2026Automation"
+
+# 五个角色名，取值与顺序对应 internal/console/rbac.go:19-24 的角色表
+# （viewer/operator/hook-author/hook-approver/admin）。本模块不重新定义
+# 角色语义——rbac.go 仍是权威定义处，这里只是把同一份取值抄成 Python 侧
+# 可 import 的常量，供 deploy.py 生成账号时遍历。
+TEST_ROLES = ("viewer", "operator", "hook-author", "hook-approver", "admin")
+
+
 # 字段名 -> 转换函数。转换失败时要报清楚是哪个字段坏了，不能让 int()/Path()
 # 的裸异常直接冒出去（那种消息不带字段名，定位不到问题出在哪个环境变量）。
 _CONVERTERS = {

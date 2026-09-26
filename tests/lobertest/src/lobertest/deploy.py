@@ -9,6 +9,13 @@
 `lober -check` 退出 0、`systemctl is-active` 为 active、未认证登录拿到
 4xx 而非连接错误。三条全过才算就绪，只看 `systemctl is-active` 不够
 ——`Type=simple` 下进程起来不代表端口在听。
+
+测试账号（`TestUser`/`build_test_users`）的用户名前缀与明文密码从
+`lobertest.config` import（`TEST_USER_PREFIX`、`TEST_PASSWORD`），不在本
+文件内联字面量——`api.py` 登录时用的是同一份常量。哈希经
+`go run ./scripts/mkuser` 生成，不在 Python 侧装 bcrypt 库计算：哈希必须
+由 lober 自己的工具产出，否则「测试账号能登录」证明不了「运维按文档建的
+账号能登录」（任务 6）。
 """
 
 from __future__ import annotations
@@ -21,28 +28,81 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from lobertest.config import TEST_PASSWORD, TEST_USER_PREFIX, TEST_ROLES
 from lobertest.ssh import SSH
-
-# 固定测试密码，与 api.py 的 _TEST_PASSWORD 取相同的值——task 6 生成的
-# 测试账号与本模块渡出的 lober.yaml 必须用同一份密码，否则 Console.token()
-# 登录不了自己刚建好的账号。两处独立记录同一个事实是刻意的（api.py 顶部
-# 注释已解释过：不让 api.py 反向依赖 deploy.py）。
-TEST_PASSWORD = "LoberTest#2026Automation"
 
 
 @dataclass(frozen=True)
 class TestUser:
     """一个测试账号的最小描述，喂给 render_config 产出 `auth.users` 段。
 
-    任务 6 会正式定义账号生成逻辑（含 bcrypt 哈希计算）；本任务只需要一个
-    足够表达「name + 哈希 + 角色」的形状，让 render_config 的契约今天就能
-    独立测试。任务 6 落地时如果需要更多字段，直接扩展这个类型即可——它是
-    叶子数据结构，不被其它模块的公开 API 依赖。
+    保留 `bcrypt_hash` 而非明文 `password`：写进配置文件的是哈希，明文只
+    在调 `mkuser` 时用一次，不该存进每条用户记录里（任务 6）。
     """
 
     name: str
     bcrypt_hash: str
     roles: list[str]
+
+
+def bcrypt_hash(repo_root: Path, password: str) -> str:
+    """调 `go run ./scripts/mkuser -user <name> -stdin` 产出密码的 bcrypt
+    哈希。不在 Python 侧装 bcrypt 库实现——哈希必须由 lober 自己的工具
+    生成，否则「测试账号能登录」证明不了「运维按文档建的账号能登录」。
+
+    密码经 `stdin=PIPE` 喂给子进程，绝不出现在命令行参数列表里——那会
+    进 `ps` 输出（本函数风险清单明确要求）。`-user` 的值只影响 mkuser
+    打到 stderr 的提示文本，不影响哈希本身，这里固定传 "lobertest"，
+    调用方不需要为了算一个哈希而先决定账号名。
+
+    显式指定 `encoding="utf-8"`（不能让 `text=True` 走平台默认编码）：
+    mkuser 的 stderr 提示信息是中文，本机默认区域设置是 GBK，`subprocess`
+    用平台默认编码解码子进程输出会在读 stderr 的后台线程里直接
+    `UnicodeDecodeError`——这不是子进程真的失败，而是 Python 侧解码
+    环节先炸了，且发生在后台线程，主线程看到的是一个误导性的空 stderr。
+    """
+    proc = subprocess.run(
+        ["go", "run", "./scripts/mkuser", "-user", "lobertest", "-stdin"],
+        cwd=str(repo_root),
+        input=f"{password}\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"mkuser 生成哈希失败（退出码 {proc.returncode}）\nstderr:\n{proc.stderr}"
+        )
+    return proc.stdout.strip()
+
+
+def build_test_users(repo_root: Path) -> list[TestUser]:
+    """为五个角色各生成一个测试账号，name 为 `f"{TEST_USER_PREFIX}{role}"`。
+
+    五个角色取自 `config.TEST_ROLES`（权威定义见 `internal/console/rbac.go
+    :19-24`），全部账号共用同一份 `config.TEST_PASSWORD`，哈希各自单独
+    调一次 `bcrypt_hash`（bcrypt 加盐，同一密码每次调用产出不同哈希，这不
+    是缺陷）。
+
+    `TestUser` 是 role -> 单角色的映射（每个账号恰好一个角色），不是
+    role 的任意组合——这保证了 `hook-author` 与 `operator`（互不重叠的
+    两个角色，rbac.go:45-47）不会被同一个测试账号同时持有，RBAC 边界
+    测试才测得出来。
+
+    没有做成模块级静态列表（计划契约原文的 `TEST_USERS: list[TestUser]`）
+    是因为哈希计算需要 `repo_root`，而 `deploy.py` 里其它需要 repo_root
+    的函数（`cross_compile`、`build_web`）都是「调用方传入」而非「模块内
+    自行发现」，本函数遵循同一约定，不额外引入一种发现方式（详见任务
+    报告的偏离说明）。
+    """
+    return [
+        TestUser(
+            name=f"{TEST_USER_PREFIX}{role}",
+            bcrypt_hash=bcrypt_hash(repo_root, TEST_PASSWORD),
+            roles=[role],
+        )
+        for role in TEST_ROLES
+    ]
 
 
 class _ConsoleLoginProbe(Protocol):

@@ -9,6 +9,11 @@
 机器面（`boot_menu`/`answer_file`）是纯文本裸响应，无认证，走独立的
 base_url（`docs/contracts/http-machine.md`）。Console 内部同时持有两个
 base_url，按方法各自选择。
+
+测试账号的用户名前缀与密码从 `lobertest.config` import（`TEST_USER_PREFIX`、
+`TEST_PASSWORD`），不在本文件内联字面量——`deploy.py` 生成账号哈希时用的是
+同一份常量。两边一旦各自记一份、又漂移出不同的值，症状是全部 L1 用例 401，
+且两处代码各自看起来都对（任务 6）。
 """
 
 from __future__ import annotations
@@ -18,18 +23,8 @@ from typing import Any
 
 import requests
 
+from lobertest.config import TEST_PASSWORD, TEST_USER_PREFIX
 from lobertest.envelope import APIError, unwrap
-
-# 任务 6 的测试账号命名约定：lobertest-<role>。本模块不 import 任务 6 的
-# deploy.py（那会让 api.py 反过来依赖部署层，倒转计划规定的单向依赖），
-# 而是把这条约定原样内嵌——两处独立记录同一个事实，任务 6 的 TestUser
-# 生成与本模块的 token() 都按这个规则算用户名。
-_TEST_USER_PREFIX = "lobertest-"
-
-# 固定测试密码。真实密码强度校验在 config.go 附近，任务 6 的账号生成会
-# 用同一个值；这里再重复一遍是因为 token() 要能独立工作（不依赖 deploy.py
-# 已经把账号建好这件事之外的任何东西）。
-_TEST_PASSWORD = "LoberTest#2026Automation"
 
 _DEFAULT_ARTIFACT_TIMEOUT = 600
 
@@ -53,10 +48,10 @@ class Console:
         if role in self._tokens:
             return self._tokens[role]
 
-        username = f"{_TEST_USER_PREFIX}{role}"
+        username = f"{TEST_USER_PREFIX}{role}"
         resp = self._session.post(
             f"{self._base_url}/auth/login",
-            json={"username": username, "password": _TEST_PASSWORD},
+            json={"username": username, "password": TEST_PASSWORD},
             timeout=self._timeout,
         )
         data = unwrap(resp, f"login as {role}")
