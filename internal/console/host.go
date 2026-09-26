@@ -9,6 +9,7 @@ package console
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -207,6 +208,11 @@ type createHostRequest struct {
 	Arch     string `json:"arch" binding:"required,oneof=x86_64 arm64"`
 	Firmware string `json:"firmware" binding:"required,oneof=bios uefi"`
 	Rack     string `json:"rack"`
+
+	// Disks 可选。磁盘规划需要它——除 by-hook 之外的四个策略都要求服务端已知
+	// 盘（见 model.Host.Disks 的文档）。不传时建出的主机磁盘清单为空，用
+	// largest 等策略建任务会以「磁盘清单为空」失败。
+	Disks []createHostDisk `json:"disks"`
 }
 
 // handleCreateHost 处理 POST /hosts：手工录入兜底（§7.4）。
@@ -246,6 +252,12 @@ func (s *Server) handleCreateHost(c *gin.Context) {
 		return
 	}
 
+	disks, derr := toHostDisks(req.Disks)
+	if derr != nil {
+		apierr.Fail(c, derr)
+		return
+	}
+
 	host := model.Host{
 		SN:         strings.TrimSpace(req.SN),
 		MAC:        normalizedMAC,
@@ -254,6 +266,7 @@ func (s *Server) handleCreateHost(c *gin.Context) {
 		Firmware:   model.FirmwareMode(req.Firmware),
 		Rack:       req.Rack,
 		LastSeenAt: s.clock.Now(),
+		Disks:      disks,
 	}
 
 	created, err := s.deps.Hosts.UpsertHost(c.Request.Context(), host)
@@ -262,4 +275,41 @@ func (s *Server) handleCreateHost(c *gin.Context) {
 		return
 	}
 	apierr.OK(c, toHostListItem(created))
+}
+
+// createHostDisk 是 POST /hosts 请求体里的一块盘。
+type createHostDisk struct {
+	ByIDPath   string `json:"byIdPath"`
+	SizeBytes  int64  `json:"sizeBytes"`
+	Rotational bool   `json:"rotational"`
+	Model      string `json:"model"`
+}
+
+// toHostDisks 把请求体里的磁盘清单转成 model.HostDisk，并逐块校验 byIdPath。
+//
+// byIdPath 必填且不接受内核名：/dev/sda 这类名字在不同启动之间会漂移，写进
+// 分区指令可能擦错盘（SPEC §10 失败模式 5）。空路径的盘进了清单，磁盘规划器
+// 会选中它然后渲染出空的 --ondisk=——那个失败发生在目标机上，只能到 BMC
+// 控制台看。
+func toHostDisks(in []createHostDisk) ([]model.HostDisk, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]model.HostDisk, 0, len(in))
+	for i, d := range in {
+		path := strings.TrimSpace(d.ByIDPath)
+		if path == "" {
+			return nil, apierr.New(http.StatusBadRequest, apierr.CodeBadRequest,
+				fmt.Sprintf("disks[%d] 缺 byIdPath——磁盘必须用 by-id/WWN 这类持久"+
+					"标识，内核名（/dev/sda）在不同启动之间会漂移，写进分区指令"+
+					"可能擦错盘", i))
+		}
+		out = append(out, model.HostDisk{
+			ByIDPath:   path,
+			SizeBytes:  d.SizeBytes,
+			Rotational: d.Rotational,
+			Model:      strings.TrimSpace(d.Model),
+		})
+	}
+	return out, nil
 }

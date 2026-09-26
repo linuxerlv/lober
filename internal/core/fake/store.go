@@ -240,6 +240,13 @@ func copyTemplate(tpl model.Template) model.Template {
 // 赋值即深拷贝，本函数只是为了让调用点风格与其它实体一致、并为将来
 // Host 加引用类型字段时留一个显式改动点。
 func copyHost(h model.Host) model.Host {
+	// Disks 是切片，浅拷贝会让调用方与库内共享底层数组——改一个影响另一个，
+	// 那正是 fake store 存在的意义（模拟真实 store 的值语义）要防的。
+	if h.Disks != nil {
+		disks := make([]model.HostDisk, len(h.Disks))
+		copy(disks, h.Disks)
+		h.Disks = disks
+	}
 	return h
 }
 

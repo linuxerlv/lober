@@ -392,6 +392,44 @@ GBK 解，表头全乱码）；**列名中文、文件名英文加时间戳**（
 
 手工录入兜底（SPEC §7.4：discovery 尚未覆盖到的机器）。
 
+**入参新增可选的 `disks` 字段**（本次契约变更）：
+
+```json
+{
+  "sn": "...", "mac": "...", "arch": "x86_64", "firmware": "bios",
+  "disks": [
+    {"byIdPath": "/dev/disk/by-id/wwn-0x...", "sizeBytes": 480000000000,
+     "rotational": false, "model": "SSD-A"}
+  ]
+}
+```
+
+为什么需要它：**除 by-hook 之外的四个磁盘策略都要求服务端已知盘**
+（first / largest / by-model / raid1-ssd，其中 largest 是
+`deploy/lober.yaml.example` 的默认值），而建任务时服务端此前拿不到任何磁盘
+信息——`handleCreateTask` 传给 `ParamsResolver` 的 facts 只有
+SN / MAC / UUID / arch / os_family。于是那四个策略在建任务时必然以「磁盘清单
+为空」失败，而 preseed 等应答文件即便建出了任务也会因 `Facts[LOBER_DISK_PRIMARY]`
+为空而拒绝渲染。
+
+只有 RHEL 家族能绕过：它的 kickstart 支持 `%include`，by-hook 策略把选盘推到
+`%pre` 阶段的 hook。其余五家（Debian / Ubuntu / SUSE / Windows / ESXi）的应答
+文件都直接吃磁盘路径，没有等价的延迟机制。
+
+`byIdPath` 必填，且必须是 by-id / WWN 这类持久标识——内核名（`/dev/sda`）在
+不同启动之间会漂移，写进分区指令可能**擦错盘**（SPEC §10 失败模式 5）。缺它
+返回 `CodeBadRequest`。
+
+字段可选，不传时磁盘清单为空，行为与本次变更之前完全一致。
+
+**这是过渡方案。** SPEC §11 Phase 2 的正解是 inspect 阶段硬件采集
+（`RenderInspectScript` 已经写好，但还没接进任何应答文件）；接通之后由它回填
+同一个 `Host.Disks` 字段，手工录入仍然保留作为 §7.4 的兜底路径。
+
+磁盘清单在建任务时被编码成 `LOBER_INSPECT_DISK_<n>_{BYID,SIZE,ROTATIONAL,MODEL}`
+形态的 facts 送给决策器——键名与 `render/inspect.go` 的采集脚本写入的格式一致
+（`provider/hwfacts.go` 的 `ParseHWDisks` 解析），两条来源共用同一个解析器。
+
 **入参：**
 
 ```json

@@ -10,6 +10,7 @@ package host
 import (
 	"context"
 	"errors"
+	"github.com/google/go-cmp/cmp"
 	"testing"
 
 	"github.com/lober/lober/internal/core/contract"
@@ -41,8 +42,9 @@ func TestUpsertHost_首次插入(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertHost 失败: %v", err)
 	}
-	if got != h {
-		t.Fatalf("UpsertHost 返回值 = %+v, want %+v", got, h)
+	// model.Host 含切片（Disks），不能用 != 比较。
+	if diff := cmp.Diff(h, got); diff != "" {
+		t.Fatalf("got 与期望不符（-want +got）:\n%s", diff)
 	}
 
 	// 用 GetHost 复核确实落库。
@@ -50,8 +52,9 @@ func TestUpsertHost_首次插入(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetHost 失败: %v", err)
 	}
-	if fetched != h {
-		t.Fatalf("GetHost 返回 = %+v, want %+v", fetched, h)
+	// model.Host 含切片（Disks），不能用 != 比较。
+	if diff := cmp.Diff(h, fetched); diff != "" {
+		t.Fatalf("fetched 与期望不符（-want +got）:\n%s", diff)
 	}
 }
 
@@ -97,8 +100,9 @@ func TestUpsertHost_同mac第二次是更新不是插入(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetHost 失败: %v", err)
 	}
-	if fetched != second {
-		t.Fatalf("GetHost 返回 = %+v, want 更新后的 %+v", fetched, second)
+	// model.Host 含切片（Disks），不能用 != 比较。
+	if diff := cmp.Diff(second, fetched); diff != "" {
+		t.Fatalf("GetHost 返回值与更新后的主机不符（-want +got）:\n%s", diff)
 	}
 }
 
@@ -182,8 +186,9 @@ func TestFindHostByIdentity_SN命中(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindHostByIdentity 失败: %v", err)
 	}
-	if got != h {
-		t.Fatalf("FindHostByIdentity 返回 = %+v, want %+v", got, h)
+	// model.Host 含切片（Disks），不能用 != 比较。
+	if diff := cmp.Diff(h, got); diff != "" {
+		t.Fatalf("got 与期望不符（-want +got）:\n%s", diff)
 	}
 }
 
@@ -207,8 +212,9 @@ func TestFindHostByIdentity_SN空而MAC命中(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindHostByIdentity 失败: %v", err)
 	}
-	if got != h {
-		t.Fatalf("FindHostByIdentity 返回 = %+v, want %+v", got, h)
+	// model.Host 含切片（Disks），不能用 != 比较。
+	if diff := cmp.Diff(h, got); diff != "" {
+		t.Fatalf("got 与期望不符（-want +got）:\n%s", diff)
 	}
 }
 
@@ -250,8 +256,9 @@ func TestGetHost_命中(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetHost 失败: %v", err)
 	}
-	if got != h {
-		t.Fatalf("GetHost 返回 = %+v, want %+v", got, h)
+	// model.Host 含切片（Disks），不能用 != 比较。
+	if diff := cmp.Diff(h, got); diff != "" {
+		t.Fatalf("got 与期望不符（-want +got）:\n%s", diff)
 	}
 }
 

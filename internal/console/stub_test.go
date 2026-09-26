@@ -118,9 +118,14 @@ var _ contract.Renderer = (*stubRenderer)(nil)
 // 验证「参数决策失败时库里不出现任务」这条硬要求。
 type stubResolver struct {
 	resolveFunc func(ctx context.Context, formData, facts map[string]string) (map[string]string, error)
+
+	// LastFacts 记录最后一次调用收到的 facts，供断言「建任务时哪些事实被送到了
+	// 决策器手上」——磁盘规划等决策的输入全在这里，送不到就等于没录入。
+	LastFacts map[string]string
 }
 
 func (r *stubResolver) Resolve(ctx context.Context, formData, facts map[string]string) (map[string]string, error) {
+	r.LastFacts = facts
 	if r.resolveFunc != nil {
 		return r.resolveFunc(ctx, formData, facts)
 	}
@@ -295,6 +300,8 @@ type testServer struct {
 	Audit  *stubAuditLogger
 	SM     *stubStateMachine
 	Bus    *stubEventBus
+	// Resolver 暴露出来供断言送进决策器的 facts（见 stubResolver.LastFacts）。
+	Resolver *stubResolver
 
 	t *testing.T
 }
@@ -309,6 +316,7 @@ func newTestServer(t *testing.T) *testServer {
 	store := fake.NewStore()
 	clock := fake.NewClock()
 	audit := &stubAuditLogger{store: store, clock: clock}
+	resolver := &stubResolver{}
 	sm := &stubStateMachine{t: t}
 	bus := &stubEventBus{}
 
@@ -330,7 +338,7 @@ func newTestServer(t *testing.T) *testServer {
 		Events:         store,
 		StateMachine:   sm,
 		Renderer:       &stubRenderer{},
-		ParamsResolver: &stubResolver{},
+		ParamsResolver: resolver,
 		DiskPlanner:    &stubDiskPlanner{},
 		EventBus:       bus,
 		Audit:          audit,
@@ -340,13 +348,14 @@ func newTestServer(t *testing.T) *testServer {
 	}
 
 	return &testServer{
-		Server: NewServer(deps),
-		Store:  store,
-		Clock:  clock,
-		Audit:  audit,
-		SM:     sm,
-		Bus:    bus,
-		t:      t,
+		Server:   NewServer(deps),
+		Store:    store,
+		Clock:    clock,
+		Audit:    audit,
+		SM:       sm,
+		Bus:      bus,
+		Resolver: resolver,
+		t:        t,
 	}
 }
 

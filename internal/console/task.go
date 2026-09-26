@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -254,6 +255,16 @@ func (s *Server) handleCreateTask(c *gin.Context) {
 		model.FactSN: host.SN, model.FactMAC: host.MAC, model.FactUUID: host.UUID,
 		model.FactArch: string(host.Arch), model.FactOSFamily: string(artifact.OSFamily),
 	}
+	// 把主机的磁盘清单编码进 facts：磁盘规划器读的是 LOBER_INSPECT_DISK_* 键
+	// （provider/hwfacts.go 的 ParseHWDisks 解析），不做这层转换，录进 Host 的
+	// 清单就送不到决策器手上——而除 by-hook 之外的四个策略都要它（见
+	// model.Host.Disks 的文档）。
+	//
+	// 清单为空时什么都不加：让磁盘规划器按自己的契约报「磁盘清单为空」，
+	// 而不是在这里替它判断——那个错误信息里带着策略名，比这里能给的更准。
+	for k, v := range encodeDiskFacts(host.Disks) {
+		facts[k] = v
+	}
 	resolvedParams, err := s.deps.ParamsResolver.Resolve(c.Request.Context(), req.FormData, facts)
 	if err != nil {
 		apierr.Fail(c, apierr.New(http.StatusOK, apierr.CodeConflict,
@@ -404,4 +415,31 @@ func (s *Server) handleTaskCancel(c *gin.Context) {
 		return
 	}
 	apierr.OK(c, toTaskItem(updated))
+}
+
+// encodeDiskFacts 把主机磁盘清单编码成 LOBER_INSPECT_DISK_* 形态的 facts。
+//
+// 键名与 provider/hwfacts.go 的 ParseHWDisks 解析的格式一致——那是
+// render/inspect.go 的采集脚本实际写入的形态，这里复用它而不是另发明一套：
+// inspect 阶段接通之后（SPEC §11 Phase 2），两条来源产出的 facts 必须能被同一
+// 个解析器吃下去。
+//
+// rotational 编码成 "1"/"0"：ParseHWDisks 按这个约定读（采集脚本取的是
+// /sys/block/<dev>/queue/rotational 的原始内容，那个文件就是 1 或 0）。
+func encodeDiskFacts(disks []model.HostDisk) map[string]string {
+	if len(disks) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(disks)*4)
+	for i, d := range disks {
+		prefix := fmt.Sprintf("LOBER_INSPECT_DISK_%d", i)
+		out[prefix+"_BYID"] = d.ByIDPath
+		out[prefix+"_SIZE"] = strconv.FormatInt(d.SizeBytes, 10)
+		out[prefix+"_ROTATIONAL"] = "0"
+		if d.Rotational {
+			out[prefix+"_ROTATIONAL"] = "1"
+		}
+		out[prefix+"_MODEL"] = d.Model
+	}
+	return out
 }

@@ -192,6 +192,45 @@ type Host struct {
 
 	Rack       string // 机架位，建任务确认框的必显字段之一（§3.2）
 	LastSeenAt int64  // 上次被发现时间，Unix 秒；同为必显字段，供运维核对是否为目标机
+
+	// Disks 是这台机器的磁盘清单，供建任务时的磁盘规划决策使用。
+	//
+	// **为什么挂在 Host 上而不是 Facts 里**：contract.FactStore 按 taskID 存
+	// facts，而建任务时任务还不存在——那是个循环依赖。而磁盘规划必须在建任务
+	// 时完成（决策要固化，SPEC §2.6），所以清单只能来自主机记录。
+	//
+	// 两个来源：
+	//
+	//   - 手工录入（POST /hosts 的 disks 字段）。SPEC §7.4 的「discovery 尚未
+	//     覆盖到的机器」兜底路径，本字段当前唯一的写入方。
+	//   - inspect 阶段的硬件采集（SPEC §11 Phase 2）。RenderInspectScript 已经
+	//     写好但还没接进任何应答文件，接通后由它回填。
+	//
+	// 为空时，除 by-hook 之外的四个磁盘策略都会在建任务时以「磁盘清单为空」
+	// 失败——那是刻意的：first/largest/by-model/raid1-ssd 都要求服务端已知盘，
+	// 猜一个出来会让机器擦错盘（SPEC §10 失败模式 5）。
+	Disks []HostDisk
+}
+
+// HostDisk 是主机磁盘清单里的一块盘。
+//
+// 字段与 contract.Disk 对应（磁盘规划器的输入类型），但刻意不复用那个类型：
+// contract 层不该依赖 model，而 model.Host 又要能被 store 序列化，两者的
+// 生命周期与演进节奏不同。转换在 console 的建任务路径上做。
+type HostDisk struct {
+	// ByIDPath 是持久化的设备标识（/dev/disk/by-id/... 或 WWN），**必填**。
+	//
+	// 不用内核名（/dev/sda）：那个名字在不同启动之间会漂移，写进分区指令可能
+	// 擦错盘（SPEC §10 失败模式 5）。空值会让磁盘规划器选中一块没有路径的盘，
+	// 然后渲染出空的 --ondisk=。
+	ByIDPath string
+
+	SizeBytes int64
+
+	// Rotational 区分机械盘与固态盘，raid1-ssd 策略靠它选盘。
+	Rotational bool
+
+	Model string
 }
 
 // ArtifactSetState 是制品集的生命周期状态。
