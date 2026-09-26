@@ -181,7 +181,7 @@ func TestUpdateArtifactSetState_DoesNotClobberPaths(t *testing.T) {
 		Repo:   "rocky9.4/repo/",
 		Extra:  map[string]string{"boot_cfg": "rocky9.4/boot.cfg"},
 	}
-	if _, err := store.SetArtifactSetContent(ctx, set.ID, model.OSFamilyRHEL, paths); err != nil {
+	if _, err := store.SetArtifactSetContent(ctx, set.ID, model.ArtifactIdentity{OSFamily: model.OSFamilyRHEL, Arch: model.ArchX86_64, Firmware: model.FirmwareAny}, paths); err != nil {
 		t.Fatalf("SetArtifactSetContent 失败: %v", err)
 	}
 
@@ -242,7 +242,7 @@ func TestSetArtifactSetContent_RoundTrip(t *testing.T) {
 		},
 	}
 
-	updated, err := store.SetArtifactSetContent(ctx, set.ID, model.OSFamilyESXi, paths)
+	updated, err := store.SetArtifactSetContent(ctx, set.ID, model.ArtifactIdentity{OSFamily: model.OSFamilyESXi, Arch: model.ArchX86_64, Firmware: model.FirmwareAny}, paths)
 	if err != nil {
 		t.Fatalf("SetArtifactSetContent 失败: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestSetArtifactSetContent_DoesNotClobberFailReason(t *testing.T) {
 		t.Fatalf("UpdateArtifactSetState 失败: %v", err)
 	}
 
-	if _, err := store.SetArtifactSetContent(ctx, set.ID, model.OSFamilyRHEL, model.ArtifactPaths{Kernel: "vmlinuz"}); err != nil {
+	if _, err := store.SetArtifactSetContent(ctx, set.ID, model.ArtifactIdentity{OSFamily: model.OSFamilyRHEL, Arch: model.ArchX86_64, Firmware: model.FirmwareAny}, model.ArtifactPaths{Kernel: "vmlinuz"}); err != nil {
 		t.Fatalf("SetArtifactSetContent 失败: %v", err)
 	}
 

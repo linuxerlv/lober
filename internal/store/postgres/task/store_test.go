@@ -198,20 +198,53 @@ func TestFindPendingTaskByIdentity(t *testing.T) {
 		}
 	})
 
-	t.Run("命中的任务不是pending", func(t *testing.T) {
+	// 本用例原先用 booting 当「非 pending」的样本，而 booting 现在是**接受**
+	// 引导请求的状态之一（SPEC §3.3「booting | 15 min | 允许重试，attempt++」，
+	// 见 contract.TaskStore.FindPendingTaskByIdentity 的文档）。改用真正不接受
+	// 引导的四个状态，并加一条正向用例确认 booting 能被命中——两者合起来锁住
+	// 「哪些状态接受引导」这条边界，比原先只测一个反例更严。
+	t.Run("命中的任务状态不接受引导", func(t *testing.T) {
+		for _, state := range []model.TaskState{
+			model.TaskStateInstalling, model.TaskStateRebooting,
+			model.TaskStateDone, model.TaskStateFailed,
+		} {
+			s := newTestStore(t)
+			ctx := context.Background()
+
+			notBootable := baseTask("task-" + string(state))
+			notBootable.HostSN = "SN-" + string(state)
+			notBootable.State = state
+			if _, err := s.CreateTask(ctx, notBootable); err != nil {
+				t.Fatalf("CreateTask() 失败: %v", err)
+			}
+
+			_, err := s.FindPendingTaskByIdentity(ctx, notBootable.HostSN, "", "")
+			if !errors.Is(err, contract.ErrNotFound) {
+				t.Errorf("状态 %s 不该接受引导请求，FindPendingTaskByIdentity = %v, "+
+					"want errors.Is(_, contract.ErrNotFound) = true", state, err)
+			}
+		}
+	})
+
+	t.Run("命中booting任务_接受重试", func(t *testing.T) {
 		s := newTestStore(t)
 		ctx := context.Background()
 
-		notPending := baseTask("task-not-pending")
-		notPending.HostSN = "SN-not-pending"
-		notPending.State = model.TaskStateBooting
-		if _, err := s.CreateTask(ctx, notPending); err != nil {
+		booting := baseTask("task-booting-retry")
+		booting.HostSN = "SN-booting-retry"
+		booting.State = model.TaskStateBooting
+		if _, err := s.CreateTask(ctx, booting); err != nil {
 			t.Fatalf("CreateTask() 失败: %v", err)
 		}
 
-		_, err := s.FindPendingTaskByIdentity(ctx, "SN-not-pending", "", "")
-		if !errors.Is(err, contract.ErrNotFound) {
-			t.Errorf("FindPendingTaskByIdentity(命中任务非 pending) = %v, want errors.Is(_, contract.ErrNotFound) = true", err)
+		got, err := s.FindPendingTaskByIdentity(ctx, booting.HostSN, "", "")
+		if err != nil {
+			t.Fatalf("booting 任务必须能被查到——否则 MaxBootAttempts=3 的重试配额"+
+				"一次都用不上（第一次引导就把任务推到 booting，机器重试时拿到 "+
+				"no_task）。实际: %v", err)
+		}
+		if got.ID != booting.ID {
+			t.Errorf("查到的任务 ID = %q, want %q", got.ID, booting.ID)
 		}
 	})
 

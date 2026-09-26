@@ -66,12 +66,13 @@ func newImportRunner(store contract.ArtifactSetStore, extractor imports.Extracto
 // 与其内部实现是否读取 ctx（Job.Run 当前的实现不会主动检查 ctx 取消，
 // 抽取过程本身也不是可中断的，这与「进程退出时在途导入会中断」是同一类
 // 已知限制，记入 notes）。
-func (r *importRunner) TriggerImport(ctx context.Context, artifactSetID, isoPath string) {
+func (r *importRunner) TriggerImport(ctx context.Context, artifactSetID string, src console.ImportSource) {
+	isoPath := src.ISOPath
 	destDir := filepath.Join(r.artifactRoot, artifactSetID)
 	job := imports.NewJob(r.store, r.extractor)
 
 	go func() {
-		if err := job.Run(ctx, artifactSetID, isoPath, destDir); err != nil {
+		if err := job.Run(ctx, artifactSetID, isoPath, destDir, imports.Options{NetbootPath: src.NetbootPath}); err != nil {
 			// 错误已经被 Job.Run 自己写回为制品集的 failed 状态（见
 			// internal/imports/job.go 的 fail 方法），这里只记日志供运维
 			// 排障——不重复写状态，也不吞掉这条信息（否则「为什么这个

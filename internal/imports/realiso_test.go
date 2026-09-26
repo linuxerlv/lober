@@ -108,7 +108,7 @@ func TestRealISO_JobRunProducesUsableArtifact(t *testing.T) {
 	store.declaredFirmware = model.FirmwareUEFI
 	job := NewJob(store, NewMountExtractor(""))
 
-	if err := job.Run(ctx, "real-iso-set", isoPath, destDir); err != nil {
+	if err := job.Run(ctx, "real-iso-set", isoPath, destDir, Options{}); err != nil {
 		t.Fatalf("Job.Run 失败: %v", err)
 	}
 

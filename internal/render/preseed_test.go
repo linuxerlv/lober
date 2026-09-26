@@ -142,10 +142,22 @@ func TestPreseed_PostHooksUseScriptFileNotSingleLine(t *testing.T) {
 			"而不是「落脚本再执行」，got 该行:\n%s", lateCommandLine)
 	}
 
-	// 脚本文件内容（落在 preseed 输出的其它位置，通过 in-target tee 落盘）
-	// 应该包含 run_hook 调用。
-	if !strings.Contains(out, "run_hook '") {
-		t.Errorf("preseed 输出中完全没有 run_hook 调用，hook 没有被落进任何脚本文件，got:\n%s", out)
+	// run_hook 调用应该在被落盘的脚本正文里。两个阶段的脚本都是 base64 编码后
+	// 塞进 debconf 单行值的，所以要解码才能断言——早先 early_command 是明文，
+	// 于是本测试在 out 里直接搜就能命中；那个明文单行做法在真机上产出非法 shell
+	// （见 earlyCommandValue 的说明），改成 base64 之后明文里不再有 run_hook。
+	early, err := earlyCommandValue(fullPreseedCtx())
+	if err != nil {
+		t.Fatalf("earlyCommandValue 返回错误: %v", err)
+	}
+	late, err := lateCommandValue(fullPreseedCtx())
+	if err != nil {
+		t.Fatalf("lateCommandValue 返回错误: %v", err)
+	}
+	decoded := decodeSoleBase64Blob(t, early) + decodeLateCommandScript(t, late)
+	if !strings.Contains(decoded, "run_hook '") {
+		t.Errorf("两个阶段的脚本里都没有 run_hook 调用，hook 没有被落进任何脚本文件。"+
+			"解码后的正文:\n%s", decoded)
 	}
 }
 
@@ -257,16 +269,27 @@ func TestSignalPoints_DebianAllPresentAndKnown(t *testing.T) {
 	}
 	decodedLate := decodeLateCommandScript(t, late)
 
-	// pre-start/pre-done 直接出现在 early_command 的值里（未经 base64
-	// 编码），post-start/post-done/rebooting 落在 late_command 的 base64
-	// 编码脚本内，需要先解码——两者在渲染管线中的落点不同，测试分别检查。
+	// pre-start/pre-done 与 post-start/post-done/rebooting 现在都落在 base64
+	// 编码的脚本里（early_command 与 late_command 各一份），都要先解码再断言。
+	//
+	// early_command 此前是明文单行，本测试也因此直接在 out 里搜。那个做法在真机
+	// 上装不了机：ClientLib 含函数定义与行内注释，按行用 `; ` 拼接会产出非法
+	// shell（实测 `sh: syntax error: unexpected ";"`），见 earlyCommandValue 的说明。
+	early, err := earlyCommandValue(fullPreseedCtx())
+	if err != nil {
+		t.Fatalf("earlyCommandValue 返回错误: %v", err)
+	}
+	decodedEarly := decodeSoleBase64Blob(t, early)
+
 	earlyMarkers := []model.SignalKind{model.SignalPreStart, model.SignalPreDone}
 	for _, sig := range earlyMarkers {
 		marker := `signal "` + string(sig) + `"`
-		if !strings.Contains(out, marker) {
-			t.Errorf("Debian preseed 的 early_command 中缺少信号 %q（marker=%q），got:\n%s", sig, marker, out)
+		if !strings.Contains(decodedEarly, marker) {
+			t.Errorf("Debian preseed 的 early_command 脚本中缺少信号 %q（marker=%q），decoded:\n%s",
+				sig, marker, decodedEarly)
 		}
 	}
+	_ = out
 
 	lateMarkers := []model.SignalKind{model.SignalPostStart, model.SignalPostDone, model.SignalRebooting}
 	for _, sig := range lateMarkers {

@@ -58,7 +58,10 @@ func TestResolveTaskParams_NoNICFactsIsNoOpForNICDecision(t *testing.T) {
 	diskPlanner := diskPlannerFirst{}
 
 	orchestrator := NewTaskParamsResolver(resolver, diskPlanner, contract.DiskIntent{})
-	params, err := orchestrator.Resolve(context.Background(), validFormData(), validFacts())
+	res, err := orchestrator.Resolve(context.Background(), contract.ResolveRequest{
+		FormData: validFormData(), Facts: validFacts(),
+	})
+	params := res.ResolvedParams
 	if err != nil {
 		t.Fatalf("无网卡 facts 时不应报错: %v", err)
 	}
@@ -77,7 +80,10 @@ func TestResolveTaskParams_WithNICFactsAddsInstallNICMACKey(t *testing.T) {
 	diskPlanner := diskPlannerFirst{}
 
 	orchestrator := NewTaskParamsResolver(resolver, diskPlanner, contract.DiskIntent{})
-	params, err := orchestrator.Resolve(context.Background(), validFormData(), factsWithNICs())
+	res, err := orchestrator.Resolve(context.Background(), contract.ResolveRequest{
+		FormData: validFormData(), Facts: factsWithNICs(),
+	})
+	params := res.ResolvedParams
 	if err != nil {
 		t.Fatalf("有完整网卡事实时不应报错: %v", err)
 	}
@@ -139,7 +145,10 @@ func TestResolveTaskParams_NICDecisionFailureDoesNotFailOverallOrchestration(t *
 	}
 
 	orchestrator := NewTaskParamsResolver(resolver, diskPlanner, contract.DiskIntent{})
-	params, err := orchestrator.Resolve(context.Background(), validFormData(), facts)
+	res, err := orchestrator.Resolve(context.Background(), contract.ResolveRequest{
+		FormData: validFormData(), Facts: facts,
+	})
+	params := res.ResolvedParams
 	if err != nil {
 		t.Fatalf("网卡决策失败不应让整体编排失败，got err=%v", err)
 	}

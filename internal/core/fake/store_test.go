@@ -126,7 +126,7 @@ func TestStore_深拷贝_ArtifactPaths不被外部修改渗透(t *testing.T) {
 		Repo:   "rocky9.4/repo/",
 		Extra:  map[string]string{"boot_cfg": "rocky9.4/boot.cfg"},
 	}
-	if _, err := store.SetArtifactSetContent(ctx, created.ID, model.OSFamilyRHEL, paths); err != nil {
+	if _, err := store.SetArtifactSetContent(ctx, created.ID, model.ArtifactIdentity{OSFamily: model.OSFamilyRHEL, Arch: model.ArchX86_64, Firmware: model.FirmwareAny}, paths); err != nil {
 		t.Fatalf("SetArtifactSetContent 失败: %v", err)
 	}
 

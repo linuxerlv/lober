@@ -21,7 +21,7 @@ func ubuntuFakeRoot() fstest.MapFS {
 		"casper/vmlinuz":             &fstest.MapFile{Data: []byte("fake-kernel")},
 		"casper/initrd":              &fstest.MapFile{Data: []byte("fake-initrd")},
 		"casper/filesystem.squashfs": &fstest.MapFile{Data: []byte("fake-squashfs-image")},
-		".disk/info":                 &fstest.MapFile{Data: []byte("Ubuntu 24.04 LTS")},
+		".disk/info":                 &fstest.MapFile{Data: []byte(`Ubuntu-Server 24.04.1 LTS "Noble Numbat" - Release amd64 (20240827)`)},
 	}
 }
 
@@ -106,7 +106,7 @@ func TestExtractUbuntu_MultiPartSquashfsAllRecordedInExtra(t *testing.T) {
 		"casper/ubuntu-server-minimal.ubuntu-server.squashfs": &fstest.MapFile{
 			Data: []byte("fake-overlay-layer"),
 		},
-		".disk/info": &fstest.MapFile{Data: []byte("Ubuntu 24.04 LTS")},
+		".disk/info": &fstest.MapFile{Data: []byte(`Ubuntu-Server 24.04.1 LTS "Noble Numbat" - Release amd64 (20240827)`)},
 	}
 	destDir := t.TempDir()
 

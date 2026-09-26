@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 
 	"github.com/lober/lober/internal/core/model"
 )
@@ -44,7 +45,7 @@ import (
 type artifactSetUpdater interface {
 	GetArtifactSet(ctx context.Context, id string) (model.ArtifactSet, error)
 	UpdateArtifactSetState(ctx context.Context, id string, state model.ArtifactSetState, manifestSHA256, reason string) (model.ArtifactSet, error)
-	SetArtifactSetContent(ctx context.Context, id string, osFamily model.OSFamily, paths model.ArtifactPaths) (model.ArtifactSet, error)
+	SetArtifactSetContent(ctx context.Context, id string, identity model.ArtifactIdentity, paths model.ArtifactPaths) (model.ArtifactSet, error)
 }
 
 // WindowsSourcesResolver 是「按制品集 ID 取 Windows 外部文件路径集合」的
@@ -172,7 +173,17 @@ var familyExtractors = map[model.OSFamily]familyExtractor{
 //
 // isoPath 是登记时运维填写的本地路径（气隙环境下以「登记服务器本地路径」
 // 为主，SPEC §2.1），destDir 是制品集在磁盘上的根目录。
-func (j *Job) Run(ctx context.Context, artifactSetID, isoPath, destDir string) error {
+// Options 是一次导入的可选项。
+//
+// 用结构体而不是继续加位置参数：这个集合以后还会变（Windows 的驱动包、ESXi 的
+// VIB 源），而 Job.Run 的调用现场散在装配点与测试里。
+type Options struct {
+	// NetbootPath 是 netboot 制品包的路径，可空。Debian 家族的 PXE 装机需要它
+	// ——理由见 console.ImportSource.NetbootPath 与 ExtractDebian 里的说明。
+	NetbootPath string
+}
+
+func (j *Job) Run(ctx context.Context, artifactSetID, isoPath, destDir string, opts Options) error {
 	importSemaphore <- struct{}{}
 	defer func() { <-importSemaphore }()
 
@@ -220,6 +231,20 @@ func (j *Job) Run(ctx context.Context, artifactSetID, isoPath, destDir string) e
 	}
 
 	paths, err := extract(root, destDir)
+	if err == nil && family == model.OSFamilyDebian && opts.NetbootPath == "" {
+		// 没给 netboot 制品：ISO 内那份 initrd 必须自己能做网络安装，否则机器
+		// 引导起来会停在交互对话框上等人（理由见 CheckInitrdNetInstallCapable）。
+		// 给了 netboot 制品时这一检查由 applyDebianNetboot 对换上来的那份做。
+		if len(paths.Initrd) > 0 {
+			err = CheckInitrdNetInstallCapable(filepath.Join(destDir, paths.Initrd[0]))
+		}
+	}
+	if err == nil && family == model.OSFamilyDebian && opts.NetbootPath != "" {
+		// Debian 的 netboot initrd 覆盖 ISO 内的那一份。必须在 extract 之后：
+		// extract 已经把 repo/ 树（dists/pool 软件包索引）建好了，这里只换内核与
+		// initrd 这两个引导期文件。
+		paths, err = applyDebianNetboot(opts.NetbootPath, destDir, paths)
+	}
 	if err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("抽取内核/initrd/仓库树失败: %v", err))
 	}
@@ -229,7 +254,19 @@ func (j *Job) Run(ctx context.Context, artifactSetID, isoPath, destDir string) e
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("生成 manifest 失败: %v", err))
 	}
 
-	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, family, paths); err != nil {
+	// 判定身份三项（架构/版本/固件）。放在抽取之后、写回之前：判定只读
+	// 元数据、不依赖抽取产物，但失败时应当与抽取失败一样让整次导入失败，
+	// 而不是留下一个 arch 为空的制品集——那种制品集能进 ready，却会在每次
+	// /v1/boot 被 precheck 拒（见 identity.go 头部注释与 ErrArchUndetectable）。
+	// 声明固件传 FirmwareAny：本分支只处理 Linux 四家（Windows 与 ESXi 在
+	// 上面各有专门分派），而 firmwareFor 对这四家一律返回 any、忽略声明值
+	// ——一套 kernel/initrd 通吃 BIOS 与 UEFI，没有第二种取值可选。
+	identity, err := DetectIdentity(root, family, model.FirmwareAny)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("判定制品集身份失败: %v", err))
+	}
+
+	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, identity, paths); err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
 	}
 
@@ -278,7 +315,16 @@ func (j *Job) runWindows(ctx context.Context, artifactSetID string, root fs.FS, 
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("生成 manifest 失败: %v", err))
 	}
 
-	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, model.OSFamilyWindows, paths); err != nil {
+	// 判定身份三项（架构/版本/固件）。放在抽取之后、写回之前：判定只读
+	// 元数据、不依赖抽取产物，但失败时应当与抽取失败一样让整次导入失败，
+	// 而不是留下一个 arch 为空的制品集——那种制品集能进 ready，却会在每次
+	// /v1/boot 被 precheck 拒（见 identity.go 头部注释与 ErrArchUndetectable）。
+	identity, err := DetectIdentity(root, model.OSFamilyWindows, set.Firmware)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("判定制品集身份失败: %v", err))
+	}
+
+	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, identity, paths); err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
 	}
 
@@ -314,7 +360,16 @@ func (j *Job) runESXi(ctx context.Context, artifactSetID string, root fs.FS, des
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("生成 manifest 失败: %v", err))
 	}
 
-	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, model.OSFamilyESXi, paths); err != nil {
+	// 判定身份三项（架构/版本/固件）。放在抽取之后、写回之前：判定只读
+	// 元数据、不依赖抽取产物，但失败时应当与抽取失败一样让整次导入失败，
+	// 而不是留下一个 arch 为空的制品集——那种制品集能进 ready，却会在每次
+	// /v1/boot 被 precheck 拒（见 identity.go 头部注释与 ErrArchUndetectable）。
+	identity, err := DetectIdentity(root, model.OSFamilyESXi, set.Firmware)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("判定制品集身份失败: %v", err))
+	}
+
+	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, identity, paths); err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
 	}
 
@@ -358,7 +413,19 @@ func (j *Job) RunRHEL(ctx context.Context, artifactSetID, isoPath, destDir strin
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("生成 manifest 失败: %v", err))
 	}
 
-	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, family, paths); err != nil {
+	// 判定身份三项（架构/版本/固件）。放在抽取之后、写回之前：判定只读
+	// 元数据、不依赖抽取产物，但失败时应当与抽取失败一样让整次导入失败，
+	// 而不是留下一个 arch 为空的制品集——那种制品集能进 ready，却会在每次
+	// /v1/boot 被 precheck 拒（见 identity.go 头部注释与 ErrArchUndetectable）。
+	// 声明固件传 FirmwareAny：本分支只处理 Linux 四家（Windows 与 ESXi 在
+	// 上面各有专门分派），而 firmwareFor 对这四家一律返回 any、忽略声明值
+	// ——一套 kernel/initrd 通吃 BIOS 与 UEFI，没有第二种取值可选。
+	identity, err := DetectIdentity(root, family, model.FirmwareAny)
+	if err != nil {
+		return j.fail(ctx, artifactSetID, fmt.Sprintf("判定制品集身份失败: %v", err))
+	}
+
+	if _, err := j.store.SetArtifactSetContent(ctx, artifactSetID, identity, paths); err != nil {
 		return j.fail(ctx, artifactSetID, fmt.Sprintf("写回制品集内容失败: %v", err))
 	}
 

@@ -118,17 +118,39 @@ var _ contract.Renderer = (*stubRenderer)(nil)
 // 验证「参数决策失败时库里不出现任务」这条硬要求。
 type stubResolver struct {
 	resolveFunc func(ctx context.Context, formData, facts map[string]string) (map[string]string, error)
+
+	// factsFunc 产出要落库的决策事实（第二个返回值）。真实 resolver 从磁盘
+	// 规划器与 IPAM 拿到它们；桩里让测试直接指定。
+	factsFunc func(formData, facts map[string]string) map[string]string
+
+	// LastFacts 记录最后一次调用收到的 facts，供断言「建任务时哪些事实被送到了
+	// 决策器手上」——磁盘规划等决策的输入全在这里，送不到就等于没录入。
+	LastFacts map[string]string
+
+	// LastDiskPolicy 记录最后一次调用收到的磁盘策略，供断言「模板的策略确实
+	// 传到了决策器」——那一环断掉时规划器会悄悄退回全局配置。
+	LastDiskPolicy model.DiskPolicy
 }
 
-func (r *stubResolver) Resolve(ctx context.Context, formData, facts map[string]string) (map[string]string, error) {
+func (r *stubResolver) Resolve(ctx context.Context, req contract.ResolveRequest) (contract.ResolveResult, error) {
+	formData, facts := req.FormData, req.Facts
+	r.LastFacts = facts
+	r.LastDiskPolicy = req.DiskPolicy
+
+	var decided map[string]string
+	if r.factsFunc != nil {
+		decided = r.factsFunc(formData, facts)
+	}
+
 	if r.resolveFunc != nil {
-		return r.resolveFunc(ctx, formData, facts)
+		out, err := r.resolveFunc(ctx, formData, facts)
+		return contract.ResolveResult{ResolvedParams: out, DecidedFacts: decided}, err
 	}
 	out := make(map[string]string, len(formData))
 	for k, v := range formData {
 		out[k] = v
 	}
-	return out, nil
+	return contract.ResolveResult{ResolvedParams: out, DecidedFacts: decided}, nil
 }
 
 var _ contract.TaskParamsResolver = (*stubResolver)(nil)
@@ -295,6 +317,8 @@ type testServer struct {
 	Audit  *stubAuditLogger
 	SM     *stubStateMachine
 	Bus    *stubEventBus
+	// Resolver 暴露出来供断言送进决策器的 facts（见 stubResolver.LastFacts）。
+	Resolver *stubResolver
 
 	t *testing.T
 }
@@ -309,6 +333,7 @@ func newTestServer(t *testing.T) *testServer {
 	store := fake.NewStore()
 	clock := fake.NewClock()
 	audit := &stubAuditLogger{store: store, clock: clock}
+	resolver := &stubResolver{}
 	sm := &stubStateMachine{t: t}
 	bus := &stubEventBus{}
 
@@ -330,23 +355,28 @@ func newTestServer(t *testing.T) *testServer {
 		Events:         store,
 		StateMachine:   sm,
 		Renderer:       &stubRenderer{},
-		ParamsResolver: &stubResolver{},
-		DiskPlanner:    &stubDiskPlanner{},
-		EventBus:       bus,
-		Audit:          audit,
-		AuditQuery:     store,
-		Clock:          clock,
-		Users:          users,
+		ParamsResolver: resolver,
+
+		// Facts 接的是同一个 fake.Store（它同时实现 FactStore）。不接这根线，
+		// 建任务时的决策结果就不落库，而渲染上下文正是从那里取 facts。
+		Facts:       store,
+		DiskPlanner: &stubDiskPlanner{},
+		EventBus:    bus,
+		Audit:       audit,
+		AuditQuery:  store,
+		Clock:       clock,
+		Users:       users,
 	}
 
 	return &testServer{
-		Server: NewServer(deps),
-		Store:  store,
-		Clock:  clock,
-		Audit:  audit,
-		SM:     sm,
-		Bus:    bus,
-		t:      t,
+		Server:   NewServer(deps),
+		Store:    store,
+		Clock:    clock,
+		Audit:    audit,
+		SM:       sm,
+		Bus:      bus,
+		Resolver: resolver,
+		t:        t,
 	}
 }
 

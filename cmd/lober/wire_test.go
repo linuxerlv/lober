@@ -333,7 +333,14 @@ func TestBuildApp_RootSSHPublicKeysWiredToGatewayAnswer(t *testing.T) {
 		t.Fatalf("CreateArtifactSet 失败: %v", err)
 	}
 
-	tpl := model.Template{ID: "tpl-wire-1", Name: "rocky9", ArtifactSetID: "art-wire-1", Version: 1, State: model.TemplateStateActive}
+	// DiskPolicy 显式声明 by-hook：本测试验证的是 root SSH 公钥从配置接到
+	// /v1/answer 的渲染上下文，不关心分区方案。而「模板不声明磁盘策略、
+	// 任务也没有 LOBER_DISK_PRIMARY fact」是个不自洽的上下文——
+	// render 的 partitionDirectives 对它报错（拒绝渲染出 `--drives=` 空值
+	// 指令，那会让 anaconda 在目标机上报错退出），所以夹具必须表明走哪条
+	// 分区路径。by-hook 是六个 e2e 脚本实际使用的策略。
+	tpl := model.Template{ID: "tpl-wire-1", Name: "rocky9", ArtifactSetID: "art-wire-1", Version: 1,
+		State: model.TemplateStateActive, DiskPolicy: model.DiskPolicyByHook}
 	if _, err := app.Store.CreateTemplate(ctx, tpl); err != nil {
 		t.Fatalf("CreateTemplate 失败: %v", err)
 	}

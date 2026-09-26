@@ -240,6 +240,13 @@ func copyTemplate(tpl model.Template) model.Template {
 // 赋值即深拷贝，本函数只是为了让调用点风格与其它实体一致、并为将来
 // Host 加引用类型字段时留一个显式改动点。
 func copyHost(h model.Host) model.Host {
+	// Disks 是切片，浅拷贝会让调用方与库内共享底层数组——改一个影响另一个，
+	// 那正是 fake store 存在的意义（模拟真实 store 的值语义）要防的。
+	if h.Disks != nil {
+		disks := make([]model.HostDisk, len(h.Disks))
+		copy(disks, h.Disks)
+		h.Disks = disks
+	}
 	return h
 }
 
@@ -340,7 +347,11 @@ func (s *Store) FindPendingTaskByIdentity(ctx context.Context, sn, mac, uuid str
 	defer s.mu.RUnlock()
 
 	for _, tk := range s.tasks {
-		if tk.State != model.TaskStatePending {
+		// pending 与 booting 都匹配：booting 任务必须接受重复引导请求，否则
+		// MaxBootAttempts=3 的重试配额一次都用不上（见 SPEC §3.3／§9.1 与
+		// statemachine.acceptsBootRequest 的文档）。两个 Store 实现在这一点上
+		// 必须一致，否则 conformance 套件通过而生产路径失败。
+		if tk.State != model.TaskStatePending && tk.State != model.TaskStateBooting {
 			continue
 		}
 		if identityMatches(sn, mac, uuid, tk.HostSN, tk.HostMAC, tk.HostUUID) {
@@ -683,7 +694,7 @@ func (s *Store) UpdateArtifactSetState(ctx context.Context, id string, state mod
 
 // SetArtifactSetContent 写回导入完成后才知道的内容：OSFamily 识别结果与
 // Paths。只改这两项，不触及 State/ManifestSHA256。
-func (s *Store) SetArtifactSetContent(ctx context.Context, id string, osFamily model.OSFamily, paths model.ArtifactPaths) (model.ArtifactSet, error) {
+func (s *Store) SetArtifactSetContent(ctx context.Context, id string, identity model.ArtifactIdentity, paths model.ArtifactPaths) (model.ArtifactSet, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -691,7 +702,10 @@ func (s *Store) SetArtifactSetContent(ctx context.Context, id string, osFamily m
 	if !ok {
 		return model.ArtifactSet{}, contract.ErrNotFound
 	}
-	a.OSFamily = osFamily
+	a.OSFamily = identity.OSFamily
+	a.OSVersion = identity.OSVersion
+	a.Arch = identity.Arch
+	a.Firmware = identity.Firmware
 	a.Paths = copyArtifactPaths(paths)
 	s.artifact[id] = a
 	return copyArtifactSet(a), nil

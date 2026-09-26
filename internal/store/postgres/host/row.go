@@ -20,7 +20,10 @@
 // 普通索引（加速 FindHostByIdentity 的 SN 分支查询），不建唯一约束。
 package host
 
-import "github.com/lober/lober/internal/core/model"
+import (
+	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/store/postgres/pgtype"
+)
 
 // hostRow 是 hosts 表的 GORM 映射。字段顺序与旧 schema 一致，方便对照。
 type hostRow struct {
@@ -46,6 +49,14 @@ type hostRow struct {
 	// LastSeenAt 恒有值（不是「尚未发生」语义），直接用 int64 存 Unix
 	// 秒，不需要 pgtype.NullTimeFromUnix 那套可空转换。
 	LastSeenAt int64 `gorm:"column:last_seen_at;not null"`
+
+	// Disks 是磁盘清单，jsonb 存。纯新增列、不带 index 标签——
+	// AutoMigrate 对已存在的索引永不更新，新增列不碰索引就绕开了那个盲区。
+	//
+	// 为什么用 jsonb 而不是单独一张表：磁盘清单只被建任务时的磁盘规划读一次，
+	// 从不单独查询、不做关联、不加索引（SPEC §2.3 的策略都是「在清单里挑一块」
+	// 这种整体读）。拆表会引入一次 join 与一份外键约束，换不到任何查询能力。
+	Disks pgtype.JSON[[]model.HostDisk] `gorm:"column:disks_json;type:jsonb"`
 }
 
 // TableName 固定表名为 hosts，不用 GORM 默认的复数推断（复数推断对
@@ -65,6 +76,7 @@ func (r hostRow) toModel() model.Host {
 		Firmware:   model.FirmwareMode(r.Firmware),
 		Rack:       r.Rack,
 		LastSeenAt: r.LastSeenAt,
+		Disks:      r.Disks.Val,
 	}
 }
 
@@ -77,6 +89,7 @@ func fromModel(h model.Host) hostRow {
 		Arch:       string(h.Arch),
 		Firmware:   string(h.Firmware),
 		Rack:       h.Rack,
+		Disks:      pgtype.JSON[[]model.HostDisk]{Val: h.Disks},
 		LastSeenAt: h.LastSeenAt,
 	}
 }

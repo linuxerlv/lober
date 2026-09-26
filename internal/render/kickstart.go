@@ -78,7 +78,16 @@ func RenderStageSection(ctx model.RenderContext, stage model.HookStage) string {
 	// 决定"怎么把这些行嵌进 kickstart 的段落语法"——内容与嵌入方式的分离，
 	// 是 phase2-01 任务 1 抽出共用骨架的设计要点。
 	lines := StageHookCallLines(ctx.Hooks, stage)
-	if len(lines) == 0 {
+	enter, leave, hasSignals := stageBoundarySignals(stage)
+
+	// 此前这里是 `if len(lines) == 0 { return "" }`——没有 hook 的阶段整段
+	// 不渲染，阶段信号也跟着一起没了。而信号是**阶段边界标记**，与 hook 是
+	// 两件独立的事：不挂任何 hook 的模板同样需要状态机知道走到了哪一步。
+	//
+	// 实测后果（2026-09-26，QEMU 目标机）：pre hook 回报 rc=0 之后再无任何
+	// 信号，任务停在 installing/pre 直到 §3.3 的 10 分钟阶段预算耗尽判失败
+	// ——anaconda 其实在正常往下走，而状态机在等一个永远不会来的 pre-done。
+	if len(lines) == 0 && !hasSignals {
 		return ""
 	}
 
@@ -86,8 +95,27 @@ func RenderStageSection(ctx model.RenderContext, stage model.HookStage) string {
 	b.WriteString(header)
 	b.WriteString("\n")
 	b.WriteString(ClientLib(ctx))
+	if enter != "" {
+		fmt.Fprintf(&b, "signal %q 0\n", enter)
+	}
 	for _, line := range lines {
 		b.WriteString(line)
+	}
+	// leave 排在 hook 调用之后：顺序错了会让状态机以为本阶段已结束而 hook
+	// 还在跑，之后 hook 若失败会被归到下一个阶段，诊断信息指向错误的位置。
+	if leave != "" {
+		fmt.Fprintf(&b, "signal %q 0\n", leave)
+	}
+	// %pre 段末尾额外补发 packages-start：**kickstart 没有「装包开始」这个
+	// 钩子**。anaconda 的段落只有 %pre（分区前）与 %post/%post --nochroot
+	// （都在装包之后），所以「装包即将开始」只能由 %pre 的末尾代表——那正是
+	// anaconda 接下来要去装包的前一刻。
+	//
+	// 放进 %post 段的后果（实测 2026-09-26）：pre-start 与 pre-done 都正常
+	// 到达，packages-start 永远不来，状态机停在 PhasePre 等到 §3.3 的 10 分钟
+	// 预算耗尽判失败——而 anaconda 其实正在装包，它要等装完才跑 %post。
+	if stage == model.HookStagePre {
+		fmt.Fprintf(&b, "signal %q 0\n", model.SignalPackagesStart)
 	}
 	b.WriteString("%end\n")
 	return b.String()
@@ -174,9 +202,30 @@ func baseDirectives(ctx model.RenderContext) (string, error) {
 	b.WriteString("lang en_US.UTF-8\n")
 	b.WriteString("keyboard us\n")
 	b.WriteString("timezone UTC --utc\n")
+	// 安装源声明。**`inst.repo=` 内核参数不能替代它**：前者告诉 installer 去哪
+	// 取 stage2 与默认仓库，这一行是 kickstart 自己的安装源声明，%packages 装包
+	// 要用。anaconda 在 inst.cmdline（非交互）模式下遇到「要装包但没有安装源
+	// 声明」这种未应答的问题会立即退出，不等任何人。
+	//
+	// 实测（2026-09-26，QEMU BIOS 目标机）：repodata 的全部索引取到（200），
+	// 三分钟后机器重新 PXE 引导——anaconda 解完索引就退出了，任务停在
+	// installing/packages 直到阶段预算耗尽。
+	//
+	// 指向**包仓库**（Repo，有 repodata/）而不是介质根：anaconda 拿它当 yum
+	// 仓库根。Repo 为空时回落到 MediaRoot——极简介质的 .treeinfo 不声明
+	// repository，那时两者本就相同。
+	repoRel := ctx.Artifact.Paths.Repo
+	if repoRel == "" {
+		repoRel = ctx.Artifact.Paths.MediaRootOrRepo()
+	}
+	fmt.Fprintf(&b, "url --url=%s\n", ctx.SetRepoURL(repoRel))
 	b.WriteString("bootloader --location=mbr\n")
-	fmt.Fprintf(&b, "clearpart --all --drives=%s\n", diskByID)
-	fmt.Fprintf(&b, "part / --fstype=xfs --grow --ondisk=%s\n", diskByID)
+
+	partitioning, err := partitionDirectives(ctx.Template.DiskPolicy, diskByID, ctx.ActualFirmware)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(partitioning)
 	// 这是装机 VLAN 上安装器自身正在使用的网卡（机器正是通过它 PXE 引导
 	// 到这里的），激活它不违反 SPEC §5.7 的"业务网写配置但不激活"——那条
 	// 规则约束的是 %post 阶段用户 hook 可能配置的业务网（另一 VLAN），与
@@ -270,23 +319,214 @@ func AssembleKickstart(ctx model.RenderContext) (string, error) {
 	}
 	b.WriteString(pro)
 
+	// %pre 段先渲染（含 pre-start / pre-done / packages-start）。
+	b.WriteString(RenderStageSection(ctx, model.HookStagePre))
+
+	// by-hook 策略的 %include 紧跟在 %pre 之后——anaconda 解析时就展开
+	// %include，而 %pre 是解析完成后才执行的，放在前面等于引用一个还不存在的
+	// 文件（见 byHookIncludeSection 的文档与实测记录）。
+	b.WriteString(byHookIncludeSection(ctx.Template.DiskPolicy))
+
+	// packages-done 必须排在 %post 的 hook 段**之前**。
+	//
+	// 装包结束这个时刻只能由 %post 的开头代表——anaconda 正是装完包才跑
+	// %post。但 post-start / post-done 也在 %post 段里，而信号的 Seq 是
+	// packages-done=40 < post-start=50：statemachine/signal.go 对 Seq 不大于
+	// 当前水位的信号直接丢弃（§3.6 只进不退）。所以 packages-done 若排在
+	// hook 的 %post 段之后，它发了也不算，状态机会卡在 packages 阶段等到
+	// 阶段预算耗尽。
+	//
+	// 单独一段而不是并进 hook 的 %post 段：那个段只在有 post hook 时才渲染，
+	// 而这个信号与 hook 无关（见 RenderStageSection 里关于「信号是阶段边界
+	// 标记」的说明）。每段各自嵌一份 ClientLib，因为 anaconda 的每个段落是
+	// 独立脚本、不共享函数定义。
+	b.WriteString("%post\n")
+	b.WriteString(ClientLib(ctx))
+	fmt.Fprintf(&b, "signal %q 0\n", model.SignalPackagesDone)
+	b.WriteString("%end\n")
+
+	// 两个 post 阶段的 hook 段（%post --nochroot 与 %post，后者含
+	// post-start / post-done）。
 	for _, stage := range []model.HookStage{
-		model.HookStagePre, model.HookStagePostNoChroot, model.HookStagePost,
+		model.HookStagePostNoChroot, model.HookStagePost,
 	} {
 		b.WriteString(RenderStageSection(ctx, stage))
 	}
 
-	// firstboot 脚手架必须落在自己的 %post ... %end 段落里（SPEC §5.8 的
-	// 参考实现正是这样写的）——它需要写文件到目标系统的
-	// /var/lib/lober、/etc/systemd/system、/usr/local/sbin，这些路径只有
-	// 在某个 %post 段落内、chroot 进目标系统之后才有意义。写成不属于任何
-	// 段落的裸露文本，anaconda 会把它当成语法错误或直接忽略，firstboot
-	// 机制会在没有任何明显报错的情况下整体失效——这是最容易被忽略的一类
-	// bug，因为通过编译与单元断言都不会暴露，只有 golden file 的完整装配
-	// 顺序检查才能抓到。
+	// firstboot 脚手架必须落在自己的 %post ... %end 段落里（SPEC §5.8 的参考
+	// 实现正是这样写的）——它需要写文件到目标系统的 /var/lib/lober、
+	// /etc/systemd/system、/usr/local/sbin，这些路径只有在某个 %post 段落内、
+	// chroot 进目标系统之后才有意义。写成不属于任何段落的裸露文本，anaconda
+	// 会把它当成语法错误或直接忽略，firstboot 机制会在没有任何明显报错的情况
+	// 下整体失效——这是最容易被忽略的一类 bug，编译与单元断言都不会暴露，
+	// 只有 golden file 的完整装配顺序检查才能抓到。
 	b.WriteString("%post\n")
 	b.WriteString(FirstbootScaffold(ctx))
 	b.WriteString("%end\n")
 
+	// rebooting 排在最后，且必须在 firstboot 脚手架之后：脚手架要把 unit 与
+	// 脚本写进目标系统，写完才算「可以重启了」。顺序颠倒会让状态机在 firstboot
+	// 还没装好时就以为进了 rebooting 阶段。
+	b.WriteString("%post\n")
+	b.WriteString(ClientLib(ctx))
+	fmt.Fprintf(&b, "signal %q 0\n", model.SignalRebooting)
+	b.WriteString("%end\n")
 	return b.String(), nil
+}
+
+// ByHookPartitionIncludePath 是 by-hook 磁盘策略下，%pre 阶段的 hook 必须
+// 写出的分区指令文件路径，主体 kickstart 用 %include 引入它。
+//
+// 放在 /tmp 下而不是 /root 或别处：anaconda 的 %pre 运行在 installer 的
+// ramdisk 里，那时目标盘还没分区、没挂载，/tmp 是唯一确定可写的位置（这也
+// 是 anaconda 社区惯例 /tmp/part-include 的由来）。名字带 lober- 前缀是为了
+// 与运维自己的 %pre 产物区分开——同一个 %pre 段里可能还有别的 hook 在写文件。
+const ByHookPartitionIncludePath = "/tmp/lober-part-include"
+
+// partitionDirectives 渲染分区相关的指令，按磁盘策略分两条路径。
+//
+// **为什么必须分路径。** kickstart 是 anaconda 开始装机**之前**就要取到的
+// 完整文本，而 by-hook 策略的语义正是「服务端不选盘，交给 %pre 阶段的 hook
+// 动态决定」（provider/diskplanner.go 的 diskPlannerByHook）——此刻服务端
+// 手上没有任何硬件信息，写不出 --drives= 的值。此前这里无条件把
+// LOBER_DISK_PRIMARY 插进两行指令，by-hook 下渲染结果是：
+//
+//	clearpart --all --drives=
+//	part / --fstype=xfs --grow --ondisk=
+//
+// anaconda 拿到空的 --drives= 直接报错退出，也就是说 by-hook 这个
+// SPEC §2.3 列出的五个策略之一，在真实装机路径上从来不可用。这个缺口此前
+// 被两层掩盖：六个 e2e 脚本全都用 by-hook（它是无硬件事实时唯一能建出任务
+// 的策略），但只用 curl 核对 HTTP 状态码与状态机流转，从不把渲染结果交给
+// 真的 anaconda；而单元测试的 RenderContext 都手工塞了 LOBER_DISK_PRIMARY，
+// 走不到空值分支。
+//
+// 两条路径：
+//
+//   - by-hook：渲染 `%include <路径>`，由 %pre 阶段的 hook 写出真正的分区
+//     指令。这是 anaconda 的标准机制，也是这个策略唯一能落地的方式。
+//   - 其余四个策略：磁盘 fact 必须有值，没有就**报错**而不是渲染出空值。
+//     空值意味着决策链某处断了（resolve.go 算出了主盘却没送进 Facts，那是
+//     一个真实存在的断口，见该文件关于契约缺口的注释），渲染期报错能把失败
+//     挡在服务端、带着完整任务上下文；渲染出空值则把失败推迟到 anaconda
+//     启动之后，那时唯一的证据在目标机的 BMC 控制台上。
+func partitionDirectives(policy model.DiskPolicy, diskByID string, firmware model.FirmwareMode) (string, error) {
+	if policy == model.DiskPolicyByHook {
+		// by-hook 策略下这里**什么都不输出**：`%include` 必须排在 %pre 段之后，
+		// 由 AssembleKickstart 在那个位置追加（见 byHookIncludeSection 的文档）。
+		//
+		// anaconda 在**解析** kickstart 时就要展开 %include，而 %pre 是解析完成
+		// 之后才执行的——放在基础指令区（本函数的输出位置）时，它读到那一行时
+		// /tmp/lober-part-include 还不存在，于是在校验阶段就失败退出。实测
+		// （2026-09-26）：repodata 索引全部取到，anaconda 200 多秒后重启，目标盘
+		// 只有 192KB——分区从未执行过。
+		return "", nil
+	}
+
+	if diskByID == "" {
+		return "", fmt.Errorf("render: 磁盘策略 %q 要求服务端已选定主盘，但 "+
+			"RenderContext.Facts[%s] 为空——渲染出 `clearpart --all --drives=` "+
+			"这种空值指令会让 anaconda 在目标机上报错退出，那时唯一的证据在 BMC "+
+			"控制台上，因此这里直接拒绝渲染。要么让决策链把主盘送进 Facts，"+
+			"要么把模板的磁盘策略改成 by-hook（由 %%pre 阶段的 hook 选盘）",
+			policy, model.FactDiskPrimary)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "clearpart --all --initlabel --drives=%s\n", diskByID)
+
+	// 按固件加引导分区。两种固件要的是**不同的东西**，给错或都给都会让
+	// anaconda 的存储校验失败：
+	//
+	//	BIOS + GPT  需要 1MiB 的 biosboot 分区。GRUB 把 core.img 写在那里——
+	//	            MBR 的 446 字节装不下它，而 GPT 没有 MBR 后面那段空隙。
+	//	UEFI        需要 /boot/efi 的 EFI 系统分区（vfat）。
+	//
+	// biosboot 这条是本轮实测中最后一个、也最难定位的缺口，因为症状指向别处：
+	// 校验失败后 anaconda 把错误挂在安装摘要屏等人处理（inst.text 下就停在
+	// 那里，inst.cmdline 下直接退出重启），而服务端侧看到的只是「packages 阶段
+	// 超时」——目标盘 192KB、包 0 个、repodata 索引全部 200。原文是：
+	//
+	//	Your BIOS-based system needs a special partition to boot from a GPT
+	//	disk label. To continue, please create a 1MiB 'biosboot' type
+	//	partition on the vda disk.
+	//
+	// 拿到这条信息花了六轮尝试（串口只有内核消息、kickstart 的 logging 指令在
+	// anaconda 启动前不生效、inst.syslog 同样没输出、journald 转发格式变了但
+	// 没有 anaconda 的行、最小化 kickstart 排除了渲染器内容问题），最后靠
+	// inst.sshd 登进 installer 读 /tmp/anaconda.log 才看到。
+	//
+	// clearpart 带 --initlabel 是前提：它建的是 GPT 标签，所以 BIOS 路径才需要
+	// biosboot。不带 --initlabel 时 anaconda 沿用盘上原有标签，而空白盘没有
+	// 标签会导致另一类失败。
+	if firmware == model.FirmwareUEFI {
+		fmt.Fprintf(&b, "part /boot/efi --fstype=efi --size=600 --ondisk=%s\n", diskByID)
+	} else {
+		fmt.Fprintf(&b, "part biosboot --fstype=biosboot --size=1 --ondisk=%s\n", diskByID)
+	}
+	fmt.Fprintf(&b, "part /boot --fstype=xfs --size=1024 --ondisk=%s\n", diskByID)
+	fmt.Fprintf(&b, "part / --fstype=xfs --grow --ondisk=%s\n", diskByID)
+	return b.String(), nil
+}
+
+// byHookIncludeSection 渲染 by-hook 策略下的 %include 行，**必须排在 %pre 段
+// 之后**。
+//
+// anaconda 解析 kickstart 时就展开 %include，而 %pre 在解析完成后才执行。放在
+// 前面等于引用一个还不存在的文件——实测（2026-09-26）anaconda 在校验阶段失败
+// 退出，分区从未执行，目标盘只有 192KB，而 %pre 明明成功跑完了（hook-report
+// rc=0，服务端收到了它打印的分区指令正文）。
+//
+// 注释与 %include 写在一起：anaconda 会把用过的 kickstart 存成
+// /root/anaconda-ks.cfg，那是失败现场唯一能直接拿到的证据。hook 忘了写那个
+// 文件时，装机会以「%include 的文件不存在」失败，现场的人必须能从 kickstart
+// 本身看出这个文件该由谁产生。
+func byHookIncludeSection(policy model.DiskPolicy) string {
+	if policy != model.DiskPolicyByHook {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("# 分区指令由 %pre 阶段的 hook 写出（磁盘策略 by-hook）。\n")
+	b.WriteString("# 本行必须排在 %pre 之后：anaconda 解析 kickstart 时就展开 %include，\n")
+	b.WriteString("# 而 %pre 是解析完成后才执行的。\n")
+	b.WriteString("# 分区必须含引导分区，否则 anaconda 的存储校验会失败：\n")
+	b.WriteString("#   BIOS + GPT  需要 1MiB 的 biosboot 分区（GRUB 的 core.img 放那里）\n")
+	b.WriteString("#   UEFI        需要 /boot/efi 的 EFI 系统分区\n")
+	b.WriteString("# 实测原文：Your BIOS-based system needs a special partition to boot\n")
+	b.WriteString("# from a GPT disk label ... create a 1MiB 'biosboot' type partition。\n")
+	b.WriteString("# 缺了它 anaconda 会挂在安装摘要屏（inst.text）或直接退出重启\n")
+	b.WriteString("#（inst.cmdline），而服务端侧只看到「packages 阶段超时」。\n")
+	b.WriteString("# 若本次装机以「" + ByHookPartitionIncludePath +
+		" 不存在」失败，说明模板引用的 pre hook 没有写这个文件。\n")
+	fmt.Fprintf(&b, "%%include %s\n", ByHookPartitionIncludePath)
+	return b.String()
+}
+
+// stageBoundarySignals 返回某个 hook 阶段对应的进入/离开信号。
+//
+// 映射依据 SPEC §3.3 的阶段预算表与 model.SignalKind 的定义，也与其余四个
+// 家族的渲染器保持一致（autoinstall.go、autoyast.go、preseed.go、winpe.go
+// 各自在对应位置发同名信号）：
+//
+//	%pre              pre-start / pre-done
+//	%post --nochroot  无独立信号——它与 %post 同属「装完之后」这一段，状态机
+//	                  只认一对 post-start/post-done，多发一对会让 §3.6 的
+//	                  「只进不退」判定把第二次 post-start 当成回退
+//	%post             post-start / post-done
+//
+// packages-start / packages-done 与 rebooting 不在这里：前两个是选包阶段的
+// 边界（%packages 不是 hook 阶段，没有对应的 HookStage），rebooting 是整个
+// 装机结束、机器即将重启那一刻，三者都由 AssembleKickstart 直接写。
+func stageBoundarySignals(stage model.HookStage) (enter, leave string, has bool) {
+	switch stage {
+	case model.HookStagePre:
+		return string(model.SignalPreStart), string(model.SignalPreDone), true
+	// packages-start 由 AssembleKickstart 紧跟在 %pre 段之后补发，不放进这里
+	// 的 leave——leave 是单个信号，而 %pre 末尾要连发两个（见
+	// AssembleKickstart 里那段说明）。
+	case model.HookStagePost:
+		return string(model.SignalPostStart), string(model.SignalPostDone), true
+	default:
+		return "", "", false
+	}
 }

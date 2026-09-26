@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -254,7 +255,26 @@ func (s *Server) handleCreateTask(c *gin.Context) {
 		model.FactSN: host.SN, model.FactMAC: host.MAC, model.FactUUID: host.UUID,
 		model.FactArch: string(host.Arch), model.FactOSFamily: string(artifact.OSFamily),
 	}
-	resolvedParams, err := s.deps.ParamsResolver.Resolve(c.Request.Context(), req.FormData, facts)
+	// 把主机的磁盘清单编码进 facts：磁盘规划器读的是 LOBER_INSPECT_DISK_* 键
+	// （provider/hwfacts.go 的 ParseHWDisks 解析），不做这层转换，录进 Host 的
+	// 清单就送不到决策器手上——而除 by-hook 之外的四个策略都要它（见
+	// model.Host.Disks 的文档）。
+	//
+	// 清单为空时什么都不加：让磁盘规划器按自己的契约报「磁盘清单为空」，
+	// 而不是在这里替它判断——那个错误信息里带着策略名，比这里能给的更准。
+	for k, v := range encodeDiskFacts(host.Disks) {
+		facts[k] = v
+	}
+	// DiskPolicy 按模板取：磁盘策略是模板属性（Template.DiskPolicy），而渲染器
+	// 正是按它决定要不要 %include（kickstart）或要求 LOBER_DISK_PRIMARY 存在
+	// （preseed）。不传这一项，决策器会退回装配点的全局配置，两半就会读到不同
+	// 的源——那正是 Debian 那轮渲染失败的原因。
+	resolveResult, err := s.deps.ParamsResolver.Resolve(c.Request.Context(), contract.ResolveRequest{
+		FormData:   req.FormData,
+		Facts:      facts,
+		DiskPolicy: tpl.DiskPolicy,
+	})
+	resolvedParams, decidedFacts := resolveResult.ResolvedParams, resolveResult.DecidedFacts
 	if err != nil {
 		apierr.Fail(c, apierr.New(http.StatusOK, apierr.CodeConflict,
 			"参数决策失败，任务未创建: "+err.Error()))
@@ -289,6 +309,27 @@ func (s *Server) handleCreateTask(c *gin.Context) {
 		}
 		apierr.Fail(c, err)
 		return
+	}
+
+	// 第 5.5 步：决策结果落进 FactStore。
+	//
+	// **这是决策链的最后一环。** 渲染上下文的 Facts 来自
+	// FactStore.GetFacts(task.ID)（gateway/rendercontext.go），所以主盘这类决策
+	// 结果不写进这里就送不到六个家族的渲染器手上——除 by-hook 之外的磁盘策略
+	// 下 preseed 直接拒绝渲染，kickstart 的非 by-hook 路径同样拒绝。
+	//
+	// 必须在 CreateTask 之后：facts 按 taskID 存，而 ID 要等任务落库才定下来。
+	//
+	// 写失败不回滚任务，但要**明确失败**而不是静默继续：facts 缺主盘的任务
+	// 取应答文件时必然渲染失败，那时报出来的是「模板配置有问题」，排查方向
+	// 完全错。留一个建不出来的任务比留一个注定装不上、且错误指向错误位置的
+	// 任务好。
+	if s.deps.Facts != nil && len(decidedFacts) > 0 {
+		if err := s.deps.Facts.MergeFacts(c.Request.Context(), created.ID, decidedFacts); err != nil {
+			apierr.Fail(c, fmt.Errorf("console: 决策结果落库失败（任务 %s 已创建但缺少 facts，"+
+				"取应答文件时会渲染失败）: %w", created.ID, err))
+			return
+		}
 	}
 	if _, err := s.deps.Events.AppendEvent(c.Request.Context(), model.TaskEvent{
 		TaskID: created.ID, Seq: 0, TS: now, Phase: model.PhasePending,
@@ -404,4 +445,31 @@ func (s *Server) handleTaskCancel(c *gin.Context) {
 		return
 	}
 	apierr.OK(c, toTaskItem(updated))
+}
+
+// encodeDiskFacts 把主机磁盘清单编码成 LOBER_INSPECT_DISK_* 形态的 facts。
+//
+// 键名与 provider/hwfacts.go 的 ParseHWDisks 解析的格式一致——那是
+// render/inspect.go 的采集脚本实际写入的形态，这里复用它而不是另发明一套：
+// inspect 阶段接通之后（SPEC §11 Phase 2），两条来源产出的 facts 必须能被同一
+// 个解析器吃下去。
+//
+// rotational 编码成 "1"/"0"：ParseHWDisks 按这个约定读（采集脚本取的是
+// /sys/block/<dev>/queue/rotational 的原始内容，那个文件就是 1 或 0）。
+func encodeDiskFacts(disks []model.HostDisk) map[string]string {
+	if len(disks) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(disks)*4)
+	for i, d := range disks {
+		prefix := fmt.Sprintf("LOBER_INSPECT_DISK_%d", i)
+		out[prefix+"_BYID"] = d.ByIDPath
+		out[prefix+"_SIZE"] = strconv.FormatInt(d.SizeBytes, 10)
+		out[prefix+"_ROTATIONAL"] = "0"
+		if d.Rotational {
+			out[prefix+"_ROTATIONAL"] = "1"
+		}
+		out[prefix+"_MODEL"] = d.Model
+	}
+	return out
 }

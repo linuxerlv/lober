@@ -53,7 +53,7 @@ func newSecureLinkGrantFixture(t *testing.T) grantFixture {
 	if !ok {
 		t.Fatalf("ArtifactSetStore 不是 *fake.Store，无法回写 Paths（类型: %T）", fx.deps.ArtifactSetStore)
 	}
-	if _, err := store.SetArtifactSetContent(t.Context(), artifact.ID, artifact.OSFamily, artifact.Paths); err != nil {
+	if _, err := store.SetArtifactSetContent(t.Context(), artifact.ID, model.ArtifactIdentity{OSFamily: artifact.OSFamily, Arch: model.ArchX86_64, Firmware: model.FirmwareAny}, artifact.Paths); err != nil {
 		t.Fatalf("回写 ArtifactSet.Paths 失败: %v", err)
 	}
 

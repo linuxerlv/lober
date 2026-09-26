@@ -223,6 +223,32 @@ token 无效/过期）永远返回真实的 HTTP `401`，body 仍为上述失败
 | 18 | PUT | `/console/v1/templates/{id}` | `admin` | 新版本 `TemplateItem` |
 | 19 | GET | `/console/v1/templates/{id}/form-schema` | 已登录 | 聚合后的 JSON Schema |
 | 20 | POST | `/console/v1/templates/{id}/preview` | 已登录 | `PreviewResult` |
+| 20b | POST | `/console/v1/templates/{id}/state` | `admin` | 流转后的 `TemplateItem` |
+
+> **端点 20b 是补一条断掉的链路，不是新增能力。** 模板只能被创建成
+> `draft`（`handleCreateTemplate` 硬编码），而 `POST /tasks` 硬性要求
+> `state == active`，而此前冻结的四个模板端点里没有任何一个能改状态——
+> 于是**任何模板都永远无法用于建任务**。store 层的
+> `TemplateStore.UpdateTemplateState` 一直完备，缺的只是这个 HTTP 调用点。
+> `scripts/e2e.sh` 头部注释（第 24-29 行）早就记录了这个缺口，并用
+> `db_template_active` 直接写库绕过。
+>
+> **入参：** `{ "state": "draft|active|deprecated", "version": <int> }`。
+> `state` 只认这三个字面值，区分大小写、不 trim（容忍 `"ACTIVE"` 会让
+> 数据库里存的形态变得不可预测，而 `POST /tasks` 用 `!= active` 判定，
+> 一个拼错的值会让模板永久不可用且无处报错）。
+>
+> `version` 必填且参与乐观锁：与当前版本不符时返回 `CodeConflict`（409），
+> 不静默覆盖——两个人同时看着同一个 draft，一个先改了内容（version 前进）、
+> 另一个拿旧 version 点激活时，被激活的那一版就不是点击者看到的那一版，
+> 而模板内容决定分区方案与 hook 链。
+>
+> **失败：** 模板不存在 → `CodeNotFound`（404）；`state` 不在三值之内 →
+> `CodeBadRequest`（400）；`version` 不匹配 → `CodeConflict`（409）。
+>
+> 刻意**不**引入 hook 那样的双人复核：hook 是「一段任意 root 代码」，
+> 模板是「选哪套制品、引哪些已批准的 hook」，后者引用的 hook 本身已经过
+> 双人复核，再叠一层是重复确认（同 §0.2 删 `armed` 的理由）。
 
 ### 任务（7 个）
 
@@ -365,6 +391,44 @@ GBK 解，表头全乱码）；**列名中文、文件名英文加时间戳**（
 #### `POST /hosts`
 
 手工录入兜底（SPEC §7.4：discovery 尚未覆盖到的机器）。
+
+**入参新增可选的 `disks` 字段**（本次契约变更）：
+
+```json
+{
+  "sn": "...", "mac": "...", "arch": "x86_64", "firmware": "bios",
+  "disks": [
+    {"byIdPath": "/dev/disk/by-id/wwn-0x...", "sizeBytes": 480000000000,
+     "rotational": false, "model": "SSD-A"}
+  ]
+}
+```
+
+为什么需要它：**除 by-hook 之外的四个磁盘策略都要求服务端已知盘**
+（first / largest / by-model / raid1-ssd，其中 largest 是
+`deploy/lober.yaml.example` 的默认值），而建任务时服务端此前拿不到任何磁盘
+信息——`handleCreateTask` 传给 `ParamsResolver` 的 facts 只有
+SN / MAC / UUID / arch / os_family。于是那四个策略在建任务时必然以「磁盘清单
+为空」失败，而 preseed 等应答文件即便建出了任务也会因 `Facts[LOBER_DISK_PRIMARY]`
+为空而拒绝渲染。
+
+只有 RHEL 家族能绕过：它的 kickstart 支持 `%include`，by-hook 策略把选盘推到
+`%pre` 阶段的 hook。其余五家（Debian / Ubuntu / SUSE / Windows / ESXi）的应答
+文件都直接吃磁盘路径，没有等价的延迟机制。
+
+`byIdPath` 必填，且必须是 by-id / WWN 这类持久标识——内核名（`/dev/sda`）在
+不同启动之间会漂移，写进分区指令可能**擦错盘**（SPEC §10 失败模式 5）。缺它
+返回 `CodeBadRequest`。
+
+字段可选，不传时磁盘清单为空，行为与本次变更之前完全一致。
+
+**这是过渡方案。** SPEC §11 Phase 2 的正解是 inspect 阶段硬件采集
+（`RenderInspectScript` 已经写好，但还没接进任何应答文件）；接通之后由它回填
+同一个 `Host.Disks` 字段，手工录入仍然保留作为 §7.4 的兜底路径。
+
+磁盘清单在建任务时被编码成 `LOBER_INSPECT_DISK_<n>_{BYID,SIZE,ROTATIONAL,MODEL}`
+形态的 facts 送给决策器——键名与 `render/inspect.go` 的采集脚本写入的格式一致
+（`provider/hwfacts.go` 的 `ParseHWDisks` 解析），两条来源共用同一个解析器。
 
 **入参：**
 

@@ -30,6 +30,11 @@ type fakeArtifactSetStore struct {
 	osFamily       model.OSFamily
 	paths          model.ArtifactPaths
 
+	// identity 记录 SetArtifactSetContent 收到的完整身份，供断言「导入真的
+	// 判定并写回了 arch/firmware」——那两项是 precheck 两道硬闸门的输入，
+	// 此前导入路径从不写它们（见 identity.go 头部注释）。
+	identity model.ArtifactIdentity
+
 	declaredFirmware model.FirmwareMode
 
 	stateUpdateCalls    int
@@ -68,16 +73,24 @@ func (f *fakeArtifactSetStore) UpdateArtifactSetState(ctx context.Context, id st
 	return model.ArtifactSet{ID: id, State: f.state, ManifestSHA256: f.manifestSHA256, FailReason: f.failReason}, nil
 }
 
-func (f *fakeArtifactSetStore) SetArtifactSetContent(ctx context.Context, id string, osFamily model.OSFamily, paths model.ArtifactPaths) (model.ArtifactSet, error) {
+func (f *fakeArtifactSetStore) SetArtifactSetContent(ctx context.Context, id string, identity model.ArtifactIdentity, paths model.ArtifactPaths) (model.ArtifactSet, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.contentUpdateCalls++
 	if f.failSetContent != nil {
 		return model.ArtifactSet{}, f.failSetContent
 	}
-	f.osFamily = osFamily
+	f.osFamily = identity.OSFamily
+	f.identity = identity
 	f.paths = paths
-	return model.ArtifactSet{ID: id, OSFamily: osFamily, Paths: paths}, nil
+	return model.ArtifactSet{
+		ID:        id,
+		OSFamily:  identity.OSFamily,
+		OSVersion: identity.OSVersion,
+		Arch:      identity.Arch,
+		Firmware:  identity.Firmware,
+		Paths:     paths,
+	}, nil
 }
 
 func (f *fakeArtifactSetStore) snapshot() (state model.ArtifactSetState, paths model.ArtifactPaths, contentCalls int) {
@@ -352,7 +365,10 @@ func containsSubstring(s, substr string) bool {
 // 成功跑完的最小内存文件系统（casper/ 下三个固定文件名）。
 func sampleUbuntuRoot() fstest.MapFS {
 	return fstest.MapFS{
-		".disk/info":                 &fstest.MapFile{Data: []byte("Ubuntu 24.04")},
+		// .disk/info 照真实 Ubuntu Server 介质那一行的形态造：架构作为独立词
+		// 出现在中间。DetectIdentity 从这里取架构——casper/ 路径不带架构，
+		// 这是 Ubuntu 唯一的架构判据（identity.go 的 archFromDiskInfo）。
+		".disk/info":                 &fstest.MapFile{Data: []byte(`Ubuntu-Server 24.04.1 LTS "Noble Numbat" - Release amd64 (20240827)`)},
 		"casper/vmlinuz":             &fstest.MapFile{Data: []byte("kernel-bytes")},
 		"casper/initrd":              &fstest.MapFile{Data: []byte("initrd-bytes")},
 		"casper/filesystem.squashfs": &fstest.MapFile{Data: []byte("squashfs-bytes")},
@@ -365,6 +381,10 @@ func sampleUbuntuRoot() fstest.MapFS {
 func sampleDebianRoot() fstest.MapFS {
 	return fstest.MapFS{
 		"dists/stable/Release": &fstest.MapFile{Data: []byte("dummy")},
+		// binary-amd64/ 是 apt 取包索引的位置，也是 DetectIdentity 判定
+		// Debian 架构的判据（identity.go 的 archFromAPTBinaryDir）。真实
+		// Debian 介质必有这一层，夹具照真实形态造。
+		"dists/stable/main/binary-amd64/Packages": &fstest.MapFile{Data: []byte(`Package: bash`)},
 		// Debian 的内核文件名是 linux（不是 RHEL 的 vmlinuz），initrd 是
 		// initrd.gz（不是 initrd.img）—— 两者都与 RHEL 不同，抽取器按
 		// 真实文件名查找，夹具必须照真实 ISO 的命名造，否则测的是一个
@@ -416,7 +436,7 @@ func TestJob_Run_DispatchesRHELDebianUbuntuToTheirExtractors(t *testing.T) {
 			job := NewJob(store, extractor)
 			destDir := t.TempDir()
 
-			err := job.Run(context.Background(), "artifact-1", "/tmp/whatever.iso", destDir)
+			err := job.Run(context.Background(), "artifact-1", "/tmp/whatever.iso", destDir, Options{})
 			if err != nil {
 				t.Fatalf("%s 应成功分派到对应抽取器，got err: %v", tc.name, err)
 			}
@@ -450,7 +470,7 @@ func TestJob_Run_NotIdentified_FailsWithSpecificReason(t *testing.T) {
 	extractor := fakeExtractor{root: fstest.MapFS{"README.txt": &fstest.MapFile{Data: []byte("no markers")}}}
 	job := NewJob(store, extractor)
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/whatever.iso", t.TempDir())
+	err := job.Run(context.Background(), "artifact-1", "/tmp/whatever.iso", t.TempDir(), Options{})
 	if err == nil {
 		t.Fatal("识别不出家族时应返回错误")
 	}
@@ -543,7 +563,7 @@ func TestJob_Run_Windows_DispatchesToExtractWindows_UEFI(t *testing.T) {
 	job.ConfigureWindows(resolver, detector)
 	destDir := t.TempDir()
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", destDir)
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", destDir, Options{})
 	if err != nil {
 		t.Fatalf("Windows 声明 uefi 且探测结果一致时应导入成功，got err: %v", err)
 	}
@@ -580,7 +600,7 @@ func TestJob_Run_Windows_DispatchesToExtractWindows_BIOS(t *testing.T) {
 	job.ConfigureWindows(resolver, detector)
 	destDir := t.TempDir()
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", destDir)
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", destDir, Options{})
 	if err != nil {
 		t.Fatalf("Windows 声明 bios 且探测结果一致时应导入成功，got err: %v", err)
 	}
@@ -604,7 +624,7 @@ func TestJob_Run_Windows_DeclaredFirmwareAny_Rejected(t *testing.T) {
 	detector := fakeWimArchDetector{firmware: model.FirmwareUEFI}
 	job.ConfigureWindows(resolver, detector)
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir())
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir(), Options{})
 	if err == nil {
 		t.Fatal("制品集声明固件为 any 时应拒绝导入——SPEC §2.1：Windows 必须取具体固件值")
 	}
@@ -642,7 +662,7 @@ func TestJob_Run_Windows_MissingInstallWIM_FailsWithSpecificReason(t *testing.T)
 	detector := fakeWimArchDetector{firmware: model.FirmwareUEFI}
 	job.ConfigureWindows(resolver, detector)
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir())
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir(), Options{})
 	if err == nil {
 		t.Fatal("boot.wim 缺失时应返回明确错误")
 	}
@@ -668,7 +688,7 @@ func TestJob_Run_Windows_NotConfigured_FailsWithSpecificReason(t *testing.T) {
 	extractor := fakeExtractor{root: sampleWindowsRoot()}
 	job := NewJob(store, extractor) // 未调用 ConfigureWindows
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir())
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir(), Options{})
 	if err == nil {
 		t.Fatal("未配置 Windows 外部文件来源时应报错，不应静默成功或 panic")
 	}
@@ -697,7 +717,7 @@ func TestJob_Run_Windows_ResolverError_FailsWithSpecificReason(t *testing.T) {
 	detector := fakeWimArchDetector{firmware: model.FirmwareUEFI}
 	job.ConfigureWindows(resolver, detector)
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir())
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir(), Options{})
 	if err == nil {
 		t.Fatal("resolver 返回错误时应导致导入失败")
 	}
@@ -720,7 +740,7 @@ func TestJob_Run_Windows_GetArtifactSetError_FailsWithSpecificReason(t *testing.
 	detector := fakeWimArchDetector{firmware: model.FirmwareUEFI}
 	job.ConfigureWindows(resolver, detector)
 
-	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir())
+	err := job.Run(context.Background(), "artifact-1", "/tmp/win.iso", t.TempDir(), Options{})
 	if err == nil {
 		t.Fatal("GetArtifactSet 失败时应导致导入失败，不能假设一个默认固件继续")
 	}

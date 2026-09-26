@@ -1,0 +1,383 @@
+# dnsmasq 配置 —— Lober 装机 VLAN 的 DHCP + TFTP + 本地 DNS/NTP
+#
+# 依据：SPEC.md §1.3、§1.3.1、§1.3.2、§10 失败模式 3/4/10、附录 A.1、A.1b
+#       docs/superpowers/plans/2026-09-20-lober-mvp-09-integration.md 任务 7
+#       docs/contracts/http-machine.md 端点 1（GET /boot.ipxe）
+#
+# ══════════════════════════════════════════════════════════════════════════
+# 部署前必跑的校验命令（本机 Windows 开发环境没有 dnsmasq，无法在此验证，
+# 必须在目标 Linux 主机上补做）：
+#
+#   dnsmasq --test --conf-file=/etc/dnsmasq.d/lober.conf
+#
+# 语法通过后，仍需在实验环境对每种固件各上电一次，抓 DHCP DISCOVER 报文核对
+# 固件实际上报的 option 93 值是否落在下面配的 tag 里（尤其国产 ARM 平台是否
+# 规范地报 11，SPEC 附录 B「option 93 实机取值」列为待核实项）：
+#
+#   tcpdump -i <本文件 interface= 指定的网卡> -vvv -s0 port 67 or port 68
+#
+# 本文件里所有形如 <> 的值都是占位符，必须替换成本次部署的真实值，
+# 绝不能按占位符原样部署。
+# ══════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════════
+# vmlab 实验床说明（本节由 scripts/vmlab/serverside 引入，不属于原始部署文档）
+# ══════════════════════════════════════════════════════════════════════════
+#
+# 本文件源自 deploy/dnsmasq/lober.conf，仅把上面「形如 <> 的值」这批占位符
+# 改写成 @@VAR@@ 形式（例如 <PXE_VLAN_IFACE> 改写为 @@PXE_VLAN_IFACE@@），
+# 供 scripts/vmlab/serverside/provision.sh 用文本替换的方式生成最终配置——
+# 这是因为原始 <> 形式在 sed 里容易与正则里的分组/量词符号冲突，@@VAR@@
+# 两侧都是不会出现在合法 dnsmasq 配置值里的双字符序列，替换更安全。除了
+# 占位符写法，本文件的其它一切内容（含全部注释、空行、分节符）都与源文件
+# 逐字符相同——那些注释解释了每个字段配错的后果，对 vmlab 场景同样有效，
+# 不因为这是「实验床」而删减。
+#
+# vmlab 场景下的固定取值（provision.sh 里的真实替换值，非本文件默写）：
+#   interface / TFTP next-server / DNS A 记录 / NTP 均指向 VM-S 在 br0 上的
+#   同一个地址 10.20.20.1；GATEWAY_DOMAIN 固定为 gw.vmlab.internal（与人面
+#   证书用的 console.vmlab.internal 是两个不同域名，一个是机器面网关的
+#   DNS 记录、一个是人面 HTTPS 证书的 CN，不要混淆）。
+
+# ───────────────────────────────────────────────────────────────────────────
+# 必须配对第 1 项：只在装机 VLAN 的网卡上提供服务，绝不监听所有接口
+# ───────────────────────────────────────────────────────────────────────────
+# @@PXE_VLAN_IFACE@@ 占位符：必须改成本机接在装机 VLAN 上的那个网卡名
+# （例如 eth1 / ens224）。绝不留空、绝不写成会匹配所有接口的写法——
+# 那等价于 SPEC §1.4 警告的「listen 写 0.0.0.0」同一类错误：一切功能正常、
+# 测试全过，只是装机 VLAN 之外（比如管理网）也会收到本服务的 DHCP 应答，
+# 信任域被静默合并。
+interface=@@PXE_VLAN_IFACE@@
+# bind-interfaces 让 dnsmasq 真正只在上面声明的接口上绑端口收发，而不是
+# 绑 0.0.0.0 后在用户态过滤——两者的差别是「端口层面就没在别的网卡上监听」
+# 与「监听了但丢弹不该处理的包」，前者才是本条要求的字面含义。
+bind-interfaces
+# except-interface=lo 是显式声明，防止将来误加了某条通配规则时把 loopback
+# 也纳入服务范围（loopback 上跑 DHCP 没有任何意义）。
+except-interface=lo
+
+# 只做 DHCP + TFTP + 本地 DNS + NTP，不接管本机已有的其它 dnsmasq 职责
+# （例如不要在这台机器上让 dnsmasq 也当全网递归 DNS 用，除非确实是设计意图）。
+dhcp-authoritative
+
+# ───────────────────────────────────────────────────────────────────────────
+# 地址池与租期
+# ───────────────────────────────────────────────────────────────────────────
+# @@PXE_VLAN_SUBNET_START@@ / @@PXE_VLAN_SUBNET_END@@ / @@PXE_VLAN_NETMASK@@ 占位符：
+# 装机 VLAN 的地址池范围与子网掩码，按实际网段替换。
+#
+# 必须配对第 7 项：租期长于装机窗口。装机 token TTL 是 90 分钟（SPEC §4.4），
+# 但真正要覆盖的是「从取引导脚本到取完全部制品」这段窗口，其间机器一旦换了
+# IP，将来上 secure_link（Phase 2，SPEC §9.3）后 nginx 校验用的
+# `$remote_addr` 会和 Go 签发时看到的不一致，签名恒不匹配。24 小时给出远超
+# 单次装机窗口的安全余量，即使一批机器分批装、中途有重启也不会因租约到期
+# 换 IP 而在 Phase 2 触发这个问题；到期后机器若仍在线会正常续租，不会中断
+# 服务。
+dhcp-range=@@PXE_VLAN_SUBNET_START@@,@@PXE_VLAN_SUBNET_END@@,@@PXE_VLAN_NETMASK@@,24h
+
+# ───────────────────────────────────────────────────────────────────────────
+# 必须配对第 2 项：五条架构匹配规则（option 93）
+# ───────────────────────────────────────────────────────────────────────────
+# option:client-arch 就是 RFC 4578 的 option 93（Client System Architecture
+# Type）。dnsmasq 内置认识这个名字，不需要像 ISC dhcpd 那样手工声明选项号
+# （SPEC §1.3.1 对比）。
+#
+# ★★★ 本节最容易踩且最难查的错误 ★★★（SPEC §1.3、附录 A.1b）
+# RFC 4578 原文把 7 定义为 `EFI BC`、9 定义为 `EFI x86-64`，但该 RFC 的勘误
+# 明确指出两者的定义应当互换——实际 UEFI 固件用 7 上报 x86-64 架构，
+# ipxe.org 把 9 标注为 obsolete，Microsoft DHCP 策略与主流实战配置一律按
+# `Arch:00007` 编写。
+#
+# 只配 9 不配 7 的后果：UEFI x86-64 机器发来的 DISCOVER 里 option 93 = 7，
+# 匹配不上任何 dhcp-match 规则，因而拿不到 tag，因而下面第「阶段一」的
+# dhcp-boot 规则都不会命中它，固件收不到 filename，静默跳到下一个引导项
+# （通常是继续 PXE 轮询或直接停机）。现场表现是「机器上电后毫无反应」，
+# 而 DHCP/TFTP 日志里往往连一条错误都没有——因为从 dnsmasq 的角度这就是
+# 一次「没有规则匹配、正常放行」的请求，不是错误。这是本条注释值得写这么长
+# 的原因：这个错误在现场排查代价极高，在配置阶段消灭它的成本几乎为零
+# ——两个值配到同一个 tag 即可，不需要两套引导二进制。
+#
+# tag 命名：bios / efi32 / efi64 / arm64，与下面「阶段一」的 dhcp-boot 规则
+# 逐一对应。efi64 由两条 dhcp-match 共同产生（7 是实测主流值，9 是兼容旧值），
+# 两条命中同一个 tag，语义上完全等价于「7 或 9 都算 efi64」。
+dhcp-match=set:bios,option:client-arch,0
+dhcp-match=set:efi32,option:client-arch,6
+dhcp-match=set:efi64,option:client-arch,7
+dhcp-match=set:efi64,option:client-arch,9
+dhcp-match=set:arm64,option:client-arch,11
+
+# ───────────────────────────────────────────────────────────────────────────
+# 必须配对第 3 项：user-class 匹配规则（option 77）区分两个阶段
+# ───────────────────────────────────────────────────────────────────────────
+# 没有这一层，机器跑起 iPXE 后再次发 DISCOVER 时会被上面那五条架构规则
+# 再次命中，再次拿到 iPXE 二进制文件名——于是固件反复加载 iPXE、iPXE 反复
+# 重新走 DHCP、永远走不到下面「阶段二」的网关 URL，构成无限引导循环
+# （SPEC §10 失败模式 3）。iPXE 固件在自己发起的 DHCP 请求里会带上
+# option 77 = "iPXE"，dhcp-userclass 就是用来识别这个标记的。
+dhcp-userclass=set:ipxe,iPXE
+
+# ───────────────────────────────────────────────────────────────────────────
+# 必须配对第 4 项：阶段一按架构给二进制，每条都带「不是 iPXE」的反条件
+# ───────────────────────────────────────────────────────────────────────────
+# @@TFTP_SERVER_IP@@ 占位符：本机在装机 VLAN 上的地址，即 TFTP 服务的 next-server。
+#
+# tag:!ipxe 是这四条的关键：dnsmasq 的 tag 匹配不是互斥的（一台机器可以同时
+# 匹配 efi64 与 ipxe 两个 tag），必须显式用 `tag:!ipxe` 排除掉「已经是 iPXE」
+# 的请求，否则一台跑起 iPXE 的 UEFI x86-64 机器会同时匹配这条（因为它仍然
+# 报 client-arch=7）和下面阶段二那条，两条 dhcp-boot 谁生效由声明顺序决定，
+# 不能指望顺序做隐式保证——反条件才是显式且可读的排他手段。
+#
+# 四条二进制名字对应 ipxe.org 官方预编译产物（详见同目录 README.md 的
+# TFTP 目录清单），此处只声明文件名，实际文件由 README 里的下载与校验流程
+# 放进 TFTP 根目录。
+dhcp-boot=tag:bios,tag:!ipxe,undionly.kpxe,,@@TFTP_SERVER_IP@@
+dhcp-boot=tag:efi32,tag:!ipxe,snponlyx32.efi,,@@TFTP_SERVER_IP@@
+dhcp-boot=tag:efi64,tag:!ipxe,snponly.efi,,@@TFTP_SERVER_IP@@
+# ARM64 那行 MVP 阶段可以不放二进制文件本身（README 里说明 TFTP 根目录下
+# 这个文件是否存在），但 tag 与 dhcp-boot 规则本身建议先留——缺失时国产
+# ARM 平台（飞腾/鲲鹏）接入的首个症状同样是「机器毫无反应」，与「配了但
+# 文件缺失」现场症状不同：留着这条规则，TFTP 服务至少会在日志里留下一条
+# 「请求了 snp-arm64.efi 但文件不存在」的记录，排查成本比「DHCP 层面完全
+# 没有规则匹配」低一个数量级（同样的道理适用于上面 A.1b 的 7/9 双匹配）。
+dhcp-boot=tag:arm64,tag:!ipxe,snp-arm64.efi,,@@TFTP_SERVER_IP@@
+
+# ───────────────────────────────────────────────────────────────────────────
+# 必须配对第 5 项：阶段二给固定的 HTTP URL，架构无关一条通吃
+# ───────────────────────────────────────────────────────────────────────────
+# 这一行是 DHCP 与网关之间唯一的耦合点（SPEC §1.3 原文）。
+#
+# @@GATEWAY_DOMAIN@@ 占位符：必须替换成本次部署里网关对外的域名（不是 IP，
+# 理由见下）。这个域名必须能被装机 VLAN 上的机器解析——本文件下方的
+# 「本地 DNS 记录」一节负责这件事，两处必须指向同一个域名，否则机器解析
+# 不到这个域名，HTTP 请求直接失败，现场症状是「iPXE 启动了，但卡在
+# 第一条 chain 命令上报错」。
+#
+# 这个 URL 的路径 `/boot.ipxe` 与查询串形态必须与
+# docs/contracts/http-machine.md 端点 1（GET /boot.ipxe）一致——该文档
+# 冻结的响应内容是：
+#   #!ipxe
+#   chain ${gateway-base}/v1/boot?sn=${serial}&mac=${net0/mac}&uuid=${uuid}&arch=${buildarch}&plat=${platform}
+# 也就是说，本行只需要把 iPXE 指向 `${GATEWAY_DOMAIN}/boot.ipxe` 这一个
+# 静态地址；`${gateway-base}` 到 `/v1/boot` 那一跳的完整 URL（含五个变量）
+# 是网关自己渲染出来的响应内容，不是本文件要拼的东西——本文件的职责边界
+# 到 `/boot.ipxe` 这一个 URL 为止，不多走一步。
+#
+# 用 http:// 而不是 https://：MVP 阶段明文 HTTP 是 SPEC §1.5 的显式决定
+# （iPXE 走 HTTPS 需要重新编译并嵌入内网 CA），此处与网关配置里的
+# gateway_base 必须保持同一 scheme，否则响应体里 chain 出的下一跳 URL
+# scheme 对不上，iPXE 请求会失败。
+dhcp-boot=tag:ipxe,http://@@GATEWAY_DOMAIN@@/boot.ipxe
+
+# ───────────────────────────────────────────────────────────────────────────
+# 必须配对第 6 项：未知架构不给任何引导文件名，绝不兜底发某个二进制
+# ───────────────────────────────────────────────────────────────────────────
+# 这一节故意留白，是配置的一部分，不是遗漏——dnsmasq 的 tag 匹配天然满足
+# 这条要求：一台机器上报的 client-arch 若不是 0/6/7/9/11 中的任何一个，
+# 它不会匹配上面任何一个 dhcp-match 规则，因而不会获得 bios/efi32/efi64/
+# arm64 中的任何 tag，因而上面「阶段一」的四条 dhcp-boot 规则都不会命中它，
+# 它收不到任何 filename。这正是想要的行为：给错架构的二进制会让固件加载
+# 失败或挂死（比如把 x86 的 undionly.kpxe 塞给 ARM64 固件），比「什么都不给、
+# 固件继续走自己的引导顺序」更难查——一个是固件层面报错或死机，另一个是
+# 固件优雅地放弃网络引导，运维一看现场就知道是哪种。
+#
+# 唯一的代价是 dnsmasq 本身不会为「未知架构」这件事主动打印一条明确的
+# 日志行（不像 ISC dhcpd 需要手写 else 分支才能记日志，见
+# SPEC §1.3.1 第 1 点）——但本文件末尾开启的 log-dhcp 会照常记录这次
+# DISCOVER 请求本身（含 client-arch 的原始选项值），排查时从 DHCP 日志里
+# 找「收到了请求但没发 dhcp-boot」的那一行即可定位。
+
+# ───────────────────────────────────────────────────────────────────────────
+# 另外三项配置 之一：本地 DNS 记录（用域名不用 IP）
+# ───────────────────────────────────────────────────────────────────────────
+# @@GATEWAY_DOMAIN@@ 必须与上面「阶段二」那行占位符替换成完全相同的域名。
+# @@GATEWAY_IP@@ 占位符：网关（nginx 机器面入口）在装机 VLAN 上的真实 IP，
+# 与上面 dhcp-boot 阶段一那几行的 @@TFTP_SERVER_IP@@ 通常是同一台机器，
+# 但字段含义不同（TFTP next-server 与 DNS A 记录），分别声明避免以后
+# 两者分离部署时漏改一处。
+#
+# 用域名而不是 IP 的理由（SPEC §1.3、§1.5）：将来给这套系统签发 TLS 证书
+# 时，证书的 CN/SAN 只能是域名，如果现在所有 URL 与模板里都写死 IP，
+# 上 TLS 那天就要回头改遍全部配置与渲染模板；现在用域名，将来只是把这条
+# DNS 记录指向的证书链换掉，其它地方零改动。
+address=/@@GATEWAY_DOMAIN@@/@@GATEWAY_IP@@
+
+# ───────────────────────────────────────────────────────────────────────────
+# 另外三项配置 之二：本地 NTP
+# ───────────────────────────────────────────────────────────────────────────
+# option 42 是标准 DHCP NTP Server 选项。装机网内如果时间不同步，机器本地
+# 时钟与网关服务器时钟出现偏差，会让 task_event 的时间戳、日志时序、以及
+# 装机 token 的过期判定全部错乱（SPEC §10 失败模式 10）——尤其是排障时
+# 「这条日志和那条日志谁先谁后」这个最基本的判断都会失真。
+#
+# @@NTP_SERVER_IP@@ 占位符：装机 VLAN 内可达的 NTP 服务地址。如果本机
+# （跑 dnsmasq 的这台机器）本身就跑着 NTP 服务，可以直接填本机在装机 VLAN
+# 上的地址，做法与「dnsmasq 可兼任 DNS」（上面 address= 那行）是同一个思路：
+# 装机网本就应尽量自给自足，不依赖对外可达。
+dhcp-option=42,@@NTP_SERVER_IP@@
+
+# ───────────────────────────────────────────────────────────────────────────
+# 另外三项配置 之三：开启 DHCP 日志
+# ───────────────────────────────────────────────────────────────────────────
+# log-dhcp 让每条 DHCP 事务（DISCOVER/OFFER/REQUEST/ACK，以及请求里携带的
+# 选项，含 client-arch 与 user-class 的原始值）都写进日志。这是 SPEC §10
+# 反复强调的排查入口——「机器毫无反应」这类现场症状，本系统的状态机与
+# 事件表完全看不到（签出 token 之前的一切都在范围外，SPEC §0.1），
+# DHCP/TFTP 日志是唯一留痕的地方。不开这个选项，连这唯一的留痕也没有。
+log-dhcp
+
+# TFTP：dnsmasq 自带，不需要单独的 TFTP 服务进程（SPEC §0.2 显式排除
+# 自研 TFTP）。
+enable-tftp
+# @@TFTP_ROOT_DIR@@ 占位符：TFTP 根目录路径，README.md 里说明这个目录下
+# 必须放哪四个文件。
+tftp-root=@@TFTP_ROOT_DIR@@
+
+# ═══════════════════════════════════════════════════════════════════════════
+# UEFI HTTP Boot（附属任务，计划任务 6）—— 整段默认注释，不影响上面已生效的
+# 四条 PXE 路径，见文件末尾「与现有 PXE 路径的兼容性」一节的核对结果。
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 依据：SPEC.md §1.3 末段（「UEFI HTTP Boot 的架构码（x64 疑为 16）与
+# option 60 HTTPClient 等做该路径时再加，不是补一行 dhcp-match 的事」）、
+# 附录 B（架构码与 option 60 必要性均标注「待核实，对照 RFC 5970」）、
+# deploy/ipxe/README.md「坑 2」（crypto 让二进制变大，是本项的启用判据）。
+#
+# 它是什么（SPEC §1.2）：不是绕过 iPXE，是用 HTTP 把 iPXE 二进制本身载入
+# 内存，省掉 TFTP 那段传输——与「阶段一」现有的四条 tag:!ipxe 规则是同一层
+# 的替代方案（只换二进制的传输方式），不影响「阶段二」iPXE 拿到 /boot.ipxe
+# 之后的行为。
+#
+# 启用判据（deploy/ipxe/README.md 已写明）：任务 4 实测出的 crypto 二进制
+# 体积增幅，若让 TFTP 传输产生可感知延迟才启用本节；MVP 阶段 TFTP 只传
+# 几十 KB 到几 MB，即使加了 crypto 大出几倍仍是秒级，本节可以不启用。
+#
+# ── 核实结果（本次任务 6 核实，替代 SPEC 附录 B 里「x64 疑为 16」的猜测）──
+#
+# 通过 curl 直连 www.rfc-editor.org 取到 RFC 5970 全文核实：**RFC 5970 标题是
+# 《DHCPv6 Options for Network Boot》，管的是 DHCPv6，不是本文件用的 DHCPv4**
+# （RFC 5970 §3.3 原文自己说得很清楚："This option provides parity with the
+# Client System Architecture Type option defined for DHCPv4 in Section 2.1 of
+# [RFC4578]"——RFC 5970 只是把 RFC 4578 已有的架构类型登记表在 DHCPv6 场景下
+# 对齐一遍，它本身不新增任何架构码，也完全没有出现 "option 60" 或
+# "HTTPClient" 这两个字符串（全文搜索零命中）。**SPEC.md §1.3/附录 B 那句
+# 「对照 RFC 5970」引用的 RFC 号是错的**——真正定义架构码取值的是 RFC 4578
+# 建立、IANA 维护的 "Processor Architecture Types" 登记表，SPEC 现有的
+# 0/6/7/9/11 五个值本来就是查这个表得到的（该表条目的 Reference 列同时标注
+# [RFC5970][RFC4578]，这是 RFC 5970 与该登记表唯一的关联点：RFC 5970 只是
+# 表的引用方之一，不是表的定义者）。
+#
+# 直连 IANA 该登记表核实到的 HTTP Boot 相关条目（2026-09-22 通过
+# https://www.iana.org/assignments/dhcpv6-parameters/processor-architecture.csv
+# 直接取得，非二次转述）：
+#
+#   0x0f (15)  x86 uefi boot from http
+#   0x10 (16)  x64 uefi boot from http     ← SPEC 猜的「疑为 16」核实为真
+#   0x11 (17)  ebc boot from http
+#   0x12 (18)  arm uefi 32 boot from http
+#   0x13 (19)  arm uefi 64 boot from http
+#   0x14 (20)  pc/at bios boot from http
+#
+# **x64 UEFI HTTP Boot 的架构码是 16，SPEC 的猜测是对的，现在有登记表为证。**
+# 与现有 PXE 路径的对应关系：既有的 efi64（PXE，值 7/9）与新增的
+# efi64-http（HTTP Boot，值 16）是两个不同的架构码，固件通过 option 93
+# 报哪个值，DHCP 侧就该按哪条规则应答——两者不冲突，一台机器同一次开机只会
+# 报其中一种（取决于固件设置里选的是"网络协议栈 PXE"还是"HTTP Boot"）。
+#
+# option 60（Vendor Class Identifier）核实结果：**RFC 5970 里没有这个内容，
+# 无法从这个来源核实**——WebFetch 被网络策略拦截，rfc-editor.org 用 curl 能
+# 直连（见上），但 uefi.org 官方规范页对 curl 返回 403（疑似按 User-Agent
+# 过滤非浏览器请求），无法直接核对 UEFI 规范原文。改用 WebSearch 交叉验证，
+# 三个独立来源一致：(1) tianocore 官方 wiki「HTTP Boot」页的选项表列出
+# `Class Identifier | 60 | ... | "HTTPClient"`；(2) ipxe 项目 GitHub
+# Discussions #569 里一条实际抓包记录显示某真实 UEFI 固件发出的
+# vendor-class 值是 `HTTPClient:Arch:00016:UNDI:003016`（注意这与上面核实
+# 的架构码 16 吻合，是独立来源对同一事实的交叉印证）；(3) Unix & Linux
+# Stack Exchange 一条回答同样描述为 vendor-class-identifier "HTTPClient"
+# 搭配 option 60。**三个来源都指向同一个结论：真实固件发送的 option 60
+# 字符串以 "HTTPClient" 开头（常见形态是 "HTTPClient:Arch:xxxxx:UNDI:yyyy"
+# 这种复合字符串，不是裸的 "HTTPClient" 四个字符独占整个字段）**——但这些
+# 都是二级来源（wiki、社区讨论、问答），不是 UEFI 规范原文，**没有查到能
+# 直连的规范原文来源，这一条的确定性低于上面架构码 16 那一条（架构码 16
+# 有 IANA 一手登记表为证；option 60 只有二级来源交叉印证，没有一手来源）**。
+#
+# ── 是否要用 vendor-class 匹配（本次核实后的判断）──
+#
+# 依据上面核实到的事实，dnsmasq 侧理论上有两种独立的方式识别 HTTP Boot
+# 客户端：只匹配架构码 16（不管 vendor-class），或者架构码 16 加
+# vendor-class 前缀匹配"HTTPClient"两者都匹配才生效。**本节选择只用架构码
+# 匹配，不叠加 vendor-class 匹配**，理由：
+#
+#   1. 架构码 16 本身已经是 IANA 登记表里专门为"HTTP Boot"这个场景新增的
+#      独立码值（不是复用 PXE 的 7 再叠加别的判据）——固件报 16 这件事本身
+#      已经充分表达了"我是 HTTP Boot 客户端"这个意图，不需要再靠
+#      vendor-class 二次确认。
+#   2. vendor-class 的确定性只有二级来源支撑（见上），如果这条字符串的
+#      精确格式核实有误（比如实际不含 "Arch:00016" 这段，或大小写不同），
+#      用 dhcp-vendorclass 做子串匹配反而可能因为格式猜错而匹配不上，
+#      让整条规则比"只查架构码"更脆弱——**核实confidence 较低的判据不应该
+#      成为规则生效的硬性前提**，这正是本次任务要求的"核实不到就如实标注，
+#      不要写一个可能错的活配置"的具体体现：架构码这条数字判据核实到了
+#      一手来源可以直接用；vendor-class 这条字符串判据只有二级来源，宁可
+#      不依赖它，也不用一个格式可能猜错的字符串匹配去决定机器能不能装机。
+#   3. 如果部署方实测抓包后确认了 vendor-class 的精确格式，可以在下面的
+#      dhcp-match 之后追加一行 dhcp-vendorclass 规则收紧匹配条件（见下方
+#      注释里给出的候选行，同样默认注释，需要时按抓包结果核对后再启用）。
+#
+# ── 候选配置（默认整段注释，抓包核实固件实际发的 option 93 值后再启用）──
+#
+# tag 命名沿用现有风格，加 -http 后缀区分 HTTP Boot 与既有 PXE 路径的同一
+# 逻辑架构，避免与上面「必须配对第 2 项」的 efi32/efi64/arm64 三个 tag 混淆
+# （HTTP Boot 与 PXE 是两条独立的引导路径，即使同为 x64 UEFI 也不共用 tag，
+# 否则一台机器若先报 PXE 架构码又报 HTTP Boot 架构码——这在两次独立的
+# DISCOVER 之间是可能发生的，取决于固件里的引导协议顺序设置——两个 tag
+# 各自独立生效，不会互相覆盖）：
+#
+# dhcp-match=set:efi64-http,option:client-arch,16
+# dhcp-match=set:efi32-http,option:client-arch,15
+# dhcp-match=set:arm64-http,option:client-arch,19
+#
+# 候选 vendor-class 收紧规则（可选叠加，见上方判断第 3 点，需要抓包核实
+# 精确格式后才启用；下面写的是核实到的、最可能的形态，前缀匹配而非要求
+# 完整字符串相等，因为已核实的样本里 "HTTPClient" 只是这个复合字符串的
+# 前缀而非全部）：
+#
+# dhcp-vendorclass=set:httpclient,HTTPClient
+#
+# 阶段一 HTTP Boot 版本：dnsmasq 的 dhcp-boot 支持 http:// 形式的 URL 直接
+# 替代 TFTP 文件名（与本文件下方「阶段二」给 iPXE 脚本 URL 用的是同一种
+# dnsmasq 能力，此处用来发 iPXE 二进制本身而不是 iPXE 脚本）。
+# @@TFTP_SERVER_IP@@ 复用上面阶段一 PXE 那几行已经声明的占位符值，此处指向
+# 的是同一台机器的 HTTP 服务（架构自选：可以是本机 nginx 加一个静态
+# location 指向 TFTP 根目录同一批文件，也可以是 dnsmasq 内置的 HTTP 能力，
+# 取决于部署方选型，本文件不预设）：
+#
+# dhcp-boot=tag:efi64-http,tag:!ipxe,http://@@TFTP_SERVER_IP@@/snponly.efi
+# dhcp-boot=tag:efi32-http,tag:!ipxe,http://@@TFTP_SERVER_IP@@/snponlyx32.efi
+# dhcp-boot=tag:arm64-http,tag:!ipxe,http://@@TFTP_SERVER_IP@@/snp-arm64.efi
+#
+# ── 与现有 PXE 路径的兼容性核对（计划任务 6 的硬性要求）──
+#
+# 上面新增的三条 dhcp-match 用的是全新的架构码（15/16/19），与现有五条
+# dhcp-match（0/6/7/9/11）在数值上不重叠，dnsmasq 的 tag 集合机制下两组
+# 规则互相独立生效，不存在"新规则覆盖旧规则"的可能——一台机器的 option 93
+# 取值只会落在其中一组的某个值上（同一次 DISCOVER 只报一个架构码），
+# 命中哪组规则完全由固件自己上报的值决定，不受本节新增内容影响。若本节
+# 全部保持注释状态（默认），dnsmasq 配置的可解析规则集合与本节之前完全
+# 一致，等价于没有本节存在——这是「加 HTTP Boot 不影响已有 PXE 路径」这条
+# 要求在配置层面最直接的满足方式：不改一行现有规则，只在文件末尾新增互不
+# 重叠的候选规则。
+#
+# 待补做的验证（本机 Windows 无 dnsmasq 与真实 UEFI HTTP Boot 硬件，
+# 无法在此完成，留给目标主机部署时）：
+#   1. dnsmasq --test --conf-file=/etc/dnsmasq.d/lober.conf
+#      （取消注释后的语法校验，含本节新增指令）
+#   2. 抓包确认至少一台支持 HTTP Boot 的真实固件在选择 HTTP Boot 引导协议
+#      时，option 93 报的值是否确实是 16（x64）——本节核实到的是 IANA
+#      登记表的定义值，不是"这批固件实测值"，两者理论上应该一致但 SPEC
+#      附录 B 对现有 PXE 架构码都要求实机核对（尤其国产 ARM 平台），HTTP
+#      Boot 的架构码同理不能只信登记表，需要同一方法核对
+#   3. 若启用了候选的 vendor-class 收紧规则，同一次抓包顺带确认 option 60
+#      的精确字节内容，核对是否真的以 "HTTPClient" 为前缀
+#   4. 启用本节后，用一台仍走 PXE（非 HTTP Boot）路径的机器验证上电流程
+#      不受影响——文件层面的规则不重叠已在上面论证，但实机验证仍是计划
+#      任务 6 明确要求的最后一步

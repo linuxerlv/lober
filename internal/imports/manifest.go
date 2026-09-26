@@ -194,8 +194,13 @@ func ExtractRHEL(root fs.FS, destDir string) (model.ArtifactPaths, error) {
 
 	const repoDestName = "repo"
 	repoDestDir := filepath.Join(destDir, repoDestName)
+	// 排除 kernel 与 initrd（它们已单独复制到 destDir 根、用固定文件名），
+	// 但**保留 .treeinfo**：anaconda 会从 inst.stage2 指向的介质根读它来确认
+	// 介质身份与变体布局，排除掉会让它在装包前先 404 一次（实测 2026-09-25：
+	// `repo//.treeinfo` 404 两次之后才去试 repodata）。它只有几百字节，留着
+	// 的代价可以忽略。
 	if err := copyTreeFromFS(root, ".", repoDestDir, map[string]bool{
-		".treeinfo": true, images.Kernel: true, images.Initrd: true,
+		images.Kernel: true, images.Initrd: true,
 	}); err != nil {
 		return model.ArtifactPaths{}, fmt.Errorf("imports: 建仓库树失败: %w", err)
 	}
@@ -211,15 +216,26 @@ func ExtractRHEL(root fs.FS, destDir string) (model.ArtifactPaths, error) {
 	// `url --url=.../repo/` 交给 anaconda 而那里没有 repodata；更早一层，
 	// statemachine 的 precheck 查 <repo>/repodata/repomd.xml 查不到就拒签
 	// 装机 token，机器连引导菜单都拿不到。
-	repoRel := repoDestName + "/"
+	// mediaRootRel 是安装介质根（整棵 ISO 树的副本根），anaconda 的 inst.repo
+	// 指向它——stage2 运行时镜像 images/install.img 与 .treeinfo 都在这一层。
+	// repoRel 是包索引目录，precheck 与包管理器指向它。
+	//
+	// 真实 RHEL 9 系布局下两者不同（repodata 在 BaseOS/ 下、images/ 在根），
+	// 老式扁平布局（RHEL 7 系与精简介质）下相同。此前只有 Repo 一个字段承担
+	// 两种用途，结果 inst.repo 指向 repo/BaseOS/，anaconda 取 stage2 时三个
+	// 路径全部 404、任务停在 installing/pre 不再前进（实测依据见
+	// TestExtractRHEL_MediaRootHoldsStage2）。
+	mediaRootRel := repoDestName + "/"
+	repoRel := mediaRootRel
 	if images.Repository != "" {
 		repoRel = path.Join(repoDestName, images.Repository) + "/"
 	}
 
 	return model.ArtifactPaths{
-		Kernel: kernelDestName,
-		Initrd: []string{initrdDestName},
-		Repo:   repoRel,
+		Kernel:    kernelDestName,
+		Initrd:    []string{initrdDestName},
+		Repo:      repoRel,
+		MediaRoot: mediaRootRel,
 	}, nil
 }
 

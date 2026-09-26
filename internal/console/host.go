@@ -9,6 +9,7 @@ package console
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -46,6 +47,20 @@ type hostListItem struct {
 	Firmware   string `json:"firmware"`
 	Rack       string `json:"rack"`
 	LastSeenAt int64  `json:"lastSeenAt"`
+
+	// Disks 回显磁盘清单。运维需要看到「这台机器录了哪些盘」——那是建任务时
+	// 磁盘规划的唯一输入（除 by-hook 之外的四个策略都要它），录错或漏录的
+	// 后果是建任务失败或选错盘，而不回显就只能靠翻数据库核对。
+	Disks []hostDiskItem `json:"disks"`
+}
+
+// hostDiskItem 是回显用的一块盘。字段与 createHostDisk 对称——同一个概念在
+// 请求与响应里用同样的键名，避免调用方两头各记一套。
+type hostDiskItem struct {
+	ByIDPath   string `json:"byIdPath"`
+	SizeBytes  int64  `json:"sizeBytes"`
+	Rotational bool   `json:"rotational"`
+	Model      string `json:"model"`
 }
 
 // hostID 计算暴露给人面 API 的主机 id：SN → MAC → UUID 优先级取第一个
@@ -100,7 +115,27 @@ func toHostListItem(h model.Host) hostListItem {
 		Firmware:   string(h.Firmware),
 		Rack:       h.Rack,
 		LastSeenAt: h.LastSeenAt,
+		Disks:      toHostDiskItems(h.Disks),
 	}
+}
+
+// toHostDiskItems 把磁盘清单转成回显形态。空清单返回 nil 而不是空切片：
+// JSON 里就是 null，与「这台机器没录过盘」这个事实一致；空数组会让调用方
+// 以为录过一个空清单。
+func toHostDiskItems(disks []model.HostDisk) []hostDiskItem {
+	if len(disks) == 0 {
+		return nil
+	}
+	out := make([]hostDiskItem, 0, len(disks))
+	for _, d := range disks {
+		out = append(out, hostDiskItem{
+			ByIDPath:   d.ByIDPath,
+			SizeBytes:  d.SizeBytes,
+			Rotational: d.Rotational,
+			Model:      d.Model,
+		})
+	}
+	return out
 }
 
 // defaultListLimit 是列表端点未传 limit 参数时的默认上限（契约约定 2：
@@ -207,6 +242,11 @@ type createHostRequest struct {
 	Arch     string `json:"arch" binding:"required,oneof=x86_64 arm64"`
 	Firmware string `json:"firmware" binding:"required,oneof=bios uefi"`
 	Rack     string `json:"rack"`
+
+	// Disks 可选。磁盘规划需要它——除 by-hook 之外的四个策略都要求服务端已知
+	// 盘（见 model.Host.Disks 的文档）。不传时建出的主机磁盘清单为空，用
+	// largest 等策略建任务会以「磁盘清单为空」失败。
+	Disks []createHostDisk `json:"disks"`
 }
 
 // handleCreateHost 处理 POST /hosts：手工录入兜底（§7.4）。
@@ -246,6 +286,12 @@ func (s *Server) handleCreateHost(c *gin.Context) {
 		return
 	}
 
+	disks, derr := toHostDisks(req.Disks)
+	if derr != nil {
+		apierr.Fail(c, derr)
+		return
+	}
+
 	host := model.Host{
 		SN:         strings.TrimSpace(req.SN),
 		MAC:        normalizedMAC,
@@ -254,6 +300,7 @@ func (s *Server) handleCreateHost(c *gin.Context) {
 		Firmware:   model.FirmwareMode(req.Firmware),
 		Rack:       req.Rack,
 		LastSeenAt: s.clock.Now(),
+		Disks:      disks,
 	}
 
 	created, err := s.deps.Hosts.UpsertHost(c.Request.Context(), host)
@@ -262,4 +309,41 @@ func (s *Server) handleCreateHost(c *gin.Context) {
 		return
 	}
 	apierr.OK(c, toHostListItem(created))
+}
+
+// createHostDisk 是 POST /hosts 请求体里的一块盘。
+type createHostDisk struct {
+	ByIDPath   string `json:"byIdPath"`
+	SizeBytes  int64  `json:"sizeBytes"`
+	Rotational bool   `json:"rotational"`
+	Model      string `json:"model"`
+}
+
+// toHostDisks 把请求体里的磁盘清单转成 model.HostDisk，并逐块校验 byIdPath。
+//
+// byIdPath 必填且不接受内核名：/dev/sda 这类名字在不同启动之间会漂移，写进
+// 分区指令可能擦错盘（SPEC §10 失败模式 5）。空路径的盘进了清单，磁盘规划器
+// 会选中它然后渲染出空的 --ondisk=——那个失败发生在目标机上，只能到 BMC
+// 控制台看。
+func toHostDisks(in []createHostDisk) ([]model.HostDisk, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]model.HostDisk, 0, len(in))
+	for i, d := range in {
+		path := strings.TrimSpace(d.ByIDPath)
+		if path == "" {
+			return nil, apierr.New(http.StatusBadRequest, apierr.CodeBadRequest,
+				fmt.Sprintf("disks[%d] 缺 byIdPath——磁盘必须用 by-id/WWN 这类持久"+
+					"标识，内核名（/dev/sda）在不同启动之间会漂移，写进分区指令"+
+					"可能擦错盘", i))
+		}
+		out = append(out, model.HostDisk{
+			ByIDPath:   path,
+			SizeBytes:  d.SizeBytes,
+			Rotational: d.Rotational,
+			Model:      strings.TrimSpace(d.Model),
+		})
+	}
+	return out, nil
 }

@@ -35,6 +35,19 @@ func (s *Server) routesTemplate() {
 	s.handleFuncRole("PUT", "/templates/:id", roleAdmin, "template.update", s.handleUpdateTemplate)
 	s.handle("GET", "/templates/:id/form-schema", "", "", s.handleTemplateFormSchema)
 	s.handle("POST", "/templates/:id/preview", "", "", s.handleTemplatePreview)
+	// state 流转端点。**这个端点补的是一条断掉的链路**：模板只能被创建成
+	// draft（handleCreateTemplate 硬编码），而 handleCreateTask 硬性要求
+	// active，而契约原先冻结的四个模板端点里没有任何一个能改状态——于是
+	// 任何模板都永远无法用于建任务。store 层的 UpdateTemplateState 一直
+	// 完备，缺的只是这个调用点（scripts/e2e.sh 头部注释第 24-29 行记下了
+	// 这件事，并用 db_template_active 直接写库绕过）。
+	//
+	// 权限用 roleAdmin，与 POST/PUT /templates 一致：激活一个模板等于让它
+	// 可被用于擦盘装机，§9.4 把模板与 provider 并列为需代码评审级别的写
+	// 权限。刻意**不**引入 hook 那样的双人复核——hook 是「一段任意 root
+	// 代码」，模板是「选哪套制品、引哪些已批准的 hook」，后者引用的 hook
+	// 本身已经过双人复核，再叠一层是重复确认（同 §0.2 删 armed 的理由）。
+	s.handleFuncRole("POST", "/templates/:id/state", roleAdmin, "template.state", s.handleTemplateState)
 }
 
 // templateItem 是响应形态，字段名与 model.Template 对应。
@@ -495,4 +508,72 @@ func sortedHookRefsForPreview(tpl model.Template) []model.HookRef {
 		out = append(out, tpl.HooksForStage(st)...)
 	}
 	return out
+}
+
+// templateStateRequest 是 POST /templates/{id}/state 的入参。
+//
+// version 必填且参与乐观锁：两个人同时看着同一个 draft 模板，一个先改了
+// 内容（version 前进），另一个拿着旧 version 点激活——静默放行会让「被
+// 激活的那一版」不是点击者看到的那一版，而模板内容决定分区方案与 hook
+// 链，这不是可以将错就错的东西。
+type templateStateRequest struct {
+	State   string `json:"state"`
+	Version int    `json:"version"`
+}
+
+// handleTemplateState 处理 POST /templates/{id}/state：模板状态流转。
+//
+// 只认 model 里已定义的三个状态值，不做「未知值原样写入」的兜底：
+// handleCreateTask 用 `!= active` 判定可用性，一个拼错的状态值
+// （"activ"）会让模板永久不可用，且没有任何地方报错——这种失败查起来
+// 要先怀疑权限、怀疑缓存，最后才会去看那一列的字面值。
+func (s *Server) handleTemplateState(c *gin.Context) {
+	id := c.Param("id")
+
+	var req templateStateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		apierr.Fail(c, bindJSONError(err))
+		return
+	}
+
+	next, ok := parseTemplateState(req.State)
+	if !ok {
+		apierr.Fail(c, apierr.New(http.StatusBadRequest, apierr.CodeBadRequest,
+			fmt.Sprintf("state 只能是 draft / active / deprecated 之一，收到 %q", req.State)))
+		return
+	}
+
+	// 先取一次确认模板存在：UpdateTemplateState 命中 0 行时无法区分
+	// 「模板不存在」与「version 不匹配」，而这两种情形对调用方的含义完全
+	// 不同（前者是 404 该去检查 ID，后者是 409 该重新加载后再试）。
+	current, err := s.deps.Templates.GetTemplate(c.Request.Context(), id, 0)
+	if err != nil {
+		apierr.Fail(c, err)
+		return
+	}
+	if current.Version != req.Version {
+		apierr.Fail(c, apierr.New(http.StatusConflict, apierr.CodeConflict,
+			fmt.Sprintf("模板当前版本是 %d，请求里的 version 是 %d——"+
+				"期间它被改过，请重新加载后再流转", current.Version, req.Version)))
+		return
+	}
+
+	updated, err := s.deps.Templates.UpdateTemplateState(c.Request.Context(), id, req.Version, next)
+	if err != nil {
+		apierr.Fail(c, err)
+		return
+	}
+	apierr.OK(c, toTemplateItem(updated))
+}
+
+// parseTemplateState 把入参字符串映射成 model.TemplateState，只认三个已定义
+// 的值（区分大小写、不 trim：容忍 "ACTIVE" 或 "draft " 会让调用方以为这层
+// 有归一化，而数据库里存的到底是哪种形态就变得不可预测）。
+func parseTemplateState(raw string) (model.TemplateState, bool) {
+	switch model.TemplateState(raw) {
+	case model.TemplateStateDraft, model.TemplateStateActive, model.TemplateStateDeprecated:
+		return model.TemplateState(raw), true
+	default:
+		return "", false
+	}
 }

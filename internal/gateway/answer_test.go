@@ -265,7 +265,7 @@ func TestAnswer_UbuntuMetaDataIsServed(t *testing.T) {
 	fx := newAnswerFixture(t, model.TaskStateBooting)
 	// 把制品集改成 Ubuntu（夹具默认造的是 RHEL）。
 	if _, err := fx.store.SetArtifactSetContent(t.Context(), "art-1",
-		model.OSFamilyUbuntu, model.ArtifactPaths{Kernel: "casper/vmlinuz"}); err != nil {
+		model.ArtifactIdentity{OSFamily: model.OSFamilyUbuntu, Arch: model.ArchX86_64, Firmware: model.FirmwareAny}, model.ArtifactPaths{Kernel: "casper/vmlinuz"}); err != nil {
 		t.Fatalf("把制品集改成 Ubuntu 失败: %v", err)
 	}
 	fx.deps.StateMachine = newStateMachineStub()
@@ -319,7 +319,7 @@ func TestAnswer_ESXiKsCfgIsServed(t *testing.T) {
 	fx := newAnswerFixture(t, model.TaskStateBooting)
 	// 把制品集改成 ESXi（夹具默认造的是 RHEL）。
 	if _, err := fx.store.SetArtifactSetContent(t.Context(), "art-1",
-		model.OSFamilyESXi, model.ArtifactPaths{Extra: map[string]string{"boot.cfg": "boot.cfg"}}); err != nil {
+		model.ArtifactIdentity{OSFamily: model.OSFamilyESXi, Arch: model.ArchX86_64, Firmware: model.FirmwareAny}, model.ArtifactPaths{Extra: map[string]string{"boot.cfg": "boot.cfg"}}); err != nil {
 		t.Fatalf("把制品集改成 ESXi 失败: %v", err)
 	}
 	fx.deps.StateMachine = newStateMachineStub()
@@ -346,7 +346,7 @@ func TestAnswer_ESXiKsCfgIsServed(t *testing.T) {
 func TestAnswer_NonESXiKsCfgStill404(t *testing.T) {
 	fx := newAnswerFixture(t, model.TaskStateBooting)
 	if _, err := fx.store.SetArtifactSetContent(t.Context(), "art-1",
-		model.OSFamilyDebian, model.ArtifactPaths{Kernel: "install.amd/vmlinuz"}); err != nil {
+		model.ArtifactIdentity{OSFamily: model.OSFamilyDebian, Arch: model.ArchX86_64, Firmware: model.FirmwareAny}, model.ArtifactPaths{Kernel: "install.amd/vmlinuz"}); err != nil {
 		t.Fatalf("把制品集改成 Debian 失败: %v", err)
 	}
 	fx.deps.StateMachine = newStateMachineStub()

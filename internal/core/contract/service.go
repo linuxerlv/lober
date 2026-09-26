@@ -274,15 +274,64 @@ type EventBus interface {
 	Subscribe(event LifecycleEvent, callback func(model.Task))
 }
 
-// TaskParamsResolver 是建任务路径上的同步决策接口，由 M7 实现、M6 在写库
-// 之前调用（计划任务 11）。它的存在理由就是 EventBus 做不到阻塞：
-// IPAM/TemplateResolver/DiskPlanner 的失败必须阻塞建任务本身。
+// ResolveRequest 是同步决策编排的入参。
 //
-// 返回错误即建任务失败，错误直接呈现给运维。返回的参数成为任务的
-// resolved_params 并被固化（§2.6：决策要固化，IO 可以实时）——之后不再
-// 重算，因此 provider 热更新不会让同一任务前后决策不一致。
+// 用结构体而不是位置参数：这个入参集合已经改过两次（先是加「要落库的决策
+// 事实」这个出参，再是加磁盘策略），每次都要连带修六七个调用现场。
+type ResolveRequest struct {
+	// FormData 是建任务时人工填的表单。
+	FormData map[string]string
+
+	// Facts 是服务端已知的硬件事实（SN / MAC / arch / os_family，以及主机
+	// 磁盘清单编码出的 LOBER_INSPECT_DISK_* 键）。
+	Facts map[string]string
+
+	// DiskPolicy 是本任务的磁盘策略，取自任务所用模板的 Template.DiskPolicy。
+	//
+	// **必须按模板取，不能只用全局配置。** 此前编排器只认装配点从
+	// lober.yaml 的 provider.disk_policy 建好的那一个 DiskIntent，而
+	// Template.DiskPolicy 只被渲染器读——同一个决策的两半读了不同的源，
+	// 于是「模板声明 largest、全局配了 by-hook」这种组合下：规划器走
+	// by-hook 不写 LOBER_DISK_PRIMARY，渲染器按 largest 要求那个 fact 存在，
+	// 必然渲染失败。反过来（模板 by-hook、全局 largest）则是规划器算了一个
+	// 没人用的结果。两种组合都不对，而全局配置无论设成哪个值都会踩中一种。
+	//
+	// 空值表示沿用装配点配置的策略——保持既有调用方的行为不变。
+	DiskPolicy model.DiskPolicy
+}
+
+// ResolveResult 是同步决策编排的出参。
+type ResolveResult struct {
+	// ResolvedParams 写进 model.Task.ResolvedParams。六个家族的渲染器把整个
+	// map 喂给 render/params.go 的 InlineParams，而它有白名单校验——混进一个
+	// 认不出的键，第一次渲染应答文件就会 500。所以这个 map 只能含白名单里的
+	// 裸键（hostname / biz_ip）。
+	ResolvedParams map[string]string
+
+	// DecidedFacts 写进 FactStore（按 taskID）。渲染上下文的 Facts 来自那里
+	// （gateway/rendercontext.go），所以主盘、业务网关、掩码这类决策结果必须
+	// 走这条路才能送到渲染器手上。
+	//
+	// 此前没有这个出参，于是 disk_primary / biz_gw / biz_mask 三项「算出来了
+	// 但送不到任何消费者手上」——internal/provider/resolve.go 的注释据实记录
+	// 过这个断口。后果是除 by-hook 之外的磁盘策略下，六个家族的应答文件都读
+	// 不到 LOBER_DISK_PRIMARY：preseed 直接拒绝渲染，kickstart 的非 by-hook
+	// 路径同样拒绝。
+	//
+	// 键用 fact 命名空间（LOBER_*），与机器侧 hook 拿到的环境变量同名——那是
+	// model.Fact* 常量定义的命名空间。只收录非空值：写
+	// `LOBER_DISK_PRIMARY=""` 比不写更糟，渲染器的判据是「键存在且非空」，
+	// 空值会让它以为决策做过了。
+	DecidedFacts map[string]string
+}
+
 type TaskParamsResolver interface {
-	// Resolve 依据表单数据与已知的硬件事实，产出该任务的最终决策参数
-	// （FormData 与 provider 决策结果与系统生成值的合并）。
-	Resolve(ctx context.Context, formData map[string]string, facts map[string]string) (resolvedParams map[string]string, err error)
+	// Resolve 依据表单数据与已知的硬件事实，产出该任务的最终决策参数与要
+	// 落库的决策事实。
+	//
+	// **不要在渲染时重算决策。** 磁盘规划本身是确定性的
+	// （provider/diskplanner.go 先按 by-id 路径排序再选，显式消除了 map 遍历
+	// 的随机性），但 SPEC §2.6 要求决策固化——IPAM 从来不是确定的，而它与
+	// 磁盘共用同一条决策路径，渲染时重算会让同一任务前后两次拿到不同的 IP。
+	Resolve(ctx context.Context, req ResolveRequest) (ResolveResult, error)
 }

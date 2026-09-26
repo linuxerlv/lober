@@ -1,8 +1,11 @@
 lang en_US.UTF-8
 keyboard us
 timezone UTC --utc
+url --url=http://ng.internal/artifacts/as-rocky94/repo/
 bootloader --location=mbr
-clearpart --all --drives=/dev/disk/by-id/wwn-0x5000c500fixed0001
+clearpart --all --initlabel --drives=/dev/disk/by-id/wwn-0x5000c500fixed0001
+part biosboot --fstype=biosboot --size=1 --ondisk=/dev/disk/by-id/wwn-0x5000c500fixed0001
+part /boot --fstype=xfs --size=1024 --ondisk=/dev/disk/by-id/wwn-0x5000c500fixed0001
 part / --fstype=xfs --grow --ondisk=/dev/disk/by-id/wwn-0x5000c500fixed0001
 network --bootproto=dhcp --activate
 rootpw --lock
@@ -64,7 +67,15 @@ run_hook() {
   local digest="$1" required="$2" timeout_sec="$3"
   curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
   echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
-  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  # timeout(1) 是 coreutils 的一部分，anaconda 的 installer ramdisk 里没有
+  # （实测 rc=127: timeout: command not found）。有就用，没有就裸跑——
+  # 宁可失去超时保护也不能让 hook 整体跑不起来。
+  if command -v timeout >/dev/null 2>&1; then
+    ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  else
+    logger -t lober "no timeout(1) in this environment, running hook $digest without time limit"
+    ( set -euo pipefail; bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  fi
   local rc=${PIPESTATUS[0]}
   signal "hook-report" "$rc" /tmp/h.log "$digest"
   [ "$rc" -eq 0 ] || [ "$required" != "true" ]
@@ -97,12 +108,65 @@ run_hook() {
   local digest="$1" required="$2" timeout_sec="$3"
   curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
   echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
-  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  # timeout(1) 是 coreutils 的一部分，anaconda 的 installer ramdisk 里没有
+  # （实测 rc=127: timeout: command not found）。有就用，没有就裸跑——
+  # 宁可失去超时保护也不能让 hook 整体跑不起来。
+  if command -v timeout >/dev/null 2>&1; then
+    ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  else
+    logger -t lober "no timeout(1) in this environment, running hook $digest without time limit"
+    ( set -euo pipefail; bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  fi
   local rc=${PIPESTATUS[0]}
   signal "hook-report" "$rc" /tmp/h.log "$digest"
   [ "$rc" -eq 0 ] || [ "$required" != "true" ]
 }
+signal "pre-start" 0
 run_hook 'aaaa1111pre' 'true' '300' || exit 1
+signal "pre-done" 0
+signal "packages-start" 0
+%end
+%post
+GW='http://gw.internal'
+ART='http://ng.internal/artifacts'
+TASK='42'
+TOKEN='install-tok-fixed-0000000000000000'
+SEQ=0
+
+signal() {
+  local phase="$1" rc="${2:-0}" log="${3:-/dev/null}" digest="${4:-}"
+  SEQ=$((SEQ+1))
+  local q="$GW/v1/signal/$TASK/$TOKEN/$phase?rc=$rc&seq=$SEQ"
+  if [ -n "$digest" ]; then
+    q="$q&digest=$digest"
+  fi
+  for i in 1 2 3; do
+    curl -fsS -m 10 -X POST "$q" \
+      -H 'Content-Type: text/plain' --data-binary "@$log" && return 0
+    sleep $((i*3))
+  done
+  logger -t lober "signal failed: $phase rc=$rc"
+  return 0
+}
+
+run_hook() {
+  local digest="$1" required="$2" timeout_sec="$3"
+  curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
+  echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
+  # timeout(1) 是 coreutils 的一部分，anaconda 的 installer ramdisk 里没有
+  # （实测 rc=127: timeout: command not found）。有就用，没有就裸跑——
+  # 宁可失去超时保护也不能让 hook 整体跑不起来。
+  if command -v timeout >/dev/null 2>&1; then
+    ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  else
+    logger -t lober "no timeout(1) in this environment, running hook $digest without time limit"
+    ( set -euo pipefail; bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  fi
+  local rc=${PIPESTATUS[0]}
+  signal "hook-report" "$rc" /tmp/h.log "$digest"
+  [ "$rc" -eq 0 ] || [ "$required" != "true" ]
+}
+signal "packages-done" 0
 %end
 %post --nochroot
 GW='http://gw.internal'
@@ -131,7 +195,15 @@ run_hook() {
   local digest="$1" required="$2" timeout_sec="$3"
   curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
   echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
-  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  # timeout(1) 是 coreutils 的一部分，anaconda 的 installer ramdisk 里没有
+  # （实测 rc=127: timeout: command not found）。有就用，没有就裸跑——
+  # 宁可失去超时保护也不能让 hook 整体跑不起来。
+  if command -v timeout >/dev/null 2>&1; then
+    ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  else
+    logger -t lober "no timeout(1) in this environment, running hook $digest without time limit"
+    ( set -euo pipefail; bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  fi
   local rc=${PIPESTATUS[0]}
   signal "hook-report" "$rc" /tmp/h.log "$digest"
   [ "$rc" -eq 0 ] || [ "$required" != "true" ]
@@ -165,12 +237,22 @@ run_hook() {
   local digest="$1" required="$2" timeout_sec="$3"
   curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
   echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
-  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  # timeout(1) 是 coreutils 的一部分，anaconda 的 installer ramdisk 里没有
+  # （实测 rc=127: timeout: command not found）。有就用，没有就裸跑——
+  # 宁可失去超时保护也不能让 hook 整体跑不起来。
+  if command -v timeout >/dev/null 2>&1; then
+    ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  else
+    logger -t lober "no timeout(1) in this environment, running hook $digest without time limit"
+    ( set -euo pipefail; bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  fi
   local rc=${PIPESTATUS[0]}
   signal "hook-report" "$rc" /tmp/h.log "$digest"
   [ "$rc" -eq 0 ] || [ "$required" != "true" ]
 }
+signal "post-start" 0
 run_hook 'cccc3333post' 'true' '300' || exit 1
+signal "post-done" 0
 %end
 %post
 mkdir -p /var/lib/lober /var/lib/lober/hooks
@@ -244,7 +326,15 @@ run_hook() {
   local digest="$1" required="$2" timeout_sec="$3"
   curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
   echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
-  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  # timeout(1) 是 coreutils 的一部分，anaconda 的 installer ramdisk 里没有
+  # （实测 rc=127: timeout: command not found）。有就用，没有就裸跑——
+  # 宁可失去超时保护也不能让 hook 整体跑不起来。
+  if command -v timeout >/dev/null 2>&1; then
+    ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  else
+    logger -t lober "no timeout(1) in this environment, running hook $digest without time limit"
+    ( set -euo pipefail; bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  fi
   local rc=${PIPESTATUS[0]}
   signal "hook-report" "$rc" /tmp/h.log "$digest"
   [ "$rc" -eq 0 ] || [ "$required" != "true" ]
@@ -281,4 +371,46 @@ LOBER_UNIT_EOF
 
 systemctl enable lober-init.service
 touch /var/lib/lober/init.pending
+%end
+%post
+GW='http://gw.internal'
+ART='http://ng.internal/artifacts'
+TASK='42'
+TOKEN='install-tok-fixed-0000000000000000'
+SEQ=0
+
+signal() {
+  local phase="$1" rc="${2:-0}" log="${3:-/dev/null}" digest="${4:-}"
+  SEQ=$((SEQ+1))
+  local q="$GW/v1/signal/$TASK/$TOKEN/$phase?rc=$rc&seq=$SEQ"
+  if [ -n "$digest" ]; then
+    q="$q&digest=$digest"
+  fi
+  for i in 1 2 3; do
+    curl -fsS -m 10 -X POST "$q" \
+      -H 'Content-Type: text/plain' --data-binary "@$log" && return 0
+    sleep $((i*3))
+  done
+  logger -t lober "signal failed: $phase rc=$rc"
+  return 0
+}
+
+run_hook() {
+  local digest="$1" required="$2" timeout_sec="$3"
+  curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
+  echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
+  # timeout(1) 是 coreutils 的一部分，anaconda 的 installer ramdisk 里没有
+  # （实测 rc=127: timeout: command not found）。有就用，没有就裸跑——
+  # 宁可失去超时保护也不能让 hook 整体跑不起来。
+  if command -v timeout >/dev/null 2>&1; then
+    ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  else
+    logger -t lober "no timeout(1) in this environment, running hook $digest without time limit"
+    ( set -euo pipefail; bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  fi
+  local rc=${PIPESTATUS[0]}
+  signal "hook-report" "$rc" /tmp/h.log "$digest"
+  [ "$rc" -eq 0 ] || [ "$required" != "true" ]
+}
+signal "rebooting" 0
 %end

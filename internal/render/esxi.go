@@ -226,7 +226,10 @@ func RenderESXiMenuLine(ctx model.RenderContext, mbootEFIPath string, answerFile
 	}
 
 	kernelURL := ctx.SetArtifactURL(mbootEFIPath)
-	return fmt.Sprintf("kernel %s -c %s\n", kernelURL, answerFileURL), nil
+	// boot 命令：ESXi 没有 initrd 行（模块列表写在 boot.cfg 里，由 -c 传入），
+	// 但同样需要 boot 才会执行——没有它 iPXE 只加载 mboot.efi 却不跳转
+	// （完整论证见 menu.go 的 ipxeBootCommand）。
+	return fmt.Sprintf("kernel %s -c %s\n", kernelURL, answerFileURL) + ipxeBootCommand, nil
 }
 
 // ---------------------------------------------------------------------------

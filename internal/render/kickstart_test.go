@@ -92,22 +92,34 @@ func TestStageMapping_OrderPreserved(t *testing.T) {
 	}
 }
 
-// TestStageMapping_EmptyStageProducesNoSection 锁住"空阶段不产生空段落
-// （%pre 里没东西就不要写 %pre）"（计划任务 5 测试要求第四条）。
+// TestStageMapping_EmptyStageProducesNoSection 锁住"没有内容的阶段不产生
+// 空段落"（计划任务 5 测试要求第四条）。
+//
+// 本用例的判据在「kickstart 补发阶段信号」之后收窄了：%pre 与 %post 即使没有
+// hook 也**不是空段落**——它们要发 pre-start/pre-done 与 post-start/post-done
+// 这两对阶段边界信号（状态机靠它们判进度，缺了就一直等到阶段预算耗尽，见
+// kickstart_signals_test.go 的实测记录）。真正「没有内容就该整段省掉」的只剩
+// %post --nochroot：它没有独立信号（与 %post 同属装完之后那一段，状态机只认
+// 一对 post-start/post-done，多发一对会被 §3.6 的只进不退判定当成回退）。
 func TestStageMapping_EmptyStageProducesNoSection(t *testing.T) {
 	ctx := model.RenderContext{Hooks: []model.HookRef{
 		{HookDigest: "post001", Stage: model.HookStagePost, Order: 10, Required: true},
 	}}
 
-	pre := RenderStageSection(ctx, model.HookStagePre)
-	if pre != "" {
-		t.Errorf("没有 pre 阶段 hook 时 RenderStageSection 应返回空字符串"+
-			"（不应写出空的 %%pre 段落头），got:\n%s", pre)
-	}
-
 	nochroot := RenderStageSection(ctx, model.HookStagePostNoChroot)
 	if nochroot != "" {
-		t.Errorf("没有 post-nochroot 阶段 hook 时应返回空字符串，got:\n%s", nochroot)
+		t.Errorf("没有 post-nochroot 阶段 hook 时应返回空字符串"+
+			"（该阶段没有独立信号，没 hook 就真的没内容），got:\n%s", nochroot)
+	}
+
+	// 反过来确认 %pre 在没有 hook 时**照样渲染**——它有信号要发。
+	pre := RenderStageSection(ctx, model.HookStagePre)
+	if pre == "" {
+		t.Error("没有 pre 阶段 hook 时仍应渲染 pre 段：pre-start 与 pre-done 是" +
+			"阶段边界标记，与 hook 无关，缺了状态机就一直等到阶段预算耗尽")
+	}
+	if !strings.Contains(pre, `signal "pre-start"`) || !strings.Contains(pre, `signal "pre-done"`) {
+		t.Errorf("无 hook 的 %%pre 段应含 pre-start 与 pre-done，got:\n%s", pre)
 	}
 }
 

@@ -124,11 +124,45 @@ func splitHostAndPath(rawURL string) (host, path string) {
 	return withoutScheme[:slashIdx], withoutScheme[slashIdx:]
 }
 
-// preseedPartitioning 渲染分区段落：用服务端决策的盘（by-id 标识，SPEC
-// §5.6），配方用 partman-auto 的 recipe 语法，单分区（MVP 范围，与
-// baseDirectives 的 RHEL 单分区策略一致）。
-func preseedPartitioning(ctx model.RenderContext) string {
+// preseedPartitioning 渲染分区段落：用服务端决策的盘（by-id 标识，SPEC §5.6），
+// 配方用 partman-auto 的 recipe 语法，单分区（MVP 范围，与 baseDirectives 的
+// RHEL 单分区策略一致）。
+//
+// **磁盘 fact 为空时报错，不渲染空值。** `d-i partman-auto/disk string `（空）
+// 会让 debian-installer 因无盘可分而停在分区界面等人，而那台机器没有人在看——
+// 现场症状是「装机卡住不动」，而服务端侧只能看到阶段超时。这与 kickstart 的
+// partitionDirectives 是同一条原则：渲染期报错能把失败挡在服务端、带着完整的
+// 任务上下文，渲染出空值则把失败推迟到目标机上，那时唯一的证据在 BMC 控制台。
+//
+// **by-hook 策略对 Debian 不适用，同样报错。** 这条与 kickstart 刻意不同：
+//
+//	kickstart  支持 %include，by-hook 能把选盘推到 %pre 阶段的 hook
+//	preseed    partman-auto/disk 直接吃路径，没有等价的延迟机制
+//	           （preseed/early_command 能跑脚本，但 partman 的 debconf 值在那
+//	           之前就已经读定了）
+//
+// 所以「Debian 模板配了 by-hook」是配置错误，必须在渲染期挡住并说清原因，
+// 否则运维会以为它像 RHEL 那样能用。Debian 家族要靠 inspect 阶段的硬件采集
+// （SPEC §11 Phase 2）把主盘送进 Facts。
+func preseedPartitioning(ctx model.RenderContext) (string, error) {
 	diskByID := ctx.Facts[model.FactDiskPrimary]
+
+	if ctx.Template.DiskPolicy == model.DiskPolicyByHook {
+		return "", fmt.Errorf("render: Debian 家族不支持 by-hook 磁盘策略——"+
+			"preseed 的 partman-auto/disk 直接吃磁盘路径，没有 kickstart 的 "+
+			"%%include 那种延迟机制（preseed/early_command 虽能跑脚本，但 partman "+
+			"的 debconf 值在那之前就已读定）。请把模板的磁盘策略改成 first / "+
+			"largest / by-model / raid1-ssd 之一，并确保 inspect 阶段把主盘送进 "+
+			"Facts[%s]", model.FactDiskPrimary)
+	}
+
+	if diskByID == "" {
+		return "", fmt.Errorf("render: 磁盘策略 %q 要求服务端已选定主盘，但 "+
+			"RenderContext.Facts[%s] 为空——渲染出 `partman-auto/disk string `"+
+			"（空值）会让 debian-installer 因无盘可分而停在分区界面等人，而那台"+
+			"机器没有人在看，服务端侧只能看到阶段超时。请让决策链把主盘送进 Facts",
+			ctx.Template.DiskPolicy, model.FactDiskPrimary)
+	}
 
 	var b strings.Builder
 	b.WriteString(debconfLine("d-i", "partman-auto/disk", "string", diskByID))
@@ -138,7 +172,7 @@ func preseedPartitioning(ctx model.RenderContext) string {
 	b.WriteString(debconfLine("d-i", "partman/choose_partition", "select", "finish"))
 	b.WriteString(debconfLine("d-i", "partman/confirm", "boolean", "true"))
 	b.WriteString(debconfLine("d-i", "partman/confirm_nooverwrite", "boolean", "true"))
-	return b.String()
+	return b.String(), nil
 }
 
 // preseedAccountAndPackages 渲染账户与软件包段落：root 不设可复用密码
@@ -163,14 +197,38 @@ func preseedAccountAndPackages() string {
 	return b.String()
 }
 
-// earlyCommandValue 渲染 preseed/early_command 的值：pre 阶段的全部
-// hook 调用压成一段 shell（early_command 在真实 d-i 里执行得早、环境
-// 简单，不落盘脚本文件，直接内联执行——这与 post 阶段的"落脚本再执行"
-// 不同，是因为 pre 阶段通常只是少量探测/准备动作，压缩成分号连接的单行
-// 不会像 post 阶段那样容易因为 hook 数量增长而失控）。
+// earlyCommandPath 是 pre 阶段脚本在 d-i 环境里的落盘路径。
 //
-// 与 kickstart 序言段一致：先内联参数、注入 facts，再注入 ClientLib，
-// 最后按 Order 逐个调用 run_hook。
+// /tmp 在 d-i 的 ramdisk 里始终可写，且 early_command 执行时目标盘还没分区，
+// 没有别的可写位置。
+const earlyCommandPath = "/tmp/lober-early.sh"
+
+// earlyCommandValue 渲染 preseed/early_command 的值：pre 阶段的全部 hook 调用
+// 压成一段 shell，base64 编码后落盘再执行。
+//
+// **不能按行用 `; ` 拼成单行。** 那是本函数此前的做法，实测（2026-09-26）在真机
+// 上一执行就死在 `sh: syntax error: unexpected ";"`，任务停在 installing/pre 直到
+// 阶段超时，连 pre-start 都没发出来——因为 signal() 这个函数本身就在语法错误的
+// 那一段里。
+//
+// 按行加分号至少有三种破法，而 ClientLib 的正文同时命中前两种：
+//
+//	func 定义   `signal() {` 后面紧跟 `;` 在 POSIX shell 里就是语法错误
+//	行内注释   `# 说明;` 之后的内容全被注释吞掉，下一条语句消失
+//	heredoc    正文与定界符必须各自独占一行，分号连接后彻底失效
+//
+// base64 落盘把「正文一个字节都不动」这件事变成结构性保证：脚本里有什么引号、
+// `$`、反引号、换行、注释都无关紧要，debconf 单行值里只出现 base64 字母表。
+// late_command 一侧早就是这么做的（见 lateCommandValue：「转义穿透 late_command
+// 单行值的风险远高于直接 base64 编码后用 base64 -d 落盘」），本函数只是跟上
+// 同一个结论。
+//
+// d-i 的 busybox 有 base64（实测 Debian 13 netboot initrd 的 busybox 1.37 内置
+// base64 与 sha256sum），所以 early_command 这个执行得很早、环境很简单的位置
+// 也能用这套载体。
+//
+// 与 kickstart 序言段一致：先内联参数、注入 facts，再注入 ClientLib，最后按
+// Order 逐个调用 run_hook。
 func earlyCommandValue(ctx model.RenderContext) (string, error) {
 	params, err := InlineParams(ctx.Task.ResolvedParams)
 	if err != nil {
@@ -178,25 +236,28 @@ func earlyCommandValue(ctx model.RenderContext) (string, error) {
 	}
 
 	var script strings.Builder
-	script.WriteString(inlineForSingleLine(params))
-	script.WriteString(inlineForSingleLine(InjectFacts(ctx.Facts)))
-	script.WriteString(inlineForSingleLine(ClientLib(ctx)))
+	script.WriteString(params)
+	script.WriteString(InjectFacts(ctx.Facts))
+	script.WriteString(ClientLib(ctx))
 
-	// pre-start/pre-done 信号点（phase2-01 任务 4，SPEC §6.1：pre 阶段 →
-	// early_command 首尾）。RHEL 家族当前尚未实际发出这一对信号（M4 的
-	// kickstart.go/firstboot.go 只发 firstboot 阶段的四个信号，installer
-	// 阶段的七个信号在 RHEL 侧目前是空白——见本文件末尾契约缺口说明），
-	// Debian 在这里补上，不等待 RHEL 对齐后再实现。
-	script.WriteString(inlineForSingleLine(`signal "pre-start" 0` + "\n"))
+	// pre-start/pre-done 信号点（SPEC §6.1：pre 阶段 → early_command 首尾）。
+	script.WriteString(`signal "pre-start" 0` + "\n")
 
-	lines := StageHookCallLines(ctx.Hooks, model.HookStagePre)
-	for _, line := range lines {
-		script.WriteString(inlineForSingleLine(line))
+	for _, line := range StageHookCallLines(ctx.Hooks, model.HookStagePre) {
+		script.WriteString(line)
+		if !strings.HasSuffix(line, "\n") {
+			script.WriteString("\n")
+		}
 	}
 
-	script.WriteString(inlineForSingleLine(`signal "pre-done" 0` + "\n"))
+	script.WriteString(`signal "pre-done" 0` + "\n")
 
-	return preseedShellValue(script.String()), nil
+	// sh 而不是 bash：d-i 的 ramdisk 里只有 busybox sh，没有 bash（run_hook 内部
+	// 调 bash 跑 hook 正文，那是另一件事——那时 anna 已经把更多组件装好了）。
+	return fmt.Sprintf(
+		"echo %s | base64 -d > %s && sh %s",
+		base64Encode(script.String()), earlyCommandPath, earlyCommandPath,
+	), nil
 }
 
 // inlineForSingleLine 把一段可能含多行的 shell 文本转换成"用 ; 连接的
@@ -459,7 +520,11 @@ func AssemblePreseed(ctx model.RenderContext) (string, error) {
 	b.WriteString(preseedLocalization())
 	b.WriteString(preseedNetwork(ctx))
 	b.WriteString(preseedMirror(ctx))
-	b.WriteString(preseedPartitioning(ctx))
+	partitioning, err := preseedPartitioning(ctx)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(partitioning)
 	b.WriteString(preseedAccountAndPackages())
 
 	early, err := earlyCommandValue(ctx)

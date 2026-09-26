@@ -507,13 +507,20 @@ func TestInspect_FullLoop_DecisionResultReachesRenderedAnswerFileAsByIDPath(t *t
 // 验证 by-hook 策略场景（服务端不做决策，见 provider/resolve.go 的
 // TestResolveTaskParams_ByHookDiskPolicy_DiskPrimaryKeyOmittedNotEmpty）与
 // 渲染层的组合：Facts 中不存在 LOBER_DISK_PRIMARY 键时，diskByID 取到零值
-// 空字符串——这不是本测试要验证的"正确"场景（by-hook 场景下渲染出一个
-// 空 --ondisk= 是已知的、留给 kickstart.go 装配点处理的行为，不在本文件
-// 归属范围内修复），本测试只确认这种组合不会意外地拼出一个看起来合法的
-// 内核设备名（比如某种回退逻辑悄悄补了 /dev/sda），把"服务端未决策"这个
-// 事实掩盖掉。
+// 空字符串。
+//
+// 本测试原先记录的那个缺口（"by-hook 场景下渲染出一个空 --ondisk= 是已知
+// 行为，留给 kickstart.go 装配点处理"）**已经修掉**：kickstart.go 的
+// partitionDirectives 现在对 by-hook 渲染 `%include`（由 %pre 阶段的 hook
+// 写出真正的分区指令），对其余策略在缺主盘时直接报错拒绝渲染。因此这里
+// 显式声明 by-hook——「既不声明策略、也没有主盘 fact」是个不自洽的上下文。
+//
+// 本测试的断言不变，且现在被更强地满足：确认这种组合不会意外拼出一个看起来
+// 合法的内核设备名（比如某种回退逻辑悄悄补了 /dev/sda），把"服务端未决策"
+// 这个事实掩盖掉。
 func TestInspect_FullLoop_MissingDiskPrimaryFactDoesNotFallBackToKernelName(t *testing.T) {
 	ctx := minimalKickstartCtx()
+	ctx.Template.DiskPolicy = model.DiskPolicyByHook
 	delete(ctx.Facts, model.FactDiskPrimary)
 
 	ks, err := AssembleKickstart(ctx)

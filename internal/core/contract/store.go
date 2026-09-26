@@ -136,10 +136,24 @@ type TaskStore interface {
 	// GetTask 按 id 查任务。查不到返回 ErrNotFound。
 	GetTask(ctx context.Context, taskID string) (model.Task, error)
 
-	// FindPendingTaskByIdentity 按主机身份查 pending 任务，判据是 SN → MAC →
-	// UUID 优先级回退（§4.3），空键跳过。只匹配 state=pending 的任务——其它
-	// 状态的任务不接受新的引导请求（§4.2），查不到统一返回 ErrNotFound，
+	// FindPendingTaskByIdentity 按主机身份查接受引导的任务，判据是 SN → MAC →
+	// UUID 优先级回退（§4.3），空键跳过。匹配 state ∈ {pending, booting}
+	// ——其它状态的任务不接受新的引导请求，查不到统一返回 ErrNotFound，
 	// 网关据此回 no_task、不建任务不记状态（§0.1）。
+	//
+	// **booting 也匹配是 SPEC 的明文要求**，不是放宽：§3.3 的阶段预算表写
+	// 「booting | 15 min | 允许重试，attempt++」，§9.1 第三道闸门是「同一任务
+	// 窗口内菜单最多取 3 次」，§4.4 还专门说明「一次性失效会直接掐死正常
+	// 重试」。只匹配 pending 会让 MaxBootAttempts=3 这个配额一次都用不上：
+	// 第一次引导把任务推到 booting，机器重试时就查不到任务了——而 PXE 重试
+	// 是常态（取 kernel 网络抖动、initrd 校验失败、机器被手动重启、iPXE 自己
+	// 的 retry）。方法名保留 Pending 是为了不改动全部调用点，语义以本注释
+	// 与 statemachine.acceptsBootRequest 为准。
+	//
+	// installing 及之后的阶段不匹配：那时机器已在跑 installer，再发引导请求
+	// 说明它重启回到了 PXE，那是真实异常，应当由阶段超时判定失败并留下诊断
+	// 信息，而不是静默重来一轮。终态（done / failed）绝不匹配——done 的任务
+	// 再接受引导会把一台已交付的生产机重新擦盘装机。
 	//
 	// sn、mac、uuid 三者均可能为空串；实现必须按优先级依次尝试非空的键，
 	// 全部为空则直接返回 ErrNotFound。
@@ -232,7 +246,7 @@ type ArtifactSetStore interface {
 
 	// SetArtifactSetContent 写回导入完成后才知道的内容：OSFamily 识别结果与
 	// Paths。导入 job 成功路径调用本方法。
-	SetArtifactSetContent(ctx context.Context, id string, osFamily model.OSFamily, paths model.ArtifactPaths) (model.ArtifactSet, error)
+	SetArtifactSetContent(ctx context.Context, id string, identity model.ArtifactIdentity, paths model.ArtifactPaths) (model.ArtifactSet, error)
 
 	// DeleteArtifactSet 删除制品集。若仍被某个 active 状态的 template 引用，
 	// 返回 ErrStillReferenced（§2.7：只能 deprecate，不能删）。

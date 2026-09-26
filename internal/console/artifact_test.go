@@ -36,7 +36,9 @@ type fakeImportCall struct {
 	ISOPath       string
 }
 
-func (f *fakeArtifactImporter) TriggerImport(ctx context.Context, artifactSetID, isoPath string) {
+func (f *fakeArtifactImporter) TriggerImport(ctx context.Context, artifactSetID string, src ImportSource) {
+	isoPath := src.ISOPath
+	_ = isoPath
 	f.mu.Lock()
 	f.calls = append(f.calls, fakeImportCall{ArtifactSetID: artifactSetID, ISOPath: isoPath})
 	onTrigger := f.onTrigger

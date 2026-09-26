@@ -33,6 +33,28 @@ import (
 //  5. 用管道状态数组 PIPESTATUS 取真实退出码（经典陷阱：直接取 $? 拿到的
 //     是 tee 的退出码，永远是 0）
 //  6. 上报 hook-report（带 digest），按 required 决定是否中止
+// 外部命令依赖（这段脚本跑在四种差异很大的环境里，缺一个的症状统一是
+// rc=127「command not found」，所以逐个记清楚）：
+//
+//	curl        必需。signal 与 run_hook 都靠它。anaconda installer、
+//	            debian-installer、装好的目标系统都有。
+//	sha256sum   必需。run_hook 校验 hook 正文用（内容寻址的完整性保证）。
+//	            实测在 anaconda installer 里可用。
+//	logger      best-effort。signal 三次重试都失败时往 syslog 记一笔；
+//	            没有它只是少一条本地日志，不影响流程（那一行的失败被
+//	            signal 的 `return 0` 吞掉）。
+//	timeout     **可选**。coreutils 的一部分，anaconda 的 installer ramdisk
+//	            里没有（2026-09-25 实测：hook 脚本正确取到并校验通过，
+//	            执行时 rc=127，服务端收到的日志正文只有一行
+//	            "/tmp/ks-script-xxx: line 27: timeout: command not found"）。
+//	            run_hook 因此先 command -v 探测：有就用，没有就裸跑并往
+//	            syslog 记一笔——宁可失去超时保护也不能让 hook 整体跑不起来。
+//
+// 裸跑的代价要说清楚：hook 是运维写的任意 shell，一个 while true 或一次网络
+// 长挂会让当前阶段卡住，直到 SPEC §3.3 的阶段预算耗尽（pre 是 10 分钟）。
+// 那时失败原因是「阶段超时」而非「hook 超时」，排查要多绕一层。有 timeout 的
+// 环境（装好的目标系统、firstboot 阶段）不受这个影响。
+
 func ClientLib(ctx model.RenderContext) string {
 	gw := ctx.Bases.GatewayURL()
 	art := ctx.Bases.ArtifactURL()
@@ -63,7 +85,15 @@ run_hook() {
   local digest="$1" required="$2" timeout_sec="$3"
   curl -fsS -o /tmp/h.sh "$ART/hooks/$digest/script.sh" || return 1
   echo "$digest  /tmp/h.sh" | sha256sum -c - || return 1
-  ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  # timeout(1) 是 coreutils 的一部分，anaconda 的 installer ramdisk 里没有
+  # （实测 rc=127: timeout: command not found）。有就用，没有就裸跑——
+  # 宁可失去超时保护也不能让 hook 整体跑不起来。
+  if command -v timeout >/dev/null 2>&1; then
+    ( set -euo pipefail; timeout "$timeout_sec" bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  else
+    logger -t lober "no timeout(1) in this environment, running hook $digest without time limit"
+    ( set -euo pipefail; bash /tmp/h.sh ) 2>&1 | tee /tmp/h.log
+  fi
   local rc=${PIPESTATUS[0]}
   signal "hook-report" "$rc" /tmp/h.log "$digest"
   [ "$rc" -eq 0 ] || [ "$required" != "true" ]
