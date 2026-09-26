@@ -267,6 +267,7 @@ class SSH:
 3. `run` 执行 `exit 3` → `rc == 3` 且不抛（命令失败不是异常）
 4. `run` 超时 → 抛超时异常（标记 `needs_vm`）
 5. `push` 到不存在的目录 → 抛异常且消息含远端路径（标记 `needs_vm`）
+6. **大输出不死锁**：远端产出 500KB stdout → 不卡死且 `len(stdout)` 等于完整长度（标记 `needs_vm`）。这是上面那两个死锁变体的回归护栏，小输出测不出来
 
 - [ ] **红：** 为五类写失败测试，前三类不需要 VM。运行 `uv run pytest tests/test_ssh.py -v -m 'not needs_vm'`，预期 FAIL。
 
@@ -274,7 +275,16 @@ class SSH:
 
 - [ ] **重构 + commit：** commit（`feat(lobertest): paramiko SSH 封装`）。
 
-**风险：** paramiko 的 `exec_command` 在命令输出量大时会因为不读 channel 而死锁。`run` 必须把 stdout/stderr 读完再等 exit status，不能先 `recv_exit_status()`。这是 paramiko 的经典坑，旧 `server.py` 已经处理对了——删它之前确认新实现同样处理。
+**风险：** paramiko 的 `exec_command` 在命令输出量大时会死锁。有**两个**变体，只防住第一个不够：
+
+1. 先 `recv_exit_status()` 再读 channel——远端写满接收窗口后阻塞，我们在等它退出，互等。这是教科书版本
+2. 顺序读：`stdout.read()` 读到 EOF 再 `stderr.read()`——远端交替写两路时，stderr 缓冲区填满会让它停止写 stdout，于是 stdout 的 EOF 永远不来，卡在第一个 `read()` 上
+
+**旧 `server.py` 只防住了第一个**（`git show 7893a30^:tools/vmlab/src/vmlab/server.py` 可取到原文，它是顺序读）。正确做法是 channel 级 `select` + 非阻塞 `recv_ready()`/`recv_stderr_ready()`，同一循环里交替抽取两路，都排空且 `exit_status_ready()` 后才退出。
+
+**超时要用截止时刻（deadline）而不是每轮重置的固定值**：把固定 timeout 传给每次 `select`，远端只要间歇性吐一点数据就会不断把时限扣满，永远不触发超时。
+
+这两条都要有测试守着，不能只靠实现时小心——它们在小输出下绝不出现，只在真实装机日志几十 KB 时炸。
 
 ---
 
