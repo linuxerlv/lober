@@ -363,15 +363,36 @@ def build_web(ssh: SSH, repo_root: Path) -> Path      # 任务 10 才用
 **接口契约：**
 
 ```python
+# config.py（叶子）新增——见下方「凭据必须收敛到一处」
+TEST_USER_PREFIX: str           # "lobertest-"
+TEST_PASSWORD: str              # 明文，长度要过 lober 的强度校验
+TEST_ROLES: tuple[str, ...]     # 五个角色名，取自 rbac.go
+
+# deploy.py
 @dataclass(frozen=True)
 class TestUser:
-    name: str; password: str; roles: list[str]
+    name: str; bcrypt_hash: str; roles: list[str]
 
-TEST_USERS: list[TestUser]      # 五个，name 为 lobertest-<role>
+TEST_USERS: list[TestUser]      # 五个，name 为 f"{TEST_USER_PREFIX}{role}"
 
 def bcrypt_hash(repo_root: Path, password: str) -> str
     # 经 scripts/mkuser 生成；不在 Python 侧实现 bcrypt
 ```
+
+**凭据必须收敛到一处（任务 3、5 实现后暴露的问题，任务 6 要一并解决）：**
+
+现状是裂开的——`api.py:27,32` 自己存了 `_TEST_USER_PREFIX` 与 `_TEST_PASSWORD`
+（任务 3 为避免反向依赖尚不存在的 `deploy.py` 而内联），`deploy.py` 的 `TestUser`
+只有 `bcrypt_hash` 没有明文密码。**两边必须指同一个密码**：`deploy` 用它算哈希写进
+`lober.yaml`，`api` 用它登录。一旦漂移，症状是全部 L1 用例 401，而两处各自看起来
+都对。
+
+按设计 §4 的依赖方向，`api.py` 与 `deploy.py` 是同级，不能互相 import；`config.py`
+是叶子、两者都可以 import。所以三个常量落在 `config.py`，任务 6 同时删掉 `api.py`
+里的两个内联副本改为 import。
+
+`TestUser` 保留 `bcrypt_hash` 而非计划原文的 `password`：写进配置文件的是哈希，
+明文只在调 `mkuser` 时用一次，不该存进每条用户记录。
 
 - 用户来自**配置文件** `auth.users`（`config.go:347` 的 `Roles []string`），不是数据库。所以建账号是 `render_config` 写 YAML + 重启，不是调 API
 - `bcrypt_hash` 调 `go run ./scripts/mkuser -user <name> -stdin`。不在 Python 侧装 bcrypt 库：哈希必须由 lober 自己的工具生成，否则「测试账号能登录」证明不了「运维按文档建的账号能登录」
@@ -383,6 +404,8 @@ def bcrypt_hash(repo_root: Path, password: str) -> str
 2. `TEST_USERS` 五个角色齐全且无重复 name
 3. 没有任何一个 user 同时含 `hook-author` 与 `operator`
 4. `render_config` 产出的 YAML 里五个用户都在，哈希非空
+5. **凭据单一来源**：`api.py` 里不再有硬编码的密码或账号前缀字面量（`grep` 断言），且它用的前缀与 `TEST_USERS` 的 name 前缀是同一个值
+6. **哈希与明文对得上**：拿 `TEST_PASSWORD` 算出的哈希，用 bcrypt 校验函数验证能匹配该明文（`mkuser` 出的哈希不是随便一串 `$2` 开头的东西）。若本机没有 bcrypt 库可用，退化为「同一密码调两次 `mkuser` 得到两个不同哈希」（bcrypt 加盐，相同输入不同输出）——这至少能证明它真的在做 bcrypt 而不是返回常量
 
 - [ ] **红：** 为四类写失败测试。运行 `uv run pytest tests/test_users.py -v`，预期 FAIL。
 
