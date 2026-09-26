@@ -488,7 +488,23 @@ def console(deployed) -> Console
 **层间闸门（`pytest_collection_modifyitems` + 运行期钩子）：**
 - L1 有任何失败 → L2/L3 的用例打 **skip 而非 fail**。理由：接口层断了，装机与 UI 必然跟着断，再跑一小时没有信息量
 - L2/L3 默认不收集，要 `-m slow` 显式开
-- `uv run pytest` 的默认行为是「只跑 L1，全绿」
+
+**marker 的三层划分（订正：原文把前两层混为一谈）：**
+
+原文说「`uv run pytest` 默认只跑 L1 且全绿」，这句话自相矛盾——L1 按本计划的设计就跑在 VM-S 上，没有 VM-S 时它不可能绿。实际有三层，各自的默认行为不同：
+
+| 层 | marker | 默认收集 | 需要什么 | 量级 |
+|---|---|---|---|---|
+| 纯逻辑 | 无 | 是 | 什么都不用 | 毫秒级 |
+| L1 接口 | `needs_vm` | 否 | VM-S 部署好 | 分钟级 |
+| L2 装机 / L3 前端 | `slow` | 否 | VM-S + 目标机 / node 构建 | 小时级 |
+
+`addopts` 因此带 `-m "not needs_vm and not slow"`：**裸跑 `uv run pytest` 只跑纯逻辑层，在任何机器上都该全绿**（config/envelope 的单测、`api.py` 的 mock 用例、`Result` 的数据逻辑）。
+
+- 跑 L1：`uv run pytest -m needs_vm`
+- 跑全部：`uv run pytest -m "needs_vm or slow"`
+
+`needs_vm` 这个 marker 由任务 4 引入（给 `ssh.py` 里那些要连真实主机的用例），任务 8 的 L1 用例沿用同一个 marker——它们的前提是一样的：有一台部署好的 VM-S。
 
 **六家族参数化的主链路（每个家族一条参数）：** 建 host（带磁盘清单）→ 导制品集并轮询 ready → 建模板并流转到 active → 建 hook 并审批到 active → 建任务 → 取 iPXE 菜单 → 取应答文件。家族差异（ISO 路径、家族名、应答文件名、菜单形态）全进参数表。
 
@@ -649,7 +665,8 @@ def target(request, settings) -> TargetVM   # 按家族参数起目标机，用�
 全部任务完成后逐项确认：
 
 - [ ] `uv sync` 在 `tests/lobertest/` 下干净完成，不带 `--extra ui`
-- [ ] `uv run pytest -q` 只跑 L1，全绿，且每条结论都来自 Linux 上运行的 lober
+- [ ] `uv run pytest -q` 裸跑只收集纯逻辑层，在没有 VM 的机器上也全绿（见任务 8 的 marker 三层划分）
+- [ ] `uv run pytest -m needs_vm` 跑 L1 全绿，且每条结论都来自 Linux 上运行的 lober
 - [ ] 故意破坏交叉编译（临时改一处 Linux 不兼容代码）后 `uv run pytest` 立即停止且不跑任何用例，错误消息含 go 的完整 stderr。**验证后恢复该改动**
 - [ ] `uv run pytest -m slow -q` 收集到 L2/L3 的用例
 - [ ] 人为让一条 L1 用例失败后，L2/L3 的用例显示为 **skipped 而非 failed**。验证后恢复

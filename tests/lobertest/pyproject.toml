@@ -21,7 +21,7 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m 'not needs_vm and not slow'"
 markers = [
     "needs_vm: 需要能连通 VM-S 才能跑的用例",
     "slow: L2/L3 用例，真实装机或前端构建，默认不收集，用 -m slow 显式开",
