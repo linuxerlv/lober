@@ -35,6 +35,11 @@ class Settings:
     ovmf_code: Path = Path("D:/msys/ucrt64/share/qemu/edk2-x86_64-code.fd")
     iso_dir: Path = Path("D:/qemu-vm/isos")
 
+    # 目标机（待装机的裸机）磁盘与串口日志的落盘目录。与 VM-S 自身
+    # （D:/qemu-vm/debian-cloud）分开：目标机每条目一块盘、每轮一份日志，
+    # 数量会积累，不该跟 VM-S 的固定文件混在一起。
+    targets_dir: Path = Path("D:/qemu-vm/vmlab-targets")
+
     schema: str = "lobertest"
 
 
@@ -68,6 +73,7 @@ _CONVERTERS = {
     "qemu_bin": Path,
     "ovmf_code": Path,
     "iso_dir": Path,
+    "targets_dir": Path,
 }
 
 
