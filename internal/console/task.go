@@ -265,7 +265,16 @@ func (s *Server) handleCreateTask(c *gin.Context) {
 	for k, v := range encodeDiskFacts(host.Disks) {
 		facts[k] = v
 	}
-	resolvedParams, err := s.deps.ParamsResolver.Resolve(c.Request.Context(), req.FormData, facts)
+	// DiskPolicy 按模板取：磁盘策略是模板属性（Template.DiskPolicy），而渲染器
+	// 正是按它决定要不要 %include（kickstart）或要求 LOBER_DISK_PRIMARY 存在
+	// （preseed）。不传这一项，决策器会退回装配点的全局配置，两半就会读到不同
+	// 的源——那正是 Debian 那轮渲染失败的原因。
+	resolveResult, err := s.deps.ParamsResolver.Resolve(c.Request.Context(), contract.ResolveRequest{
+		FormData:   req.FormData,
+		Facts:      facts,
+		DiskPolicy: tpl.DiskPolicy,
+	})
+	resolvedParams, decidedFacts := resolveResult.ResolvedParams, resolveResult.DecidedFacts
 	if err != nil {
 		apierr.Fail(c, apierr.New(http.StatusOK, apierr.CodeConflict,
 			"参数决策失败，任务未创建: "+err.Error()))
@@ -300,6 +309,27 @@ func (s *Server) handleCreateTask(c *gin.Context) {
 		}
 		apierr.Fail(c, err)
 		return
+	}
+
+	// 第 5.5 步：决策结果落进 FactStore。
+	//
+	// **这是决策链的最后一环。** 渲染上下文的 Facts 来自
+	// FactStore.GetFacts(task.ID)（gateway/rendercontext.go），所以主盘这类决策
+	// 结果不写进这里就送不到六个家族的渲染器手上——除 by-hook 之外的磁盘策略
+	// 下 preseed 直接拒绝渲染，kickstart 的非 by-hook 路径同样拒绝。
+	//
+	// 必须在 CreateTask 之后：facts 按 taskID 存，而 ID 要等任务落库才定下来。
+	//
+	// 写失败不回滚任务，但要**明确失败**而不是静默继续：facts 缺主盘的任务
+	// 取应答文件时必然渲染失败，那时报出来的是「模板配置有问题」，排查方向
+	// 完全错。留一个建不出来的任务比留一个注定装不上、且错误指向错误位置的
+	// 任务好。
+	if s.deps.Facts != nil && len(decidedFacts) > 0 {
+		if err := s.deps.Facts.MergeFacts(c.Request.Context(), created.ID, decidedFacts); err != nil {
+			apierr.Fail(c, fmt.Errorf("console: 决策结果落库失败（任务 %s 已创建但缺少 facts，"+
+				"取应答文件时会渲染失败）: %w", created.ID, err))
+			return
+		}
 	}
 	if _, err := s.deps.Events.AppendEvent(c.Request.Context(), model.TaskEvent{
 		TaskID: created.ID, Seq: 0, TS: now, Phase: model.PhasePending,

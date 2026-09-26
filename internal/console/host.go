@@ -47,6 +47,20 @@ type hostListItem struct {
 	Firmware   string `json:"firmware"`
 	Rack       string `json:"rack"`
 	LastSeenAt int64  `json:"lastSeenAt"`
+
+	// Disks 回显磁盘清单。运维需要看到「这台机器录了哪些盘」——那是建任务时
+	// 磁盘规划的唯一输入（除 by-hook 之外的四个策略都要它），录错或漏录的
+	// 后果是建任务失败或选错盘，而不回显就只能靠翻数据库核对。
+	Disks []hostDiskItem `json:"disks"`
+}
+
+// hostDiskItem 是回显用的一块盘。字段与 createHostDisk 对称——同一个概念在
+// 请求与响应里用同样的键名，避免调用方两头各记一套。
+type hostDiskItem struct {
+	ByIDPath   string `json:"byIdPath"`
+	SizeBytes  int64  `json:"sizeBytes"`
+	Rotational bool   `json:"rotational"`
+	Model      string `json:"model"`
 }
 
 // hostID 计算暴露给人面 API 的主机 id：SN → MAC → UUID 优先级取第一个
@@ -101,7 +115,27 @@ func toHostListItem(h model.Host) hostListItem {
 		Firmware:   string(h.Firmware),
 		Rack:       h.Rack,
 		LastSeenAt: h.LastSeenAt,
+		Disks:      toHostDiskItems(h.Disks),
 	}
+}
+
+// toHostDiskItems 把磁盘清单转成回显形态。空清单返回 nil 而不是空切片：
+// JSON 里就是 null，与「这台机器没录过盘」这个事实一致；空数组会让调用方
+// 以为录过一个空清单。
+func toHostDiskItems(disks []model.HostDisk) []hostDiskItem {
+	if len(disks) == 0 {
+		return nil
+	}
+	out := make([]hostDiskItem, 0, len(disks))
+	for _, d := range disks {
+		out = append(out, hostDiskItem{
+			ByIDPath:   d.ByIDPath,
+			SizeBytes:  d.SizeBytes,
+			Rotational: d.Rotational,
+			Model:      d.Model,
+		})
+	}
+	return out
 }
 
 // defaultListLimit 是列表端点未传 limit 参数时的默认上限（契约约定 2：

@@ -44,6 +44,18 @@ class TargetVM:
     memory_mb: int = 4096
     disk_gb: int = 12
     firmware: str = "bios"  # bios | uefi
+
+    # disk_serial 给虚拟盘一个序列号，guest 内因此有
+    # /dev/disk/by-id/virtio-<serial> 这个持久链接。
+    #
+    # **为什么需要它**：QEMU 的 virtio 盘默认没有 by-id 链接，选盘只能退回内核名
+    # （/dev/vda），而那个名字在不同启动之间会漂移——写进分区指令可能擦错盘
+    # （SPEC §10 失败模式 5）。RHEL 那轮的 by-hook 脚本实测就打了「没有 by-id
+    # 链接，退回内核名」的警告。
+    #
+    # 而 Debian 这条路径必须用 by-id：主机磁盘清单要预先录入（preseed 不支持
+    # by-hook），录进去的路径必须与 guest 内实际存在的设备节点一致。
+    disk_serial: str = ""
     settings: object = SETTINGS
 
     @property
@@ -115,7 +127,7 @@ class TargetVM:
             "-smp",
             "2",
             "-drive",
-            f"file={self.disk_path},if=virtio,format=qcow2",
+            self._disk_arg(),
             "-netdev",
             f"socket,id=lan,connect=127.0.0.1:{self.settings.net.lan_port}",
             "-device",
@@ -146,6 +158,14 @@ class TargetVM:
 
         handle = open(log, "wb")
         subprocess.Popen(args, stdout=handle, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+
+    def _disk_arg(self) -> str:
+        """拼 -drive 的值。给了 disk_serial 就带上 serial=，guest 内因此有
+        /dev/disk/by-id/virtio-<serial> 链接。"""
+        arg = f"file={self.disk_path},if=virtio,format=qcow2"
+        if self.disk_serial:
+            arg += f",serial={self.disk_serial}"
+        return arg
 
     def console_tail(self, chars: int = 2000) -> str:
         """取串口日志尾部。日志里有 NUL 与 ANSI 转义，读时清掉 NUL。"""

@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"github.com/lober/lober/internal/core/contract"
 	"testing"
 
 	"github.com/lober/lober/internal/core/model"
@@ -51,10 +52,13 @@ func TestParamsResolver_WiredEndToEndProducesInlineParamsWhitelistKeys(t *testin
 		"LOBER_INSPECT_DISK_0_MODEL":      "SSD",
 	}
 
-	got, err := app.ParamsResolver.Resolve(context.Background(), formData, facts)
+	res, err := app.ParamsResolver.Resolve(context.Background(), contract.ResolveRequest{
+		FormData: formData, Facts: facts,
+	})
 	if err != nil {
 		t.Fatalf("真实装配出的 ParamsResolver.Resolve 失败: %v", err)
 	}
+	got := res.ResolvedParams
 
 	want := map[string]string{
 		"hostname": "e2e-host-01",
@@ -100,7 +104,7 @@ func TestParamsResolver_WiredEndToEnd_IPAMFailurePropagatesAsError(t *testing.T)
 	formData := map[string]string{"hostname": "e2e-host-02"}
 	facts := map[string]string{model.FactOSFamily: string(model.OSFamilyRHEL)}
 
-	_, err := app.ParamsResolver.Resolve(context.Background(), formData, facts)
+	_, err := app.ParamsResolver.Resolve(context.Background(), contract.ResolveRequest{FormData: formData, Facts: facts})
 	if err == nil {
 		t.Fatal("没有配置任何模板解析规则时，Resolve 应该报错（阻塞式 provider 失败必须阻塞建任务）")
 	}

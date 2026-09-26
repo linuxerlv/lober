@@ -33,6 +33,13 @@ type taskParamsResolver struct {
 	ipamFactory func(form map[string]string) contract.IPAMProviderV1
 	diskPlanner contract.DiskPlanner
 	diskIntent  contract.DiskIntent
+
+	// diskPlannerFor 按策略取规划器。模板可以声明与装配点配置不同的策略，
+	// 而每个策略对应一个不同的规划器实现（diskplanner.go 的五个），所以不能
+	// 只换 DiskIntent.Policy 而继续用同一个规划器实例。
+	//
+	// 为 nil 时退回 diskPlanner 这个固定实例——保持既有构造函数的行为。
+	diskPlannerFor func(policy string) (contract.DiskPlanner, error)
 }
 
 // NewTaskParamsResolver 构造同步决策编排器。
@@ -51,6 +58,11 @@ func NewTaskParamsResolver(
 		ipamFactory: func(form map[string]string) contract.IPAMProviderV1 { return newStaticIPAM(form) },
 		diskPlanner: diskPlanner,
 		diskIntent:  diskIntent,
+
+		// 按模板策略取规划器。NewDiskPlanner 本来就是按策略串返回实现的工厂
+		// （diskplanner.go），这里复用它而不另造一张映射表——多一份表就多一处
+		// 可能与那五个具名策略脱节的地方。
+		diskPlannerFor: NewDiskPlanner,
 	}
 }
 
@@ -145,7 +157,35 @@ const (
 	resolvedKeyBizIP    = "biz_ip"
 )
 
-func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]string, facts map[string]string) (map[string]string, error) {
+func (r *taskParamsResolver) Resolve(ctx context.Context, req contract.ResolveRequest) (contract.ResolveResult, error) {
+	formData, facts := req.FormData, req.Facts
+
+	// 磁盘意图按模板的策略取，装配点配置只兜底。
+	//
+	// **必须这样取。** Template.DiskPolicy 此前只被渲染器读，而规划器只认装配点
+	// 从 lober.yaml 建好的那一个 DiskIntent——同一个决策的两半读了不同的源。
+	// 实测后果（2026-09-26，Debian 那轮）：模板声明 largest、VM 的 lober.yaml
+	// 配的是 by-hook，于是规划器走 by-hook 分支返回零值 Disk、不写
+	// LOBER_DISK_PRIMARY，而 preseed 渲染器按 largest 要求那个 fact 存在，
+	// 取应答文件时直接渲染失败。
+	//
+	// Params 仍然来自装配点：by-model 需要的型号串这类参数是部署级配置
+	// （lober.yaml 的 provider.disk_model），不在模板里。
+	// 只在模板显式给了策略时才换规划器。req.DiskPolicy 为空表示调用方没有指定，
+	// 那就沿用装配点传进来的那一对（planner + intent）——包括 intent.Policy 本身
+	// 为空的情形，那是既有测试与既有调用方的用法，不能因为本次改动开始报错。
+	diskIntent := r.diskIntent
+	diskPlanner := r.diskPlanner
+	if req.DiskPolicy != "" && r.diskPlannerFor != nil {
+		diskIntent.Policy = string(req.DiskPolicy)
+		p, err := r.diskPlannerFor(diskIntent.Policy)
+		if err != nil {
+			return contract.ResolveResult{}, fmt.Errorf("provider: 按模板策略 %q 取磁盘规划器失败: %w",
+				diskIntent.Policy, err)
+		}
+		diskPlanner = p
+	}
+
 	hwFacts := contract.HWFacts{
 		OSFamily: facts[model.FactOSFamily],
 		Vendor:   facts[model.FactVendor],
@@ -155,7 +195,7 @@ func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]st
 
 	templateRef, err := r.resolver.Resolve(ctx, formData, hwFacts)
 	if err != nil {
-		return nil, fmt.Errorf("provider: 同步决策编排失败于模板解析步骤: %w", err)
+		return contract.ResolveResult{}, fmt.Errorf("provider: 同步决策编排失败于模板解析步骤: %w", err)
 	}
 
 	hostname := formData[formKeyHostname]
@@ -164,20 +204,20 @@ func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]st
 		Hostname: hostname,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("provider: 同步决策编排失败于 IPAM 步骤: %w", err)
+		return contract.ResolveResult{}, fmt.Errorf("provider: 同步决策编排失败于 IPAM 步骤: %w", err)
 	}
 
 	disks, err := decodeDisksFromFacts(facts)
 	if err != nil {
-		return nil, fmt.Errorf("provider: 同步决策编排失败于磁盘规划步骤（解析磁盘清单时）: %w", err)
+		return contract.ResolveResult{}, fmt.Errorf("provider: 同步决策编排失败于磁盘规划步骤（解析磁盘清单时）: %w", err)
 	}
 
-	layout, err := r.diskPlanner.Plan(ctx, disks, r.diskIntent)
+	layout, err := diskPlanner.Plan(ctx, disks, diskIntent)
 	if err != nil {
-		return nil, fmt.Errorf("provider: 同步决策编排失败于磁盘规划步骤: %w", err)
+		return contract.ResolveResult{}, fmt.Errorf("provider: 同步决策编排失败于磁盘规划步骤: %w", err)
 	}
 	if len(layout.Selected) == 0 {
-		return nil, fmt.Errorf("provider: 磁盘规划器返回了空的选盘结果——这不应该发生" +
+		return contract.ResolveResult{}, fmt.Errorf("provider: 磁盘规划器返回了空的选盘结果——这不应该发生" +
 			"（DiskPlanner 契约要求零块盘时返回错误而不是空 Selected），视为编排失败")
 	}
 
@@ -280,7 +320,24 @@ func (r *taskParamsResolver) Resolve(ctx context.Context, formData map[string]st
 		resolved[resolvedKeyBizIP] = v
 	}
 
-	return resolved, nil
+	// decidedFacts 走 FactStore（按 taskID），与 resolved 的去向不同：
+	// resolved 写进 Task.ResolvedParams 并被渲染器喂给 InlineParams 的白名单，
+	// 而这些决策结果要经 Facts 才能送到渲染器手上（渲染上下文的 Facts 来自
+	// FactStore，见 gateway/rendercontext.go）。
+	//
+	// 只收录非空值：写 `LOBER_DISK_PRIMARY=""` 比不写更糟——渲染器的判据是
+	// 「键存在且非空」，空值会让它以为决策做过了。
+	decidedFacts := map[string]string{}
+	for _, k := range []string{
+		model.FactDiskPrimary, model.FactBizIP, model.FactBizGW, model.FactBizMask,
+		model.FactHostname, model.FactNICs,
+	} {
+		if v := decided[k]; v != "" {
+			decidedFacts[k] = v
+		}
+	}
+
+	return contract.ResolveResult{ResolvedParams: resolved, DecidedFacts: decidedFacts}, nil
 }
 
 // nicInstallMACParamKey 是网卡决策结果（装机网卡 MAC）在 Resolve 返回的

@@ -100,7 +100,10 @@ func TestResolveTaskParams_AllSucceedMergesAllExpectedKeys(t *testing.T) {
 	diskPlanner := &recordingDiskPlanner{inner: diskPlannerFirst{}}
 
 	orchestrator := NewTaskParamsResolver(resolver, diskPlanner, contract.DiskIntent{})
-	params, err := orchestrator.Resolve(context.Background(), validFormData(), validFacts())
+	res, err := orchestrator.Resolve(context.Background(), contract.ResolveRequest{
+		FormData: validFormData(), Facts: validFacts(),
+	})
+	params := res.ResolvedParams
 	if err != nil {
 		t.Fatalf("三个 provider 都成功时不应报错: %v", err)
 	}
@@ -146,7 +149,10 @@ func TestResolveTaskParams_TemplateResolverFailureFailsOverallNoPartialResult(t 
 	diskPlanner := diskPlannerFirst{}
 
 	orchestrator := NewTaskParamsResolver(resolver, diskPlanner, contract.DiskIntent{})
-	params, err := orchestrator.Resolve(context.Background(), validFormData(), validFacts())
+	res, err := orchestrator.Resolve(context.Background(), contract.ResolveRequest{
+		FormData: validFormData(), Facts: validFacts(),
+	})
+	params := res.ResolvedParams
 
 	if err == nil {
 		t.Fatal("模板解析失败时整体必须返回错误")
@@ -173,7 +179,10 @@ func TestResolveTaskParams_IPAMFailureFailsOverallNoPartialResult(t *testing.T) 
 		},
 	}
 
-	params, err := orch.Resolve(context.Background(), validFormData(), validFacts())
+	res, err := orch.Resolve(context.Background(), contract.ResolveRequest{
+		FormData: validFormData(), Facts: validFacts(),
+	})
+	params := res.ResolvedParams
 	if err == nil {
 		t.Fatal("IPAM 失败时整体必须返回错误")
 	}
@@ -187,7 +196,10 @@ func TestResolveTaskParams_DiskPlannerFailureFailsOverallNoPartialResult(t *test
 	diskPlanner := failingDiskPlanner{err: errors.New("磁盘规划失败")}
 
 	orchestrator := NewTaskParamsResolver(resolver, diskPlanner, contract.DiskIntent{})
-	params, err := orchestrator.Resolve(context.Background(), validFormData(), validFacts())
+	res, err := orchestrator.Resolve(context.Background(), contract.ResolveRequest{
+		FormData: validFormData(), Facts: validFacts(),
+	})
+	params := res.ResolvedParams
 
 	if err == nil {
 		t.Fatal("磁盘规划失败时整体必须返回错误")
@@ -219,7 +231,10 @@ func TestResolveTaskParams_ByHookDiskPolicy_OrchestratorSucceedsNoPartialFailure
 	diskPlanner := diskPlannerByHook{}
 
 	orchestrator := NewTaskParamsResolver(resolver, diskPlanner, contract.DiskIntent{Policy: "by-hook"})
-	params, err := orchestrator.Resolve(context.Background(), validFormData(), validFacts())
+	res, err := orchestrator.Resolve(context.Background(), contract.ResolveRequest{
+		FormData: validFormData(), Facts: validFacts(),
+	})
+	params := res.ResolvedParams
 
 	if err != nil {
 		t.Fatalf("by-hook 策略不是失败，编排器不应报错: %v", err)
@@ -267,7 +282,10 @@ func TestResolveTaskParams_MalformedDiskFactsFailsOverall(t *testing.T) {
 	// 清单归零，diskPlannerFirst 面对零块盘报错。
 	facts["LOBER_INSPECT_DISK_0_SIZE"] = "字段数不对"
 
-	params, err := orchestrator.Resolve(context.Background(), validFormData(), facts)
+	res, err := orchestrator.Resolve(context.Background(), contract.ResolveRequest{
+		FormData: validFormData(), Facts: facts,
+	})
+	params := res.ResolvedParams
 	if err == nil {
 		t.Fatal("磁盘 facts 格式异常导致有效磁盘清单为空时应返回错误")
 	}
