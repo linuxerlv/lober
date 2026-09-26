@@ -54,6 +54,23 @@ class Settings:
     # 它必须保持一致；provision.md 记录了对应的 QEMU hostfwd）。
     console_base_url: str = "http://127.0.0.1:8090/console/v1"
 
+    # gateway_base_url（任务 8 实测暴露的缺口）：guest 内 nginx 的机器面
+    # listener 绑的是 10.10.10.10:80（SPEC 要求 listen 写具体 IP，不写
+    # 0.0.0.0——同一条约束在 guest 内部导致 127.0.0.1:80 也不通，只有
+    # 10.10.10.10:80 才通，实测确认过），而 start-vm.sh 最初的 hostfwd
+    # 只转发了 SSH 与人面（8090），机器面端口从 Windows 宿主完全不可达
+    # ——直连 127.0.0.1:80 会在 TCP 层面纯挂起到超时（curl -v 验证过
+    # 零字节，不是响应慢），boot_menu/answer_file 两个机器面方法因此永远
+    # 连不上。已协调加第三条 hostfwd：`hostfwd=tcp:127.0.0.1:8080-
+    # 10.10.10.10:80`（start-vm.sh 2026-09-26 新增），本字段默认值必须
+    # 与之一致。
+    #
+    # 不并进 console_base_url 用同一个字段区分路径前缀：机器面走独立的
+    # host:port（8080 而非 8090），且无 /console/v1 前缀、无认证、纯文本
+    # 响应，与人面是两个完全不同的协议（任务 3 的 Console.__init__ 已经
+    # 把两者作为独立的两个 base_url 参数处理），字段层面维持同样的分离。
+    gateway_base_url: str = "http://127.0.0.1:8080"
+
     pxe_subnet: str = "10.20.20.0/24"
     tftp_root: str = "/srv/tftp"
 

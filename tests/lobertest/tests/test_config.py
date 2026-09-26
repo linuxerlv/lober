@@ -41,6 +41,18 @@ def test_load_env_override_single_field():
     assert overridden.console_base_url == default_settings.console_base_url
 
 
+def test_gateway_base_url_defaults_to_8080():
+    """任务 8 实测发现：guest 内 nginx 的机器面 listener 绑的是
+    10.10.10.10:80（guest 内部地址），start-vm.sh 最初的 hostfwd 只转发了
+    SSH 与人面（8090），机器面端口从 Windows 宿主完全不可达——直连
+    127.0.0.1:80 会在 TCP 层面纯挂起到超时（curl 验证过，不是响应慢）。
+    已协调给 start-vm.sh 加第三条 hostfwd（127.0.0.1:8080 → 10.10.10.10:80），
+    本字段的默认值必须与之一致。"""
+    settings = load(env={})
+
+    assert settings.gateway_base_url == "http://127.0.0.1:8080"
+
+
 def test_load_invalid_ssh_port_raises_clear_error_not_bare_valueerror():
     """ssh_port 给非数字字符串时要报清楚是哪个字段坏了，不是裸抛 ValueError。"""
     with pytest.raises(ValueError, match="ssh_port"):

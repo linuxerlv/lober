@@ -58,9 +58,80 @@ def settings() -> Settings:
     return load()
 
 
+def _local_sha256(path: Path) -> str:
+    """算本地文件的 sha256 十六进制摘要。"""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _guest_deployed_sha256(ssh: SSH) -> str | None:
+    """取 guest 上已部署二进制的 sha256。二进制不存在时返回 None（不抛
+    异常）——「guest 上还没有任何东西」是一个合法状态（比如全新的 VM-S），
+    不是错误，调用方应该据此判定「不能跳过部署」而不是被异常打断。"""
+    result = ssh.run("sha256sum /opt/lober/bin/lober 2>/dev/null || echo MISSING")
+    line = result.stdout.strip()
+    if line == "MISSING" or not line:
+        return None
+    return line.split()[0]
+
+
+def _deployment_already_matches(ssh: SSH, local_binary: Path, console: Console) -> bool:
+    """判定「当前 guest 上跑的服务」是否已经等于「即将要部署的这一份」，
+    即本轮 deploy() 是否可以跳过。
+
+    **本任务实测发现的问题**（团队协作过程中定位）：`deployed` 是
+    session 级 fixture，每次 `pytest` 进程启动都会无条件调一次
+    `deploy()`——deploy() 内部会 stop→推送→restart lober。TDD 迭代里
+    连续跑几轮 pytest，就是连续几次停服窗口；若某一轮的 Bash 调用超时
+    返回、但后台进程仍在跑，紧接着的下一轮 `deploy()` 会正好在上一轮的
+    某个 HTTP 请求还在等响应时把服务停掉——这解释了一次
+    `boot_menu` 的 30 秒读超时假失败（实测确认：`NRestarts`=0 说明是
+    显式 stop/start 不是崩溃重启，且宿主进程表当时只有一个 pytest，
+    时间点与 `deploy()` 的行为完全吻合）。
+
+    判定条件必须**同时满足**两条才能跳过，缺一不可：
+      1. 本地即将推送的二进制的 sha256 与 guest 上已部署的一致——只看
+         这一条不够：内容对但服务当前是挂的（比如被人手动 stop 过、
+         或配置在别处被改坏），跳过部署会让 session 后续全部用例都建立
+         在一个「看起来对但其实没在跑」的服务上，比多花一次重启的代价
+         高得多。
+      2. `wait_ready` 的三条判据当下就全部通过——这是「服务真的健康」
+         的唯一判据来源（deploy.py 的 wait_ready 本身已经封装好，不重复
+         实现一套新的健康检查逻辑）。
+
+    二进制不一致（或 guest 上还没有任何部署）时直接返回 False，不需要
+    走到判据 2——省一次远程健康检查往返，且语义上「内容都不一样」已经
+    足以判定必须重新部署，不需要再问「现在健康不健康」。
+    """
+    guest_sha = _guest_deployed_sha256(ssh)
+    if guest_sha is None:
+        return False
+    if guest_sha != _local_sha256(local_binary):
+        return False
+
+    # 复用公开的 wait_ready，不重新实现一套判据逻辑，也不导入 deploy.py
+    # 的私有函数 _check_readiness（下划线前缀标记它是模块内部实现细节，
+    # 跨模块依赖私有函数会让本文件在 deploy.py 重构内部实现时莫名其妙
+    # 跟着坏）。`timeout=0` 让 wait_ready 的循环只跑一轮判据检查：deadline
+    # 在进入循环前就已经过去，第一轮检查不通过就立即超时，第一轮检查通过
+    # 就立即正常返回——效果等价于「问一次现在健康不健康」，不做任何轮询
+    # 等待（那是 deploy 之后才需要的语义，这里只是一次性探测）。
+    try:
+        wait_ready(ssh, console, timeout=0)
+        return True
+    except TimeoutError:
+        return False
+
+
 @pytest.fixture(scope="session")
 def deployed(settings: Settings, repo_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Settings:
-    """session 级部署闸门：交叉编译 + 建 schema + 推二进制/配置 + 等就绪。
+    """session 级部署闸门：交叉编译 + （必要时）建 schema/推二进制/配置/
+    重启 + 等就绪。
 
     每轮 pytest 一次，不是每个用例一次——`deployed` 是 session scope。
     返回值就是 settings 本身（`DeployInfo` 这个契约里提到的类型名在本次
@@ -73,17 +144,29 @@ def deployed(settings: Settings, repo_root: Path, tmp_path_factory: pytest.TempP
     的 session 级 fixture 一旦抛异常，整个 session 立刻停止收集/执行后续
     用例（这正是「session 立刻停止」这条要求在 pytest 里的落地方式，
     不需要额外写终止逻辑）。
+
+    **条件部署**（`_deployment_already_matches` 的详细文档记录了这个
+    改动的完整背景）：先编译，再判断本地二进制是否与 guest 上当前跑着的
+    完全一致且服务健康——一致就跳过 stop/push/restart，直接复用；不一致
+    才走完整流程。这不只是性能优化：它顺带消灭了「连续几轮 pytest 互相
+    重启对方正在被请求的服务」这个真实发生过的自撞场景，且这本身正是
+    `deploy()` 该有的语义（provision.sh 的幂等设计是同一个道理——已经
+    是期望状态就不该重新做一遍）。schema 仍然每次都尝试建一次（`CREATE
+    SCHEMA IF NOT EXISTS` 幂等，代价接近零，不值得为了跳过它单独判断）。
     """
     binary = cross_compile(repo_root, tmp_path_factory.mktemp("deploy") / "lober-linux-amd64")
     users = build_test_users(repo_root)
 
     with SSH(settings) as ssh:
         create_schema(ssh, settings.schema)
+
+        probe_console = Console(settings.console_base_url)
+        if _deployment_already_matches(ssh, binary, probe_console):
+            return settings
+
         config_text = render_config(schema=settings.schema, users=users)
         deploy(ssh, binary, config_text)
-
-        console = Console(settings.console_base_url)
-        wait_ready(ssh, console, timeout=60)
+        wait_ready(ssh, probe_console, timeout=60)
 
     return settings
 
@@ -169,30 +252,15 @@ def console(deployed: Settings) -> Console:
     """人面 + 机器面两个 base_url 都要给（任务 3 的实现后订正：机器面用例
     缺了 gateway_base_url 会抛 ValueError）。
 
-    机器面 base_url 不进 `Settings`（任务 1 已冻结该 dataclass 的字段），
-    在这里按约定拼出来。
-
-    **实测订正（本任务发现的环境缺口）：** guest 内 nginx 的机器面
-    listener 绑定的是 `10.10.10.10:80`（guest 内部地址），而
-    `start-vm.sh` 最初只给 SSH 与人面（8090）配了 hostfwd，机器面端口
-    完全没有从 Windows 宿主转发进去——直接连 `127.0.0.1:80` 会纯挂起
-    到超时（实测用 curl 验证过，TCP 层面没有任何东西在监听那个地址，
-    不是响应慢）。这不是应该由本文件"猜出正确端口"就能绕过的问题，是
-    provision 阶段留下的真实基础设施缺口。已协调加了第三条 hostfwd
-    （`start-vm.sh` 2026-09-26 新增：`hostfwd=tcp:127.0.0.1:8080-
-    10.10.10.10:80`），本函数因此拼 `127.0.0.1:8080` 而不是
-    `127.0.0.1:80`——两者在 guest 内部都还是 80 端口，只是 Windows 宿主
-    侧转发用的端口号不同（8090 同理，人面在 guest 内部也不是 8090
-    本身，是 nginx 反代到 `127.0.0.1:8190`，这里只关心宿主侧能连到
-    哪个端口）。
+    机器面 base_url 现在是 `Settings.gateway_base_url`（任务 8 补的字段，
+    详见 config.py 该字段的文档：guest 内 nginx 的机器面 listener 绑的是
+    `10.10.10.10:80`，Windows 宿主最初没有到这个端口的 hostfwd，已协调
+    加了第三条转发 `127.0.0.1:8080 → 10.10.10.10:80`）。不再在本函数内
+    用字符串替换从 `console_base_url` 派生——那是发现这条环境缺口过程中
+    的过渡写法，字符串替换本身脆弱（依赖 "8090" 这个子串刚好只出现在
+    端口位置），现在有了专门的字段就该直接用它。
     """
-    from urllib.parse import urlsplit, urlunsplit
-
-    deployed_settings = deployed
-    parts = urlsplit(deployed_settings.console_base_url)
-    gateway_netloc = parts.netloc.replace(":8090", ":8080")
-    gateway_base_url = urlunsplit((parts.scheme, gateway_netloc, "", "", ""))
-    return Console(deployed_settings.console_base_url, gateway_base_url=gateway_base_url)
+    return Console(deployed.console_base_url, gateway_base_url=deployed.gateway_base_url)
 
 
 @pytest.fixture(scope="session")
