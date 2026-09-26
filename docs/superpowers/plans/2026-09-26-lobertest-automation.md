@@ -373,11 +373,18 @@ TEST_ROLES: tuple[str, ...]     # 五个角色名，取自 rbac.go
 class TestUser:
     name: str; bcrypt_hash: str; roles: list[str]
 
-TEST_USERS: list[TestUser]      # 五个，name 为 f"{TEST_USER_PREFIX}{role}"
+def build_test_users(repo_root: Path) -> list[TestUser]
+    # 五个，name 为 f"{TEST_USER_PREFIX}{role}"
 
 def bcrypt_hash(repo_root: Path, password: str) -> str
     # 经 scripts/mkuser 生成；不在 Python 侧实现 bcrypt
 ```
+
+**为什么是函数而不是模块级 `TEST_USERS` 静态列表**（任务 6 实现时的决定，已验证）：算哈希要跑
+`go run ./scripts/mkuser`，需要 `repo_root`。静态列表意味着在 import 时机就得算好五个哈希，
+那要在 `deploy.py` 里新增一套「模块自己发现 repo_root」的机制——而同模块的 `cross_compile`
+与 `build_web` 都是「调用方传入 repo_root」。为一处引入第二种约定不值得。任务 8 的
+`deployed` fixture 本来就要拿 `repo_root` 调 `cross_compile`，传同一个变量即可。
 
 **凭据必须收敛到一处（任务 3、5 实现后暴露的问题，任务 6 要一并解决）：**
 
@@ -395,8 +402,10 @@ def bcrypt_hash(repo_root: Path, password: str) -> str
 明文只在调 `mkuser` 时用一次，不该存进每条用户记录。
 
 - 用户来自**配置文件** `auth.users`（`config.go:347` 的 `Roles []string`），不是数据库。所以建账号是 `render_config` 写 YAML + 重启，不是调 API
-- `bcrypt_hash` 调 `go run ./scripts/mkuser -user <name> -stdin`。不在 Python 侧装 bcrypt 库：哈希必须由 lober 自己的工具生成，否则「测试账号能登录」证明不了「运维按文档建的账号能登录」
-- 密码用固定测试值，长度要过 lober 的强度校验（`config.go:620` 附近有校验）
+- `bcrypt_hash` 调 `go run ./scripts/mkuser -user <name> -stdin`。不在 Python 侧装 bcrypt 库算哈希：它必须由 lober 自己的工具生成，否则「测试账号能登录」证明不了「运维按文档建的账号能登录」。（用 bcrypt 库**校验**哈希是另一回事，那是测试类别 6 的手段，不是生产路径）
+- `subprocess` 调 `mkuser` 时密码只走 `stdin=PIPE`，**不进 argv**（argv 会出现在 `ps` 输出里）。这条要有测试守着——拦截调用参数断言密码不在 argv 列表中
+- `subprocess` 必须显式 `encoding="utf-8"`：本机默认区域设置是 GBK，而 `mkuser` 的中文 stderr 是 UTF-8，不指定会在读 stderr 时 `UnicodeDecodeError`，失败路径的错误消息因此不可读
+- **密码强度的唯一闸门是 `mkuser` 自己**：`scripts/mkuser/main.go:46` 的 `minPasswordLen = 12`。`internal/config/config.go` 那一段只校验 `auth.users[]` 的 name / bcrypt_hash / roles 非空，没有密码复杂度规则（原计划说「config.go:620 附近有校验」，指的其实是这个非空校验，不是强度校验）
 - `hook-author` 与 `operator` 是互不重叠的两个角色（`rbac.go:45-47`：hook 以 root 身份在分区之前运行，能力等同擦掉整机所有盘）。**不要给任何测试账号同时挂这两个角色**，那会让 L1 测不出这条边界
 
 **要覆盖的输入类别：**
