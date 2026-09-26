@@ -21,6 +21,8 @@ from pathlib import Path
 
 import paramiko
 
+from lobertest.config import Settings
+
 
 @dataclass
 class Result:
@@ -58,7 +60,7 @@ class SSHTimeoutError(Exception):
 class SSH:
     """VM-S 的 SSH 连接。用作上下文管理器。"""
 
-    def __init__(self, settings) -> None:
+    def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._client: paramiko.SSHClient | None = None
 
