@@ -40,6 +40,7 @@ disk_serial 拆分、日志归档）因此可以直接断言 argv 列表内容�
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -100,19 +101,19 @@ def _vars_path(entry_id: str, settings: "Settings") -> Path:
 def _ensure_vars_copy(entry_id: str, settings: "Settings") -> Path:
     """确保 entry 的可写 vars 副本文件存在，返回其路径。
 
-    这个 MSYS qemu 包只随 edk2-x86_64 附带 `-code.fd`，没有配套的
-    `-vars.fd` 模板（i386/arm/riscv 才有）。**vars 文件不能是空文件**：
-    QEMU 的 pflash 设备要求文件大小与只读的 code.fd 一致，塞一个 0 字节
-    文件在 `-drive if=pflash,format=raw` 上大概率启动即报错或者 OVMF 认为
-    NVRAM 损坏——所以按 code.fd 的大小创建一份全零文件，不是空文件。
+    从 `settings.ovmf_vars_template` 拷贝，**不能自造全零文件**：真实的
+    vars 模板在偏移 0x28 处有 `_FVH` 固件卷签名与卷头，全零文件缺这个
+    结构会被 OVMF 判成损坏的 NVRAM（且 flash 的擦除态是 0xFF 不是 0x00，
+    全零在语义上也不对——表示"所有位都被编程过"）。vars 与 code 是两个
+    独立的 pflash 设备，各自按自己的文件大小映射，**不需要同大小**
+    （模板 540672 字节，code.fd 3653632 字节）。
     """
     vars_path = _vars_path(entry_id, settings)
     if vars_path.exists():
         return vars_path
 
     vars_path.parent.mkdir(parents=True, exist_ok=True)
-    code_size = settings.ovmf_code.stat().st_size
-    vars_path.write_bytes(b"\x00" * code_size)
+    shutil.copy(settings.ovmf_vars_template, vars_path)
     return vars_path
 
 

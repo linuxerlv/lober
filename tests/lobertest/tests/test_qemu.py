@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import filecmp
 import subprocess
 import time
 from pathlib import Path
@@ -84,16 +85,23 @@ def test_target_args_is_pure_does_not_write_vars_file(settings):
     )
 
 
-def test_ensure_vars_copy_creates_file_matching_ovmf_code_size(settings):
-    """_ensure_vars_copy 是 _target_args side effect 的正确归宿：这个
-    MSYS qemu 包没有配套的 edk2-x86_64-vars.fd 模板，必须自己创建一份
-    大小与只读 code.fd 一致的全零文件——0 字节文件会被 QEMU 的 pflash
-    设备当成损坏的 NVRAM。"""
+def test_ensure_vars_copy_creates_file_matching_template_bytes(settings):
+    """_ensure_vars_copy 是 _target_args side effect 的正确归宿：从
+    settings.ovmf_vars_template（edk2-i386-vars.fd，QEMU 自己的固件
+    descriptor 声明的 x86_64 nvram-template）逐字节拷贝，不能自造。
+
+    大小不需要与 ovmf_code 一致——vars 与 code 是两个独立的 pflash 设备，
+    各自按自己的文件大小映射（模板 540672 字节 vs code.fd 3653632 字节）。
+    0 字节或全零文件都不对：真实模板在偏移 0x28 处有 _FVH 固件卷签名，
+    缺这个头会被 OVMF 判成损坏的 NVRAM。"""
     vars_path = _ensure_vars_copy("e-vars-1", settings)
 
     assert vars_path.exists()
-    assert vars_path.stat().st_size == settings.ovmf_code.stat().st_size
-    assert vars_path.stat().st_size > 0, "vars 文件不能是 0 字节"
+    assert filecmp.cmp(vars_path, settings.ovmf_vars_template, shallow=False), (
+        "vars 副本内容应与模板逐字节一致"
+    )
+    # _FVH 固件卷签名，真实模板的标志——全零或截断文件都不会有它。
+    assert vars_path.read_bytes()[0x28:0x28 + 4] == b"_FVH"
 
 
 def test_ensure_vars_copy_is_idempotent_does_not_overwrite_existing(settings):

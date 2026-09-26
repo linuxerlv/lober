@@ -33,6 +33,14 @@ class Settings:
 
     qemu_bin: Path = Path("D:/msys/ucrt64/bin/qemu-system-x86_64.exe")
     ovmf_code: Path = Path("D:/msys/ucrt64/share/qemu/edk2-x86_64-code.fd")
+
+    # x86_64 的 UEFI vars 模板。这个 MSYS 包没有 edk2-x86_64-vars.fd，但
+    # 这不是缺件——share/qemu/firmware/60-edk2-x86_64.json 明确声明
+    # nvram-template 就是 i386 那份（varstore 格式与架构无关，QEMU 只发
+    # 一份）。不能自造：模板开头（偏移 0x28）有 _FVH 固件卷签名，全零文件
+    # 缺这个头会被 OVMF 判成损坏的 NVRAM。
+    ovmf_vars_template: Path = Path("D:/msys/ucrt64/share/qemu/edk2-i386-vars.fd")
+
     iso_dir: Path = Path("D:/qemu-vm/isos")
 
     # 目标机（待装机的裸机）磁盘与串口日志的落盘目录。与 VM-S 自身
@@ -72,6 +80,7 @@ _CONVERTERS = {
     "ssh_key_path": Path,
     "qemu_bin": Path,
     "ovmf_code": Path,
+    "ovmf_vars_template": Path,
     "iso_dir": Path,
     "targets_dir": Path,
 }
