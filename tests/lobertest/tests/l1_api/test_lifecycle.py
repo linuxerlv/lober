@@ -147,7 +147,11 @@ def _extract_answer_url_parts(menu: str, filename_hint: str) -> tuple[str, str, 
 
 @pytest.mark.parametrize("case", FAMILIES)
 def test_family_full_lifecycle(
-    case: FamilyCase, console: Console, deployed, family_iso_paths: dict[str, str]
+    case: FamilyCase,
+    console: Console,
+    deployed,
+    family_iso_paths: dict[str, str],
+    artifact_reaper,
 ) -> None:
     """类别 1-3：六个家族各走完整主链路；应答文件形态按家族断言；iPXE
     菜单含 `#!ipxe` 首行与 boot 命令（`99b6ca7`、`4e32ed9` 的回归护栏）。
@@ -181,6 +185,15 @@ def test_family_full_lifecycle(
         f"lobertest-{case.family}",
         netboot_path=case.netboot_guest_path,
     )
+    # 登记给 artifact_reaper，session 结束时回收这份制品占的磁盘（rhel 约
+    # 1.6G、debian 约 958M）。**登记要紧跟 import 之后、在 wait_ready 之前**：
+    # 导入失败或超时的制品同样已经在盘上占了空间，等到断言之后再登记就漏掉
+    # 了失败路径——而失败恰恰是最容易留垃圾的路径。
+    #
+    # 为什么不是调 API 删（那条路 409）、为什么不做孤儿探测，见
+    # conftest.py 里 artifact_reaper 的文档。
+    artifact_reaper(artifact_id)
+
     artifact = console.wait_artifact_ready(artifact_id, timeout=600)
     assert artifact["osFamily"] == case.family
 

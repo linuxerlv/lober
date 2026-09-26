@@ -80,7 +80,21 @@ def _guest_deployed_sha256(ssh: SSH) -> str | None:
     return line.split()[0]
 
 
-def _deployment_already_matches(ssh: SSH, local_binary: Path, console: Console) -> bool:
+def _guest_deployed_config(ssh: SSH) -> str | None:
+    """读 guest 上当前生效的 /etc/lober/lober.yaml 正文；不存在时返回 None。
+
+    640 root:lober，debian 用户不在 lober 组，必须 sudo 读（与 wait_ready
+    判据 1 同一个原因）。
+    """
+    result = ssh.sudo("cat /etc/lober/lober.yaml")
+    if not result.ok:
+        return None
+    return result.stdout
+
+
+def _deployment_already_matches(
+    ssh: SSH, local_binary: Path, local_config: str, console: Console
+) -> bool:
     """判定「当前 guest 上跑的服务」是否已经等于「即将要部署的这一份」，
     即本轮 deploy() 是否可以跳过。
 
@@ -94,24 +108,34 @@ def _deployment_already_matches(ssh: SSH, local_binary: Path, console: Console) 
     显式 stop/start 不是崩溃重启，且宿主进程表当时只有一个 pytest，
     时间点与 `deploy()` 的行为完全吻合）。
 
-    判定条件必须**同时满足**两条才能跳过，缺一不可：
+    判定条件必须**同时满足**三条才能跳过，缺一不可：
       1. 本地即将推送的二进制的 sha256 与 guest 上已部署的一致——只看
          这一条不够：内容对但服务当前是挂的（比如被人手动 stop 过、
          或配置在别处被改坏），跳过部署会让 session 后续全部用例都建立
          在一个「看起来对但其实没在跑」的服务上，比多花一次重启的代价
          高得多。
-      2. `wait_ready` 的三条判据当下就全部通过——这是「服务真的健康」
+      2. 本地即将推送的配置正文与 guest 上生效的一字不差。**这一条是补的
+         （第一版只比二进制）**：缓存键漏了配置，症状是「改了 render_config
+         但新配置永远不落地」——二进制没变，判定为已匹配而跳过部署，测试
+         对着旧配置跑却全绿。实际踩到过：把 gateway_base 从 127.0.0.1:8180
+         改成装机 VLAN 地址后，渲染出的 iPXE 菜单里仍然是旧地址。
+         这类错误极难定位，因为源码里看是对的、服务也确实健康。
+      3. `wait_ready` 的三条判据当下就全部通过——这是「服务真的健康」
          的唯一判据来源（deploy.py 的 wait_ready 本身已经封装好，不重复
          实现一套新的健康检查逻辑）。
 
-    二进制不一致（或 guest 上还没有任何部署）时直接返回 False，不需要
-    走到判据 2——省一次远程健康检查往返，且语义上「内容都不一样」已经
+    二进制或配置不一致（或 guest 上还没有任何部署）时直接返回 False，不需要
+    走到判据 3——省一次远程健康检查往返，且语义上「内容都不一样」已经
     足以判定必须重新部署，不需要再问「现在健康不健康」。
     """
     guest_sha = _guest_deployed_sha256(ssh)
     if guest_sha is None:
         return False
     if guest_sha != _local_sha256(local_binary):
+        return False
+
+    guest_config = _guest_deployed_config(ssh)
+    if guest_config is None or guest_config != local_config:
         return False
 
     # 复用公开的 wait_ready，不重新实现一套判据逻辑，也不导入 deploy.py
@@ -161,10 +185,14 @@ def deployed(settings: Settings, repo_root: Path, tmp_path_factory: pytest.TempP
         create_schema(ssh, settings.schema)
 
         probe_console = Console(settings.console_base_url)
-        if _deployment_already_matches(ssh, binary, probe_console):
+        # 先渲染配置再判定：配置正文是「要不要跳过部署」这个判断的一部分
+        # （判据 2），不能等判定之后才渲染——那样就只能拿二进制做缓存键，
+        # 配置改了也发现不了。渲染本身是纯字符串拼装，没有副作用，提前做
+        # 不产生任何代价。
+        config_text = render_config(schema=settings.schema, users=users)
+        if _deployment_already_matches(ssh, binary, config_text, probe_console):
             return settings
 
-        config_text = render_config(schema=settings.schema, users=users)
         deploy(ssh, binary, config_text)
         wait_ready(ssh, probe_console, timeout=60)
 
@@ -224,10 +252,57 @@ def _ensure_iso_pushed(ssh: SSH, local_path: Path, guest_filename: str) -> str:
     # `debian` 用户自己的 home 目录（`/home/debian`，落在真实磁盘
     # /dev/vda1 上，20G 盘当前有 15G 空闲），推送权限与磁盘容量都够。
     staging_path = f"/home/debian/lobertest-iso-upload-{guest_filename}"
-    ssh.push(local_path, staging_path)
+    try:
+        ssh.push(local_path, staging_path)
+    except Exception:
+        # 推送中断会在 guest 上留下半个文件——而推送失败最常见的原因恰好就是
+        # 磁盘满，留着那半个文件（实测见过 1.04G）等于让下一次更难成功。
+        # 清理本身失败就忽略：此刻要抛的是推送失败那个异常，它才是根因。
+        ssh.run(f"rm -f {staging_path}")
+        raise
     ssh.sudo(f"mv {staging_path} {guest_path}").check(f"移动 ISO 到 {guest_path}")
     ssh.sudo(f"chmod 644 {guest_path}").check("设置 ISO 可读权限")
     return guest_path
+
+
+@pytest.fixture(scope="session")
+def artifact_reaper(deployed: Settings):
+    """收集本 session 导入的制品集 id，session 结束时回收它们占的磁盘。
+
+    **为什么不走 API：** 后端刻意只允许删 `state=deprecated` 且未被 active
+    template 引用的制品集（`internal/console/artifact.go` 的
+    handleDeleteArtifactSet，依据 SPEC §2.7），而测试建的制品是 `ready` 且被
+    模板引用，`DELETE /artifact-sets/:id` 一律 409。API 里也没有「ready →
+    deprecated」的端点，模板同样没有 DELETE。这条路走不通，不是权限问题。
+    所以只能在基础设施层删：rm 目录 + DELETE 库记录。
+
+    **为什么不做孤儿探测（「删掉库里查不到的目录」）：** 那正是踩过的坑——
+    这台 VM-S 上有三个库（postgres/lober/lober_test），只查其中一个会让另一个
+    库里活着的数据看起来像孤儿，差点误删 8 个旧 vmlab 时代真实导入成功的制品。
+    本 fixture 只删**自己登记过的 id**，不推断、不扫描，因此不可能误删别人的
+    数据。代价是崩溃的 session 仍会留下垃圾，那是可接受的——它有明确的上限
+    （一轮的量），而误删没有下限。
+
+    为什么需要它：不回收的话每跑一轮攒一份（rhel 约 1.6G、debian 约 958M），
+    跨 session 累积。实测攒到 13 个目录共 14G、`df` 100%，症状是下一轮推 ISO
+    时 SFTP 报 `Failure`——这个消息本身完全不提磁盘，极易误判。
+    """
+    collected: list[str] = []
+    yield collected.append
+
+    if not collected:
+        return
+    ids = " ".join(f"'{i}'" for i in collected)
+    dirs = " ".join(f"/srv/lober/artifacts/{i}" for i in collected)
+    try:
+        with SSH(deployed) as ssh:
+            ssh.sudo(f"rm -rf {dirs}")
+            ssh.run(
+                "sudo -u postgres psql -d lober_test -Atc "
+                f'"DELETE FROM {deployed.schema}.artifact_sets WHERE id IN ({ids});"'
+            )
+    except Exception as exc:  # noqa: BLE001 —— teardown 不该掩盖用例的真实结果
+        print(f"\n[警告] 回收 {len(collected)} 个制品集失败，guest 上会留下几 GB：{exc}")
 
 
 @pytest.fixture(scope="session")
@@ -264,7 +339,9 @@ def console(deployed: Settings) -> Console:
 
 
 @pytest.fixture(scope="session")
-def ready_rhel_artifact_id(console: Console, family_iso_paths: dict[str, str]) -> str:
+def ready_rhel_artifact_id(
+    console: Console, family_iso_paths: dict[str, str], artifact_reaper
+) -> str:
     """导入一次 RHEL 家族制品集并等到 ready，session 内全程复用。
 
     准入（test_admission.py）与 RBAC（test_rbac.py）两个文件里的多个
@@ -278,8 +355,13 @@ def ready_rhel_artifact_id(console: Console, family_iso_paths: dict[str, str]) -
 
     用 rhel 而非 debian：rhel 不需要 netboot_path 这个额外参数，作为
     「随便找一个能 ready 的家族」的选择更简单。
+
+    session 内复用只解决了「同一次 pytest 里不重复导入」，跨 session 的累积
+    由 `artifact_reaper` 回收（见它的文档：为什么只能在基础设施层删、为什么
+    不做孤儿探测）。
     """
     artifact_id = console.import_artifact(family_iso_paths["rhel"], "lobertest-shared-rhel-artifact")
+    artifact_reaper(artifact_id)
     console.wait_artifact_ready(artifact_id, timeout=600)
     return artifact_id
 

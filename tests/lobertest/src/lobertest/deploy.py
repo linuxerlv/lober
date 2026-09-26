@@ -260,10 +260,26 @@ def render_config(*, schema: str, users: list[TestUser]) -> str:
     users_yaml = _render_users(users)
     return f"""\
 gateway:
+  # listen 保持回环：Go 侧两个 listener 都绑 127.0.0.1，nginx 是唯一对外入口
+  # （SPEC §1.4）。这条不变。
   listen: "127.0.0.1:8180"
-  gateway_base: "http://127.0.0.1:8180"
-  artifact_base: "http://127.0.0.1:8181"
-  syslog_listen: "127.0.0.1:8614"
+  # gateway_base / artifact_base 是**目标机要访问的地址**，不是本进程的监听面
+  # ——config.go:150-154 写明它们「供渲染器拼接 iPXE 脚本与应答文件里的完整
+  # URL」。原值填的是 127.0.0.1:8180/8181，那是致命的：目标机拿到菜单后会去
+  # 访问它自己的回环，装机必然失败。L1 发现不了这个错，因为 L1 只断言菜单的
+  # 形态（有 #!ipxe 首行、有 boot 命令），而宿主侧取菜单走的是 hostfwd，与
+  # 菜单正文里写的 URL 无关。真实装机（L2）是第一个会踩到它的场景。
+  #
+  # 10.20.20.1 是 VM-S 在装机 VLAN（enp0s3）上的地址，guest 内 nginx 在这个
+  # 地址的 80 端口上同时提供 /boot.ipxe、/v1/*（反代到 127.0.0.1:8180）与
+  # /artifacts/（直接发盘，不经 Go）。两个字段因此是同一个 base。
+  gateway_base: "http://10.20.20.1"
+  artifact_base: "http://10.20.20.1"
+  # syslog_listen 是装机过程中 installer 把日志打回来的地址，必须是目标机能
+  # 发到的具体 IP。这也解释了 VM-S 上一轮那条崩溃循环：旧配置填的正是
+  # 10.20.20.1:514，地址本身是对的，但装机 VLAN 那张网卡当时还不存在，于是
+  # `bind: cannot assign requested address` 反复重启。现在网卡加上了。
+  syslog_listen: "10.20.20.1:514"
   root_ssh_public_keys:
     - "{TEST_ROOT_SSH_PUBLIC_KEY}"
 console:

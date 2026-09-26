@@ -123,6 +123,7 @@ def _target_args(
     firmware: str,
     mem: str,
     disk_serial: str,
+    mac: str,
     settings: "Settings",
 ) -> list[str]:
     """拼装目标机的 QEMU argv，不启动进程。纯函数，供测试直接断言。"""
@@ -137,6 +138,20 @@ def _target_args(
         "-m", mem,
         "-smp", "2",
         *_disk_args(disk_path, disk_serial),
+        # 装机 VLAN 网卡：socket 类型，connect 到 VM-S 的 listen 侧
+        # （start-vm.sh 里 `-netdev socket,id=lan,listen=127.0.0.1:12520`）。
+        # 两台 QEMU 的虚拟网卡由此形成一个二层 hub，DHCP 广播才能到达 dnsmasq
+        # ——SLIRP 做不到这件事，它是用户态 NAT，两台 guest 之间不互通。
+        #
+        # 顺序有硬依赖：VM-S（listen 侧）必须先在跑，否则这里 connect 立刻被拒
+        # 而 QEMU 直接退出。`-boot n` 没有网卡时同样是必败的（没有可引导设备），
+        # 这正是本函数此前的缺口：有 `-boot n` 却一张网卡都没有。
+        #
+        # mac 由调用方传入而不是从 entry_id 派生：lober 按 MAC 认机器
+        # （UpsertHost 用 mac 做写入冲突判定），必须与控制台里建的 host 记录
+        # 一致。派生值一旦跨进程不稳定，就会在库里累积同一 SN 的多行脏数据。
+        "-netdev", f"socket,id=lan,connect=127.0.0.1:{settings.pxe_socket_port}",
+        "-device", f"virtio-net-pci,netdev=lan,mac={mac}",
         "-device", "virtio-rng-pci",
         "-boot", "n",
         "-display", "none",
@@ -221,11 +236,16 @@ def start_target(
     mem: str,
     disk_serial: str = "",
     *,
+    mac: str,
     settings: "Settings",
 ) -> subprocess.Popen:
     """启动目标机。先清理残留进程（约束 4），串口走 -nographic 重定向到
     日志文件（约束 1），日志已存在时先归档（约束 6），uefi 固件时确保
     entry 独立的 vars 副本存在。
+
+    `mac` 是必需的关键字参数，没有默认值：它必须与控制台里建的 host 记录
+    用同一个值（lober 按 MAC 认机器），给个默认值只会让调用方忘记传而拿到
+    一台永远匹配不上任务的机器。
     """
     kill_stale_targets(settings=settings)
     if firmware == "uefi":
@@ -237,6 +257,7 @@ def start_target(
         firmware=firmware,
         mem=mem,
         disk_serial=disk_serial,
+        mac=mac,
         settings=settings,
     )
 

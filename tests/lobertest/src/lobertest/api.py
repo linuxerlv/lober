@@ -164,6 +164,22 @@ class Console:
         data = self.call("POST", "/artifact-sets", json=body)
         return data["id"]
 
+    def delete_artifact(self, artifact_id: str) -> None:
+        """删除制品集。
+
+        **注意它对测试收尾没用**，别指望用它清理：后端刻意只允许删
+        `state=deprecated` 且未被任何 active template 引用的制品集
+        （`artifact.go` 的 handleDeleteArtifactSet，依据 SPEC §2.7），而测试
+        建出来的制品是 `ready` 且被模板引用，调它一律 409。控制台 API 里也
+        没有「把 ready 改成 deprecated」的端点，模板同样没有 DELETE——这条
+        路在 API 层是走不通的，不是权限问题。
+
+        测试的磁盘回收走 conftest 的 `artifact_reaper`（SSH + psql 直接删
+        目录与库记录）。保留本方法是因为它对应一个真实端点，将来要测
+        「删除的前置条件校验」时正是从这里发起。
+        """
+        self.call("DELETE", f"/artifact-sets/{artifact_id}")
+
     def wait_artifact_ready(self, artifact_id: str, timeout: int = _DEFAULT_ARTIFACT_TIMEOUT) -> dict:
         """轮询到 ready；命中 failed 立即抛（不等超时），把 FailReason 放进消息。"""
         start = time.monotonic()

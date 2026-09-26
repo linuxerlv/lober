@@ -32,6 +32,11 @@ from lobertest.qemu import (
     winpath,
 )
 
+# 目标机的装机 VLAN MAC。参数拼装测试只关心它有没有被原样带进 argv，具体值
+# 不影响断言——真实用例里这个值必须与控制台建的 host 记录一致（lober 按 MAC
+# 认机器），所以 start_target 把 mac 做成了无默认值的必需关键字参数。
+_TEST_MAC = "52:54:00:30:30:01"
+
 
 @pytest.fixture
 def settings(tmp_path):
@@ -56,6 +61,7 @@ def test_target_args_uefi_has_pflash_with_entry_scoped_vars(settings, tmp_path):
         firmware="uefi",
         mem="4096",
         disk_serial="",
+        mac=_TEST_MAC,
         settings=settings,
     )
 
@@ -76,6 +82,7 @@ def test_target_args_is_pure_does_not_write_vars_file(settings):
         firmware="uefi",
         mem="4096",
         disk_serial="",
+        mac=_TEST_MAC,
         settings=settings,
     )
 
@@ -123,6 +130,7 @@ def test_target_args_bios_has_no_pflash(settings):
         firmware="bios",
         mem="4096",
         disk_serial="",
+        mac=_TEST_MAC,
         settings=settings,
     )
 
@@ -146,6 +154,7 @@ def test_target_args_uses_whpx_and_cpu_qemu64_exactly(settings):
         firmware="bios",
         mem="4096",
         disk_serial="",
+        mac=_TEST_MAC,
         settings=settings,
     )
 
@@ -173,6 +182,7 @@ def test_target_args_uses_nographic_and_rng_not_serial_file(settings):
         firmware="bios",
         mem="4096",
         disk_serial="",
+        mac=_TEST_MAC,
         settings=settings,
     )
 
@@ -181,6 +191,38 @@ def test_target_args_uses_nographic_and_rng_not_serial_file(settings):
     assert not any(a.startswith("file:") for a in args), (
         f"不应出现 -serial file: 形式的参数（这个 QEMU 构建上写出 0 字节）：{args}"
     )
+
+
+def test_target_args_has_pxe_socket_nic_with_connect_and_mac(settings):
+    """护栏：目标机必须有装机 VLAN 的 socket 网卡，且是 connect 侧。
+
+    这条锁住的是一个真实存在过的缺口：`_target_args` 曾经有 `-boot n`
+    （网络引导）却**一张网卡都没有**——没有可引导设备，真实装机必败，而
+    参数拼装的其余断言全绿。
+
+    三点都要断言，各自对应一种错法：
+      1. 有 socket netdev——漏了就是上面那个缺口
+      2. 是 `connect=` 不是 `listen=`——两边都 listen 则永远连不上；
+         VM-S（start-vm.sh）才是 listen 侧
+      3. mac 被原样带进 argv——lober 按 MAC 认机器，值传丢了会让目标机
+         匹配不上控制台里建的 host 记录
+    """
+    args = _target_args(
+        entry_id="e-pxe",
+        firmware="bios",
+        mem="3072",
+        disk_serial="",
+        mac=_TEST_MAC,
+        settings=settings,
+    )
+    joined = " ".join(args)
+    assert f"socket,id=lan,connect=127.0.0.1:{settings.pxe_socket_port}" in joined, (
+        f"缺装机 VLAN 的 socket 网卡（connect 侧）：{args}"
+    )
+    assert "listen=" not in joined, (
+        f"目标机不该是 listen 侧——VM-S 才 listen，两边都 listen 则永远连不上：{args}"
+    )
+    assert f"mac={_TEST_MAC}" in joined, f"mac 没被带进 argv：{args}"
 
 
 def test_target_args_disk_serial_splits_drive_and_device(settings):
@@ -192,6 +234,7 @@ def test_target_args_disk_serial_splits_drive_and_device(settings):
         firmware="bios",
         mem="4096",
         disk_serial="disk-abc123",
+        mac=_TEST_MAC,
         settings=settings,
     )
 
@@ -218,6 +261,7 @@ def test_target_args_no_disk_serial_uses_if_virtio_shorthand(settings):
         firmware="bios",
         mem="4096",
         disk_serial="",
+        mac=_TEST_MAC,
         settings=settings,
     )
 

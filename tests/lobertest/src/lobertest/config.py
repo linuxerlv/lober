@@ -96,6 +96,12 @@ class Settings:
     # （SSH 登进新装的机器）。
     target_root_key_path: Path = Path("D:/qemu-vm/lobertest-keys/lobertest-target-root_ed25519")
 
+    # 装机 VLAN 的 QEMU socket 网卡端口。VM-S 在这个端口 listen
+    # （start-vm.sh），目标机 connect 上来，两张虚拟网卡形成一个二层 hub
+    # ——PXE 装机要在同一个二层域里做 DHCP 广播，SLIRP（用户态 NAT）做不到
+    # 这件事，两台 guest 之间根本不互通。
+    pxe_socket_port: int = 12520
+
     schema: str = "lobertest"
 
 
@@ -172,6 +178,7 @@ _CONVERTERS = {
     "iso_dir": Path,
     "targets_dir": Path,
     "target_root_key_path": Path,
+    "pxe_socket_port": int,
 }
 
 
