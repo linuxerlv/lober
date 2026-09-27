@@ -30,15 +30,28 @@ func (m *Machine) ApplySignal(ctx context.Context, taskID string, signal model.S
 
 	now := m.clock.Now()
 
-	// 写事件：seq > 0 的信号走 (task_id, seq) 去重路径；seq <= 0
-	// （hook-report）走非信号事件的自增负数序号路径，不参与去重。
-	eventSeq := seq
-	if entry.Seq == 0 {
-		// hook-report 的表序号是 0，与阶段正交，不参与去重——本次调用
-		// 传入的机器侧 seq（installer 客户端自己维护的计数器）不是本方法
-		// 判定水位用的表序号，这里统一按非信号事件写入。
-		eventSeq = 0
-	}
+	// 写事件的去重键用**信号表序号** entry.Seq，不是客户端传来的 seq。
+	//
+	// 两者是不同的东西，混用会让去重失效（2026-09-26 首次真实装机踩到）：
+	// 机器侧的 seq 是每个阶段各自从 1 开始数的（installer 脚本里每段自己
+	// 维护计数器），而事件表的唯一索引 idx_task_events_task_seq 建在
+	// (task_id, seq) 上、跨阶段全局唯一。于是 packages-done(seq=1) 落库后，
+	// post-start(seq=1) 撞 23505 被翻译成 ErrDuplicateSeq 并吞掉（那是给
+	// 机器侧重试用的幂等路径），状态机判定重复投递、不推进状态——而网关
+	// 照样返回 200。真实后果：3222 个包装完、rebooting 也发到了，任务却
+	// 永远停在 installing，events 表一条记录都没有。
+	//
+	// entry.Seq 是 signalTable 里的全局单调序号（10/20/…/110，十的间隔留给
+	// 将来插入中间信号），本方法下面判定水位「只进不退」用的正是它
+	// （§3.6）。去重键与水位键取同一个值，语义才自洽：同一个信号重复投递
+	// 才算重复，不同信号永远不撞。
+	//
+	// 客户端 seq 因此不再参与落库。它作为形参保留是因为契约文档端点 4 要求
+	// 缺失或非法时拒绝请求（网关层已校验），值本身对状态机没有用途。
+	//
+	// hook-report 的表序号是 0：与阶段正交，一个阶段内可来任意多次，永不
+	// 推进水位，也不参与去重（走非信号事件的自增负数序号路径）。
+	eventSeq := entry.Seq
 
 	_, appendErr := m.store.AppendEvent(ctx, model.TaskEvent{
 		TaskID:  taskID,
