@@ -358,3 +358,54 @@ func (b *recordingEventBus) Publish(event contract.LifecycleEvent, task model.Ta
 }
 
 func (b *recordingEventBus) Subscribe(event contract.LifecycleEvent, callback func(model.Task)) {}
+
+// TestApplySignalClientSeqPerPhaseDoesNotCollide 锁住「事件落库的去重键必须
+// 用信号表序号，不能用客户端 seq」。
+//
+// 2026-09-26 首次真实装机暴露的缺陷：机器侧的 seq 是**每个阶段各自从 1 开始**
+// 数的（installer 脚本里每段自己维护计数器），而事件表的唯一索引
+// idx_task_events_task_seq 建在 (task_id, seq) 上、跨阶段全局唯一。于是
+// packages-done(seq=1) 落库后，post-start(seq=1) 必然撞 23505，被翻译成
+// contract.ErrDuplicateSeq 并吞掉（那是给机器侧重试用的幂等去重路径），
+// 状态机因此判定为重复投递、不推进状态——而网关照样返回 200。
+//
+// 真实后果：3222 个包装完、rebooting 信号也发到了，任务却永远停在
+// installing，events 表一条记录都没有。
+//
+// 既有测试撞不上这个缺陷，因为它们传的 seq 恰好等于表序号（传 pre-done 时
+// 给 20，表里也是 20）。本测试刻意用真实机器的编号方式：每阶段从 1 数。
+func TestApplySignalClientSeqPerPhaseDoesNotCollide(t *testing.T) {
+	ctx := context.Background()
+	store := fake.NewStore()
+	clock := fake.NewClock()
+	m := newBootTestMachine(store, clock, alwaysPassPrechecker{})
+
+	installingTaskAtPhase(t, store, "task-seq-collide", model.PhasePackages, 30)
+
+	// 真实机器的发法：packages 阶段的收尾信号 seq=1，post 阶段的起始信号
+	// 又是 seq=1（各阶段独立计数）。两者的表序号分别是 40 与 50。
+	first, err := m.ApplySignal(ctx, "task-seq-collide", model.SignalPackagesDone, 1)
+	if err != nil {
+		t.Fatalf("ApplySignal(packages-done, seq=1) 失败: %v", err)
+	}
+	if !first.StateChanged {
+		t.Fatalf("packages-done 未推进阶段: %+v", first)
+	}
+
+	second, err := m.ApplySignal(ctx, "task-seq-collide", model.SignalPostStart, 1)
+	if err != nil {
+		t.Fatalf("ApplySignal(post-start, seq=1) 失败: %v", err)
+	}
+	if !second.StateChanged {
+		t.Errorf("post-start(客户端 seq=1) 未推进阶段——去重键用了客户端 seq，"+
+			"与上一个阶段的 seq=1 撞成了「重复投递」。outcome = %+v", second)
+	}
+	if second.Task.CurrentPhase != model.PhasePost {
+		t.Errorf("post-start 之后 CurrentPhase = %q, want %q",
+			second.Task.CurrentPhase, model.PhasePost)
+	}
+	if second.Task.LastSeq != 50 {
+		t.Errorf("post-start 之后 LastSeq = %d, want 50（信号表序号，不是客户端 seq）",
+			second.Task.LastSeq)
+	}
+}
