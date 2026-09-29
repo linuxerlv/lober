@@ -36,7 +36,12 @@ make check          # 收口：fmt → vet → test → race，四步全绿才�
 go build ./...      # 每个任务末尾必须绿
 ```
 
-**本机已知的 4 个既存失败用例**（`internal/render`，Windows/msys 环境问题，与本计划无关，不要试图修）：
+**基线是零失败。** 2026-09-29 在 `feat/four-layer` 工作树实测（`go1.27.1 windows/amd64`、
+PostgreSQL 17.10）：`go test ./internal/...` 全部包 `ok`，`go test ./internal/render/
+./cmd/... -count=1` 强制重跑亦全绿。
+
+**回归判据：任何失败都是回归。** 早期计划稿曾把 4 个 `internal/render` 的 inspect/exec
+用例记成「已知既存失败」，那份记录**已过期**——这 4 个现在全部通过：
 
 ```
 TestInspect_DiskCollectionFailureStillProducesNICOutput
@@ -45,7 +50,9 @@ TestInspect_NICFunctionOutputExactKeyFormat
 TestExec_RequiredHookFailureAbortsSectionEvenWithLaterHooks
 ```
 
-判断是否引入回归的标准：`go test ./internal/...` 的失败集合**恰好等于**上面这 4 个（任务 15 之后第 4 个会消失，因为 `Exec` 相关渲染路径被重写）。
+**不要容忍它们失败。** 若在实现过程中看到其中任何一个变红，那是本次改动引入的，不是环境
+问题。（其中 `TestExec_...` 会随任务 15 删除 `kickstart.go` 一并消失，那是文件被删、用例
+不再存在，与「用例失败」是两件事。）
 
 ---
 
@@ -162,7 +169,7 @@ import（`deps_test.go:273`），所以它不能放进 `internal/console` 或 `i
 - [ ] **绿：** 逐个改到 `go build ./...` 绿。`internal/config` 删字段时同步删
       `Validate` 里对它的校验与相关测试。
 
-- [ ] **重构 + commit：** `make check` 全绿（失败集合恰好等于已知的 4 个）。确认
+- [ ] **重构 + commit：** `make check` 全绿（**零失败**）。确认
       `grep -rn "DeliveryChannel\|ImageArtifact\|PartitionLayout\|ChannelImageWrite" --include="*.go" internal/ cmd/`
       只剩空结果。commit（`refactor!: 删除镜像直写通道的全部实现与配置`）。
 
@@ -891,8 +898,9 @@ A 档的逐字节比对是主要护栏，而 rhel（C 档）**恰好没有这道
 关键行」之类的弱断言——那会让这道锚点失效，而失效的代价是在真机上装到一半停住、只能
 到 BMC 控制台看。
 
-已知的 4 个既存失败用例里 `TestExec_RequiredHookFailureAbortsSectionEvenWithLaterHooks`
-会随 `kickstart.go` 删除一起消失。从本任务起，回归判据变成失败集合恰好等于剩下的 3 个。
+`TestExec_RequiredHookFailureAbortsSectionEvenWithLaterHooks` 会随 `kickstart.go` 与
+`kickstart_exec_test.go` 一起被删除——**用例不再存在**，不是「用例失败」。回归判据始终是
+零失败。三个 `TestInspect_*` 在 `inspect.go`（保留不动），本任务后应当仍然全绿。
 
 ---
 
@@ -976,9 +984,9 @@ import 了 `internal/store/postgres` 的具体类型，守卫会失败——用 
 ### 构建与测试
 
 - [ ] `export LOBER_TEST_PG_DSN='postgres://lober_test:lober_test_pw@localhost:5432/lober_test?sslmode=disable'`
-- [ ] `make check` 四步全绿（fmt → vet → test → race）。测试失败集合**恰好等于**
-      3 个已知的 `internal/render` inspect 用例（第 4 个随 `kickstart.go` 删除消失）。
-      出现任何其它失败即回归。
+- [ ] `make check` 四步全绿（fmt → vet → test → race），**零失败**。基线本身就是零失败
+      （2026-09-29 实测），所以任何失败都是本次改动引入的。
+- [ ] 三个 `TestInspect_*`（在保留不动的 `inspect.go` 里）仍然通过。
 - [ ] `go test ./internal/archtest/ -count=1` 绿 —— 依赖方向守卫（含测试 import）。
 - [ ] `go run ./cmd/lober -config deploy/lober.yaml.example -check` 通过启动自检。
 

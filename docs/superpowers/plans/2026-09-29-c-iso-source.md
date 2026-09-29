@@ -36,16 +36,12 @@ make check          # 收口：fmt → vet → test → race，四步全绿才�
 go build ./...      # 每个任务末尾必须绿
 ```
 
-**本机已知的 4 个既存失败用例**（`internal/render`，Windows/msys 环境问题，与本计划无关，不要试图修）：
+**基线是零失败。** 2026-09-29 在 `feat/four-layer` 工作树实测（`go1.27.1 windows/amd64`、
+PostgreSQL 17.10）：`go test ./internal/...` 全部包 `ok`。
 
-```
-TestInspect_DiskCollectionFailureStillProducesNICOutput
-TestInspect_DiskFunctionOutputExactKeyFormat
-TestInspect_NICFunctionOutputExactKeyFormat
-TestExec_RequiredHookFailureAbortsSectionEvenWithLaterHooks
-```
-
-判断是否引入回归的标准：`go test ./internal/...` 的失败集合**恰好等于**上面这 4 个。本计划不碰 `internal/render`，这 4 个应当始终保持原样。
+**回归判据：任何失败都是回归。** 早期计划稿曾把 4 个 `internal/render` 用例记成「已知既存
+失败」，那份记录**已过期**——它们全部通过。本计划完全不碰 `internal/render`，所以那个包
+应当始终全绿；看到它变红就是本计划的改动越界了。
 
 前端检查命令（本机 node 不在 PATH、无 pnpm、`node_modules/.bin/` 的 shim 用不了）：
 
@@ -1033,8 +1029,8 @@ export function useChunkedUpload(): {
 ### 构建与测试
 
 - [ ] `export LOBER_TEST_PG_DSN='postgres://lober_test:lober_test_pw@localhost:5432/lober_test?sslmode=disable'`
-- [ ] `make check` 四步全绿（fmt → vet → test → race）。测试失败集合**恰好等于**计划
-      开头列的 4 个已知 `internal/render` 用例。出现任何其它失败即回归。
+- [ ] `make check` 四步全绿（fmt → vet → test → race），**零失败**。基线本身就是零失败
+      （2026-09-29 实测），任何失败都是本次改动引入的。
 - [ ] `go test ./internal/archtest/ -count=1` 绿 —— 依赖方向守卫（含测试 import）。
       `internal/console` 不得 import `internal/imports` 或 `net/http` 的下载实现。
 - [ ] `go run ./cmd/lober -config deploy/lober.yaml.example -check` 通过启动自检，**且
@@ -1073,8 +1069,8 @@ export function useChunkedUpload(): {
       全绿。它们用旧形态 `sourcePath` 调创建端点（任务 5 的兼容路径），这是那条兼容性
       存在的唯一理由，也是验证它有效的唯一手段。
 - [ ] `git diff docs/contracts/http-machine.md` 为空 —— 本计划完全不碰机器面。
-- [ ] `go test ./internal/render/ ./internal/statemachine/ -count=1` 的失败集合等于已知的
-      4 个 render 用例 —— 本计划不该碰这两个包。
+- [ ] `go test ./internal/render/ ./internal/statemachine/ -count=1` 全绿 —— 本计划不该
+      碰这两个包。
 - [ ] `grep -rn "time.Now()" --include="*.go" internal/console/ internal/store/postgres/source/ | grep -v _test`
       为空 —— 时间仍全部来自注入的 `Clock`。
 - [ ] `incoming/` 不可从制品服务器取到：部署后 `curl <artifact_base>/artifacts/../incoming/`

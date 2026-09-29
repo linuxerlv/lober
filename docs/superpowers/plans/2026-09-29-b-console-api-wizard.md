@@ -58,8 +58,9 @@ cd web && node node_modules/eslint/bin/eslint.js --fix <文件>
 `_placeholder-keeps-embed-underscore-mode.js`），少了它们 `go:embed` 编译不过。若跑了，
 跑完 `git restore internal/console/ui/dist/`。
 
-**回归判据**：`go test ./internal/...` 的失败集合恰好等于 plan A 收尾时的 3 个
-`internal/render` inspect 用例。
+**回归判据：零失败。** 基线实测（2026-09-29，`feat/four-layer` 工作树）`go test
+./internal/...` 全绿。早期计划稿提到的「4 个已知既存失败用例」那份记录已过期——它们全部
+通过。任何失败都是本次改动引入的，不要容忍。
 
 ---
 
@@ -733,8 +734,7 @@ type ImportSource struct {
 ### 构建与测试
 
 - [ ] `export LOBER_TEST_PG_DSN='postgres://lober_test:lober_test_pw@localhost:5432/lober_test?sslmode=disable'`
-- [ ] `make check` 四步全绿。失败集合恰好等于 plan A 收尾时的 3 个 `internal/render`
-      inspect 用例。
+- [ ] `make check` 四步全绿，**零失败**。
 - [ ] `go test ./internal/archtest/ -count=1` 绿 —— `internal/console` 未 import 其它
       实现模块（含测试 import）。
 - [ ] `export PATH="/c/Program Files/nodejs:$PATH" && cd web/apps/web-ele && node ../../node_modules/vue-tsc/bin/vue-tsc.js --noEmit --skipLibCheck`
