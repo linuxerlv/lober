@@ -246,6 +246,17 @@ type ArtifactSet struct {
 	ID   string
 	Name string
 
+	// Family 是用户创建这个制品集时**选的**分组标签（linux/windows/esxi
+	// 三选一，见 family.go），而 OSFamily 是导入时从 ISO 元数据里**识别
+	// 出来的**。两者来源不同——一个是人的输入，一个是程序的判定——所以
+	// 需要交叉校验：选了 windows 族却识别出 rhel 家族，说明运维选错了
+	// 文件，必须在导入完成写回前被拒绝（见 FamilyConsistent）。
+	//
+	// 真正的拒绝动作在 internal/imports 与 internal/console 接线（四层
+	// 解耦重构计划任务 4 明确排除的范围），本字段与判定函数只是那两处
+	// 校验共用的唯一真源。
+	Family Family
+
 	OSFamily  OSFamily
 	OSVersion string
 	Arch      Arch
@@ -288,6 +299,23 @@ func (a ArtifactSet) MatchesFirmware(firmware FirmwareMode) bool {
 		return true
 	}
 	return a.Firmware == firmware
+}
+
+// FamilyConsistent 判定该制品集的族与识别出的家族是否自相符，用于导入
+// 完成写回前的最后一道校验（四层解耦重构计划任务 4 设计要点）。
+//
+// 族为空返回 false——**不是「跳过校验」**：空族的制品集无法被任何按族
+// 筛选的模板选中，等于一个建不了任务的死制品集，必须在导入阶段就拒绝，
+// 不能放行到 ready 状态后才让用户发现建不了任务。家族为空同理：意味着
+// 导入尚未识别出结果，谈不上「相符」。
+//
+// 判定本身委托给 FamilyAllows（family.go）——族与家族的对应关系只有
+// 一张真源表，这里不重复写一份判断逻辑。
+func (a ArtifactSet) FamilyConsistent() bool {
+	if a.Family == "" || a.OSFamily == "" {
+		return false
+	}
+	return FamilyAllows(a.Family, a.OSFamily)
 }
 
 // iPXE 上报的 ${buildarch} 与 ${platform} 原始字符串值。

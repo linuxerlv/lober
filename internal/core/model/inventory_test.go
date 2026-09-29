@@ -110,6 +110,50 @@ func TestArtifactSet_MatchesFirmware(t *testing.T) {
 	}
 }
 
+// TestArtifactSetFamily_Consistent 验证族与家族的自相符判定：用户创建时
+// 选的 Family 与导入时识别出的 OSFamily 必须能通过 FamilyAllows 对上，
+// 否则说明运维选错了文件（四层解耦重构计划任务 4 设计要点）。
+//
+// 覆盖四类：相符、不符（windows 族 × rhel 家族）、族为空、家族为空。
+func TestArtifactSetFamily_Consistent(t *testing.T) {
+	cases := []struct {
+		name    string
+		set     ArtifactSet
+		want    bool
+		because string
+	}{
+		{
+			name:    "linux 族与 rhel 家族相符",
+			set:     ArtifactSet{Family: FamilyLinux, OSFamily: OSFamilyRHEL},
+			want:    true,
+			because: "rhel 属于 linux 族，用户选对了",
+		},
+		{
+			name:    "windows 族与 rhel 家族不符",
+			set:     ArtifactSet{Family: FamilyWindows, OSFamily: OSFamilyRHEL},
+			want:    false,
+			because: "用户选了 windows 族却导入了一份 rhel 的 ISO，说明选错了文件，必须拒绝导入",
+		},
+		{
+			name:    "族为空",
+			set:     ArtifactSet{Family: Family(""), OSFamily: OSFamilyRHEL},
+			want:    false,
+			because: "空族不是「跳过校验」——空族的制品集无法被模板筛选到，等于一个建不了任务的死制品集",
+		},
+		{
+			name:    "家族为空",
+			set:     ArtifactSet{Family: FamilyLinux, OSFamily: OSFamily("")},
+			want:    false,
+			because: "家族为空意味着导入尚未识别出结果，不能视为自相符",
+		},
+	}
+	for _, c := range cases {
+		if got := c.set.FamilyConsistent(); got != c.want {
+			t.Errorf("%s: FamilyConsistent() = %v, want %v —— %s", c.name, got, c.want, c.because)
+		}
+	}
+}
+
 // TestParseIPXEBuildArch 验证 ${buildarch} 的解析与对无法映射值的拒绝
 // （SPEC §4.1、§4.6，附录 B）。
 func TestParseIPXEBuildArch(t *testing.T) {
