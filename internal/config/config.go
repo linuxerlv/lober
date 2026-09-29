@@ -228,23 +228,6 @@ type Store struct {
 	Postgres     Postgres `yaml:"postgres"`
 	ArtifactPath string   `yaml:"artifact_path"`
 	LogPath      string   `yaml:"log_path"`
-
-	// ImageSignaturePublicKeyPath 是镜像直写通道的签名公钥文件路径
-	// （PEM 编码的 PKIX ECDSA 公钥，即 cosign.pub）。P3-03 任务 3、SPEC §9.6。
-	//
-	// **留空是合法配置**，含义是「本部署不使用镜像直写通道」——installer 驱动
-	// 通道不需要任何签名。因此本字段不参与非空校验：绝大多数部署只用 installer
-	// 驱动通道（那是兜底通道，永远可用），为一条可选通道的配置项去卡启动校验
-	// 会让所有不用它的部署都得填一个假路径。
-	//
-	// 但一旦要导入镜像直写制品集，本项就**必须**配上：
-	// internal/imports.VerifyManifestSignature 在公钥为空时**拒绝导入**而不是
-	// 跳过校验——「没有公钥就不校验」会让签名机制在配置漏项时静默失效，系统
-	// 照常工作但不再校验任何东西（§9.1 默认拒绝）。
-	//
-	// 公钥**从配置文件读，不从网络取**（§9.6、计划任务 3 第 2 条）：取公钥的
-	// 通道若不可信，整个签名机制就没有意义。
-	ImageSignaturePublicKeyPath string `yaml:"image_signature_public_key_path"`
 }
 
 // Postgres 是数据库连接参数。

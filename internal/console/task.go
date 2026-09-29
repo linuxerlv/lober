@@ -60,48 +60,6 @@ type taskItem struct {
 	FailureDetail   *failureDetailItem `json:"failureDetail"`
 }
 
-// checkTemplateChannel 校验模板声明的交付通道与它 pin 的制品集一致，且镜像
-// 直写通道的制品集三项齐备（P3-03 任务 5）。
-//
-// 两条各有实在的后果：
-//
-//   - 通道不符：机器会拿到一份与它引导的环境不匹配的东西。声明镜像直写但制品集
-//     是 installer 的，机器引导的是一个没有 installer 的最小环境，却收到一份
-//     kickstart——症状是卡在那里什么也不做直到超时。
-//   - 镜像三项缺失：装机走到写盘环节才发现，而那时盘可能已经被动过，留下一台
-//     状态不明的机器。
-//
-// **错误文案给出可行的下一步**（计划任务 5 的明确要求）：「该版本尚未封装镜像，
-// 可改用 installer 驱动」——而不只是报「通道不符」。这一条决定运维是自己解决
-// 还是来找开发。
-func checkTemplateChannel(tpl model.Template, artifact model.ArtifactSet) error {
-	want := tpl.Channel.Normalize()
-	got := artifact.Channel.Normalize()
-
-	if want != got {
-		if want.IsImageWrite() {
-			return apierr.New(http.StatusConflict, apierr.CodeConflict,
-				fmt.Sprintf("该模板声明走镜像直写通道，但它绑定的制品集 %q 属于 %s 通道"+
-					"——该版本尚未封装镜像。可把模板的 channel 改成 %q（installer 驱动，"+
-					"兜底通道，对新版本总是可用），或先用封装流水线产出镜像制品集后再建任务。",
-					artifact.ID, got, model.ChannelInstaller))
-		}
-		return apierr.New(http.StatusConflict, apierr.CodeConflict,
-			fmt.Sprintf("该模板声明走 %s 通道，但它绑定的制品集 %q 属于 %s 通道，两者不符"+
-				"——请把模板的 channel 改成 %q，或改绑一个 %s 通道的制品集。",
-				want, artifact.ID, got, got, want))
-	}
-
-	if want.IsImageWrite() && artifact.Image == nil {
-		return apierr.New(http.StatusConflict, apierr.CodeConflict,
-			fmt.Sprintf("制品集 %q 标为镜像直写通道，但镜像三项（镜像文件、校验值与签名、"+
-				"分区布局）缺失——这份制品集的导入没有走完。请重新导入，或把模板的 channel "+
-				"改成 %q 并改绑一个 installer 驱动通道的制品集。",
-				artifact.ID, model.ChannelInstaller))
-	}
-	return nil
-}
-
 // toFailureDetailItem 把 §3.5 的六个失败诊断字段转成响应形态。nil 进 nil 出
 // ——未失败的任务没有失败详情，响应里该是 null 而不是一个六个字段全空的对象
 // （前端据此判断「要不要显示失败面板」）。
@@ -227,14 +185,6 @@ func (s *Server) handleCreateTask(c *gin.Context) {
 	}
 	artifact, err := s.deps.ArtifactSets.GetArtifactSet(c.Request.Context(), tpl.ArtifactSetID)
 	if err != nil {
-		apierr.Fail(c, err)
-		return
-	}
-
-	// 第 2.5 步：交付通道的交叉校验（P3-03 任务 5）。放在这里而不是渲染阶段：
-	// 渲染发生在机器已经上电、已经取到引导菜单之后，那时报错只会留下一台卡住
-	// 的机器；建任务时拦下来的成本是零。
-	if err := checkTemplateChannel(tpl, artifact); err != nil {
 		apierr.Fail(c, err)
 		return
 	}

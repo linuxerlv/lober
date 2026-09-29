@@ -17,7 +17,6 @@ package conformance
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -88,9 +87,6 @@ func RunConformanceSuite(t *testing.T, newStore func() contract.Store) {
 	t.Run("任务按创建时间范围过滤", func(t *testing.T) { testTaskFilterByCreatedRange(t, newStore) })
 	t.Run("任务按失败原因过滤", func(t *testing.T) { testTaskFilterByFailureReason(t, newStore) })
 	t.Run("任务列表按创建时间倒序且limit生效", func(t *testing.T) { testTaskListOrderedDescendingWithLimit(t, newStore) })
-	t.Run("制品集通道字段缺省为installer", func(t *testing.T) { testArtifactSetChannelDefaultsToInstaller(t, newStore) })
-	t.Run("镜像直写制品集三项完整往返", func(t *testing.T) { testArtifactSetImageRoundTrip(t, newStore) })
-	t.Run("同一OS版本两条通道制品集可分别选中", func(t *testing.T) { testArtifactSetBothChannelsCoexist(t, newStore) })
 }
 
 // ---------------------------------------------------------------------------
@@ -1319,184 +1315,6 @@ func tsList(records []contract.AuditRecord) []int64 {
 		out = append(out, r.TS)
 	}
 	return out
-}
-
-// testArtifactSetChannelDefaultsToInstaller 验证不显式指定通道时，存回来的
-// 制品集属于 installer 驱动通道。
-//
-// 这是 P3-03 任务 1 的**兼容性硬要求**：Phase 1 与 Phase 2 导入的全部制品集
-// 都没有这个字段。存储层若把零值原样存成空字符串、而选集逻辑又拿显式的
-// installer 去比对，那些历史制品集会在升级后一个都匹配不上——后果是升级完成
-// 的瞬间所有装机任务开始失败，而查询本身不报错，原因不会出现在任何日志里。
-//
-// 断言用 IsInstaller() 而不是 == ChannelInstaller：两种存法（存空串 / 存
-// "installer"）都算通过，本条要锁的是语义而不是存储表示。
-func testArtifactSetChannelDefaultsToInstaller(t *testing.T, newStore func() contract.Store) {
-	ctx := context.Background()
-	store := newStore()
-
-	created, err := store.CreateArtifactSet(ctx, model.ArtifactSet{
-		ID:        "artifact-default-channel",
-		Name:      "rocky9.4",
-		OSVersion: "9.4",
-		Arch:      model.ArchX86_64,
-		Firmware:  model.FirmwareAny,
-		State:     model.ArtifactSetReady,
-		// Channel 刻意不设，模拟 Phase 1/2 的既有数据。
-	})
-	if err != nil {
-		t.Fatalf("CreateArtifactSet 失败: %v", err)
-	}
-	if !created.Channel.IsInstaller() {
-		t.Errorf("CreateArtifactSet 返回的 Channel = %q，IsInstaller() 为假 —— "+
-			"零值必须等价于 installer 驱动通道", created.Channel)
-	}
-
-	got, err := store.GetArtifactSet(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("GetArtifactSet 失败: %v", err)
-	}
-	if !got.Channel.IsInstaller() {
-		t.Errorf("重新查询后 Channel = %q，IsInstaller() 为假 —— 历史制品集"+
-			"（库里该列为空）必须仍被当作 installer 驱动通道，否则升级后全部选不中", got.Channel)
-	}
-	if got.Image != nil {
-		t.Errorf("installer 驱动通道的制品集 Image = %+v, want nil —— "+
-			"nil 与「零值结构体」语义不同，后者会让「镜像 sha256 是空串」这种"+
-			"非法状态看起来像合法数据", got.Image)
-	}
-}
-
-// testArtifactSetImageRoundTrip 验证镜像直写制品集的三项（镜像文件与两个
-// 校验值、签名、分区布局）完整往返。
-//
-// 这几个字段是嵌套结构加切片，是 JSON 序列化最容易掉字段的形状。掉了的后果
-// 分两种，都很实在：掉 UncompressedSHA256 会让写盘端无从回读校验（P3-03 任务 4
-// 第 3 步），而那是发现静默写入错误的唯一手段；掉 PartitionLayout 会让写完盘
-// 之后不知道该扩哪个分区。
-func testArtifactSetImageRoundTrip(t *testing.T, newStore func() contract.Store) {
-	ctx := context.Background()
-	store := newStore()
-
-	image := &model.ImageArtifact{
-		ImagePath:             "image.raw.zst",
-		SHA256:                "aa" + strings.Repeat("0", 62),
-		UncompressedSHA256:    "bb" + strings.Repeat("0", 62),
-		SizeBytes:             1234567890,
-		UncompressedSizeBytes: 9876543210,
-		ManifestPath:          "manifest.yaml",
-		SignaturePath:         "manifest.yaml.sig",
-		PartitionLayout: model.PartitionLayout{
-			TableType: "gpt",
-			Partitions: []model.Partition{
-				{Number: 1, Filesystem: "vfat", Role: model.PartitionRoleESP},
-				{Number: 2, Filesystem: "xfs", Role: model.PartitionRoleRoot},
-			},
-		},
-	}
-
-	created, err := store.CreateArtifactSet(ctx, model.ArtifactSet{
-		ID:        "artifact-imagewrite",
-		Name:      "rocky9.4-image",
-		OSFamily:  model.OSFamilyRHEL,
-		OSVersion: "9.4",
-		Arch:      model.ArchX86_64,
-		Firmware:  model.FirmwareUEFI,
-		State:     model.ArtifactSetReady,
-		Channel:   model.ChannelImageWrite,
-		Image:     image,
-	})
-	if err != nil {
-		t.Fatalf("CreateArtifactSet（镜像直写）失败: %v", err)
-	}
-	if !created.Channel.IsImageWrite() {
-		t.Fatalf("创建后 Channel = %q, want image-write", created.Channel)
-	}
-
-	got, err := store.GetArtifactSet(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("GetArtifactSet 失败: %v", err)
-	}
-	if got.Image == nil {
-		t.Fatalf("重新查询后 Image 为 nil —— 镜像直写通道的三项没有持久化，" +
-			"写盘端拿不到校验值与分区布局，整条通道不可用")
-	}
-	if diff := cmp.Diff(image, got.Image); diff != "" {
-		t.Errorf("重新查询后 Image 与写入时不符（-want +got）:\n%s —— "+
-			"嵌套结构加切片是 JSON 往返最容易掉字段的形状；掉 UncompressedSHA256 "+
-			"会让写盘端无从回读校验（静默写入错误就查不出来了），掉 PartitionLayout "+
-			"会让写完盘不知道该扩哪个分区", diff)
-	}
-
-	// 根分区必须能被唯一定位——恰好一个 root 角色。
-	if _, ok := got.Image.PartitionLayout.RootPartition(); !ok {
-		t.Errorf("往返后 RootPartition() 定位失败 —— 分区角色字段没存住，" +
-			"扩展分区那一步会不知道扩哪个")
-	}
-}
-
-// testArtifactSetBothChannelsCoexist 验证同一个 OS 版本的两条通道制品集能共存
-// 且被分别选中（P3-03 任务 1 的五元组选集要求）。
-//
-// 同时验证四元组查询向后兼容：不带通道条件时两条都能查到。
-func testArtifactSetBothChannelsCoexist(t *testing.T, newStore func() contract.Store) {
-	ctx := context.Background()
-	store := newStore()
-
-	common := model.ArtifactSet{
-		OSFamily:  model.OSFamilyRHEL,
-		OSVersion: "9.4",
-		Arch:      model.ArchX86_64,
-		Firmware:  model.FirmwareAny,
-		State:     model.ArtifactSetReady,
-	}
-
-	installerSet := common
-	installerSet.ID = "artifact-coexist-installer"
-	installerSet.Name = "rocky9.4-installer"
-	if _, err := store.CreateArtifactSet(ctx, installerSet); err != nil {
-		t.Fatalf("CreateArtifactSet（installer）失败: %v", err)
-	}
-
-	imageSet := common
-	imageSet.ID = "artifact-coexist-image"
-	imageSet.Name = "rocky9.4-image"
-	imageSet.Channel = model.ChannelImageWrite
-	if _, err := store.CreateArtifactSet(ctx, imageSet); err != nil {
-		t.Fatalf("CreateArtifactSet（image-write）失败: %v", err)
-	}
-
-	all, err := store.ListArtifactSets(ctx)
-	if err != nil {
-		t.Fatalf("ListArtifactSets 失败: %v", err)
-	}
-
-	var installerMatches, imageMatches, unfilteredMatches int
-	for _, set := range all {
-		if set.OSVersion != "9.4" {
-			continue
-		}
-		if set.MatchesChannel(model.ChannelInstaller) {
-			installerMatches++
-		}
-		if set.MatchesChannel(model.ChannelImageWrite) {
-			imageMatches++
-		}
-		if set.MatchesChannel("") {
-			unfilteredMatches++
-		}
-	}
-
-	if installerMatches != 1 || imageMatches != 1 {
-		t.Errorf("同一 OS 版本下按通道选集命中数 = installer:%d image-write:%d, want 1 和 1 —— "+
-			"两条通道的制品集必须能被分别选中，否则「选镜像直写」会命中一份没有镜像"+
-			"文件的 installer 制品集，装机走到一半才发现",
-			installerMatches, imageMatches)
-	}
-	if unfilteredMatches != 2 {
-		t.Errorf("不带通道条件时命中 %d 条, want 2 —— 四元组查询向后兼容要求"+
-			"不传通道维度时两条通道都算匹配", unfilteredMatches)
-	}
 }
 
 // seedAuditMatrix 写入一组 actor × action 交叉的审计记录，供三条「按维度

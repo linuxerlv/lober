@@ -173,33 +173,7 @@ func copyArtifactPaths(p model.ArtifactPaths) model.ArtifactPaths {
 func copyArtifactSet(a model.ArtifactSet) model.ArtifactSet {
 	out := a
 	out.Paths = copyArtifactPaths(a.Paths)
-	out.Image = copyImageArtifact(a.Image)
 	return out
-}
-
-// copyImageArtifact 返回 *model.ImageArtifact 的一份独立拷贝。
-//
-// 两层引用都要处理：**Image 本身是指针**（结构体赋值只复制指针，调用方与库内
-// 会指向同一个 ImageArtifact），**内部的 Partitions 是切片**（复制结构体不复制
-// 底层数组）。漏掉任何一层，调用方改一下返回值就会渗透进库内。
-//
-// 这不是理论风险：写盘端持有 GetArtifactSet 的返回值，UncompressedSHA256 是
-// 它回读校验的比对对象，分区角色决定「把哪个分区扩展到整盘」——后者被改错是
-// 破坏性操作。
-//
-// nil 进 nil 出：installer 驱动通道的制品集这个字段就是 nil，不能被拷贝成一个
-// 零值结构体（那会让「镜像 sha256 是空串」这种非法状态看起来像合法数据）。
-func copyImageArtifact(img *model.ImageArtifact) *model.ImageArtifact {
-	if img == nil {
-		return nil
-	}
-	out := *img
-	if img.PartitionLayout.Partitions != nil {
-		parts := make([]model.Partition, len(img.PartitionLayout.Partitions))
-		copy(parts, img.PartitionLayout.Partitions)
-		out.PartitionLayout.Partitions = parts
-	}
-	return &out
 }
 
 // copyHookRefSlice 返回 []model.HookRef 的一份独立拷贝，每个元素的
