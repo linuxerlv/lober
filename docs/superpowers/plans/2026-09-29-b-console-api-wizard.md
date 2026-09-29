@@ -58,9 +58,15 @@ cd web && node node_modules/eslint/bin/eslint.js --fix <文件>
 `_placeholder-keeps-embed-underscore-mode.js`），少了它们 `go:embed` 编译不过。若跑了，
 跑完 `git restore internal/console/ui/dist/`。
 
-**回归判据：零失败。** 基线实测（2026-09-29，`feat/four-layer` 工作树）`go test
-./internal/...` 全绿。早期计划稿提到的「4 个已知既存失败用例」那份记录已过期——它们全部
-通过。任何失败都是本次改动引入的，不要容忍。
+**回归判据：零失败**，只有一个例外（见下）。基线实测（2026-09-29，`feat/four-layer`
+工作树）`go test ./internal/...` 全绿。早期计划稿提到的「4 个已知既存失败用例」那份记录
+已过期——它们全部通过。
+
+**唯一的已知 flake**：`internal/provider/loader` 的
+`TestCallWithRetry_BackoffIsExponential`（`protocol_test.go:75-99`），20ms 量级的墙钟计时
+断言，整套 `-race` 并发争用下偶发误报。2026-09-30 在基线提交上隔离重跑 5 次全 PASS。
+看到它失败时隔离重跑三次，全绿即判为 flake 继续走并在汇报里注明。**不要因此放宽整体
+判据，也不要顺手修它。**
 
 ---
 

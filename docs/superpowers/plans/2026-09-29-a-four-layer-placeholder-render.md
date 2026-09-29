@@ -54,6 +54,23 @@ TestExec_RequiredHookFailureAbortsSectionEvenWithLaterHooks
 问题。（其中 `TestExec_...` 会随任务 15 删除 `kickstart.go` 一并消失，那是文件被删、用例
 不再存在，与「用例失败」是两件事。）
 
+### 唯一的已知 flake（2026-09-30 查实）
+
+`internal/provider/loader` 的 `TestCallWithRetry_BackoffIsExponential`
+（`protocol_test.go:75-99`）在**整套 `-race` 并发争用下**偶发失败，症状形如
+「第二段退避间隔 = 43.068ms, 第一段 = 29.1499ms —— want 第二段显著大于第一段」。
+
+**判据**：它是墙钟计时断言，`RetryBackoff` 只有 20ms，而测试注释自己写明「精确倍数类断言
+在 CI 环境下容易因调度抖动误报」，所以只断言 1.5 倍而非 2 倍 —— 20ms 量级在满载 `-race`
+下抖动超过 50% 是这类断言的固有脆弱性。已在基线提交 `ccd7f90` 上隔离重跑 `-race` 5 次全
+PASS，确认与四层解耦无关。
+
+**处置**：看到它失败时，**隔离重跑一次**（`go test ./internal/provider/loader/ -run
+TestCallWithRetry_BackoffIsExponential -race -count=3`）。三次全绿即可判为 flake 继续往下
+走，并在任务汇报里注明。**不要因此放宽整体的零失败判据** —— 除这一个用例之外，任何失败
+都是回归。也不要顺手去修它（修一个计时断言需要换掉计时方式，那是独立的任务，不在本计划
+范围内）。
+
 ---
 
 ## 文件结构

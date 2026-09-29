@@ -39,9 +39,16 @@ go build ./...      # 每个任务末尾必须绿
 **基线是零失败。** 2026-09-29 在 `feat/four-layer` 工作树实测（`go1.27.1 windows/amd64`、
 PostgreSQL 17.10）：`go test ./internal/...` 全部包 `ok`。
 
-**回归判据：任何失败都是回归。** 早期计划稿曾把 4 个 `internal/render` 用例记成「已知既存
-失败」，那份记录**已过期**——它们全部通过。本计划完全不碰 `internal/render`，所以那个包
-应当始终全绿；看到它变红就是本计划的改动越界了。
+**回归判据：任何失败都是回归**，只有一个例外（见下）。早期计划稿曾把 4 个
+`internal/render` 用例记成「已知既存失败」，那份记录**已过期**——它们全部通过。本计划完全
+不碰 `internal/render`，所以那个包应当始终全绿；看到它变红就是本计划的改动越界了。
+
+**唯一的已知 flake**：`internal/provider/loader` 的
+`TestCallWithRetry_BackoffIsExponential`（`protocol_test.go:75-99`）在整套 `-race` 并发
+争用下偶发失败 —— 它是 20ms 量级的墙钟计时断言，测试注释自己写明容易因调度抖动误报。
+2026-09-30 在基线提交上隔离重跑 `-race` 5 次全 PASS，确认与重构无关。看到它失败时隔离
+重跑三次，全绿即判为 flake 继续走，并在汇报里注明。**不要因此放宽整体判据，也不要顺手
+修它**（修计时断言要换计时方式，是独立任务）。
 
 前端检查命令（本机 node 不在 PATH、无 pnpm、`node_modules/.bin/` 的 shim 用不了）：
 
