@@ -60,8 +60,15 @@ SSH 公钥登入。API 级断言（preview / dryrun / precheck）是辅助手段
 保存时校验：`bodies` 的键必须落在 `family` 的允许集合里；每条 `hookRef.stage` 必须在
 对应正文的 `{{stage:}}` 占位符里出现过；每个被引用的 hook 必须有该家族的实现。
 
-`POST /templates/{id}/activate` 新增校验：至少一份正文；每份正文的
-`{{lober:syslog|firstboot|cleanup}}` 各恰好一次（spec A §3.4）。
+`POST /templates/{id}/state`（现有端点，不是 `/activate`）转 `active` 时新增校验：至少
+一份正文；每份正文的 `{{lober:syslog|firstboot|cleanup}}` 各恰好一次（spec A §3.4）。
+
+**新增 `GET /templates`（补一个现存契约缺口）**：这个端点**当前不存在**——
+`internal/console/template.go:33-45` 只注册了 create / update / form-schema / preview /
+state 五个，而前端 `web/apps/web-ele/src/api/console/template.ts:82-93` 已经把它作为
+契约缺口如实记录（「后端未实现 GET /templates 会在运行时报错」）。4 步向导的第 ③ 步
+必须按 ISO 家族筛模板，没有列表端点无从筛选。响应支持 `?family=` 与 `?osFamily=` 两个
+可选过滤参数。
 
 **新增 `POST /templates/{id}/derive`**：入参只有 `name`。语义是快照复制——复制族、
 全部正文、全部 hook 引用，置 `state=draft`、`version=1`、
@@ -127,6 +134,11 @@ WSL 或 busybox 的场景），拦掉会挡住合法用法。
 ②③ 的顺序是 ISO 在前：模板下拉要按 ISO 的家族过滤，反过来则无法过滤。**格式错配在
 UI 层就不可能发生**——preseed 模板根本不会出现在 alma ISO 的候选列表里。第 2.4 节
 第 3、4 项的服务端校验仍然保留，它挡的是绕过 UI 直接调 API 的情况。
+
+**过滤方向反转了。** 现状是「模板 → `artifactSetId` → 制品集的 arch/firmware」联查
+（`views/tasks/new.vue:18-22` 的注释记录了这条路径）。模板不再持 `artifactSetId` 之后
+这条路径消失，改成「ISO 的家族 → 筛模板」。这不是等价改写：旧路径一个模板只对应一个
+制品集，新路径一个模板服务该家族的全部 ISO 版本——这正是需求 3 要的解耦。
 
 每步可回退（现有 `backToStep` 机制保留）。回退到 ② 改 ISO 时，③ 已选的模板若不再
 兼容要清空并提示，而不是静默保留一个不兼容的选择。
