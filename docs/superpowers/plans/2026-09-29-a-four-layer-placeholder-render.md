@@ -684,36 +684,27 @@ func StageText(ctx model.RenderContext, stage string) (string, error)
 
 # 阶段五：骨架正文与渲染器改写
 
-### 任务 13：确认 ESXi 与 Ubuntu 的双文件边界
+### 任务 13：确认 ESXi 与 Ubuntu 的双文件边界 —— ✅ 已完成（2026-09-29）
 
-**目标：** 在动渲染器之前确认两个家族「哪份文件归系统、哪份归用户」，这是设计 §5.2 标
-的待核实项，基于假设动手会让 ESXi 与 Ubuntu 整条链路错位。
+**结论：`AnswerFileName` 不需要改。** 双文件机制已经完整接线，两份文件走同一个
+`/v1/answer` 端点靠文件名分派。完整结论与证据行号见设计文档 §5.2.1，不在此重复。
 
-**文件：** 本任务不改生产代码，产出是一段写进设计 §5.2 的核实结论。
+任务 14/15 要用到的三条：
 
-**要核实的三件事：**
+1. **`meta-data` 可以进 `systemParts`**（纯靠任务上下文现算，`autoinstall.go:310-327`）；
+   **`boot.cfg` 不能**——它要读盘（原始素材在 `ArtifactPaths.Extra["boot.cfg"]`），
+   读盘发生在网关层的专属分支（`internal/gateway/esxi_bootcfg.go`），继续留在那里不动。
+2. **ESXi 的模板正文是方言 kickstart**，交付路径已存在（`renderer.go:115` 的
+   `AssembleESXiKickstart`），不需要新建交付方式——原先担心的最大风险不成立。
+3. **只有这两家双文件。** 唯一放行点是 `answer.go:169-177` 的 `answerFileNameAllowed`，
+   函数体只有两个 `if`。其余四家单分支单渲染函数。
 
-1. `model.AnswerFileName(OSFamilyESXi)` 现在返回 `"boot.cfg"`（`render.go:112`）。查
-   `internal/gateway` 的 `/v1/answer` handler 与 `internal/render/esxi.go`：机器请求
-   应答文件时**实际返回的是哪一份**？`boot.cfg` 的 `kernelopt` 行里 `ks=` 指向哪个 URL？
-2. Ubuntu 的 `meta-data`（`testdata/meta_data.golden`）由哪个函数产出、通过哪个端点
-   或路径交付给机器？`ds=nocloud-net;s=<url>` 指向的那个目录是 nginx 直发还是网关？
-3. 结论：`AnswerFileName` 要不要改？若 ESXi 的 `/v1/answer` 需要按查询参数区分两份
-   文件，那是机器面契约变更（`docs/contracts/http-machine.md` 声明为冻结契约），要
-   单独评估。
+**顺带查出两处既存漂移**（非本次改造引入，详见设计 §5.2.2）：
 
-- [ ] **红：** 本任务是调查，无红灯。用 `grep` 与 `go doc` 读代码，**不要凭印象**——
-      写下每条结论时附上文件名与行号。
-
-- [ ] **绿：** 把结论写进 `docs/superpowers/specs/2026-09-29-a-four-layer-placeholder-render-design.md`
-      的 §5.2，替换掉「待核实项」那段。若结论是「机器面契约需要变更」，**停下来上报**
-      而不是自行变更——`http-machine.md` 是冻结契约。
-
-- [ ] **重构 + commit：** commit（`docs(design): 核实 ESXi 与 Ubuntu 的双文件边界`）。
-
-**风险：** 若发现 ESXi 的方言 kickstart 当前根本没有交付路径（只有 `boot.cfg` 经
-`/v1/answer` 出去），那么 ESXi 的模板正文需要一个新的交付方式，工作量比预期大。这种
-情况下把 ESXi 拆成独立任务排到最后，先让另外五个家族跑通。
+- `docs/contracts/http-machine.md:271-273` 的「文件名逐字符相等」与代码已不一致。
+  **处置（用户已定）：按代码现状更新契约文档**，落在任务 17。
+- `internal/render/esxi.go:532-565` 的「契约缺口 1」注释已过期（它说的未接线状态已被
+  后续改动填上）。任务 15 重写 `esxi.go` 时一并清理。
 
 ---
 
@@ -960,16 +951,32 @@ import 了 `internal/store/postgres` 的具体类型，守卫会失败——用 
 - 修改：`docs/contracts/http-console.md` —— 追加变更记录（形态细节在 spec B）
 - 修改：`docs/contracts/filesystem.md` —— 追加变更记录（一个 hook 有多个
   `hooks/<digest>/` 目录，每份实现一个）
-- **不改** `docs/contracts/http-machine.md`（除任务 13 另有结论）
+- 修改：`docs/contracts/http-machine.md` 的**约定 4**（`:256-273`）—— 修既存漂移，见下
 
-- [ ] **红：** 无红灯（纯文档）。先列出设计 §11.1 那张表的 13 行，逐行打勾确认改到。
+**机器面契约的这一处修正是补登记既有事实，不是本次改造引入的变更**（任务 13 查出，
+用户 2026-09-29 决定按代码现状更新文档）。现在约定 4 写「`{file}` 段必须与
+`AnswerFileName()` 的返回值**逐字符相等**，handler 层不做模糊匹配——不一致直接 404」，
+而 `internal/gateway/answer.go:169-177` 的 `answerFileNameAllowed` 已放行两个第二文件名。
+
+要补的内容：那六个家族的规范文件名表**保留不动**，在其后加一段说明两个例外——
+Ubuntu 额外放行 `meta-data`（cloud-init 的 NoCloud 数据源要求同目录两份都在）、
+ESXi 额外放行 `ks.cfg`（`boot.cfg` 的 `kernelopt` 行里 `ks=` 指向它）。并写明两份文件
+各自的归属：`user-data` 与 ESXi 的 `ks.cfg` 是**用户模板正文**，`meta-data` 与
+`boot.cfg` 是**系统生成**。放行是白名单而非放宽——非 ESXi 家族请求 `ks.cfg` 仍然 404
+（`answer_test.go:336-357` 锁住了这条）。
+
+- [ ] **红：** 无红灯（纯文档）。先列出设计 §11.1 那张表的 13 行加上面这条机器面修正，
+      逐行打勾确认改到。
 
 - [ ] **绿：** 逐节改写。`§5.2` 的「阶段不是排序，是能力边界」**保留为文档指引**（告诉
       模板作者各家族的执行环境在哪儿、`%post` 里哪些命令必然失败），但不再是代码约束——
       这一条要写清楚，否则后来者会以为它被删了。
 
 - [ ] **重构 + commit：** `grep -n "artifact_set_id\|os_families\|answer_template\|channel\|镜像直写" SPEC.md`
-      应只剩变更记录里的历史提及。commit（`docs(spec): 同步四层解耦与占位符体系`）。
+      应只剩变更记录里的历史提及。机器面那处修正**单独一个 commit**（它是既存漂移的
+      补登记，与本次改造无关，混在一起会让将来 blame 时看不清）：
+      `docs(contract): 约定 4 补登记 Ubuntu 与 ESXi 的第二应答文件名`。
+      其余 commit（`docs(spec): 同步四层解耦与占位符体系`）。
 
 **风险：** SPEC 里代码注释引用的小节号（`SPEC §4.6`、`§3.4` 这类）散布全仓。改小节号
 会让那些引用失效——**只改小节内容，不重排小节号**。新增的两节追加在末尾或用小数号

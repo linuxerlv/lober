@@ -496,13 +496,52 @@ RenderAnswer(ctx) = Expand(ctx.Body.Text, 展开器集合)
   后者承载 instance-id 等 cloud-init 元数据（现有 `testdata/meta_data.golden`）。
   `meta-data` 归系统生成，用户只写 `user-data`。
 
-两者印证了同一条边界：**能让机器找到应答文件的东西归系统，应答文件本身归用户。**
-这与 §5.3「引导菜单不在范围内」是同一条原则的三个实例。
+### 5.2.1 核实结论（2026-09-29，原「待核实项」已结案）
 
-**待核实项（实现计划第一步要确认）**：`model.AnswerFileName(OSFamilyESXi)` 现在返回
-`"boot.cfg"`（`render.go:112`），而按上表 `/v1/answer` 对 ESXi 应当返回方言 kickstart。
-需要确认网关现在实际返回的是哪一份，以及 `ks=` 指向的 URL 是哪个端点。这决定
-`AnswerFileName` 要不要改。
+代码核实完成，**双文件机制已经完整接线，`AnswerFileName` 不需要改**。原假设「能让机器
+找到应答文件的东西归系统」大体成立，但两个家族的第二份文件性质不同，不能用同一条规则套。
+
+**两份文件都走同一个端点 `/v1/answer/{task}/{token}/{file}`，靠文件名分派：**
+
+| 请求的文件名 | 走哪条路 | 证据 |
+|---|---|---|
+| `boot.cfg`（ESXi） | 网关层专属分支，读盘改写 | `internal/gateway/answer.go:107-111` 的 if 只判这一种组合；实现在 `internal/gateway/esxi_bootcfg.go` |
+| `ks.cfg`（ESXi） | 通用渲染器分派 → `AssembleESXiKickstart` | `internal/render/renderer.go:115` |
+| `user-data`（Ubuntu） | 通用渲染器分派 → `AssembleAutoinstall` | `internal/render/renderer.go:59-71` |
+| `meta-data`（Ubuntu） | 通用渲染器分派 → `RenderMetaData` | `internal/render/autoinstall.go:310-327` |
+
+`boot.cfg` 里 `ks=` 指向 `/v1/answer/{task}/{token}/ks.cfg`（网关端点，不是制品路径），
+见 `internal/gateway/esxi_bootcfg.go:126-127`。`boot.cfg` 的原始素材来自导入时落盘、存在
+`ArtifactPaths.Extra["boot.cfg"]`（写入 `internal/imports/extract_esxi.go:160`，读出
+`esxi_bootcfg.go:85,105-106`）；读盘发生在**网关层而非渲染器**，因为 `internal/render`
+要保持零 IO 纯函数（`esxi_bootcfg.go:14-30` 论证了这个接缝）。
+
+**`meta-data` 与 `boot.cfg` 都归系统，但结构不同**——前者纯靠任务上下文现算、不需要任何
+落盘素材，后者需要导入时保存的原始文件作输入。所以「系统生成」这一类里有两种：现算的
+与需素材的。这个区分对本次改造的意义：`meta-data` 可以直接进 `systemParts` 那张表，
+`boot.cfg` 不能（它要读盘），继续留在网关层的专属分支里。
+
+**只有这两个家族涉及双文件。** 唯一的放行点是 `internal/gateway/answer.go:169-177` 的
+`answerFileNameAllowed`，函数体只有两个 `if`（Ubuntu→`meta-data`、ESXi→`ks.cfg`）。
+其余四家在 `renderer.go` 的 switch 里都是单分支单渲染函数，无 `fileName ==` 的二次判断。
+`answer_test.go:336-357` 的 `TestAnswer_NonESXiKsCfgStill404` 锁住了「非 ESXi 家族请求
+`ks.cfg` 一律 404」。
+
+### 5.2.2 顺带查出的两处既存漂移（非本次改造引入）
+
+**一、`docs/contracts/http-machine.md:271-273` 与代码行为已不一致。** 契约写「`{file}` 段
+必须与 `AnswerFileName()` 的返回值**逐字符相等**，handler 层不做模糊匹配——不一致直接
+404」，而 `answerFileNameAllowed` 现在放行两个第二文件名。这是早于本次重构的旧账。
+**处置（用户 2026-09-29 决定）：按代码现状更新契约文档**——在约定 4 补一段说明两个
+第二文件名及其归属（系统生成 vs 用户编写），不回滚代码。回滚会让 Ubuntu 的 cloud-init
+取不到 `meta-data`（NoCloud 数据源要求同目录两份都在）、ESXi 取不到方言 kickstart，
+两条链路直接断。落在任务 17。
+
+**二、`internal/render/esxi.go:532-565` 的「契约缺口 1」注释已过期。** 它说
+`AssembleESXiKickstart` 与 `boot.cfg` 渲染都没接线、需要编排方另外打通，而两条路径都已
+完成（前者经 `renderer.go:115`，后者经网关层读盘方案——不是那段注释设想的「渲染器直接调
+`RenderESXiBootCfg`」）。`renderer.go:163-219` 自己的注释已承认这一点，esxi.go 那段没同步。
+任务 15 重写 `esxi.go` 时一并清理。
 
 ### 5.3 引导菜单不在范围内
 
@@ -688,7 +727,7 @@ SPEC 同步：`§11 Phase 3` 删掉镜像直写条目、`§1476` 的 MVP 排除�
 | 4 | 用户正文语法错误，模板保存时不报 | `preview` 端点是唯一的语法验证手段，spec B 要让它在 UI 上显眼。真机装机是最终判据 |
 | 5 | 删除镜像直写波及面判断错，误删别的代码要用的东西 | §6.1 清单已按 grep 核过（9 个生产文件 + 1 个配置字段），并标出 `iso9660.go` 里同名但无关的 `rockRidgeSignatureNM` 不要误删。删完 `make check` 必须全绿 |
 | 6 | `AutoMigrate` 的索引盲区 | 新增 `family` 列若参与索引，按 CLAUDE.md 的既有纪律同步改 `internal/store/postgres/schemacheck.go` 的结构断言，WHERE 按 PostgreSQL 规范化后的实际输出写 |
-| 7 | ESXi 的 `AnswerFileName` 返回 `boot.cfg` 与本设计的正文归属对不上 | §5.2 已标为待核实项，实现计划第一步就要确认网关实际返回哪一份，不要基于假设动手 |
+| 7 | ~~ESXi 的 `AnswerFileName` 返回 `boot.cfg` 与本设计的正文归属对不上~~ | **已结案**（§5.2.1，2026-09-29 核实）：双文件机制已完整接线，`AnswerFileName` 不改。顺带查出两处既存漂移，见 §5.2.2 |
 
 ## 13. 实现阶段划分
 
