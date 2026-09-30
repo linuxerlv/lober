@@ -24,10 +24,10 @@
 
 ## 开工前
 
-- [ ] 主目录（`/e/src/lober`，dev）现有 160 处未提交改动，由用户定去留：81 处已暂存（大批删除、`internal/console/` 下四个新文件、`.gitignore` 的新增），其余是未暂存的删除（`deploy/`、`pipeline/`、`scripts/`、`tools/`）。拍板之前不碰主目录；下面的工作树从 dev 的提交建出，不受这些改动影响。
-- [ ] 用户同意后打标签：`git tag -a legacy-final 7355e6a -m "重写前的旧系统"`。之后查旧代码用 `git show legacy-final:<路径>`；没打标签就用 `7355e6a` 代替。
-- [ ] 建工作树：`git worktree add .worktree/core-model -b feat/core-model dev`，以后的任务都在它里面做。
-- [ ] 在工作树里确认 `go version` 输出 `go1.27.1`。
+- [x] 主目录原有的 160 处未提交改动：用户决定丢弃，已执行。
+- [x] 不打标签，也不参照旧代码：用户要求完全重写。旧提交留在 git 历史里，但任何任务都不读取、不照搬旧代码。
+- [ ] 在主目录直接开分支：`git checkout -b feat/core-model dev`。不用 git worktree（用户决定：在 Claude Code 里用工作树，auto 模式会因复合命令里的 `cd` 而要求逐条确认）。任务不在主目录里直接改，见「并行执行」。
+- [ ] 确认 `go version` 输出 `go1.27.1`。
 
 ## 包与文件
 
@@ -58,7 +58,18 @@
 - 判定函数返回 `[]model.Problem`，空切片表示通过，不返回 error，也不 panic。规范化函数返回 `(值, error)`，error 的动态类型是 `model.Problem`，可以用 `errors.As` 取出。
 - 标识一律是小写 ASCII；给人看的名称（模板名、插槽名、显示名）可以用中文。
 - 对外返回的列表都有固定顺序（声明顺序或字典序），同样的输入永远得到同样顺序的输出。返回的切片和 map 都是副本，调用方改了不影响目录和原对象。
-- 每个任务一个 commit，提交信息用仓库现有的中文 Conventional Commits 风格。每个任务的重构步骤都要跑一次 `make check`。
+- 每个任务在 `feat/core-model` 上只留一个提交，提交信息用计划给的、仓库现有的中文 Conventional Commits 风格。评审修正在克隆里另起 `fix(...)` 提交，并入时与功能提交压成一个。每个任务的重构步骤都要跑一次 `make check`。
+
+## 并行执行
+
+本计划由工作流并行执行，最多 10 个代理同时工作：
+
+- 依赖满足的任务同时开工。任务 2、5 依赖 1；3、4 依赖 2；6 依赖 5；7 依赖 2–6；8 依赖 3、5；9、11 依赖 6、7、8；12 依赖 4、7；10 依赖 9；13 依赖 7、8、11。
+- 每个任务在自己的本地克隆 `.tmp/wf/t<N>` 里做：从主目录 `feat/core-model` 当时的最新提交克隆，不用 git worktree。做完经规格与质量两路评审，再由串行的并入步骤变基到最新的 `feat/core-model`、压成一个提交，快进并入主目录。主目录只接收并入，不在里面直接改。
+- 不用 `cd`：复合命令里的 `cd` 会触发权限确认，让后台代理卡住。git、go、make 一律用 `-C <目录>`，其余命令用绝对路径。
+- 只改本任务「文件」一节列出的文件。任务 10 的重构可以改 `activation/hook.go`。
+- 任务 3 与任务 4 会同时往 `catalog` 包里加文件：新增的包级未导出标识符，名字带上本文件的主题（如 `timingTable`、`platformTable`），先看包里已有的辅助函数能不能复用。
+- 原因代码由任务 5 按附录一次登记，其他任务只产出、只测试，不改 `codes.go`。确需计划外的新代码时，在 `codes.go` 末尾追加，并在报告里说明。
 
 ---
 
@@ -68,7 +79,7 @@
 
 **文件：**
 - 删除：`web/` 以外的全部受控文件，只留 `.gitignore`、spec 和本计划。约 500 个文件，包括 `cmd/`、`internal/`、`scripts/`、`deploy/`、`tools/`、`pipeline/`、`SPEC.md`、`go.sum`、根目录的 `.wf*.js`，以及 `docs/` 下的其他文件。
-- 重写：`go.mod`，只留 `module github.com/lober/lober` 和 `go 1.27.1`，没有 require。
+- 重写：`go.mod`，只有 `module github.com/lober/lober`、`go 1.27.1` 和 `ignore ./web`（前端目录不归 go 工具管），没有 require。
 - 重写：`Makefile`，目标为 `fmt`、`vet`、`test`、`race`、`cross`、`check`。
 - 创建：`internal/core/catalog/doc.go`，只有包注释，写明本包职责，让守卫从第一天起就有检查对象。
 - 创建：`internal/archtest/deps_test.go`，层 1 依赖守卫。
@@ -82,7 +93,7 @@ cross:
 check: fmt vet test race cross
 ```
 
-`fmt`、`vet`、`test`、`race` 四个目标照 `legacy-final:Makefile` 的写法（它避开了 `rm -rf`、`find` 这类 POSIX 专属工具）。spec §7.1 里「比对生成代码」那一步，等第一个代码生成器出现时（第 5 层）再加进 `check`。
+`fmt`、`vet`、`test`、`race` 四个目标只用 `go`、`gofmt` 和 shell 内建命令，不依赖 `rm -rf`、`find` 这类 POSIX 专属工具；`fmt` 只检查 `go list -f '{{.Dir}}' ./...` 列出的包目录，有输出就失败。不用 `gofmt -l .`，因为主目录的 `web/node_modules` 里混有第三方 .go 文件。spec §7.1 里「比对生成代码」那一步，等第一个代码生成器出现时（第 5 层）再加进 `check`。
 
 依赖守卫对 `go list -json ./...` 列出的每个 `internal/core/` 下的包检查：
 - 只 import 标准库（路径第一段不含 `.`）和 `github.com/lober/lober/internal/core/` 下的包；
@@ -90,13 +101,13 @@ check: fmt vet test race cross
 - 非测试源文件里不出现 `time.Now`；
 - 检查过的层 1 包数为 0 时直接失败，防止 `go list` 出错或路径写错时空转成绿。
 
-失败信息要写出违规的包和它 import 的路径。可参考 `legacy-final:internal/archtest/deps_test.go`，它用 `go env GOMOD` 定位模块根，不硬编码路径。
+失败信息要写出违规的包和它 import 的路径。用 `go env GOMOD` 定位模块根，不硬编码路径；`go list -json ./...` 的输出是多个 JSON 对象首尾相接，要流式逐个解码。
 
 - [ ] **红：** 先写守卫，再做一次证伪：临时建 `internal/tmpother`（空包）和 `internal/core/tmpbad`（import 前者，并调用一次 `time.Now`），运行 `go test ./internal/archtest/ -v`，预期 FAIL，失败信息同时点出这两处违规。
 - [ ] **绿：** 删掉两个临时包，再跑同一条命令，预期 PASS。
-- [ ] **重构 + commit：** 删除旧文件；跑 `go mod tidy` 后不应重新生成 `go.sum`；`make check` 全绿；`git ls-files | grep -v '^web/'` 只剩上面列出的七个文件。commit：`refactor!: 删除旧系统，从层 1 的空骨架重新开始`，正文写明证伪实验的结果和 `legacy-final` 的用法。
+- [ ] **重构 + commit：** 删除旧文件；跑 `go mod tidy` 后不应重新生成 `go.sum`；`make check` 全绿；`git ls-files | grep -v '^web/'` 只剩上面列出的七个文件。commit：`refactor!: 删除旧系统，从层 1 的空骨架重新开始`，正文写明证伪实验的结果。
 
-**风险：** 不要在主目录跑 `git clean`、`git checkout .` 或 `git stash`，那里有用户还没定去留的改动；所有操作只在工作树里做。`.gitignore` 里指向已删路径的条目先留着，不影响构建。
+**风险：** 所有操作只在自己的克隆里做，不碰主目录。`.gitignore` 里指向已删路径的条目先留着，不影响构建。
 
 ### 任务 2：族、系与格式
 
@@ -254,12 +265,14 @@ func ValidIdent(s string) bool
 
 - `Category` 供第 5 层映射 HTTP 状态码：invalid 输入不合法，incomplete 未完备（激活不过），incompatible 组合不兼容（准入不过），state 对象状态不允许。
 - `Subject`：Kind 取 host、iso、hook、impl、template、slot、param、body 之一；ID 是 SN、ISO ID 或「hook ID@版本」这类标识；Path 是对象内的位置（参数的字段键、插槽名），可空；Line、Col 是正文位置，从 1 起，不适用时为 0。
-- 代码表的每一项写明类别、说明模板、下一步模板，以及模板要几个参数。`NewProblem` 从表里取模板、用 `args` 填入。后面每个任务新增的代码都加到 `codes.go`，别处不写中文说明。
+- 代码表的每一项写明类别、说明模板、下一步模板，以及模板要几个参数。`NewProblem` 从表里取模板、用 `args` 填入。
+- 代码表一次建全：附录「原因代码总表」里的全部代码都在本任务登记，类别按总表，说明与下一步按产出任务对它的描述写。之后的任务只产出这些代码，不改 `codes.go`（例外见「并行执行」），别处不写中文说明。
+- `NewProblem` 遇到未登记的代码，或参数个数与表中声明不符时 panic。这是编程错误，测试第一次走到就会暴露；判定函数在正确调用下不会触发它，所以不违反「判定函数不 panic」。
 - SN（C6）：去掉首尾空白，ASCII 字母转大写；结果须为 1–64 个可打印 ASCII 字符（0x21–0x7E），中间允许单个空格。以下视为占位值，规范化后比较：`TO BE FILLED BY O.E.M.`、`DEFAULT STRING`、`SYSTEM SERIAL NUMBER`、`CHASSIS SERIAL NUMBER`、`SERIAL NUMBER`、`NOT SPECIFIED`、`NOT APPLICABLE`、`N/A`、`NONE`、`INVALID`、`OEM`、`0123456789`、`123456789`；由同一个字符重复组成的（如 `00000000`、`XXXXXXXX`）也算。
 - 名称（C12）：去掉首尾空白，内部连续空白压成一个空格；1–64 个 rune，不含控制字符。`key` 是 display 的小写形式，第 2 层按它做唯一约束，所以「Linux 基线」与「linux 基线」算同名。
 - 标识符（参数名、主机属性键）：`^[a-z][a-z0-9_]{0,31}$`。
 
-本任务新增的代码：
+本任务产出的代码：
 
 | 代码 | 类别 | 何时产生 |
 |---|---|---|
@@ -267,11 +280,11 @@ func ValidIdent(s string) bool
 | `sn_placeholder` | invalid | SN 是占位值 |
 | `name_invalid` | invalid | 名称为空、超长或含控制字符 |
 
-- [ ] **红：** 写失败测试，覆盖：代码表每一项都有类别、说明和下一步，按它声明的参数个数构造一次，说明和下一步里都不出现 `%!`；`Problem` 能经 `errors.As` 取出；SN 的首尾空白与大小写、内部空格、超长、控制字符、每一个占位值、同字符重复；名称的空白压缩、中文、超长、大小写不同时得到同一个 key；标识符的合法与非法样例。运行 `go test ./internal/core/model/ -v`，预期 FAIL。
+- [ ] **红：** 写失败测试，覆盖：代码表与附录总表逐项一致，一个不多、一个不少，类别相同；每一项都有说明和下一步，按它声明的参数个数构造一次，说明和下一步里都不出现 `%!`；未登记的代码与参数个数不符都会 panic；`Problem` 能经 `errors.As` 取出；SN 的首尾空白与大小写、内部空格、超长、控制字符、每一个占位值、同字符重复；名称的空白压缩、中文、超长、大小写不同时得到同一个 key；标识符的合法与非法样例。运行 `go test ./internal/core/model/ -v`，预期 FAIL。
 - [ ] **绿：** 实现，预期 PASS。
 - [ ] **重构 + commit：** `make check` 全绿后 commit（`feat(model): 判定结果、原因代码表与标识规范化`）。
 
-**风险：** 说明模板的占位数和参数个数对不上时，fmt 不报错，而是输出 `%!(EXTRA …)` 这类文字，会原样出现在界面上。上面那条代码表测试就是为此设的，后续任务每加一个代码，它都会自动覆盖到。
+**风险：** 说明模板的占位数和参数个数对不上时，fmt 不报错，而是输出 `%!(EXTRA …)` 这类文字，会原样出现在界面上。上面那条代码表测试就是为此设的，它覆盖表里的全部代码。
 
 ### 任务 6：参数类型与取值
 
@@ -332,7 +345,7 @@ func EnvName(param string) string                   // disk → LOBER_PARAM_DISK
 - `Parse` 的 error 用代码 `param_value_invalid`，说明里写清期望的格式；`Sub` 遇到不适用的子值（IPv6 取 netmask、非 cidr 类型）返回 `param_accessor_invalid`。
 - `EnvName` 是脚本取参数的唯一约定：第 3 层按它导出环境变量，任务 9 按它检查脚本里的引用。
 
-本任务新增的代码：`param_decl_invalid`、`param_value_invalid`、`param_accessor_invalid`，类别都是 invalid。
+本任务产出的代码：`param_decl_invalid`、`param_value_invalid`、`param_accessor_invalid`，类别都是 invalid。
 
 - [ ] **红：** 写失败测试。每种类型至少三个合法、三个非法样例，非法样例里要有能改变结构的字符（引号、换行、`<`、`#`、`$(`、反引号）；规范化（IPv4 前导零被拒、hostname 转小写、sshkey 多余空格压成一个、int 的 `+5` 与 `007`）；列表的项数上下限与逐项校验；`cidr` 的三个子值与 IPv6 取 netmask 被拒；声明校验（名字非法、默认值不合法、enum 选项不是安全词、Options 与 Offer 同时给、`text` 声明成列表）；`EnvName`。运行 `go test ./internal/core/model/ -v`，预期 FAIL。
 - [ ] **绿：** 实现，预期 PASS。
@@ -436,7 +449,7 @@ func Scan(src string) (Result, []model.Problem)
 - 有问题时也返回尽量完整的结果，写错的占位符当作原文段：编辑器要靠它继续显示插槽列表。
 - 扫描不看格式。某种格式能不能用某个时机、某个系统值，必需哪些部件，都是任务 9、10 的事。重复的插槽名在这里也不报错，如实列出，由任务 10 报。
 
-本任务新增的代码，类别都是 invalid，Subject 的 Kind 为 body 并带行列：`placeholder_unknown_kind`（种类不是四种之一）、`placeholder_malformed`（名字、时机、子值或 `|join` 的写法不对）、`placeholder_unclosed`（同一行里没有 `}}`）、`timing_unknown`、`part_unknown`、`sysvalue_unknown`。
+本任务产出的代码，类别都是 invalid，Subject 的 Kind 为 body 并带行列：`placeholder_unknown_kind`（种类不是四种之一）、`placeholder_malformed`（名字、时机、子值或 `|join` 的写法不对）、`placeholder_unclosed`（同一行里没有 `}}`）、`timing_unknown`、`part_unknown`、`sysvalue_unknown`。
 
 - [ ] **红：** 写失败测试，覆盖：七种格式的样例各扫出预期的插槽、部件、系统值和参数；拼回原文逐字节相同（含 CRLF 与制表符缩进）；Jinja 的几种写法原样保留；每种错误各一例，行列号正确；首尾带空格的占位符；未闭合；`{{sys:lbrace}}`；中文插槽名；独占一行的判定，含「前面有非空白」「后面有非空白」两种反例。运行 `go test ./internal/core/scan/ -v`，预期 FAIL。
 - [ ] **绿：** 实现，预期 PASS。
@@ -458,7 +471,7 @@ func Scan(src string) (Result, []model.Problem)
 func Hook(h model.Hook) []model.Problem
 ```
 
-判定内容（新代码加进 `model/codes.go`；除沿用的 invalid 代码外，类别都是 incomplete）：
+判定内容（代码已由任务 5 登记，类别见附录）：
 
 | 检查 | 代码 |
 |---|---|
@@ -504,7 +517,7 @@ func Approver(author, approver string) []model.Problem
 - `hooks` 由调用方凑齐，包含装配表引用的每个 hook 版本。缺的当作引用不存在报错，不去别处查。
 - `Approver`：审批人为空报 `approver_missing`（invalid），与作者相同报 `approver_is_author`（state）。内置内容出厂即已审批，不走这里。
 
-判定内容（新代码的类别都是 incomplete）：
+判定内容（代码已由任务 5 登记，类别见附录）：
 
 | 检查 | 代码 |
 |---|---|
@@ -571,7 +584,7 @@ func Evaluate(in Input) Result
 5. 选项：`enum` 取声明的 Options，或取 ISO 的 Offers 里同名的集合（C21）。
 6. 最终值：可改的字段用操作员填的值，没填就用预填值；锁定的字段用预填值。然后按类型解析（任务 6）。
 
-本任务新增的代码（Subject 的 Kind 为 param，ID 为主机 SN，Path 为字段键）：
+本任务产出的代码（Subject 的 Kind 为 param，ID 为主机 SN，Path 为字段键）：
 
 | 代码 | 类别 | 何时产生 |
 |---|---|---|
@@ -672,7 +685,7 @@ func Build(in params.Input) (model.Snapshot, []model.Problem)
 
 ## 整体验收
 
-- [ ] 在工作树根目录跑 `make check`，fmt、vet、test、race、cross 五步全部通过，退出码为 0。
+- [ ] 在主目录（`feat/core-model`）跑 `make check`，fmt、vet、test、race、cross 五步全部通过，退出码为 0。
 - [ ] `go list ./...` 只列出 `internal/core/` 下的七个包和 `internal/archtest`。
 - [ ] 依赖守卫通过，任务 1 的证伪实验结果写在该任务的 commit 正文里。
 - [ ] `git diff --stat dev...feat/core-model -- web/` 没有输出，`web/` 没被动过。
@@ -702,3 +715,23 @@ func Build(in params.Input) (model.Snapshot, []model.Problem)
 | C33 | 时机次序 | 3 |
 
 由后续层负责的：C3、C4（第 4 层）；C6 与 C12 的唯一性、C23 的不可修改、C26 的禁止删除、C30、C31 的并发兜底（第 2 层）；C32、C34，以及 C35 的逐字节一致（第 3、7 层）。
+
+## 附录：原因代码总表
+
+任务 5 按这张表一次登记全部 58 个代码。「定义任务」是首次描述该代码的任务，何时产生、说明写什么，以那个任务的描述为准；后面的任务可以沿用。
+
+| 类别 | 代码 | 定义任务 |
+|---|---|---|
+| invalid | `sn_invalid`、`sn_placeholder`、`name_invalid` | 5 |
+| invalid | `param_decl_invalid`、`param_value_invalid`、`param_accessor_invalid` | 6 |
+| invalid | `attr_key_invalid` | 7 |
+| invalid | `placeholder_unknown_kind`、`placeholder_malformed`、`placeholder_unclosed`、`timing_unknown`、`part_unknown`、`sysvalue_unknown` | 8 |
+| incomplete | `hook_no_impl`、`impl_series_invalid`、`impl_series_overlap`、`fragment_mixed_formats`、`fragment_forbidden_placeholder`、`sysvalue_not_allowed`、`param_undeclared`、`param_text_in_fragment`、`list_repeat_conflict`、`script_incomplete`、`script_timing_unsupported`、`script_interpreter_unavailable`、`timeout_invalid` | 9 |
+| incomplete | `template_series_invalid`、`template_mixed_formats`、`slot_duplicate`、`slot_timing_unsupported`、`fragment_slot_not_alone`、`part_missing`、`part_duplicate`、`part_not_in_format`、`binding_param_unknown`、`assembly_slot_unknown`、`hook_ref_missing`、`hook_ref_unapproved`、`hook_ref_deprecated`、`impl_missing_for_series`、`impl_kind_mismatch`、`impl_timing_mismatch` | 10 |
+| invalid | `approver_missing` | 10 |
+| state | `approver_is_author` | 10 |
+| invalid | `param_required`、`param_locked`、`param_not_offered`、`param_unknown_field` | 11 |
+| incompatible | `param_attr_missing`、`iso_offer_missing` | 11 |
+| state | `host_has_open_task`、`iso_not_ready`、`template_not_approved` | 12 |
+| incompatible | `arch_mismatch`、`firmware_mismatch`、`template_blocked_by_deprecated`、`series_not_ticked` | 12 |
+| invalid | `host_duplicate_in_batch` | 12 |
