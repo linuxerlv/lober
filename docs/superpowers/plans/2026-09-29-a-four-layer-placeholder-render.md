@@ -965,10 +965,26 @@ import 了 `internal/store/postgres` 的具体类型，守卫会失败——用 
 
 **文件：**
 - 修改：`SPEC.md` —— 按设计 §11.1 那张表改 11 个小节，新增 2 节
+- 修改：`docs/superpowers/specs/SPEC.md` —— **它是根目录 SPEC.md 的逐字节副本**，见下
 - 修改：`docs/contracts/http-console.md` —— 追加变更记录（形态细节在 spec B）
 - 修改：`docs/contracts/filesystem.md` —— 追加变更记录（一个 hook 有多个
   `hooks/<digest>/` 目录，每份实现一个）
 - 修改：`docs/contracts/http-machine.md` 的**约定 4**（`:256-273`）—— 修既存漂移，见下
+- 修改：`docs/superpowers/plans/2026-09-20-lober-{mvp,phase2,phase3}-*.md` —— 若其中描述
+  镜像直写为「设计中的一部分」，加一行「2026-09-29 已删除，见 spec A §6」的注记；**不要
+  改写那些计划的正文**（它们是已执行完的历史记录，改写会让 git 历史与文档对不上）
+
+**仓库里有两份逐字节相同的 SPEC.md**（2026-09-30 查实：均 1769 行、md5 相同，自 M1 地基
+提交 `d7c2e20` 起并存）：根目录的 `SPEC.md` 与 `docs/superpowers/specs/SPEC.md`。
+
+CLAUDE.md 声明「`SPEC.md` 是设计的唯一真源」，而代码注释按 § 号引用它。**只改一份会让
+另一份静默留成过期文档**，而下一个人无从知道哪份是真的——这比两份都过期更危险。两个选择：
+
+1. **两份同步改**（保守，本任务默认）：改完用 `md5sum` 或 `diff` 验证两份仍然一致。
+2. **把 `docs/superpowers/specs/SPEC.md` 删掉、留根目录那一份**（更干净，消灭这个陷阱本身）。
+   若选这条，先 `grep -rn "superpowers/specs/SPEC.md"` 确认没有文档或脚本引用那个路径。
+
+选 1 还是 2 **上报由用户定**，不要自行决定——删一份声明为「唯一真源」的文档是范围外的动作。
 
 **机器面契约的这一处修正是补登记既有事实，不是本次改造引入的变更**（任务 13 查出，
 用户 2026-09-29 决定按代码现状更新文档）。现在约定 4 写「`{file}` 段必须与
@@ -990,8 +1006,10 @@ ESXi 额外放行 `ks.cfg`（`boot.cfg` 的 `kernelopt` 行里 `ks=` 指向它�
       这一条要写清楚，否则后来者会以为它被删了。
 
 - [ ] **重构 + commit：** `grep -n "artifact_set_id\|os_families\|answer_template\|channel\|镜像直写" SPEC.md`
-      应只剩变更记录里的历史提及。机器面那处修正**单独一个 commit**（它是既存漂移的
-      补登记，与本次改造无关，混在一起会让将来 blame 时看不清）：
+      应只剩变更记录里的历史提及。**两份 SPEC.md 若选方案 1，收尾必须
+      `diff SPEC.md docs/superpowers/specs/SPEC.md` 为空**——不验证等于把陷阱留给下一个人。
+      机器面那处修正**单独一个 commit**（它是既存漂移的补登记，与本次改造无关，混在一起会
+      让将来 blame 时看不清）：
       `docs(contract): 约定 4 补登记 Ubuntu 与 ESXi 的第二应答文件名`。
       其余 commit（`docs(spec): 同步四层解耦与占位符体系`）。
 
