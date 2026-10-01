@@ -23,6 +23,16 @@ const (
 	timeoutMaxSec = 21600
 )
 
+// timeoutOK 报告脚本超时是否在范围内。hook 给的默认值与模板按实例的覆盖用同一个范围（C11）。
+func timeoutOK(sec int) bool {
+	return timeoutMinSec <= sec && sec <= timeoutMaxSec
+}
+
+// versionID 是 hook 或模板的一个版本在 Subject 里的 ID：「ID@版本」。
+func versionID(id string, version int) string {
+	return id + "@" + strconv.Itoa(version)
+}
+
 // Hook 判断 hook 版本 h 能不能批准（C8–C11，以及 C19 在片段上的部分）。
 //
 // 问题的顺序固定：先 hook 整体（名称、参数声明、有没有实现），再按实现的顺序逐份列出，超时
@@ -30,7 +40,7 @@ const (
 // 「hook ID@版本」，参数声明的问题 Path 为参数名；实现的问题 Kind 为 impl，Path 为它覆盖的系
 // （逗号分隔），涉及正文位置时带上行列。
 func Hook(h model.Hook) []model.Problem {
-	id := h.ID + "@" + strconv.Itoa(h.Version)
+	id := versionID(h.ID, h.Version)
 	hookSubj := model.Subject{Kind: "hook", ID: id}
 	var out []model.Problem
 	if _, _, err := model.NormalizeName(h.Name); err != nil {
@@ -49,7 +59,7 @@ func Hook(h model.Hook) []model.Problem {
 		hasScript = hasScript || impl.Kind == model.ImplScript
 	}
 	// 超时只约束脚本（C11）：片段在渲染时就写进了应答文件，没有执行这一步。
-	if hasScript && (h.TimeoutSec < timeoutMinSec || h.TimeoutSec > timeoutMaxSec) {
+	if hasScript && !timeoutOK(h.TimeoutSec) {
 		out = append(out, model.NewProblem("timeout_invalid", hookSubj, h.TimeoutSec))
 	}
 	return out
@@ -89,7 +99,7 @@ func checkDecls(decls []model.ParamDecl, subj model.Subject) (map[string]paramIn
 // checkImpl 查一份实现。covered 记着前面的实现覆盖了哪些系，本份查完后把自己的系加进去。
 func checkImpl(impl model.Impl, params map[string]paramInfo, subj model.Subject, covered map[catalog.Series]bool) []model.Problem {
 	var out []model.Problem
-	seriesOK := implSeriesOK(impl)
+	seriesOK := seriesValid(impl.Family, impl.Series)
 	if !seriesOK {
 		out = append(out, model.NewProblem("impl_series_invalid", subj))
 	}
@@ -117,14 +127,15 @@ func checkImpl(impl model.Impl, params map[string]paramInfo, subj model.Subject,
 	return out
 }
 
-// implSeriesOK：族合法，系非空、各不相同，且都属于该族（C8）。同一个系勾两次只会来自直接
-// 调接口，界面上做不到；也按系不对拦下，不替调用方去重：第 2 层会原样存下这份列表。
-func implSeriesOK(impl model.Impl) bool {
-	if !impl.Family.Valid() || len(impl.Series) == 0 {
+// seriesValid：族合法，系非空、各不相同，且都属于该族。hook 的实现（C8）与模板（C13）共用。
+// 同一个系勾两次只会来自直接调接口，界面上做不到；也按系不对拦下，不替调用方去重：第 2 层会
+// 原样存下这份列表。
+func seriesValid(f catalog.Family, series []catalog.Series) bool {
+	if !f.Valid() || len(series) == 0 {
 		return false
 	}
-	for i, s := range impl.Series {
-		if s.Family() != impl.Family || slices.Contains(impl.Series[:i], s) {
+	for i, s := range series {
+		if s.Family() != f || slices.Contains(series[:i], s) {
 			return false
 		}
 	}
@@ -137,46 +148,95 @@ func checkFragment(impl model.Impl, seriesOK bool, params map[string]paramInfo, 
 	var out []model.Problem
 	var format catalog.Format // 推不出时为空
 	if seriesOK {
-		formats := formatsOf(impl.Series)
-		if len(formats) == 1 {
-			format = formats[0]
-		} else {
-			out = append(out, model.NewProblem("fragment_mixed_formats", subj, joinFormats(formats)))
-		}
+		format, out = commonFormat(impl.Series, "fragment_mixed_formats", subj)
 	}
-	res, scanned := scan.Scan(impl.Body)
-	body := make([]model.Problem, 0, len(scanned))
-	for _, p := range scanned {
-		// 扫描只知道正文，不知道它属于哪份实现：代码、说明与行列原样保留，只改指向。
-		p.Subject = at(subj, p.Subject.Line, p.Subject.Col)
-		body = append(body, p)
-	}
-	repeated := map[int]string{} // 行号 → 这一行里第一个逐行重复的列表参数
+	res, body := scanBody(impl.Body, subj)
+	rules := newBodyRules(format, params)
 	for _, seg := range res.Segments {
 		s := at(subj, seg.Line, seg.Col)
 		switch seg.Kind {
 		case scan.KindSlot, scan.KindPart:
 			// hook 只有一层（C8）：插槽与系统部件只属于模板正文。
 			body = append(body, model.NewProblem("fragment_forbidden_placeholder", s, seg.Raw))
-		case scan.KindSys:
-			if format != "" && !slices.Contains(format.SystemValues(), seg.Sys) {
-				body = append(body, model.NewProblem("sysvalue_not_allowed", s, seg.Sys, format))
-			}
-		case scan.KindParam:
-			body = append(body, checkParamRef(seg, params, s, repeated)...)
+		default:
+			body = append(body, rules.check(seg, s)...)
 		}
 	}
-	slices.SortStableFunc(body, func(a, b model.Problem) int {
-		return cmp.Or(cmp.Compare(a.Subject.Line, b.Subject.Line), cmp.Compare(a.Subject.Col, b.Subject.Col))
-	})
+	slices.SortStableFunc(body, byPosition)
 	return append(out, body...)
 }
 
-// checkParamRef 查正文里的一处参数引用：声明过（C9），是受限类型（C19），子值与 |join 用得对。
-// repeated 记着每一行里第一个逐行重复的列表参数。
-func checkParamRef(seg scan.Segment, params map[string]paramInfo, s model.Subject, repeated map[int]string) []model.Problem {
+// 下面到 subOK 为止是模板正文与 hook 片段共用的检查（参数引用、列表规则、系统值），两边只在
+// 插槽和系统部件上不同，那部分由 checkFragment 与 checkTemplateBody 各自查。
+
+// commonFormat 是一组合法的系共同的格式。不同格式时报 mixed（片段与模板各有自己的代码），返回
+// 空：推不出格式，跟格式有关的检查都要跳过。
+func commonFormat(series []catalog.Series, mixed model.Code, subj model.Subject) (catalog.Format, []model.Problem) {
+	formats := formatsOf(series)
+	if len(formats) != 1 {
+		return "", []model.Problem{model.NewProblem(mixed, subj, joinFormats(formats))}
+	}
+	return formats[0], nil
+}
+
+// scanBody 扫描正文或片段。扫描只知道正文，不知道它属于哪个对象：问题的代码、说明与行列原样
+// 保留，只改指向 subj。
+func scanBody(body string, subj model.Subject) (scan.Result, []model.Problem) {
+	res, ps := scan.Scan(body)
+	for i, p := range ps {
+		ps[i].Subject = at(subj, p.Subject.Line, p.Subject.Col)
+	}
+	return res, ps
+}
+
+// byPosition 按正文位置排问题，给 slices.SortStableFunc 用：扫描的问题与逐段查出的问题各自
+// 有序，合起来要再排一次，同一位置的保持原来的先后。
+func byPosition(a, b model.Problem) int {
+	return cmp.Or(cmp.Compare(a.Subject.Line, b.Subject.Line), cmp.Compare(a.Subject.Col, b.Subject.Col))
+}
+
+// bodyRules 查正文里的系统值与参数引用：系统值在该格式可用；参数已声明（C9）、是受限类型（C19），
+// 子值与 |join 用得对；逐行重复的列表参数所在的行没有冲突。一份正文用一个，按片段的顺序逐段交给它。
+type bodyRules struct {
+	format catalog.Format // 推不出时为空，不查系统值
+	params map[string]paramInfo
+	// 逐行重复把整行按列表项各抄一遍，所以按行记：这一行里第一个逐行重复的列表参数，以及这一行
+	// 里有没有插槽、系统部件（只有模板正文里会有）。
+	repeated   map[int]string
+	structural map[int]bool
+}
+
+func newBodyRules(format catalog.Format, params map[string]paramInfo) *bodyRules {
+	return &bodyRules{format: format, params: params, repeated: map[int]string{}, structural: map[int]bool{}}
+}
+
+// check 查一段系统值或参数引用，别的种类返回空。
+func (r *bodyRules) check(seg scan.Segment, s model.Subject) []model.Problem {
+	switch seg.Kind {
+	case scan.KindSys:
+		if r.format != "" && !slices.Contains(r.format.SystemValues(), seg.Sys) {
+			return []model.Problem{model.NewProblem("sysvalue_not_allowed", s, seg.Sys, r.format)}
+		}
+	case scan.KindParam:
+		return r.param(seg, s)
+	}
+	return nil
+}
+
+// placeholder 记下插槽或系统部件所在的行。它们只能展开一次，不能随所在的行逐行重复：这一行里
+// 已经有逐行重复的列表参数时报 list_repeat_conflict，参数是那个列表参数。
+func (r *bodyRules) placeholder(seg scan.Segment, s model.Subject) []model.Problem {
+	r.structural[seg.Line] = true
+	if name, ok := r.repeated[seg.Line]; ok {
+		return []model.Problem{model.NewProblem("list_repeat_conflict", s, name)}
+	}
+	return nil
+}
+
+// param 查一处参数引用：声明过（C9），是受限类型（C19），子值与 |join 用得对，逐行重复不冲突。
+func (r *bodyRules) param(seg scan.Segment, s model.Subject) []model.Problem {
 	ref := seg.Param
-	info, declared := params[ref.Name]
+	info, declared := r.params[ref.Name]
 	switch {
 	case !declared:
 		return []model.Problem{model.NewProblem("param_undeclared", s, ref.Name)}
@@ -192,12 +252,14 @@ func checkParamRef(seg scan.Segment, params map[string]paramInfo, s model.Subjec
 	if ref.Join && !info.decl.List {
 		out = append(out, model.NewProblem("param_accessor_invalid", s, "|join"))
 	}
-	// 逐行重复把整行按列表项各抄一遍。同一行里两个不同的列表参数，没法说清第几份抄本代入
-	// 哪一项；同一个列表参数出现几次、取几个子值，每份抄本代入的都是同一项，不冲突。
+	// 同一行里两个不同的列表参数，没法说清第几份抄本代入哪一项；同一个列表参数出现几次、取几个
+	// 子值，每份抄本代入的都是同一项，不冲突。
 	if info.decl.List && !ref.Join {
-		if first, ok := repeated[seg.Line]; !ok {
-			repeated[seg.Line] = ref.Name
-		} else if first != ref.Name {
+		first, seen := r.repeated[seg.Line]
+		if !seen {
+			r.repeated[seg.Line] = ref.Name
+		}
+		if (seen && first != ref.Name) || r.structural[seg.Line] {
 			out = append(out, model.NewProblem("list_repeat_conflict", s, ref.Name))
 		}
 	}
@@ -322,7 +384,7 @@ func formatsOf(series []catalog.Series) []catalog.Format {
 	return out
 }
 
-// joinFormats 按代码表对 fragment_mixed_formats 的约定，用顿号连接格式。
+// joinFormats 按代码表对 fragment_mixed_formats 与 template_mixed_formats 的约定，用顿号连接格式。
 func joinFormats(formats []catalog.Format) string {
 	parts := make([]string, len(formats))
 	for i, f := range formats {
