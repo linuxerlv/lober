@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// appendixCodes 照抄计划附录「原因代码总表」。代码表必须与它逐项一致：
+// appendixCodes 照抄计划附录「原因代码总表」。代码表必须与它加上 extraCodes 逐项一致：
 // 改代码表就得同步改这里，测试就是为了逼出这一步。
 var appendixCodes = map[Category][]Code{
 	CategoryInvalid: {
@@ -42,6 +42,12 @@ var appendixCodes = map[Category][]Code{
 	},
 }
 
+// extraCodes 是附录之外、按计划「并行执行」一节追加在代码表末尾的代码，各写明来由。
+var extraCodes = map[Code]Category{
+	// 整层验收：{{sys:sn}} 要代入的主机 SN 不是安全词，由 snapshot.Build 报。
+	"sn_unsafe_in_body": CategoryIncompatible,
+}
+
 func TestCode表与附录总表逐项一致(t *testing.T) {
 	want := map[Code]Category{}
 	for cat, codes := range appendixCodes {
@@ -55,14 +61,20 @@ func TestCode表与附录总表逐项一致(t *testing.T) {
 	if len(want) != 58 {
 		t.Fatalf("附录应有 58 个代码，测试里抄了 %d 个", len(want))
 	}
+	for c, cat := range extraCodes {
+		if _, dup := want[c]; dup {
+			t.Fatalf("追加的 %s 已在附录里", c)
+		}
+		want[c] = cat
+	}
 	for c, cat := range want {
 		if got := c.Category(); got != cat {
-			t.Errorf("%s 的类别是 %q，附录是 %q（空表示没登记）", c, got, cat)
+			t.Errorf("%s 的类别是 %q，应为 %q（空表示没登记）", c, got, cat)
 		}
 	}
 	for _, c := range registeredCodes() {
 		if _, ok := want[c]; !ok {
-			t.Errorf("代码表多出附录里没有的 %s", c)
+			t.Errorf("代码表多出附录与 extraCodes 里都没有的 %s", c)
 		}
 	}
 }

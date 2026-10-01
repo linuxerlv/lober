@@ -205,6 +205,11 @@ func slotAt(code model.Code, path string) model.Problem {
 	return model.Problem{Code: code, Subject: model.Subject{Kind: "slot", ID: "baseline@3", Path: path}}
 }
 
+// hostAt 是落在主机 sn 上的问题应有的代码与对象。
+func hostAt(code model.Code, sn string) model.Problem {
+	return model.Problem{Code: code, Subject: model.Subject{Kind: "host", ID: sn}}
+}
+
 // instanceOf 取插槽 slot 里的第 n 个实例（从 1 起）。
 func instanceOf(t *testing.T, snap model.Snapshot, slot string, n int) model.SnapshotInstance {
 	t.Helper()
@@ -456,6 +461,150 @@ func TestBuild参数求值有问题时原样返回(t *testing.T) {
 	if !reflect.DeepEqual(snap, model.Snapshot{}) {
 		t.Errorf("有问题时不应产出快照，得到 %+v", snap)
 	}
+}
+
+// unsafeSNs 是登记得下、却不是安全词的 SN。前四个各带一种会改变结构的字符：空格（VMware 虚拟机的
+// SN 常这样写）、引号、<、&；后三个是整层验收时探出来的：一串 shell 与标记语言的特殊字符、YAML 的
+// 「冒号加空格」、看着像占位符的花括号。
+var unsafeSNs = []string{"VMWARE-42 1A 2B 3C", `A"B`, "A<B", "A&B", `A"B<C>&D#E$(ID)`, "A: B", "{{SYS:REPO}}"}
+
+// withSN 把主机的 SN 换成 sn，并确认它原样就是 NormalizeSN 的结果：这类 SN 真能登记进来，
+// 登记规则不拦它。
+func withSN(t *testing.T, in params.Input, sn string) params.Input {
+	t.Helper()
+	if got, err := model.NormalizeSN(sn); err != nil || got != sn {
+		t.Fatalf("SN %q 应能原样登记，NormalizeSN 得到 %q、%v", sn, got, err)
+	}
+	in.Host.SN = sn
+	return in
+}
+
+// replaceInBody 把正文里的 old 换成 new；正文里没有 old 时直接判失败，免得测试改了个寂寞。
+func replaceInBody(t *testing.T, in *params.Input, old, new string) {
+	t.Helper()
+	if !strings.Contains(in.Template.Body, old) {
+		t.Fatalf("正文里没有 %q", old)
+	}
+	in.Template.Body = strings.Replace(in.Template.Body, old, new, 1)
+}
+
+// snHostnameHook 拿主机 SN 当主机名，不少机房就是这样起名的。只有覆盖 rocky 的那份片段引用了
+// {{sys:sn}}，覆盖 almalinux 的那份用 DHCP 给的名字。
+func snHostnameHook() model.Hook {
+	return model.Hook{
+		ID: "sn-hostname", Version: 1, Name: "主机名取 SN", State: model.VersionApproved,
+		Impls: []model.Impl{
+			{Family: "linux", Series: []catalog.Series{"rocky"}, Kind: model.ImplFragment, Body: "network --hostname={{sys:sn}}\n"},
+			{Family: "linux", Series: []catalog.Series{"almalinux"}, Kind: model.ImplFragment, Body: "network --bootproto=dhcp\n"},
+		},
+	}
+}
+
+// useSNHostname 把正文里设主机名的那一行换成片段插槽「主机名」，放进 snHostnameHook。
+func useSNHostname(t *testing.T, in *params.Input) {
+	t.Helper()
+	replaceInBody(t, in, "network --hostname={{param:hostname}}\n", "{{slot:主机名}}\n")
+	h := snHostnameHook()
+	in.Template.Assembly["主机名"] = []model.Instance{{HookID: h.ID, HookVersion: h.Version}}
+	in.Hooks[h.Key()] = h
+}
+
+// echoSNInPost 在正文的 %post 里加一行 echo {{sys:sn}}：SN 里的空格会把它拆成几个参数，引号、<、&
+// 会让这段 shell 出语法错，或者去读文件、另起一条命令。
+func echoSNInPost(t *testing.T, in *params.Input) {
+	t.Helper()
+	replaceInBody(t, in, "%post\n", "%post\necho {{sys:sn}} >/etc/lober-sn\n")
+}
+
+// {{sys:sn}} 把主机 SN 原样代入正文与片段，渲染不解析语法、不知道该按什么位置转义（C18）；SN 的
+// 登记规则却收空格和任意可打印 ASCII。空格会把 kickstart、preseed 的指令和 shell 参数拆开，引号、
+// <>&、# 会破坏 JSON、XML、YAML 的结构，这类错要等机器装到一半才暴露。所以模板正文或按 ISO 的系
+// 选中的片段引用了 {{sys:sn}}、而 SN 不是安全词时，报一条落在这台主机上的问题，不产出快照。
+func TestBuild引用sys_sn而SN不是安全词时不产出快照(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(t *testing.T, in *params.Input)
+	}{
+		{"模板正文引用", echoSNInPost},
+		{"所选片段引用", useSNHostname},
+		// 引用了几处都只报一条：问题出在这台主机的 SN 上。
+		{"正文与片段都引用", func(t *testing.T, in *params.Input) {
+			echoSNInPost(t, in)
+			useSNHostname(t, in)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			for _, sn := range unsafeSNs {
+				t.Run(sn, func(t *testing.T) {
+					in := withSN(t, baselineInput("rocky"), sn)
+					c.edit(t, &in)
+					ps := mustFail(t, in, hostAt("sn_unsafe_in_body", sn))
+					if !strings.Contains(ps[0].Message, "「"+sn+"」") {
+						t.Errorf("说明应点出这台主机的 SN：%s", ps[0].Message)
+					}
+				})
+			}
+		})
+	}
+	// SN 查的是即将产出的快照：参数求值有问题时没有快照可查，原样返回参数求值的问题，不另加这一条；
+	// 取值都改对了，再构建时才报 SN。
+	t.Run("参数求值也有问题", func(t *testing.T) {
+		in := withSN(t, baselineInput("rocky"), unsafeSNs[0])
+		echoSNInPost(t, &in)
+		delete(in.Host.Attrs, "disk")
+		want := params.Evaluate(in).Problems
+		if len(want) != 1 || want[0].Code != "param_attr_missing" {
+			t.Fatalf("这组输入的参数求值应只有一个 param_attr_missing：%v", want)
+		}
+		snap, got := Build(in)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("问题是\n%v\n应原样是参数求值的\n%v", got, want)
+		}
+		if !reflect.DeepEqual(snap, model.Snapshot{}) {
+			t.Errorf("有问题时不应产出快照，得到 %+v", snap)
+		}
+	})
+}
+
+// 不引用 {{sys:sn}} 的照常构建：SN 的登记规则不动，只有代入正文与片段时才要求它是安全词。片段只看
+// 按 ISO 的系选中的那一份；脚本的正文原样下发、不展开占位符（网关按摘要放行，机器侧按摘要校验），
+// 里面字面写着 {{sys:sn}} 也不算引用。SN 是安全词时，正文与片段照常引用它。
+func TestBuild不引用sys_sn时SN不是安全词也照常构建(t *testing.T) {
+	cases := []struct {
+		name   string
+		series catalog.Series
+		edit   func(t *testing.T, in *params.Input)
+	}{
+		{"正文与片段都不引用", "rocky", func(*testing.T, *params.Input) {}},
+		{"引用它的片段没被选中", "almalinux", useSNHostname},
+		{"只有脚本里字面写着", "rocky", func(_ *testing.T, in *params.Input) {
+			nic := nicHook()
+			nic.Impls[0].Body += "echo {{sys:sn}}\n"
+			in.Hooks = hookMap(diskHook(), sshHook(), nic)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			for _, sn := range unsafeSNs {
+				t.Run(sn, func(t *testing.T) {
+					in := withSN(t, baselineInput(c.series), sn)
+					c.edit(t, &in)
+					if snap := mustBuild(t, in); snap.Host.SN != sn {
+						t.Errorf("快照里的 SN 是 %q，应原样为 %q", snap.Host.SN, sn)
+					}
+				})
+			}
+		})
+	}
+	t.Run("SN 是安全词", func(t *testing.T) {
+		in := baselineInput("rocky")
+		echoSNInPost(t, &in)
+		useSNHostname(t, &in)
+		if snap := mustBuild(t, in); snap.Host.SN != hostSN {
+			t.Errorf("快照里的 SN 是 %q，应为 %q", snap.Host.SN, hostSN)
+		}
+	})
 }
 
 // 同样的输入得到深度相等的快照，用 encoding/json 编码字节相同（第 2 层按 JSON 存它）。输入里的

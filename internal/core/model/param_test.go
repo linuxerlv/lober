@@ -428,6 +428,30 @@ func TestParse受限类型拒收能改变结构的字符(t *testing.T) {
 	}
 }
 
+// IsSafeWord 是安全词唯一的一份判定：word 等类型的取值、enum 的选项值，以及快照构建对 {{sys:sn}}
+// 要代入的 SN，都按它查，别处不另抄字符集。字符按 0x00–0x7F 逐个与计划的 [A-Za-z0-9._:/@^+=-]
+// 比对，再加几个非 ASCII 字符；长度为 1–128。
+func TestIsSafeWord与计划的字符集和长度一致(t *testing.T) {
+	for r := range rune(0x80) {
+		s := "a" + string(r) + "b"
+		if got, want := IsSafeWord(s), onlyBodySafe("word", s); got != want {
+			t.Errorf("IsSafeWord(%q) = %v，应为 %v", s, got, want)
+		}
+	}
+	// 非 ASCII 的三个：不换行空格（U+00A0）、全角的 a（U+FF41）、汉字。
+	nonASCII := []string{"a" + string(rune(0x00a0)) + "b", string(rune(0xff41)), "名"}
+	for _, s := range append([]string{"", strings.Repeat("w", 129), "VMWARE-42 1A"}, nonASCII...) {
+		if IsSafeWord(s) {
+			t.Errorf("IsSafeWord(%q) 应为 false", s)
+		}
+	}
+	for _, s := range []string{"w", strings.Repeat("w", 128), "VMWARE-42-1A", "Asia/Shanghai", "ops@lab:a^b+c=d_e.f"} {
+		if !IsSafeWord(s) {
+			t.Errorf("IsSafeWord(%q) 应为 true", s)
+		}
+	}
+}
+
 // 计划点名的规范化：同一个值只有一种写法，向导里预填的、快照里存的、正文里渲染的都是它。
 func TestParse规范化(t *testing.T) {
 	cases := []struct {

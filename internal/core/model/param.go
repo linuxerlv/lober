@@ -104,7 +104,7 @@ func (d ParamDecl) optionsOK() bool {
 	}
 	seen := make(map[string]bool, len(d.Options))
 	for _, o := range d.Options {
-		if !isSafeWord(o.Value) || seen[o.Value] {
+		if !IsSafeWord(o.Value) || seen[o.Value] {
 			return false
 		}
 		seen[o.Value] = true
@@ -236,14 +236,17 @@ func EnvName(param string) string {
 	return "LOBER_PARAM_" + strings.ToUpper(param)
 }
 
-// isSafeWord 判断安全词：1–128 个 [A-Za-z0-9._:/@^+=-]。它不含引号、空白、$、#、%、<>&、
+// IsSafeWord 判断安全词：1–128 个 [A-Za-z0-9._:/@^+=-]。它不含引号、空白、$、#、%、<>&、
 // 反斜杠和花括号，放进七种格式里带引号的位置、XML 文本、kickstart 与 preseed 的指令值、
 // shell 参数，都不会改变结构，也拼不出占位符或 Jinja 表达式。放宽任何一个字符，都要先在
 // 七种格式的文本、引号和 shell 位置里逐一确认。
 //
+// 这是安全词唯一的一份判定：参数取值与 enum 选项值按它查，快照构建也按它查 {{sys:sn}} 要代入
+// 的主机 SN（SN 的登记规则比它宽），别处不另抄字符集。
+//
 // 结构不变不等于语义不变：YAML 裸值不能以 @ 开头，以 : 结尾会被读成映射键，这些由作者
 // 按格式留意（计划任务 6 的「安全词」）。
-func isSafeWord(s string) bool {
+func IsSafeWord(s string) bool {
 	if s == "" || len(s) > safeWordMaxLen {
 		return false
 	}
@@ -260,7 +263,7 @@ func isASCIIAlnum(c byte) bool {
 }
 
 func parseWord(_ ParamDecl, s string) (string, bool) {
-	return s, isSafeWord(s)
+	return s, IsSafeWord(s)
 }
 
 // parseInt 收十进制 int64，可带正负号和前导零，规范形式两者都不带。
@@ -275,7 +278,7 @@ func parseInt(d ParamDecl, s string) (string, bool) {
 // parseEnum 只认选项值，区分大小写。选项取自 ISO 时这里只查是不是安全词，在不在该 ISO
 // 的集合里要对照具体的 ISO，由参数求值查（C21）。
 func parseEnum(d ParamDecl, s string) (string, bool) {
-	if !isSafeWord(s) {
+	if !IsSafeWord(s) {
 		return "", false
 	}
 	if len(d.Options) == 0 {
@@ -331,7 +334,7 @@ func parseHostname(_ ParamDecl, s string) (string, bool) {
 // 这类路径借着 /dev/ 前缀混进分区指令。
 func parseDiskPath(_ ParamDecl, s string) (string, bool) {
 	rest, ok := strings.CutPrefix(s, "/dev/")
-	if !ok || !isSafeWord(s) {
+	if !ok || !IsSafeWord(s) {
 		return "", false
 	}
 	for seg := range strings.SplitSeq(rest, "/") {
@@ -367,7 +370,7 @@ func parseSSHKey(_ ParamDecl, s string) (string, bool) {
 		}
 		fields = append(fields, f)
 	}
-	if len(fields) < 2 || (len(fields) == 3 && !isSafeWord(fields[2])) {
+	if len(fields) < 2 || (len(fields) == 3 && !IsSafeWord(fields[2])) {
 		return "", false
 	}
 	algo, key := fields[0], fields[1]

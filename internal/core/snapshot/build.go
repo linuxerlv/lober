@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/core/params"
 	"github.com/lober/lober/internal/core/scan"
@@ -23,6 +24,10 @@ import (
 //     接着求值只会多出一串因它而起的 impl_missing_for_series。
 //   - 某个实例没有覆盖该系的实现，或引用的 hook 不在 in.Hooks 里：参数求值会报
 //     impl_missing_for_series 或 hook_ref_missing。
+//
+// 取值都通过之后，构建出的快照还要过一道 {{sys:sn}} 的检查（见 unsafeSN）：正文或所选片段引用了
+// 它、而主机 SN 不是安全词时报 sn_unsafe_in_body，不产出快照。准入判定与参数求值都不查这一条；
+// 建任务与预览都要经这里构建快照，所以都在装机之前被拒。
 //
 // 同样的输入得到深度相等的快照，用 encoding/json 编码两次字节相同：列表按正文与装配表的顺序，
 // map 由 encoding/json 按键排序。快照里的 map 与切片都是新建的，不与入参共用；没有内容的也给
@@ -41,7 +46,7 @@ func Build(in params.Input) (model.Snapshot, []model.Problem) {
 	for _, f := range res.Fields {
 		b.fields[f.Key] = f
 	}
-	return model.Snapshot{
+	snap := model.Snapshot{
 		Schema: model.SnapshotSchema,
 		// 族与格式由系推出：系的格式发布后不会变，三者在快照里不会互相矛盾。
 		Family: series.Family(),
@@ -59,7 +64,52 @@ func Build(in params.Input) (model.Snapshot, []model.Problem) {
 			ID: t.ID, Version: t.Version, Name: t.Name, Body: t.Body, Params: b.valuesOf("tpl/", t.Params),
 		},
 		Slots: b.slots(),
-	}, nil
+	}
+	if ps := unsafeSN(snap); len(ps) > 0 {
+		return model.Snapshot{}, ps
+	}
+	return snap, nil
+}
+
+// sysSN 是代入主机 SN 的系统值。
+const sysSN catalog.SystemValue = "sn"
+
+// unsafeSN 查 {{sys:sn}}：快照的模板正文或片段实例引用了它、而主机 SN 不是安全词时，报一条
+// sn_unsafe_in_body，落在这台主机上；引用了几处都只报这一条。
+//
+// SN 的登记规则（model.NormalizeSN）收空格和任意可打印 ASCII，渲染又不解析语法、不知道该按什么
+// 位置转义（C18），只能原样代入：空格会把指令和 shell 参数拆开，引号、<>&、#、「冒号加空格」会
+// 破坏 JSON、XML、YAML 的结构，$( 与反引号落在 shell 里还会被执行。进正文与片段的参数只能是取值
+// 不改变结构的受限类型（C19），SN 来自用户输入，进正文与片段时也守这条规矩，按安全词查；不引用
+// 它的模板不受影响，登记规则也不因此收紧。
+//
+// 查的就是渲染要展开的那几份：快照里的模板正文，以及按 ISO 的系选中的片段（种类不认识的也算，
+// 与 instance 一致）。脚本不查：它的正文原样下发、不展开占位符，网关按摘要放行，机器侧按摘要校验。
+func unsafeSN(snap model.Snapshot) []model.Problem {
+	if model.IsSafeWord(snap.Host.SN) || !refersSN(snap) {
+		return nil
+	}
+	subject := model.Subject{Kind: "host", ID: snap.Host.SN}
+	return []model.Problem{model.NewProblem("sn_unsafe_in_body", subject, snap.Host.SN)}
+}
+
+// refersSN 报告快照的模板正文或片段实例里有没有 {{sys:sn}}。写错的占位符扫描时留在原文段里，
+// 不算引用。
+func refersSN(snap model.Snapshot) bool {
+	bodies := []string{snap.Template.Body}
+	for _, s := range snap.Slots {
+		for _, inst := range s.Instances {
+			if inst.Kind != model.ImplScript {
+				bodies = append(bodies, inst.Body)
+			}
+		}
+	}
+	for _, body := range bodies {
+		if res, _ := scan.Scan(body); slices.Contains(res.Sys, sysSN) {
+			return true
+		}
+	}
+	return false
 }
 
 // builder 在参数求值通过之后整理快照：values 是求出的最终取值，fields 是表单的各格，都按字段键查。
