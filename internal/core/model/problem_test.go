@@ -46,6 +46,18 @@ var appendixCodes = map[Category][]Code{
 var extraCodes = map[Code]Category{
 	// 整层验收：{{sys:sn}} 要代入的主机 SN 不是安全词，由 snapshot.Build 报。
 	"sn_unsafe_in_body": CategoryIncompatible,
+
+	// 第 1 层修补轮（plans/2026-10-02-layer1-fixups.md「新增代码」），括号里是清单条目。
+	"text_not_storable":               CategoryInvalid,      // 自由文本不是合法的 UTF-8 或含 NUL（T13-10）
+	"iso_incomplete":                  CategoryState,        // ISO.Validate 不通过（L-6）
+	"host_platform_invalid":           CategoryInvalid,      // 主机登记的架构或固件不合法（T4-1）
+	"impl_kind_unknown":               CategoryIncomplete,   // 实现的种类不认识（T7-2）
+	"binding_source_unknown":          CategoryIncomplete,   // 取值来源不认识（T7-2）
+	"param_locked_without_value":      CategoryIncomplete,   // 锁在默认值上却没有默认值（L-4）
+	"script_placeholder_not_expanded": CategoryIncomplete,   // 脚本里写了 lober 的占位符（L-1）
+	"param_attr_unusable":             CategoryIncompatible, // 锁定取自主机属性的格子取值用不了（T11-8）
+	"param_sub_unavailable":           CategoryInvalid,      // 填的值取不出模板要的子值（T11-8）
+	"iso_import_failed":               CategoryState,        // ISO 导入失败（T5-1）
 }
 
 func TestCode表与附录总表逐项一致(t *testing.T) {
@@ -66,6 +78,10 @@ func TestCode表与附录总表逐项一致(t *testing.T) {
 			t.Fatalf("追加的 %s 已在附录里", c)
 		}
 		want[c] = cat
+	}
+	// 附录 58 个、整层验收 1 个、修补轮 10 个。以后再追加代码，这个数要跟着改。
+	if len(want) != 69 {
+		t.Fatalf("附录加上追加的代码应共 69 个，测试里有 %d 个", len(want))
 	}
 	for c, cat := range want {
 		if got := c.Category(); got != cat {
@@ -125,6 +141,74 @@ func TestCode参数取值的格式按十种类型登记(t *testing.T) {
 	for _, typ := range types {
 		if strings.TrimSpace(paramValueFormats[typ]) == "" {
 			t.Errorf("类型 %s 没有登记期望的格式", typ)
+		}
+	}
+}
+
+// 修补轮新增与改写的代码，参数个数照修补计划。别的包按这些个数调用 NewProblem，个数一变，
+// 并入时就会 panic；改写说明时不许顺手改个数，所以改写的几条也钉在这里。
+func TestCode修补轮登记的参数个数(t *testing.T) {
+	cases := []struct {
+		code Code
+		args int
+	}{
+		// 新增
+		{"text_not_storable", 0},
+		{"iso_incomplete", 1},
+		{"host_platform_invalid", 2},
+		{"impl_kind_unknown", 1},
+		{"binding_source_unknown", 2},
+		{"param_locked_without_value", 1},
+		{"script_placeholder_not_expanded", 1},
+		{"param_attr_unusable", 2},
+		{"param_sub_unavailable", 2},
+		{"iso_import_failed", 0},
+		// 只改说明，个数不变
+		{"name_invalid", 1},
+		{"param_decl_invalid", 1},
+		{"param_value_invalid", 2},
+		{"impl_series_invalid", 0},
+		{"template_series_invalid", 0},
+		{"placeholder_unclosed", 0},
+		{"iso_not_ready", 1},
+		{"template_not_approved", 1},
+	}
+	for _, c := range cases {
+		spec, ok := codeTable[c.code]
+		switch {
+		case !ok:
+			t.Errorf("%s 没有登记", c.code)
+		case spec.args != c.args:
+			t.Errorf("%s 登记了 %d 个参数，修补计划定的是 %d 个", c.code, spec.args, c.args)
+		}
+	}
+}
+
+// int 声明了上下限时，Parse 把 intRange* 之一填好数字、接在 int 的格式后面（T5-4①），操作员
+// 看到的就是下面这几句。钉住拼法：措辞自己带着连接用的逗号，接上去不会多一个或少一个。
+func TestCode的int范围措辞接在格式后面(t *testing.T) {
+	cases := []struct {
+		wording string
+		args    []any
+		want    string
+	}{
+		{intRangeMin, []any{int64(1)}, "十进制整数，不小于 1"},
+		{intRangeMax, []any{int64(-1)}, "十进制整数，不大于 -1"},
+		{intRangeBoth, []any{int64(1), int64(4094)}, "十进制整数，在 1 到 4094 之间"},
+	}
+	for _, c := range cases {
+		if got := paramValueFormats["int"] + fmt.Sprintf(c.wording, c.args...); got != c.want {
+			t.Errorf("拼出来是 %q，应为 %q", got, c.want)
+		}
+	}
+}
+
+// iso_incomplete、host_platform_invalid 的参数是字段的中文称呼，按 Subject.Path 里的字段名查
+// fieldLabels。ISO.Validate 与 Host.Validate 用到的字段都要有称呼：查不到就是空串，说明里会缺一截。
+func TestCode字段称呼覆盖ISO与主机校验的字段(t *testing.T) {
+	for _, field := range []string{"family", "series", "arch", "version", "name", "offers", "firmware"} {
+		if strings.TrimSpace(fieldLabels[field]) == "" {
+			t.Errorf("字段 %s 没有登记中文称呼", field)
 		}
 	}
 }

@@ -12,8 +12,10 @@ type codeSpec struct {
 // codeTable 按计划附录「原因代码总表」一次登记全部代码，分组照定义该代码的任务。
 // 每项上方的注释写何时产生，以及各个参数是什么。
 //
-// 全层的中文说明只写在本文件里，参数只放数据：标识、名字或显示名、取值、数字、
-// 占位符原文。一个代码有几种原因时，说明把条件写全；只有产出它的函数在本包里、
+// 全层的中文说明只写在本文件里，参数只放数据：目录里的值（族、系、格式、时机、解释器、
+// 部件、系统值、架构、固件）传标识，作者在正文和占位符里写的就是它，对照报错好找；状态传
+// 中文显示名（ISOState、VersionState 的 Label；不认识的状态 Label 为空，回落到标识）；其余是
+// 名字或显示名、取值、数字、占位符原文。一个代码有几种原因时，说明把条件写全；只有产出它的函数在本包里、
 // 可选的措辞又是固定几种的，才把每种措辞登记在文件末尾，由那个函数选一条作参数。
 // 之后的任务只产出这些代码，不在别处写中文说明；确需新代码时追加在本表末尾。
 var codeTable = map[Code]codeSpec{
@@ -27,27 +29,36 @@ var codeTable = map[Code]codeSpec{
 	"sn_placeholder": {CategoryInvalid, 1,
 		"SN「%[1]v」是主板出厂时的占位值，不能用来区分机器",
 		"到 BIOS 或 BMC 里查这台机器真实的序列号再登记；厂商没写序列号的，先给机器刷入唯一的 SN"},
-	// 名称为空、超长、含控制字符或不可见字符，或不是合法的 UTF-8。
+	// 模板、hook 的名称为空、超长，或含可打印 ASCII（0x21–0x7E）以外的字符：空格等空白、中文、
+	// 全角字符、控制字符与不可见字符，以及非法的 UTF-8 字节（T5-3）。
 	// 参数：原因，取文件末尾的 nameReason* 之一。
 	"name_invalid": {CategoryInvalid, 1,
 		"名称不合法：%[1]v",
-		"名称要 1–64 个字（一个汉字算一个），不能含控制字符或不可见字符"},
+		"名称要 1–64 个英文字母、数字或美式键盘上可见的符号，不能有空格、中文或其他字符；" +
+			"单词之间可以用 - 或 _ 连接，比如 Rocky-Base"},
 
 	// —— 任务 6：参数类型与取值 ——
 
-	// 参数声明本身不合法：名字不是标识符或重名、类型不认识、text 声明成列表、默认值通不过
-	// 校验、enum 的选项值不是安全词、Options 与 Offer 同给、int 的下限大于上限。参数：参数名。
+	// 参数声明本身不合法（T5-4②）：名字不是标识符或重名；类型不认识，或 text 声明成列表；默认值
+	// 通不过校验，或不是原样的规范形式；enum 既没给 Options 也没给 Offer、两样都给，或 Offer 不是
+	// 标识符；选项值不是安全词或有重复；Options、Offer 给了 enum 以外的类型，Min、Max 给了 int 以外
+	// 的类型，或下限大于上限；显示名不合格（ValidLabel：参数的显示名可以留空，选项的不能）。
+	// 参数：参数名。
 	"param_decl_invalid": {CategoryInvalid, 1,
-		"参数「%[1]v」的声明不合法：名字、类型、是否列表、默认值、选项或上下限有不符合规则的地方",
+		"参数「%[1]v」的声明不合法：名字、显示名、类型、是否列表、默认值、选项或上下限有不符合规则的地方",
 		"名字要以小写字母开头，只含小写字母、数字和下划线，最长 32 个字符，且不与其他参数重名；" +
 			"类型只能是 word、int、enum、ip、cidr、hostname、diskpath、sshkey、pwhash、text，text 不能声明成列表；" +
-			"默认值要能通过这个参数自己的校验；enum 的选项值要是安全词，静态选项和 ISO 提供的集合只能给一种；" +
-			"int 的下限不能大于上限"},
-	// 取值通不过类型校验，或不在静态选项里。
-	// 参数：参数名、期望的格式（按参数类型取文件末尾 paramValueFormats 里的那一条）。
+			"默认值要能通过这个参数自己的校验，并且原样写成规范形式：整数不带正号和前导零，主机名小写，" +
+			"IPv6 用小写的压缩写法，sshkey 的各段只隔一个空格，除 text 外不带首尾空白，列表每行一项、不留空行、末尾不带换行；" +
+			"enum 要给静态选项或 ISO 提供的集合，只能给一种，集合名的写法同参数名，选项值是互不重复的安全词；" +
+			"静态选项和集合只能给 enum，上下限只能给 int，下限不能大于上限；" +
+			"参数的显示名可以留空，选项的显示名不能为空，显示名最多 64 个字，首尾不能是空白，不能含控制字符或不可见字符"},
+	// 取值通不过类型校验，或不在静态选项里。参数：参数的称呼（参数名；参数求值经 ParseNamed 传
+	// 显示名）、期望的格式（按参数类型取文件末尾 paramValueFormats 里的那一条，int 声明了上下限的
+	// 再接上 intRange* 之一）。
 	"param_value_invalid": {CategoryInvalid, 2,
 		"参数「%[1]v」的取值不合法：应为%[2]v",
-		"按说明里的格式重新填写；列表参数每行一项，共 1–256 项"},
+		"按说明里的格式重新填写；列表参数每行一项，共 1–256 项，整个列表合计不超过 32767 字节（不算空行和每项首尾的空白）"},
 	// 子值或 |join 用在了不支持它的值上（IPv6 取 netmask、非 cidr 取子值、非列表用 |join）。
 	// 参数：写出的子值名或 |join。
 	"param_accessor_invalid": {CategoryInvalid, 1,
@@ -71,10 +82,11 @@ var codeTable = map[Code]codeSpec{
 		"占位符「%[1]v」写法不对：名字、时机、子值或 |join 不合语法",
 		"对照占位符语法改正，例如 {{slot:分区}}、{{slot:装后配置@post-target}}、{{param:addr.netmask}}、{{param:pkgs|join}}；" +
 			"插槽名是 1–32 个字母（含中文）、数字、_ 或 -，参数名以小写字母开头，只含小写字母、数字和下划线"},
-	// 同一行里没有 }}。
+	// 同一行里，在 }} 或下一个 {{ 之前没有闭合（T8-1）：同一行里没有 }}，或者 }} 之前又出现了
+	// {{。lober 占位符的内容不可能合法地含有 {{，扫描就在那里截断，从内层的 {{ 接着扫。
 	"placeholder_unclosed": {CategoryInvalid, 0,
-		"占位符在这一行里没有闭合",
-		"在同一行里补上 }}，占位符不能跨行；要原样输出 {{，写成 {{sys:lbrace}}"},
+		"占位符没有闭合：同一行里、下一个 {{ 之前没有 }}",
+		"在同一行里补上 }}，占位符不能跨行，里面也不能再套 {{；要原样输出 {{，写成 {{sys:lbrace}}"},
 	// 执行插槽 @ 后的时机不认识。参数：写出的时机。
 	"timing_unknown": {CategoryInvalid, 1,
 		"不认识的执行时机「%[1]v」",
@@ -93,10 +105,10 @@ var codeTable = map[Code]codeSpec{
 	"hook_no_impl": {CategoryIncomplete, 0,
 		"hook 还没有任何实现",
 		"至少写一份实现：选一个族和该族下的系，再写片段或脚本"},
-	// 实现的族不合法，没勾系，系不合法或不属于该族。
+	// 实现的族不合法，没勾系，系不合法、不属于该族，或同一个系勾了两次（T9-4）。
 	"impl_series_invalid": {CategoryIncomplete, 0,
-		"实现的族或系不对：族不合法、没勾系，或者勾了不合法、不属于这个族的系",
-		"给这份实现选一个合法的族，再勾该族下的一个或多个系"},
+		"实现的族或系不对：族不合法、没勾系，勾了不合法、不属于这个族的系，或重复勾选了同一个系",
+		"给这份实现选一个合法的族，再勾该族下的一个或多个系，每个系只勾一次"},
 	// 同一个系出现在不止一份实现里。参数：系。
 	"impl_series_overlap": {CategoryIncomplete, 1,
 		"系「%[1]v」出现在不止一份实现里",
@@ -144,10 +156,10 @@ var codeTable = map[Code]codeSpec{
 		"把超时改成 1 到 21600 秒（6 小时）之间的整数"},
 
 	// —— 任务 10：模板的激活判定与审批人 ——
-	// 模板没选族、没勾系，系不合法或不属于该族。
+	// 模板没选族、没勾系，系不合法、不属于该族，或同一个系勾了两次（T9-4）。
 	"template_series_invalid": {CategoryIncomplete, 0,
-		"模板的族或系不对：没选族、族不合法、没勾系，或者勾了不合法、不属于这个族的系",
-		"先选族，再勾该族下至少一个系；没勾系的模板不能激活"},
+		"模板的族或系不对：没选族、族不合法、没勾系，勾了不合法、不属于这个族的系，或重复勾选了同一个系",
+		"先选族，再勾该族下至少一个系，每个系只勾一次；没勾系的模板不能激活"},
 	// 模板勾的系不同格式。参数：涉及的格式（调用方用顿号连好）。
 	"template_mixed_formats": {CategoryIncomplete, 1,
 		"模板勾的系不是同一种格式：%[1]v",
@@ -249,13 +261,15 @@ var codeTable = map[Code]codeSpec{
 	"host_has_open_task": {CategoryState, 0,
 		"这台主机已有未结束的任务",
 		"等那个任务结束，或先取消它"},
-	// ISO 不可用；已废弃也归这里。参数：现状（获取中、导入中、导入失败、已废弃）。
+	// ISO 不可用：获取中、导入中、已废弃，或状态不认识；导入失败不归这里，另报 iso_import_failed
+	// （T5-1）。参数：状态的中文显示名（ISOState.Label，为空时回落到标识）。已废弃的 ISO 不能再
+	// 被新引用（C26），所以下一步要把它与「等它导入完成」分开说。
 	"iso_not_ready": {CategoryState, 1,
-		"ISO 不可用：%[1]v",
+		"ISO 不可用：现为「%[1]v」",
 		"等它导入完成后再用，或换一个可用的 ISO；已废弃的 ISO 不能再用来建任务"},
-	// 模板版本不是已审批。参数：当前状态。
+	// 模板版本不是已审批。参数：状态的中文显示名（VersionState.Label，为空时回落到标识，T5-1）。
 	"template_not_approved": {CategoryState, 1,
-		"模板的这个版本不是已审批状态（现为 %[1]v）",
+		"模板的这个版本不是已审批状态（现为「%[1]v」）",
 		"先审批这个版本；向导里每个模板只提供它当前的已审批版本"},
 	// ISO 的架构与主机登记的不符。参数：ISO 架构、主机架构。
 	"arch_mismatch": {CategoryIncompatible, 2,
@@ -287,11 +301,72 @@ var codeTable = map[Code]codeSpec{
 		"主机 SN「%[1]v」不是安全词，原样代入模板正文或所选片段里的 {{sys:sn}} 可能改变应答文件的结构",
 		"能代入 {{sys:sn}} 的 SN 只能由字母、数字和 ._:/@^+=- 组成，不能有空格；给这台主机换一个不引用 {{sys:sn}} 的模板，" +
 			"或在模板正文与片段里去掉 {{sys:sn}}、改用取自主机属性的 word 参数，审批后再建任务"},
+
+	// —— 第 1 层修补轮追加（plans/2026-10-02-layer1-fixups.md「新增代码」，括号里是遗留问题清单的条目） ——
+
+	// 自由文本存不下（StorableText 为假，T13-10）：不是合法的 UTF-8，或含 NUL。PostgreSQL 的 text 与
+	// jsonb 都不收 NUL，encoding/json 又会把非法字节换成 U+FFFD，存进去再取出来就不是原来的字节。
+	// 激活判定查正文与说明，ISO 与主机的校验查名称与属性值，第 5 层保存时查全部自由文本；Subject
+	// 指向那个字段。
+	"text_not_storable": {CategoryInvalid, 0,
+		"文本存不下：不是合法的 UTF-8，或者含有 NUL 字符",
+		"改成 UTF-8 编码的文本再保存，并去掉其中的 NUL 字符；Windows 上编辑的 .ps1、.cmd 常存成 UTF-16 或 GBK，要先转成 UTF-8"},
+	// ISO 的记录不合法（ISO.Validate 不通过，L-6）：族、系、架构、版本不合法，或提供的集合里集合名
+	// 不是标识符、选项值不是安全词或有重复、选项的显示名不合格；名称存不下另报 text_not_storable。
+	// ready 却不合法的 ISO 在准入时也报它。参数：字段的中文称呼，按 Subject.Path 里的字段名取文件
+	// 末尾 fieldLabels 里的那一条。
+	"iso_incomplete": {CategoryState, 1,
+		"ISO 的记录不完整：%[1]v不合法",
+		"重新导入这个 ISO，仍然不行就删掉后重新创建；也可以换一个可用的 ISO"},
+	// 主机登记的架构或固件非空，却不是合法取值（T4-1）：大小写不对、写成了别名，或存了 iPXE 的
+	// 上报值。参数：字段的中文称呼（取 fieldLabels）、登记的取值。
+	"host_platform_invalid": {CategoryInvalid, 2,
+		"主机登记的%[1]v「%[2]v」不是合法取值",
+		"架构只能填 x86_64 或 aarch64，固件只能填 bios 或 uefi，区分大小写；iPXE 上报的 i386、arm64 分别对应 x86_64、aarch64，" +
+			"pcbios、efi 分别对应 bios、uefi。不确定就留空：留空的建任务时不比对，引导时按机器实际上报的值校验"},
+	// 实现的种类既不是 fragment，也不是 script，含空串（T7-2）。界面上选不出这种值，只会来自直接
+	// 调接口或库里的坏数据。参数：种类。
+	"impl_kind_unknown": {CategoryIncomplete, 1,
+		"实现的种类「%[1]v」不认识",
+		"实现只有片段（fragment）和脚本（script）两种；给这份实现选其中一种"},
+	// 取值来源既不是 fixed、attr，也不是 default，含零值（比如 JSON 里漏了 Source，T7-2）。
+	// 参数：参数名、来源。
+	"binding_source_unknown": {CategoryIncomplete, 2,
+		"参数「%[1]v」的取值来源「%[2]v」不认识",
+		"取值来源只有写死的值（fixed）、主机属性（attr）和声明的默认值（default）三种；给这个参数重新选一种"},
+	// 参数按参数求值的规则必填（被正文或所选片段引用，或是脚本声明的 Required），取值来源却锁定在
+	// 默认值上、声明里又没有默认值（L-4）：向导里这一格锁着填不了，每台主机都会报 param_required。
+	// 参数：参数名。
+	"param_locked_without_value": {CategoryIncomplete, 1,
+		"参数「%[1]v」必填，取值来源却锁定在默认值上，而它的声明里没有默认值",
+		"给这个参数的声明补上默认值，或在装配表里改用写死的值、主机属性，或者设成向导里可改"},
+	// 脚本正文里出现了 slot、lober、sys、param 四种占位符，写错的同种类也算（L-1）：脚本按原样
+	// 下发，这些占位符永远不会被替换。参数：占位符原文。
+	"script_placeholder_not_expanded": {CategoryIncomplete, 1,
+		"脚本里的「%[1]v」不会被替换：脚本按原样下发，不展开 lober 的占位符",
+		"参数改从环境变量取，变量名是 LOBER_PARAM_ 加大写的参数名（{{param:disk}} 对应 LOBER_PARAM_DISK），其余占位符删掉；" +
+			"确实要写出这串字符，就把 {{ 拆开拼接，{{sys:lbrace}} 在脚本里同样不会展开"},
+	// 锁定、取自主机属性的格子，这台主机登记的值通不过参数的类型校验，或取不出正文与所选片段要用
+	// 的子值（如登记的是 IPv6，片段取 .netmask，T11-8）。这一格操作员改不了，要改的是主机登记。
+	// 参数：参数的显示名、属性键。
+	"param_attr_unusable": {CategoryIncompatible, 2,
+		"参数「%[1]v」锁定取自主机属性「%[2]v」，这台主机登记的值用不了：格式不对，或取不出模板要用的部分",
+		"到主机登记里改正这台主机的属性「%[2]v」"},
+	// 可改的格子填的值取不出正文与所选片段要用的子值（如填了 IPv6，模板取 .netmask，T11-8）。
+	// 参数：参数的显示名、子值名。
+	"param_sub_unavailable": {CategoryInvalid, 2,
+		"参数「%[1]v」填的值取不出模板要用的「%[2]v」",
+		"改填一个取得出「%[2]v」的值（netmask 只有 IPv4 地址才有）"},
+	// ISO 处于导入失败状态（T5-1）。导入失败的可以直接重新导入，不用重新获取字节（spec §5.1 第 5 步），
+	// 所以不与 iso_not_ready 共用「等它导入完成」的下一步。
+	"iso_import_failed": {CategoryState, 0,
+		"ISO 导入失败，不能用来建任务",
+		"重新导入这个 ISO，不用重新获取字节；仍然不行就删掉后重新创建，或换一个可用的 ISO"},
 }
 
 // 下面是代码表的补充：产出代码的函数在本包里、可选的措辞（不合法的原因、各类型
-// 期望的格式）又是固定几种的，每种措辞登记在这里，由那个函数选一条作为参数传给
-// NewProblem，自己不写中文。
+// 期望的格式、字段的称呼）又是固定几种的，每种措辞登记在这里，由那个函数选一条作为
+// 参数传给 NewProblem，自己不写中文。
 
 // sn_invalid 的原因，NormalizeSN 选用。
 const (
@@ -303,25 +378,47 @@ const (
 
 // name_invalid 的原因，NormalizeName 选用。
 const (
-	nameReasonNotUTF8   = "不是合法的 UTF-8 文本"
-	nameReasonEmpty     = "为空"
-	nameReasonInvisible = "含控制字符或不可见字符"
-	nameReasonTooLong   = "超过 64 个字"
+	nameReasonEmpty   = "为空"
+	nameReasonSpace   = "中间有空格或其他空白"
+	nameReasonChar    = "含英文字母、数字和美式键盘上可见的符号以外的字符，比如中文、全角字符或不可见字符"
+	nameReasonTooLong = "超过 64 个字符"
 )
 
 // paramValueFormats 是 param_value_invalid 说明里「期望的格式」，键是参数类型的标识，
-// 内容照计划任务 6 的类型表，由参数取值的 Parse 按声明的类型选用。列表的项数规则
-// 写在该代码的下一步里。
+// 内容照计划任务 6 的类型表，由参数取值的 Parse 按声明的类型选用。列表的项数与总长
+// 规则写在该代码的下一步里；int 的具体范围见下面的 intRange*。
 var paramValueFormats = map[string]string{
 	"word":     "由 1–128 个字母、数字或 ._:/@^+=- 字符组成的串",
-	"int":      "十进制整数，声明了上下限的还要在范围之内",
+	"int":      "十进制整数",
 	"enum":     "列出的选项之一",
 	"ip":       "不带 zone 的 IPv4 或 IPv6 地址，IPv4 的各段不带前导零",
 	"cidr":     "「地址/前缀」的形式，如 10.0.0.3/8",
 	"hostname": "主机名：以点分隔的若干段，每段 1–63 个字母、数字或连字符，不以连字符开头或结尾，总长不超过 253 个字符",
 	"diskpath": "以 /dev/ 开头的磁盘路径，共 1–128 个字母、数字或 ._:/@^+=- 字符",
 	"sshkey": "「算法 公钥 注释」的形式，注释可省；算法限 ssh-ed25519、ssh-rsa、ecdsa-sha2-nistp256、" +
-		"ecdsa-sha2-nistp384、ecdsa-sha2-nistp521、sk-ssh-ed25519@openssh.com、sk-ecdsa-sha2-nistp256@openssh.com",
-	"pwhash": "以 $6$、$5$ 或 $y$ 开头的 crypt 口令散列",
+		"ecdsa-sha2-nistp384、ecdsa-sha2-nistp521、sk-ssh-ed25519@openssh.com、sk-ecdsa-sha2-nistp256@openssh.com；" +
+		"公钥主体解码后不超过 16384 字节",
+	"pwhash": "以 $6$、$5$ 或 $y$ 开头的 crypt 口令散列，不带 rounds=，不超过 256 字节",
 	"text":   "不超过 4096 字节、不含 NUL 的 UTF-8 文本",
+}
+
+// int 声明了上下限时，Parse 按 Min、Max 选下面一条，用 fmt 填入具体的数字，整条接在
+// paramValueFormats["int"] 后面作为「期望的格式」：只说「在范围之内」，操作员不知道范围是多少
+// （T5-4①）。开头已带连接用的逗号，Parse 自己不写中文标点。
+const (
+	intRangeMin  = "，不小于 %[1]v"          // 只声明了下限
+	intRangeMax  = "，不大于 %[1]v"          // 只声明了上限
+	intRangeBoth = "，在 %[1]v 到 %[2]v 之间" // 两端都声明了，含两端
+)
+
+// fieldLabels 是 iso_incomplete、host_platform_invalid 里字段的中文称呼，键是 Subject.Path 里的
+// 字段名；ISO 提供的集合以 offers/<集合名> 定位，称呼查 offers。由 ISO.Validate 与 Host.Validate 选用。
+var fieldLabels = map[string]string{
+	"family":   "族",
+	"series":   "系",
+	"arch":     "架构",
+	"firmware": "固件",
+	"version":  "版本",
+	"name":     "名称",
+	"offers":   "提供的选项集合",
 }

@@ -37,7 +37,7 @@ func partHook() model.Hook {
 	return model.Hook{
 		ID:       "lvm",
 		Version:  3,
-		Name:     "LVM 分区",
+		Name:     "LVM-Partition",
 		State:    model.VersionApproved,
 		Author:   "alice",
 		Approver: "bob",
@@ -56,7 +56,7 @@ func motdHook() model.Hook {
 	return model.Hook{
 		ID:         "motd",
 		Version:    1,
-		Name:       "登录提示",
+		Name:       "Login-Banner",
 		State:      model.VersionApproved,
 		Author:     "alice",
 		Approver:   "bob",
@@ -86,7 +86,7 @@ func goodTemplate() model.Template {
 	return model.Template{
 		ID:      "rhel-base",
 		Version: 2,
-		Name:    "RHEL 系基线",
+		Name:    "RHEL-Baseline",
 		State:   model.VersionReview,
 		Author:  "alice",
 		Family:  "linux",
@@ -206,7 +206,7 @@ func bareTemplate(s catalog.Series, extra string) model.Template {
 	return model.Template{
 		ID:      "bare",
 		Version: 1,
-		Name:    "最小模板",
+		Name:    "Minimal",
 		Family:  s.Family(),
 		Series:  []catalog.Series{s},
 		Body:    body.String(),

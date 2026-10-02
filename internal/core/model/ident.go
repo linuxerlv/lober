@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	snMaxLen     = 64 // 字节数；合法的 SN 只含 ASCII，等于字符数
-	nameMaxRunes = 64 // 按 rune 计，一个汉字算一个
-	identMaxLen  = 32
+	snMaxLen      = 64 // 字节数；合法的 SN 只含 ASCII，等于字符数
+	nameMaxLen    = 64 // 字节数；合法的名称只含 ASCII，等于字符数
+	identMaxLen   = 32
+	labelMaxRunes = 64 // 按 rune 计，一个汉字算一个
 )
 
 // snPlaceholders 是主板与机箱出厂时常见的占位 SN，以规范化后的形式登记。
@@ -73,38 +74,68 @@ func repeatsOneByte(sn string) bool {
 	return sn != "" && strings.Count(sn, sn[:1]) == len(sn)
 }
 
-// NormalizeName 规范化给人看的名称（C12）：去掉首尾空白，内部连续空白压成一个空格。
-// key 是 display 的小写形式，第 2 层按它做唯一约束，所以「Linux 基线」与
-// 「linux 基线」算同名。
+// NormalizeName 规范化模板、hook 的名称（C12）：去掉首尾空白后，必须是 1–64 个可打印 ASCII
+// 字符（0x21–0x7E），即英文字母、数字和美式键盘上可见的 32 个符号（T5-3）。中间的空格、中文、
+// 全角字符和其他非 ASCII 字符一律拒收：标准库没有 Unicode 规范化（NFC、NFKC），é 的合成与分解
+// 两种写法、全角字母、变体选择符这类字符看着一样，key 却不同，会绕过第 2 层按 key 建的唯一约束。
+// 只收 ASCII，看着一样的名字就是同一个串。以后要放宽（比如允许单个空格），只改这里和它的测试。
+//
+// key 是 display 的 ASCII 小写，第 2 层按它做唯一约束，所以「Rocky-Base」与「rocky-base」算同名。
 //
 // 返回的 error 是 Problem，代码为 name_invalid。Subject 留空：名称属于哪个对象
 // 只有调用方知道，由调用方填上。
 func NormalizeName(raw string) (display, key string, err error) {
-	if !utf8.ValidString(raw) {
-		return "", "", nameInvalid(nameReasonNotUTF8)
+	display = strings.TrimSpace(raw)
+	if reason := nameInvalidReason(display); reason != "" {
+		return "", "", NewProblem("name_invalid", Subject{}, reason)
 	}
-	display = strings.Join(strings.Fields(raw), " ")
-	switch {
-	case display == "":
-		return "", "", nameInvalid(nameReasonEmpty)
-	case strings.ContainsFunc(display, invisibleRune):
-		return "", "", nameInvalid(nameReasonInvisible)
-	case utf8.RuneCountInString(display) > nameMaxRunes:
-		return "", "", nameInvalid(nameReasonTooLong)
-	}
-	return display, strings.ToLower(display), nil
+	return display, strings.ToLower(display), nil // 走到这里只剩 ASCII，ToLower 只会动 ASCII 字母
 }
 
-// nameInvalid 的 reason 取 codes.go 登记的 nameReason* 之一。
-func nameInvalid(reason string) error {
-	return NewProblem("name_invalid", Subject{}, reason)
+// nameInvalidReason 返回名称不合法的原因，取 codes.go 登记的 nameReason* 之一；合法时返回空串。
+// 逐个字符查，第一个不合法的字符决定原因；先查字符再查长度，理由同 snInvalidReason。非法的
+// UTF-8 字节按 U+FFFD 读出，归入非 ASCII 字符。
+func nameInvalidReason(name string) string {
+	if name == "" {
+		return nameReasonEmpty
+	}
+	for _, r := range name {
+		switch {
+		case unicode.IsSpace(r):
+			return nameReasonSpace
+		case r < 0x21 || r > 0x7e:
+			return nameReasonChar
+		}
+	}
+	if len(name) > nameMaxLen {
+		return nameReasonTooLong
+	}
+	return ""
 }
 
-// invisibleRune 除了控制字符，还拦零宽空格、BOM 这类格式字符：它们看不见，
-// 却会让两个看着一模一样的名字得到不同的 key，绕过同名约束。
-// 空白在这之前已被压成空格，所以换行、制表符不会走到这里。
-func invisibleRune(r rune) bool {
-	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
+// StorableText 判断自由文本能不能原样存下：合法的 UTF-8，且不含 NUL（T13-10）。PostgreSQL 的
+// text 与 jsonb 都不收 NUL；encoding/json 又会把非法字节换成 U+FFFD，存进去再取出来就不是原来
+// 的字节，按原字节算的摘要也对不上（C35）。NUL 以外的控制字符照存。空串返回 true：空草稿也能存。
+func StorableText(s string) bool {
+	return utf8.ValidString(s) && strings.IndexByte(s, 0) < 0
+}
+
+// ValidLabel 判断参数、选项、状态这类给人看的显示名，可以用中文：存得下（StorableText），
+// 1–64 个字（按 rune 计），首尾不是空白，不含控制字符、格式字符、变体选择符和其他默认不显示的
+// 字符（Cc、Cf、Variation_Selector、Other_Default_Ignorable_Code_Point）。这些字符看不见，却能让
+// 两个看着一样的显示名不同，或在界面上打乱显示。中间的空格照收。空串返回 false：显示名能不能
+// 留空由调用方判断。
+func ValidLabel(s string) bool {
+	if s == "" || !StorableText(s) || utf8.RuneCountInString(s) > labelMaxRunes {
+		return false
+	}
+	first, _ := utf8.DecodeRuneInString(s)
+	last, _ := utf8.DecodeLastRuneInString(s)
+	return !unicode.IsSpace(first) && !unicode.IsSpace(last) && !strings.ContainsFunc(s, hiddenInLabel)
+}
+
+func hiddenInLabel(r rune) bool {
+	return unicode.In(r, unicode.Cc, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point)
 }
 
 // ValidIdent 判断参数名、主机属性键这类标识符：^[a-z][a-z0-9_]{0,31}$。

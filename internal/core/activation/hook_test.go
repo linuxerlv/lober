@@ -35,7 +35,7 @@ func goodHook() model.Hook {
 	return model.Hook{
 		ID:      "lvm",
 		Version: 3,
-		Name:    "LVM 分区",
+		Name:    "LVM-Partition",
 		State:   model.VersionReview,
 		Author:  "alice",
 		Params: []model.ParamDecl{
@@ -284,7 +284,7 @@ func Test脚本的时机该格式不支持(t *testing.T) {
 		{"时机不认识", func(h *model.Hook) { script(h).Timings = []catalog.Timing{"post"} }},
 	})
 	// unattend 没有两个 post 时机。
-	h := model.Hook{ID: "win", Version: 1, Name: "Windows 装后", TimeoutSec: 60, Impls: []model.Impl{{
+	h := model.Hook{ID: "win", Version: 1, Name: "Windows-Post", TimeoutSec: 60, Impls: []model.Impl{{
 		Family: "windows", Series: []catalog.Series{"windows-server"}, Kind: model.ImplScript,
 		Body: "echo ok\r\n", Interpreter: "cmd", Timings: []catalog.Timing{"post-target"},
 	}}}
