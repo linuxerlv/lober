@@ -57,6 +57,97 @@ func TestAuthoring取值的字面量(t *testing.T) {
 	}
 }
 
+// 版本状态的显示名给说明与界面用（T5-1）：每个状态都有，是合格的显示名；不认识的为空串，由调用方
+// 回落到标识。
+func TestVersionState的显示名(t *testing.T) {
+	want := map[VersionState]string{
+		VersionDraft: "草稿", VersionReview: "待审批", VersionApproved: "已审批", VersionDeprecated: "已废弃",
+	}
+	for s, label := range want {
+		if got := s.Label(); got != label || !ValidLabel(got) {
+			t.Errorf("%q.Label() = %q，应为 %q", s, got, label)
+		}
+	}
+	for _, s := range []VersionState{"", "Approved", "approve", "published", "draft "} {
+		if got := s.Label(); got != "" {
+			t.Errorf("不认识的状态 %q 的显示名应为空，得到 %q", s, got)
+		}
+	}
+}
+
+// 这几个取值类型都会进数据库，界面上选不出不认识的值，它们只会来自直接调接口或库里的坏数据
+// （T7-2）。第 2 层建 CHECK 约束、第 5 层保存时拒收，都只调这里的 Valid，不另抄取值表。
+func TestAuthoring取值类型的Valid只认各自的常量(t *testing.T) {
+	for _, s := range []VersionState{VersionDraft, VersionReview, VersionApproved, VersionDeprecated} {
+		if !s.Valid() {
+			t.Errorf("VersionState %q.Valid() 应为 true", s)
+		}
+	}
+	for _, s := range []VersionState{"", "Approved", "approve", "published", "draft "} {
+		if s.Valid() {
+			t.Errorf("VersionState %q.Valid() 应为 false", s)
+		}
+	}
+	for _, k := range []ImplKind{ImplFragment, ImplScript} {
+		if !k.Valid() {
+			t.Errorf("ImplKind %q.Valid() 应为 true", k)
+		}
+	}
+	for _, k := range []ImplKind{"", "Fragment", "SCRIPT", "macro", "script "} {
+		if k.Valid() {
+			t.Errorf("ImplKind %q.Valid() 应为 false", k)
+		}
+	}
+	for _, s := range []BindingSource{BindingFixed, BindingAttr, BindingDefault} {
+		if !s.Valid() {
+			t.Errorf("BindingSource %q.Valid() 应为 true", s)
+		}
+	}
+	// 零值也不算：JSON 里漏了 Source 的取值来源，不能被当成哪一种。
+	for _, s := range []BindingSource{"", "Fixed", "attribute", "default "} {
+		if s.Valid() {
+			t.Errorf("BindingSource %q.Valid() 应为 false", s)
+		}
+	}
+}
+
+// FitsSlot 是插槽适配唯一的一份判定（L-7），激活判定和快照构建都调它：片段只进片段插槽；脚本只进
+// 执行插槽，且要声明这个插槽的时机。种类不对时不再看时机：错的是种类，不连带报时机。
+func TestImplFitsSlot(t *testing.T) {
+	script := Impl{Family: "linux", Series: []catalog.Series{"rocky"}, Kind: ImplScript,
+		Body: "#!/bin/sh\ntrue\n", Interpreter: "sh", Timings: []catalog.Timing{"pre", "post-target"}}
+	fragment := Impl{Family: "linux", Series: []catalog.Series{"rocky"}, Kind: ImplFragment, Body: "part / --grow\n"}
+	type fitCase struct {
+		name   string
+		impl   Impl
+		exec   bool
+		timing catalog.Timing
+		want   Code
+	}
+	cases := []fitCase{
+		{"脚本进声明了该时机的执行插槽", script, true, "post-target", ""},
+		{"脚本进没声明该时机的执行插槽", script, true, "firstboot", "impl_timing_mismatch"},
+		{"片段进执行插槽", fragment, true, "pre", "impl_kind_mismatch"},
+		{"片段进片段插槽", fragment, false, "", ""},
+		{"脚本进片段插槽", script, false, "", "impl_kind_mismatch"},
+		// 片段插槽没有时机，传了也不看。
+		{"片段插槽不看时机", fragment, false, "firstboot", ""},
+	}
+	for _, kind := range []ImplKind{"", "macro", "Script", "FRAGMENT"} {
+		impl := script
+		impl.Kind = kind
+		cases = append(cases,
+			fitCase{"种类「" + string(kind) + "」进执行插槽", impl, true, "firstboot", "impl_kind_mismatch"},
+			fitCase{"种类「" + string(kind) + "」进片段插槽", impl, false, "", "impl_kind_mismatch"},
+		)
+	}
+	for _, c := range cases {
+		if got := c.impl.FitsSlot(c.exec, c.timing); got != c.want {
+			t.Errorf("%s：FitsSlot(%v, %q) = %q，应为 %q", c.name, c.exec, c.timing, got, c.want)
+		}
+	}
+}
+
 func TestHookKey由ID与版本组成(t *testing.T) {
 	h := sampleHook()
 	if got, want := h.Key(), (HookKey{ID: "ssh-key", Version: 2}); got != want {

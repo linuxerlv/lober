@@ -1,0 +1,93 @@
+{
+  "ID": "rocky-base",
+  "Version": 4,
+  "Name": "Rocky-Base",
+  "State": "approved",
+  "Author": "alice",
+  "Approver": "bob",
+  "Builtin": false,
+  "DerivedFrom": {
+    "ID": "builtin-kickstart",
+    "Version": 3
+  },
+  "Family": "linux",
+  "Series": [
+    "rocky",
+    "almalinux"
+  ],
+  "Body": "text\nurl --url={{sys:repo}}\n{{lober:syslog}}\nnetwork --hostname={{param:hostname}}\n{{slot:分区}}\n%pre\n{{slot:装前检查@pre}}\n%end\n%post\n{{slot:装后配置@post-target}}\n{{lober:firstboot}}\n{{lober:cleanup}}\n%end\n",
+  "Params": [
+    {
+      "Name": "hostname",
+      "Label": "主机名",
+      "Type": "hostname",
+      "List": false,
+      "Required": false,
+      "Default": "",
+      "Options": null,
+      "Min": null,
+      "Max": null,
+      "Offer": ""
+    },
+    {
+      "Name": "swap_mb",
+      "Label": "交换分区（MiB）",
+      "Type": "int",
+      "List": false,
+      "Required": false,
+      "Default": "4096",
+      "Options": null,
+      "Min": 0,
+      "Max": 65536,
+      "Offer": ""
+    }
+  ],
+  "Bindings": {
+    "hostname": {
+      "Source": "attr",
+      "Value": "",
+      "Attr": "hostname",
+      "Editable": true
+    },
+    "swap_mb": {
+      "Source": "fixed",
+      "Value": "8192",
+      "Attr": "",
+      "Editable": false
+    }
+  },
+  "Assembly": {
+    "分区": [
+      {
+        "HookID": "lvm",
+        "HookVersion": 1,
+        "TimeoutSec": null,
+        "Required": null,
+        "Bindings": {
+          "disk": {
+            "Source": "default",
+            "Value": "",
+            "Attr": "",
+            "Editable": true
+          }
+        }
+      }
+    ],
+    "装后配置": [
+      {
+        "HookID": "nic",
+        "HookVersion": 2,
+        "TimeoutSec": 900,
+        "Required": false,
+        "Bindings": {
+          "ip": {
+            "Source": "attr",
+            "Value": "",
+            "Attr": "ip",
+            "Editable": false
+          }
+        }
+      }
+    ]
+  }
+}

@@ -9,16 +9,52 @@ import (
 	"github.com/lober/lober/internal/core/catalog"
 )
 
-// VersionState 是 hook 或模板某个版本的状态。字面量会存进数据库，发布后不能改名。
-// 审批后的版本不可修改，修改会产生新版本（C23），只有已审批的版本能用于建任务（C22）。
+// VersionState 是 hook 或模板某个版本的状态。字面量会存进数据库，发布后不能改名；显示名只给说明
+// 与界面看。审批后的版本不可修改，修改会产生新版本（C23），只有已审批的版本能用于建任务（C22）。
 type VersionState string
 
 const (
-	VersionDraft      VersionState = "draft"      // 草稿：怎样都能存，可以预览
+	VersionDraft      VersionState = "draft"      // 草稿：存得下的都能存（StorableText），可以预览
 	VersionReview     VersionState = "review"     // 已提交，等待审批
 	VersionApproved   VersionState = "approved"   // 已审批
 	VersionDeprecated VersionState = "deprecated" // 已废弃：不能再被新引用，已建的任务不受影响（C26）
 )
+
+type versionStateRow struct {
+	id    VersionState
+	label string
+}
+
+// versionStateTable 是全部版本状态及其显示名，照 catalog 的做法登记成表：准入的说明里显示的是
+// 中文的现状，而不是 review 这类标识（T5-1）。
+var versionStateTable = []versionStateRow{
+	{VersionDraft, "草稿"},
+	{VersionReview, "待审批"},
+	{VersionApproved, "已审批"},
+	{VersionDeprecated, "已废弃"},
+}
+
+// Valid 报告 s 是不是版本状态，只认原样的写法（T7-2）。第 2 层的 CHECK 约束、第 5 层保存时的拒收
+// 都用它，不另抄取值表。
+func (s VersionState) Valid() bool {
+	_, ok := versionStateRowOf(s)
+	return ok
+}
+
+// Label 是状态的中文显示名；不认识的状态返回空串，由调用方回落到标识。
+func (s VersionState) Label() string {
+	r, _ := versionStateRowOf(s)
+	return r.label
+}
+
+func versionStateRowOf(s VersionState) (versionStateRow, bool) {
+	for _, r := range versionStateTable {
+		if r.id == s {
+			return r, true
+		}
+	}
+	return versionStateRow{}, false
+}
 
 // HookKey 指一个 hook 版本。模板引用的是具体版本，hook 出了新版本，模板不会自动跟随（C23），
 // 所以 ID 和版本合起来才是一个引用。
@@ -34,6 +70,12 @@ const (
 	ImplFragment ImplKind = "fragment" // 片段：渲染时放进片段插槽
 	ImplScript   ImplKind = "script"   // 脚本：装机时在目标机上执行，放进执行插槽
 )
+
+// Valid 报告 k 是不是实现的种类，只认原样的写法（T7-2）。界面上选不出别的值，不认识的只会来自
+// 直接调接口或库里的坏数据。
+func (k ImplKind) Valid() bool {
+	return k == ImplFragment || k == ImplScript
+}
 
 // Hook 是一个 hook 版本，相当于一个组件：参数声明由它的全部实现共用（C9）。
 // 第 2 层原样存它，字段名就是最终的名字。
@@ -114,6 +156,16 @@ const (
 	BindingDefault BindingSource = "default" // 参数声明的默认值
 )
 
+// Valid 报告 s 是不是取值来源，只认原样的写法（T7-2）。零值也不算：JSON 里漏了 Source 的取值来源，
+// 不能被当成其中哪一种。参数没有 Binding 条目才等同于 default（见 Binding）。
+func (s BindingSource) Valid() bool {
+	switch s {
+	case BindingFixed, BindingAttr, BindingDefault:
+		return true
+	}
+	return false
+}
+
 // Binding 是一个参数的取值来源，以及向导里能不能改（C20）。参数没有 Binding 条目时，
 // 等同于 {Source: BindingDefault, Editable: true}。
 type Binding struct {
@@ -138,6 +190,24 @@ func (h Hook) ImplFor(s catalog.Series) (Impl, bool) {
 		}
 	}
 	return Impl{}, false
+}
+
+// FitsSlot 判断这份实现能不能放进某种插槽（L-7）：执行插槽（exec 为 true）要求实现是脚本，且 Timings
+// 含插槽的时机 timing；片段插槽要求实现是片段，不看 timing。种类不对（含不认识的种类）返回
+// impl_kind_mismatch，这时不再比时机：错的是种类，不连带报时机。时机不对返回 impl_timing_mismatch，
+// 适配返回空串。激活判定与快照构建都调它，插槽适配只有这一份定义；问题的 Subject 与参数由调用方填。
+func (i Impl) FitsSlot(exec bool, timing catalog.Timing) Code {
+	want := ImplFragment
+	if exec {
+		want = ImplScript
+	}
+	switch {
+	case i.Kind != want:
+		return "impl_kind_mismatch"
+	case exec && !slices.Contains(i.Timings, timing):
+		return "impl_timing_mismatch"
+	}
+	return ""
 }
 
 // Digest 是 Body 的 SHA256，小写十六进制。不加前缀、不规范化换行，与 coreutils sha256sum

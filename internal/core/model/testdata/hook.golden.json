@@ -1,0 +1,97 @@
+{
+  "ID": "nic",
+  "Version": 2,
+  "Name": "Business-NIC",
+  "Description": "配置业务网卡的地址、DNS 与 MTU",
+  "State": "approved",
+  "Author": "alice",
+  "Approver": "bob",
+  "Builtin": false,
+  "Params": [
+    {
+      "Name": "ip",
+      "Label": "业务地址",
+      "Type": "cidr",
+      "List": false,
+      "Required": false,
+      "Default": "",
+      "Options": null,
+      "Min": null,
+      "Max": null,
+      "Offer": ""
+    },
+    {
+      "Name": "mtu",
+      "Label": "MTU",
+      "Type": "int",
+      "List": false,
+      "Required": false,
+      "Default": "1500",
+      "Options": null,
+      "Min": 576,
+      "Max": 9000,
+      "Offer": ""
+    },
+    {
+      "Name": "dns",
+      "Label": "DNS 服务器",
+      "Type": "ip",
+      "List": true,
+      "Required": true,
+      "Default": "",
+      "Options": null,
+      "Min": null,
+      "Max": null,
+      "Offer": ""
+    },
+    {
+      "Name": "mode",
+      "Label": "绑定模式",
+      "Type": "enum",
+      "List": false,
+      "Required": false,
+      "Default": "active-backup",
+      "Options": [
+        {
+          "Value": "active-backup",
+          "Label": "主备"
+        },
+        {
+          "Value": "802.3ad",
+          "Label": "LACP"
+        }
+      ],
+      "Min": null,
+      "Max": null,
+      "Offer": ""
+    }
+  ],
+  "TimeoutSec": 300,
+  "Required": true,
+  "Impls": [
+    {
+      "Family": "linux",
+      "Series": [
+        "debian"
+      ],
+      "Kind": "fragment",
+      "Body": "d-i netcfg/get_ipaddress string {{param:ip.addr}}\nd-i netcfg/get_netmask string {{param:ip.netmask}}\n",
+      "Interpreter": "",
+      "Timings": null
+    },
+    {
+      "Family": "linux",
+      "Series": [
+        "rocky",
+        "almalinux"
+      ],
+      "Kind": "script",
+      "Body": "#!/bin/sh\nip addr add \"$LOBER_PARAM_IP\" dev eth1\nip link set eth1 mtu \"$LOBER_PARAM_MTU\"\n",
+      "Interpreter": "sh",
+      "Timings": [
+        "post-target",
+        "firstboot"
+      ]
+    }
+  ]
+}

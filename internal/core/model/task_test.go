@@ -16,6 +16,20 @@ func TestTaskState的字面量(t *testing.T) {
 	}
 }
 
+// 状态会进数据库：第 2 层建 CHECK 约束、第 7 层推进状态之前，都只调 Valid，不另抄取值表（T7-2）。
+func TestTaskStateValid只认八个状态(t *testing.T) {
+	for _, s := range []TaskState{TaskPending, TaskBooting, TaskInstalling, TaskRebooting, TaskInitializing, TaskDone, TaskFailed, TaskCancelled} {
+		if !s.Valid() {
+			t.Errorf("%q.Valid() 应为 true", s)
+		}
+	}
+	for _, s := range []TaskState{"", "Done", "canceled", "running", "pending "} {
+		if s.Valid() {
+			t.Errorf("%q.Valid() 应为 false：只认原样的写法", s)
+		}
+	}
+}
+
 // 只有 done、failed、cancelled 算结束：一台主机同一时刻最多有一个未结束的任务（C31），结束了
 // 才能再建。不认识的写法算未结束，宁可挡住这台主机，也不让它同时有两个任务在装。
 func TestTaskStateFinished只认三个结束状态(t *testing.T) {

@@ -28,12 +28,24 @@ func (s TaskState) Finished() bool {
 	return false
 }
 
+// Valid 报告 s 是不是任务的状态，只认原样的写法（T7-2）。第 2 层的 CHECK 约束、第 7 层推进状态之前
+// 的检查都用它，不另抄取值表。
+func (s TaskState) Valid() bool {
+	switch s {
+	case TaskPending, TaskBooting, TaskInstalling, TaskRebooting, TaskInitializing, TaskDone, TaskFailed, TaskCancelled:
+		return true
+	}
+	return false
+}
+
 // Task 是一个装机任务：一台主机、一个 ISO、一个模板版本，外加建成时固化的快照（C27、C29）。
 // 第 2 层原样存它，字段名就是最终的名字；第 7 层会再加 token、引导次数、时机进度这类执行字段。
 //
 // HostSN、ISOID、TemplateID 与 TemplateVersion 和快照里的重复：第 2 层要按它们查任务（这台主机
 // 有没有未结束的任务、这个版本还被哪些任务引用），不必为此解开快照。
 type Task struct {
+	// ID 经 {{sys:task}} 原样代入模板正文与片段（C18），所以必须是安全词（IsSafeWord），由第 2 层
+	// 生成时保证（L-13b）：含空格、引号的 ID 会改变应答文件的结构。快照里不带它，快照构建查不到。
 	ID              string
 	HostSN          string
 	ISOID           string

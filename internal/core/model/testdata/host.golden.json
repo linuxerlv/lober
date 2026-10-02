@@ -1,0 +1,10 @@
+{
+  "SN": "SN-0001",
+  "Arch": "x86_64",
+  "Firmware": "uefi",
+  "Attrs": {
+    "hostname": "web-01",
+    "ip": "10.0.0.3/24",
+    "rack_u": "机房 A 第 12 层"
+  }
+}
