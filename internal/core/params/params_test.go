@@ -1,7 +1,6 @@
 package params
 
 import (
-	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -380,34 +379,41 @@ func TestEvaluate正文和片段引用的参数没有值时报必填(t *testing.
 	}
 }
 
-// netmask 只适用于 IPv4，激活判定只看声明，取值是不是 IPv6 要到这里才知道。正文或所选片段
-// 取了 netmask 的参数，取值是 IPv6 的 cidr（列表里有一项是也算），报 param_accessor_invalid，
-// 落在那一格上：不然建任务和快照构建都会放行，要到渲染应答文件时才失败。只取 addr 与 prefix
-// 的，取值是 IPv6 也能用。
-func TestEvaluate正文和片段取的子值要取得出(t *testing.T) {
-	// 正文取模板参数 mgmt 的地址与掩码、v6 的地址与前缀；「网络」插槽里的片段对 ips 的每一项
-	// 写一行，取地址与掩码。
-	input := func(entered map[FieldKey]string) Input {
-		in := baselineInput("rocky")
-		in.Template.Body += "network --device=eth0 --ip={{param:mgmt.addr}} --netmask={{param:mgmt.netmask}}" +
-			" --ipv6={{param:v6.addr}}/{{param:v6.prefix}}\n{{slot:网络}}\n"
-		in.Template.Params = append(in.Template.Params,
-			model.ParamDecl{Name: "mgmt", Label: "管理网地址", Type: "cidr"},
-			model.ParamDecl{Name: "v6", Label: "管理网 IPv6 地址", Type: "cidr"})
-		network := model.Hook{
-			ID: "net", Version: 1, Name: "业务网络", State: model.VersionApproved,
-			Params: []model.ParamDecl{{Name: "ips", Label: "业务地址", Type: "cidr", List: true}},
-			Impls: []model.Impl{{Family: "linux", Series: []catalog.Series{"rocky", "almalinux"}, Kind: model.ImplFragment,
-				Body: "network --device=bond0 --ip={{param:ips.addr}} --netmask={{param:ips.netmask}}\n"}},
-		}
-		in.Hooks = hookMap(diskHook(), pkgsHook(), nicHook(), network)
-		in.Template.Assembly["网络"] = []model.Instance{{HookID: "net", HookVersion: 1}}
-		in.Entered = entered
-		return in
+// netInput 在 baseline 上加几处取子值的引用：正文取模板参数 mgmt 的地址与掩码、v6 的地址与前缀；
+// 「网络」插槽里的片段对 ips 的每一项写一行，先取掩码、再取地址。两处取掩码的引用一处排在最后、
+// 一处排在最前，只查第一个或只查最后一个子值的写法都过不了取掩码的反例（T11-10①）。
+func netInput(entered map[FieldKey]string) Input {
+	in := baselineInput("rocky")
+	in.Template.Body += "network --device=eth0 --ip={{param:mgmt.addr}} --netmask={{param:mgmt.netmask}}" +
+		" --ipv6={{param:v6.addr}}/{{param:v6.prefix}}\n{{slot:网络}}\n"
+	in.Template.Params = append(in.Template.Params,
+		model.ParamDecl{Name: "mgmt", Label: "管理网地址", Type: "cidr"},
+		model.ParamDecl{Name: "v6", Label: "管理网 IPv6 地址", Type: "cidr"})
+	network := model.Hook{
+		ID: "net", Version: 1, Name: "业务网络", State: model.VersionApproved,
+		Params: []model.ParamDecl{{Name: "ips", Label: "业务地址", Type: "cidr", List: true}},
+		Impls: []model.Impl{{Family: "linux", Series: []catalog.Series{"rocky", "almalinux"}, Kind: model.ImplFragment,
+			Body: "network --device=bond0 --netmask={{param:ips.netmask}} --ip={{param:ips.addr}}\n"}},
 	}
+	in.Hooks = hookMap(diskHook(), pkgsHook(), nicHook(), network)
+	in.Template.Assembly["网络"] = []model.Instance{{HookID: "net", HookVersion: 1}}
+	in.Entered = entered
+	return in
+}
 
-	good := map[FieldKey]string{"tpl/mgmt": "10.0.0.5/24", "tpl/v6": "2001:db8::5/64", "网络/1/ips": "10.0.1.11/24\n10.0.2.11/24"}
-	got := mustPass(t, Evaluate(input(good)))
+// netGood 是 netInput 里三个新参数都取得出子值的一组填法，每次给新的一份，各测试改了互不影响。
+func netGood() map[FieldKey]string {
+	return map[FieldKey]string{"tpl/mgmt": "10.0.0.5/24", "tpl/v6": "2001:db8::5/64", "网络/1/ips": "10.0.1.11/24\n10.0.2.11/24"}
+}
+
+// netmask 只适用于 IPv4，激活判定只看声明，取值是不是 IPv6 要到这里才知道。正文或所选片段取了
+// netmask 的参数，可改的格子取值是 IPv6 的 cidr（列表里有一项是也算），报 param_sub_unavailable，
+// 落在那一格上：不然建任务和快照构建都会放行，要到渲染应答文件时才失败。这一格操作员改填就能过，
+// 所以说明写给操作员，以显示名称呼这一格（T11-8）。取的是预填的主机属性也一样：格子可改，
+// 就不归咎于主机登记，也不报给作者。只取 addr 与 prefix 的，取值是 IPv6 也能用。
+func TestEvaluate正文和片段取的子值要取得出(t *testing.T) {
+	good := netGood()
+	got := mustPass(t, Evaluate(netInput(good)))
 	for key, want := range good {
 		if got[key] != want {
 			t.Errorf("%s 取值 %q，应为 %q", key, got[key], want)
@@ -415,19 +421,129 @@ func TestEvaluate正文和片段取的子值要取得出(t *testing.T) {
 	}
 
 	for name, c := range map[string]struct {
-		key FieldKey
-		raw string
+		edit  func(in *Input)
+		key   FieldKey
+		label string
 	}{
-		"正文取掩码的是 IPv6":      {"tpl/mgmt", "2001:db8::5/64"},
-		"片段取掩码的列表有一项是 IPv6": {"网络/1/ips", "10.0.1.11/24\n2001:db8:1::11/64"},
+		"正文取掩码的是 IPv6": {func(in *Input) { in.Entered["tpl/mgmt"] = "2001:db8::5/64" },
+			"tpl/mgmt", "管理网地址"},
+		"片段取掩码的列表有一项是 IPv6": {func(in *Input) { in.Entered["网络/1/ips"] = "10.0.1.11/24\n2001:db8:1::11/64" },
+			"网络/1/ips", "业务地址"},
+		// 有 Binding 的可改格子：只看取值来源、或只看有没有 Binding 来选代码的写法，都过不了这一例。
+		"正文取掩码而预填的主机属性是 IPv6": {func(in *Input) {
+			delete(in.Entered, "tpl/mgmt") // 不填，用预填值
+			in.Template.Bindings["mgmt"] = model.Binding{Source: model.BindingAttr, Attr: "mgmt_cidr", Editable: true}
+			in.Host.Attrs["mgmt_cidr"] = "2001:db8::5/64"
+		}, "tpl/mgmt", "管理网地址"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			entered := maps.Clone(good)
-			entered[c.key] = c.raw
-			res := Evaluate(input(entered))
-			mustFail(t, res, at("param_accessor_invalid", c.key))
+			in := netInput(netGood())
+			c.edit(&in)
+			res := Evaluate(in)
+			mustFail(t, res, at("param_sub_unavailable", c.key))
+			// 整条比对，连参数顺序一起钉住：说明与下一步共用两个参数，只查说明里含不含
+			// 显示名和子值，参数写反了也照样能过。
+			want := model.NewProblem("param_sub_unavailable", at("", c.key).Subject, c.label, "netmask")
+			if !reflect.DeepEqual(res.Problems[0], want) {
+				t.Errorf("param_sub_unavailable 应以显示名点出这一格，并点出取不出的子值：\n得到 %+v\n应为 %+v", res.Problems[0], want)
+			}
+		})
+	}
+}
+
+// 锁定、取自主机属性的格子，操作员改不了，取值有问题时要改的是这台主机的登记（T11-8）：登记的值
+// 通不过类型校验，或取不出正文与所选片段要用的子值，都报 param_attr_unusable，说明以显示名点出
+// 这一格，下一步点出要改的属性键。各例的属性键都与参数名不同，下一步错用了参数名就过不了。
+func TestEvaluate锁定取自主机属性的格子取值用不了(t *testing.T) {
+	for name, c := range map[string]struct {
+		edit        func(in *Input)
+		key         FieldKey
+		label, attr string
+	}{
+		"登记的值通不过类型校验": {func(in *Input) {
+			in.Template.Assembly["装后配置"][0].Bindings["ip"] = model.Binding{Source: model.BindingAttr, Attr: "eth1_ip"}
+			in.Host.Attrs["eth1_ip"] = "10.0.0.11"
+		}, "装后配置/1/ip", "地址与前缀", "eth1_ip"},
+		"正文取掩码而登记的是 IPv6": {func(in *Input) {
+			in.Template.Bindings["mgmt"] = model.Binding{Source: model.BindingAttr, Attr: "mgmt_cidr"}
+			in.Host.Attrs["mgmt_cidr"] = "2001:db8::5/64"
+		}, "tpl/mgmt", "管理网地址", "mgmt_cidr"},
+		"片段取掩码而登记的是 IPv6": {func(in *Input) {
+			in.Template.Assembly["网络"][0].Bindings = map[string]model.Binding{"ips": {Source: model.BindingAttr, Attr: "bond_ips"}}
+			in.Host.Attrs["bond_ips"] = "2001:db8:1::11/64"
+		}, "网络/1/ips", "业务地址", "bond_ips"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			entered := netGood()
+			delete(entered, c.key) // 锁定的格子不填，填了另报 param_locked
+			in := netInput(entered)
+			c.edit(&in)
+			res := Evaluate(in)
+			mustFail(t, res, at("param_attr_unusable", c.key))
+			p := res.Problems[0]
+			if p.Code.Category() != model.CategoryIncompatible ||
+				!strings.Contains(p.Message, "「"+c.label+"」") || !strings.Contains(p.Next, "「"+c.attr+"」") {
+				t.Errorf("param_attr_unusable 应为 incompatible，说明以显示名点出这一格，下一步点出属性键：%+v", p)
+			}
+		})
+	}
+}
+
+// 参数的声明本身不成立（类型写错）时，哪台主机登记什么值都用不了，照报 param_decl_invalid，不归咎于
+// 主机登记：照 param_attr_unusable 的下一步去改主机，改了也没用。
+func TestEvaluate声明不成立时不归咎于主机登记(t *testing.T) {
+	in := baselineInput("rocky")
+	nic := nicHook()
+	nic.Params[0].Type = "address" // ip：第一个实例锁定取自主机属性，第二个可改
+	in.Hooks = hookMap(diskHook(), pkgsHook(), nic)
+	mustFail(t, Evaluate(in), at("param_decl_invalid", "装后配置/1/ip"), at("param_decl_invalid", "装后配置/2/ip"))
+}
+
+// 锁定在模板写定的值上（fixed，或 default 来源取声明的默认值）的格子取不出子值，操作员与主机登记
+// 都改不了，要改的是模板，照激活判定（L-4）报写给作者的 param_accessor_invalid。
+func TestEvaluate锁定在模板写定的值上时取不出子值报给作者(t *testing.T) {
+	for name, edit := range map[string]func(in *Input){
+		"写死的值": func(in *Input) {
+			in.Template.Bindings["mgmt"] = model.Binding{Source: model.BindingFixed, Value: "2001:db8::5/64"}
+		},
+		"声明的默认值": func(in *Input) {
+			in.Template.Params[2].Default = "2001:db8::5/64" // mgmt
+			in.Template.Bindings["mgmt"] = model.Binding{Source: model.BindingDefault}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			entered := netGood()
+			delete(entered, "tpl/mgmt")
+			in := netInput(entered)
+			edit(&in)
+			res := Evaluate(in)
+			mustFail(t, res, at("param_accessor_invalid", "tpl/mgmt"))
 			if msg := res.Problems[0].Message; !strings.Contains(msg, "「netmask」") {
 				t.Errorf("param_accessor_invalid 的说明应点出取不出的子值：%s", msg)
+			}
+		})
+	}
+}
+
+// 可改的格子取值不合法时报 param_value_invalid，说明以显示名称呼这一格，与向导的列头和这一格的其他
+// 问题一致，不用作者在正文里写的参数名（T11-8）。取的是预填值也一样：这一格操作员改填就能过。
+func TestEvaluate可改的格子取值不合法时说明用显示名(t *testing.T) {
+	for name, c := range map[string]struct {
+		edit        func(in *Input)
+		key         FieldKey
+		label, name string
+	}{
+		"操作员填的": {func(in *Input) { in.Entered = map[FieldKey]string{"分区/1/swap_mb": "-1"} },
+			"分区/1/swap_mb", "交换分区（MiB）", "swap_mb"},
+		"预填的主机属性": {func(in *Input) { in.Host.Attrs["ip2"] = "192.168.10.11" }, "装后配置/2/ip", "地址与前缀", "ip"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := baselineInput("rocky")
+			c.edit(&in)
+			res := Evaluate(in)
+			mustFail(t, res, at("param_value_invalid", c.key))
+			if msg := res.Problems[0].Message; !strings.Contains(msg, "「"+c.label+"」") || strings.Contains(msg, "「"+c.name+"」") {
+				t.Errorf("param_value_invalid 的说明应以显示名「%s」称呼这一格，不用参数名：%s", c.label, msg)
 			}
 		})
 	}
@@ -604,9 +720,27 @@ func TestEvaluate结构性缺失时跳过那个实例(t *testing.T) {
 	if msg := res.Problems[0].Message; !strings.Contains(msg, "pkgs@1") || !strings.Contains(msg, "almalinux") {
 		t.Errorf("impl_missing_for_series 的说明应点出 hook 与系：%s", msg)
 	}
+}
 
-	if res := Evaluate(Input{}); len(res.Fields) != 0 || len(res.Problems) != 0 {
-		t.Errorf("空输入应得到空表单、没有问题：%+v", res)
+// ISO 的系不在模板所勾的系里（L-7）：模板本不为这个系而写，先查系，只报一条 series_not_ticked，
+// 代码、对象与说明都与准入判定、快照构建报的相同；不给表单，也不再给每个实例各报一条
+// impl_missing_for_series。填过的值无从核对，不另报 param_unknown_field。
+func TestEvaluateISO的系没勾时只报一条series_not_ticked(t *testing.T) {
+	in := baselineInput("debian")
+	in.Entered = map[FieldKey]string{"分区/1/disk": "/dev/sdb", "tpl/nope": "x"}
+	res := Evaluate(in)
+	want := []model.Problem{model.NewProblem("series_not_ticked", model.Subject{Kind: "template", ID: "baseline@3"}, "debian")}
+	if !reflect.DeepEqual(res.Problems, want) {
+		t.Errorf("问题是\n%v\n应只有\n%v", res.Problems, want)
+	}
+	if len(res.Fields) != 0 || len(res.Values) != 0 {
+		t.Errorf("系没勾时不应给表单与取值：%+v", res)
+	}
+
+	// 空输入同样是没勾系：一个系都没勾的模板配什么 ISO 都不行，照报这一条，不 panic。
+	empty := Evaluate(Input{})
+	if len(empty.Problems) != 1 || empty.Problems[0].Code != "series_not_ticked" || len(empty.Fields) != 0 {
+		t.Errorf("空输入应只报一条 series_not_ticked、没有表单：%+v", empty)
 	}
 }
 
