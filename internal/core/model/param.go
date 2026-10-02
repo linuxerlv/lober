@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"fmt"
 	"net/netip"
 	"slices"
 	"strconv"
@@ -15,15 +16,16 @@ import (
 // 正文和片段没有转义语法，系统也不解析各格式的语法，所以只放行取值不会改变结构的受限类型（C19）。
 type ParamType string
 
-// Option 是 enum 的一个静态选项：Value 是安全词，原样进正文；Label 是给人看的显示名。
+// Option 是 enum 的一个静态选项：Value 是安全词，原样进正文；Label 是给人看的显示名，不能为空，
+// 要通过 ValidLabel（T13-10），否则向导的下拉框里这一项没有文字，或混进看不见的字符。
 type Option struct{ Value, Label string }
 
 // ParamDecl 是 hook 或模板里的一个参数声明。第 2 层原样存它，字段名就是最终的名字。
 type ParamDecl struct {
 	Name  string // 标识符（ValidIdent）；同一个 hook 或模板内不重名，由激活判定查
-	Label string // 显示名，可以用中文
+	Label string // 显示名，可以用中文；可以留空，参数求值时回落到参数名，非空的要通过 ValidLabel
 	Type  ParamType
-	List  bool // 列表 1–256 项；text 不能是列表
+	List  bool // 列表 1–256 项，规范形式合计不超过 32767 字节；text 不能是列表
 	// Required 只对脚本生效：被正文或片段引用的参数一律必填（C20），由参数求值判断。
 	Required bool
 	Default  string   // 规范形式的默认值，空表示没有；列表以换行分隔
@@ -45,6 +47,19 @@ const (
 	textMaxBytes    = 4096
 	hostnameMaxLen  = 253
 	hostLabelMaxLen = 63
+)
+
+// 下面三个上限来自外部限制（T6-2）。脚本经 EnvName 的环境变量拿参数：Linux 单个环境变量串最长
+// 131072 字节（MAX_ARG_STRLEN，超了 execve 报 E2BIG），Windows 单个环境变量最多 32767 个字符。
+// 超限的取值要到装机执行脚本时才失败，向导里拦不住，所以 Parse 当场拒收。
+const (
+	// listMaxBytes 是列表规范形式（各项以换行连接）的总字节数。列表只能是受限类型，只含 ASCII，
+	// 字节数就是字符数，两种系统都放得下。
+	listMaxBytes = 32767
+	// sshKeyBlobMaxBytes 是公钥 blob 解码后的字节数，取 OpenSSH 的 SSH_MAX_PUBKEY_BYTES。
+	sshKeyBlobMaxBytes = 16384
+	// pwhashMaxLen 是口令散列的字节数，最长的 yescrypt 散列也远小于它。
+	pwhashMaxLen = 256
 )
 
 // paramTypeRow 是类型表的一行：能否进正文与片段，以及单项的校验。parse 收到的单项已去掉
@@ -75,20 +90,40 @@ func (t ParamType) Restricted() bool {
 	return paramTypeTable[t].restricted
 }
 
-// Validate 校验声明本身：名字、类型、是否列表、选项、上下限和默认值。各种毛病共用
+// Valid 报告 t 是不是类型表里的十种类型之一，只认原样写法（T7-2）。第 2 层建表的 CHECK 约束、
+// 第 5 层保存草稿时的拒收都用它，不另抄一份类型表。
+func (t ParamType) Valid() bool {
+	_, ok := paramTypeTable[t]
+	return ok
+}
+
+// Validate 校验声明本身：名字、显示名、类型、是否列表、选项、上下限和默认值。各种毛病共用
 // param_decl_invalid 的同一条说明，所以最多报一条。Subject 留空：声明属于哪个 hook 或
 // 模板只有调用方知道，由调用方填上。名字在 hook 或模板内是否重复，要看全部声明，不在这里查。
 func (d ParamDecl) Validate() []Problem {
-	if ValidIdent(d.Name) && d.typeOK() && d.optionsOK() && d.boundsOK() && d.defaultOK() {
+	if ValidIdent(d.Name) && d.labelsOK() && d.typeOK() && d.optionsOK() && d.boundsOK() && d.defaultOK() {
 		return nil
 	}
 	return []Problem{NewProblem("param_decl_invalid", Subject{}, d.Name)}
 }
 
+// labelsOK：显示名给人看，非空的要通过 ValidLabel（T13-10）。参数的显示名可以留空，参数求值时
+// 回落到参数名；选项的不能，否则向导的下拉框里这一项没有文字。
+func (d ParamDecl) labelsOK() bool {
+	if d.Label != "" && !ValidLabel(d.Label) {
+		return false
+	}
+	for _, o := range d.Options {
+		if !ValidLabel(o.Label) {
+			return false
+		}
+	}
+	return true
+}
+
 // typeOK：类型认识，且 text 没声明成列表。列表按换行分项，而 text 本身就能含换行。
 func (d ParamDecl) typeOK() bool {
-	_, known := paramTypeTable[d.Type]
-	return known && !(d.List && d.Type == "text")
+	return d.Type.Valid() && !(d.List && d.Type == "text")
 }
 
 // optionsOK：enum 的选项恰好来自一处，静态选项或 ISO 提供的集合；别的类型两样都不能有。
@@ -130,21 +165,66 @@ func (d ParamDecl) defaultOK() bool {
 	return err == nil && v.Canonical() == d.Default
 }
 
+// OfferMissing 报告声明了 Offer 的 enum 在 offers（ISO 提供的集合，即 ISO.Offers）里没有可选的
+// 选项：ISO 没提供那个集合，或集合为空，向导里无从选起。别的声明一律为 false。参数求值据此报
+// iso_offer_missing，准入判定据此筛掉注定用不了的模板（L-2）；两边共用这一份条件，向导列出的候选
+// 与提交时的结果才对得上。
+func (d ParamDecl) OfferMissing(offers map[string][]Option) bool {
+	return d.Type == "enum" && d.Offer != "" && len(offers[d.Offer]) == 0
+}
+
+// MissingOffers 按声明顺序列出 decls 里 OfferMissing 为真的集合名，同一个集合只列一次；
+// 都不缺时返回 nil。
+func MissingOffers(decls []ParamDecl, offers map[string][]Option) []string {
+	var missing []string
+	for _, d := range decls {
+		if d.OfferMissing(offers) && !slices.Contains(missing, d.Offer) {
+			missing = append(missing, d.Offer)
+		}
+	}
+	return missing
+}
+
 // Parse 按声明校验并规范化一个取值。标量去掉首尾空白再校验；列表的 raw 每行一项，空行和
-// 每项首尾的空白（含 \r）都去掉，剩下的 1–256 项逐项校验，一项不合法整个列表都拒收。
-// text 原样收，不去空白。空串表示没有值，不是取值，一律拒收；没有值时怎么办由参数求值定。
+// 每项首尾的空白（含 \r）都去掉，剩下的 1–256 项逐项校验，一项不合法整个列表都拒收，规范形式
+// 合计也不能超过 32767 字节。text 原样收，不去空白。空串表示没有值，不是取值，一律拒收；没有值时
+// 怎么办由参数求值定。
 //
-// error 是 Problem，代码为 param_value_invalid，说明里写着这个类型期望的格式。类型不认识或
-// text 声明成列表时，取值无从谈起，改报 param_decl_invalid。Subject 都留空，由调用方填上。
+// error 是 Problem，代码为 param_value_invalid，说明里以参数名称呼参数，写着这个类型期望的格式，
+// int 声明了上下限的还带出具体范围。类型不认识或 text 声明成列表时，取值无从谈起，改报
+// param_decl_invalid。Subject 都留空，由调用方填上。
 func (d ParamDecl) Parse(raw string) (Value, error) {
+	return d.ParseNamed(d.Name, raw)
+}
+
+// ParseNamed 与 Parse 相同，只是 param_value_invalid 的说明里以 name 称呼参数。参数求值面向操作员，
+// 传参数的显示名，与向导的列头一致（T11-8）；激活判定面向作者，用 Parse，称呼就是作者在正文里写的
+// 参数名。声明本身不成立时报的 param_decl_invalid 是写给作者的，照 codes.go 的约定仍用参数名。
+func (d ParamDecl) ParseNamed(name, raw string) (Value, error) {
 	if !d.typeOK() {
 		return Value{}, NewProblem("param_decl_invalid", Subject{}, d.Name)
 	}
 	items, ok := d.parseItems(paramTypeTable[d.Type].parse, raw)
 	if !ok {
-		return Value{}, NewProblem("param_value_invalid", Subject{}, d.Name, paramValueFormats[string(d.Type)])
+		return Value{}, NewProblem("param_value_invalid", Subject{}, name, d.expectedFormat())
 	}
 	return Value{typ: d.Type, items: items}, nil
+}
+
+// expectedFormat 是 param_value_invalid 说明里「期望的格式」：按类型取 paramValueFormats 里的那一条；
+// int 声明了上下限的，再按 Min、Max 接上 intRange* 之一，填入具体的数字（T5-4①）。
+func (d ParamDecl) expectedFormat() string {
+	format := paramValueFormats[string(d.Type)]
+	switch {
+	case d.Type != "int": // 上下限只有 int 有
+	case d.Min != nil && d.Max != nil:
+		format += fmt.Sprintf(intRangeBoth, *d.Min, *d.Max)
+	case d.Min != nil:
+		format += fmt.Sprintf(intRangeMin, *d.Min)
+	case d.Max != nil:
+		format += fmt.Sprintf(intRangeMax, *d.Max)
+	}
+	return format
 }
 
 func (d ParamDecl) parseItems(parse func(ParamDecl, string) (string, bool), raw string) ([]string, bool) {
@@ -159,13 +239,15 @@ func (d ParamDecl) parseItems(parse func(ParamDecl, string) (string, bool), raw 
 		return []string{item}, true
 	}
 	var items []string
+	size := -1 // 规范形式的字节数：每项连同它前面的换行计入，第一项前面没有换行，所以从 -1 起
 	for line := range strings.Lines(raw) {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		item, ok := parse(d, line)
-		if !ok || len(items) == listMaxItems {
+		size += 1 + len(item)
+		if !ok || len(items) == listMaxItems || size > listMaxBytes {
 			return nil, false
 		}
 		items = append(items, item)
@@ -244,8 +326,16 @@ func EnvName(param string) string {
 // 这是安全词唯一的一份判定：参数取值与 enum 选项值按它查，快照构建也按它查 {{sys:sn}} 要代入
 // 的主机 SN（SN 的登记规则比它宽），别处不另抄字符集。
 //
-// 结构不变不等于语义不变：YAML 裸值不能以 @ 开头，以 : 结尾会被读成映射键，这些由作者
-// 按格式留意（计划任务 6 的「安全词」）。
+// 结构不变不等于语义不变，下面这些由模板作者按格式留意（计划任务 6 的「安全词」，遗留问题 T6-3）：
+//
+//   - YAML 裸值不能以 @ 开头，以 : 结尾会被读成映射键。
+//   - 以 - 开头的取值（int 的负数也是）放进 shell 命令的参数位置，会被当成选项：dnf install -y
+//     {{param:pkg}} 填进 --setopt=sslverify=0，就关掉了校验。加引号挡不住，要把参数放在 -- 之后。
+//   - Windows 的命令行另有讲究：cmd 里 ^ 是转义符，= 会把批处理的参数断开；PowerShell 里以 @ 开头
+//     会被当成展开，以 - 开头会被当成参数名。这两处至少要加引号；unattend 不把参数放进 cmd 与
+//     PowerShell 的参数位置。
+//
+// 字符集不为这些收紧。要不要拒收以 - 或 @ 开头的取值，留到第 3 层写内置模板之前再定。
 func IsSafeWord(s string) bool {
 	if s == "" || len(s) > safeWordMaxLen {
 		return false
@@ -358,7 +448,8 @@ var sshKeyFields = map[string]int{
 }
 
 // parseSSHKey 收「算法 base64[ 注释]」，多余的空格压成一个；只认空格分隔，注释是安全词。
-// base64 要能解开，解出的 blob 要与算法对得上，截断或拼错的公钥不必等装完机登不上才发现。
+// base64 要能解开，解出的 blob 不超过 16384 字节、要与算法对得上，截断或拼错的公钥不必等装完机
+// 登不上才发现。
 func parseSSHKey(_ ParamDecl, s string) (string, bool) {
 	var fields []string
 	for f := range strings.SplitSeq(s, " ") {
@@ -379,7 +470,7 @@ func parseSSHKey(_ ParamDecl, s string) (string, bool) {
 		return "", false
 	}
 	blob, err := base64.StdEncoding.Strict().DecodeString(key)
-	if err != nil || !sshKeyBlobOK(algo, blob) {
+	if err != nil || len(blob) > sshKeyBlobMaxBytes || !sshKeyBlobOK(algo, blob) {
 		return "", false
 	}
 	return strings.Join(fields, " "), true
@@ -419,9 +510,12 @@ var pwhashSchemes = []struct {
 	{"$y$", 3},
 }
 
-// parsePWHash 只看 crypt 的写法，不验散列本身。每段非空、只含 [./A-Za-z0-9]：带 rounds= 的
-// SHA-crypt 写法有等号，不收。
+// parsePWHash 只看 crypt 的写法，不验散列本身。整串不超过 256 字节；每段非空、只含 [./A-Za-z0-9]：
+// 带 rounds= 的 SHA-crypt 写法有等号，不收。
 func parsePWHash(_ ParamDecl, s string) (string, bool) {
+	if len(s) > pwhashMaxLen {
+		return "", false
+	}
 	for _, sc := range pwhashSchemes {
 		rest, ok := strings.CutPrefix(s, sc.prefix)
 		if !ok {

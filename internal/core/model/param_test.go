@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -445,7 +446,8 @@ func TestIsSafeWord与计划的字符集和长度一致(t *testing.T) {
 			t.Errorf("IsSafeWord(%q) 应为 false", s)
 		}
 	}
-	for _, s := range []string{"w", strings.Repeat("w", 128), "VMWARE-42-1A", "Asia/Shanghai", "ops@lab:a^b+c=d_e.f"} {
+	// 以 - 或 @ 开头的也照收（T6-3 只补了文档）：要不要拒收，留到第 3 层写内置模板之前再定，到时改这里。
+	for _, s := range []string{"w", strings.Repeat("w", 128), "VMWARE-42-1A", "Asia/Shanghai", "ops@lab:a^b+c=d_e.f", "--setopt=sslverify=0", "@x"} {
 		if !IsSafeWord(s) {
 			t.Errorf("IsSafeWord(%q) 应为 true", s)
 		}
@@ -714,5 +716,276 @@ func TestEnvName(t *testing.T) {
 		if got := EnvName(param); got != want {
 			t.Errorf("EnvName(%q) = %q，应为 %q", param, got, want)
 		}
+	}
+}
+
+// —— 第 1 层修补轮（plans/2026-10-02-layer1-fixups.md 任务 U2），括号里是遗留问题清单的条目 ——
+
+// Valid 只认十种类型的原样写法（T7-2）：第 2 层建表的 CHECK 约束、第 5 层保存时的拒收都用它，
+// 不另抄一份类型表。
+func TestParamTypeValid只认十种类型(t *testing.T) {
+	for _, typ := range paramTypes {
+		if !typ.Valid() {
+			t.Errorf("%s.Valid() 应为 true", typ)
+		}
+	}
+	for _, typ := range []ParamType{"", "Word", "TEXT", "string", "float", " word", "word "} {
+		if typ.Valid() {
+			t.Errorf("不认识的类型 %q 的 Valid() 应为 false", typ)
+		}
+	}
+}
+
+// 显示名给人看（T13-10）：参数的可以留空，参数求值时回落到参数名；选项的不能，否则向导的下拉框里
+// 这一项没有文字。非空的显示名都要通过 ValidLabel，它的规则由 ident_test 逐条测；这里测 Validate
+// 对两种显示名都查了，不合格时恰好报一条 param_decl_invalid。
+func TestParamDeclValidate查显示名(t *testing.T) {
+	enumLabeled := func(label string) ParamDecl {
+		return ParamDecl{Name: "profile", Type: "enum", Options: []Option{{"server", "服务器"}, {"minimal", label}}}
+	}
+	for name, d := range map[string]ParamDecl{
+		"参数显示名留空":   {Name: "swap_mb", Type: "int"},
+		"参数显示名用中文":  {Name: "swap_mb", Label: "交换分区（MiB）", Type: "int"},
+		"参数显示名64个字": {Name: "swap_mb", Label: strings.Repeat("中", 64), Type: "int"},
+		"选项显示名用中文":  enumLabeled("最小化"),
+		"选项显示名64个字": enumLabeled(strings.Repeat("中", 64)),
+	} {
+		if probs := d.Validate(); len(probs) != 0 {
+			t.Errorf("%s：声明应当合法，得到 %+v", name, probs)
+		}
+	}
+
+	// 每一例只有显示名不合格。不可见的字符写成转义，免得编辑器悄悄改掉它们。
+	badLabels := map[string]string{
+		"含控制字符":     "交换\x07分区",
+		"含零宽空格":     "交换\U0000200b分区",
+		"开头是空格":     " 交换分区",
+		"结尾是空格":     "交换分区 ",
+		"有65个字":     strings.Repeat("中", 65),
+		"不是合法的UTF8": "交换\xff分区",
+	}
+	cases := map[string]ParamDecl{"选项显示名为空": enumLabeled("")}
+	for what, label := range badLabels {
+		cases["参数显示名"+what] = ParamDecl{Name: "swap_mb", Label: label, Type: "int"}
+		cases["选项显示名"+what] = enumLabeled(label)
+	}
+	for name, d := range cases {
+		probs := d.Validate()
+		if len(probs) != 1 || probs[0].Code != "param_decl_invalid" || !strings.Contains(probs[0].Message, "「"+d.Name+"」") {
+			t.Errorf("%s：应恰好报一条点出参数名的 param_decl_invalid，得到 %+v", name, probs)
+		}
+	}
+}
+
+// 公钥主体（base64 解开后的 blob）不超过 16384 字节，即 OpenSSH 的 SSH_MAX_PUBKEY_BYTES（T6-2）。
+// 用 ssh-rsa 凑：blob 是算法名、e、n 三个字段，加长 n 凑出总字节数，两例只差 n 的一个字节。
+func TestParse公钥主体不超过16384字节(t *testing.T) {
+	head := len(sshBlobBytes("ssh-rsa", "\x01\x00\x01", "")) // 三个字段的长度头，加上算法名与 e
+	keyOfBlob := func(size int) string {
+		blob := sshBlobBytes("ssh-rsa", "\x01\x00\x01", strings.Repeat("n", size-head))
+		if len(blob) != size {
+			t.Fatalf("测试自己拼的 blob 有 %d 字节，应为 %d", len(blob), size)
+		}
+		return "ssh-rsa " + base64.StdEncoding.EncodeToString(blob)
+	}
+	key := ParamDecl{Name: "key", Type: "sshkey"}
+	if at := keyOfBlob(16384); mustParse(t, key, at).Canonical() != at {
+		t.Error("16384 字节的公钥主体应原样收下")
+	}
+	// 列表逐项查，一项超限整个列表都拒收。
+	for _, d := range []ParamDecl{key, {Name: "keys", Type: "sshkey", List: true}} {
+		_, err := d.Parse(keyOfBlob(16385))
+		if err == nil {
+			t.Errorf("%s：16385 字节的公钥主体应拒收", d.Name)
+			continue
+		}
+		if p := asProblem(t, err); p.Code != "param_value_invalid" {
+			t.Errorf("%s：16385 字节的公钥主体报的是 %s，应为 param_value_invalid", d.Name, p.Code)
+		}
+	}
+}
+
+// 口令散列不超过 256 字节（T6-2）：最长的 yescrypt 散列也远小于它，再长的只会是写错了。
+func TestParse口令散列不超过256字节(t *testing.T) {
+	ofLen := func(n int) string {
+		head := "$6$Xy7.ab/Q$"
+		return head + strings.Repeat("h", n-len(head))
+	}
+	d := ParamDecl{Name: "root_pw", Type: "pwhash"}
+	if at := ofLen(256); mustParse(t, d, at).Canonical() != at {
+		t.Error("256 字节的口令散列应原样收下")
+	}
+	_, err := d.Parse(ofLen(257))
+	if err == nil {
+		t.Fatal("257 字节的口令散列应拒收")
+	}
+	if p := asProblem(t, err); p.Code != "param_value_invalid" {
+		t.Errorf("257 字节的口令散列报的是 %s，应为 param_value_invalid", p.Code)
+	}
+}
+
+// 列表的规范形式（各项以换行连接）合计不超过 32767 字节（T6-2）：脚本经环境变量拿到的就是它，
+// Windows 单个环境变量最多 32767 个字符。用 130 项主机名凑，项数远不到 256，拦下它的只能是总长。
+func TestParse列表规范形式合计不超过32767字节(t *testing.T) {
+	long := strings.Repeat(strings.Repeat("h", 63)+".", 3) + strings.Repeat("h", 61) // 253 个字符，最长的主机名
+	itemsOfSize := func(size int) []string {
+		n := (size - 1) / (len(long) + 1) // 前面 n 项都用最长的主机名，每项连同换行占 254 字节
+		items := append(slices.Repeat([]string{long}, n), strings.Repeat("h", size-n*(len(long)+1)))
+		if got := len(strings.Join(items, "\n")); got != size {
+			t.Fatalf("测试自己拼的列表合计 %d 字节，应为 %d", got, size)
+		}
+		return items
+	}
+	d := ParamDecl{Name: "ntp", Type: "hostname", List: true}
+	at := strings.Join(itemsOfSize(32767), "\n")
+	if v := mustParse(t, d, at); v.Canonical() != at || len(v.Items()) != 130 {
+		t.Errorf("合计 32767 字节的列表应原样收下，得到 %d 项、%d 字节", len(v.Items()), len(v.Canonical()))
+	}
+	// 数的是规范形式：原样输入里的空行、\r\n 和每项首尾的空白都不算。
+	padded := "\n  " + strings.Join(itemsOfSize(32767), " \r\n\n\t") + "\r\n"
+	if v := mustParse(t, d, padded); v.Canonical() != at {
+		t.Errorf("去掉空行与空白后合计 32767 字节的列表应收下，规范形式却有 %d 字节", len(v.Canonical()))
+	}
+	_, err := d.Parse(strings.Join(itemsOfSize(32768), "\n"))
+	if err == nil {
+		t.Fatal("合计 32768 字节的列表应拒收")
+	}
+	if p := asProblem(t, err); p.Code != "param_value_invalid" {
+		t.Errorf("合计 32768 字节的列表报的是 %s，应为 param_value_invalid", p.Code)
+	}
+}
+
+// int 声明了上下限时，说明里带出具体的范围（T5-4①）：只说「在范围之内」，操作员不知道该填多少。
+// 范围是期望格式的一部分，填的不是整数时也带上。措辞取 codes.go 登记的 intRange*，数字原样填入。
+func TestParse的int说明带出具体范围(t *testing.T) {
+	intFormat := paramValueFormats["int"]
+	cases := []struct {
+		name   string
+		decl   ParamDecl
+		bad    []string
+		format string   // 说明里期望的格式
+		nums   []string // 说明里必须出现的数字
+	}{
+		{"不限", ParamDecl{Name: "count", Type: "int"}, []string{"abc"}, intFormat, nil},
+		{"只有下限", ParamDecl{Name: "mtu", Type: "int", Min: int64p(576)}, []string{"575", "abc"},
+			intFormat + fmt.Sprintf(intRangeMin, int64(576)), []string{"576"}},
+		{"只有上限", ParamDecl{Name: "offset", Type: "int", Max: int64p(-15)}, []string{"-14", "abc"},
+			intFormat + fmt.Sprintf(intRangeMax, int64(-15)), []string{"-15"}},
+		{"两端都有", ParamDecl{Name: "vlan", Type: "int", Min: int64p(1), Max: int64p(4094)}, []string{"0", "4095", "abc"},
+			intFormat + fmt.Sprintf(intRangeBoth, int64(1), int64(4094)), []string{"1", "4094"}},
+	}
+	for _, c := range cases {
+		for _, raw := range c.bad {
+			_, err := c.decl.Parse(raw)
+			if err == nil {
+				t.Errorf("%s：%q 应拒收", c.name, raw)
+				continue
+			}
+			p := asProblem(t, err)
+			if want := NewProblem("param_value_invalid", Subject{}, c.decl.Name, c.format); p != want {
+				t.Errorf("%s：%q 报的是 %+v，应为 %+v", c.name, raw, p, want)
+			}
+			for _, n := range c.nums {
+				if !strings.Contains(p.Message, n) {
+					t.Errorf("%s：说明里应出现 %s：%s", c.name, n, p.Message)
+				}
+			}
+		}
+	}
+}
+
+// 参数求值面向操作员，经 ParseNamed 传显示名（T11-8），说明里的称呼才与向导的列头一致。除了称呼，
+// 它与 Parse 完全相同：同样的取值得到同样的结果，同样的错误只差那个称呼。
+func TestParseNamed在说明里用传入的称呼(t *testing.T) {
+	const label = "交换分区（MiB）"
+	for _, c := range typeCases() {
+		for raw := range c.ok {
+			want := mustParse(t, c.decl, raw)
+			got, err := c.decl.ParseNamed(label, raw)
+			if err != nil || got.Canonical() != want.Canonical() || !slices.Equal(got.Items(), want.Items()) {
+				t.Errorf("%s：ParseNamed(%q) 得到 %q（%v），Parse 得到 %q", c.decl.Name, raw, got.Items(), err, want.Items())
+			}
+		}
+		for _, raw := range c.bad {
+			_, perr := c.decl.Parse(raw)
+			_, err := c.decl.ParseNamed(label, raw)
+			if err == nil {
+				t.Errorf("%s：ParseNamed(%q) 应拒收", c.decl.Name, raw)
+				continue
+			}
+			want, got := asProblem(t, perr), asProblem(t, err)
+			want.Message = strings.Replace(want.Message, "「"+c.decl.Name+"」", "「"+label+"」", 1)
+			if got != want {
+				t.Errorf("%s：ParseNamed(%q) 报的是 %+v，应为 %+v", c.decl.Name, raw, got, want)
+			}
+		}
+	}
+
+	// 列表里有一项超出范围时也一样：称呼换成传入的，范围照样带出。
+	vlans := ParamDecl{Name: "vlans", Type: "int", List: true, Min: int64p(1), Max: int64p(4094)}
+	_, err := vlans.ParseNamed(label, "100\n5000")
+	if p := asProblem(t, err); !strings.Contains(p.Message, "「"+label+"」") || strings.Contains(p.Message, "vlans") || !strings.Contains(p.Message, "4094") {
+		t.Errorf("列表的说明应以 %s 称呼参数并带出范围：%s", label, p.Message)
+	}
+
+	// 声明本身不成立是写给作者的，照 codes.go 的约定仍用参数名。
+	d := ParamDecl{Name: "size", Label: "大小", Type: "float"}
+	_, err = d.ParseNamed(d.Label, "1")
+	if p := asProblem(t, err); p != NewProblem("param_decl_invalid", Subject{}, "size") {
+		t.Errorf("类型不认识时应报点出参数名的 param_decl_invalid，得到 %+v", p)
+	}
+}
+
+// OfferMissing 是 iso_offer_missing 唯一的一份条件（L-2）：参数求值与准入判定都调用它，向导里列出的
+// 候选与提交时的结果才对得上。空集合也算没提供：一个选项都没有，向导里无从选起。
+func TestOfferMissing(t *testing.T) {
+	edition := ParamDecl{Name: "edition", Type: "enum", Offer: "editions"}
+	editions := []Option{{"ServerStandard", "Standard"}, {"ServerDatacenter", "Datacenter"}}
+	cases := []struct {
+		name   string
+		decl   ParamDecl
+		offers map[string][]Option
+		want   bool
+	}{
+		{"ISO 什么集合都没提供", edition, nil, true},
+		{"ISO 没提供这个集合", edition, map[string][]Option{"images": editions}, true},
+		{"集合名大小写不同不算同一个", edition, map[string][]Option{"Editions": editions}, true},
+		{"集合为空", edition, map[string][]Option{"editions": {}}, true},
+		{"集合是 nil", edition, map[string][]Option{"editions": nil}, true},
+		{"集合有值", edition, map[string][]Option{"editions": editions}, false},
+		{"不是 enum", ParamDecl{Name: "edition", Type: "word", Offer: "editions"}, nil, false},
+		{"enum 没声明 Offer", ParamDecl{Name: "profile", Type: "enum", Options: editions}, nil, false},
+		{"别的类型也没声明 Offer", ParamDecl{Name: "pkg", Type: "word"}, nil, false},
+	}
+	for _, c := range cases {
+		if got := c.decl.OfferMissing(c.offers); got != c.want {
+			t.Errorf("%s：OfferMissing = %v，应为 %v", c.name, got, c.want)
+		}
+	}
+}
+
+// MissingOffers 按声明顺序列出缺的集合名，同一个集合只列一次：准入判定为每个缺的集合各报一条。
+func TestMissingOffers按声明顺序列出且不重复(t *testing.T) {
+	langs := []Option{{"zh-CN", "简体中文"}}
+	decls := []ParamDecl{
+		{Name: "image", Type: "enum", Offer: "images"},
+		{Name: "lang", Type: "enum", Offer: "langs"},
+		{Name: "edition", Type: "enum", Offer: "editions"},
+		{Name: "pkg", Type: "word"},
+		{Name: "image2", Type: "enum", Offer: "images"},
+		{Name: "profile", Type: "enum", Options: langs},
+		{Name: "keyboard", Type: "enum", Offer: "keyboards"},
+	}
+	// 按字典序会是 editions、images、keyboards；按声明顺序 images 在前。
+	offers := map[string][]Option{"langs": langs, "keyboards": {}}
+	if got, want := MissingOffers(decls, offers), []string{"images", "editions", "keyboards"}; !slices.Equal(got, want) {
+		t.Errorf("MissingOffers = %q，应为 %q", got, want)
+	}
+	full := map[string][]Option{"images": langs, "langs": langs, "editions": langs, "keyboards": langs}
+	if got := MissingOffers(decls, full); len(got) != 0 {
+		t.Errorf("集合都提供了，MissingOffers 应为空，得到 %q", got)
+	}
+	if got := MissingOffers(nil, nil); len(got) != 0 {
+		t.Errorf("没有声明时 MissingOffers 应为空，得到 %q", got)
 	}
 }
