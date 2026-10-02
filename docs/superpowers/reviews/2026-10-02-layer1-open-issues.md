@@ -13,11 +13,68 @@
 
 每条都附有出处（文件与行号，或计划、spec 的章节），以及它合并了哪些原始记录。
 
+## 修补结果
+
+2026-10-02 按你的决定修补，计划见 `docs/superpowers/plans/2026-10-02-layer1-fixups.md`。第 1 节 10 条、第 2 节 19 条全部落实（T13-8 随 L-7 一起做）；第 3 节只并入了 T7-5（随 L-6 进 ISO.Validate），其余 14 条仍归后续层，没有动。每条的做法和测试名写在条目标题下的「结果」一行。各条「出处」里的行号指 d45fbf3，修补后已经变了。
+
+修补轮的提交，都在 `feat/core-model` 上：
+
+| 提交 | 任务 | 内容 |
+|---|---|---|
+| 822eec6 | U1 | 一次登记 10 个新代码并改写说明；名称只收可打印 ASCII；StorableText 与 ValidLabel |
+| 03e0fec | U2 | 参数显示名、长度上限、int 的范围说明、ParseNamed、OfferMissing |
+| 5416531 | U3 | ISO 与主机的完整性判定、状态显示名、取值类型的 Valid、插槽适配、golden 测试 |
+| fc53fe6 | U4 | 格式显示名、能力表自检、嵌套占位符 |
+| 091d3af | U5 | 依赖守卫改白名单，查层内方向与目录覆盖，守卫自身的反例测试 |
+| 43aca7b | U6 | 激活判定 |
+| c7fe6db | U7 | 参数求值 |
+| cc4c636 | U8 | 准入判定 |
+| a3dc308 | U9 | 快照构建 |
+| 3572304 | U10 | 说明文字与常量、词表对齐 |
+| 与本节同一个提交 | U11 | spec、第 1 层原计划与本清单同步 |
+
+逐条：
+
+| 条目 | 结果 | 提交 |
+|---|---|---|
+| T13-10 | 选 A | 822eec6、03e0fec、5416531、43aca7b |
+| T5-3 | 按你的决定：名称只收可打印 ASCII | 822eec6 |
+| L-6 | 选 A，不做 C | 5416531、cc4c636 |
+| T6-3 | 只做 A；B 待第 3 层写内置模板之前定 | 03e0fec，文档随 U11 |
+| T1-1 | 标准库选 C，层内方向选 b | 091d3af |
+| L-7 | 选 A | 5416531、43aca7b、c7fe6db、a3dc308 |
+| T9-1 | 选 B | 43aca7b |
+| L-1 | 选 A | 822eec6、43aca7b |
+| L-2 | 选 A，条件放在 model 里共用 | 03e0fec、c7fe6db、cc4c636 |
+| T5-1 | 选 B | 822eec6、5416531、cc4c636 |
+| L-4 | 已修 | 822eec6、43aca7b |
+| T4-1 | 已修 | 822eec6、5416531、43aca7b |
+| T6-2 | 已修 | 822eec6、03e0fec |
+| T7-4 | 已修 | 5416531 |
+| T7-2 | 已修 | 822eec6、03e0fec、5416531、43aca7b |
+| L-13b | 已修（注释） | 5416531 |
+| T1-3 | 已修 | 091d3af |
+| T1-2 | 已修 | 091d3af |
+| T9-6 | 已修 | 43aca7b |
+| T11-8 | 已修 | 822eec6、03e0fec、c7fe6db |
+| T3-1 | 已修 | fc53fe6 |
+| T8-1 | 已修 | 822eec6、fc53fe6 |
+| T5-4 | 已修 | 822eec6、03e0fec |
+| T5-5 | 已修 | fc53fe6、43aca7b、3572304 |
+| T13-8 | 已修（随 L-7） | a3dc308 |
+| T10-6 | 已修 | 43aca7b |
+| T11-10 | 已修 | c7fe6db、cc4c636、a3dc308 |
+| T9-4 | 已修（行为不改） | 822eec6、43aca7b |
+| T2-1 | 已修 | fc53fe6 |
+| T7-5（第 3 节） | 随 L-6 修掉 | 5416531 |
+
 ## 1. 需要你拍板
 
 计划或 spec 本身有缺口、矛盾或取舍。每条列出可选项与代价，并给出建议。
 
 ### T13-10　草稿文本可含 NUL 与非法 UTF-8，第 2 层存不下
+
+结果：选 A，已落实。model 提供 StorableText（合法 UTF-8、不含 NUL）与 ValidLabel，存不下的报新增的 text_not_storable（822eec6）；参数与选项的显示名按 ValidLabel 查，Option.Label 不能为空（03e0fec）；ISO 的名称与主机的属性值按 StorableText 查（5416531）；激活判定查 hook 的说明、每份实现的正文和模板正文（43aca7b）。保存时对全部自由文本统一拒收，留给第 5 层。spec §3 总则已改成「能存成 UTF-8 文本的草稿都能存」。测试：TestStorableText、TestValidLabel拒收不可见字符首尾空白与超长、TestParamDeclValidate查显示名、Test说明或正文存不下、Test模板正文存不下。
 
 问题：全层只有名称（ident.go:83）、text 参数（param.go:450）和 SN 查合法 UTF-8 与 NUL。模板正文、hook 实现正文、Description、参数显示名 Label、选项显示名 Option.Label 都不查；ParamDecl.Validate 也不看两个显示名，Option.Label 可以为空（向导里选项没有文字），显示名可以含控制字符、零宽字符，也可以超长。
 
@@ -39,6 +96,8 @@ C. 层 1 不管，只把「所有文本字段必须是不含 NUL 的 UTF-8」写
 
 ### T5-3　名称 key 挡不住变体选择符等不可见字符
 
+结果：按你的决定落实，比选项 A 更严（822eec6）：模板名与 hook 名去掉首尾空白后只收 1–64 个可打印 ASCII（0x21–0x7E），空格、中文、全角字符、é 的两种写法、变体选择符和其他不可见字符一律报 name_invalid，key 是 ASCII 小写。只收 ASCII，合成与分解、全角字母这两类问题也一并没了，不用引入 x/text。activation 测试里用中文起的名字随之改成 ASCII。显示名仍可以用中文，另按 ValidLabel 查。spec C12 与原计划任务 5 已同步。测试：TestNormalizeName只收0x21到0x7E、TestNormalizeName拒收空白中文与不可见字符、TestNormalizeName大小写不同得到同一个key。
+
 问题：invisibleRune 只拦 unicode.IsControl 与 Cf 类（ident.go:106-108）。变体选择符 U+FE0F、IVS U+E0101、组合字形连接符 U+034F（都属 Mn）和韩文填充符 U+3164（Lo）都能通过，名字看着一模一样，key 却不同；:103-105 的注释说能挡住这类字符，说过头了。合成与分解两种写法的 é、全角字母同理，而标准库没有 NFC/NFKC（golang.org/x/text 不在「只用标准库」之内）。
 
 影响：第 2 层按 key 建唯一约束（C12），这些写法能绕过同名约束。key 一旦落库建了唯一索引，事后改规则要迁移旧数据，还可能撞出重复。
@@ -58,6 +117,8 @@ C. 规则不改，把注释收窄成「控制字符与格式字符」，接受 C
 合并自：T5 should「ident.go:103-108 invisibleRune 的注释说要挡住…」
 
 ### L-6　C5「ready 必带版本与架构」在层 1 没有落点
+
+结果：选 A，已落实；C（第 2 层约束）按你的决定不做。model 加 ISO.Validate（族、系、架构、版本、名称与提供的集合，并入 T7-5）与 ISO.Unusable，Usable 就是 Unusable 为空；版本规则改为 ^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$，. 与 .. 都不合法（5416531）。准入判定改用 Unusable，ISO 不可用时不再逐台比平台：ready 却缺架构的报 iso_incomplete，没登记平台的主机不再通过，只登记了架构的主机也不再收到参数为空的 firmware_mismatch，原来 :137 的提前返回删掉了（cc4c636）。第 4 层置 ready 之前调用 Validate。spec C5、原计划任务 7 与任务 12 已同步。测试：TestISOValidate版本的规则、TestISOUnusable可用却记录不全时给出Validate的问题、TestISOUsable可用却缺架构时报iso_incomplete。
 
 问题：ISO.Usable 只看 State 是否为 ready（registry.go:68-71）。Version 的规则 [0-9A-Za-z._-]{1,32} 只写在注释里（:56），没有校验函数，照这条规则 . 和 .. 都合法。platformConflicts 遇到架构、固件都没登记的主机直接放行（admission.go:137），否则调 PlatformOK，而 ISO 的系或架构不合法时 PlatformOK 两项都判不通过。
 
@@ -79,6 +140,8 @@ C. 在 A 或 B 之外，由第 2 层加约束：state 为 ready 时 version、ar
 
 ### T6-3　安全词可作 shell 选项，Windows 命令行另有陷阱
 
+结果：只做了 A；B（拒收以 - 或 @ 开头的取值）留到第 3 层写内置模板之前再定，C 不做。IsSafeWord 的文档写明了 shell 选项、cmd 的 ^ 与 =、PowerShell 的 @ 与 - 这几处陷阱，字符集不变（03e0fec）；原计划任务 6 的「安全词」与「留给后续层的约定」随本清单一起补上。lober 只部署在 Linux 上（spec §4.8 已写明）；这些陷阱出在被装的 Windows 目标机上，与部署平台无关。
+
 问题：IsSafeWord 允许以 - 开头（--setopt=sslverify=0 能收下），int 也可以是负数；放进 shell 命令的参数位置（如 dnf install -y {{param:pkg}}）会被当成选项。Windows 侧：cmd.exe 里 ^ 是转义符、= 是批处理参数的分隔符；PowerShell 里 @ 开头会被当成展开，- 开头会被当成参数名。IsSafeWord 的文档（param.go:247-248）只提了 YAML 的陷阱。计划说安全词放进 shell 参数「不会改变结构」，这句对结构成立，对语义不成立；计划「风险」要求改字符集前逐格式确认，但没考虑 cmd 与 PowerShell，「留给后续层的约定」里也没写。
 
 影响：操作员在向导里填的 word、enum 值，可以把模板里的一个参数变成选项（比如关掉校验）。第 3 层的 unattend 正文若把参数放进 <CommandLine>，在 cmd、PowerShell 的参数位置不安全。
@@ -98,6 +161,8 @@ C. 去掉 ^ 和 =。代价：会拒掉 console=ttyS0 这类常见的 word 取值
 合并自：T6 concern「安全词里的 ^ 和 = 在 Windows cmd.exe 里有特殊含义…」；T6 should「isSafeWord 的文档（param.go:244-245）只列了 YAML 的语义陷阱…」
 
 ### T1-1　依赖守卫的范围：标准库清单留有绕法，层内方向不查
+
+结果：标准库选 C（白名单），层内方向选 b（只守关键不变式），已落实（091d3af）。白名单是下面核对出的 14 个包加 encoding/json、regexp；cgo 的 C、unsafe，以及 CgoFiles、IgnoredGoFiles 都算违规；读时钟的检查扩到 time 的 Now、Since、Until、Sleep、After、AfterFunc、Tick、NewTimer、NewTicker。方向：catalog 不依赖层 1，model 只依赖 catalog，判定包之间只许 snapshot 依赖 params。原计划「全局约定」第 1 条与任务 1 的守卫契约已同步。测试：Test守卫逐个文件的检查、Test层1包的文件都参与构建、Test总检查接上了每一项。
 
 问题：①标准库：forbiddenStd 只有计划列的六个包（deps_test.go:28-35）；时间只认 time.Now（:189-198）；isStd 按「首段不含点」判断（:113-117），cgo 的伪包 C 和 unsafe 也算标准库。io/ioutil.ReadFile、os/user、os/signal、net/rpc、net/smtp、log/syslog、plugin、cgo，以及 time.Since、Until、Sleep、After、AfterFunc、Tick、NewTimer、NewTicker 都能绕过。②层内方向：checkFile 只分「层 1」与「层 1 以外」（:166-173），计划「包与文件」表规定的层内依赖方向没有任何检查，Go 编译器只拦得住环；admission 去 import scan、activation 去 import params 这类不成环的越级依赖会悄悄进来，正是计划「为什么这样切」想避免的。已用 go list 核对 HEAD：7 个包的非测试代码只用 14 个标准库包（cmp、errors、fmt、maps、slices、strconv、strings、unicode、unicode/utf8、crypto/sha256、encoding/base64、encoding/binary、encoding/hex、net/netip），层内依赖都在表内（params 实际没 import catalog），CgoFiles、IgnoredGoFiles 都为空，下面任何一种收紧都不会让现有代码变红。
 
@@ -127,6 +192,8 @@ c. 不做。
 
 ### L-7　快照构建与参数求值的前提检查比激活宽
 
+结果：选 A，已落实。插槽适配收成 model.Impl.FitsSlot 一份（5416531），激活判定与快照构建都调它（43aca7b、a3dc308），snapshot 不依赖 activation，也没有复制检查；参数求值先查系，没勾时只报一条 series_not_ticked（c7fe6db）；Build 补查系的合法性、插槽适配与查找结果（a3dc308，并入 T13-8）。渲染可以依赖的三条不变式写进了 Build 的文档注释和原计划「留给后续层的约定」，原计划任务 11、13 已同步。测试：TestEvaluateISO的系没勾时只报一条series_not_ticked、TestBuild实现放不进插槽时不产出快照、TestBuild前提不满足时不产出快照。
+
 问题：Build 只先查 series_not_ticked（build.go:36-40），其余前提靠 Evaluate 报 hook_ref_missing、impl_missing_for_series。下面这些草稿（C22、spec §5.2 第 4 步允许预览）Build 照样产出快照：片段放进执行插槽，执行插槽里出现 Kind=fragment、没有 Digest 的实例；脚本放进片段插槽，渲染会把脚本正文贴进应答文件；执行插槽的时机不在脚本声明的时机里；实现种类不认识；勾了不合法的系，Family、Format 为空也不报。Evaluate 也不先查系有没有勾上：ISO 的系没勾时，每个实例各报一条 impl_missing_for_series，准入和 Build 报的却是一条 series_not_ticked。
 
 影响：已审批的模板都过了激活判定，正式建任务不受影响；受影响的是草稿预览（渲染要么出错，要么产出错的文件），以及提交时多出的报错噪声。第 3 层渲染要知道自己能依赖哪些不变式。
@@ -146,6 +213,8 @@ C. 第 5 层预览草稿时先跑 activation.Template，把激活问题和预览
 合并自：layerReview_should 第7条「快照构建与参数求值的前提检查比激活宽」；任务13 should「小问题：ISO 的系如果目录里不认识」；任务11 concern「Plan sequencing note: Evaluate does not check series_not_ticked」
 
 ### T9-1　Subject.Path 定位不到唯一的实现、声明与取值来源
+
+结果：选 B，已落实（43aca7b）。实现为 impl/<n>，参数声明为 param/<n>，模板参数的取值来源为 tpl/<参数名>，实例参数的取值来源为「插槽名/n/参数名」，与 params.FieldKey 对齐；系与参数名只出现在说明里。完整的对照写在原计划任务 9、10（已同步），第 5、6 层按它解析。测试：TestSubject指向出问题的位置、Test模板问题的Subject、Test实例取值来源的问题按参数分开。
 
 问题：三处 Path 会撞。①实现的 Path 是它勾的系，以逗号连接（hook.go:57）：两份实现勾了同一组系，或都还没勾系（草稿里新建两份实现时 Path 都是空串），各自问题的 Subject 完全相同，只差行列。②参数声明的 Path 是参数名（hook.go:82，模板沿用）：重名的两条相同，空名的为空。③实例取值来源的问题一律落在「插槽名/序号」（template.go:205-206）：attr_key_invalid 的说明里只有属性键，同一实例的 disk 和 disk2 写了同一个坏键，得到两条逐字节相同的问题；而模板参数的取值来源以参数名为 Path，params 的字段键是「插槽名/序号/参数名」。
 
@@ -167,6 +236,8 @@ C. 只在冲突时（重名、系列表相同或为空）附加序号。代价�
 
 ### L-1　脚本正文里的 lober 占位符激活时不查
 
+结果：选 A，已落实。登记 script_placeholder_not_expanded，下一步指向 LOBER_PARAM_*（822eec6）；checkScript 扫描脚本正文，slot、lober、sys、param 四种占位符（写错的同种类也算）各报一条，参数是占位符原文，带行列，其余 {{…}} 与 Jinja、Go 模板的写法不报（43aca7b）。原计划任务 9 已同步。测试：Test脚本里写了lober的占位符。
+
 问题：checkScript 只核对字面出现的 LOBER_PARAM_*，不扫描正文。脚本里写 {{param:disk}}、{{sys:gateway}}、{{slot:x}}，激活判定一条问题都不报。脚本按摘要原样下发、不展开占位符，整层修正也正是据此定下「脚本不查 {{sys:sn}}」，build_test 里有用例锁定。
 
 影响：这些占位符永远不会被替换，作者以为拿到了参数，到装机时才出错。计划的约定是脚本只经 EnvName 给出的环境变量拿参数。
@@ -187,6 +258,8 @@ C. 不查，只在 hook 编辑器里提示。代价：错误拖到装机时才�
 
 ### L-2　准入不查 ISO 提供的集合，候选与提交不一致
 
+结果：选 A，已落实，条件只在 model 里写一份：ParamDecl.OfferMissing 与 MissingOffers（03e0fec）；参数求值报 iso_offer_missing 改用它（c7fe6db）；TemplateUsable 在 ISO 可用时查模板参数与所引 hook 的参数，缺的集合各报一条 iso_offer_missing，Subject 为模板，包注释也改准确了（cc4c636）。spec §4.1、§5.3 第 3 步与原计划任务 12 已同步。测试：TestOfferMissing、TestTemplateUsableISO没提供模板参数要的集合、TestTemplateUsableISO没提供hook参数要的集合。
+
 问题：iso_offer_missing 只由 params.Evaluate 报（params.go:175-178）；TemplateUsable 只查三项：已审批、没有废弃引用、勾了 ISO 的系（admission.go:53-66）。ISO 不提供 editions 时，要 editions 的 Windows 模板照样进入向导第 3 步的候选，到第 4 步每台主机都报 iso_offer_missing。admission 的包注释（:1-4）说「筛出来的候选和提交时的校验结果不会对不上」，可提交时还要跑参数求值，这句话说过了头。
 
 影响：向导里出现注定用不了的候选。spec §4.1 把 C21 归给参数求值，§5.3 第 3 步列的筛选条件里也没有这一项，所以加进准入等于扩大 spec 和计划任务 12 写死的三项检查。
@@ -204,6 +277,8 @@ B. 规则不动，只把包注释改准确，接受到第 4 步才报。
 合并自：layerReview_should 第2条「准入与参数求值在 ISO 提供的集合上一宽一严」
 
 ### T5-1　说明参数传标识还是显示名未定，状态显示成英文
+
+结果：选 B，已落实。codes.go 的头注释定下目录值传标识、状态传中文显示名；iso_not_ready 的参数改成状态的显示名，导入失败另报新增的 iso_import_failed，下一步是重新导入（822eec6）；ISOState、VersionState 有 Label 与 Valid，显示名照 catalog 的做法登记成表（5416531）；准入判定改传 Label，不认识的状态回落到标识（cc4c636）。测试：TestISOState的显示名、TestVersionState的显示名、TestISOUsable不可用的ISO按状态报原因、TestTemplateUsable不是已审批的版本不能用。
 
 问题：codes.go 头注释（:15-18）允许参数是「标识、名字或显示名」，没有定死。实现里一律传标识：activation 的系、格式、时机、解释器（如「系统值「smb」在 esxi-ks 格式里不可用」），admission 的系、架构、固件，以及两种状态。iso_not_ready 的参数注释（:252）写的是中文现状（获取中、导入中、导入失败、已废弃），代码却传 string(iso.State)（admission.go:127-131），template_not_approved 也传英文状态（:57）。ISOState、VersionState 没有显示名，计划也没要求。
 
@@ -231,6 +306,8 @@ D. 按读者分：激活判定（读者是作者）传标识，准入（读者�
 
 ### L-4　激活放行了必然通不过求值的取值来源
 
+结果：已修。登记 param_locked_without_value（822eec6）；激活判定对 fixed 值、default 来源（含没有 Binding 的）取到的默认值，以及被 hook 自己的片段取了子值的参数默认值，逐个调 Value.Sub，取不出报 param_accessor_invalid；必填参数锁在默认值上、声明里又没有默认值的报 param_locked_without_value（43aca7b）。原计划任务 9、10 的判定表已同步。测试：Test取值来源取不出正文或片段要的子值（含 IPv4 配 .netmask、IPv6 配 .addr 与 .prefix 两个正例）、Test锁在默认值上却没有默认值、Test参数的默认值取不出片段要的子值。
+
 问题：checkBindings 对 fixed 值只查 Parse，对 {Source: default} 什么都不查（template.go:221-231）；默认值只过 defaultOK；正文或片段取的子值只用 IPv4 样例按类型检查（hook.go:269-279）。于是两类模板能通过审批，建任务时却每台主机都报错：①fixed 值或默认值是 IPv6 的 cidr，正文或所选片段又取了 .netmask，每台都报 param_accessor_invalid，格子锁定时永远建不了任务，不锁时每台都得手动改；②参数被正文或所选片段引用（或是脚本的 Required 参数），Binding 为 {Source: default, Editable: false}，声明里却没有默认值，每台都报 param_required，而格子锁着填不了。spec C20「最后仍然没有值的必填参数，向导里每台主机都得填」与锁定互相矛盾，计划任务 10 的判定表没有这一项。
 
 影响：已审批的模板注定用不了，要到建任务时才发现。这两类都与主机无关，激活时就能判定；按激活判定「审批前是否完备」的定位，应在这里拦下，不需要另行拍板。
@@ -242,6 +319,8 @@ D. 按读者分：激活判定（读者是作者）传标识，准入（读者�
 合并自：layerReview_should 第4条「激活对 fixed 值与默认值比参数求值宽」（第 (1) 点：IPv6 配 .netmask）；任务11 should「跨任务提醒（不属于本任务）：锁定的字段如果取值不合法，或没有值」（后半：锁在默认值上却没有默认值）；【T10-2】T10 建议：计划缺口，不在任务 10 的表里（template.go:222）
 
 ### T4-1　主机的架构与固件登记值没人拒收
+
+结果：已修。登记 host_platform_invalid（822eec6）；model 导出 ValidAttrKey，Host.Validate 改用它，并查非空的架构、固件是否合法，以及属性值存不存得下（5416531）；checkBindings 改用 ValidAttrKey，不再造 model.Host（43aca7b）。原计划任务 7 那句已同步。测试：TestValidAttrKey、TestHostValidate拒收不合法的架构与固件。
 
 问题：Host.Validate 照计划任务 7「只查属性键」，层 1 没有任何地方拒收非空却不合法的 Host.Arch、Host.Firmware（如 CSV 里写成 UEFI、amd64，或存了 iPXE 上报的 i386、pcbios），代码表里也没有对应的代码。PlatformOK 把这类值判为不通过（这个取舍是对的），于是建任务时每个 ISO 都报 arch_mismatch 或 firmware_mismatch，说明写成「系「rocky」不支持用 UEFI 固件引导」，真实原因却是登记写错了。
 
@@ -263,6 +342,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### T6-2　sshkey、pwhash 与列表不限长，导出环境变量会失败
 
+结果：已修。Parse 限定公钥主体解码后不超过 16384 字节、pwhash 不超过 256 字节、列表规范形式合计不超过 32767 字节（03e0fec），说明与下一步同步改了（822eec6）。原计划任务 6 已同步。测试：TestParse公钥主体不超过16384字节、TestParse口令散列不超过256字节、TestParse列表规范形式合计不超过32767字节。
+
 问题：parseSSHKey 只限注释（安全词，至多 128），base64 主体不限长；parsePWHash 不限长；列表只限 256 项、不限总长。照代码读，1.4 MB 的 ssh-rsa 公钥、2 MB 的 $6$ 散列都能通过，256 把 RSA-4096 公钥的规范形式约 189 KB。
 
 影响：脚本经 EnvName 的环境变量拿参数（计划「留给后续层的约定」第 4 条）。Linux 单个环境变量串的上限 MAX_ARG_STRLEN 是 131072 字节，超出时 execve 报 E2BIG；Windows 单个环境变量最多 32767 个字符。错误要到装机执行脚本时才出现，向导里拦不住，违反 spec 总则「不做静默降级」。
@@ -274,6 +355,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：T6 should「sshkey 与 pwhash 没有长度上限（param.go:359、421）…」
 
 ### T7-4　落库类型没有 json tag，改字段名会静默丢数据
+
+结果：已修，不加 json tag（5416531）。golden_test.go 把 Snapshot、Template、Hook、Host、ISO、Task 的 JSON 编码钉在 testdata/*.golden.json 里，改了字段名立刻报红；-update 可以重写期望文件，什么时候能这样做写在文件头。原计划任务 7 的风险一节已同步。测试：TestGolden落库类型的JSON编码。
 
 问题：照计划「字段名就是最终的名字」，全层没有一处 json tag（已 grep）。第 2 层按 JSON 存 Snapshot（计划任务 13），也可能这样存 Template、Hook 的 Assembly、Bindings、Params，键名就是 HookID、TimeoutSec 这类 Go 字段名。TestTask连同快照经JSON存取后不变（task_test.go:36）只做往返，字段改了名照样通过，只会逼人改测试里的字段名。
 
@@ -287,6 +370,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### T7-2　取值类型没有 Valid()，不认识的值借用不贴切的代码
 
+结果：已修。ParamType（03e0fec）与 ImplKind、BindingSource、ISOState、VersionState、TaskState（5416531）都有 Valid()；登记 impl_kind_unknown、binding_source_unknown（822eec6），激活判定改报它们（43aca7b）。测试：TestParamTypeValid只认十种类型、TestAuthoring取值类型的Valid只认各自的常量、TestISOStateValid只认五个状态、TestTaskStateValid只认八个状态、Test实现的种类不认识、Test取值来源不认识。
+
 问题：ImplKind、BindingSource、ISOState、VersionState 都没有 Valid()，catalog 的类型都有。不认识的值已经挡得住审批：Impl.Kind 为空串或 macro 时报 script_incomplete（hook.go:122-126，说明是「正文为空，或者没有声明解释器、执行时机」）；Binding.Source 不认识（含零值，比如 JSON 里漏了 source）时对空串调 Parse，报 param_value_invalid（template.go:232-235，说明是「应为<格式>」）；不认识的状态在准入里算不可用或未审批。只是说明都没点出真正原因。这些值界面上选不出来，只会来自直接调接口或库里的坏数据。实现者说「不许改 codes.go」不准确：计划「并行执行」允许在末尾追加。
 
 影响：第 2 层要给这些列加 CHECK 约束、第 5 层要在保存时拒收（草稿不经激活就能保存），都得自己再抄一份取值表。
@@ -298,6 +383,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：T7 should「authoring.go:30-36、108-124，以及 ISOState、VersionState：这些取值类型都没有 Valid()…」；【T9-3】T9 偏离：An impl whose Kind is neither fragment nor script is reported as script_incomplete；【T9-3】T9 建议：hook.go:112-115 种类不认识的实现报 script_incomplete（种类部分）；【T9-3】T9 建议：种类不认识的实现（Kind 为空串或 macro）报 script_incomplete（种类部分）；【T9-3】T10 偏离：A Binding.Source that is none of fixed, attr or default；【T9-3】T10 顾虑：For an unknown Binding.Source, the param_value_invalid text；【T9-3】T10 建议：template.go:232-236 不认识的 Binding.Source（含零值）；【T9-3】T10 建议：template.go:232-235：来源不认识的 Binding
 
 ### L-13b　Task.ID 经 {{sys:task}} 进正文，未约束为安全词
+
+结果：已修（5416531）。Task.ID 的注释写明它经 {{sys:task}} 原样代入正文，必须是安全词，由第 2 层生成时保证；第 2 层的契约测试据此断言。原计划任务 13 已同步。
 
 问题：系统值 task（任务号）在七种格式里都能引用，渲染按 C18 原样代入；model.Task.ID 只是一个 string，哪里都没写它必须是安全词。快照里不带任务号，Build 查不到。整层修正刚给 SN 补上了同类约束（sn_unsafe_in_body）。
 
@@ -311,6 +398,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### T1-3　全部文件被构建约束排除的层 1 包会被守卫跳过
 
+结果：已修（091d3af）。守卫遍历 internal/core，含非测试 .go 文件的目录不在 go list 结果里就报错，注释改成了实际覆盖的范围；按 T1-1 另要求 CgoFiles、IgnoredGoFiles 为空。测试：Test含源文件的目录都要出现在go_list里、Test只收集含非测试源文件的目录、Test层1包的文件都参与构建。
+
 问题：守卫的检查对象来自 go list -json ./...（deps_test.go:92），通配模式会静默跳过「所有文件都被当前平台的构建约束排除」的目录：cmd/go 把它当作没有包，不报错。IgnoredGoFiles 只覆盖「包里至少有一个文件在当前平台编译」的情况。所以只含 x_linux.go 的层 1 包在 Windows 上根本进不了检查，评审在探针里复现过（新建 internal/core/probeonly/x_linux.go 并 import os，守卫 PASS）；按只读约束我没有重做探针，读代码并用 git log 确认守卫自 6fa208c 没改过。:134-135 的注释「只在 Linux 上编译的文件，在 Windows 上跑守卫时同样要守规矩」说过头了。make check 的 cross 只编译 Linux 版、不跑测试，这个口子在本机流程里一直开着。
 
 影响：族标识 linux、windows 恰好是 GOOS 名，第 3、4 层往 catalog 加按族命名的文件（如 repo_linux.go）会被 Go 当成平台约束；整包都这样命名时，它在 Windows 上就从守卫里消失了。
@@ -322,6 +411,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：T1 should：internal/archtest/deps_test.go:134（另见 :92）
 
 ### T1-2　依赖守卫自身没有自动化反例测试
+
+结果：已修（091d3af）。guard_test.go 用内存里的源码测守卫的每条规则，覆盖建议里列的全部情形和 T1-1 的新规则；守卫的组合逻辑抽成只吃输入的 checkLayer1，组合本身也有测试。测试：Test守卫逐个文件的检查、Test违规信息写出位置、Test总检查接上了每一项。
 
 问题：archtest 只有 Test层1依赖守卫 一个测试，checkFile、inLayer1、isStd 对不对，只靠 6fa208c 提交时那一次手工证伪（计划就是这么规定的）。树现在是干净的，守卫逻辑被改坏，make check 照样全绿。
 
@@ -335,6 +426,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### T9-6　激活判定有四处连带报错，下一步会误导作者
 
+结果：已修（43aca7b），四处都照建议改，各有断言条数的测试：①Test重叠检查不比不属于本族的系；②Test正文扫描有问题时不报装配表里的插槽；③Test执行插槽的时机该格式不支持时不比实例的时机；④Test片段的列表规则与子值、Test模板正文的参数引用（每行每个参数只报一次）。原计划任务 9、10 已同步。
+
 问题（逐处读码确认）：①hook 的重叠检查只跳过不认识的系和本份内重复的系，合法却不属于本实现族的系照样记进 covered（hook.go:106-116）。linux 片段误勾了 esxi、另一份 esxi 实现也勾了 esxi 时，前者报 impl_series_invalid，后者再报 impl_series_overlap，下一步写着「从其余的实现里去掉它」，作者可能去改那份本来正确的实现。②模板正文里写坏的插槽占位符（未闭合，或 @post 这种不认识的时机）不进扫描结果的插槽列表，装配表里同名的插槽就再报 assembly_slot_unknown（template.go:150-156），下一步写着「从装配表里删掉它」，照做会丢掉已配好的实例。③执行插槽的时机该格式不支持时，除了 slot_timing_unsupported，插槽里每个实例、每个系还各报一条 impl_timing_mismatch（:193-203），下一步让人给 hook 加一个该格式根本不支持的时机。④同一个列表参数在带插槽或部件的行里出现两次（部件写在前面），或两个列表参数同行而后者出现两次，list_repeat_conflict 报两次（hook.go:226-234、255-265）。
 
 影响：与 hook.go 自己「不连带报错」的取舍不一致，照着下一步改反而改坏。
@@ -346,6 +439,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：T9 建议：hook.go:98-106 的重叠检查只跳过不认识的系；【T10-4】T10 建议：连带重复报错（探针实测）；【T10-4】T10 建议：template.go:152-156 与 :200：有连带报错
 
 ### T11-8　参数求值透传的取值问题，称呼与下一步不对操作员
+
+结果：已修。model 加 ParseNamed（03e0fec），登记 param_attr_unusable 与 param_sub_unavailable（822eec6）；参数求值里，可改的格子取值不合法时以 Field.Label 称呼，取不出子值报 param_sub_unavailable，锁定且取自主机属性的格子两样都报 param_attr_unusable，锁定在模板写定的值上的照激活判定报 param_accessor_invalid（c7fe6db）。原计划任务 11 已同步。测试：TestEvaluate可改的格子取值不合法时说明用显示名、TestEvaluate锁定取自主机属性的格子取值用不了、TestEvaluate正文和片段取的子值要取得出。
 
 问题：params 原样透传 model 的两类问题，只换掉 Subject（params.go:194-199、210-219）。①称呼：param_value_invalid 用参数名（param.go:145 传 d.Name），同一格的 param_required、param_locked、param_not_offered、iso_offer_missing、param_attr_missing 用的却是 Field.Label（params.go:151）；向导里同一格一会儿叫「交换分区（MiB）」，一会儿叫「swap_mb」。Field.Label 的注释写明它就是给列头和问题说明用的。②下一步写错了人：锁定、取自主机属性的格子取值有问题时，报 param_value_invalid（「按说明里的格式重新填写」），或 param_accessor_invalid（主机登记的是 IPv6、片段取 .netmask，下一步「改正引用的写法，或换成支持它的参数类型」是写给作者的）；可这一格锁着，操作员填不了，该改的是主机登记。可改的格子填了 IPv6、片段取 .netmask 时，操作员该做的是改填 IPv4，说明同样不对人。只有 param_attr_missing 说对了。
 
@@ -359,6 +454,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### T3-1　能力表格子里的取值与 cleanup 部件没有结构性校验
 
+结果：已修（fc53fe6），两条断言都照建议加了，后一个测试改名为含凭据清理。原计划任务 3 已同步。测试：Test能力表只登记目录里的值且每格不重复、Test每种格式都支持首次开机时机并要求首次开机与凭据清理部件。
+
 问题：①Test能力表只登记目录里的格式与时机（timing_test.go:327-340）只校验格式键和时机键是否 Valid，不校验格子里的解释器、部件、系统值，也不查列表内部重复；Test能力表逐格与计划一致 比对的是测试里手抄的一份，计划要求第 3、7 层改表时两边一起改，两边一起写错就没人兜。部件有间接保护（activation 的 bareTemplate 按 RequiredParts 拼正文），解释器和系统值没有：误加的 python 能通过 hook 激活（hook.go:296 只查是否在 Interpreters 里），Label() 却是空串；层 1 测试里没有用例引用 {{sys:gateway}}，把它写成 gatway，用到 gateway 的片段和模板都会被判 sysvalue_not_allowed，没人发现。②Test每种格式都支持首次开机时机并要求首次开机部件（:342-353）的注释引了 spec §5.4「最后还要清理目标机上的凭据」，循环里却没查 RequiredParts 含 cleanup；某种格式在表和抄录里同时去掉 cleanup，不会有任何测试报错，装出的机器会把应答文件副本里的密码哈希和首次开机 token 留在盘上。
 
 影响：第 3、7 层真装之后要改这张表，到时这些错误都是静默的。
@@ -370,6 +467,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：T3 should：timing_test.go:327-340 Test能力表只登记目录里的格式与时机；【T3-2】T3 should：timing_test.go:342-353 Test每种格式都支持首次开机时机并要求首次开机部件
 
 ### T8-1　扫描遇嵌套 {{ 会吞掉同一行后面的占位符
+
+结果：已修。扫描在占位符内容里遇到 {{ 就截断，外层报 placeholder_unclosed，从内层的 {{ 接着扫，建议的三条测试都补上了（fc53fe6）；placeholder_unclosed 的说明改成「在 }} 或下一个 {{ 之前没有闭合」（822eec6）。原计划任务 8 已同步。T8-2 照建议不改。测试：Test内容里遇到双左花括号就截断外层。
 
 问题：占位符从 {{ 起，到同一行其后第一个 }} 为止（scan.go:144-160）。{{slot:a {{slot:b}} 只报一条 placeholder_malformed，原文一直延伸到 b 的 }}，插槽 b 不进 Slots；{{foo:x {{slot:b}} 报 placeholder_unknown_kind，b 同样被吞。另外「种类不认识之后同一行接着扫」没有测试：现有用例里，种类不认识的占位符要么独占一行，要么同一行后面没有别的占位符（scan_test.go:266-269、439、571），拼回原文的用例只查原文；把 !known 分支改成丢掉这一行余下的部分，测试照样全过，而 {{foo:x}} {{slot:a}} 里的插槽 a 会从 Slots 里消失。
 
@@ -383,6 +482,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### T5-4　参数类的三条说明不够具体，照着改不出
 
+结果：已修。①int 的三种范围措辞登记在 codes.go（822eec6），Parse 按 Min、Max 选一条填好（03e0fec）；②param_decl_invalid 的下一步与注释写全了（822eec6）；③pwhash 的说明补上「不带 rounds=」，不放宽（822eec6）。可选的「给 params.Field 加 Min、Max」没做，第 6 层需要时再加。测试：TestParse的int说明带出具体范围、TestCode的int范围措辞接在格式后面。
+
 问题：①int 有上下限时，param_value_invalid 只说「应为十进制整数，声明了上下限的还要在范围之内」（codes.go:317），不给出范围；给 1–4094 的 vlan 填了 5000，操作员不知道范围是多少，params.Field 也没有 Min、Max。②param_decl_invalid 的下一步（:42-45）和条目注释（:38-39）比实现窄：实现还要求默认值原样就是规范形式（+5、007、Node01、2001:DB8::1、带首尾空白、列表有空行或以换行结尾都会被拒），enum 必须给 Options 或 Offer 之一，Offer 是标识符，Options 与 Offer 只能给 enum，Min 与 Max 只能给 int，选项值不能重复（param.go:88-131）。作者把默认值写成 +5，单独 Parse 能过、Validate 却拒收，照说明找不出错在哪。③pwhash 照计划不收 $6$rounds=5000$…（param.go:422-423），说明只写「以 $6$、$5$ 或 $y$ 开头的 crypt 口令散列」（codes.go:325），被拒的人看不出原因；mkpasswd -m sha-512、openssl passwd -6 默认不带 rounds，只有显式指定轮数才会遇到。
 
 影响：计划任务 6 要求「说明里写清期望的格式」，spec 总则要求说清下一步，这三处都做不到。
@@ -394,6 +495,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：T5 should「codes.go:307：paramValueFormats[int] 只写了「声明了上下限的还要在范围之内」，没给出具体范围…」；T5 should「codes.go:307 paramValueFormats[int] 只写了…没有给出实际的上下限…」；T6 should「int 声明了上下限时，param_value_invalid 只说…」；【T6-5】T6 deviation「默认值必须原样就是规范形式（Parse(Default).Canonical() == Default）…」；【T6-5】T6 deviation「声明校验里比计划多出的几条：Offer 必须是 ValidIdent…」；【T6-5】T6 should「param_decl_invalid 的下一步（internal/core/model/codes.go:42-45，任务 5 的文件）比实现的规则宽…」；【T6-5】T6 should「默认值从严要求规范形式（param.go:125-131）…」；【T6-4】T6 concern「pwhash 按计划只收 [./A-Za-z0-9$]，带 rounds=N 的 SHA-crypt 散列…」
 
 ### T5-5　codes.go 说明里抄的常量与词表没有对齐测试
+
+结果：已修。codes_align_test.go 把说明里的上限、类型清单、算法、保留键、目录词表和「ESXi 只走 UEFI」钉在常量与目录上（3572304）；插槽名长度与超时范围分别在 scan、activation 的测试里对齐（fc53fe6、43aca7b）。逐项核对时说明与常量本来一致，codes.go 没改。测试：以 TestAlign 开头的 9 个测试、Test插槽名超长时说明里的上限与常量一致、Test超时的说明与范围一致。
 
 问题：层 1 的测试里没有一处引用 snMaxLen、nameMaxRunes、identMaxLen、safeWordMaxLen、textMaxBytes、listMaxItems、timeoutMaxSec、slotNameMaxRunes（已 grep）。codes.go 的说明里重复写下的事实有：sn_invalid、name_invalid 及其原因里的 64；param_decl_invalid、attr_key_invalid 的「最长 32 个字符」、类型清单、保留键 sn、arch、firmware；param_value_invalid 的 1–256 项；paramValueFormats 里的 1–128、1–63、253、4096、sshkey 算法表和 pwhash 前缀；sn_unsafe_in_body 与 word、diskpath 说明里的安全词字符；param_accessor_invalid 的 addr、prefix、netmask；timing_unknown、part_unknown、sysvalue_unknown 下一步逐个列出的 4 个时机、3 个部件、7 个系统值；firmware_mismatch 的「ESXi 只走 UEFI」；timeout_invalid 的 1–21600（与 activation/hook.go:21-24 重复）；placeholder_malformed 的插槽名 1–32（与 scan/scan.go:40 重复）。目前逐项核对都一致。
 
@@ -407,6 +510,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### T13-8　Build 丢掉查找结果，前提走岔时会静默产出空实例
 
+结果：已修，随 L-7 一起做（a3dc308）。instance 查不到 hook 或实现时报与参数求值相同的 hook_ref_missing、impl_missing_for_series，不产出快照；参数求值通过之后的部分拆成 buildFrom，白盒测试用它模拟两边走岔。原计划任务 13 已同步。测试：TestBuild求值之后查不到hook或实现时不产出快照。
+
 问题：instance 取 hook 和 ImplFor 时丢掉了 ok（build.go:150-151），完全靠 params.Evaluate 先报出 hook_ref_missing、impl_missing_for_series。现在两边遍历的是同一组插槽和实例，TestBuild前提不满足时不产出快照 也守着这一点。
 
 影响：两边以后一旦走岔，Build 会静默产出 Kind、Body、HookName 全空的实例，随任务存进第 2 层，违反 spec 总则「不做静默降级」。
@@ -418,6 +523,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：任务13 concern「Build relies on params.Evaluate to report missing hooks and implementations」；任务13 should「…build.go:100-101：instance 丢掉了 map 查找和 ImplFor 返回的 ok」
 
 ### T10-6　激活测试不断言条数，几处跳过规则没钉住
+
+结果：已修，只改测试（43aca7b）。①onlyCode 要求条数；②–⑤ 各补了用例：Test族或系不对时照查不依赖格式的问题、Test模板的族或系不对时照查不依赖格式的问题、Test片段覆盖的系不同格式（混格式时不查系统值）、Test用join的列表与逐行重复的列表同行不冲突、Test模板问题的Subject。
 
 问题：①onlyCode（hook_test.go:78-89）只要求每条都是期望的代码，不查条数，重复报出测不出。读代码可确认：去掉 template.go:243 的 !info.ok 保护后，「类型不认识」用例会多一条 param_decl_invalid，测试照样通过。②没有测试同时断言 impl_series_invalid（或 template_series_invalid）与不依赖格式的问题（如 param_undeclared）一起报出，checkImpl 或 Template 改成报完就提前返回也全绿。③hook 片段混格式时跳过 sysvalue_not_allowed 没钉住：混格式用例只用了 kickstart、autoyast、agama 都有的 task、sn。④一行里一个 |join 列表配一个逐行重复列表，这种不冲突的写法没有正例。⑤Test模板问题的Subject（template_test.go:515-554）只覆盖了 fragment_slot_not_alone 一种插槽问题，slot_duplicate（应指向后一处并带行列）、slot_timing_unsupported、part_not_in_format、实例的 timeout_invalid（Path「插槽名/序号」）都没有。
 
@@ -431,6 +538,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### T11-10　三处测试的数据分不出变异实现
 
+结果：已修，只改测试。①锁定的 attr 登记成 IPv6 的例子，以及「.netmask 在前、.addr 在后」的引用（c7fe6db）；②pkgs@1 与 nic@2、nic@2 与 nic@10 两组（cc4c636）；③重名插槽插到正文中间（a3dc308）。测试：TestEvaluate锁定取自主机属性的格子取值用不了、TestEvaluate正文和片段取的子值要取得出、TestTemplateUsable多个废弃引用按hook排序各报一次、TestBuild重名的插槽与参数只算第一次出现。
+
 问题：①params：TestEvaluate正文和片段取的子值要取得出（params_test.go:387-434）只测了操作员填值的路径，锁定、取自主机属性、登记成 IPv6、片段取 .netmask 的预填路径没有用例（读代码行为正确）；两处引用的 .netmask 都排在最后一个子值的位置，把 refSubs 改成只留最后一个子值，测试照样全过。②admission：废弃引用的测试数据是 lvm@1、nic@1、nic@2（admission_test.go:287-310），先比 ID 与先比版本排出来一样，评审把 deprecatedRefs 改成先比版本测试全过，文档承诺的「按 ID、版本排序」没被钉住。③snapshot：TestBuild重名的插槽与参数只算第一次出现（build_test.go:688-702）的注释说要钉住序号连续，但重名插槽追加在正文末尾，后面再没有别的插槽，把 Seq: len(out)+1 改成按扫描下标编号照样全过。
 
 影响：这几处规则以后被改坏，不会有测试报红。
@@ -442,6 +551,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：任务11 should「…params_test.go:387 TestEvaluate正文和片段取的子值要取得出 只测了操作员填值的路径」；任务11 should「…params_test.go:392 与 :401：…两处引用里，.netmask 都排在这个参数最后一个子值的位置」；【T12-7】任务12 should「admission_test.go:289-310 (TestTemplateUsable多个废弃引用按hook排序各报一次)」；【T13-9】任务13 should「…build_test.go:543：TestBuild重名的插槽与参数只算第一次出现 的注释说要钉住「序号连续」，实际钉不住」
 
 ### T9-4　激活判定几处有意的放行没写明也没钉住
+
+结果：已修，行为不改。两条 *_series_invalid 的说明加上「或重复勾选」（822eec6）；重复的时机只查一次、空片段允许，都写进注释并用测试钉住（43aca7b）。原计划任务 9 已同步。测试：Test重复声明的时机只查一次、Test空片段能通过。
 
 问题：①同一份实现（以及模板）里重复勾的系报 impl_series_invalid 或 template_series_invalid（hook.go:130-143），两条说明都没提「重复」；脚本 Timings 里重复的时机被跳过、0 条问题（:293），这个分支没有测试。seriesValid 注释给的拒收理由「第 2 层会原样存下这份列表」对时机同样成立。②正文为空的片段能通过激活，空脚本会被拦（:285）。spec C8 没要求片段非空，计划任务 9 只对脚本写了「正文非空」；空片段有正当用途：给不需要做任何事的系当空操作实现，免得模板勾了这个系报 impl_missing_for_series。两种重复都只会来自直接调接口。
 
@@ -455,6 +566,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### T2-1　格式显示名照计划写成小写，与 spec 不一致
 
+结果：已修（fc53fe6）。autoyast、agama 的显示名改成 AutoYaST、Agama，测试抄录同步改；原计划任务 2 那句已同步。测试：Test取值表与计划一致。
+
 问题：计划任务 2 写「格式的显示名就是它的标识，esxi-ks 显示为「ESXi ks」」，实现照做，autoyast、agama 显示为小写（series.go:46-47，series_test.go:39-40 的抄录相同）；spec §2.1 的表和 C1 写的是 AutoYaST、Agama（kickstart、preseed、autoinstall、unattend 在 spec 里本来就是小写）。计划只对 ESXi ks 用了 spec 的写法，像是漏了这两个。
 
 影响：显示名不进库，层 1 非测试代码也没有调用 Label()（已 grep），只影响第 5、6 层界面；界面会与 spec、文档和同表的「ESXi ks」写法不一致。
@@ -467,7 +580,7 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ## 3. 归后续层处理
 
-属于后续层的事，或要等后续层才有真实用途。写这一层的计划时纳入即可。
+属于后续层的事，或要等后续层才有真实用途。写这一层的计划时纳入即可。修补轮只并入了 T7-5（随 L-6），其余 14 条没有动。
 
 ### T4-2　网关须先检查 iPXE 换算结果，不能传空值
 
@@ -502,6 +615,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：T10 偏离：Approver ignores surrounding whitespace and letter case；T10 顾虑：Comparing approver and author case-insensitively is a policy choice；T10 建议：template.go:54-63 Approver 先 TrimSpace 再 strings.EqualFold
 
 ### T7-5　ISO.Offers 的选项值须是安全词，第 4 层导入要守
+
+结果：已随 L-6 修掉（5416531）。ISO.Validate 要求集合名是标识符、选项值是同一集合内不重复的安全词、选项的显示名过 ValidLabel，ISO.Offers 的注释也补上了这条规则；第 4 层导入 editions 时照它写值。原计划任务 7 已同步。测试：TestISOValidate提供的集合不合法。
 
 第 4 层。parseEnum 只收安全词。ISO 提供的集合值如果不是安全词（比如把「Windows Server 2025 Datacenter」存进 Value），这个选项永远选不上，Evaluate 还会对列表里明明有的值报「应为列出的选项之一」，说明自相矛盾。这条要求只写在 Option 的注释里（param.go:18，说的是静态选项），ISO.Offers 的注释（registry.go:63-65）没提，model.ISO 也不校验。d45fbf3 已导出 model.IsSafeWord，第 4 层可以自查。建议第 4 层导入 editions 时 Value 用镜像索引或 ServerDatacenter 这类安全词、Label 放全名，集合名用 ValidIdent，导入时校验；现在可顺手给 ISO.Offers 的注释补一句。L-6 若决定加 ISO.Validate，这条规则一并放进去。
 
