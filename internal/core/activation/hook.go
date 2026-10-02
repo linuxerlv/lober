@@ -35,10 +35,12 @@ func versionID(id string, version int) string {
 
 // Hook 判断 hook 版本 h 能不能批准（C8–C11，以及 C19 在片段上的部分）。
 //
-// 问题的顺序固定：先 hook 整体（名称、参数声明、有没有实现），再按实现的顺序逐份列出，超时
-// 最后；一份实现里正文的问题按位置排。hook 整体的问题 Subject 的 Kind 为 hook，ID 为
-// 「hook ID@版本」，参数声明的问题 Path 为参数名；实现的问题 Kind 为 impl，Path 为它覆盖的系
-// （逗号分隔），涉及正文位置时带上行列。
+// 问题的顺序固定：先 hook 整体（名称、说明，参数声明按位置，有没有实现），再按实现的顺序逐份列出，
+// 超时最后；一份实现里先列不涉及正文位置的，再列正文的问题，按位置排。
+//
+// Subject 按位置指向（T9-1）：hook 整体的问题 Kind 为 hook，ID 为「hook ID@版本」，Path 为空；第 n 个
+// 参数声明的问题 Path 为 param/<n>；第 n 份实现的问题 Kind 为 impl，Path 为 impl/<n>，涉及正文位置时
+// 另带行列。n 都从 1 起，重名的声明、勾了同一组系的两份实现因此分得开；系与参数名只出现在说明里。
 func Hook(h model.Hook) []model.Problem {
 	id := versionID(h.ID, h.Version)
 	hookSubj := model.Subject{Kind: "hook", ID: id}
@@ -46,15 +48,19 @@ func Hook(h model.Hook) []model.Problem {
 	if _, _, err := model.NormalizeName(h.Name); err != nil {
 		out = append(out, withSubject(err, hookSubj))
 	}
-	params, ps := checkDecls(h.Params, hookSubj)
+	// 说明与正文一样要原样存下（T13-10）。
+	if !model.StorableText(h.Description) {
+		out = append(out, model.NewProblem("text_not_storable", hookSubj))
+	}
+	params, ps := checkDecls(h.Params, hookSubj, fragmentSubs(h.Impls))
 	out = append(out, ps...)
 	if len(h.Impls) == 0 {
 		out = append(out, model.NewProblem("hook_no_impl", hookSubj))
 	}
 	covered := map[catalog.Series]bool{} // 前面的实现已经覆盖的系
 	hasScript := false
-	for _, impl := range h.Impls {
-		subj := model.Subject{Kind: "impl", ID: id, Path: joinSeries(impl.Series)}
+	for i, impl := range h.Impls {
+		subj := model.Subject{Kind: "impl", ID: id, Path: "impl/" + strconv.Itoa(i+1)}
 		out = append(out, checkImpl(impl, params, subj, covered)...)
 		hasScript = hasScript || impl.Kind == model.ImplScript
 	}
@@ -72,14 +78,30 @@ type paramInfo struct {
 	ok   bool
 }
 
+// fragmentSubs 收集 hook 各份片段对参数取的子值（写法见 addRefs），参数的默认值要取得出它们（L-4）。
+// 脚本经环境变量拿整个值、不取子值；种类不认识的不知道该怎么读：都不算。
+func fragmentSubs(impls []model.Impl) map[string][]string {
+	subs := map[string][]string{}
+	for _, impl := range impls {
+		if impl.Kind == model.ImplFragment {
+			res, _ := scan.Scan(impl.Body)
+			addRefs(subs, res.Params)
+		}
+	}
+	return subs
+}
+
 // checkDecls 逐个校验参数声明，并查名字有没有重复。重名的取第一个作引用的对象，后面的
-// 报 param_decl_invalid。问题的 Path 为参数名。
-func checkDecls(decls []model.ParamDecl, subj model.Subject) (map[string]paramInfo, []model.Problem) {
+// 报 param_decl_invalid。问题的 Path 为 param/<序号>，序号是声明的位置，从 1 起（T9-1）。
+//
+// subs 是对各参数取的子值，合法声明的默认值要取得出它们（L-4）。hook 传它自己的片段取的：默认值
+// 不合用，错在声明上。模板与实例的默认值随取值来源查（checkBindings），传 nil。
+func checkDecls(decls []model.ParamDecl, subj model.Subject, subs map[string][]string) (map[string]paramInfo, []model.Problem) {
 	params := make(map[string]paramInfo, len(decls))
 	var out []model.Problem
-	for _, d := range decls {
+	for i, d := range decls {
 		s := subj
-		s.Path = d.Name
+		s.Path = "param/" + strconv.Itoa(i+1)
 		ps := d.Validate()
 		_, dup := params[d.Name]
 		if dup && len(ps) == 0 {
@@ -89,8 +111,12 @@ func checkDecls(decls []model.ParamDecl, subj model.Subject) (map[string]paramIn
 			p.Subject = s
 			out = append(out, p)
 		}
-		if !dup {
-			params[d.Name] = paramInfo{decl: d, ok: len(ps) == 0}
+		if dup {
+			continue
+		}
+		params[d.Name] = paramInfo{decl: d, ok: len(ps) == 0}
+		if len(ps) == 0 && d.Default != "" && len(subs[d.Name]) > 0 {
+			out = append(out, valueProblems(d, d.Default, subs[d.Name], s)...)
 		}
 	}
 	return params, out
@@ -103,10 +129,11 @@ func checkImpl(impl model.Impl, params map[string]paramInfo, subj model.Subject,
 	if !seriesOK {
 		out = append(out, model.NewProblem("impl_series_invalid", subj))
 	}
-	// 一个系最多出现在一份实现里（C8），否则渲染时不知道取哪一份。不认识的系已经算作
-	// 族或系不对，不再拿来比。
+	// 一个系最多出现在一份实现里（C8），否则渲染时不知道取哪一份。不认识的、不属于本实现族的
+	// 系已经算作族或系不对，不再拿来比：另一份实现照样覆盖它是对的，报重叠会让作者去改那份
+	// 本来正确的实现（T9-6①）。
 	for i, s := range impl.Series {
-		if !s.Valid() || slices.Contains(impl.Series[:i], s) {
+		if !s.Valid() || s.Family() != impl.Family || slices.Contains(impl.Series[:i], s) {
 			continue
 		}
 		if covered[s] {
@@ -114,17 +141,24 @@ func checkImpl(impl model.Impl, params map[string]paramInfo, subj model.Subject,
 		}
 		covered[s] = true
 	}
+	var head, body []model.Problem
 	switch impl.Kind {
 	case model.ImplFragment:
-		out = append(out, checkFragment(impl, seriesOK, params, subj)...)
+		head, body = checkFragment(impl, seriesOK, params, subj)
 	case model.ImplScript:
-		out = append(out, checkScript(impl, seriesOK, params, subj)...)
+		head, body = checkScript(impl, seriesOK, params, subj)
 	default:
-		// 实现只有片段与脚本两种（C8），代码表里没有专门的代码；种类不认识的当作没写完的
-		// 脚本拦下，不能让它通过审批。
-		out = append(out, model.NewProblem("script_incomplete", subj))
+		// 实现只有片段与脚本两种（C8）。种类不认识的只会来自直接调接口或库里的坏数据，正文按
+		// 哪一种的规则查都无从说起（T7-2）。
+		head = []model.Problem{model.NewProblem("impl_kind_unknown", subj, impl.Kind)}
 	}
-	return out
+	// 正文要原样存下（T13-10），与种类无关。说的是整份正文，不带位置，排在正文的问题最前。
+	if !model.StorableText(impl.Body) {
+		body = append(body, model.NewProblem("text_not_storable", subj))
+	}
+	slices.SortStableFunc(body, byPosition)
+	out = append(out, head...)
+	return append(out, body...)
 }
 
 // seriesValid：族合法，系非空、各不相同，且都属于该族。hook 的实现（C8）与模板（C13）共用。
@@ -142,13 +176,17 @@ func seriesValid(f catalog.Family, series []catalog.Series) bool {
 	return true
 }
 
-// checkFragment 查片段。系不对时推不出格式，跟格式有关的检查（同格式、系统值）都跳过，
-// 免得同一个错误换个说法再报一遍；其余检查照做，作者一次能看到更多要改的地方。
-func checkFragment(impl model.Impl, seriesOK bool, params map[string]paramInfo, subj model.Subject) []model.Problem {
-	var out []model.Problem
+// checkFragment 查片段，分别返回不涉及正文位置的问题与正文的问题，后者由调用方按位置排。系不对时
+// 推不出格式，跟格式有关的检查（同格式、系统值）都跳过，免得同一个错误换个说法再报一遍；其余检查
+// 照做，作者一次能看到更多要改的地方。
+//
+// 正文可以为空，这是有意的放行（T9-4②）：给不需要做任何事的系当空操作实现，模板勾了这个系才不会
+// 报 impl_missing_for_series。脚本不行，见 checkScript。
+func checkFragment(impl model.Impl, seriesOK bool, params map[string]paramInfo, subj model.Subject) ([]model.Problem, []model.Problem) {
+	var head []model.Problem
 	var format catalog.Format // 推不出时为空
 	if seriesOK {
-		format, out = commonFormat(impl.Series, "fragment_mixed_formats", subj)
+		format, head = commonFormat(impl.Series, "fragment_mixed_formats", subj)
 	}
 	res, body := scanBody(impl.Body, subj)
 	rules := newBodyRules(format, params)
@@ -162,12 +200,12 @@ func checkFragment(impl model.Impl, seriesOK bool, params map[string]paramInfo, 
 			body = append(body, rules.check(seg, s)...)
 		}
 	}
-	slices.SortStableFunc(body, byPosition)
-	return append(out, body...)
+	return head, body
 }
 
-// 下面到 subOK 为止是模板正文与 hook 片段共用的检查（参数引用、列表规则、系统值），两边只在
-// 插槽和系统部件上不同，那部分由 checkFragment 与 checkTemplateBody 各自查。
+// 下面到 addRefs 为止是模板与 hook 共用的检查：正文与片段里的参数引用、列表规则、系统值，以及
+// 取值取不取得出引用要的子值。正文与片段只在插槽和系统部件上不同，那部分由 checkFragment 与
+// checkTemplateBody 各自查。
 
 // commonFormat 是一组合法的系共同的格式。不同格式时报 mixed（片段与模板各有自己的代码），返回
 // 空：推不出格式，跟格式有关的检查都要跳过。
@@ -204,10 +242,29 @@ type bodyRules struct {
 	// 里有没有插槽、系统部件（只有模板正文里会有）。
 	repeated   map[int]string
 	structural map[int]bool
+	// conflicts 记着哪一行已经为哪个列表参数报过 list_repeat_conflict：每行每个参数只报一次，
+	// 同一个参数在冲突的行里再出现、后面再跟插槽或部件，都还是同一个冲突（T9-6④）。
+	conflicts map[lineParam]bool
+}
+
+type lineParam struct {
+	line int
+	name string
 }
 
 func newBodyRules(format catalog.Format, params map[string]paramInfo) *bodyRules {
-	return &bodyRules{format: format, params: params, repeated: map[int]string{}, structural: map[int]bool{}}
+	return &bodyRules{format: format, params: params,
+		repeated: map[int]string{}, structural: map[int]bool{}, conflicts: map[lineParam]bool{}}
+}
+
+// conflict 报第 line 行里列表参数 name 的 list_repeat_conflict，这一行已为它报过的不再报。
+func (r *bodyRules) conflict(line int, name string, s model.Subject) []model.Problem {
+	k := lineParam{line, name}
+	if r.conflicts[k] {
+		return nil
+	}
+	r.conflicts[k] = true
+	return []model.Problem{model.NewProblem("list_repeat_conflict", s, name)}
 }
 
 // check 查一段系统值或参数引用，别的种类返回空。
@@ -228,7 +285,7 @@ func (r *bodyRules) check(seg scan.Segment, s model.Subject) []model.Problem {
 func (r *bodyRules) placeholder(seg scan.Segment, s model.Subject) []model.Problem {
 	r.structural[seg.Line] = true
 	if name, ok := r.repeated[seg.Line]; ok {
-		return []model.Problem{model.NewProblem("list_repeat_conflict", s, name)}
+		return r.conflict(seg.Line, name, s)
 	}
 	return nil
 }
@@ -260,7 +317,7 @@ func (r *bodyRules) param(seg scan.Segment, s model.Subject) []model.Problem {
 			r.repeated[seg.Line] = ref.Name
 		}
 		if (seen && first != ref.Name) || r.structural[seg.Line] {
-			out = append(out, model.NewProblem("list_repeat_conflict", s, ref.Name))
+			out = append(out, r.conflict(seg.Line, ref.Name, s)...)
 		}
 	}
 	return out
@@ -268,7 +325,7 @@ func (r *bodyRules) param(seg scan.Segment, s model.Subject) []model.Problem {
 
 // subOK 拿一个 IPv4 的 cidr 样例按声明解析，再取子值：哪些类型有哪些子值只在 model 里
 // 登记一处，这里不另抄一份。样例对别的类型要么解析不了，要么解析成该类型的值、取子值时被
-// 拒，结果都对。netmask 只适用于 IPv4，取值是不是 IPv6 要到参数求值时才知道。
+// 拒，结果都对。netmask 只适用于 IPv4，取值是不是 IPv6 要看具体的值，见 valueProblems。
 func subOK(d model.ParamDecl, sub string) bool {
 	v, err := model.ParamDecl{Name: d.Name, Type: d.Type}.Parse("192.0.2.1/24")
 	if err != nil {
@@ -278,12 +335,48 @@ func subOK(d model.ParamDecl, sub string) bool {
 	return err == nil
 }
 
-// checkScript 查脚本：写完整了（C10），声明的时机和解释器在覆盖的每个系里都可用（C8、C10），
-// 正文里字面出现的参数变量都已声明（C9）。系不对时不按系查能力，理由同 checkFragment。
-func checkScript(impl model.Impl, seriesOK bool, params map[string]paramInfo, subj model.Subject) []model.Problem {
-	var out []model.Problem
+// valueProblems 查 raw 能不能作为参数 d 的取值：通过类型校验（C19），并取得出 subs 里的每个子值
+// （L-4）。按类型就取不了的子值已在引用处报过（subOK），这里跳过，不连带再报一遍；剩下的只取决于
+// 取值本身，比如 IPv6 的 cidr 取不出 netmask。有一个取不出就报，与参数求值一致。问题指向 s。
+func valueProblems(d model.ParamDecl, raw string, subs []string, s model.Subject) []model.Problem {
+	v, err := d.Parse(raw)
+	if err != nil {
+		return []model.Problem{withSubject(err, s)}
+	}
+	for _, sub := range subs {
+		if !subOK(d, sub) {
+			continue
+		}
+		if _, err := v.Sub(sub); err != nil {
+			return []model.Problem{withSubject(err, s)}
+		}
+	}
+	return nil
+}
+
+// addRefs 把一组参数引用记进 refs：键是引用到的参数名，值是对它取过的子值，按第一次出现的顺序、
+// 不重复；只按名字引用的也有键。与参数求值整理引用的规则相同：正文与所选片段引用到的参数必填，
+// 取的子值要取得出，激活判定按同一份引用去查，批准了的模板求值时才不会因此报错。
+func addRefs(refs map[string][]string, params []scan.ParamRef) {
+	for _, r := range params {
+		subs := refs[r.Name]
+		if r.Sub != "" && !slices.Contains(subs, r.Sub) {
+			subs = append(subs, r.Sub)
+		}
+		refs[r.Name] = subs
+	}
+}
+
+// checkScript 查脚本，分别返回不涉及正文位置的问题与正文的问题，后者由调用方按位置排：写完整了
+// （C10），声明的时机和解释器在覆盖的每个系里都可用（C8、C10），正文里字面出现的参数变量都已声明
+// （C9），也没有写 lober 的占位符（L-1）。系不对时不按系查能力，理由同 checkFragment。
+//
+// 同一个时机写了两次只查一次，这是有意的放行（T9-4①）：不像重复勾的系那样拦下，第 5 层可以在接口
+// 边界去重。
+func checkScript(impl model.Impl, seriesOK bool, params map[string]paramInfo, subj model.Subject) ([]model.Problem, []model.Problem) {
+	var head []model.Problem
 	if strings.TrimSpace(impl.Body) == "" || impl.Interpreter == "" || len(impl.Timings) == 0 {
-		out = append(out, model.NewProblem("script_incomplete", subj))
+		head = append(head, model.NewProblem("script_incomplete", subj))
 	}
 	if seriesOK {
 		for _, s := range impl.Series {
@@ -292,14 +385,87 @@ func checkScript(impl model.Impl, seriesOK bool, params map[string]paramInfo, su
 				switch {
 				case slices.Contains(impl.Timings[:i], t): // 重复声明的时机只查一次
 				case !slices.Contains(f.Timings(), t):
-					out = append(out, model.NewProblem("script_timing_unsupported", subj, s, t))
+					head = append(head, model.NewProblem("script_timing_unsupported", subj, s, t))
 				case impl.Interpreter != "" && !slices.Contains(f.Interpreters(t), impl.Interpreter):
-					out = append(out, model.NewProblem("script_interpreter_unavailable", subj, s, t, impl.Interpreter))
+					head = append(head, model.NewProblem("script_interpreter_unavailable", subj, s, t, impl.Interpreter))
 				}
 			}
 		}
 	}
-	return append(out, checkEnvRefs(impl.Body, params, subj)...)
+	return head, append(checkEnvRefs(impl.Body, params, subj), checkScriptPlaceholders(impl.Body, subj)...)
+}
+
+// checkScriptPlaceholders 找出脚本正文里 lober 的占位符（L-1）：脚本按原样下发、不展开占位符，写在
+// 里面的 {{param:disk}} 永远不会被替换，作者以为拿到了参数，到装机时才出错。slot、lober、sys、param
+// 四种都报，写错的同种类也报，每处一条，参数是占位符原文，行列指向它的 {{。
+//
+// 哪些 {{ 开了一个占位符，以扫描为准；扫描报的问题本身不带出：脚本不展开占位符，{{http://…}} 这类
+// 写法在脚本里没有毛病，种类不是那四种的照样放行，Jinja、Go 模板也不受影响。
+func checkScriptPlaceholders(body string, subj model.Subject) []model.Problem {
+	res, ps := scan.Scan(body)
+	var out []model.Problem
+	for _, seg := range res.Segments {
+		if seg.Kind != scan.KindText {
+			out = append(out, model.NewProblem("script_placeholder_not_expanded", at(subj, seg.Line, seg.Col), seg.Raw))
+		}
+	}
+	// 写错的占位符留在原文段里，扫描只给出它的问题与 {{ 的行列，原文要从正文里取。扫描的问题按位置
+	// 排好，c 只往前走。
+	c := cursor{body: body, line: 1, col: 1}
+	for _, p := range ps {
+		line, col := p.Subject.Line, p.Subject.Col
+		if raw, ok := scriptPlaceholderRaw(body[c.seek(line, col):]); ok {
+			out = append(out, model.NewProblem("script_placeholder_not_expanded", at(subj, line, col), raw))
+		}
+	}
+	slices.SortStableFunc(out, byPosition)
+	return out
+}
+
+// scriptKinds 是 lober 占位符的四种种类，与扫描认的相同：写错的占位符扫描不给出种类，只好照它的
+// 写法（{{、可选的空格、种类、冒号）再认一次。
+var scriptKinds = []string{"slot:", "lober:", "sys:", "param:"}
+
+// scriptPlaceholderRaw 认扫描报了问题的那个占位符，rest 从它的 {{ 起。种类不是那四种的返回 false；
+// 是的话返回它的原文，规则同扫描：到同一行里其后的第一个 }} 为止，在那之前先遇到下一个 {{ 或行尾的，
+// 截断在那里并去掉末尾的空白。原文只写进说明，哪里有占位符仍以扫描为准。
+func scriptPlaceholderRaw(rest string) (string, bool) {
+	head, ok := strings.CutPrefix(rest, "{{")
+	word := strings.TrimLeft(head, " ")
+	if !ok || !slices.ContainsFunc(scriptKinds, func(k string) bool { return strings.HasPrefix(word, k) }) {
+		return "", false
+	}
+	end := len(rest)
+	if k := strings.Index(head, "{{"); k >= 0 {
+		end = 2 + k
+	}
+	if k := strings.IndexByte(rest[:end], '\n'); k >= 0 {
+		end = k
+	}
+	if k := strings.Index(rest[2:end], "}}"); k >= 0 {
+		return rest[:2+k+2], true
+	}
+	return strings.TrimRight(rest[:end], " \t\r"), true
+}
+
+// cursor 把扫描给的行列换回正文里的字节偏移，行列的算法同 position。它只往前走：问题按位置排好，
+// 整份正文最多走一遍，一行里写满写错的占位符时也不会变成平方级。
+type cursor struct {
+	body           string
+	off, line, col int
+}
+
+func (c *cursor) seek(line, col int) int {
+	for c.line < line {
+		c.off += strings.IndexByte(c.body[c.off:], '\n') + 1
+		c.line, c.col = c.line+1, 1
+	}
+	for c.col < col {
+		_, size := utf8.DecodeRuneInString(c.body[c.off:])
+		c.off += size
+		c.col++
+	}
+	return c.off
 }
 
 // envPrefix 是脚本参数变量的前缀，取自 model.EnvName：第 3 层按它导出变量，这里按它认引用，
@@ -361,16 +527,6 @@ func withSubject(err error, s model.Subject) model.Problem {
 func at(s model.Subject, line, col int) model.Subject {
 	s.Line, s.Col = line, col
 	return s
-}
-
-// joinSeries 是实现的 Path：它覆盖的系按勾选顺序以逗号连接。实现没有自己的 ID，界面靠它
-// 认出是哪一份。
-func joinSeries(series []catalog.Series) string {
-	parts := make([]string, len(series))
-	for i, s := range series {
-		parts[i] = string(s)
-	}
-	return strings.Join(parts, ",")
 }
 
 // formatsOf 按首次出现的顺序列出 series 用到的格式。

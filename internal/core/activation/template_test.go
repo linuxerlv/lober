@@ -123,16 +123,41 @@ type tplEdit struct {
 	mod  tplMod
 }
 
-// runTplEdits 对每个反例断言它恰好报出 want。
+// runTplEdits 对每个反例断言它恰好报出一条 want。
 func runTplEdits(t *testing.T, want model.Code, edits []tplEdit) {
+	t.Helper()
+	runTplEditsN(t, want, 1, edits)
+}
+
+// runTplEditsN 对每个反例断言它恰好报出 n 条 want：有的问题按系、按实例各报一条。
+func runTplEditsN(t *testing.T, want model.Code, n int, edits []tplEdit) {
 	t.Helper()
 	for _, e := range edits {
 		t.Run(e.name, func(t *testing.T) {
 			tpl, hooks := goodTemplate(), goodHooks()
 			e.mod(&tpl, hooks)
-			onlyCode(t, Template(tpl, hooks), want)
+			onlyCode(t, Template(tpl, hooks), want, n)
 		})
 	}
+}
+
+// all 依次做几处修改：有的反例要同时声明参数、写引用、定取值来源。
+func all(mods ...tplMod) tplMod {
+	return func(tpl *model.Template, hooks hookSet) {
+		for _, m := range mods {
+			m(tpl, hooks)
+		}
+	}
+}
+
+// declare 只声明一个模板参数，正文里不引用它。
+func declare(d model.ParamDecl) tplMod {
+	return func(tpl *model.Template, _ hookSet) { tpl.Params = append(tpl.Params, d) }
+}
+
+// replaceWith 整个换成另一个模板：有的格式规则在正例的 kickstart 上反不出来。
+func replaceWith(other model.Template) tplMod {
+	return func(tpl *model.Template, _ hookSet) { *tpl = other }
 }
 
 // passes 断言正例改过一处后仍然通过。
@@ -248,6 +273,14 @@ func Test模板名称不合法(t *testing.T) {
 	})
 }
 
+// 模板正文要存得下（T13-10），理由同 hook 的正文：快照按 JSON 存，非法的字节存进去再取出来就变了。
+func Test模板正文存不下(t *testing.T) {
+	runTplEdits(t, "text_not_storable", []tplEdit{
+		{"含 NUL", tplLine("# \x00")},
+		{"不是 UTF-8", tplLine("# \xe4\xb8")},
+	})
+}
+
 // 模板属于一个族，勾该族的系，没勾系的不能激活（C13）。系不对时推不出格式，按格式、按系的
 // 检查都跳过：正例的 hook 不覆盖 centos 和 esxi，照查就会连带报出 impl_missing_for_series。
 func Test模板的族或系不对(t *testing.T) {
@@ -268,6 +301,14 @@ func Test模板的族或系不对(t *testing.T) {
 	})
 }
 
+// 族或系不对时只跳过按格式、按系的检查，不依赖格式的照查（T10-6②）。
+func Test模板的族或系不对时照查不依赖格式的问题(t *testing.T) {
+	tpl, hooks := goodTemplate(), goodHooks()
+	tpl.Series = nil
+	tpl.Body += "# {{param:nope}}\n"
+	wantCodes(t, Template(tpl, hooks), "template_series_invalid", "param_undeclared")
+}
+
 // 所勾的系要同格式，正文按这种格式写（C13）；推不出格式，按格式、按系的检查同样跳过。
 func Test模板勾的系不同格式(t *testing.T) {
 	runTplEdits(t, "template_mixed_formats", []tplEdit{
@@ -286,6 +327,17 @@ func Test模板正文的扫描错误原样带出(t *testing.T) {
 	runTplEdits(t, "timing_unknown", []tplEdit{{"时机不认识", tplLine("{{slot:收尾@post}}")}})
 	runTplEdits(t, "part_unknown", []tplEdit{{"部件不认识", tplLine("{{lober:motd}}")}})
 	runTplEdits(t, "sysvalue_unknown", []tplEdit{{"系统值不认识", tplLine("# {{sys:mirror}}")}})
+}
+
+// 写坏的插槽占位符不进插槽列表；这时再报 assembly_slot_unknown，作者照「从装配表里删掉它」去做，
+// 会丢掉已经配好的实例（T9-6②）。正文改好之后，真不存在的插槽照样会报。
+func Test正文扫描有问题时不报装配表里的插槽(t *testing.T) {
+	runTplEdits(t, "placeholder_unclosed", []tplEdit{{"片段插槽没闭合", tplReplace("{{slot:分区}}\n", "{{slot:分区\n")}})
+	runTplEdits(t, "timing_unknown", []tplEdit{{"执行插槽的时机写错", tplReplace("@post-target}}", "@post}}")}})
+	orphan := func(tpl *model.Template, _ hookSet) {
+		tpl.Assembly["软件包"] = []model.Instance{{HookID: "lvm", HookVersion: 3}}
+	}
+	runTplEdits(t, "sysvalue_unknown", []tplEdit{{"别处的扫描错误也算", all(tplLine("# {{sys:mirror}}"), orphan)}})
 }
 
 // 插槽名在一个模板里唯一，不论类型（C14）：装配表按名字挂实例，重名就不知道挂在哪一个。
@@ -309,9 +361,28 @@ func Test执行插槽的时机该格式不支持(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			onlyCode(t, Template(bareTemplate(c.series, c.line), nil), "slot_timing_unsupported")
+			onlyCode(t, Template(bareTemplate(c.series, c.line), nil), "slot_timing_unsupported", 1)
 		})
 	}
+}
+
+// 执行插槽的时机该格式不支持时，插槽已报 slot_timing_unsupported；再拿它去比实例的时机，下一步会让
+// 作者给 hook 加一个该格式根本没有的时机（T9-6③）。种类与时机无关，照比。
+func Test执行插槽的时机该格式不支持时不比实例的时机(t *testing.T) {
+	win := func(id string, kind model.ImplKind) model.Hook {
+		impl := model.Impl{Family: "windows", Series: []catalog.Series{"windows-server"}, Kind: kind, Body: "echo ok\r\n"}
+		if kind == model.ImplScript {
+			impl.Interpreter, impl.Timings = "cmd", []catalog.Timing{"firstboot"}
+		}
+		return model.Hook{ID: id, Version: 1, Name: "Windows-" + id, State: model.VersionApproved,
+			Author: "alice", Approver: "bob", TimeoutSec: 60, Impls: []model.Impl{impl}}
+	}
+	hooks := hookSet{{ID: "post", Version: 1}: win("post", model.ImplScript), {ID: "frag", Version: 1}: win("frag", model.ImplFragment)}
+	tpl := bareTemplate("windows-server", "{{slot:装后@post-target}}\n")
+	tpl.Assembly = map[string][]model.Instance{"装后": {{HookID: "post", HookVersion: 1}}}
+	wantCodes(t, Template(tpl, hooks), "slot_timing_unsupported")
+	tpl.Assembly["装后"] = append(tpl.Assembly["装后"], model.Instance{HookID: "frag", HookVersion: 1})
+	wantCodes(t, Template(tpl, hooks), "slot_timing_unsupported", "impl_kind_mismatch")
 }
 
 // 片段插槽展开成多行、每行套用所在行的缩进，所以要独占一行；执行插槽只展开成一行，可以写在行内。
@@ -335,7 +406,7 @@ func Test系统部件缺少重复或不属于该格式(t *testing.T) {
 		{"同一行里写了两次", tplReplace("{{lober:firstboot}}\n", "{{lober:firstboot}} {{lober:firstboot}}\n")},
 	})
 	// kickstart 的三个部件都必需，换 preseed 反：它没有 syslog。
-	onlyCode(t, Template(bareTemplate("debian", "{{lober:syslog}}\n"), nil), "part_not_in_format")
+	onlyCode(t, Template(bareTemplate("debian", "{{lober:syslog}}\n"), nil), "part_not_in_format", 1)
 }
 
 func Test模板正文引用的系统值在该格式不可用(t *testing.T) {
@@ -362,6 +433,10 @@ func Test模板正文的参数引用(t *testing.T) {
 			"# {{param:pkgs}} {{param:ntp}}")},
 		{"执行插槽之后有列表", tplReplace("{{slot:装后配置@post-target}}\n", "{{slot:装后配置@post-target}} {{param:pkgs}}\n")},
 		{"列表之后有系统部件", tplReplace("{{lober:syslog}}\n", "{{param:pkgs}} {{lober:syslog}}\n")},
+		// 每行每个参数只报一次（T9-6④）。
+		{"系统部件之后同一个列表写了两次", tplReplace("{{lober:syslog}}\n", "{{lober:syslog}} {{param:pkgs}} {{param:pkgs}}\n")},
+		{"列表之后有系统部件又有执行插槽", tplReplace("{{lober:firstboot}}\n",
+			"{{param:pkgs}} {{lober:firstboot}} {{slot:收尾@post-target}}\n")},
 	})
 	passes(t, "同一个列表在一行里写两次", tplLine("# {{param:pkgs}} {{param:pkgs}}"))
 	passes(t, "|join 的列表与执行插槽同行",
@@ -384,17 +459,146 @@ func Test模板参数的声明与取值来源(t *testing.T) {
 	runTplEdits(t, "param_value_invalid", []tplEdit{
 		{"fixed 的值通不过类型校验", setBinding("pkgs", model.Binding{Source: model.BindingFixed, Value: "vim tmux"})},
 		{"fixed 没有值", setBinding("pkgs", model.Binding{Source: model.BindingFixed})},
-		// 来源只有三种。不认识的来源说不清值从哪来，当作没有合法的值拦下。
-		{"来源不认识", setBinding("pkgs", model.Binding{Source: "host", Value: "vim"})},
 	})
 	runTplEdits(t, "attr_key_invalid", []tplEdit{
 		{"属性键不是标识符", setBinding("pkgs", model.Binding{Source: model.BindingAttr, Attr: "Pkgs"})},
 		{"属性键为空", setBinding("pkgs", model.Binding{Source: model.BindingAttr})},
 		{"用了保留键", setBinding("pkgs", model.Binding{Source: model.BindingAttr, Attr: "arch"})},
 	})
-	passes(t, "取 default 时不查值", setBinding("pkgs", model.Binding{Source: model.BindingDefault}))
+	passes(t, "取 default、向导里可改", setBinding("pkgs", model.Binding{Source: model.BindingDefault, Editable: true}))
 	passes(t, "取主机属性", setBinding("pkgs", model.Binding{Source: model.BindingAttr, Attr: "pkg_list"}))
 	passes(t, "没有取值来源", func(tpl *model.Template, _ hookSet) { tpl.Bindings = nil })
+}
+
+// 取值来源只有 fixed、attr、default 三种，零值也不算（T7-2）：JSON 里漏了 Source 的取值来源，不能被
+// 当成其中哪一种，也不再借 param_value_invalid 说「应为某种格式」。
+func Test取值来源不认识(t *testing.T) {
+	runTplEdits(t, "binding_source_unknown", []tplEdit{
+		{"模板参数的来源不认识", setBinding("pkgs", model.Binding{Source: "host", Value: "vim"})},
+		{"模板参数漏了来源", setBinding("pkgs", model.Binding{Value: "vim", Editable: true})},
+		{"实例参数的来源不认识", setInstBinding("分区", 0, "disk", model.Binding{Source: "host"})},
+		{"实例参数的来源大小写不同", setInstBinding("装后配置", 1, "msg", model.Binding{Source: "Fixed", Value: "你好"})},
+	})
+	tpl, hooks := goodTemplate(), goodHooks()
+	setBinding("pkgs", model.Binding{Source: "host"})(&tpl, hooks)
+	if ps := Template(tpl, hooks); len(ps) != 1 || !strings.Contains(ps[0].Message, "「pkgs」的取值来源「host」") {
+		t.Errorf("说明里应写出参数名与来源，得到：%v", ps)
+	}
+}
+
+// fixed 值和默认值与主机无关，激活时就判定得了取不取得出正文或所选片段要的子值（L-4）：IPv6 的 cidr
+// 取不出 netmask，模板一经批准，每台主机建任务都会报错，格子锁着的话永远建不了。问题落在取值来源上，
+// Path 与参数求值的字段键相同。取自主机属性的要到求值时才知道。
+func Test取值来源取不出正文或片段要的子值(t *testing.T) {
+	const ipv4, ipv6 = "192.0.2.1/24", "2001:db8::1/64"
+	gw := model.ParamDecl{Name: "gw", Label: "网关", Type: "cidr"}
+	gwDefault := gw
+	gwDefault.Default = ipv6
+	netmask := "network --ip={{param:gw.addr}} --netmask={{param:gw.netmask}}"
+	fixed := func(v string) model.Binding { return model.Binding{Source: model.BindingFixed, Value: v} }
+	// gwHook 给分区插槽里的 hook 加上参数 d，line 写进它覆盖 rocky 与 almalinux 的片段。
+	gwHook := func(d model.ParamDecl, line string) tplMod {
+		return editHook("lvm", 3, func(h *model.Hook) {
+			h.Params = append(h.Params, d)
+			h.Impls[0].Body += line + "\n"
+		})
+	}
+	cases := []struct {
+		name string
+		mod  tplMod
+		want model.Subject
+	}{
+		{"模板参数写死了 IPv6", all(withParam(gw, netmask), setBinding("gw", fixed(ipv6))),
+			model.Subject{Kind: "template", ID: tplID, Path: "tpl/gw"}},
+		{"模板参数锁在 IPv6 的默认值上", all(withParam(gwDefault, netmask), setBinding("gw", model.Binding{Source: model.BindingDefault})),
+			model.Subject{Kind: "template", ID: tplID, Path: "tpl/gw"}},
+		{"模板参数没有取值来源，默认值是 IPv6", withParam(gwDefault, netmask),
+			model.Subject{Kind: "template", ID: tplID, Path: "tpl/gw"}},
+		{"实例参数写死了 IPv6", all(gwHook(gw, netmask), setInstBinding("分区", 0, "gw", fixed(ipv6))),
+			model.Subject{Kind: "slot", ID: tplID, Path: "分区/1/gw"}},
+		// hook 自己的激活判定拦得住这样的默认值，这里给的却是已审批的版本：在这条规则之前批准的照样能被引用。
+		{"实例参数沿用 hook 的 IPv6 默认值", gwHook(gwDefault, netmask),
+			model.Subject{Kind: "slot", ID: tplID, Path: "分区/1/gw"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tpl, hooks := goodTemplate(), goodHooks()
+			c.mod(&tpl, hooks)
+			ps := Template(tpl, hooks)
+			onlyCode(t, ps, "param_accessor_invalid", 1)
+			if ps[0].Subject != c.want {
+				t.Errorf("Subject = %+v，应为 %+v", ps[0].Subject, c.want)
+			}
+		})
+	}
+	addrPrefix := "network --ipv6={{param:gw.addr}}/{{param:gw.prefix}}"
+	ipv4Default := gw
+	ipv4Default.Default = ipv4
+	passes(t, "写死的 IPv4 取得出 netmask", all(withParam(gw, netmask), setBinding("gw", fixed(ipv4))))
+	passes(t, "写死的 IPv6 取 addr 与 prefix", all(withParam(gw, addrPrefix), setBinding("gw", fixed(ipv6))))
+	passes(t, "IPv4 的默认值取得出 netmask", withParam(ipv4Default, netmask))
+	passes(t, "IPv6 的默认值取 addr 与 prefix", withParam(gwDefault, addrPrefix))
+	passes(t, "取自主机属性的不查", all(withParam(gw, netmask), setBinding("gw", model.Binding{Source: model.BindingAttr, Attr: "gw"})))
+	passes(t, "只有没勾的系的片段取了 netmask", all(
+		editHook("lvm", 3, func(h *model.Hook) {
+			h.Params = append(h.Params, gw)
+			h.Impls = append(h.Impls, model.Impl{Family: "linux", Series: []catalog.Series{"debian"}, Kind: model.ImplFragment,
+				Body: "d-i netcfg/get_netmask string {{param:gw.netmask}}\n"})
+		}),
+		setInstBinding("分区", 0, "gw", fixed(ipv6)),
+	))
+}
+
+// 参数按参数求值的规则必填（被正文或所选片段引用，或者声明了 Required），取值来源却锁在默认值上，
+// 声明里又没有默认值：向导里这一格锁着填不了，每台主机都会报 param_required（L-4）。
+func Test锁在默认值上却没有默认值(t *testing.T) {
+	locked := model.Binding{Source: model.BindingDefault}
+	note := model.ParamDecl{Name: "note", Label: "备注", Type: "word"}
+	requiredNote := note
+	requiredNote.Required = true
+	vg := model.ParamDecl{Name: "vg", Label: "卷组", Type: "word"}
+	// vgHook 给分区插槽里的 hook 加上参数 vg，再由 mod 决定哪份实现引用它。
+	vgHook := func(mod func(h *model.Hook)) tplMod {
+		return editHook("lvm", 3, func(h *model.Hook) {
+			h.Params = append(h.Params, vg)
+			mod(h)
+		})
+	}
+	// 覆盖 rocky 与 almalinux 的片段引用它，模板勾的两个系都选中这一份。
+	inTicked := vgHook(func(h *model.Hook) { h.Impls[0].Body += "volgroup {{param:vg}} pv.01\n" })
+	// 只有覆盖 debian 的片段引用它，模板没勾 debian。
+	inUnticked := vgHook(func(h *model.Hook) {
+		h.Impls = append(h.Impls, model.Impl{Family: "linux", Series: []catalog.Series{"debian"}, Kind: model.ImplFragment,
+			Body: "d-i partman-auto-lvm/new_vg_name string {{param:vg}}\n"})
+	})
+	cases := []struct {
+		name string
+		mod  tplMod
+		want model.Subject
+	}{
+		{"正文引用的模板参数", setBinding("pkgs", locked), model.Subject{Kind: "template", ID: tplID, Path: "tpl/pkgs"}},
+		{"声明了必填的模板参数", all(declare(requiredNote), setBinding("note", locked)),
+			model.Subject{Kind: "template", ID: tplID, Path: "tpl/note"}},
+		{"脚本声明了必填的实例参数", setInstBinding("装后配置", 0, "msg", locked),
+			model.Subject{Kind: "slot", ID: tplID, Path: "装后配置/1/msg"}},
+		{"所选片段引用的实例参数", all(inTicked, setInstBinding("分区", 0, "vg", locked)),
+			model.Subject{Kind: "slot", ID: tplID, Path: "分区/1/vg"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tpl, hooks := goodTemplate(), goodHooks()
+			c.mod(&tpl, hooks)
+			ps := Template(tpl, hooks)
+			onlyCode(t, ps, "param_locked_without_value", 1)
+			if ps[0].Subject != c.want {
+				t.Errorf("Subject = %+v，应为 %+v", ps[0].Subject, c.want)
+			}
+		})
+	}
+	passes(t, "有默认值", setInstBinding("分区", 0, "disk", locked))
+	passes(t, "向导里可改", setBinding("pkgs", model.Binding{Source: model.BindingDefault, Editable: true}))
+	passes(t, "不必填", all(declare(note), setBinding("note", locked)))
+	passes(t, "只有没勾的系的片段引用了它", all(inUnticked, setInstBinding("分区", 0, "vg", locked)))
 }
 
 // 装配表只能引用正文里存在的插槽（C16）。插槽类型无从知道，里面的实例不再往下查，
@@ -420,12 +624,17 @@ func Test引用的hook版本不存在未审批或已废弃(t *testing.T) {
 	runTplEdits(t, "hook_ref_missing", []tplEdit{
 		{"版本不存在", func(tpl *model.Template, _ hookSet) { tpl.Assembly["分区"][0].HookVersion = 4 }},
 		{"ID 不存在", func(tpl *model.Template, _ hookSet) { tpl.Assembly["分区"][0].HookID = "lvm2" }},
+	})
+	// 装后插槽里放了 motd 两次，每个实例各报一条。
+	runTplEditsN(t, "hook_ref_missing", 2, []tplEdit{
 		{"调用方没给", func(_ *model.Template, hooks hookSet) { delete(hooks, model.HookKey{ID: "motd", Version: 1}) }},
 	})
 	runTplEdits(t, "hook_ref_unapproved", []tplEdit{
 		{"草稿", editHook("lvm", 3, func(h *model.Hook) { h.State = model.VersionDraft })},
-		{"待审批", editHook("motd", 1, func(h *model.Hook) { h.State = model.VersionReview })},
 		{"状态为空", editHook("lvm", 3, func(h *model.Hook) { h.State = "" })},
+	})
+	runTplEditsN(t, "hook_ref_unapproved", 2, []tplEdit{
+		{"待审批", editHook("motd", 1, func(h *model.Hook) { h.State = model.VersionReview })},
 	})
 	runTplEdits(t, "hook_ref_deprecated", []tplEdit{
 		{"已废弃", editHook("lvm", 3, func(h *model.Hook) { h.State = model.VersionDeprecated })},
@@ -436,6 +645,9 @@ func Test引用的hook版本不存在未审批或已废弃(t *testing.T) {
 func Test实例的hook没有覆盖所勾的系(t *testing.T) {
 	runTplEdits(t, "impl_missing_for_series", []tplEdit{
 		{"片段只覆盖 rocky", editHook("lvm", 3, func(h *model.Hook) { h.Impls[0].Series = []catalog.Series{"rocky"} })},
+	})
+	// 三个实例都没有覆盖 rhel 的实现，各报一条。
+	runTplEditsN(t, "impl_missing_for_series", 3, []tplEdit{
 		{"模板多勾了 rhel", func(tpl *model.Template, _ hookSet) { tpl.Series = append(tpl.Series, "rhel") }},
 	})
 }
@@ -443,13 +655,16 @@ func Test实例的hook没有覆盖所勾的系(t *testing.T) {
 // 实现种类要与插槽类型一致（C16）：片段进片段插槽，脚本进执行插槽。同一个 hook 在不同系
 // 可以是不同种类（spec §2.4），所以按系逐个对。
 func Test实现种类与插槽类型不一致(t *testing.T) {
-	runTplEdits(t, "impl_kind_mismatch", []tplEdit{
+	// 模板勾了两个系，每个系各报一条。
+	runTplEditsN(t, "impl_kind_mismatch", 2, []tplEdit{
 		{"片段放进执行插槽", func(tpl *model.Template, _ hookSet) {
 			tpl.Assembly["装后配置"] = []model.Instance{{HookID: "lvm", HookVersion: 3}}
 		}},
 		{"脚本放进片段插槽", func(tpl *model.Template, _ hookSet) {
 			tpl.Assembly["分区"] = []model.Instance{{HookID: "motd", HookVersion: 1}}
 		}},
+	})
+	runTplEdits(t, "impl_kind_mismatch", []tplEdit{
 		{"almalinux 上是脚本", editHook("lvm", 3, func(h *model.Hook) {
 			h.Impls[0].Series = []catalog.Series{"rocky"}
 			h.Impls = append(h.Impls, model.Impl{Family: "linux", Series: []catalog.Series{"almalinux"},
@@ -460,7 +675,8 @@ func Test实现种类与插槽类型不一致(t *testing.T) {
 
 // 放进执行插槽的脚本，声明的时机要包含插槽的时机（C16）。
 func Test执行插槽的时机不在脚本声明的时机里(t *testing.T) {
-	runTplEdits(t, "impl_timing_mismatch", []tplEdit{
+	// 装后插槽里的两个实例、模板勾的两个系，共四条。
+	runTplEditsN(t, "impl_timing_mismatch", 4, []tplEdit{
 		{"插槽改成 post-installer", tplReplace("@post-target}}", "@post-installer}}")},
 		{"脚本只声明了 firstboot", editHook("motd", 1, func(h *model.Hook) { h.Impls[0].Timings = []catalog.Timing{"firstboot"} })},
 	})
@@ -478,7 +694,6 @@ func Test实例的取值来源按hook的参数声明校验(t *testing.T) {
 	runTplEdits(t, "param_value_invalid", []tplEdit{
 		{"fixed 的值通不过类型校验", setInstBinding("分区", 0, "disk", model.Binding{Source: model.BindingFixed, Value: "sda"})},
 		{"text 含 NUL", setInstBinding("装后配置", 1, "msg", model.Binding{Source: model.BindingFixed, Value: "a\x00b"})},
-		{"来源不认识", setInstBinding("分区", 0, "disk", model.Binding{Source: "host"})},
 	})
 	runTplEdits(t, "attr_key_invalid", []tplEdit{
 		{"属性键不是标识符", setInstBinding("分区", 0, "disk", model.Binding{Source: model.BindingAttr, Attr: "Sys-Disk"})},
@@ -510,33 +725,58 @@ func Test同一个hook在模板里出现多次不报错(t *testing.T) {
 	})
 }
 
-// 模板整体的问题指向模板，插槽与实例的问题指向插槽（Path 为插槽名或「插槽名/序号」），
-// 涉及正文位置的带上行列：前端靠 Subject 把错误标到具体的地方。
+// Subject 按位置指向出问题的地方（T9-1）：模板整体与正文的问题指向模板，参数声明是 param/<序号>，取值
+// 来源是 tpl/<参数名>；插槽的问题 Path 为插槽名，实例的为「插槽名/序号」，实例参数的取值来源为「插槽名/
+// 序号/参数名」，后两种与参数求值的字段键一致；涉及正文位置的带上行列。前端靠它把错误标到具体的地方。
 func Test模板问题的Subject(t *testing.T) {
 	whole := model.Subject{Kind: "template", ID: tplID}
+	field := func(path string) model.Subject { return model.Subject{Kind: "template", ID: tplID, Path: path} }
+	body := func(line, col int) model.Subject {
+		return model.Subject{Kind: "template", ID: tplID, Line: line, Col: col}
+	}
+	slot := func(path string, line, col int) model.Subject {
+		return model.Subject{Kind: "slot", ID: tplID, Path: path, Line: line, Col: col}
+	}
 	cases := []struct {
 		name string
 		mod  tplMod
+		code model.Code
 		want model.Subject
 	}{
-		{"名称", func(tpl *model.Template, _ hookSet) { tpl.Name = "" }, whole},
-		{"族与系", func(tpl *model.Template, _ hookSet) { tpl.Series = nil }, whole},
-		{"参数声明", func(tpl *model.Template, _ hookSet) { tpl.Params[0].Default = "vim tmux" },
-			model.Subject{Kind: "template", ID: tplID, Path: "pkgs"}},
+		{"名称", func(tpl *model.Template, _ hookSet) { tpl.Name = "" }, "name_invalid", whole},
+		{"族与系", func(tpl *model.Template, _ hookSet) { tpl.Series = nil }, "template_series_invalid", whole},
+		{"参数声明", func(tpl *model.Template, _ hookSet) { tpl.Params[0].Default = "vim tmux" }, "param_decl_invalid", field("param/1")},
+		{"重名的参数声明指向后一个", declare(model.ParamDecl{Name: "pkgs", Label: "重名", Type: "word"}),
+			"param_decl_invalid", field("param/2")},
 		{"参数的取值来源", setBinding("pkgs", model.Binding{Source: model.BindingFixed, Value: "vim tmux"}),
-			model.Subject{Kind: "template", ID: tplID, Path: "pkgs"}},
-		{"正文位置按 rune 计", tplLine("# 中文{{sys:smb}}"), model.Subject{Kind: "template", ID: tplID, Line: 14, Col: 5}},
-		{"扫描问题改指向模板、保留行列", tplLine("  {{slot:x"), model.Subject{Kind: "template", ID: tplID, Line: 14, Col: 3}},
-		{"插槽的问题", tplReplace("{{slot:分区}}\n", "# {{slot:分区}}\n"),
-			model.Subject{Kind: "slot", ID: tplID, Path: "分区", Line: 4, Col: 3}},
-		{"缺少的部件没有位置", tplReplace("{{lober:syslog}}\n", ""), whole},
-		{"重复的部件指向后一处", tplLine("{{lober:cleanup}}"), model.Subject{Kind: "template", ID: tplID, Line: 14, Col: 1}},
+			"param_value_invalid", field("tpl/pkgs")},
+		{"取值来源指向没声明的参数", setBinding("nope", model.Binding{Source: model.BindingDefault}),
+			"binding_param_unknown", field("tpl/nope")},
+		{"取值来源不认识", setBinding("pkgs", model.Binding{Source: "host"}), "binding_source_unknown", field("tpl/pkgs")},
+		{"锁在默认值上却没有默认值", setBinding("pkgs", model.Binding{Source: model.BindingDefault}),
+			"param_locked_without_value", field("tpl/pkgs")},
+		{"正文存不下不带行列", tplLine("\x00"), "text_not_storable", whole},
+		{"正文位置按 rune 计", tplLine("# 中文{{sys:smb}}"), "sysvalue_not_allowed", body(14, 5)},
+		{"扫描问题改指向模板、保留行列", tplLine("  {{slot:x"), "placeholder_unclosed", body(14, 3)},
+		{"插槽的问题", tplReplace("{{slot:分区}}\n", "# {{slot:分区}}\n"), "fragment_slot_not_alone", slot("分区", 4, 3)},
+		{"重名的插槽指向后一处", tplLine("{{slot:分区}}"), "slot_duplicate", slot("分区", 14, 1)},
+		{"执行插槽的时机该格式不支持", replaceWith(bareTemplate("esxi", "{{slot:装后@post-target}}\n")),
+			"slot_timing_unsupported", model.Subject{Kind: "slot", ID: "bare@1", Path: "装后", Line: 3, Col: 1}},
+		{"部件不属于该格式", replaceWith(bareTemplate("debian", "{{lober:syslog}}\n")),
+			"part_not_in_format", model.Subject{Kind: "template", ID: "bare@1", Line: 3, Col: 1}},
+		{"缺少的部件没有位置", tplReplace("{{lober:syslog}}\n", ""), "part_missing", whole},
+		{"重复的部件指向后一处", tplLine("{{lober:cleanup}}"), "part_duplicate", body(14, 1)},
 		{"装配表里不存在的插槽", func(tpl *model.Template, _ hookSet) { tpl.Assembly["收尾"] = nil },
-			model.Subject{Kind: "slot", ID: tplID, Path: "收尾"}},
+			"assembly_slot_unknown", slot("收尾", 0, 0)},
 		{"实例的 hook 引用", func(tpl *model.Template, _ hookSet) { tpl.Assembly["分区"][0].HookVersion = 9 },
-			model.Subject{Kind: "slot", ID: tplID, Path: "分区/1"}},
-		{"实例的取值来源", setInstBinding("装后配置", 1, "msg", model.Binding{Source: model.BindingFixed}),
-			model.Subject{Kind: "slot", ID: tplID, Path: "装后配置/2"}},
+			"hook_ref_missing", slot("分区/1", 0, 0)},
+		{"实例覆盖的超时", setInstTimeout("装后配置", 1, 0), "timeout_invalid", slot("装后配置/2", 0, 0)},
+		{"实例参数的取值来源", setInstBinding("装后配置", 1, "msg", model.Binding{Source: model.BindingFixed}),
+			"param_value_invalid", slot("装后配置/2/msg", 0, 0)},
+		{"实例参数的来源不认识", setInstBinding("分区", 0, "disk", model.Binding{Source: "host"}),
+			"binding_source_unknown", slot("分区/1/disk", 0, 0)},
+		{"实例参数的属性键", setInstBinding("分区", 0, "disk", model.Binding{Source: model.BindingAttr, Attr: "sn"}),
+			"attr_key_invalid", slot("分区/1/disk", 0, 0)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -546,39 +786,69 @@ func Test模板问题的Subject(t *testing.T) {
 			if len(ps) == 0 {
 				t.Fatal("应报出问题，却通过了")
 			}
-			if ps[0].Subject != c.want {
-				t.Errorf("Subject = %+v，应为 %+v", ps[0].Subject, c.want)
+			if ps[0].Code != c.code || ps[0].Subject != c.want {
+				t.Errorf("第一条是 %s %+v，应为 %s %+v", ps[0].Code, ps[0].Subject, c.code, c.want)
 			}
 		})
 	}
 }
 
-// 同样的输入永远得到同样顺序的输出：先模板整体（名称、族与系、参数声明、按参数名排的取值来源），
-// 再正文（按位置，缺少的部件随后），最后装配表（正文里没有的插槽按名字排，再按插槽在正文里的
-// 顺序、实例在插槽里的顺序）。取值来源与装配表都是 map，多跑几次才看得出顺序是否固定。
+// 同一个实例里两个参数写了同一个坏属性键，问题按参数分开（T9-1）：说明里只有属性键，Path 不带参数名的
+// 话两条逐字节相同，前端分不清是哪一格。
+func Test实例取值来源的问题按参数分开(t *testing.T) {
+	tpl, hooks := goodTemplate(), goodHooks()
+	editHook("lvm", 3, func(h *model.Hook) {
+		h.Params = append(h.Params, model.ParamDecl{Name: "data", Label: "数据盘", Type: "diskpath"})
+	})(&tpl, hooks)
+	bad := model.Binding{Source: model.BindingAttr, Attr: "Sys-Disk"}
+	tpl.Assembly["分区"][0].Bindings = map[string]model.Binding{"disk": bad, "data": bad}
+	var got []string
+	for _, p := range Template(tpl, hooks) {
+		got = append(got, string(p.Code)+" "+p.Subject.Path)
+	}
+	if want := []string{"attr_key_invalid 分区/1/data", "attr_key_invalid 分区/1/disk"}; !slices.Equal(got, want) {
+		t.Errorf("得到 %q，应为 %q", got, want)
+	}
+}
+
+// 同样的输入永远得到同样顺序的输出：先模板整体（名称、族与系、参数声明按位置、取值来源按参数名），
+// 再正文（存不下的在前，其余按位置，缺少的部件随后），最后装配表（正文里没有的插槽按名字排，再按插槽
+// 在正文里的顺序、实例在插槽里的顺序，实例的取值来源按参数名）。取值来源与装配表都是 map，多跑几次
+// 才看得出顺序是否固定。
 func Test模板问题的顺序固定(t *testing.T) {
 	tpl, hooks := goodTemplate(), goodHooks()
 	tpl.Name = ""
-	tpl.Params = append(tpl.Params, model.ParamDecl{Name: "pkgs", Label: "重名", Type: "word"})
+	tpl.Params = append(tpl.Params,
+		model.ParamDecl{Name: "pkgs", Label: "重名", Type: "word"},
+		model.ParamDecl{Name: "gw", Label: "网关", Type: "cidr"},
+	)
 	tpl.Bindings["zz"] = model.Binding{Source: model.BindingDefault}
 	tpl.Bindings["aa"] = model.Binding{Source: model.BindingDefault}
-	tpl.Body = strings.Replace(tpl.Body, "{{lober:syslog}}\n", "", 1) + "# {{sys:smb}} {{param:nope}}\n{{slot:x\n"
+	tpl.Bindings["gw"] = model.Binding{Source: model.BindingFixed, Value: "2001:db8::1/64"}
+	// 正文里写坏的占位符会让装配表里的未知插槽不报（见 Test正文扫描有问题时不报装配表里的插槽），这里只放
+	// 扫描之后才查出的问题。
+	tpl.Body = strings.Replace(tpl.Body, "{{lober:syslog}}\n", "", 1) +
+		"# {{sys:smb}} {{param:nope}} {{param:gw.netmask}}\n{{slot:分区}}\n\x00\n"
 	tpl.Assembly["分区"][0].Bindings["size"] = model.Binding{Source: model.BindingDefault}
+	tpl.Assembly["分区"][0].Bindings["disk"] = model.Binding{Source: "host"}
 	tpl.Assembly["装后配置"][1].HookVersion = 9
 	tpl.Assembly["不存在"] = nil
 	tpl.Assembly["also"] = nil
 	want := []string{
 		"name_invalid ",
-		"param_decl_invalid pkgs",
-		"binding_param_unknown aa",
-		"binding_param_unknown zz",
+		"param_decl_invalid param/2",
+		"binding_param_unknown tpl/aa",
+		"param_accessor_invalid tpl/gw",
+		"binding_param_unknown tpl/zz",
+		"text_not_storable ",
 		"sysvalue_not_allowed ",
 		"param_undeclared ",
-		"placeholder_unclosed ",
+		"slot_duplicate 分区",
 		"part_missing ",
 		"assembly_slot_unknown also",
 		"assembly_slot_unknown 不存在",
-		"binding_param_unknown 分区/1",
+		"binding_source_unknown 分区/1/disk",
+		"binding_param_unknown 分区/1/size",
 		"hook_ref_missing 装后配置/2",
 	}
 	for range 5 {
