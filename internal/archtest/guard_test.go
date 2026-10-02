@@ -1,0 +1,251 @@
+package archtest
+
+// 守卫自身的反例测试（T1-2）。源码都放在内存里：写成 testdata 下的文件，会被
+// make fmt 的 gofmt 目录递归扫到；取了 x_linux.go 这类名字，还会被构建约束
+// 静默排除，测试就假绿了。
+
+import (
+	"fmt"
+	"go/parser"
+	"go/token"
+	"slices"
+	"strings"
+	"testing"
+	"testing/fstest"
+)
+
+// pkgScan 只有测试用得到：方向规则不限制 scan。
+const pkgScan = layer1 + "/scan"
+
+// finding 是一条违规里测试要断言的部分：违反了哪一条、违规的是什么。
+type finding struct {
+	rule    rule
+	subject string
+}
+
+func checkSource(t *testing.T, pkg, src string) []violation {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "x.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("测试源码解析失败：%v\n%s", err, src)
+	}
+	return checkFile(fset, pkg, f)
+}
+
+// importing 拼出只有导入声明的源文件：守卫只解析不编译，导入了不用也没关系。
+func importing(paths ...string) string {
+	var b strings.Builder
+	b.WriteString("package p\n\nimport (\n")
+	for _, p := range paths {
+		fmt.Fprintf(&b, "\t%q\n", p)
+	}
+	b.WriteString(")\n")
+	return b.String()
+}
+
+// withImport 拼出导入一个包、再跟一段代码的源文件。
+func withImport(spec, body string) string {
+	return "package p\n\nimport " + spec + "\n\n" + body + "\n"
+}
+
+// assertFindings 比对违规要点，并要求每条违规信息都写出包、违规的是什么和违反了哪一条。
+func assertFindings(t *testing.T, got []violation, pkg string, want []finding) {
+	t.Helper()
+	var points []finding
+	for _, v := range got {
+		points = append(points, finding{v.rule, v.subject})
+		msg := v.String()
+		for _, part := range []string{pkg, v.subject, string(v.rule)} {
+			if !strings.Contains(msg, part) {
+				t.Errorf("违规信息 %q 没写出 %q", msg, part)
+			}
+		}
+	}
+	if !slices.Equal(points, want) {
+		t.Errorf("违规要点 = %v，期望 %v", points, want)
+	}
+}
+
+func Test守卫逐个文件的检查(t *testing.T) {
+	// 九个函数各自都会读时钟或依赖时钟，少认一个就留下一条绕法。
+	clockNames := []string{"Now", "Since", "Until", "Sleep", "After", "AfterFunc", "Tick", "NewTimer", "NewTicker"}
+	allClocks := []finding{{ruleStd, "time"}}
+	for _, n := range clockNames {
+		allClocks = append(allClocks, finding{ruleClock, "time." + n})
+	}
+	coreutils := "github.com/lober/lober/internal/coreutils"
+
+	cases := []struct {
+		name string
+		pkg  string
+		src  string
+		want []finding
+	}{
+		{"白名单里的十六个包都不报", pkgModel, importing(
+			"cmp", "errors", "fmt", "maps", "slices", "strconv", "strings", "unicode", "unicode/utf8",
+			"crypto/sha256", "encoding/base64", "encoding/binary", "encoding/hex", "encoding/json",
+			"net/netip", "regexp"), nil},
+		{"os 要报", pkgCatalog, importing("os"), []finding{{ruleStd, "os"}}},
+		{"io/ioutil 要报", pkgModel, importing("io/ioutil"), []finding{{ruleStd, "io/ioutil"}}},
+		{"math/rand 要报", pkgParams, importing("math/rand"), []finding{{ruleStd, "math/rand"}}},
+		{"time 要报", pkgSnapshot, importing("time"), []finding{{ruleStd, "time"}}},
+		// 放行 net/netip 不等于放行 net 下的其他包。
+		{"白名单按整条路径比对", pkgModel, importing("net", "net/http", "net/netip"),
+			[]finding{{ruleStd, "net"}, {ruleStd, "net/http"}}},
+		{"cgo 的 C 要报", pkgModel, importing("C"), []finding{{ruleCgo, "C"}}},
+		{"unsafe 要报", pkgModel, importing("unsafe"), []finding{{ruleStd, "unsafe"}}},
+
+		{"别的模块要报", pkgModel, importing("golang.org/x/text/width"),
+			[]finding{{ruleOutside, "golang.org/x/text/width"}}},
+		{"前缀相撞的 internal/coreutils 不算层 1", pkgModel, importing(coreutils),
+			[]finding{{ruleOutside, coreutils}}},
+
+		// time 现在不在白名单里，下面几例都先报 import 了 time；时钟检查留给以后放进 time 时用。
+		{"别名导入后的 t.Now 与 t.Since 要报", pkgModel,
+			withImport(`t "time"`, "func f() { _ = t.Now(); _ = t.Since(t.Time{}) }"),
+			[]finding{{ruleStd, "time"}, {ruleClock, "time.Now"}, {ruleClock, "time.Since"}}},
+		{"点导入 time 要报", pkgModel, withImport(`. "time"`, "func f() { _ = Now() }"),
+			[]finding{{ruleStd, "time"}, {ruleDotTime, "time"}}},
+		{"time.Now 当函数值用要报", pkgModel, withImport(`"time"`, "var clock = time.Now"),
+			[]finding{{ruleStd, "time"}, {ruleClock, "time.Now"}}},
+		{"读时钟的九个函数都要报", pkgModel,
+			withImport(`"time"`, "var clocks = []any{time."+strings.Join(clockNames, ", time.")+"}"), allClocks},
+		{"注释和字符串里的不报", pkgModel,
+			withImport(`"time"`, "// time.Now() 只是注释\nvar d time.Duration\n\nvar s = \"time.Now() time.Since(x)\""),
+			[]finding{{ruleStd, "time"}}},
+		{"没导入 time 时同名的 Now 不报", pkgModel,
+			"package p\n\ntype clock struct{}\n\nfunc (clock) Now() int { return 0 }\n\nfunc f() { var time clock; _ = time.Now() }\n", nil},
+
+		// 层内方向（T1-1 选 b）
+		{"catalog 只用标准库不报", pkgCatalog, importing("slices"), nil},
+		{"catalog import model 要报", pkgCatalog, importing(pkgModel), []finding{{ruleCatalog, pkgModel}}},
+		{"model import catalog 不报", pkgModel, importing(pkgCatalog), nil},
+		{"model import scan 要报", pkgModel, importing(pkgCatalog, pkgScan), []finding{{ruleModel, pkgScan}}},
+		{"snapshot import params 不报", pkgSnapshot, importing(pkgCatalog, pkgModel, pkgScan, pkgParams), nil},
+		{"snapshot import activation 要报", pkgSnapshot, importing(pkgParams, pkgActivation),
+			[]finding{{ruleDecision, pkgActivation}}},
+		{"activation import scan 不报", pkgActivation, importing(pkgCatalog, pkgModel, pkgScan), nil},
+		{"activation import params 要报", pkgActivation, importing(pkgParams), []finding{{ruleDecision, pkgParams}}},
+		{"params import scan 不报", pkgParams, importing(pkgModel, pkgScan), nil},
+		{"params import snapshot 要报", pkgParams, importing(pkgSnapshot), []finding{{ruleDecision, pkgSnapshot}}},
+		{"admission import catalog 与 model 不报", pkgAdmission, importing(pkgCatalog, pkgModel), nil},
+		{"admission import params 要报", pkgAdmission, importing(pkgParams), []finding{{ruleDecision, pkgParams}}},
+		{"scan 不另作限制", pkgScan, importing(pkgCatalog, pkgModel, pkgAdmission), nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assertFindings(t, checkSource(t, c.pkg, c.src), c.pkg, c.want)
+		})
+	}
+}
+
+func Test违规信息写出位置(t *testing.T) {
+	got := checkSource(t, pkgCatalog, importing("os"))
+	if len(got) != 1 {
+		t.Fatalf("违规 = %v，期望恰好一条", got)
+	}
+	if msg := got[0].String(); !strings.Contains(msg, "x.go:4:2") {
+		t.Errorf("违规信息 %q 没写出位置 x.go:4:2", msg)
+	}
+}
+
+func Test层1包的文件都参与构建(t *testing.T) {
+	cases := []struct {
+		name string
+		p    goPackage
+		want []finding
+	}{
+		{"只有 GoFiles 不报", goPackage{ImportPath: pkgModel, GoFiles: []string{"a.go"}}, nil},
+		{"cgo 文件要报", goPackage{ImportPath: pkgModel, GoFiles: []string{"a.go"}, CgoFiles: []string{"c.go"}},
+			[]finding{{ruleCgo, "c.go"}}},
+		{"按族命名被排除的文件要报",
+			goPackage{ImportPath: pkgCatalog, GoFiles: []string{"series.go"}, IgnoredGoFiles: []string{"repo_linux.go"}},
+			[]finding{{ruleIgnored, "repo_linux.go"}}},
+		// 测试文件被排除，就是它在这个平台上静默不跑。
+		{"被排除的测试文件也要报",
+			goPackage{ImportPath: pkgCatalog, GoFiles: []string{"series.go"}, IgnoredGoFiles: []string{"series_windows_test.go"}},
+			[]finding{{ruleIgnored, "series_windows_test.go"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assertFindings(t, checkBuildFiles(c.p), c.p.ImportPath, c.want)
+		})
+	}
+}
+
+func Test含源文件的目录都要出现在go_list里(t *testing.T) {
+	listed := []goPackage{{ImportPath: layer1}, {ImportPath: pkgModel}, {ImportPath: pkgScan}}
+	cases := []struct {
+		name   string
+		dirs   []string
+		listed []goPackage
+		want   []finding
+	}{
+		{"都列出了不报", []string{".", "model", "scan"}, listed, nil},
+		{"整包被构建约束排除的目录要报", []string{".", "model", "probeonly", "scan"}, listed,
+			[]finding{{ruleListed, "internal/core/probeonly"}}},
+		{"internal/core 自己没列出也要报", []string{".", "model"}, listed[1:],
+			[]finding{{ruleListed, "internal/core"}}},
+		// 只有测试文件的目录不算含源文件，go list 照样会列出它。
+		{"列出的包多于目录不报", []string{"model"}, listed, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assertFindings(t, unlistedDirs(c.dirs, c.listed), "", c.want)
+		})
+	}
+}
+
+func Test只收集含非测试源文件的目录(t *testing.T) {
+	fsys := fstest.MapFS{
+		"doc.go":                  {}, // internal/core 自己也可能有包
+		"model/model.go":          {},
+		"model/model_test.go":     {},
+		"model/_gen/x.go":         {}, // go list 不进 _ 开头的目录
+		"onlytest/x_test.go":      {},
+		"probeonly/x_linux.go":    {}, // 整包被构建约束排除，正是要查出来的
+		"deep/README.md":          {},
+		"deep/nested/x.go":        {},
+		"scan/scan.go":            {},
+		"scan/testdata/sample.go": {}, // go list 也不进 testdata
+		".cache/x.go":             {}, // 和 . 开头的目录
+	}
+	got, err := sourceDirs(fsys)
+	if err != nil {
+		t.Fatalf("遍历失败：%v", err)
+	}
+	want := []string{".", "deep/nested", "model", "probeonly", "scan"}
+	if !slices.Equal(got, want) {
+		t.Errorf("目录 = %v，期望 %v", got, want)
+	}
+}
+
+// 真实的树是干净的：总检查漏接了哪一项，Test层1依赖守卫 照样通过，所以组合本身也要有反例。
+func Test总检查接上了每一项(t *testing.T) {
+	fsys := fstest.MapFS{ // 以模块根为根
+		"internal/core/model/model.go":   {Data: []byte(importing(pkgScan))},
+		"internal/core/model/cgo.go":     {Data: []byte(importing("C"))},
+		"internal/core/model/x_linux.go": {Data: []byte(importing("os"))},
+		// 被排除的测试文件只报它被排除，不解析：要是解析了，它 import 的 net 会多报一条。
+		"internal/core/model/x_windows_test.go": {Data: []byte(importing("net"))},
+	}
+	pkgs := []goPackage{{
+		ImportPath:     pkgModel,
+		GoFiles:        []string{"model.go"},
+		CgoFiles:       []string{"cgo.go"},
+		IgnoredGoFiles: []string{"x_linux.go", "x_windows_test.go"},
+	}}
+	got := checkLayer1(fsys, []string{"model", "probeonly"}, pkgs)
+	// 依次是目录覆盖、文件构成，再是三类文件各自的 import。model.go 按 model 的方向规则报，
+	// 说明解析时包名也接对了。
+	assertFindings(t, got, "", []finding{
+		{ruleListed, "internal/core/probeonly"},
+		{ruleCgo, "cgo.go"},
+		{ruleIgnored, "x_linux.go"},
+		{ruleIgnored, "x_windows_test.go"},
+		{ruleModel, pkgScan},
+		{ruleCgo, "C"},
+		{ruleStd, "os"},
+	})
+}
