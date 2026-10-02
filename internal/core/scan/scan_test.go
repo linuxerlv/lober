@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -345,13 +346,15 @@ func Test首尾带空格的占位符(t *testing.T) {
 }
 
 func Test未闭合的占位符不跨行(t *testing.T) {
-	// 同一行里没有 }} 就报未闭合，这一行余下的部分都留作原文：其后已经没有 }}，再往后的
-	// {{ 也闭合不了，只报一次。下一行开头的 }} 不会把它接上，下一行照常扫描。
+	// 同一行里没有 }} 就报未闭合，下一行开头的 }} 不会把它接上，下一行照常扫描。同一行里
+	// 没闭合的 {{ 各报一次：内层的 {{ 截断外层后另起一个占位符，它自己也没有 }}，作者两处
+	// 都得补，一次全标出来。
 	src := "{{slot:a\n}}{{sys:repo}}\n{{slot:b {{slot:c\n  {{slot:d}}"
 	res, problems := Scan(src)
 	want := []model.Problem{
 		model.NewProblem("placeholder_unclosed", model.Subject{Kind: "body", Line: 1, Col: 1}),
 		model.NewProblem("placeholder_unclosed", model.Subject{Kind: "body", Line: 3, Col: 1}),
+		model.NewProblem("placeholder_unclosed", model.Subject{Kind: "body", Line: 3, Col: 10}),
 	}
 	if !slices.Equal(problems, want) {
 		t.Errorf("问题 = %v，想要 %v", problems, want)
@@ -360,6 +363,45 @@ func Test未闭合的占位符不跨行(t *testing.T) {
 		t.Errorf("Slots = %+v、Sys = %q，想要只有下面几行的 d 与 repo", res.Slots, res.Sys)
 	}
 	checkSegments(t, src, res.Segments)
+}
+
+func Test内容里遇到双左花括号就截断外层(t *testing.T) {
+	// 插槽名、标识、子值里都没有花括号，占位符的内容不可能含 {{：内层的 {{ 另起一个占位符，
+	// 外层截断在那里报未闭合。否则作者少写一个 }}，同一行后面的插槽就从编辑器的插槽列表里
+	// 消失，渲染也找不到它（T8-1）。
+	unknownKind := func(col int, word string) model.Problem {
+		return model.NewProblem("placeholder_unknown_kind", model.Subject{Kind: "body", Line: 1, Col: col}, word)
+	}
+	unclosed := func(col int) model.Problem {
+		return model.NewProblem("placeholder_unclosed", model.Subject{Kind: "body", Line: 1, Col: col})
+	}
+	cases := []struct {
+		name     string
+		src      string
+		problems []model.Problem
+		slots    []Slot
+	}{
+		// 种类不认识的占位符闭合了，就从它的 }} 之后接着扫，不丢掉这一行余下的部分。
+		{"种类不认识之后接着扫", "{{foo:x}} {{slot:a}}", []model.Problem{unknownKind(1, "foo")}, []Slot{{Name: "a"}}},
+		{"插槽里套插槽", "{{slot:a {{slot:b}}", []model.Problem{unclosed(1)}, []Slot{{Name: "b"}}},
+		// 截断的外层不论种类都报未闭合，同一行后面多半还是作者要写的占位符。
+		{"种类不认识的套插槽", "{{foo:x {{slot:b}}", []model.Problem{unclosed(1)}, []Slot{{Name: "b"}}},
+		// 内层不归 lober 管也照样截断：外层的问题是没收住，不是内容写法不对。
+		{"内层是 Jinja", "{{slot:a {{ x }}", []model.Problem{unclosed(1)}, nil},
+		{"一行套了几层", "{{param:x {{sys:repo {{slot:c}}", []model.Problem{unclosed(1), unclosed(11)}, []Slot{{Name: "c"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, problems := Scan(c.src)
+			if !slices.Equal(problems, c.problems) {
+				t.Errorf("Scan(%q) 的问题 = %v，想要恰好 %v", c.src, problems, c.problems)
+			}
+			if !slices.Equal(res.Slots, c.slots) {
+				t.Errorf("Scan(%q) 的 Slots = %+v，想要 %+v", c.src, res.Slots, c.slots)
+			}
+			checkSegments(t, c.src, res.Segments)
+		})
+	}
 }
 
 func Test用lbrace转义左花括号对(t *testing.T) {
@@ -418,6 +460,22 @@ func Test中文插槽名(t *testing.T) {
 		t.Errorf("第一个插槽应在第 1 行第 4 列，Segments = %+v", res.Segments)
 	}
 	checkSegments(t, src, res.Segments)
+}
+
+func Test插槽名超长时说明里的上限与常量一致(t *testing.T) {
+	// 插槽名的上限在 codes.go 的说明里另写了一份：改了 slotNameMaxRunes 却没改说明，
+	// 作者就会照着错的上限去改（T5-5）。
+	limit := strings.Repeat("区", slotNameMaxRunes)
+	if _, problems := Scan("{{slot:" + limit + "}}"); len(problems) != 0 {
+		t.Errorf("%d 个字的插槽名应扫描无错，得到 %v", slotNameMaxRunes, problems)
+	}
+	_, problems := Scan("{{slot:" + limit + "区}}")
+	if len(problems) != 1 || problems[0].Code != "placeholder_malformed" {
+		t.Fatalf("%d 个字的插槽名应恰好报一条 placeholder_malformed，得到 %v", slotNameMaxRunes+1, problems)
+	}
+	if p, want := problems[0], "1–"+strconv.Itoa(slotNameMaxRunes); !strings.Contains(p.Message+p.Next, want) {
+		t.Errorf("placeholder_malformed 的说明 = %q，下一步 = %q，想要写明插槽名是 %s 个字", p.Message, p.Next, want)
+	}
 }
 
 func Test独占一行的判定(t *testing.T) {

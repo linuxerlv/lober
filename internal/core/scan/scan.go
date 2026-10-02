@@ -94,7 +94,9 @@ type Result struct {
 // {{ 之后跳过空格，紧跟「小写字母加冒号」的才是 lober 的占位符，其余 {{…}} 原样保留，
 // 所以 cloud-init 的 {{ ds.meta_data.local_hostname }} 不受影响；代价是正文里不能直接写
 // {{http://…}} 这类字面量，要写就用 {{sys:lbrace}} 转义。占位符从 {{ 起，到同一行里其后
-// 的第一个 }} 为止，首尾可以有空格；同一行里没有 }} 的报未闭合，这一行余下的部分留作原文。
+// 的第一个 }} 为止，首尾可以有空格。在 }} 之前先遇到下一个 {{、或者到行尾都没有 }} 的报
+// 未闭合：占位符的内容不可能含 {{，外层就截断在内层的 {{ 处，从那里接着扫，同一行后面的
+// 占位符不会被吞掉。截断的外层不论种类认不认识都报未闭合；没被截断的，种类不认识先于未闭合。
 //
 // 有问题时照样返回其余部分的结果，写错的占位符留在原文段里：草稿有错也能保存，编辑器要靠
 // 它继续显示插槽列表。问题按出现位置排列，Subject 的 Kind 为 body，行列指向占位符的 {{。
@@ -141,21 +143,30 @@ func (sc *scanner) scanLine(n, start, end int) {
 			i = at + 1
 			continue
 		}
-		stop, closed := len(line), false
-		if k := strings.Index(line[body:], "}}"); k >= 0 {
-			stop, closed = body+k+2, true
+		// 插槽名、标识、子值里都没有花括号，所以先找下一个 {{：在它之前有 }} 才算闭合，
+		// 没有就截断在那里，从内层的 {{ 接着扫。只在截断点之前找 }}：每个占位符都找到行尾
+		// 的话，一行写满没闭合的 {{ 时会变成平方级。
+		stop, cut := len(line), false
+		if k := strings.Index(line[body:], "{{"); k >= 0 {
+			stop, cut = body+k, true
+		}
+		closed := false
+		if k := strings.Index(line[body:stop], "}}"); k >= 0 {
+			stop, closed, cut = body+k+2, true, false
 		}
 		i = stop
 		seg := Segment{Raw: line[at:stop], Line: n, Col: cols.at(at)}
 		subject := model.Subject{Kind: "body", Line: n, Col: seg.Col}
 		kind, known := kindOf[word]
 		switch {
-		case !known:
+		case !known && !cut:
 			// 种类在冒号前就定了，所以先于闭合检查：把网址写进双花括号的人，看到这一条
 			// 才知道要用 {{sys:lbrace}} 转义。
 			sc.problems = append(sc.problems, model.NewProblem("placeholder_unknown_kind", subject, word))
 			continue
 		case !closed:
+			// 到行尾都没有 }}，或者被内层的 {{ 截断。截断的外层不论种类都报这一条：同一行
+			// 后面还有 {{，作者多半是在写占位符时少了 }}，补上以后种类不对会接着报出来。
 			sc.problems = append(sc.problems, model.NewProblem("placeholder_unclosed", subject))
 			continue
 		}

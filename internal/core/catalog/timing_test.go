@@ -324,30 +324,61 @@ func Test能力表逐格与计划一致(t *testing.T) {
 	}
 }
 
-func Test能力表只登记目录里的格式与时机(t *testing.T) {
+// catalogValue 是能力表格子里的取值：解释器、系统部件、系统值都是这样的词表标识。
+type catalogValue interface {
+	~string
+	Valid() bool
+}
+
+// checkCell 断言能力表一格里的每一项都是词表里的值，且同一格里不重复。where 写成对应的
+// 查询，报错时一眼看出是哪一格。
+func checkCell[T catalogValue](t *testing.T, where string, items []T) {
+	t.Helper()
+	seen := map[T]bool{}
+	for _, v := range items {
+		if !v.Valid() {
+			t.Errorf("%s 里有未知的值 %q", where, v)
+		}
+		if seen[v] {
+			t.Errorf("%s 里重复登记了 %q", where, v)
+		}
+		seen[v] = true
+	}
+}
+
+func Test能力表只登记目录里的值且每格不重复(t *testing.T) {
 	// 能力按格式、再按时机查。键拼错了查询不会报错，那一行或那一格只是永远查不到；
-	// Timings 又只列时机表里的时机，拼错的时机会悄无声息地消失。
+	// Timings 又只列时机表里的时机，拼错的时机会悄无声息地消失。格子里的值同样没人兜：
+	// 误加的 python 能让 hook 通过激活，Label() 却是空串；gateway 拼成 gatway，引用它的
+	// 片段和模板全被判不可用。「逐格与计划一致」比对的是一起改的抄录，两边一起写错时
+	// 只有这里报红，所以直接查实现里的表。
 	for f, r := range capabilityTable {
 		if !f.Valid() {
 			t.Errorf("能力表登记了未知的格式 %q", f)
 		}
-		for tm := range r.interpreters {
+		for tm, interpreters := range r.interpreters {
 			if !tm.Valid() {
 				t.Errorf("格式 %q 的能力登记了未知的时机 %q", f, tm)
 			}
+			checkCell(t, string(f)+".Interpreters("+string(tm)+")", interpreters)
 		}
+		checkCell(t, string(f)+".RequiredParts()", r.parts)
+		checkCell(t, string(f)+".SystemValues()", r.values)
 	}
 }
 
-func Test每种格式都支持首次开机时机并要求首次开机部件(t *testing.T) {
-	// 任务要等首次开机的脚本跑完才进入「完成」，最后还要清理目标机上的凭据（spec §5.4）。
-	// 哪种格式缺了这个时机或这个部件，用它装的机器就永远到不了「完成」。
+func Test每种格式都支持首次开机时机并要求首次开机与凭据清理部件(t *testing.T) {
+	// 任务要等首次开机的脚本跑完才进入「完成」，最后还要清理目标机上的凭据（spec §5.4 第 5 步）。
+	// 哪种格式缺了首次开机的时机或部件，用它装的机器就永远到不了「完成」；缺了凭据清理，
+	// 装出的机器会把应答文件副本里的密码哈希和首次开机 token 留在盘上。
 	for _, f := range formatTableIDs() {
 		if !slices.Contains(f.Timings(), "firstboot") {
 			t.Errorf("%s.Timings() = %q，想要含 firstboot", f, f.Timings())
 		}
-		if !slices.Contains(f.RequiredParts(), "firstboot") {
-			t.Errorf("%s.RequiredParts() = %q，想要含 firstboot", f, f.RequiredParts())
+		for _, p := range []SystemPart{"firstboot", "cleanup"} {
+			if !slices.Contains(f.RequiredParts(), p) {
+				t.Errorf("%s.RequiredParts() = %q，想要含 %s", f, f.RequiredParts(), p)
+			}
 		}
 	}
 }

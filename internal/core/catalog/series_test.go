@@ -23,7 +23,8 @@ type planSeries struct {
 	label string
 }
 
-// planCatalog 是计划「任务 2」取值表的逐字抄录，按族、格式、系三级排列。
+// planCatalog 抄录计划「任务 2」的取值表，按族、格式、系三级排列；格式的显示名以 spec §2.1
+// 的表和 C1 为准，界面要与 spec、文档写法一致（T2-1）。
 // 标识会进数据库和 URL，发布后不能改名，所以期望值写死在测试里，不从实现推出来。
 var planCatalog = []planFamily{
 	{"linux", "Linux", []planFormat{
@@ -36,8 +37,8 @@ var planCatalog = []planFamily{
 		}},
 		{"preseed", "preseed", []planSeries{{"debian", "Debian"}}},
 		{"autoinstall", "autoinstall", []planSeries{{"ubuntu", "Ubuntu"}}},
-		{"autoyast", "autoyast", []planSeries{{"sles15", "SLES 15"}, {"leap15", "openSUSE Leap 15"}}},
-		{"agama", "agama", []planSeries{{"sles16", "SLES 16"}, {"leap16", "openSUSE Leap 16"}}},
+		{"autoyast", "AutoYaST", []planSeries{{"sles15", "SLES 15"}, {"leap15", "openSUSE Leap 15"}}},
+		{"agama", "Agama", []planSeries{{"sles16", "SLES 16"}, {"leap16", "openSUSE Leap 16"}}},
 	}},
 	{"windows", "Windows", []planFormat{
 		{"unattend", "unattend", []planSeries{{"windows-server", "Windows Server"}, {"windows-desktop", "Windows 桌面版"}}},
@@ -185,7 +186,7 @@ func Test未知或大小写不同的值无效且查询为空(t *testing.T) {
 		}
 	})
 	t.Run("格式", func(t *testing.T) {
-		for _, f := range []Format{"", "Kickstart", "AUTOYAST", " preseed", "ESXi ks", "esxi_ks", "esxi", "ks", "linux"} {
+		for _, f := range []Format{"", "Kickstart", "AUTOYAST", " preseed", "ESXi ks", "AutoYaST", "Agama", "esxi_ks", "esxi", "ks", "linux"} {
 			if f.Valid() || f.Label() != "" || len(SeriesOfFormat(f)) != 0 {
 				t.Errorf("格式 %q：Valid() = %v、Label() = %q、SeriesOfFormat() = %q，想要 false、空、空",
 					f, f.Valid(), f.Label(), SeriesOfFormat(f))

@@ -38,13 +38,14 @@ var familyTable = []familyRow{
 	{"esxi", "ESXi"},
 }
 
-// formatTable 里格式的显示名就是它的标识，只有 esxi-ks 显示为「ESXi ks」。
+// formatTable 里格式的显示名照 spec §2.1 与 C1 的写法，界面与文档才对得上：kickstart、
+// preseed、autoinstall、unattend 就是标识本身，另三种是 AutoYaST、Agama、ESXi ks。
 var formatTable = []formatRow{
 	{"kickstart", "linux", "kickstart"},
 	{"preseed", "linux", "preseed"},
 	{"autoinstall", "linux", "autoinstall"},
-	{"autoyast", "linux", "autoyast"},
-	{"agama", "linux", "agama"},
+	{"autoyast", "linux", "AutoYaST"},
+	{"agama", "linux", "Agama"},
 	{"unattend", "windows", "unattend"},
 	{"esxi-ks", "esxi", "ESXi ks"},
 }
