@@ -167,11 +167,26 @@ func scalar(typ model.ParamType, item string) model.SnapshotValue {
 	return model.SnapshotValue{Type: typ, Items: []string{item}}
 }
 
+// mustBuild 构建快照，并核对渲染要依赖的三条不变式（L-7，见 Build 的文档）：每个构建得出的快照
+// 都要满足，不只是专门测它们的那几例。
 func mustBuild(t *testing.T, in params.Input) model.Snapshot {
 	t.Helper()
 	snap, ps := Build(in)
 	if len(ps) != 0 {
 		t.Fatalf("不应有问题，得到 %v", ps)
+	}
+	if snap.Family == "" || snap.Format == "" {
+		t.Errorf("族与格式应非空：%q、%q", snap.Family, snap.Format)
+	}
+	for _, s := range snap.Slots {
+		for i, inst := range s.Instances {
+			switch {
+			case s.Exec && (inst.Kind != model.ImplScript || inst.Digest == ""):
+				t.Errorf("执行插槽 %s 的第 %d 个实例应是带摘要的脚本：%+v", s.Name, i+1, inst)
+			case !s.Exec && inst.Kind != model.ImplFragment:
+				t.Errorf("片段插槽 %s 的第 %d 个实例应是片段：%+v", s.Name, i+1, inst)
+			}
+		}
 	}
 	return snap
 }
@@ -180,6 +195,12 @@ func mustBuild(t *testing.T, in params.Input) model.Snapshot {
 func mustFail(t *testing.T, in params.Input, want ...model.Problem) []model.Problem {
 	t.Helper()
 	snap, ps := Build(in)
+	return wantNoSnapshot(t, snap, ps, want...)
+}
+
+// wantNoSnapshot 是 mustFail 的核对部分：白盒测试直接调包内函数，结果也照此核对。
+func wantNoSnapshot(t *testing.T, snap model.Snapshot, ps []model.Problem, want ...model.Problem) []model.Problem {
+	t.Helper()
 	if !reflect.DeepEqual(snap, model.Snapshot{}) {
 		t.Errorf("有问题时不应产出快照，得到 %+v", snap)
 	}
@@ -425,6 +446,27 @@ func TestBuild前提不满足时不产出快照(t *testing.T) {
 			t.Errorf("series_not_ticked 的说明应点出 ISO 的系：%s", ps[0].Message)
 		}
 	})
+	// 不是目录里的系推不出族与格式，渲染无从下手（L-7）。草稿勾了它也算没勾：激活判定不让模板勾
+	// 不认识的系。清空装配表与填的值，参数求值就没有别的问题，构建原先会产出族与格式都为空的快照。
+	for _, c := range []struct {
+		name   string
+		series catalog.Series
+	}{
+		{"ISO 的系不在目录里", "centos"},
+		{"ISO 的系大小写不对", "Rocky"},
+		{"ISO 的系为空", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in := baselineInput("rocky")
+			in.Template.Series = append(in.Template.Series, c.series)
+			in.ISO.Series = c.series
+			in.Template.Assembly, in.Entered = nil, nil
+			ps := mustFail(t, in, templateAt("series_not_ticked"))
+			if !strings.Contains(ps[0].Message, "「"+string(c.series)+"」") {
+				t.Errorf("series_not_ticked 的说明应点出 ISO 的系：%s", ps[0].Message)
+			}
+		})
+	}
 	t.Run("实例没有覆盖该系的实现", func(t *testing.T) {
 		in := baselineInput("almalinux")
 		ssh := sshHook()
@@ -440,6 +482,121 @@ func TestBuild前提不满足时不产出快照(t *testing.T) {
 		in.Entered = nil // 跳过的实例没有字段，填给它们的值会另报 param_unknown_field
 		delete(in.Hooks, model.HookKey{ID: "nic", Version: 2})
 		mustFail(t, in, slotAt("hook_ref_missing", "装后配置/1"), slotAt("hook_ref_missing", "装后配置/2"))
+	})
+}
+
+// nicIn 是放进任意插槽都过得了参数求值的一个网卡实例：地址锁定取自主机属性 ip，网卡名写死。
+func nicIn() model.Instance {
+	return model.Instance{HookID: "nic", HookVersion: 2, Bindings: map[string]model.Binding{
+		"ip":     {Source: model.BindingAttr, Attr: "ip"},
+		"device": {Source: model.BindingFixed, Value: "eth3"},
+	}}
+}
+
+// 实现放不进插槽，激活判定会拦，草稿却照样能预览（C22）。渲染要依赖执行插槽里只有带摘要的脚本、
+// 片段插槽里只有片段（L-7），所以构建时每个实例都按 model.Impl.FitsSlot 再查一遍：不适配的问题
+// 落在「插槽名/序号」上，说明点出 hook、系，以及不对的种类或时机，不产出快照。
+func TestBuild实现放不进插槽时不产出快照(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(in *params.Input)
+		want []model.Problem
+		msg  []string // 每条问题的说明里都应出现
+	}{
+		{"片段放进执行插槽", func(in *params.Input) {
+			in.Template.Assembly["装前检查"] = []model.Instance{{HookID: "disk", HookVersion: 1, Bindings: map[string]model.Binding{
+				"disk": {Source: model.BindingAttr, Attr: "disk"},
+			}}}
+		}, []model.Problem{slotAt("impl_kind_mismatch", "装前检查/1")}, []string{"disk@1", "「rocky」", "fragment"}},
+		{"脚本放进片段插槽", func(in *params.Input) {
+			in.Template.Assembly["分区"] = append(in.Template.Assembly["分区"], nicIn())
+		}, []model.Problem{slotAt("impl_kind_mismatch", "分区/2")}, []string{"nic@2", "「rocky」", "script"}},
+		{"脚本的时机不含执行插槽的时机", func(in *params.Input) {
+			in.Template.Assembly["装前检查"] = []model.Instance{nicIn()}
+		}, []model.Problem{slotAt("impl_timing_mismatch", "装前检查/1")}, []string{"nic@2", "「rocky」", "「pre」"}},
+		// 种类不认识的放进哪种插槽都不适配：参数求值把它当片段读，渲染却不知道该怎么展开它。
+		{"片段插槽里的种类不认识", func(in *params.Input) {
+			disk := diskHook()
+			disk.Impls[0].Kind = "macro"
+			in.Hooks[disk.Key()] = disk
+		}, []model.Problem{slotAt("impl_kind_mismatch", "分区/1")}, []string{"disk@1", "macro"}},
+		// 种类只认原样的写法，大小写不对的 Script 也不是脚本；两个实例各报一条。
+		{"执行插槽里的种类不认识", func(in *params.Input) {
+			nic := nicHook()
+			nic.Impls[0].Kind = "Script"
+			in.Hooks[nic.Key()] = nic
+		}, []model.Problem{slotAt("impl_kind_mismatch", "装后配置/1"), slotAt("impl_kind_mismatch", "装后配置/2")},
+			[]string{"nic@2", "Script"}},
+		// 每处都报，按插槽在正文里的顺序：不是查到第一处就停。
+		{"几处同时不适配", func(in *params.Input) {
+			in.Template.Assembly["分区"] = append(in.Template.Assembly["分区"], nicIn())
+			in.Template.Assembly["装前检查"] = []model.Instance{nicIn()}
+		}, []model.Problem{slotAt("impl_kind_mismatch", "分区/2"), slotAt("impl_timing_mismatch", "装前检查/1")}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := baselineInput("rocky")
+			c.edit(&in)
+			if ps := params.Evaluate(in).Problems; len(ps) != 0 {
+				t.Fatalf("参数求值应当通过，问题才只出在插槽适配上：%v", ps)
+			}
+			for _, p := range mustFail(t, in, c.want...) {
+				for _, s := range c.msg {
+					if !strings.Contains(p.Message, s) {
+						t.Errorf("%s 的说明应含「%s」：%s", p.Code, s, p.Message)
+					}
+				}
+			}
+		})
+	}
+	// 参数求值有问题时原样返回它的问题，不再往下查插槽：与 {{sys:sn}} 的检查一样，取值都通过了才
+	// 整理快照。
+	t.Run("参数求值也有问题", func(t *testing.T) {
+		in := baselineInput("rocky")
+		in.Template.Assembly["装前检查"] = []model.Instance{nicIn()}
+		in.Entered["tpl/nope"] = "x"
+		want := params.Evaluate(in).Problems
+		if len(want) != 1 || want[0].Code != "param_unknown_field" {
+			t.Fatalf("这组输入的参数求值应只有一个 param_unknown_field：%v", want)
+		}
+		snap, got := Build(in)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("问题是\n%v\n应原样是参数求值的\n%v", got, want)
+		}
+		if !reflect.DeepEqual(snap, model.Snapshot{}) {
+			t.Errorf("有问题时不应产出快照，得到 %+v", snap)
+		}
+	})
+}
+
+// 参数求值与整理快照各查一遍 hook 和实现，两边遍历同一组插槽与实例，求值通过了本不会查不到。两边
+// 一旦走岔，整理快照也不能丢掉查找结果、产出种类与正文全空的实例（T13-8），而要报出与参数求值相同的
+// 问题，不产出快照。正常的入参走不到这一步，所以白盒：按完整的入参求值，再拿走岔的入参调 buildFrom。
+func TestBuild求值之后查不到hook或实现时不产出快照(t *testing.T) {
+	in := baselineInput("rocky")
+	res := params.Evaluate(in)
+	if len(res.Problems) != 0 {
+		t.Fatalf("完整的入参应能通过参数求值：%v", res.Problems)
+	}
+	t.Run("查不到 hook", func(t *testing.T) {
+		diverged := in
+		diverged.Hooks = hookMap(diskHook(), sshHook())
+		snap, ps := buildFrom(diverged, res)
+		ps = wantNoSnapshot(t, snap, ps, slotAt("hook_ref_missing", "装后配置/1"), slotAt("hook_ref_missing", "装后配置/2"))
+		if !strings.Contains(ps[0].Message, "nic@2") {
+			t.Errorf("hook_ref_missing 的说明应点出 hook：%s", ps[0].Message)
+		}
+	})
+	t.Run("查不到覆盖该系的实现", func(t *testing.T) {
+		diverged := in
+		ssh := sshHook()
+		ssh.Impls[0].Series = []catalog.Series{"almalinux"}
+		diverged.Hooks = hookMap(diskHook(), ssh, nicHook())
+		snap, ps := buildFrom(diverged, res)
+		ps = wantNoSnapshot(t, snap, ps, slotAt("impl_missing_for_series", "账号/1"))
+		if msg := ps[0].Message; !strings.Contains(msg, "ssh-key@2") || !strings.Contains(msg, "「rocky」") {
+			t.Errorf("impl_missing_for_series 的说明应点出 hook 与系：%s", msg)
+		}
 	})
 }
 
@@ -687,9 +844,11 @@ func TestBuild空集合在JSON里不是null(t *testing.T) {
 
 // 插槽重名、参数重名由激活判定拦下（slot_duplicate、param_decl_invalid），草稿照样能预览。这里与
 // 参数求值一样只按第一次出现的算：插槽不重复列出，序号连续；参数的类型按进了表单的那个声明记。
+// 重名的插槽插在正文中间，后面还有两个插槽：序号若按扫描到的位置编，它们会往后错一位（T11-10③）。
+// 它写成执行插槽，「分区」里的片段也不按它查适配。
 func TestBuild重名的插槽与参数只算第一次出现(t *testing.T) {
 	in := baselineInput("rocky")
-	in.Template.Body += "{{slot:分区@firstboot}}\n"
+	replaceInBody(t, &in, "{{slot:账号}}\n", "{{slot:账号}}\n{{slot:分区@firstboot}}\n")
 	in.Template.Params = append(in.Template.Params, model.ParamDecl{Name: "hostname", Label: "重名的主机名", Type: "word"})
 	got := mustBuild(t, in)
 	want := mustBuild(t, baselineInput("rocky"))
