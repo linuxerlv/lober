@@ -1,11 +1,17 @@
 // Package admission 是准入判定：一台主机、一个 ISO、一个模板能不能配到一起建任务
 // （C5、C22、C26、C27、C31，以及 C28 在建任务时的那一次）。三者在建任务之前互不知道
 // 对方，能不能配到一起只在这里查（spec §3 总则）。向导前三步筛候选、提交时逐台校验都调
-// 本包，两边用的是同一套规则，筛出来的候选和提交时的校验结果不会对不上（spec §4.1）。
+// 本包，两边用的是同一套规则（spec §4.1）。
+//
+// 提交时还要逐台跑参数求值（spec §5.3 第 6 步），所以筛出来的候选，提交时仍可能被参数求值拦下：
+// 参数的问题大多取决于主机属性和操作员填的值，筛候选时还不知道。只凭模板、hook 与 ISO 就能定下的
+// 那一条，即 ISO 没提供参数要的选项集合（C21），这里也查，条件与参数求值共用
+// model.ParamDecl.OfferMissing，向导就不会列出注定用不了的模板（L-2）。
 package admission
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"strconv"
 
@@ -22,15 +28,16 @@ func HostSelectable(h model.Host, hasOpenTask bool) []model.Problem {
 	return nil
 }
 
-// ISOUsable 判断 ISO 能不能给这几台主机建任务：ISO 要可用（C5；已废弃的不能再被新引用，
-// C26），架构与固件要与每台主机登记的相符（C28 建任务时的那一次）。平台冲突指向那台主机，
-// 按主机传入的顺序报出，向导据此灰显 ISO 并写明是哪几台。
+// ISOUsable 判断 ISO 能不能给这几台主机建任务：ISO 要可用，即 model.ISO.Unusable 为空（导入完成
+// 且记录合法，C5；已废弃的不能再被新引用，C26）；架构与固件要与每台主机登记的相符（C28 建任务时
+// 的那一次）。平台冲突指向那台主机，按主机传入的顺序报出，向导据此灰显 ISO 并写明是哪几台。
 //
-// ISO 不可用时只报 iso_not_ready、不再逐台比平台：获取中、导入中的 ISO 还没识别出架构，
-// 拿它去比，会给登记过的主机报出不成立的冲突，而这个 ISO 本来就用不了。
+// ISO 不可用时只报 Unusable 给的原因、不再逐台比平台：获取中、导入中的 ISO 还没识别出架构，ready
+// 却缺架构的记录不全（L-6），拿它们去比，会给登记过的主机报出不成立的冲突，没登记平台的主机反倒
+// 通过，而这个 ISO 本来就用不了。
 func ISOUsable(iso model.ISO, hosts []model.Host) []model.Problem {
-	if !iso.Usable() {
-		return []model.Problem{isoNotReady(iso)}
+	if reasons := iso.Unusable(); len(reasons) > 0 {
+		return reasons
 	}
 	var out []model.Problem
 	for _, h := range hosts {
@@ -43,10 +50,14 @@ func ISOUsable(iso model.ISO, hosts []model.Host) []model.Problem {
 // 取出的版本：向导里每个模板只提供它（C23）。
 //
 // 这里不重做激活判定。批准时已经查过引用的 hook 版本存在且已审批，批准之后它们只可能被
-// 废弃（C23 已审批的不可修改，C26 只许废弃、不许删除），所以只查三件事：这个版本是已审批
-// 的（C22）；它没有引用已废弃的 hook 版本（C26，经模板间接引用也算）；ISO 的系是它所勾的
-// 系之一（C27）。hooks 里缺了某个引用时当作没废弃：那是调用方漏给的，参数求值会报
-// hook_ref_missing。
+// 废弃（C23 已审批的不可修改，C26 只许废弃、不许删除），所以只查四件事，依次报出：这个版本
+// 是已审批的（C22）；它没有引用已废弃的 hook 版本（C26，经模板间接引用也算）；ISO 的系是它所勾
+// 的系之一（C27）；ISO 提供了模板参数与所引 hook 参数要的选项集合（C21，L-2），缺的集合各报一条，
+// 见 offerProblems。hooks 里缺了某个引用时当作没废弃，也不看它的参数：那是调用方漏给的，参数
+// 求值会报 hook_ref_missing。
+//
+// ISO 不可用时不查集合，理由同 ISOUsable 不逐台比平台：获取中、导入中的 ISO 还没有提供的集合，
+// 拿它去查会报出不成立的 iso_offer_missing，而这个 ISO 本来就用不了。
 //
 // 引用了已废弃的 hook 版本时挡住的就是这个版本，不回落到更早的已审批版本：回落会让操作员
 // 选的是当前版本、装出来的却是旧内容。下一步是作者升级引用，审批出新版本。
@@ -54,13 +65,17 @@ func TemplateUsable(t model.Template, hooks map[model.HookKey]model.Hook, iso mo
 	subject := model.Subject{Kind: "template", ID: t.ID + "@" + strconv.Itoa(t.Version)}
 	var out []model.Problem
 	if t.State != model.VersionApproved {
-		out = append(out, model.NewProblem("template_not_approved", subject, string(t.State)))
+		// 说明里给状态的中文显示名；不认识的状态没有显示名，回落到标识（T5-1）。
+		out = append(out, model.NewProblem("template_not_approved", subject, cmp.Or(t.State.Label(), string(t.State))))
 	}
 	for _, k := range deprecatedRefs(t, hooks) {
 		out = append(out, model.NewProblem("template_blocked_by_deprecated", subject, k.ID, k.Version))
 	}
 	if !slices.Contains(t.Series, iso.Series) {
 		out = append(out, model.NewProblem("series_not_ticked", subject, string(iso.Series)))
+	}
+	if iso.Usable() {
+		out = append(out, offerProblems(subject, paramDecls(t, hooks), iso.Offers)...)
 	}
 	return out
 }
@@ -91,11 +106,9 @@ type BatchResult struct {
 // ByHost 里的一个键，host_duplicate_in_batch 在这个键下报一次；几处是同一条登记，这台主机
 // 的其他问题也只按第一处判一次，不会成倍报出。
 func Batch(in BatchInput) BatchResult {
-	usable := in.ISO.Usable()
-	common := []model.Problem{}
-	if !usable {
-		common = append(common, isoNotReady(in.ISO))
-	}
+	isoProblems := in.ISO.Unusable()
+	usable := len(isoProblems) == 0
+	common := append([]model.Problem{}, isoProblems...)
 	common = append(common, TemplateUsable(in.Template, in.Hooks, in.ISO)...)
 
 	seen := make(map[string]int, len(in.Hosts))
@@ -124,19 +137,10 @@ func hostSubject(h model.Host) model.Subject {
 	return model.Subject{Kind: "host", ID: h.SN}
 }
 
-// isoNotReady 的参数是 ISO 状态的标识，说明据此分得清是哪一种：已废弃的再也不能用，其余的
-// 导入完成后还能用。中文只写在 model 的代码表里，所以这里传标识，不另写中文的现状。
-func isoNotReady(iso model.ISO) model.Problem {
-	return model.NewProblem("iso_not_ready", model.Subject{Kind: "iso", ID: iso.ID}, string(iso.State))
-}
-
-// platformConflicts 报 ISO 与一台主机的平台冲突，架构在前、固件在后。架构和固件都没登记的
-// 主机不查（C28 登记了才校验）；规则本身在 catalog.PlatformOK 里，网关引导时也用它，
-// 两次校验因此是同一套规则。
+// platformConflicts 报 ISO 与一台主机的平台冲突，架构在前、固件在后。iso 必须可用（调用方先查
+// Unusable），PlatformOK 才有合法的系与架构可比。规则本身在 catalog.PlatformOK 里：主机没登记的
+// 那一项算通过（C28 登记了才校验）；网关引导时也用它，两次校验因此是同一套规则。
 func platformConflicts(iso model.ISO, h model.Host) []model.Problem {
-	if h.Arch == "" && h.Firmware == "" {
-		return nil
-	}
 	archOK, fwOK := catalog.PlatformOK(iso.Series, iso.Arch, h.Arch, h.Firmware)
 	var out []model.Problem
 	if !archOK {
@@ -163,5 +167,31 @@ func deprecatedRefs(t model.Template, hooks map[model.HookKey]model.Hook) []mode
 	slices.SortFunc(out, func(a, b model.HookKey) int {
 		return cmp.Or(cmp.Compare(a.ID, b.ID), cmp.Compare(a.Version, b.Version))
 	})
+	return out
+}
+
+// paramDecls 依次列出模板参数，与装配表里各实例所引 hook 的参数：插槽按名字的字典序，实例按在
+// 插槽里的顺序。装配表是 map，排过序，同一个模板每次判定的结果才一样。hooks 里缺了的引用没有参数
+// 可列。先复制模板参数再追加：直接往 t.Params 上 append，可能写进调用方切片的底层数组。
+func paramDecls(t model.Template, hooks map[model.HookKey]model.Hook) []model.ParamDecl {
+	decls := slices.Clone(t.Params)
+	for _, slot := range slices.Sorted(maps.Keys(t.Assembly)) {
+		for _, inst := range t.Assembly[slot] {
+			decls = append(decls, hooks[model.HookKey{ID: inst.HookID, Version: inst.HookVersion}].Params...)
+		}
+	}
+	return decls
+}
+
+// offerProblems 为 offers 里缺的每个集合报一条 iso_offer_missing，次序是 model.MissingOffers 给的
+// 声明顺序。说明里称呼第一个要这个集合的参数，用显示名，没写时用参数名，与参数求值里那一格的称呼
+// 相同。
+func offerProblems(subject model.Subject, decls []model.ParamDecl, offers map[string][]model.Option) []model.Problem {
+	var out []model.Problem
+	for _, name := range model.MissingOffers(decls, offers) {
+		// MissingOffers 只列出有声明要的集合，这里一定找得到。
+		i := slices.IndexFunc(decls, func(d model.ParamDecl) bool { return d.Offer == name && d.OfferMissing(offers) })
+		out = append(out, model.NewProblem("iso_offer_missing", subject, cmp.Or(decls[i].Label, decls[i].Name), name))
+	}
 	return out
 }

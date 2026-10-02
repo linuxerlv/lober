@@ -81,6 +81,35 @@ func esxiTemplate() model.Template {
 	}
 }
 
+// windowsISO 是一个导入完成的 Windows Server 2025 ISO，offers 是它提供的取值集合（C21）。
+func windowsISO(offers map[string][]model.Option) model.ISO {
+	return model.ISO{
+		ID: "iso-ws2025", Name: "Windows Server 2025", Family: "windows", Series: "windows-server",
+		Version: "10.0.26100", Arch: "x86_64", State: model.ISOReady, Offers: offers,
+	}
+}
+
+// editionOffers 是 Windows Server 的 ISO 提供的 editions 集合。
+func editionOffers() map[string][]model.Option {
+	return map[string][]model.Option{"editions": {
+		{Value: "ServerStandard", Label: "Standard"}, {Value: "ServerDatacenter", Label: "Datacenter"},
+	}}
+}
+
+// windowsTemplate 是一个已审批、只勾 windows-server 的模板 v2，装配表为空：版本（edition）的选项
+// 取自 ISO 提供的 editions，界面语言是静态选项。
+func windowsTemplate() model.Template {
+	return model.Template{
+		ID: "win-base", Version: 2, Name: "Windows-Base", State: model.VersionApproved,
+		Author: "alice", Approver: "bob", Family: "windows", Series: []catalog.Series{"windows-server"},
+		Params: []model.ParamDecl{
+			{Name: "lang", Label: "界面语言", Type: "enum", Default: "zh-CN",
+				Options: []model.Option{{Value: "zh-CN", Label: "简体中文"}, {Value: "en-US", Label: "English"}}},
+			{Name: "edition", Label: "版本", Type: "enum", Offer: "editions"},
+		},
+	}
+}
+
 func onHost(sn string) model.Subject {
 	return model.Subject{Kind: "host", ID: sn}
 }
@@ -122,24 +151,38 @@ func TestHostSelectable已有未结束任务的主机不能选(t *testing.T) {
 	sameProblems(t, "没有未结束的任务", HostSelectable(h, false), nil)
 }
 
-// 只有导入完成的 ISO 能建任务（C5），已废弃的不能再被新引用（C26）。几种状态共用一个代码，
-// 说明里要分得清是哪一种：已废弃的再也不能用，其余的导入完成后还能用。
-func TestISOUsable不可用的ISO报iso_not_ready(t *testing.T) {
+// 只有导入完成的 ISO 能建任务（C5），已废弃的不能再被新引用（C26）。获取中、导入中、已废弃共用
+// iso_not_ready，参数是状态的中文显示名（T5-1），说明里分得清是哪一种；导入失败的另报
+// iso_import_failed：它不用等，可以直接重新导入（spec §5.1 第 5 步）。
+func TestISOUsable不可用的ISO按状态报原因(t *testing.T) {
 	hosts := []model.Host{hostOf("SN-1", "x86_64", "uefi")}
+	on := onISO("iso-rocky96")
+	cases := []struct {
+		state model.ISOState
+		want  model.Problem
+	}{
+		{model.ISOAcquiring, model.NewProblem("iso_not_ready", on, "获取中")},
+		{model.ISOImporting, model.NewProblem("iso_not_ready", on, "导入中")},
+		{model.ISOFailed, model.NewProblem("iso_import_failed", on)},
+		{model.ISODeprecated, model.NewProblem("iso_not_ready", on, "已废弃")},
+	}
 	byMessage := map[string]model.ISOState{}
-	for _, state := range []model.ISOState{model.ISOAcquiring, model.ISOImporting, model.ISOFailed, model.ISODeprecated} {
+	for _, c := range cases {
 		iso := rockyISO()
-		iso.State = state
+		iso.State = c.state
 		got := ISOUsable(iso, hosts)
-		sameProblems(t, "状态为 "+string(state), got,
-			[]model.Problem{model.NewProblem("iso_not_ready", onISO("iso-rocky96"), string(state))})
+		sameProblems(t, "状态为 "+string(c.state), got, []model.Problem{c.want})
 		if len(got) != 1 {
 			continue
 		}
-		if prev, dup := byMessage[got[0].Message]; dup {
-			t.Errorf("状态 %s 与 %s 的说明一样，分不出是哪一种：%s", state, prev, got[0].Message)
+		// 操作员看到的是中文的现状，不是 deprecated 这类标识。
+		if strings.Contains(got[0].Message, string(c.state)) {
+			t.Errorf("状态 %s 的说明里出现了标识：%s", c.state, got[0].Message)
 		}
-		byMessage[got[0].Message] = state
+		if prev, dup := byMessage[got[0].Message]; dup {
+			t.Errorf("状态 %s 与 %s 的说明一样，分不出是哪一种：%s", c.state, prev, got[0].Message)
+		}
+		byMessage[got[0].Message] = c.state
 	}
 	sameProblems(t, "可用的 ISO", ISOUsable(rockyISO(), hosts), nil)
 }
@@ -150,7 +193,35 @@ func TestISOUsable不可用时不逐台比平台(t *testing.T) {
 	iso := model.ISO{ID: "iso-new", Name: "ESXi 9.0", Family: "esxi", Series: "esxi", State: model.ISOAcquiring}
 	hosts := []model.Host{hostOf("SN-1", "x86_64", "uefi"), hostOf("SN-2", "aarch64", "bios")}
 	sameProblems(t, "获取中、还没有架构的 ISO", ISOUsable(iso, hosts),
-		[]model.Problem{model.NewProblem("iso_not_ready", onISO("iso-new"), "acquiring")})
+		[]model.Problem{model.NewProblem("iso_not_ready", onISO("iso-new"), "获取中")})
+}
+
+// ready 却缺架构的 ISO 违反 C5，报 iso_incomplete，同样不逐台比平台（L-6）：拿它去比，没登记平台
+// 的主机会通过，只登记了架构的主机却会收到「ISO 的架构是 ，…」和参数为空的 firmware_mismatch。
+func TestISOUsable可用却缺架构时报iso_incomplete(t *testing.T) {
+	iso := rockyISO()
+	iso.Arch = ""
+	want := []model.Problem{
+		model.NewProblem("iso_incomplete", model.Subject{Kind: "iso", ID: "iso-rocky96", Path: "arch"}, "架构"),
+	}
+	for _, h := range []model.Host{
+		hostOf("SN-BARE", "", ""),
+		hostOf("SN-ARCH", "x86_64", ""),
+		hostOf("SN-FW", "", "uefi"),
+		hostOf("SN-FULL", "x86_64", "bios"),
+	} {
+		sameProblems(t, "配主机 "+h.SN, ISOUsable(iso, []model.Host{h}), want)
+	}
+	sameProblems(t, "没有主机", ISOUsable(iso, nil), want)
+
+	res := Batch(BatchInput{
+		Hosts:    []model.Host{hostOf("SN-BARE", "", ""), hostOf("SN-ARCH", "x86_64", "")},
+		ISO:      iso,
+		Template: baselineTemplate(),
+		Hooks:    baselineHooks(),
+	})
+	sameProblems(t, "Batch 的 Common", res.Common, want)
+	sameByHost(t, res.ByHost, map[string][]model.Problem{"SN-BARE": {}, "SN-ARCH": {}})
 }
 
 // 架构与固件分开报，问题指向冲突的那台主机：向导据此灰显 ISO 并写明是哪几台（spec §5.3 第 2 步）。
@@ -235,13 +306,22 @@ func TestISOUsable按主机的顺序报冲突(t *testing.T) {
 }
 
 // t 应当是 CurrentApproved 取出的版本；调用方传错了，草稿、待审批、已废弃的版本也不能
-// 建任务（C22、C23）。
+// 建任务（C22、C23）。说明里的现状是中文显示名（T5-1）；不认识的状态没有显示名，回落到标识。
 func TestTemplateUsable不是已审批的版本不能用(t *testing.T) {
-	for _, state := range []model.VersionState{model.VersionDraft, model.VersionReview, model.VersionDeprecated} {
+	cases := []struct {
+		state model.VersionState
+		label string
+	}{
+		{model.VersionDraft, "草稿"},
+		{model.VersionReview, "待审批"},
+		{model.VersionDeprecated, "已废弃"},
+		{"Approved", "Approved"}, // 只认原样的写法，大小写不同就不认识
+	}
+	for _, c := range cases {
 		tpl := baselineTemplate()
-		tpl.State = state
-		sameProblems(t, "状态为 "+string(state), TemplateUsable(tpl, baselineHooks(), rockyISO()),
-			[]model.Problem{model.NewProblem("template_not_approved", onTemplate("baseline@4"), string(state))})
+		tpl.State = c.state
+		sameProblems(t, "状态为 "+string(c.state), TemplateUsable(tpl, baselineHooks(), rockyISO()),
+			[]model.Problem{model.NewProblem("template_not_approved", onTemplate("baseline@4"), c.label)})
 	}
 	sameProblems(t, "已审批", TemplateUsable(baselineTemplate(), baselineHooks(), rockyISO()), nil)
 }
@@ -284,27 +364,51 @@ func TestTemplateUsable当前版本被阻塞时不回落到旧版本(t *testing.
 	sameProblems(t, "建任务时的 Common", res.Common, blocked)
 }
 
-// 装配表是 map，遍历顺序随机：废弃的引用每个 hook 版本报一次，按 hook ID 与版本排序，
-// 同一个模板每次判定的原因次序都一样。
+// 装配表是 map，遍历顺序随机：废弃的引用每个 hook 版本报一次，先按 hook ID、再按版本的数值排序，
+// 同一个模板每次判定的原因次序都一样。后两组专门分开排序键与比较方式（T11-10②）：第一组里先比 ID
+// 与先比版本排出来一样，版本又都是一位数，排错了也看不出来。
 func TestTemplateUsable多个废弃引用按hook排序各报一次(t *testing.T) {
-	tpl := baselineTemplate()
-	tpl.Assembly["软件包"] = []model.Instance{{HookID: "pkgs", HookVersion: 3}, {HookID: "nic", HookVersion: 1}}
-	tpl.Assembly["首次开机"] = []model.Instance{{HookID: "lvm", HookVersion: 1}}
-	hooks := hookMap(
-		hookOf("lvm", 1, model.VersionDeprecated),
-		hookOf("nic", 1, model.VersionDeprecated),
-		hookOf("nic", 2, model.VersionDeprecated),
-		hookOf("pkgs", 3, model.VersionApproved),
-	)
-	subject := onTemplate("baseline@4")
-	want := []model.Problem{
-		model.NewProblem("template_blocked_by_deprecated", subject, "lvm", 1),
-		model.NewProblem("template_blocked_by_deprecated", subject, "nic", 1),
-		model.NewProblem("template_blocked_by_deprecated", subject, "nic", 2),
+	cases := []struct {
+		name  string
+		add   map[string][]model.Instance // 在 baselineTemplate 的装配表上追加的插槽
+		hooks map[model.HookKey]model.Hook
+		want  []model.HookKey
+	}{
+		{"几个 hook 各有废弃的版本", map[string][]model.Instance{
+			"软件包":  {{HookID: "pkgs", HookVersion: 3}, {HookID: "nic", HookVersion: 1}},
+			"首次开机": {{HookID: "lvm", HookVersion: 1}},
+		}, hookMap(
+			hookOf("lvm", 1, model.VersionDeprecated),
+			hookOf("nic", 1, model.VersionDeprecated),
+			hookOf("nic", 2, model.VersionDeprecated),
+			hookOf("pkgs", 3, model.VersionApproved),
+		), []model.HookKey{{ID: "lvm", Version: 1}, {ID: "nic", Version: 1}, {ID: "nic", Version: 2}}},
+		// 先比版本的话，pkgs@1 会排到 nic@2 前面。
+		{"先按 ID 排", map[string][]model.Instance{"软件包": {{HookID: "pkgs", HookVersion: 1}}}, hookMap(
+			hookOf("lvm", 1, model.VersionApproved),
+			hookOf("nic", 2, model.VersionDeprecated),
+			hookOf("pkgs", 1, model.VersionDeprecated),
+		), []model.HookKey{{ID: "nic", Version: 2}, {ID: "pkgs", Version: 1}}},
+		// 按字符串比的话，nic@10 会排到 nic@2 前面。
+		{"版本按数值比", map[string][]model.Instance{"软件包": {{HookID: "nic", HookVersion: 10}}}, hookMap(
+			hookOf("lvm", 1, model.VersionApproved),
+			hookOf("nic", 2, model.VersionDeprecated),
+			hookOf("nic", 10, model.VersionDeprecated),
+		), []model.HookKey{{ID: "nic", Version: 2}, {ID: "nic", Version: 10}}},
 	}
-	for range 20 {
-		if got := TemplateUsable(tpl, hooks, rockyISO()); !slices.Equal(got, want) {
-			t.Fatalf("得到 %v\n应为 %v", got, want)
+	subject := onTemplate("baseline@4")
+	for _, c := range cases {
+		tpl := baselineTemplate()
+		maps.Copy(tpl.Assembly, c.add)
+		var want []model.Problem
+		for _, k := range c.want {
+			want = append(want, model.NewProblem("template_blocked_by_deprecated", subject, k.ID, k.Version))
+		}
+		for range 20 {
+			if got := TemplateUsable(tpl, c.hooks, rockyISO()); !slices.Equal(got, want) {
+				t.Errorf("%s：得到 %v\n应为 %v", c.name, got, want)
+				break
+			}
 		}
 	}
 }
@@ -337,16 +441,94 @@ func TestTemplateUsableISO的系不在所勾的系里(t *testing.T) {
 	}
 }
 
-// 几个原因同时存在时都报出来，次序固定：先是版本状态，再是废弃的引用，最后是系。
+// 模板参数要的选项集合 ISO 没提供，或给的是空集合：到向导第 4 步每台主机都会报 iso_offer_missing，
+// 所以第 3 步就不列出这个模板（L-2）。条件与参数求值共用 model.ParamDecl.OfferMissing，提交时
+// Batch 也在 Common 里报同一条。
+func TestTemplateUsableISO没提供模板参数要的集合(t *testing.T) {
+	want := []model.Problem{model.NewProblem("iso_offer_missing", onTemplate("win-base@2"), "版本", "editions")}
+	for name, offers := range map[string]map[string][]model.Option{
+		"没有提供任何集合":      nil,
+		"只提供了别的集合":      {"images": editionOffers()["editions"]},
+		"editions 是空集合": {"editions": {}},
+	} {
+		sameProblems(t, name, TemplateUsable(windowsTemplate(), nil, windowsISO(offers)), want)
+	}
+	sameProblems(t, "提供了 editions", TemplateUsable(windowsTemplate(), nil, windowsISO(editionOffers())), nil)
+
+	res := Batch(BatchInput{Hosts: []model.Host{hostOf("SN-1", "x86_64", "uefi")}, ISO: windowsISO(nil), Template: windowsTemplate()})
+	sameProblems(t, "建任务时的 Common", res.Common, want)
+	sameByHost(t, res.ByHost, map[string][]model.Problem{"SN-1": {}})
+}
+
+// 装配表里实例所引 hook 的参数也算：hook 的参数由它的全部实现共用（C9），选了这个模板，向导里就有
+// 这一格。hooks 里缺了的引用没有参数可看，不报，理由见 TestTemplateUsable不重做激活判定。
+func TestTemplateUsableISO没提供hook参数要的集合(t *testing.T) {
+	tpl := windowsTemplate()
+	tpl.Params = nil
+	tpl.Assembly = map[string][]model.Instance{"装后配置": {{HookID: "winimg", HookVersion: 1}}}
+	h := hookOf("winimg", 1, model.VersionApproved)
+	h.Params = []model.ParamDecl{{Name: "image", Label: "镜像", Type: "enum", Offer: "images"}}
+	sameProblems(t, "hook 的参数要 images", TemplateUsable(tpl, hookMap(h), windowsISO(editionOffers())),
+		[]model.Problem{model.NewProblem("iso_offer_missing", onTemplate("win-base@2"), "镜像", "images")})
+	sameProblems(t, "hooks 里缺了这个引用", TemplateUsable(tpl, nil, windowsISO(editionOffers())), nil)
+}
+
+// ISO 不可用时不查它提供的集合，理由同 ISOUsable 不逐台比平台：导入中的 ISO 还没有提供的集合，拿它
+// 去查会报出不成立的 iso_offer_missing，下一步还让人重新导入一个正在导入的 ISO。
+func TestTemplateUsableISO不可用时不查集合(t *testing.T) {
+	iso := windowsISO(nil)
+	iso.State = model.ISOImporting
+	sameProblems(t, "导入中的 ISO", TemplateUsable(windowsTemplate(), nil, iso), nil)
+	res := Batch(BatchInput{Hosts: []model.Host{hostOf("SN-1", "x86_64", "uefi")}, ISO: iso, Template: windowsTemplate()})
+	sameProblems(t, "建任务时的 Common", res.Common,
+		[]model.Problem{model.NewProblem("iso_not_ready", onISO("iso-ws2025"), "导入中")})
+}
+
+// 缺的集合各报一条，次序与说明里称呼的参数都固定：先看模板参数，再按插槽名的字典序、实例在插槽里的
+// 顺序看 hook 参数，同一个集合称呼第一个要它的参数。没写显示名的用参数名，与参数求值里那一格的称呼
+// 相同。装配表是 map，多跑几次也得到同样的结果。
+func TestTemplateUsable缺的集合各报一条且次序固定(t *testing.T) {
+	tpl := windowsTemplate() // 模板参数 edition（版本）要 editions
+	tpl.Assembly = map[string][]model.Instance{
+		"post": {{HookID: "kbd", HookVersion: 1}},
+		"disk": {{HookID: "img", HookVersion: 1}, {HookID: "kbd", HookVersion: 1}},
+	}
+	img := hookOf("img", 1, model.VersionApproved)
+	img.Params = []model.ParamDecl{
+		{Name: "edition", Label: "Edition", Type: "enum", Offer: "editions"}, // 模板参数已经要过 editions
+		{Name: "image", Type: "enum", Offer: "images"},                       // 没写显示名
+	}
+	kbd := hookOf("kbd", 1, model.VersionApproved)
+	kbd.Params = []model.ParamDecl{
+		{Name: "image", Label: "镜像", Type: "enum", Offer: "images"}, // disk 里的 img 已经要过 images
+		{Name: "layout", Label: "键盘布局", Type: "enum", Offer: "keyboards"},
+	}
+	subject := onTemplate("win-base@2")
+	want := []model.Problem{
+		model.NewProblem("iso_offer_missing", subject, "版本", "editions"),
+		model.NewProblem("iso_offer_missing", subject, "image", "images"),
+		model.NewProblem("iso_offer_missing", subject, "键盘布局", "keyboards"),
+	}
+	for range 20 {
+		if got := TemplateUsable(tpl, hookMap(img, kbd), windowsISO(nil)); !slices.Equal(got, want) {
+			t.Fatalf("得到 %v\n应为 %v", got, want)
+		}
+	}
+}
+
+// 几个原因同时存在时都报出来，次序固定：先是版本状态，再是废弃的引用，然后是系，最后是 ISO 没提供
+// 的集合。
 func TestTemplateUsable几个原因一起报(t *testing.T) {
 	tpl := baselineTemplate()
 	tpl.State = model.VersionDeprecated
+	tpl.Params = []model.ParamDecl{{Name: "edition", Label: "版本", Type: "enum", Offer: "editions"}}
 	hooks := hookMap(hookOf("lvm", 1, model.VersionApproved), hookOf("nic", 2, model.VersionDeprecated))
 	subject := onTemplate("baseline@4")
-	sameProblems(t, "三个原因", TemplateUsable(tpl, hooks, esxiISO()), []model.Problem{
-		model.NewProblem("template_not_approved", subject, "deprecated"),
+	sameProblems(t, "四个原因", TemplateUsable(tpl, hooks, esxiISO()), []model.Problem{
+		model.NewProblem("template_not_approved", subject, "已废弃"),
 		model.NewProblem("template_blocked_by_deprecated", subject, "nic", 2),
 		model.NewProblem("series_not_ticked", subject, "esxi"),
+		model.NewProblem("iso_offer_missing", subject, "版本", "editions"),
 	})
 }
 
@@ -409,8 +591,8 @@ func TestBatchISO不可用时只在Common报一次(t *testing.T) {
 		Hooks:    baselineHooks(),
 	})
 	sameProblems(t, "Common", res.Common, []model.Problem{
-		model.NewProblem("iso_not_ready", onISO("iso-rocky96"), "deprecated"),
-		model.NewProblem("template_not_approved", onTemplate("baseline@4"), "review"),
+		model.NewProblem("iso_not_ready", onISO("iso-rocky96"), "已废弃"),
+		model.NewProblem("template_not_approved", onTemplate("baseline@4"), "待审批"),
 	})
 	sameByHost(t, res.ByHost, map[string][]model.Problem{"SN-1": {}, "SN-2": {}})
 }
