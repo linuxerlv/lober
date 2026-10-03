@@ -30,7 +30,8 @@ func HostSelectable(h model.Host, hasOpenTask bool) []model.Problem {
 
 // ISOUsable 判断 ISO 能不能给这几台主机建任务：ISO 要可用，即 model.ISO.Unusable 为空（导入完成
 // 且记录合法，C5；已废弃的不能再被新引用，C26）；架构与固件要与每台主机登记的相符（C28 建任务时
-// 的那一次）。平台冲突指向那台主机，按主机传入的顺序报出，向导据此灰显 ISO 并写明是哪几台。
+// 的那一次），登记的取值本身不合法的报 host_platform_invalid（C-6，见 platformConflicts）。平台的
+// 问题指向那台主机，按主机传入的顺序报出，向导据此灰显 ISO 并写明是哪几台。
 //
 // ISO 不可用时只报 Unusable 给的原因、不再逐台比平台：获取中、导入中的 ISO 还没识别出架构，ready
 // 却缺架构的记录不全（L-6），拿它们去比，会给登记过的主机报出不成立的冲突，没登记平台的主机反倒
@@ -56,7 +57,10 @@ func ISOUsable(iso model.ISO, hosts []model.Host) []model.Problem {
 // 见 offerProblems。hooks 里缺了某个引用时当作没废弃，也不看它的参数：那是调用方漏给的，参数
 // 求值会报 hook_ref_missing。
 //
-// ISO 不可用时不查集合，理由同 ISOUsable 不逐台比平台：获取中、导入中的 ISO 还没有提供的集合，
+// 系没勾时不查集合（C-1）：模板本不为这个系而写，集合缺不缺无从谈起。参数求值与快照构建遇到这种
+// 情况也只报 series_not_ticked，这里多报一条 iso_offer_missing，就与它们一宽一严。
+//
+// ISO 不可用时也不查集合，理由同 ISOUsable 不逐台比平台：获取中、导入中的 ISO 还没有提供的集合，
 // 拿它去查会报出不成立的 iso_offer_missing，而这个 ISO 本来就用不了。
 //
 // 引用了已废弃的 hook 版本时挡住的就是这个版本，不回落到更早的已审批版本：回落会让操作员
@@ -65,16 +69,16 @@ func TemplateUsable(t model.Template, hooks map[model.HookKey]model.Hook, iso mo
 	subject := model.Subject{Kind: "template", ID: t.ID + "@" + strconv.Itoa(t.Version)}
 	var out []model.Problem
 	if t.State != model.VersionApproved {
-		// 说明里给状态的中文显示名；不认识的状态没有显示名，回落到标识（T5-1）。
-		out = append(out, model.NewProblem("template_not_approved", subject, cmp.Or(t.State.Label(), string(t.State))))
+		// 说明里给状态的称呼：中文显示名，不认识的回落到标识，空状态回落到「未知状态」（T5-1、C-7）。
+		out = append(out, model.NewProblem("template_not_approved", subject, model.StateLabel(t.State)))
 	}
 	for _, k := range deprecatedRefs(t, hooks) {
 		out = append(out, model.NewProblem("template_blocked_by_deprecated", subject, k.ID, k.Version))
 	}
-	if !slices.Contains(t.Series, iso.Series) {
+	switch {
+	case !slices.Contains(t.Series, iso.Series):
 		out = append(out, model.NewProblem("series_not_ticked", subject, string(iso.Series)))
-	}
-	if iso.Usable() {
+	case iso.Usable():
 		out = append(out, offerProblems(subject, paramDecls(t, hooks), iso.Offers)...)
 	}
 	return out
@@ -100,7 +104,7 @@ type BatchResult struct {
 
 // Batch 判定一批主机，给提交时的逐台校验用：服务端不信任向导的筛选结果，整批重跑一遍
 // （spec §5.3 第 6 步）。规则就是上面三个函数的，只是按对象分开放：ISO 与模板的问题放
-// Common；主机的问题放 ByHost，依次是批内重复、未结束的任务、架构、固件。
+// Common；主机的问题放 ByHost，依次是批内重复、未结束的任务、架构、固件（冲突，或登记的取值不合法）。
 //
 // 同一个 SN 出现不止一次时，几处都算错，不是第一处照常建、后面的才算重复。几处按 SN 共用
 // ByHost 里的一个键，host_duplicate_in_batch 在这个键下报一次；几处是同一条登记，这台主机
@@ -137,16 +141,31 @@ func hostSubject(h model.Host) model.Subject {
 	return model.Subject{Kind: "host", ID: h.SN}
 }
 
-// platformConflicts 报 ISO 与一台主机的平台冲突，架构在前、固件在后。iso 必须可用（调用方先查
+// platformConflicts 报 ISO 与一台主机的平台问题，架构在前、固件在后。iso 必须可用（调用方先查
 // Unusable），PlatformOK 才有合法的系与架构可比。规则本身在 catalog.PlatformOK 里：主机没登记的
 // 那一项算通过（C28 登记了才校验）；网关引导时也用它，两次校验因此是同一套规则。
+//
+// 主机登记的架构或固件不合法时（大小写不对、写成别名或 iPXE 的上报值），这一项报 Host.Validate 给出的
+// host_platform_invalid，不再拿去比（C-6）：不合法的值比不上任何 ISO，比了只会报出「系不支持用 UEFI
+// 固件引导」这类说法，真实原因却是登记写错了。另一项合法的照常比。Host.Validate 的其余问题（属性）与
+// 建任务配哪个 ISO 无关，不在这里报。
 func platformConflicts(iso model.ISO, h model.Host) []model.Problem {
+	invalid := map[string]model.Problem{} // 不合法的那一项（arch 或 firmware）→ Host.Validate 给的问题
+	for _, p := range h.Validate() {
+		if p.Code == "host_platform_invalid" {
+			invalid[p.Subject.Path] = p
+		}
+	}
 	archOK, fwOK := catalog.PlatformOK(iso.Series, iso.Arch, h.Arch, h.Firmware)
 	var out []model.Problem
-	if !archOK {
+	if p, bad := invalid["arch"]; bad {
+		out = append(out, p)
+	} else if !archOK {
 		out = append(out, model.NewProblem("arch_mismatch", hostSubject(h), string(iso.Arch), string(h.Arch)))
 	}
-	if !fwOK {
+	if p, bad := invalid["firmware"]; bad {
+		out = append(out, p)
+	} else if !fwOK {
 		out = append(out, model.NewProblem("firmware_mismatch", hostSubject(h), string(iso.Series), string(h.Firmware)))
 	}
 	return out

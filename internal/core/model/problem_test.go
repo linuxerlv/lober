@@ -267,6 +267,26 @@ func TestProblem的Error带代码与说明(t *testing.T) {
 	}
 }
 
+// 字段键与实例的位置只由这三个函数构造（C-3），写法照修补计划 U6 的表：激活判定、参数求值与快照构建
+// 都调它们。插槽名不含 /，实例参数的键比模板参数的多一段，名叫 tpl 的插槽也撞不上模板参数。
+func Test字段键与实例位置的写法(t *testing.T) {
+	cases := []struct{ got, want string }{
+		{TemplateFieldKey("disk"), "tpl/disk"},
+		{InstancePath("分区", 1), "分区/1"},
+		{InstancePath("装后配置", 12), "装后配置/12"},
+		{InstanceFieldKey("分区", 2, "disk"), "分区/2/disk"},
+		{InstanceFieldKey("tpl", 1, "disk"), "tpl/1/disk"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("得到 %q，应为 %q", c.got, c.want)
+		}
+	}
+	if got, want := InstanceFieldKey("装后配置", 3, "mtu"), InstancePath("装后配置", 3)+"/mtu"; got != want {
+		t.Errorf("实例参数的键 %q 应以实例的位置 %q 开头", got, want)
+	}
+}
+
 // registeredCodes 按字典序列出代码表，失败信息的顺序因此固定。
 func registeredCodes() []Code {
 	codes := make([]Code, 0, len(codeTable))

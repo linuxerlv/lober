@@ -179,6 +179,27 @@ func TestISOStateValid只认五个状态(t *testing.T) {
 	}
 }
 
+// 说明里对状态的称呼（T5-1、C-7）：认识的用中文显示名；不认识的没有显示名，回落到标识；空串连标识都
+// 没有，回落到 codes.go 登记的「未知状态」。ISO 的状态与版本的状态共用这一条，iso_not_ready 与
+// template_not_approved 的说明里因此都不会出现「现为「」」。
+func TestStateLabel(t *testing.T) {
+	for s, want := range map[ISOState]string{ISODeprecated: "已废弃", "Ready": "Ready", "": "未知状态"} {
+		if got := StateLabel(s); got != want {
+			t.Errorf("StateLabel(ISOState(%q)) = %q，应为 %q", s, got, want)
+		}
+	}
+	for s, want := range map[VersionState]string{VersionReview: "待审批", "Approved": "Approved", "": "未知状态"} {
+		if got := StateLabel(s); got != want {
+			t.Errorf("StateLabel(VersionState(%q)) = %q，应为 %q", s, got, want)
+		}
+	}
+	for _, c := range []Code{"iso_not_ready", "template_not_approved"} {
+		if p := NewProblem(c, Subject{}, StateLabel(VersionState(""))); strings.Contains(p.Message, "「」") {
+			t.Errorf("%s 的说明里出现了空的称呼：%s", c, p.Message)
+		}
+	}
+}
+
 // ValidAttrKey 就是 Host.Validate 查属性键的规则，导出给激活判定查 attr 来源（T4-1）：保留键表
 // 只在本包一处。只有保留键本身被拒，长得像的照收。
 func TestValidAttrKey(t *testing.T) {
@@ -382,9 +403,10 @@ func TestISOUnusable按状态给出原因(t *testing.T) {
 		{ISOReady, nil},
 		{ISOFailed, []Problem{NewProblem("iso_import_failed", on)}},
 		{ISODeprecated, []Problem{NewProblem("iso_not_ready", on, "已废弃")}},
-		// 不认识的状态没有显示名，回落到标识本身；只认原样的写法。
+		// 不认识的状态没有显示名，回落到标识本身；只认原样的写法。空状态连标识都没有，回落到
+		// 「未知状态」（C-7），说明里不会出现「现为「」」。
 		{"Ready", []Problem{NewProblem("iso_not_ready", on, "Ready")}},
-		{"", []Problem{NewProblem("iso_not_ready", on, "")}},
+		{"", []Problem{NewProblem("iso_not_ready", on, "未知状态")}},
 	}
 	for _, c := range cases {
 		iso := completeISO()

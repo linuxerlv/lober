@@ -12,9 +12,10 @@ import (
 )
 
 // 本文件把 codes.go 说明里抄下的事实与代码钉在一起（T5-5）：上限、参数类型、算法、保留键、安全词
-// 字符、子值，以及目录里的时机、部件、系统值和 ESXi 的固件限制。能力表注释写明是初值，第 3、7 层
-// 会改，第 3 层还可能加参数类型；到时只改了一边，这里就报红。超时范围与插槽名长度的常量不在本包，
-// 在 activation、scan 的测试里对齐。
+// 字符、子值，目录里的时机、部件、系统值和 ESXi 的固件限制，以及主机平台的取值、脚本参数的变量名和
+// 转义用的系统值（C-9）。能力表注释写明是初值，第 3、7 层会改，第 3 层还可能加参数类型；到时只改了
+// 一边，这里就报红。超时范围、插槽名长度与占位符的种类不在本包登记（本包的测试也 import 不了 scan，
+// 会成环），在 activation、scan 的测试里对齐。
 //
 // 说明里的清单按措辞找（如「类型只能是 …」）。措辞改了就找不到，同样报红：先改这里的写法，再核对清单。
 
@@ -249,5 +250,112 @@ func TestAlign口令散列前缀与支持的方案一致(t *testing.T) {
 func TestAlignCIDR子值与支持的子值一致(t *testing.T) {
 	for _, m := range alignFind(t, "param_accessor_invalid", alignText(t, "param_accessor_invalid"), `cidr 参数有 (\S+) 子值`) {
 		alignSame(t, "param_accessor_invalid 的子值", alignSplit(m[1]), alignKeys(cidrAccessors))
+	}
+}
+
+// alignFirmwares 经目录的公开查询（Families → SeriesOf → Firmwares）求各系能装的固件的并集，按首次出现的
+// 顺序。没有固件限制的系能装全部固件，所以并集就是全集。
+func alignFirmwares() []string {
+	var out []string
+	for _, fam := range catalog.Families() {
+		for _, s := range catalog.SeriesOf(fam) {
+			for _, fw := range s.Firmwares() {
+				if !slices.Contains(out, string(fw)) {
+					out = append(out, string(fw))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// host_platform_invalid 的下一步列出了架构与固件的合法取值，以及 iPXE 上报值怎样对应（C-9）：目录改了
+// 取值或换算，说明得跟着改，被拒的人照着说明才填得对。固件查得到全集；目录没有列出全部架构的公开查询，
+// 架构只能查列出的都合法，目录新加了架构而说明没补，这里查不出。每一对 iPXE 换算都按目录核对。
+func TestAlign主机平台的取值与目录一致(t *testing.T) {
+	text := alignText(t, "host_platform_invalid")
+	arches := alignSplit(alignFind(t, "host_platform_invalid", text, `架构只能填 ([^，；。]+)，`)[0][1])
+	firmwares := alignSplit(alignFind(t, "host_platform_invalid", text, `固件只能填 ([^，；。]+)，`)[0][1])
+	for _, a := range arches {
+		// 说明还写了「区分大小写」：大写的写法不能也算合法。
+		if !catalog.Arch(a).Valid() || catalog.Arch(strings.ToUpper(a)).Valid() {
+			t.Errorf("host_platform_invalid 列出的架构 %q 应是目录里区分大小写的合法取值", a)
+		}
+	}
+	for _, fw := range firmwares {
+		if catalog.Firmware(strings.ToUpper(fw)).Valid() {
+			t.Errorf("host_platform_invalid 说区分大小写，固件 %q 的大写写法却也合法", fw)
+		}
+	}
+	alignSame(t, "host_platform_invalid 列出的固件", firmwares, alignFirmwares())
+
+	m := alignFind(t, "host_platform_invalid", text, `iPXE 上报的 (\S+) 分别对应 (\S+?)，(\S+) 分别对应 (\S+?)。`)[0]
+	pairs := []struct {
+		what     string
+		from, to []string
+		convert  func(string) (string, bool)
+	}{
+		{"架构", alignSplit(m[1]), alignSplit(m[2]), func(s string) (string, bool) {
+			a, ok := catalog.ArchFromIPXE(s)
+			return string(a), ok
+		}},
+		{"固件", alignSplit(m[3]), alignSplit(m[4]), func(s string) (string, bool) {
+			fw, ok := catalog.FirmwareFromIPXE(s)
+			return string(fw), ok
+		}},
+	}
+	for _, p := range pairs {
+		if len(p.from) != len(p.to) {
+			t.Errorf("iPXE 的%s上报值 %q 与对应的取值 %q 个数不同", p.what, p.from, p.to)
+			continue
+		}
+		for i, from := range p.from {
+			if got, ok := p.convert(from); !ok || got != p.to[i] {
+				t.Errorf("说明说 iPXE 上报的%s %q 对应 %q，目录换算成 %q、%v", p.what, from, p.to[i], got, ok)
+			}
+		}
+	}
+}
+
+// script_placeholder_not_expanded 的下一步教作者改从环境变量取参数，写出了变量名的规则和一个例子（C-9）：
+// 都要与 EnvName 一致，第 3 层就是按它导出变量的；照着错的名字去取，脚本拿到的是空值。
+func TestAlign脚本占位符说明里的变量名与EnvName一致(t *testing.T) {
+	text := alignText(t, "script_placeholder_not_expanded")
+	for _, m := range alignFind(t, "script_placeholder_not_expanded", text, `变量名是 (\S+) 加大写的参数名`) {
+		if m[1] != EnvName("") {
+			t.Errorf("说明里的变量名前缀是 %q，EnvName 用的是 %q", m[1], EnvName(""))
+		}
+	}
+	for _, m := range alignFind(t, "script_placeholder_not_expanded", text, `\{\{param:([a-z][a-z0-9_]*)\}\} 对应 ([A-Z0-9_]+)`) {
+		if got := EnvName(m[1]); got != m[2] {
+			t.Errorf("说明说 {{param:%s}} 对应 %s，EnvName 给的是 %s", m[1], m[2], got)
+		}
+	}
+}
+
+// 三条说明教人写 {{sys:lbrace}} 原样输出 {{（C-9）：它要是目录里的系统值，并且每种格式都能用，否则照着
+// 写反倒报 sysvalue_unknown 或 sysvalue_not_allowed。
+func TestAlign说明里转义用的系统值每种格式都能用(t *testing.T) {
+	var formats []catalog.Format
+	for _, fam := range catalog.Families() {
+		for _, s := range catalog.SeriesOf(fam) {
+			if !slices.Contains(formats, s.Format()) {
+				formats = append(formats, s.Format())
+			}
+		}
+	}
+	for _, c := range []Code{"placeholder_unknown_kind", "placeholder_unclosed", "script_placeholder_not_expanded"} {
+		for _, m := range alignFind(t, string(c), alignText(t, c), `\{\{sys:([^{}]+)\}\}`) {
+			v := catalog.SystemValue(m[1])
+			if !v.Valid() {
+				t.Errorf("%s 写的 {{sys:%s}} 不是目录里的系统值", c, m[1])
+				continue
+			}
+			for _, f := range formats {
+				if !slices.Contains(f.SystemValues(), v) {
+					t.Errorf("%s 写的 {{sys:%s}} 在 %s 格式里不可用", c, m[1], f)
+				}
+			}
+		}
 	}
 }

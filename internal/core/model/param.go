@@ -101,24 +101,16 @@ func (t ParamType) Valid() bool {
 // param_decl_invalid 的同一条说明，所以最多报一条。Subject 留空：声明属于哪个 hook 或
 // 模板只有调用方知道，由调用方填上。名字在 hook 或模板内是否重复，要看全部声明，不在这里查。
 func (d ParamDecl) Validate() []Problem {
-	if ValidIdent(d.Name) && d.labelsOK() && d.typeOK() && d.optionsOK() && d.boundsOK() && d.defaultOK() {
+	if ValidIdent(d.Name) && d.labelOK() && d.typeOK() && d.optionsOK() && d.boundsOK() && d.defaultOK() {
 		return nil
 	}
 	return []Problem{NewProblem("param_decl_invalid", Subject{}, d.Name)}
 }
 
-// labelsOK：显示名给人看，非空的要通过 ValidLabel（T13-10）。参数的显示名可以留空，参数求值时
-// 回落到参数名；选项的不能，否则向导的下拉框里这一项没有文字。
-func (d ParamDecl) labelsOK() bool {
-	if d.Label != "" && !ValidLabel(d.Label) {
-		return false
-	}
-	for _, o := range d.Options {
-		if !ValidLabel(o.Label) {
-			return false
-		}
-	}
-	return true
+// labelOK：参数的显示名给人看，可以留空，参数求值时回落到参数名；非空的要通过 ValidLabel（T13-10）。
+// 选项的显示名随选项一起查，见 validOptions。
+func (d ParamDecl) labelOK() bool {
+	return d.Label == "" || ValidLabel(d.Label)
 }
 
 // typeOK：类型认识，且 text 没声明成列表。列表按换行分项，而 text 本身就能含换行。
@@ -127,19 +119,25 @@ func (d ParamDecl) typeOK() bool {
 }
 
 // optionsOK：enum 的选项恰好来自一处，静态选项或 ISO 提供的集合；别的类型两样都不能有。
-// 静态选项值要是互不相同的安全词：它原样进正文，重复了操作员也分不清选的是哪个。
+// 静态选项至少一项，并且合 validOptions。
 func (d ParamDecl) optionsOK() bool {
 	switch {
 	case d.Type != "enum":
 		return len(d.Options) == 0 && d.Offer == ""
 	case d.Offer != "":
 		return len(d.Options) == 0 && ValidIdent(d.Offer)
-	case len(d.Options) == 0:
-		return false
 	}
-	seen := make(map[string]bool, len(d.Options))
-	for _, o := range d.Options {
-		if !IsSafeWord(o.Value) || seen[o.Value] {
+	return len(d.Options) > 0 && validOptions(d.Options)
+}
+
+// validOptions 判断一组选项（C-8）：值是互不重复的安全词，它原样进正文，重复了操作员也分不清选的是哪个；
+// 显示名过 ValidLabel，不能为空，否则向导的下拉框里这一项没有文字，或混进看不见的字符。enum 的静态选项
+// 与 ISO 提供的集合都按它查，规则只有这一份。空的一组也算合格，能不能为空由调用方定：静态选项不能，
+// ISO 提供的空集合等同于没提供。
+func validOptions(opts []Option) bool {
+	seen := make(map[string]bool, len(opts))
+	for _, o := range opts {
+		if !IsSafeWord(o.Value) || seen[o.Value] || !ValidLabel(o.Label) {
 			return false
 		}
 		seen[o.Value] = true
@@ -316,6 +314,16 @@ func (v Value) Sub(name string) (Value, error) {
 // 转成大写后仍与参数名一一对应。
 func EnvName(param string) string {
 	return "LOBER_PARAM_" + strings.ToUpper(param)
+}
+
+// Expanded 报告渲染时会不会展开这份实现的正文，也就是参数经正文里的占位符、而不是经 EnvName 的环境变量
+// 交给它（C-2）。片段写进应答文件，占位符要展开，它引用的参数因此必填、取的子值要取得出（C20）；脚本
+// 原样下发，不展开。种类不认识的也按片段算：多要几个必填，好过把空值渲染进应答文件；它放进哪种插槽都
+// 不适配（FitsSlot），到不了渲染。激活判定、参数求值与快照构建都按它分，规则只有这一份。
+//
+// Impl 定义在 authoring.go，这个方法写在这里，与 EnvName 放在一起：两者说的是参数怎样交给实现。
+func (i Impl) Expanded() bool {
+	return i.Kind != ImplScript
 }
 
 // IsSafeWord 判断安全词：1–128 个 [A-Za-z0-9._:/@^+=-]。它不含引号、空白、$、#、%、<>&、

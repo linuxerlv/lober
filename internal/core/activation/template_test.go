@@ -220,6 +220,22 @@ func editHook(id string, version int, mod func(h *model.Hook)) tplMod {
 	}
 }
 
+// splitPart 把 partHook 覆盖 rocky 与 almalinux 的那份片段拆成每个系一份，正文照旧（都引用 disk），再往
+// rocky 的那份末尾追加一行 rocky、almalinux 的那份追加一行 alma，空串不追加。模板勾的两个系于是各选中
+// 一份不同的片段，实例对参数的引用要把两份并起来才全。
+func splitPart(h *model.Hook, rocky, alma string) {
+	other := h.Impls[0]
+	other.Series = []catalog.Series{"almalinux"}
+	h.Impls[0].Series = []catalog.Series{"rocky"}
+	if rocky != "" {
+		h.Impls[0].Body += rocky + "\n"
+	}
+	if alma != "" {
+		other.Body += alma + "\n"
+	}
+	h.Impls = append(h.Impls, other)
+}
+
 // bareTemplate 是只写了必需部件、另加一行 extra 的模板。有的格式规则在正例的 kickstart 上
 // 反不出来（它四个时机都支持，三个部件也都必需），就换一种格式从头写。
 func bareTemplate(s catalog.Series, extra string) model.Template {
@@ -503,6 +519,12 @@ func Test取值来源取不出正文或片段要的子值(t *testing.T) {
 			h.Impls[0].Body += line + "\n"
 		})
 	}
+	// gwSplit 给分区插槽里的 hook 加上参数 gw，再把片段拆成每个系一份：rocky 的那份取 netmask，almalinux
+	// 的只取 addr。
+	gwSplit := editHook("lvm", 3, func(h *model.Hook) {
+		h.Params = append(h.Params, gw)
+		splitPart(h, netmask, "network --ip={{param:gw.addr}}")
+	})
 	cases := []struct {
 		name string
 		mod  tplMod
@@ -518,6 +540,9 @@ func Test取值来源取不出正文或片段要的子值(t *testing.T) {
 			model.Subject{Kind: "slot", ID: tplID, Path: "分区/1/gw"}},
 		// hook 自己的激活判定拦得住这样的默认值，这里给的却是已审批的版本：在这条规则之前批准的照样能被引用。
 		{"实例参数沿用 hook 的 IPv6 默认值", gwHook(gwDefault, netmask),
+			model.Subject{Kind: "slot", ID: tplID, Path: "分区/1/gw"}},
+		// 所勾各系选中的片段不同，引用要并起来查：只看其中一个系，另一个系的主机建任务时照样报错。
+		{"实例参数写死了 IPv6，只有一个系的片段取了 netmask", all(gwSplit, setInstBinding("分区", 0, "gw", fixed(ipv6))),
 			model.Subject{Kind: "slot", ID: tplID, Path: "分区/1/gw"}},
 	}
 	for _, c := range cases {
@@ -571,6 +596,8 @@ func Test锁在默认值上却没有默认值(t *testing.T) {
 		h.Impls = append(h.Impls, model.Impl{Family: "linux", Series: []catalog.Series{"debian"}, Kind: model.ImplFragment,
 			Body: "d-i partman-auto-lvm/new_vg_name string {{param:vg}}\n"})
 	})
+	// 片段拆成每个系一份，只有 rocky 的那份引用它：所勾各系选中的片段要并起来看。
+	inOneTicked := vgHook(func(h *model.Hook) { splitPart(h, "volgroup {{param:vg}} pv.01", "") })
 	cases := []struct {
 		name string
 		mod  tplMod
@@ -582,6 +609,8 @@ func Test锁在默认值上却没有默认值(t *testing.T) {
 		{"脚本声明了必填的实例参数", setInstBinding("装后配置", 0, "msg", locked),
 			model.Subject{Kind: "slot", ID: tplID, Path: "装后配置/1/msg"}},
 		{"所选片段引用的实例参数", all(inTicked, setInstBinding("分区", 0, "vg", locked)),
+			model.Subject{Kind: "slot", ID: tplID, Path: "分区/1/vg"}},
+		{"只有一个系所选的片段引用的实例参数", all(inOneTicked, setInstBinding("分区", 0, "vg", locked)),
 			model.Subject{Kind: "slot", ID: tplID, Path: "分区/1/vg"}},
 	}
 	for _, c := range cases {

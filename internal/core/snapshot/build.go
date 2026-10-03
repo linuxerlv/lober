@@ -78,8 +78,7 @@ func buildFrom(in params.Input, res params.Result) (model.Snapshot, []model.Prob
 			Artifacts: cloneStrings(in.ISO.Artifacts),
 		},
 		Template: model.SnapshotTemplate{
-			// 模板参数的字段键是 tpl/<参数名>，写法见 params.FieldKey。
-			ID: t.ID, Version: t.Version, Name: t.Name, Body: t.Body, Params: b.valuesOf("tpl/", t.Params),
+			ID: t.ID, Version: t.Version, Name: t.Name, Body: t.Body, Params: b.valuesOf(model.TemplateFieldKey, t.Params),
 		},
 		Slots: slots,
 	}
@@ -111,15 +110,17 @@ func unsafeSN(snap model.Snapshot) []model.Problem {
 	return []model.Problem{model.NewProblem("sn_unsafe_in_body", subject, snap.Host.SN)}
 }
 
-// refersSN 报告快照的模板正文或片段实例里有没有 {{sys:sn}}。写错的占位符扫描时留在原文段里，
-// 不算引用。
+// refersSN 报告快照里要展开的正文有没有 {{sys:sn}}：模板正文，以及片段插槽里的实例。实例放不放得进
+// 插槽在 slots 里查过（Build 的不变式），所以片段插槽里只有片段、执行插槽里只有脚本，后者原样下发、
+// 不展开，不用再看种类。写错的占位符扫描时留在原文段里，不算引用。
 func refersSN(snap model.Snapshot) bool {
 	bodies := []string{snap.Template.Body}
 	for _, s := range snap.Slots {
+		if s.Exec {
+			continue
+		}
 		for _, inst := range s.Instances {
-			if inst.Kind != model.ImplScript {
-				bodies = append(bodies, inst.Body)
-			}
+			bodies = append(bodies, inst.Body)
 		}
 	}
 	for _, body := range bodies {
@@ -158,7 +159,7 @@ func (b builder) slots() ([]model.SnapshotSlot, []model.Problem) {
 		}
 		for i, inst := range insts {
 			// 序号从 1 起，与参数求值给实例定位、拼字段键用的一致。
-			got, ps := b.instance(s, s.Name+"/"+strconv.Itoa(i+1), inst)
+			got, ps := b.instance(s, i+1, inst)
 			slot.Instances = append(slot.Instances, got)
 			problems = append(problems, ps...)
 		}
@@ -167,15 +168,15 @@ func (b builder) slots() ([]model.SnapshotSlot, []model.Problem) {
 	return out, problems
 }
 
-// instance 整理放进插槽 slot 的一个实例，path 是它的位置「插槽名/序号」。实例参数的字段键是
-// path 后面接 /<参数名>，写法见 params.FieldKey。
+// instance 整理放进插槽 slot 的第 seq 个实例。它的位置与参数的字段键由 model.InstancePath、
+// model.InstanceFieldKey 给出，与参数求值的是同一份（C-3）。
 //
 // hook 与实现自己再查一遍，不丢掉查找结果（T13-8）：参数求值通过了本不会查不到，可两边一旦走岔，
 // 静默产出种类与正文全空的实例，就违反了「不做静默降级」。所选实现还要放得进这个插槽（L-7），
 // Build 文档里插槽的那两条不变式靠的就是这一步。有问题时返回一条落在这个实例上的问题，Subject
 // 与参数求值的一致，不给实例。
-func (b builder) instance(slot scan.Slot, path string, inst model.Instance) (model.SnapshotInstance, []model.Problem) {
-	where := model.Subject{Kind: "slot", ID: templateRef(b.in.Template), Path: path}
+func (b builder) instance(slot scan.Slot, seq int, inst model.Instance) (model.SnapshotInstance, []model.Problem) {
+	where := model.Subject{Kind: "slot", ID: templateRef(b.in.Template), Path: model.InstancePath(slot.Name, seq)}
 	fail := func(code model.Code, args ...any) (model.SnapshotInstance, []model.Problem) {
 		return model.SnapshotInstance{}, []model.Problem{model.NewProblem(code, where, args...)}
 	}
@@ -197,11 +198,11 @@ func (b builder) instance(slot scan.Slot, path string, inst model.Instance) (mod
 	out := model.SnapshotInstance{
 		HookID: inst.HookID, HookVersion: inst.HookVersion, HookName: h.Name,
 		Kind: impl.Kind, Body: impl.Body,
-		Params: b.valuesOf(path+"/", h.Params),
+		Params: b.valuesOf(func(param string) string { return model.InstanceFieldKey(slot.Name, seq, param) }, h.Params),
 	}
-	// 解释器、超时、是否必需和摘要只对脚本有意义：片段在渲染时就写进了应答文件，没有执行这一步，
-	// 网关也只该对脚本的摘要放行。
-	if impl.Kind == model.ImplScript {
+	// 解释器、超时、是否必需和摘要只对正文不展开的实现有意义（model.Impl.Expanded）：走到这里种类已经
+	// 查过，那就是脚本。片段在渲染时就写进了应答文件，没有执行这一步，网关也只该对脚本的摘要放行。
+	if !impl.Expanded() {
 		out.Interpreter = impl.Interpreter
 		out.TimeoutSec, out.Required = h.TimeoutSec, h.Required
 		if inst.TimeoutSec != nil {
@@ -215,12 +216,13 @@ func (b builder) instance(slot scan.Slot, path string, inst model.Instance) (mod
 	return out, nil
 }
 
-// valuesOf 取一组参数的最终取值，键为参数名，没有值的可选参数不在其中。类型与是否列表取自表单里
-// 的那一格：取值就是按它解析的，参数重名时进了表单的也只有第一个声明。
-func (b builder) valuesOf(prefix string, decls []model.ParamDecl) map[string]model.SnapshotValue {
+// valuesOf 取一组参数的最终取值，键为参数名，没有值的可选参数不在其中；fieldKey 按参数名给出它在表单
+// 里的键（model.TemplateFieldKey 或 model.InstanceFieldKey）。类型与是否列表取自表单里的那一格：取值
+// 就是按它解析的，参数重名时进了表单的也只有第一个声明。
+func (b builder) valuesOf(fieldKey func(param string) string, decls []model.ParamDecl) map[string]model.SnapshotValue {
 	out := make(map[string]model.SnapshotValue, len(decls))
 	for _, d := range decls {
-		key := params.FieldKey(prefix + d.Name)
+		key := params.FieldKey(fieldKey(d.Name))
 		if v, ok := b.values[key]; ok {
 			f := b.fields[key]
 			out[d.Name] = model.SnapshotValue{Type: f.Type, List: f.List, Items: v.Items()}

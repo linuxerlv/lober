@@ -17,8 +17,9 @@ import (
 )
 
 // FieldKey 是表单字段的键，前后端和错误定位共用这一种写法：模板参数为 tpl/<参数名>，
-// 实例参数为 <插槽名>/<序号>/<参数名>，序号是实例在插槽里的位置，从 1 起。参数名是标识符、
-// 插槽名不含 /，所以两种键不会撞上。
+// 实例参数为 <插槽名>/<序号>/<参数名>，序号是实例在插槽里的位置，从 1 起。键由 model 的
+// TemplateFieldKey 与 InstanceFieldKey 构造：激活判定给取值来源定位、快照构建按键取值都用它们，
+// 同一格在几处不会走岔（C-3）。
 type FieldKey string
 
 // Input 是求值的全部入参，由调用方凑齐：Hooks 要包含装配表引用的每个 hook 版本。
@@ -60,7 +61,7 @@ type Result struct {
 // Evaluate 求一台主机的参数表单与最终取值。每个字段依次：
 //
 //  1. 选实现：每个实例用 ISO 的系调 ImplFor；
-//  2. 必填：被模板正文或所选片段引用的必填，只被脚本用到的看声明的 Required；
+//  2. 必填：被模板正文或所选片段引用的必填，只被脚本用到的看声明的 Required（scan.Refs.Required）；
 //  3. 预填：fixed 取它的值，attr 取主机属性，default 或没有 Binding 取声明的默认值；
 //  4. 锁定：Binding 的 Editable 为 false 时锁定，没有 Binding 时可改；
 //  5. 选项：enum 取声明的 Options，或 ISO 的 Offers 里同名的集合；
@@ -79,7 +80,7 @@ func Evaluate(in Input) Result {
 	ev := evaluator{in: in, inForm: map[FieldKey]bool{}, values: Values{}}
 	// 正文有扫描错误时照样给出插槽与引用，那些错误归激活判定报。
 	body, _ := scan.Scan(in.Template.Body)
-	ev.addParams("tpl/", in.Template.Params, in.Template.Bindings, refSubs(body.Params))
+	ev.addParams(model.TemplateFieldKey, in.Template.Params, in.Template.Bindings, body.Refs())
 	seen := map[string]bool{}
 	for _, slot := range body.Slots {
 		if seen[slot.Name] {
@@ -87,7 +88,7 @@ func Evaluate(in Input) Result {
 		}
 		seen[slot.Name] = true
 		for i, inst := range in.Template.Assembly[slot.Name] {
-			ev.addInstance(slot.Name+"/"+strconv.Itoa(i+1), inst)
+			ev.addInstance(slot.Name, i+1, inst)
 		}
 	}
 	ev.checkEntered()
@@ -108,10 +109,10 @@ type evaluator struct {
 	problems []model.Problem
 }
 
-// addInstance 取实例所用 hook 在 ISO 的系上的实现，再把 hook 的参数列进表单。path 是
-// 「插槽名/序号」，结构性缺失的问题落在这个实例上。
-func (ev *evaluator) addInstance(path string, inst model.Instance) {
-	where := model.Subject{Kind: "slot", ID: templateRef(ev.in.Template), Path: path}
+// addInstance 取插槽 slot 里第 seq 个实例所用 hook 在 ISO 的系上的实现，再把 hook 的参数列进表单。
+// 结构性缺失的问题落在这个实例上（model.InstancePath）。
+func (ev *evaluator) addInstance(slot string, seq int, inst model.Instance) {
+	where := model.Subject{Kind: "slot", ID: templateRef(ev.in.Template), Path: model.InstancePath(slot, seq)}
 	h, ok := ev.in.Hooks[model.HookKey{ID: inst.HookID, Version: inst.HookVersion}]
 	if !ok {
 		ev.report(model.NewProblem("hook_ref_missing", where, inst.HookID, inst.HookVersion))
@@ -122,34 +123,33 @@ func (ev *evaluator) addInstance(path string, inst model.Instance) {
 		ev.report(model.NewProblem("impl_missing_for_series", where, inst.HookID, inst.HookVersion, ev.in.ISO.Series))
 		return
 	}
-	// 片段的正文进应答文件，它引用的参数必填；脚本的参数经环境变量传入，看声明。
-	// 种类不认识的也按片段算：多要几个必填，好过把空值渲染进应答文件。
-	var refs map[string][]string
-	if impl.Kind != model.ImplScript {
+	// 要展开的正文（片段）进应答文件，它引用的参数必填；脚本的参数经环境变量传入，看声明。哪些实现
+	// 算展开见 model.Impl.Expanded：种类不认识的也按片段算，多要几个必填，好过把空值渲染进应答文件。
+	var refs scan.Refs
+	if impl.Expanded() {
 		frag, _ := scan.Scan(impl.Body)
-		refs = refSubs(frag.Params)
+		refs = frag.Refs()
 	}
-	ev.addParams(path+"/", h.Params, inst.Bindings, refs)
+	ev.addParams(func(param string) string { return model.InstanceFieldKey(slot, seq, param) }, h.Params, inst.Bindings, refs)
 }
 
-// addParams 把一组参数声明列进表单，字段键为 prefix 加参数名；refs 是正文或片段里引用到的
-// 参数名，各带上对它取过的子值（见 refSubs）。
-func (ev *evaluator) addParams(prefix string, decls []model.ParamDecl, bindings map[string]model.Binding, refs map[string][]string) {
+// addParams 把一组参数声明列进表单，字段键由 fieldKey 按参数名给出（model.TemplateFieldKey 或
+// model.InstanceFieldKey）；refs 是正文或片段里对它们的引用（见 scan.Refs），为 nil 表示没有引用。
+func (ev *evaluator) addParams(fieldKey func(param string) string, decls []model.ParamDecl, bindings map[string]model.Binding, refs scan.Refs) {
 	for _, d := range decls {
-		key := FieldKey(prefix + d.Name)
+		key := FieldKey(fieldKey(d.Name))
 		if ev.inForm[key] {
 			continue // 参数重名由激活判定报（param_decl_invalid），这里只按第一次出现的算
 		}
 		ev.inForm[key] = true
 		b, bound := bindings[d.Name]
-		subs, referenced := refs[d.Name]
-		ev.addField(key, d, b, bound, referenced, subs)
+		ev.addField(key, d, b, bound, refs.Required(d), refs[d.Name])
 	}
 }
 
-// addField 按 Evaluate 文档的第 2–6 条求一个字段，subs 是正文或片段对它取过的子值。一格的问题
-// 按发现的顺序报：填了锁定的字段，与取值本身有没有问题互不相干，两样都报；ISO 没提供选项集合
-// 时，取值无从核对，就此打住。
+// addField 按 Evaluate 文档的第 2–6 条求一个字段：required 是它按 scan.Refs.Required 是否必填，subs 是
+// 正文或片段对它取过的子值。一格的问题按发现的顺序报：填了锁定的字段，与取值本身有没有问题互不相干，
+// 两样都报；ISO 没提供选项集合时，取值无从核对，就此打住。
 //
 // 取值本身的问题按这一格由谁来改选代码（T11-8），说明里一律以 Field.Label 称呼这一格：
 //   - 可改的：取值不合法报 param_value_invalid，取不出子值报 param_sub_unavailable，操作员改填就能过；
@@ -157,13 +157,13 @@ func (ev *evaluator) addParams(prefix string, decls []model.ParamDecl, bindings 
 //   - 锁定在写死的值或默认值上的：要改的是模板，取不出子值照激活判定（L-4）报 param_accessor_invalid。
 //
 // 声明本身不成立（param_decl_invalid）时原样报，不归咎于任何一方的取值。
-func (ev *evaluator) addField(key FieldKey, d model.ParamDecl, b model.Binding, bound, referenced bool, subs []string) {
+func (ev *evaluator) addField(key FieldKey, d model.ParamDecl, b model.Binding, bound, required bool, subs []string) {
 	f := Field{
 		Key:      key,
 		Label:    cmp.Or(d.Label, d.Name),
 		Type:     d.Type,
 		List:     d.List,
-		Required: referenced || d.Required,
+		Required: required,
 		Locked:   bound && !b.Editable,
 		Prefill:  prefill(d, b, bound, ev.in.Host),
 	}
@@ -279,18 +279,4 @@ func templateRef(t model.Template) string {
 
 func (ev *evaluator) report(p model.Problem) {
 	ev.problems = append(ev.problems, p)
-}
-
-// refSubs 整理一组参数引用：键是引用到的参数名，值是对它取过的子值，按第一次出现的顺序、
-// 不重复。只按名字引用的参数也有键，值为空。
-func refSubs(refs []scan.ParamRef) map[string][]string {
-	subs := make(map[string][]string, len(refs))
-	for _, r := range refs {
-		s := subs[r.Name]
-		if r.Sub != "" && !slices.Contains(s, r.Sub) {
-			s = append(s, r.Sub)
-		}
-		subs[r.Name] = s
-	}
-	return subs
 }
