@@ -44,8 +44,9 @@ func (s TaskState) Valid() bool {
 // HostSN、ISOID、TemplateID 与 TemplateVersion 和快照里的重复：第 2 层要按它们查任务（这台主机
 // 有没有未结束的任务、这个版本还被哪些任务引用），不必为此解开快照。
 type Task struct {
-	// ID 经 {{sys:task}} 原样代入模板正文与片段（C18），所以必须是安全词（IsSafeWord），由第 2 层
-	// 生成时保证（L-13b）：含空格、引号的 ID 会改变应答文件的结构。快照里不带它，快照构建查不到。
+	// ID 由仓储用 store.NewID 生成。它经 {{sys:task}} 原样代入模板正文与片段（C18），所以必须是安全词
+	// （IsSafeWord），由第 2 层生成时保证（L-13b）：含空格、引号的 ID 会改变应答文件的结构。快照里不带它，
+	// 快照构建查不到。
 	ID              string
 	HostSN          string
 	ISOID           string
@@ -55,6 +56,10 @@ type Task struct {
 	Snapshot        Snapshot
 	CreatedBy       string
 	CreatedAt       int64 // Unix 秒，由调用方传入：层 1 不碰时钟
+	// Rev 是仓储的乐观锁版本：每次写入加 1，由仓储维护。推进状态时，调用方把读到的 State 与 Rev 一起
+	// 带回作期望值，对不上就写不进去，所以并发的推进只有一次生效（C33）。第 1 层的判定都不看它，
+	// 快照里也不放它。
+	Rev int64
 }
 
 // SnapshotSchema 是本层产出的快照格式版本。任务要保存很久，格式将来变了，渲染靠它认出旧快照，

@@ -58,6 +58,9 @@ var extraCodes = map[Code]Category{
 	"param_attr_unusable":             CategoryIncompatible, // 锁定取自主机属性的格子取值用不了（T11-8）
 	"param_sub_unavailable":           CategoryInvalid,      // 填的值取不出模板要的子值（T11-8）
 	"iso_import_failed":               CategoryState,        // ISO 导入失败（T5-1）
+
+	// 第 2 层（plans/2026-10-03-rewrite-layer2-store.md 任务 1）。
+	"host_not_registered": CategoryState, // 建任务时批里的 SN 没有登记，由仓储在事务里重跑准入时报
 }
 
 func TestCode表与附录总表逐项一致(t *testing.T) {
@@ -79,9 +82,9 @@ func TestCode表与附录总表逐项一致(t *testing.T) {
 		}
 		want[c] = cat
 	}
-	// 附录 58 个、整层验收 1 个、修补轮 10 个。以后再追加代码，这个数要跟着改。
-	if len(want) != 69 {
-		t.Fatalf("附录加上追加的代码应共 69 个，测试里有 %d 个", len(want))
+	// 附录 58 个、整层验收 1 个、修补轮 10 个、第 2 层 1 个。以后再追加代码，这个数要跟着改。
+	if len(want) != 70 {
+		t.Fatalf("附录加上追加的代码应共 70 个，测试里有 %d 个", len(want))
 	}
 	for c, cat := range want {
 		if got := c.Category(); got != cat {
@@ -181,6 +184,14 @@ func TestCode修补轮登记的参数个数(t *testing.T) {
 		case spec.args != c.args:
 			t.Errorf("%s 登记了 %d 个参数，修补计划定的是 %d 个", c.code, spec.args, c.args)
 		}
+	}
+}
+
+// 第 2 层登记的代码不带参数，SN 在 Subject 里（第 2 层计划任务 1）。仓储按这个个数调用 NewProblem，
+// 个数一变，建任务时就会 panic。
+func TestCode第2层登记的参数个数(t *testing.T) {
+	if spec, ok := codeTable["host_not_registered"]; !ok || spec.args != 0 {
+		t.Errorf("host_not_registered 应登记为不带参数：登记了 %v，参数 %d 个", ok, spec.args)
 	}
 }
 

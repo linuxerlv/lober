@@ -362,6 +362,15 @@ var codeTable = map[Code]codeSpec{
 	"iso_import_failed": {CategoryState, 0,
 		"ISO 导入失败，不能用来建任务",
 		"重新导入这个 ISO，不用重新获取字节；仍然不行就删掉后重新创建，或换一个可用的 ISO"},
+
+	// —— 第 2 层追加（plans/2026-10-03-rewrite-layer2-store.md 任务 1） ——
+
+	// 建任务时批里的 SN 没有登记：从没登记过，或者在向导里选中之后被删了。准入判定的入参只有登记过的
+	// 主机，查不出这种情况，由仓储在事务里重跑准入时补报（store.BatchProblems）。Subject 的 Kind 为 host，
+	// ID 为 SN；SN 只在 Subject 里，所以不带参数。
+	"host_not_registered": {CategoryState, 0,
+		"这台主机还没登记，或者已经被删了",
+		"到主机列表里重新登记它，再建任务"},
 }
 
 // 下面是代码表的补充：产出代码的函数在本包里、可选的措辞（不合法的原因、各类型

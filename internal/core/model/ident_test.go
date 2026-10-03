@@ -212,6 +212,63 @@ func TestValidIdent(t *testing.T) {
 	}
 }
 
+// 仓储生成的 ID 是 26 个字符的小写 base32，可能以数字开头；内置内容带的是固定 ID。单个字符与
+// 64 个字符是长度的两端。合法的 ID 也都得是安全词：任务 ID 经 {{sys:task}} 原样进正文（L-13b）。
+func TestValidID收仓储生成的与内置的ID(t *testing.T) {
+	for _, s := range []string{
+		"k5xq2z7m4rvbt6nwy3hpdjcgfa", "7aq4m2xk5rzt3wb6nyhgpdjcfe",
+		"builtin-kickstart",
+		"a", "7",
+		strings.Repeat("a", 64),
+	} {
+		if !ValidID(s) {
+			t.Errorf("ValidID(%q) 应为 true", s)
+		}
+		if !IsSafeWord(s) {
+			t.Errorf("合法的 ID %q 应当也是安全词", s)
+		}
+	}
+}
+
+// 每一例只犯一条规则。
+func TestValidID拒收(t *testing.T) {
+	cases := []struct{ name, s string }{
+		{"空串", ""},
+		{"大写", "Builtin-kickstart"},
+		{"下划线", "builtin_kickstart"},
+		{"@ 是「ID@版本」里的分隔符", "rocky-base@4"},
+		{"点", "rocky.base"},
+		{"斜杠", "rocky/base"},
+		{"空格", "rocky base"},
+		{"以 - 开头，放进命令行会被当成选项", "-builtin"},
+		{"65 个字符", strings.Repeat("a", 65)},
+		{"中文", "模板"},
+		{"全角字母", "\U0000ff42uiltin"},
+		{"结尾是换行", "builtin\n"},
+		{"NUL", "a\x00b"},
+	}
+	for _, c := range cases {
+		if ValidID(c.s) {
+			t.Errorf("%s：ValidID(%q) 应为 false", c.name, c.s)
+		}
+	}
+}
+
+// 上面是挑出来的例子；这里按码位把 ASCII 的 128 个字符分别放在开头和末尾各试一遍，两边合起来才说明
+// 字符集不多不少：开头只收小写字母与数字，其余位置另收 -。
+func TestValidID逐个字符(t *testing.T) {
+	for r := range rune(0x80) {
+		c := string(r)
+		alnum := 'a' <= r && r <= 'z' || '0' <= r && r <= '9'
+		if got := ValidID(c + "a"); got != alnum {
+			t.Errorf("ValidID(%q) = %v，应为 %v", c+"a", got, alnum)
+		}
+		if got, want := ValidID("a"+c), alnum || r == '-'; got != want {
+			t.Errorf("ValidID(%q) = %v，应为 %v", "a"+c, got, want)
+		}
+	}
+}
+
 // 能存成 UTF-8 文本的都能存（T13-10）。PostgreSQL 的 text 与 jsonb 不收 NUL，encoding/json 又会
 // 把非法字节换成 U+FFFD，存进去再取出来就不是原来的字节；NUL 以外的控制字符、换行都存得下。
 func TestStorableText(t *testing.T) {

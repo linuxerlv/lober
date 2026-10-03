@@ -10,6 +10,7 @@ const (
 	snMaxLen      = 64 // 字节数；合法的 SN 只含 ASCII，等于字符数
 	nameMaxLen    = 64 // 字节数；合法的名称只含 ASCII，等于字符数
 	identMaxLen   = 32
+	idMaxLen      = 64 // 字节数；合法的 ID 只含 ASCII，等于字符数
 	labelMaxRunes = 64 // 按 rune 计，一个汉字算一个
 )
 
@@ -136,6 +137,25 @@ func ValidLabel(s string) bool {
 
 func hiddenInLabel(r rune) bool {
 	return unicode.In(r, unicode.Cc, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point)
+}
+
+// ValidID 判断 ISO、hook、模板与任务的 ID：^[a-z0-9][a-z0-9-]{0,63}$。仓储用 store.NewID 生成的 26 个
+// 字符的小写 base32，和内置内容自带的 builtin-kickstart 这类固定 ID 都合它；仓储收到的 ID 先过它。
+//
+// 合它的都是安全词（IsSafeWord）：字符集是安全词的子集，长度也在安全词的上限之内，所以任务 ID 经
+// {{sys:task}} 原样代入正文，不会改变结构（L-13b）。只收小写，ID 就没有只差大小写的两种写法；不收 @，
+// 它是「ID@版本」里的分隔符；不收 . 与 /，放进路径时它们会改变层次；首字符不能是 -，否则放进命令行
+// 会被当成选项。
+func ValidID(s string) bool {
+	if s == "" || len(s) > idMaxLen || s[0] == '-' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidIdent 判断参数名、主机属性键这类标识符：^[a-z][a-z0-9_]{0,31}$。

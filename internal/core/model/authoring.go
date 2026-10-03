@@ -94,6 +94,9 @@ type Hook struct {
 	TimeoutSec int
 	Required   bool
 	Impls      []Impl
+	// Rev 是这个版本那条记录的乐观锁版本，与版本号 Version 无关：每次写入加 1，由仓储维护；调用方
+	// 改它时原样带回，对不上就写不进去。第 1 层的判定都不看它，快照里也不放它。
+	Rev int64
 }
 
 // Impl 是 hook 的一份实现：属于一个族，可以覆盖该族的多个系（C8）。
@@ -135,6 +138,9 @@ type Template struct {
 	Bindings map[string]Binding
 	// Assembly 是装配表：插槽名到按顺序放进该插槽的实例。插槽只来自正文（C14），这里只按名字引用。
 	Assembly map[string][]Instance
+	// Rev 是这个版本那条记录的乐观锁版本，与版本号 Version 无关：每次写入加 1，由仓储维护；调用方
+	// 改它时原样带回，对不上就写不进去。第 1 层的判定都不看它，快照里也不放它。
+	Rev int64
 }
 
 // Instance 是装配表里的一个 hook 实例。同一个 hook 可以在一个模板里出现多次，各带一组取值来源（C17）。

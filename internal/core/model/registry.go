@@ -18,6 +18,9 @@ type Host struct {
 	// Attrs 是自定义属性，如 IP 与前缀、主机名、机架位。键是标识符；值原样存、系统不解释，
 	// 被参数引用时才按那个参数的类型校验。
 	Attrs map[string]string
+	// Rev 是仓储的乐观锁版本：每次写入加 1，由仓储维护；调用方改记录时原样带回，对不上就写不进去。
+	// CSV 批量导入例外：已登记的按 SN 整条替换，不比它。第 1 层的判定都不看它，快照里也不放它。
+	Rev int64
 }
 
 // hostReservedAttrs 不能当属性键：它们是主机自己的字段，CSV 导入按列名把这几列填进字段、
@@ -131,6 +134,9 @@ type ISO struct {
 	// 引用；选项值原样进正文，必须是安全词（IsSafeWord），同一个集合里不重复；选项的显示名过
 	// ValidLabel（T7-5）。第 4 层导入 editions 时，Value 用 ServerDatacenter 这类安全词，全名放 Label。
 	Offers map[string][]Option
+	// Rev 是仓储的乐观锁版本：每次写入加 1，由仓储维护；调用方改记录时原样带回，对不上就写不进去。
+	// 第 1 层的判定都不看它，快照里也不放它。
+	Rev int64
 }
 
 // isoVersionMaxLen 是 ISO 版本的最大长度，见 ISO.Version。
