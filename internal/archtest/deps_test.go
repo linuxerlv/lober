@@ -23,10 +23,23 @@ import (
 	"testing"
 )
 
+// modulePath 是本模块的路径：模块里的包，导入路径就是它接上相对模块根的目录。
+const modulePath = "github.com/lober/lober"
+
 // layer1Dir 是层 1 相对模块根的目录，layer1 是它的导入路径：它自己和它下面的包都算层 1。
 const (
 	layer1Dir = "internal/core"
-	layer1    = "github.com/lober/lober/" + layer1Dir
+	layer1    = modulePath + "/" + layer1Dir
+)
+
+// storeDir 是存储层（第 2 层）相对模块根的目录：它自己和它下面的包都算存储层。下面是存储层规则点名的四个包，
+// pkgStore 既是存储层的根，也是契约包。
+const (
+	storeDir     = "internal/store"
+	pkgStore     = modulePath + "/" + storeDir
+	pkgStoretest = pkgStore + "/storetest"
+	pkgMemstore  = pkgStore + "/memstore"
+	pkgPgstore   = pkgStore + "/pgstore"
 )
 
 // 层内方向规则点名的包。
@@ -74,6 +87,13 @@ const (
 	ruleIgnored  rule = "层 1 的文件都参与构建：被构建约束排除的文件在本平台不编译也不测试，按族命名的 x_linux.go 也会被排除"
 	ruleParse    rule = "源文件要能解析，守卫才查得了"
 	ruleListed   rule = "含非测试 .go 文件的目录都要出现在 go list ./... 里，否则守卫查不到它"
+
+	// 存储层的三条规则（第 2 层计划任务 2），都照计划「包与文件」表写成白名单。
+	ruleContract rule = "store 与 storetest 只依赖标准库、internal/core/... 和 internal/store：契约和契约测试不依赖任何一份实现，" +
+		"也不依赖第三方模块；存储层新加的包也按这一条查"
+	ruleMemstore rule = "memstore 只依赖标准库、internal/core/... 和 internal/store：不依赖任何第三方模块，也不依赖 pgstore 与 storetest"
+	rulePgstore  rule = "pgstore 只依赖标准库、internal/core/...、internal/store，以及 gorm.io/... 与 github.com/jackc/pgx/v5/...：" +
+		"第三方模块只有这两家，也不依赖 memstore 与 storetest"
 )
 
 // violation 是守卫查出的一处违规。
@@ -114,13 +134,13 @@ type goPackage struct {
 func Test层1依赖守卫(t *testing.T) {
 	gomod := goModPath(t)
 	root := filepath.Dir(gomod)
-	pkgs := layer1Packages(t, root)
+	pkgs := packagesUnder(t, root, layer1)
 	if len(pkgs) == 0 {
 		// go list 出错、模块路径改了或 internal/core 被挪走都会走到这里，
 		// 没有检查对象还报通过，守卫就形同虚设。
 		t.Fatalf("go list 没有列出 %s 下的任何包，守卫没有检查对象", layer1)
 	}
-	dirs := layer1SourceDirs(t, gomod, root)
+	dirs := layerSourceDirs(t, gomod, root, layer1Dir)
 	for _, v := range checkLayer1(os.DirFS(root), dirs, pkgs) {
 		t.Error(v)
 	}
@@ -131,9 +151,38 @@ func Test层1依赖守卫(t *testing.T) {
 // dirs 是含非测试源文件的目录（相对 internal/core），pkgs 是 go list 列出的层 1 包。
 // 它只吃输入，组合本身也就测得了（guard_test）；新加的检查接在这里，别接在 Test层1依赖守卫 里。
 func checkLayer1(fsys fs.FS, dirs []string, pkgs []goPackage) []violation {
-	found := unlistedDirs(dirs, pkgs)
+	found := unlistedDirs(layer1Dir, dirs, pkgs)
 	for _, p := range pkgs {
 		found = append(found, checkPackage(fsys, p)...)
+	}
+	return found
+}
+
+// Test存储层依赖守卫 照第 2 层计划任务 2 的三条规则查存储层各包的 import：契约与契约测试不依赖任何一份实现，
+// 两份实现互不依赖，第三方模块只有 pgstore 能用，也只能是 gorm 与 pgx。层 1 不依赖存储层，由 Test层1依赖守卫 查。
+func Test存储层依赖守卫(t *testing.T) {
+	gomod := goModPath(t)
+	root := filepath.Dir(gomod)
+	pkgs := packagesUnder(t, root, pkgStore)
+	if len(pkgs) == 0 {
+		t.Fatalf("go list 没有列出 %s 下的任何包，守卫没有检查对象", pkgStore)
+	}
+	dirs := layerSourceDirs(t, gomod, root, storeDir)
+	for _, v := range checkStore(os.DirFS(root), dirs, pkgs) {
+		t.Error(v)
+	}
+	t.Logf("检查了 %d 个存储层的包、%d 个含源文件的目录", len(pkgs), len(dirs))
+}
+
+// checkStore 是存储层守卫的全部检查，参数同 checkLayer1，dirs 相对 internal/store：先查有没有目录漏出 go list，
+// 再逐个包查非测试源文件的 import。
+//
+// 第 1 层对文件构成的要求（不用 cgo、文件都参与构建）不套用到这里，只是 cgo 文件与被构建约束排除的文件照样
+// 解析：在本平台不编译的文件，import 的包照样按规则查，躲不过守卫；cgo 的 C 本身就违反规则。
+func checkStore(fsys fs.FS, dirs []string, pkgs []goPackage) []violation {
+	found := unlistedDirs(storeDir, dirs, pkgs)
+	for _, p := range pkgs {
+		found = append(found, checkSources(fsys, p, checkStoreFile)...)
 	}
 	return found
 }
@@ -163,8 +212,9 @@ func runGo(t *testing.T, dir string, args ...string) []byte {
 	return out
 }
 
-// layer1Packages 逐个解码 go list -json 的输出：它是首尾相接的多个 JSON 对象，不是数组。
-func layer1Packages(t *testing.T, root string) []goPackage {
+// packagesUnder 逐个解码 go list -json 的输出，留下 base 和它下面的包。输出是首尾相接的多个 JSON 对象，
+// 不是数组。
+func packagesUnder(t *testing.T, root, base string) []goPackage {
 	t.Helper()
 	dec := json.NewDecoder(bytes.NewReader(runGo(t, root, "list", "-json", "./...")))
 	var pkgs []goPackage
@@ -177,39 +227,44 @@ func layer1Packages(t *testing.T, root string) []goPackage {
 		if err != nil {
 			t.Fatalf("解码 go list 的输出失败：%v", err)
 		}
-		if inLayer1(p.ImportPath) {
+		if under(p.ImportPath, base) {
 			pkgs = append(pkgs, p)
 		}
 	}
 }
 
-func inLayer1(path string) bool {
-	return path == layer1 || strings.HasPrefix(path, layer1+"/")
+// under 报告 path 是不是 base 自己或它下面的包。按整段比对，internal/coreutils 不在 internal/core 下面。
+func under(path, base string) bool {
+	return path == base || strings.HasPrefix(path, base+"/")
 }
 
-// isStd 沿用 go 命令的判断：路径第一段不含点的是标准库。放行只看白名单，
-// 它只用来决定白名单以外的包报哪一条。
+func inLayer1(path string) bool {
+	return under(path, layer1)
+}
+
+// isStd 沿用 go 命令的判断：路径第一段不含点的是标准库，cgo 的 C 也算在内。层 1 放行只看白名单，
+// 它只用来决定白名单以外的包报哪一条；存储层不套用白名单，按它放行标准库（C 除外）。
 func isStd(path string) bool {
 	first, _, _ := strings.Cut(path, "/")
 	return !strings.Contains(first, ".")
 }
 
-// layer1SourceDirs 遍历 internal/core，收集含非测试 .go 文件的目录（T1-3）。go list ./...
+// layerSourceDirs 遍历一层的目录 dir（相对模块根），收集含非测试 .go 文件的目录（T1-3）。go list ./...
 // 会静默跳过整包被构建约束排除的目录：只有 x_linux.go 的包在 Windows 上就不算包，
 // 所以检查对象不能只信 go list。
 //
-// 这次遍历还让 go test 的结果缓存跟着层 1 的源码走。go test 只按测试进程自己经 os 包
+// 这次遍历还让 go test 的结果缓存跟着这一层的源码走。go test 只按测试进程自己经 os 包
 // 打开过的文件和目录判断缓存是否失效，子进程 go list 读过什么它不知道；不走这一遍，
-// 新增一个层 1 包或源文件、改了 go.mod 之后，go test 会直接复用上一次的 PASS。
+// 新增一个包或源文件、改了 go.mod 之后，go test 会直接复用上一次的 PASS。
 // 跳过的目录 go list 也不进，不用跟踪。
-func layer1SourceDirs(t *testing.T, gomod, root string) []string {
+func layerSourceDirs(t *testing.T, gomod, root, dir string) []string {
 	t.Helper()
 	if _, err := os.Stat(gomod); err != nil {
 		t.Fatalf("读取 go.mod 失败：%v", err)
 	}
-	dirs, err := sourceDirs(os.DirFS(filepath.Join(root, filepath.FromSlash(layer1Dir))))
+	dirs, err := sourceDirs(os.DirFS(filepath.Join(root, filepath.FromSlash(dir))))
 	if err != nil {
-		t.Fatalf("遍历 %s 失败：%v", layer1Dir, err)
+		t.Fatalf("遍历 %s 失败：%v", dir, err)
 	}
 	return dirs
 }
@@ -236,32 +291,37 @@ func sourceDirs(fsys fs.FS) ([]string, error) {
 	return slices.Sorted(maps.Keys(dirs)), err
 }
 
-// unlistedDirs 返回 dirs（相对 internal/core）里没有出现在 go list 结果里的目录。
+// unlistedDirs 返回 dirs（相对 base，base 是一层相对模块根的目录）里没有出现在 go list 结果里的目录。
 // 整包被构建约束排除，或者目录里另有 go.mod，go list ./... 都不报错、只是不列出它。
 // 按导入路径比对，不受路径分隔符和盘符大小写的影响。
-func unlistedDirs(dirs []string, pkgs []goPackage) []violation {
+func unlistedDirs(base string, dirs []string, pkgs []goPackage) []violation {
 	listed := map[string]bool{}
 	for _, p := range pkgs {
 		listed[p.ImportPath] = true
 	}
 	var found []violation
 	for _, d := range dirs {
-		if !listed[path.Join(layer1, d)] {
-			found = append(found, violation{rule: ruleListed, subject: path.Join(layer1Dir, d),
+		if !listed[path.Join(modulePath, base, d)] {
+			found = append(found, violation{rule: ruleListed, subject: path.Join(base, d),
 				detail: "多半是整包被构建约束排除（比如只有 x_linux.go），或者目录里另有 go.mod"})
 		}
 	}
 	return found
 }
 
-// checkPackage 先查包的文件构成，再逐个解析非测试源文件。cgo 文件和被构建约束排除的
-// 文件本身已经违规，也照样解析，一次报全它们 import 了什么。
+// checkPackage 查层 1 的一个包：先查包的文件构成，再逐个查非测试源文件。cgo 文件和被构建约束
+// 排除的文件本身已经违规，也照样解析，一次报全它们 import 了什么。
+func checkPackage(fsys fs.FS, p goPackage) []violation {
+	return append(checkBuildFiles(p), checkSources(fsys, p, checkFile)...)
+}
+
+// checkSources 逐个解析包的非测试源文件，交给 check 查；cgo 文件和被构建约束排除的文件也在内。
 //
 // 文件从 fsys（以模块根为根）里读；线上是 os.DirFS，读文件照样经过 os 包，测试缓存跟得上。
 // 模块里的包，导入路径就是模块路径接上目录，所以目录按导入路径推出，不用 go list 给的绝对路径。
-func checkPackage(fsys fs.FS, p goPackage) []violation {
-	found := checkBuildFiles(p)
-	dir := layer1Dir + strings.TrimPrefix(p.ImportPath, layer1)
+func checkSources(fsys fs.FS, p goPackage, check func(*token.FileSet, string, *ast.File) []violation) []violation {
+	var found []violation
+	dir := strings.TrimPrefix(p.ImportPath, modulePath+"/")
 	fset := token.NewFileSet()
 	for _, list := range [][]string{p.GoFiles, p.CgoFiles, p.IgnoredGoFiles} {
 		for _, name := range list {
@@ -273,7 +333,7 @@ func checkPackage(fsys fs.FS, p goPackage) []violation {
 				found = append(found, violation{rule: ruleParse, pkg: p.ImportPath, subject: name, detail: err.Error()})
 				continue
 			}
-			found = append(found, checkFile(fset, p.ImportPath, f)...)
+			found = append(found, check(fset, p.ImportPath, f)...)
 		}
 	}
 	return found
@@ -303,13 +363,18 @@ func checkBuildFiles(p goPackage) []violation {
 	return found
 }
 
-// checkFile 查一个非测试源文件的 import 和读时钟的写法。只看语法树，
+// position 是违规信息里的位置：文件:行:列。
+func position(fset *token.FileSet, pos token.Pos) string {
+	p := fset.Position(pos)
+	return fmt.Sprintf("%s:%d:%d", p.Filename, p.Line, p.Column)
+}
+
+// checkFile 查层 1 一个非测试源文件的 import 和读时钟的写法。只看语法树，
 // 所以注释和字符串里的 time.Now 不算。
 func checkFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
 	var found []violation
 	report := func(r rule, subject string, pos token.Pos) {
-		p := fset.Position(pos)
-		found = append(found, violation{rule: r, pkg: pkg, subject: subject, pos: fmt.Sprintf("%s:%d:%d", p.Filename, p.Line, p.Column)})
+		found = append(found, violation{rule: r, pkg: pkg, subject: subject, pos: position(fset, pos)})
 	}
 	timeNames := map[string]bool{} // time 包在本文件里的名字，别名导入也要认
 	for _, imp := range f.Imports {
@@ -369,4 +434,43 @@ func layerDirection(pkg, imp string) rule {
 		return ruleDecision
 	}
 	return ""
+}
+
+// checkStoreFile 查存储层一个非测试源文件的 import。
+func checkStoreFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
+	var found []violation
+	for _, imp := range f.Imports {
+		importPath, _ := strconv.Unquote(imp.Path.Value) // 理由同 checkFile
+		if r := storeRule(pkg, importPath); r != "" {
+			found = append(found, violation{rule: r, pkg: pkg, subject: importPath, pos: position(fset, imp.Pos())})
+		}
+	}
+	return found
+}
+
+// storeRule 返回存储层的包 pkg import imp 违反的规则，不违反时返回空串。三条规则都是白名单，照计划「包与文件」表：
+// 标准库、层 1 与契约包 internal/store 谁都能用，pgstore 另可用 gorm 与 pgx v5，此外一律不许，所以两份实现互不依赖，
+// 契约也不依赖实现。四个包以外、存储层新加的包按契约的规则查，要放宽就先改这里。
+//
+// 第 1 层的标准库白名单不套用到这里：仓储要用 context、sync、crypto/rand 这类包。cgo 的 C 不是标准库，照样要报。
+func storeRule(pkg, imp string) rule {
+	if (isStd(imp) && imp != "C") || inLayer1(imp) || imp == pkgStore {
+		return ""
+	}
+	switch pkg {
+	case pkgMemstore:
+		return ruleMemstore
+	case pkgPgstore:
+		if pgDriver(imp) {
+			return ""
+		}
+		return rulePgstore
+	}
+	return ruleContract
+}
+
+// pgDriver 报告 imp 是不是 pgstore 能用的第三方包：gorm.io 下的包，以及 pgx v5 和它下面的包。按整段比对，
+// github.com/jackc/pgx/v4 与 github.com/jackc/pgx/v5x 都不算。
+func pgDriver(imp string) bool {
+	return strings.HasPrefix(imp, "gorm.io/") || under(imp, "github.com/jackc/pgx/v5")
 }
