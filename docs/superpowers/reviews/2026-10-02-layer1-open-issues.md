@@ -68,6 +68,28 @@
 | T2-1 | 已修 | fc53fe6 |
 | T7-5（第 3 节） | 随 L-6 修掉 | 5416531 |
 
+## 修补轮之后新发现的问题
+
+2026-10-03，修补轮的跨任务评审给出以下 12 条建议（评审结论是「通过」，没有必须修改项）。它们都不阻塞合入 dev。其中两条要你拍板，十条并进第 2 层计划开头的清理任务。出处里的行号指 41ab33f。
+
+**要你拍板（各自写明了最晚什么时候定）：**
+
+- **P-1　锁定的 enum 取值不在 ISO 的集合里，审批和准入都查不到。** 模板把一个带 Offer 的 enum 锁定在写死的值或默认值上，而某个 ISO 的集合里没有这个值。这时激活判定和准入都放行，建任务时每台主机都报 param_not_offered，可它的下一步是「从 ISO 的选项里选一个」，锁定的格子又改不了。选项：A. 在 model 加一个共用判定，准入时把这种模板筛掉，问题报给模板作者；B. 保持现状，只把 admission 的包注释改准确。锁定且取自主机属性的格子遇到同样的情况，按 T11-8 的精神应改报 param_attr_unusable。最晚在第 5 层做向导之前定。（admission/admission.go:6-9、74-79；params/params.go:218-226）
+- **P-2　快照构建不查执行插槽的时机该格式支不支持。** 草稿的 unattend 正文写了 `{{slot:x@post-target}}`（unattend 只支持 pre 与 firstboot），草稿脚本也声明了 post-target 时，Build 照样产出快照。选项：A. Build 补报 slot_timing_unsupported，作为渲染可以依赖的第四条不变式；B. 在 Build 的文档里写明这一条由渲染自己查。最晚在第 3 层开工前定。（snapshot/build.go:191-196）
+
+**并进第 2 层计划开头的清理任务：**
+
+- **C-1** ISO 的系没勾时，准入在 series_not_ticked 之外还会多报一条 iso_offer_missing，参数求值只报前一条，两边一宽一严。改为系不符时跳过集合检查，并改测试 TestTemplateUsable几个原因一起报。（admission/admission.go:74-79）
+- **C-2** 「整理参数引用与子值」在 activation 与 params 各写了一份（activation/hook.go:357-368 的 addRefs 与 params/params.go:284-296 的 refSubs 逐行相同），「被引用即必填」「非脚本的正文才展开」也各写了几处。收进 scan 或 model，只留一份。
+- **C-3** 取值来源的字段键（tpl/、插槽名/序号/参数名）在 activation、params、snapshot 各手写一份，没有跨包测试钉住它们一致。由 params 导出字段键的构造函数，三处共用，或者至少加一条跨包测试（L-8 的一部分）。
+- **C-4** model.Subject 的文档注释没跟上 T9-1：Path 的取值要列全（param/n、impl/n、tpl/参数名、插槽名/n/参数名，以及 ISO 与主机的字段），第 5、6 层要按它解析。（model/problem.go:25-33）
+- **C-5** codes.go 里几处注释没写新的产出方：iso_offer_missing 现在也由准入产出，Subject 不同；series_not_ticked、impl_kind_mismatch、impl_timing_mismatch 现在也由参数求值或快照构建产出。
+- **C-6** 准入时主机登记的平台不合法（比如固件写成 UEFI），仍拿去比平台，报出误导的 firmware_mismatch；应先报 Host.Validate 给出的 host_platform_invalid。优先级低。（admission/admission.go:140-153）
+- **C-7** 状态为空串时，说明显示成「现为「」」。在 codes.go 登记「未知状态」的称呼，或在注释里写明空状态只会来自坏数据。优先级低。（model/registry.go:212-216）
+- **C-8** 「选项值是互不重复的安全词，显示名过 ValidLabel」在 model 里写了两份（param.go:131-148 与 registry.go:186-197），抽成一个函数。
+- **C-9** host_platform_invalid、placeholder_unknown_kind、script_placeholder_not_expanded 的说明里抄了目录取值和占位符种类，补进 codes_align_test。
+- **C-10** 修补计划第 34 行说 T13-8 从清单第 3 节并入，实际在第 2 节。只改文字。
+
 ## 1. 需要你拍板
 
 计划或 spec 本身有缺口、矛盾或取舍。每条列出可选项与代价，并给出建议。
