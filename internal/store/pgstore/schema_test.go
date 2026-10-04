@@ -222,6 +222,26 @@ func Test模板引用的外键改了删除动作被查出来并拒绝启动(t *t
 		[]string{"ALTER TABLE template_hook_refs DROP CONSTRAINT fk_template_hook_refs_template"})
 }
 
+// C31 靠 tasks 上的部分唯一索引：它不见了，同一台主机就能同时有两个未结束的任务，建任务与推进的兜底都跟着落空。
+// AutoMigrate 按名字补建缺了的索引，重新 Open 就修好了。
+func TestC31的部分唯一索引不见了被查出来(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	execAll(t, s, `DROP INDEX `+openTaskIndex)
+	wantMismatches(t, mismatchesOf(t, s, tables), "tasks "+openTaskIndex)
+	wantMismatches(t, mismatchesOf(t, openStore(t, dsn), tables))
+}
+
+// 事件按 (task_id, key) 去重。它被建成只有 key 的单列索引时，不同任务里的同一个 Key 也会撞上：第 7 层给每个任务的信号
+// 用同样的 Key，就只有第一个任务记得下来。同名的索引已经存在，AutoMigrate 不再动它。
+func Test事件Key的唯一索引变成单列被查出来并拒绝启动(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	execAll(t, s, `DROP INDEX idx_task_events_key`, `CREATE UNIQUE INDEX idx_task_events_key ON task_events (key) WHERE key <> ''`)
+	wantMismatches(t, mismatchesOf(t, s, tables), "task_events idx_task_events_key")
+	wantRefused(t, dsn, []string{"idx_task_events_key", "task_id, key"}, []string{"DROP INDEX idx_task_events_key"})
+}
+
 // 版本表的 CHECK 收下的状态要与 model 认的完全相同（VersionState.Valid 的注释），理由同 ISO 的状态。
 func Test版本状态的CHECK与model一致(t *testing.T) {
 	s := openStore(t, newSchema(t))
@@ -270,6 +290,52 @@ func TestISO状态的CHECK与model一致(t *testing.T) {
 		case rejected == state.Valid():
 			t.Errorf("状态 %q：model 认不认是 %v，CHECK 拒不拒是 %v", state, state.Valid(), rejected)
 		}
+	}
+}
+
+// tasks 的 CHECK 收下的状态要与 model 认的完全相同（TaskState.Valid 的注释），理由同 ISO 的状态。C31 的部分唯一索引挡住的
+// 也要恰好是 model 认为未结束的状态（TaskState.Finished）：同一台主机已有一个任务时再写一个 pending 的，前一个未结束才撞上。
+// rebooting、initializing 这类契约测试推进不到的状态也在其中。
+func Test任务状态的CHECK与C31的索引都与model一致(t *testing.T) {
+	s := openStore(t, newSchema(t))
+	execAll(t, s, `INSERT INTO hosts (sn, arch, firmware, attrs, rev) VALUES ('SN-1', '', '', 'null', 1)`,
+		`INSERT INTO isos (id, name, family, series, version, arch, state, sha256, artifacts, offers, rev)
+			VALUES ('iso', '', '', '', '', '', 'ready', '', 'null', 'null', 1)`,
+		`INSERT INTO templates (id, name, name_key, builtin, last_version) VALUES ('t', 'T', 't', false, 1)`,
+		`INSERT INTO template_versions (template_id, version, state, author, approver, builtin, derived_from, family, series,
+			body, params, bindings, assembly, rev)
+			VALUES ('t', 1, 'approved', '', '', false, 'null', '', 'null', '', 'null', 'null', 'null', 1)`)
+	insert := func(id string, state model.TaskState) error {
+		return s.db.WithContext(t.Context()).Exec(`INSERT INTO tasks (id, host_sn, iso_id, template_id, template_version, state,
+			snapshot, created_by, created_at, rev, last_seq) VALUES (?, 'SN-1', 'iso', 't', 1, ?, 'null', 'alice', 1, 1, 0)`,
+			id, string(state)).Error
+	}
+	rejectedBy := func(err error, code, name string) bool {
+		var pe *pgconn.PgError
+		return errors.As(err, &pe) && pe.Code == code && pe.ConstraintName == name
+	}
+	candidates := []model.TaskState{model.TaskPending, model.TaskBooting, model.TaskInstalling, model.TaskRebooting,
+		model.TaskInitializing, model.TaskDone, model.TaskFailed, model.TaskCancelled, "", "Pending", "started", "done "}
+	for _, state := range candidates {
+		err := insert("a", state)
+		rejected := rejectedBy(err, "23514", "chk_tasks_state")
+		switch {
+		case err != nil && !rejected:
+			t.Fatalf("写入状态 %q：%v", state, err)
+		case rejected == state.Valid():
+			t.Errorf("chk_tasks_state 状态 %q：model 认不认是 %v，CHECK 拒不拒是 %v", state, state.Valid(), rejected)
+		}
+		if err == nil {
+			err = insert("b", model.TaskPending)
+			taken := rejectedBy(err, "23505", openTaskIndex)
+			switch {
+			case err != nil && !taken:
+				t.Fatalf("已有 %q 的任务时再写一个 pending 的：%v", state, err)
+			case taken == state.Finished():
+				t.Errorf("%s 在已有 %q 的任务时：model 说它结束了没有是 %v，索引挡没挡是 %v", openTaskIndex, state, state.Finished(), taken)
+			}
+		}
+		execAll(t, s, `DELETE FROM tasks`)
 	}
 }
 

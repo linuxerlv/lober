@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"gorm.io/driver/postgres"
@@ -27,6 +26,7 @@ var _ store.Store = (*Store)(nil)
 var models = []any{
 	&hostRow{}, &isoRow{},
 	&hookRow{}, &hookVersionRow{}, &templateRow{}, &templateVersionRow{}, &templateHookRefRow{},
+	&taskRow{}, &taskEventRow{},
 	&auditRow{},
 }
 
@@ -163,40 +163,4 @@ func decodeCursor(cursor, list string, key ...any) error {
 		}
 	}
 	return nil
-}
-
-// 下面是还没做的方法，返回 errNotImplemented：任务与事件由任务 9 实现，届时连同这一节一起删掉。
-
-var errNotImplemented = errors.New("pgstore：尚未实现")
-
-func (s *Store) CreateTasks(context.Context, []model.Task, store.Audit) ([]model.Task, error) {
-	return nil, errNotImplemented
-}
-
-func (s *Store) GetTask(context.Context, string) (model.Task, error) {
-	return model.Task{}, errNotImplemented
-}
-
-func (s *Store) FindOpenTask(context.Context, string) (model.Task, bool, error) {
-	return model.Task{}, false, errNotImplemented
-}
-
-func (s *Store) ListTasks(context.Context, store.TaskQuery) (store.Page[model.Task], error) {
-	return store.Page[model.Task]{}, errNotImplemented
-}
-
-func (s *Store) TransitionTask(context.Context, string, store.TaskExpect, model.TaskState, []store.NewEvent) (model.Task, []store.Appended, error) {
-	return model.Task{}, nil, errNotImplemented
-}
-
-func (s *Store) TransitionTaskByUser(context.Context, string, store.TaskExpect, model.TaskState, []store.NewEvent, store.Audit) (model.Task, []store.Appended, error) {
-	return model.Task{}, nil, errNotImplemented
-}
-
-func (s *Store) AppendEvents(context.Context, string, []store.NewEvent) ([]store.Appended, error) {
-	return nil, errNotImplemented
-}
-
-func (s *Store) ListEvents(context.Context, string, int64, int) ([]store.Event, error) {
-	return nil, errNotImplemented
 }

@@ -438,6 +438,11 @@ func rejectedCases() []testCase {
 			f.mustCreate(t, s, hs[0])
 			return f.newTasks(t, hs[1], hs[0])
 		}),
+		// 逐台列出原因（C30）：只报出第一台撞上的不够
+		rejected("两台主机都有未结束的任务时逐台报出", []model.Code{"host_has_open_task", "host_has_open_task"}, func(t *testing.T, s store.Store, f fixture, hs []model.Host) []model.Task {
+			f.mustCreate(t, s, hs...)
+			return f.newTasks(t, hs[1], hs[0])
+		}),
 		rejected("主机登记的架构改了，与 ISO 的不符", []model.Code{"arch_mismatch"}, func(t *testing.T, s store.Store, f fixture, hs []model.Host) []model.Task {
 			batch := f.newTasks(t, hs...)
 			h := hs[1]

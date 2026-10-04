@@ -47,8 +47,16 @@ const versionStates = "CHECK (state = ANY (ARRAY['draft'::text, 'review'::text, 
 // unapproved 是未审批（草稿或待审批）的版本，每个身份同时最多一个。
 const unapproved = "state = ANY (ARRAY['draft'::text, 'review'::text])"
 
+// taskStates 是 tasks 的 CHECK：与 model.TaskState 认的完全相同（TaskState.Valid）。
+const taskStates = "CHECK (state = ANY (ARRAY['pending'::text, 'booting'::text, 'installing'::text, 'rebooting'::text, " +
+	"'initializing'::text, 'done'::text, 'failed'::text, 'cancelled'::text]))"
+
+// openTaskIndex 是守着 C31 的部分唯一索引：一台主机同一时刻最多一个未结束的任务，结束了的（done、failed、cancelled，
+// 与 model.TaskState.Finished 一致）不占位。建任务与推进撞上它时，tasks.go 按这个名字认出来，翻成 host_has_open_task。
+const openTaskIndex = "idx_tasks_open"
+
 // tables 是本层全部表的期望结构，Open 与 schema_test 共用这一份，翻译数据库错误时也按它认约束名。计划「表结构」一节
-// 列的表，由第一个用到它的任务加进来。
+// 列的十张表都在这里。
 var tables = []table{
 	{
 		name:    "hosts",
@@ -116,6 +124,42 @@ var tables = []table{
 			name: "fk_template_hook_refs_template", columns: []string{"template_id", "template_version"},
 			refTable: "template_versions", refColumns: []string{"template_id", "version"}, onDelete: "CASCADE",
 		}},
+	},
+	{
+		// 外键都是 RESTRICT：已建的任务要一直查得到它引用的主机、ISO 与模板版本（C26），任务结束了也一样
+		name:    "tasks",
+		primary: []string{"id"},
+		indexes: []index{
+			{name: "idx_tasks_created_at", columns: []string{"created_at"}},
+			// C31。建任务时先在事务里对锁住的主机重跑准入，它是最后一道防线；推进回未结束的状态时靠它挡住
+			{name: openTaskIndex, unique: true, columns: []string{"host_sn"},
+				where: "state <> ALL (ARRAY['done'::text, 'failed'::text, 'cancelled'::text])"},
+			{name: "idx_tasks_state", columns: []string{"state"}},
+		},
+		foreign: []foreign{
+			{name: "fk_tasks_host", columns: []string{"host_sn"}, refTable: "hosts", refColumns: []string{"sn"}, onDelete: "RESTRICT"},
+			{name: "fk_tasks_iso", columns: []string{"iso_id"}, refTable: "isos", refColumns: []string{"id"}, onDelete: "RESTRICT"},
+			{name: "fk_tasks_template", columns: []string{"template_id", "template_version"},
+				refTable: "template_versions", refColumns: []string{"template_id", "version"}, onDelete: "RESTRICT"},
+		},
+		checks: []check{
+			{"chk_tasks_created_at", "CHECK (created_at > 0)"},
+			{"chk_tasks_rev", "CHECK (rev >= 1)"},
+			{"chk_tasks_state", taskStates},
+		},
+	},
+	{
+		// 事件的主键与去重用的索引都是复合的：旧系统漏标一个列的 tag，把 (task_id, seq) 建成了 (seq)，不同任务的事件被当成
+		// 重复丢掉。空的 Key 不去重，不占位
+		name:    "task_events",
+		primary: []string{"task_id", "seq"},
+		indexes: []index{{name: "idx_task_events_key", unique: true, columns: []string{"task_id", "key"}, where: "key <> ''::text"}},
+		foreign: []foreign{{name: "fk_task_events_task", columns: []string{"task_id"},
+			refTable: "tasks", refColumns: []string{"id"}, onDelete: "RESTRICT"}},
+		checks: []check{
+			{"chk_task_events_at", "CHECK (at > 0)"},
+			{"chk_task_events_seq", "CHECK (seq >= 1)"},
+		},
 	},
 	{
 		name:    "audit_log",

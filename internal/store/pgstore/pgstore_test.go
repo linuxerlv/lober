@@ -18,6 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/lober/lober/internal/core/admission"
 	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
@@ -181,15 +182,8 @@ func (harness) Open(t *testing.T) store.Store {
 	return s
 }
 
-func Test主机契约(t *testing.T) { storetest.RunHosts(t, harness{}) }
-
-func TestISO契约(t *testing.T) { storetest.RunISOs(t, harness{}) }
-
-func Test审计契约(t *testing.T) { storetest.RunAudit(t, harness{}) }
-
-func TestHook契约(t *testing.T) { storetest.RunHooks(t, harness{}) }
-
-func Test模板契约(t *testing.T) { storetest.RunTemplates(t, harness{}) }
+// PostgreSQL 实现实现了完整的契约，与内存实现跑同一套全部分组。
+func Test契约(t *testing.T) { storetest.RunAll(t, harness{}) }
 
 // 失败注入只在测试的 schema 里：Open 建的表上，FaultActor 只是一个普通的操作者。
 func TestOpen不注入失败(t *testing.T) {
@@ -729,6 +723,332 @@ func Test模板草稿引用很长的hookID照样存得下(t *testing.T) {
 		}
 		readBack(t, saved, tpl.Assembly)
 	})
+}
+
+// 建任务在事务里对锁住的主机重跑准入，可同一台主机上失败的任务正被重试、还没提交时，准入看不到它：推进不锁主机，C31 由
+// 部分唯一索引 idx_tasks_open 兜底（批量建任务第 4 步）。新任务的插入要等那次推进提交，再撞上索引：整批回滚，报
+// BatchError，结果与准入看得到那次重试时给的相同，只有撞上的那台报 host_has_open_task；任务与审计都没写。契约测试里的撞车
+// 都被准入拦下了，走不到这条路；这里另开一个连接当那次重试，让它停在没提交的事务里。
+func Test建任务撞上没提交的重试由部分唯一索引兜底(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	ctx := t.Context()
+	f := newTaskFixture(t, s, "SN-1", "SN-2")
+	audit := store.Audit{Actor: "alice", Action: "task.create", At: 1}
+	failed := f.mustFailed(t, s, "SN-1")
+	audits := auditCount(t, s)
+	err := writeWhileHeld(t, dsn, `UPDATE tasks SET state = 'pending', rev = rev + 1 WHERE id = $1`, failed.ID, func() error {
+		_, err := s.CreateTasks(ctx, f.tasks("SN-2", "SN-1"), audit)
+		return err
+	})
+	want := admission.BatchResult{Common: []model.Problem{}, ByHost: map[string][]model.Problem{
+		"SN-1": admission.HostSelectable(model.Host{SN: "SN-1"}, true),
+		"SN-2": {},
+	}}
+	var be *store.BatchError
+	if !errors.As(err, &be) || !errors.Is(err, store.ErrRejected) || !reflect.DeepEqual(be.Result, want) {
+		t.Fatalf("撞上重试之后应报 BatchError，只有 SN-1 报 host_has_open_task：得到 %v（%+v）", err, be)
+	}
+	p, err := s.ListTasks(ctx, store.TaskQuery{})
+	if err != nil || len(p.Items) != 1 || p.Items[0].ID != failed.ID || p.Items[0].State != model.TaskPending {
+		t.Fatalf("库里应只有重试回 pending 的那一个任务，得到 %+v、%v", p.Items, err)
+	}
+	if n := auditCount(t, s); n != audits {
+		t.Fatalf("整批回滚时不写审计：审计从 %d 条变成了 %d 条", audits, n)
+	}
+}
+
+// 推进回未结束的状态时，C31 只靠部分唯一索引 idx_tasks_open 挡：推进不锁主机。要是先查一遍「这台主机有没有别的未结束
+// 任务」再写，别人刚建、还没提交的任务查不到，两边就都落了库。另开一个连接，在没提交的事务里给同一台主机写一个 pending 的
+// 任务：失败任务的重试要等它提交，再撞上索引，报 ProblemsError(ErrRejected)，问题是 host_has_open_task，推进连同带的事件
+// 与审计都不生效。契约测试里挡住重试的新任务都已提交，钉不住这一点。
+func Test推进撞上没提交的新任务由部分唯一索引兜底(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	ctx := t.Context()
+	f := newTaskFixture(t, s, "SN-1")
+	failed := f.mustFailed(t, s, "SN-1")
+	audits := auditCount(t, s)
+	hold := `INSERT INTO tasks (id, host_sn, iso_id, template_id, template_version, state, snapshot, created_by, created_at, rev, ` +
+		`last_seq) SELECT 'held', host_sn, iso_id, template_id, template_version, 'pending', snapshot, created_by, created_at, 1, 0 ` +
+		`FROM tasks WHERE id = $1`
+	err := writeWhileHeld(t, dsn, hold, failed.ID, func() error {
+		_, _, err := s.TransitionTaskByUser(ctx, failed.ID, store.TaskExpect{State: failed.State, Rev: failed.Rev}, model.TaskPending,
+			[]store.NewEvent{{At: 1, Kind: "task.retry"}}, store.Audit{Actor: "alice", Action: "task.retry", At: 1})
+		return err
+	})
+	var pe *store.ProblemsError
+	want := admission.HostSelectable(model.Host{SN: "SN-1"}, true)
+	if !errors.As(err, &pe) || pe.Kind != store.ErrRejected || !reflect.DeepEqual(pe.Problems, want) {
+		t.Fatalf("撞上别人刚建的任务之后，重试应报 ProblemsError(ErrRejected)，问题是 host_has_open_task，得到 %v", err)
+	}
+	if got, err := s.GetTask(ctx, failed.ID); err != nil || !reflect.DeepEqual(got, failed) {
+		t.Fatalf("推进被拒之后任务应原样不动：得到 %+v、%v，应为 %+v", got, err, failed)
+	}
+	if es, err := s.ListEvents(ctx, failed.ID, 0, 0); err != nil || len(es) != 0 {
+		t.Fatalf("推进被拒之后不写事件，得到 %+v、%v", es, err)
+	}
+	if n := auditCount(t, s); n != audits {
+		t.Fatalf("推进被拒之后不写审计：审计从 %d 条变成了 %d 条", audits, n)
+	}
+}
+
+// 建任务给涉及的主机加写锁，给 ISO、模板版本与它引用的 hook 版本加读锁，再对锁住之后读到的最新数据重跑准入（批量建任务第
+// 2、3 步）。另开一个连接，在没提交的事务里改掉其中一样：建任务要等它提交，再按改了之后的数据报问题，一个任务都不建。不加锁
+// 的话，建任务读到的是改之前的数据，不等就建了下来，任务引用的却是已废弃的 ISO、模板或 hook，或者与主机新登记的架构不符。
+// 契约测试里的改动都在建任务之前提交，钉不住这一点。
+func Test建任务等锁住的记录提交之后再重跑准入(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		hold string                     // 在没提交的事务里执行，$1 是 key 给的值
+		key  func(f taskFixture) string // 要改的那一行的键
+		code model.Code                 // 改了之后，重跑准入报的问题
+	}{
+		{"主机改了架构", `UPDATE hosts SET arch = 'aarch64', rev = rev + 1 WHERE sn = $1`,
+			func(taskFixture) string { return "SN-1" }, "arch_mismatch"},
+		{"ISO 废弃了", `UPDATE isos SET state = 'deprecated', rev = rev + 1 WHERE id = $1`,
+			func(f taskFixture) string { return f.iso.ID }, "iso_not_ready"},
+		{"模板版本废弃了", `UPDATE template_versions SET state = 'deprecated', rev = rev + 1 WHERE template_id = $1`,
+			func(f taskFixture) string { return f.tpl.ID }, "template_not_approved"},
+		{"引用的 hook 版本废弃了", `UPDATE hook_versions SET state = 'deprecated', rev = rev + 1 WHERE hook_id = $1`,
+			func(f taskFixture) string { return f.hook.ID }, "template_blocked_by_deprecated"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dsn := newSchema(t)
+			s := openStore(t, dsn)
+			ctx := t.Context()
+			f := newTaskFixture(t, s, "SN-1", "SN-2")
+			err := writeWhileHeld(t, dsn, c.hold, c.key(f), func() error {
+				_, err := s.CreateTasks(ctx, f.tasks("SN-2", "SN-1"), store.Audit{Actor: "alice", Action: "task.create", At: 1})
+				return err
+			})
+			var be *store.BatchError
+			if !errors.As(err, &be) {
+				t.Fatalf("对方提交之后，建任务应报 BatchError，得到 %v", err)
+			}
+			var codes []model.Code
+			for _, p := range slices.Concat(be.Result.Common, be.Result.ByHost["SN-1"], be.Result.ByHost["SN-2"]) {
+				codes = append(codes, p.Code)
+			}
+			if !slices.Equal(codes, []model.Code{c.code}) {
+				t.Fatalf("重跑准入应只报 %s，得到 %v", c.code, be)
+			}
+			if p, err := s.ListTasks(ctx, store.TaskQuery{}); err != nil || len(p.Items) != 0 {
+				t.Fatalf("准入没通过时一个任务都不建，得到 %+v、%v", p.Items, err)
+			}
+		})
+	}
+}
+
+// 建任务给涉及的主机加写锁（lockHosts 的 FOR UPDATE），锁住之后再查这几台已有的未结束任务（openTasksOf），交给准入逐台报出
+// （批量建任务第 2、3 步）。另开一个连接，在没提交的事务里给批里的两台主机各写一个 pending 的任务：插入时的外键检查给这两行
+// 主机加上 FOR KEY SHARE，与它冲突的只有 FOR UPDATE。建任务要在给主机加锁时等它提交，再对两台都报 host_has_open_task，任务与
+// 审计都不写。主机的锁弱于 FOR UPDATE，或者不查已有的未结束任务、全靠 idx_tasks_open 兜底，建任务都要到插入时才撞上索引，只报
+// 得出先撞上的那一台，契约却要求 ByHost 逐台列出原因；锁换成 FOR SHARE 这种彼此不冲突的，两批同时给重叠的主机建任务、插入的
+// 顺序不同时，还会互相等死（SQLSTATE 40P01）。契约测试里只有一台主机有未结束的任务，兜底给的结果恰好与准入的相同；
+// Test建任务等锁住的记录提交之后再重跑准入 里改主机的对方持的是 FOR NO KEY UPDATE，FOR SHARE 也会等它。两处都钉不住这一点。
+func Test建任务等主机上没提交的新任务提交之后逐台报出(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	ctx := t.Context()
+	f := newTaskFixture(t, s, "SN-1", "SN-2")
+	audits := auditCount(t, s)
+	hold := `INSERT INTO tasks (id, host_sn, iso_id, template_id, template_version, state, snapshot, created_by, created_at, rev, ` +
+		`last_seq) SELECT 'held' || n, 'SN-' || n, i.id, v.template_id, v.version, 'pending', 'null', 'bob', 1, 1, 0 ` +
+		`FROM isos i, template_versions v, generate_series(1, 2) AS n WHERE i.id = $1`
+	err := writeWhileHeld(t, dsn, hold, f.iso.ID, func() error {
+		_, err := s.CreateTasks(ctx, f.tasks("SN-2", "SN-1"), store.Audit{Actor: "alice", Action: "task.create", At: 1})
+		return err
+	})
+	want := admission.BatchResult{Common: []model.Problem{}, ByHost: map[string][]model.Problem{
+		"SN-1": admission.HostSelectable(model.Host{SN: "SN-1"}, true),
+		"SN-2": admission.HostSelectable(model.Host{SN: "SN-2"}, true),
+	}}
+	var be *store.BatchError
+	if !errors.As(err, &be) || !errors.Is(err, store.ErrRejected) || !reflect.DeepEqual(be.Result, want) {
+		t.Fatalf("对方提交之后，建任务应报 BatchError，两台都报 host_has_open_task：得到 %v（%+v）", err, be)
+	}
+	p, err := s.ListTasks(ctx, store.TaskQuery{})
+	if err != nil {
+		t.Fatalf("列出任务：%v", err)
+	}
+	var ids []string
+	for _, task := range p.Items {
+		ids = append(ids, task.ID)
+	}
+	if !slices.Equal(ids, []string{"held1", "held2"}) {
+		t.Fatalf("库里应只有对方写下的两个任务，得到 %v", ids)
+	}
+	if n := auditCount(t, s); n != audits {
+		t.Fatalf("准入没通过时不写审计：审计从 %d 条变成了 %d 条", audits, n)
+	}
+}
+
+// 推进与追加事件都先给任务行加写锁（lockTask 的 FOR UPDATE），比对期望值、分配 Seq、查已有的 Key 都看锁住之后读到的数据。
+// 另开一个连接当先到的那一次：在没提交的事务里照仓储的写法推进一步，并追加一条带 Key 的事件。带着旧期望值的推进要等它提交，
+// 再报 ErrConflict（C33）；追加要等它提交，再接着它的 Seq 分配，同一个 Key 报告为 Duplicate。没有这把锁，推进读到旧的 Rev，
+// 等对方提交之后照样写入、把它覆盖掉；追加读到旧的计数，分到同一个 Seq，撞上主键。RunConcurrency 的用例要靠调度撞在一起，
+// 撞不上时钉不住这一点。
+func Test推进与追加事件等对方提交之后再比对与分配(t *testing.T) {
+	hold := `WITH u AS (UPDATE tasks SET state = 'booting', rev = rev + 1, last_seq = last_seq + 1 WHERE id = $1 RETURNING id) ` +
+		`INSERT INTO task_events (task_id, seq, at, kind, key, fields) SELECT id, 1, 1, 'task.boot', 'sig-1', 'null' FROM u`
+	for _, c := range []struct {
+		name  string
+		write func(ctx context.Context, s *Store, task model.Task) error // 在对方提交之前开始，带着对方提交之前读到的 task
+	}{
+		{"带着旧期望值推进", func(ctx context.Context, s *Store, task model.Task) error {
+			_, _, err := s.TransitionTask(ctx, task.ID, store.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskInstalling, nil)
+			if !errors.Is(err, store.ErrConflict) {
+				return fmt.Errorf("对方提交之后 Rev 已是 %d，带着 %d 推进应报 ErrConflict，得到 %v", task.Rev+1, task.Rev, err)
+			}
+			return nil
+		}},
+		{"追加事件", func(ctx context.Context, s *Store, task model.Task) error {
+			got, err := s.AppendEvents(ctx, task.ID,
+				[]store.NewEvent{{At: 1, Kind: "signal.recv", Key: "sig-1"}, {At: 1, Kind: "signal.recv", Key: "sig-2"}})
+			if want := []store.Appended{{Seq: 1, Duplicate: true}, {Seq: 2}}; err != nil || !reflect.DeepEqual(got, want) {
+				return fmt.Errorf("对方提交之后，追加应得到 %+v，得到 %+v、%v", want, got, err)
+			}
+			return nil
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dsn := newSchema(t)
+			s := openStore(t, dsn)
+			ctx := t.Context()
+			in := newTaskFixture(t, s, "SN-1").tasks("SN-1")
+			created, err := s.CreateTasks(ctx, in, store.Audit{Actor: "alice", Action: "task.create", At: 1})
+			if err != nil {
+				t.Fatalf("建任务：%v", err)
+			}
+			task := created[0]
+			if err := writeWhileHeld(t, dsn, hold, task.ID, func() error { return c.write(ctx, s, task) }); err != nil {
+				t.Fatal(err)
+			}
+			want := task
+			want.State, want.Rev = model.TaskBooting, task.Rev+1
+			if got, err := s.GetTask(ctx, task.ID); err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("库里应留着对方推进之后的 %+v，得到 %+v、%v", want, got, err)
+			}
+		})
+	}
+}
+
+// 快照存成 jsonb：jsonb 不收 NUL，encoding/json 还会把非法的 UTF-8 换成 U+FFFD，固化下来的快照（C29）就不是写进去的那份。
+// 所以写入之前先查快照里的每个串（包括 map 的键）都存得下，存不下的报 ErrInvalid，什么都不写，也不把数据库的编码错误交给
+// 调用方。snapshot.Build 用存得下的记录构建，走不到这里；契约测试没有这几例，这里补上。
+func Test快照里有存不下的文本报ErrInvalid(t *testing.T) {
+	s := openStore(t, newSchema(t))
+	ctx := t.Context()
+	f := newTaskFixture(t, s, "SN-1")
+	audits := auditCount(t, s)
+	for _, c := range []struct {
+		name string
+		mod  func(snap *model.Snapshot)
+	}{
+		{"正文含 NUL", func(snap *model.Snapshot) { snap.Template.Body = "a\x00b" }},
+		{"属性值不是 UTF-8", func(snap *model.Snapshot) { snap.Host.Attrs = map[string]string{"rack": "\xff"} }},
+		{"属性键不是 UTF-8", func(snap *model.Snapshot) { snap.Host.Attrs = map[string]string{"\xff": "A1"} }},
+		{"实例参数的取值含 NUL", func(snap *model.Snapshot) {
+			snap.Slots = []model.SnapshotSlot{{Seq: 1, Name: "分区", Instances: []model.SnapshotInstance{{HookID: "lvm", HookVersion: 1,
+				Params: map[string]model.SnapshotValue{"disk": {Type: "text", List: true, Items: []string{"sda", "a\x00"}}}}}}}
+		}},
+	} {
+		in := f.tasks("SN-1")
+		c.mod(&in[0].Snapshot)
+		if _, err := s.CreateTasks(ctx, in, store.Audit{Actor: "alice", Action: "task.create", At: 1}); !errors.Is(err, store.ErrInvalid) {
+			t.Errorf("%s：应报 ErrInvalid，得到 %v", c.name, err)
+		}
+	}
+	if p, err := s.ListTasks(ctx, store.TaskQuery{}); err != nil || len(p.Items) != 0 {
+		t.Fatalf("快照存不下时一个任务都不建，得到 %+v、%v", p.Items, err)
+	}
+	if n := auditCount(t, s); n != audits {
+		t.Fatalf("快照存不下时不写审计：审计从 %d 条变成了 %d 条", audits, n)
+	}
+}
+
+// taskFixture 是上面几个测试建任务要的记录：一个 ready 的 ISO、一个已审批的模板与它引用的 hook 版本。模板与 hook 都不经仓储
+// 置为 approved：这里只看加锁与约束，不必让内容过激活判定，建任务时重跑的准入也不看它。
+type taskFixture struct {
+	iso  model.ISO
+	tpl  model.Template
+	hook model.Hook
+}
+
+// newTaskFixture 登记 sns 这几台主机，备好 ISO、hook 与模板。
+func newTaskFixture(t *testing.T, s *Store, sns ...string) taskFixture {
+	t.Helper()
+	ctx := t.Context()
+	audit := store.Audit{Actor: "alice", Action: "fixture.setup", At: 1}
+	for _, sn := range sns {
+		if _, err := s.CreateHost(ctx, model.Host{SN: sn}, audit); err != nil {
+			t.Fatalf("登记 %s：%v", sn, err)
+		}
+	}
+	iso, err := s.CreateISO(ctx, model.ISO{Name: "Rocky", Family: "linux", Series: "rocky"}, audit)
+	if err != nil {
+		t.Fatalf("新建 ISO：%v", err)
+	}
+	iso.Version, iso.Arch, iso.State, iso.SHA256 = "9.6", "x86_64", model.ISOReady, strings.Repeat("5a", 32)
+	iso.Artifacts = map[string]string{"kernel": "rocky/9.6/x86_64/vmlinuz", "initrd": "rocky/9.6/x86_64/initrd.img"}
+	if iso, err = s.UpdateISO(ctx, iso); err != nil {
+		t.Fatalf("置为 ready：%v", err)
+	}
+	hook, err := s.CreateHook(ctx, model.Hook{Name: "LVM", Author: "alice"})
+	if err != nil {
+		t.Fatalf("新建 hook：%v", err)
+	}
+	tpl, err := s.CreateTemplate(ctx, model.Template{Name: "KS", Author: "alice", Family: "linux", Series: []catalog.Series{"rocky"},
+		Assembly: map[string][]model.Instance{"分区": {{HookID: hook.ID, HookVersion: hook.Version}}}})
+	if err != nil {
+		t.Fatalf("新建模板：%v", err)
+	}
+	for _, v := range []struct{ table, owner, id string }{
+		{"hook_versions", "hook_id", hook.ID}, {"template_versions", "template_id", tpl.ID},
+	} {
+		if err := s.db.WithContext(ctx).Exec("UPDATE "+v.table+" SET state = 'approved' WHERE "+v.owner+" = ?", v.id).Error; err != nil {
+			t.Fatalf("把 %s 置为 approved：%v", v.table, err)
+		}
+	}
+	hook.State, tpl.State = model.VersionApproved, model.VersionApproved
+	return taskFixture{iso: iso, tpl: tpl, hook: hook}
+}
+
+// tasks 是给 sns 这几台主机各建一个任务的入参。快照只填仓储要对上的几项（store.CheckNewTasks）：仓储不解释快照。
+func (f taskFixture) tasks(sns ...string) []model.Task {
+	ts := make([]model.Task, len(sns))
+	for i, sn := range sns {
+		ts[i] = model.Task{HostSN: sn, ISOID: f.iso.ID, TemplateID: f.tpl.ID, TemplateVersion: f.tpl.Version, CreatedBy: "alice",
+			CreatedAt: 1, Snapshot: model.Snapshot{Schema: model.SnapshotSchema, Host: model.SnapshotHost{SN: sn},
+				ISO: model.SnapshotISO{ID: f.iso.ID}, Template: model.SnapshotTemplate{ID: f.tpl.ID, Version: f.tpl.Version}}}
+	}
+	return ts
+}
+
+// mustFailed 给主机 sn 建一个任务，再推进到 failed：结束了的任务不占 C31 的位，重试时才回到未结束的状态。
+func (f taskFixture) mustFailed(t *testing.T, s *Store, sn string) model.Task {
+	t.Helper()
+	ctx := t.Context()
+	created, err := s.CreateTasks(ctx, f.tasks(sn), store.Audit{Actor: "alice", Action: "task.create", At: 1})
+	if err != nil {
+		t.Fatalf("给 %s 建任务：%v", sn, err)
+	}
+	failed, _, err := s.TransitionTask(ctx, created[0].ID, store.TaskExpect{State: model.TaskPending, Rev: 1}, model.TaskFailed, nil)
+	if err != nil {
+		t.Fatalf("把任务推进到 failed：%v", err)
+	}
+	return failed
+}
+
+// auditCount 是 s 的 schema 里审计的条数。
+func auditCount(t *testing.T, s *Store) int64 {
+	t.Helper()
+	var n int64
+	if err := s.db.WithContext(t.Context()).Raw(`SELECT count(*) FROM audit_log`).Row().Scan(&n); err != nil {
+		t.Fatalf("数审计：%v", err)
+	}
+	return n
 }
 
 func templateKey(tpl model.Template) model.TemplateKey {
