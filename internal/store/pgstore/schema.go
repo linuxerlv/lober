@@ -41,6 +41,12 @@ type check struct {
 	def  string
 }
 
+// versionStates 是 hook_versions 与 template_versions 的 CHECK：与 model.VersionState 认的完全相同。
+const versionStates = "CHECK (state = ANY (ARRAY['draft'::text, 'review'::text, 'approved'::text, 'deprecated'::text]))"
+
+// unapproved 是未审批（草稿或待审批）的版本，每个身份同时最多一个。
+const unapproved = "state = ANY (ARRAY['draft'::text, 'review'::text])"
+
 // tables 是本层全部表的期望结构，Open 与 schema_test 共用这一份，翻译数据库错误时也按它认约束名。计划「表结构」一节
 // 列的表，由第一个用到它的任务加进来。
 var tables = []table{
@@ -62,6 +68,54 @@ var tables = []table{
 			{"chk_isos_state", "CHECK (state = ANY (ARRAY['acquiring'::text, 'importing'::text, 'ready'::text, " +
 				"'failed'::text, 'deprecated'::text]))"},
 		},
+	},
+	{
+		// hook 的身份：名字放在身份上，各版本共用，唯一约束按名字的 key（C12），用户建的与内置的共用这个名字空间
+		name:    "hooks",
+		primary: []string{"id"},
+		indexes: []index{{name: "idx_hooks_name_key", unique: true, columns: []string{"name_key"}}},
+	},
+	{
+		// 外键是 RESTRICT：身份只在它的最后一个版本删掉时一起删（DeleteHookDraft），已审批与已废弃的版本永不删除，
+		// 它们的身份也就一直在
+		name:    "hook_versions",
+		primary: []string{"hook_id", "version"},
+		indexes: []index{{name: "idx_hook_versions_unapproved", unique: true, columns: []string{"hook_id"}, where: unapproved}},
+		foreign: []foreign{{name: "fk_hook_versions_hook", columns: []string{"hook_id"},
+			refTable: "hooks", refColumns: []string{"id"}, onDelete: "RESTRICT"}},
+		checks: []check{
+			{"chk_hook_versions_version", "CHECK (version >= 1)"},
+			{"chk_hook_versions_state", versionStates},
+			{"chk_hook_versions_rev", "CHECK (rev >= 1)"},
+		},
+	},
+	{
+		name:    "templates",
+		primary: []string{"id"},
+		indexes: []index{{name: "idx_templates_name_key", unique: true, columns: []string{"name_key"}}},
+	},
+	{
+		name:    "template_versions",
+		primary: []string{"template_id", "version"},
+		indexes: []index{{name: "idx_template_versions_unapproved", unique: true, columns: []string{"template_id"}, where: unapproved}},
+		foreign: []foreign{{name: "fk_template_versions_template", columns: []string{"template_id"},
+			refTable: "templates", refColumns: []string{"id"}, onDelete: "RESTRICT"}},
+		checks: []check{
+			{"chk_template_versions_version", "CHECK (version >= 1)"},
+			{"chk_template_versions_state", versionStates},
+			{"chk_template_versions_rev", "CHECK (rev >= 1)"},
+		},
+	},
+	{
+		// 模板的每个版本引用了哪些 hook 版本，删 hook 草稿与建任务时查它。刻意不对 hook_versions 建外键：草稿可以引用
+		// 不存在的版本，激活时才报 hook_ref_missing
+		name:    "template_hook_refs",
+		primary: []string{"template_id", "template_version", "hook_id", "hook_version"},
+		indexes: []index{{name: "idx_template_hook_refs_hook", columns: []string{"hook_id", "hook_version"}}},
+		foreign: []foreign{{
+			name: "fk_template_hook_refs_template", columns: []string{"template_id", "template_version"},
+			refTable: "template_versions", refColumns: []string{"template_id", "version"}, onDelete: "CASCADE",
+		}},
 	},
 	{
 		name:    "audit_log",

@@ -24,7 +24,11 @@ type Store struct {
 var _ store.Store = (*Store)(nil)
 
 // models 是本层的全部行类型，AutoMigrate 按它们建表；它们的表与 schema.go 的 tables 一一对应。
-var models = []any{&hostRow{}, &isoRow{}, &auditRow{}}
+var models = []any{
+	&hostRow{}, &isoRow{},
+	&hookRow{}, &hookVersionRow{}, &templateRow{}, &templateVersionRow{}, &templateHookRefRow{},
+	&auditRow{},
+}
 
 // batchSize 是一条语句最多写或查的行数：PostgreSQL 一条语句最多 65535 个参数，CSV 导入一次可能有几千台主机。
 const batchSize = 1000
@@ -161,122 +165,9 @@ func decodeCursor(cursor, list string, key ...any) error {
 	return nil
 }
 
-// 下面是还没做的方法，返回 errNotImplemented：hook 与模板由任务 8 实现，任务与事件由任务 9 实现，届时连同这一节
-// 一起删掉。
+// 下面是还没做的方法，返回 errNotImplemented：任务与事件由任务 9 实现，届时连同这一节一起删掉。
 
 var errNotImplemented = errors.New("pgstore：尚未实现")
-
-func (s *Store) CreateHook(context.Context, model.Hook) (model.Hook, error) {
-	return model.Hook{}, errNotImplemented
-}
-
-func (s *Store) SaveHookDraft(context.Context, model.Hook) (model.Hook, error) {
-	return model.Hook{}, errNotImplemented
-}
-
-func (s *Store) NewHookVersion(context.Context, string, int, string) (model.Hook, error) {
-	return model.Hook{}, errNotImplemented
-}
-
-func (s *Store) SubmitHook(context.Context, model.HookKey, int64, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) ApproveHook(context.Context, model.HookKey, int64, string, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) RejectHook(context.Context, model.HookKey, int64, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) DeprecateHook(context.Context, model.HookKey, int64, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) RenameHook(context.Context, string, string, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) DeleteHookDraft(context.Context, model.HookKey, int64) error {
-	return errNotImplemented
-}
-
-func (s *Store) GetHook(context.Context, model.HookKey) (model.Hook, error) {
-	return model.Hook{}, errNotImplemented
-}
-
-func (s *Store) GetHooks(context.Context, []model.HookKey) (map[model.HookKey]model.Hook, error) {
-	return nil, errNotImplemented
-}
-
-func (s *Store) ListHookVersions(context.Context, string) ([]model.Hook, error) {
-	return nil, errNotImplemented
-}
-
-func (s *Store) ListHooks(context.Context, store.HookQuery) (store.Page[model.Hook], error) {
-	return store.Page[model.Hook]{}, errNotImplemented
-}
-
-func (s *Store) EnsureBuiltinHook(context.Context, model.Hook) error {
-	return errNotImplemented
-}
-
-func (s *Store) CreateTemplate(context.Context, model.Template) (model.Template, error) {
-	return model.Template{}, errNotImplemented
-}
-
-func (s *Store) SaveTemplateDraft(context.Context, model.Template) (model.Template, error) {
-	return model.Template{}, errNotImplemented
-}
-
-func (s *Store) NewTemplateVersion(context.Context, string, int, string) (model.Template, error) {
-	return model.Template{}, errNotImplemented
-}
-
-func (s *Store) DeriveTemplate(context.Context, model.TemplateKey, string, string) (model.Template, error) {
-	return model.Template{}, errNotImplemented
-}
-
-func (s *Store) SubmitTemplate(context.Context, model.TemplateKey, int64, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) ApproveTemplate(context.Context, model.TemplateKey, int64, string, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) RejectTemplate(context.Context, model.TemplateKey, int64, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) DeprecateTemplate(context.Context, model.TemplateKey, int64, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) RenameTemplate(context.Context, string, string, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) DeleteTemplateDraft(context.Context, model.TemplateKey, int64) error {
-	return errNotImplemented
-}
-
-func (s *Store) GetTemplate(context.Context, model.TemplateKey) (model.Template, error) {
-	return model.Template{}, errNotImplemented
-}
-
-func (s *Store) ListTemplateVersions(context.Context, string) ([]model.Template, error) {
-	return nil, errNotImplemented
-}
-
-func (s *Store) ListTemplates(context.Context, store.TemplateQuery) (store.Page[model.Template], error) {
-	return store.Page[model.Template]{}, errNotImplemented
-}
-
-func (s *Store) EnsureBuiltinTemplate(context.Context, model.Template) error {
-	return errNotImplemented
-}
 
 func (s *Store) CreateTasks(context.Context, []model.Task, store.Audit) ([]model.Task, error) {
 	return nil, errNotImplemented

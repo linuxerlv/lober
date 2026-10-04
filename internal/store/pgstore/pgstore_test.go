@@ -18,6 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
 	"github.com/lober/lober/internal/store/storetest"
@@ -185,6 +186,10 @@ func Test主机契约(t *testing.T) { storetest.RunHosts(t, harness{}) }
 func TestISO契约(t *testing.T) { storetest.RunISOs(t, harness{}) }
 
 func Test审计契约(t *testing.T) { storetest.RunAudit(t, harness{}) }
+
+func TestHook契约(t *testing.T) { storetest.RunHooks(t, harness{}) }
+
+func Test模板契约(t *testing.T) { storetest.RunTemplates(t, harness{}) }
 
 // 失败注入只在测试的 schema 里：Open 建的表上，FaultActor 只是一个普通的操作者。
 func TestOpen不注入失败(t *testing.T) {
@@ -459,6 +464,275 @@ func Test带着旧Rev的写入等对方提交之后报冲突(t *testing.T) {
 			}
 		})
 	}
+}
+
+// hook 与模板版本的乐观锁同样靠先对版本行加写锁，道理同上一个测试：另开一个连接当先到的那一次，在没提交的事务里改
+// 这个版本、让 Rev 加 1。带着旧 Rev 的保存、状态转换与删除都要等它提交，再报 ErrConflict，库里留着它写下的内容。
+func Test带着旧Rev写hook与模板版本的等对方提交之后报冲突(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	audit := func(action string) store.Audit { return store.Audit{Actor: "alice", Action: action, At: 1} }
+	// setState 不经仓储把版本 1 置为 state：这里只看加锁与 Rev，不必让内容过激活判定
+	setState := func(t *testing.T, table, owner, id string, state model.VersionState) {
+		t.Helper()
+		if err := s.db.WithContext(t.Context()).Exec("UPDATE "+table+" SET state = ? WHERE "+owner+" = ?", string(state), id).Error; err != nil {
+			t.Fatalf("置为 %s：%v", state, err)
+		}
+	}
+
+	for i, c := range []struct {
+		name  string
+		state model.VersionState // 写入之前版本所处的状态，这一步写入本来合规矩
+		write func(ctx context.Context, h model.Hook) error
+	}{
+		{"SaveHookDraft", model.VersionDraft, func(ctx context.Context, h model.Hook) error {
+			h.Description = "mine"
+			_, err := s.SaveHookDraft(ctx, h)
+			return err
+		}},
+		{"SubmitHook", model.VersionDraft, func(ctx context.Context, h model.Hook) error {
+			return s.SubmitHook(ctx, h.Key(), h.Rev, audit("hook.submit"))
+		}},
+		{"ApproveHook", model.VersionReview, func(ctx context.Context, h model.Hook) error {
+			return s.ApproveHook(ctx, h.Key(), h.Rev, "bob", audit("hook.approve"))
+		}},
+		{"RejectHook", model.VersionReview, func(ctx context.Context, h model.Hook) error {
+			return s.RejectHook(ctx, h.Key(), h.Rev, audit("hook.reject"))
+		}},
+		{"DeprecateHook", model.VersionApproved, func(ctx context.Context, h model.Hook) error {
+			return s.DeprecateHook(ctx, h.Key(), h.Rev, audit("hook.deprecate"))
+		}},
+		{"DeleteHookDraft", model.VersionDraft, func(ctx context.Context, h model.Hook) error {
+			return s.DeleteHookDraft(ctx, h.Key(), h.Rev)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := t.Context()
+			h, err := s.CreateHook(ctx, model.Hook{Name: fmt.Sprintf("Hook-%d", i), Author: "alice"})
+			if err != nil {
+				t.Fatalf("新建 hook：%v", err)
+			}
+			setState(t, "hook_versions", "hook_id", h.ID, c.state)
+			h.State = c.state
+			err = writeWhileHeld(t, dsn, `UPDATE hook_versions SET description = 'held', rev = rev + 1 WHERE hook_id = $1`, h.ID,
+				func() error { return c.write(ctx, h) })
+			if !errors.Is(err, store.ErrConflict) {
+				t.Fatalf("对方提交之后 Rev 已是 %d，带着 %d 写入应报 ErrConflict，得到 %v", h.Rev+1, h.Rev, err)
+			}
+			want := h
+			want.Description, want.Rev = "held", h.Rev+1
+			if got, err := s.GetHook(ctx, h.Key()); err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("库里应留着对方写下的 %+v，得到 %+v、%v", want, got, err)
+			}
+		})
+	}
+
+	for i, c := range []struct {
+		name  string
+		state model.VersionState
+		write func(ctx context.Context, tpl model.Template) error
+	}{
+		{"SaveTemplateDraft", model.VersionDraft, func(ctx context.Context, tpl model.Template) error {
+			tpl.Body = "mine"
+			_, err := s.SaveTemplateDraft(ctx, tpl)
+			return err
+		}},
+		{"SubmitTemplate", model.VersionDraft, func(ctx context.Context, tpl model.Template) error {
+			return s.SubmitTemplate(ctx, templateKey(tpl), tpl.Rev, audit("template.submit"))
+		}},
+		{"ApproveTemplate", model.VersionReview, func(ctx context.Context, tpl model.Template) error {
+			return s.ApproveTemplate(ctx, templateKey(tpl), tpl.Rev, "bob", audit("template.approve"))
+		}},
+		{"RejectTemplate", model.VersionReview, func(ctx context.Context, tpl model.Template) error {
+			return s.RejectTemplate(ctx, templateKey(tpl), tpl.Rev, audit("template.reject"))
+		}},
+		{"DeprecateTemplate", model.VersionApproved, func(ctx context.Context, tpl model.Template) error {
+			return s.DeprecateTemplate(ctx, templateKey(tpl), tpl.Rev, audit("template.deprecate"))
+		}},
+		{"DeleteTemplateDraft", model.VersionDraft, func(ctx context.Context, tpl model.Template) error {
+			return s.DeleteTemplateDraft(ctx, templateKey(tpl), tpl.Rev)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := t.Context()
+			tpl, err := s.CreateTemplate(ctx, model.Template{Name: fmt.Sprintf("Template-%d", i), Author: "alice"})
+			if err != nil {
+				t.Fatalf("新建模板：%v", err)
+			}
+			setState(t, "template_versions", "template_id", tpl.ID, c.state)
+			tpl.State = c.state
+			err = writeWhileHeld(t, dsn, `UPDATE template_versions SET body = 'held', rev = rev + 1 WHERE template_id = $1`, tpl.ID,
+				func() error { return c.write(ctx, tpl) })
+			if !errors.Is(err, store.ErrConflict) {
+				t.Fatalf("对方提交之后 Rev 已是 %d，带着 %d 写入应报 ErrConflict，得到 %v", tpl.Rev+1, tpl.Rev, err)
+			}
+			want := tpl
+			want.Body, want.Rev = "held", tpl.Rev+1
+			if got, err := s.GetTemplate(ctx, templateKey(tpl)); err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("库里应留着对方写下的 %+v，得到 %+v、%v", want, got, err)
+			}
+		})
+	}
+}
+
+// 开新版本先给身份行加写锁（lockForNewVersion 经 lockIdent 的 FOR UPDATE）：同一个身份同时开新版本的两次因此排队，后一次
+// 看得到前一次开的草稿，报 ErrConflict（已有未审批的版本）。没有这把锁，两次都看不到对方还没提交的草稿，分到同一个版本号，
+// 后一次等前一次提交之后撞上 hook_versions 的主键，报出没翻译的 23505：部分唯一索引兜不住，主键先撞。契约测试里的开新版本
+// 都是串行的，钉不住这一点。另开一个连接当先到的那一次：在没提交的事务里照 NewHookVersion 的写法记下分配的版本号 2、写下
+// 版本 2 的草稿。带着同一个来源版本再开，要等它提交，再报 ErrConflict，库里只有它开的那个版本。
+func Test同时开新版本等对方提交之后报冲突(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	ctx := t.Context()
+	h, err := s.CreateHook(ctx, model.Hook{Name: "LVM", Author: "alice"})
+	if err != nil {
+		t.Fatalf("新建 hook：%v", err)
+	}
+	// 不经仓储把版本 1 置为 approved，好在它之上开新版本：这里只看加锁，不必让内容过激活判定
+	if err := s.db.WithContext(ctx).Exec(`UPDATE hook_versions SET state = 'approved' WHERE hook_id = ?`, h.ID).Error; err != nil {
+		t.Fatalf("置为 approved：%v", err)
+	}
+	hold := `WITH u AS (UPDATE hooks SET last_version = 2 WHERE id = $1 RETURNING id) ` +
+		`INSERT INTO hook_versions (hook_id, version, description, state, author, approver, builtin, params, timeout_sec, ` +
+		`required, impls, rev) SELECT id, 2, '', 'draft', 'carol', '', false, 'null', 0, false, 'null', 1 FROM u`
+	err = writeWhileHeld(t, dsn, hold, h.ID, func() error {
+		_, err := s.NewHookVersion(ctx, h.ID, 1, "dave")
+		return err
+	})
+	if !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("对方开的版本 2 提交之后还没审批，再开新版本应报 ErrConflict，得到 %v", err)
+	}
+	vs, err := s.ListHookVersions(ctx, h.ID)
+	if err != nil {
+		t.Fatalf("列出版本：%v", err)
+	}
+	if len(vs) != 2 || vs[1].Version != 2 || vs[1].Author != "carol" {
+		t.Fatalf("库里应只有版本 1 与对方开的版本 2，得到 %+v", vs)
+	}
+}
+
+// 审批模板时，对它引用的 hook 版本加读锁，在锁住之后读到的最新数据上重跑判定（C26）。另开一个连接，在没提交的事务里
+// 废弃模板引用的 hook 版本：审批要等它提交，再报 hook_ref_deprecated，模板仍待审批。不加读锁的话，审批读到的是废弃
+// 之前的版本，不等就批了下来，批准的模板引用的却是一个已废弃的 hook。契约测试里的废弃都在审批之前提交，钉不住这一点。
+func Test审批模板等引用的hook版本提交之后再判定(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	ctx := t.Context()
+	audit := func(action string) store.Audit { return store.Audit{Actor: "alice", Action: action, At: 1} }
+	h, err := s.CreateHook(ctx, model.Hook{Name: "LVM", Author: "alice", Impls: []model.Impl{{
+		Family: "linux", Series: []catalog.Series{"rocky"}, Kind: model.ImplFragment, Body: "autopart --type=lvm\n"}}})
+	if err != nil {
+		t.Fatalf("新建 hook：%v", err)
+	}
+	if err := s.SubmitHook(ctx, h.Key(), h.Rev, audit("hook.submit")); err != nil {
+		t.Fatalf("提交 hook：%v", err)
+	}
+	if err := s.ApproveHook(ctx, h.Key(), h.Rev+1, "bob", audit("hook.approve")); err != nil {
+		t.Fatalf("审批 hook：%v", err)
+	}
+	tpl, err := s.CreateTemplate(ctx, model.Template{
+		Name: "KS", Author: "alice", Family: "linux", Series: []catalog.Series{"rocky"},
+		Body:     "text\n{{lober:syslog}}\n{{slot:分区}}\n%post\n{{lober:firstboot}}\n{{lober:cleanup}}\n%end\n",
+		Assembly: map[string][]model.Instance{"分区": {{HookID: h.ID, HookVersion: 1}}},
+	})
+	if err != nil {
+		t.Fatalf("新建模板：%v", err)
+	}
+	if err := s.SubmitTemplate(ctx, templateKey(tpl), tpl.Rev, audit("template.submit")); err != nil {
+		t.Fatalf("提交模板：%v", err)
+	}
+	if tpl, err = s.GetTemplate(ctx, templateKey(tpl)); err != nil {
+		t.Fatalf("读模板：%v", err)
+	}
+
+	approve := func() error {
+		return s.ApproveTemplate(ctx, templateKey(tpl), tpl.Rev, "bob", audit("template.approve"))
+	}
+	err = writeWhileHeld(t, dsn, `UPDATE hook_versions SET state = 'deprecated', rev = rev + 1 WHERE hook_id = $1`, h.ID, approve)
+	var pe *store.ProblemsError
+	if !errors.As(err, &pe) || pe.Kind != store.ErrRejected || len(pe.Problems) != 1 || pe.Problems[0].Code != "hook_ref_deprecated" {
+		t.Fatalf("hook 的废弃提交之后，审批应报 ProblemsError(ErrRejected)，问题是 hook_ref_deprecated，得到 %v", err)
+	}
+	if got, err := s.GetTemplate(ctx, templateKey(tpl)); err != nil || !reflect.DeepEqual(got, tpl) {
+		t.Fatalf("审批被拒之后模板应原样不动：得到 %+v、%v，应为 %+v", got, err, tpl)
+	}
+}
+
+// 名字的唯一索引是兜底：同时用同一个名字新建的两次写入，事务里谁都看不到对方还没提交的身份。另开一个连接，在没提交的
+// 事务里占住一个名字：用它新建的要等对方提交，再撞上 idx_hooks_name_key，在事务外查出对方，照样报 DuplicateError，
+// 自己什么都没写下。契约测试里的撞名都是串行的，走不到「等对方提交」这一步。
+func Test同时占用同一个名字由唯一索引兜底报出对方(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	ctx := t.Context()
+	err := writeWhileHeld(t, dsn, `INSERT INTO hooks (id, name, name_key, builtin, last_version) VALUES ($1, 'Same', 'same', false, 1)`,
+		"held", func() error {
+			_, err := s.CreateHook(ctx, model.Hook{Name: "SAME", Author: "alice"})
+			return err
+		})
+	var de *store.DuplicateError
+	if !errors.As(err, &de) || de.Field != "name" || de.Existing != "held" {
+		t.Fatalf("撞上对方已提交的名字，应报 DuplicateError{name, held}，得到 %v", err)
+	}
+	var idents, versions int64
+	if err := s.db.WithContext(ctx).Raw(`SELECT (SELECT count(*) FROM hooks), (SELECT count(*) FROM hook_versions)`).
+		Row().Scan(&idents, &versions); err != nil {
+		t.Fatalf("数行数：%v", err)
+	}
+	if idents != 1 || versions != 0 {
+		t.Fatalf("库里应只有对方占名字的那一个身份，得到 %d 个身份、%d 个版本", idents, versions)
+	}
+}
+
+// 草稿可以引用不存在的 hook 版本（激活时才报 hook_ref_missing），引用的 ID 只要是可存文本，再长也存得下（spec §3 总则：
+// 能存成 UTF-8 文本的草稿都能存），与内存实现一致。template_hook_refs 的主键与 (hook_id, hook_version) 的索引都带着
+// hook_id，btree 索引的一行最多两千七百来个字节，压不下去的长 ID 写进去就超了（SQLSTATE 54000）。契约测试里的 ID
+// 都短，钉不住这一点。随机的小写字母压不下去；种子固定，每次跑的都一样。
+func Test模板草稿引用很长的hookID照样存得下(t *testing.T) {
+	s := openStore(t, newSchema(t))
+	r := rand.New(rand.NewPCG(1, 2))
+	longID := func() string {
+		b := make([]byte, 3000)
+		for i := range b {
+			b[i] = byte('a' + r.IntN(26))
+		}
+		return string(b)
+	}
+	// readBack 查返回的版本带着写进去的装配表，读回来的与返回的相同。ID 太长，不把装配表打出来
+	readBack := func(t *testing.T, got model.Template, asm map[string][]model.Instance) {
+		t.Helper()
+		if !reflect.DeepEqual(got.Assembly, asm) {
+			t.Fatal("返回的装配表与写进去的不同")
+		}
+		if again, err := s.GetTemplate(t.Context(), templateKey(got)); err != nil || !reflect.DeepEqual(again, got) {
+			t.Fatalf("读回来的与写进去的不同（读的错误：%v）", err)
+		}
+	}
+
+	t.Run("新建", func(t *testing.T) {
+		asm := map[string][]model.Instance{"分区": {{HookID: longID(), HookVersion: 1}}}
+		tpl, err := s.CreateTemplate(t.Context(), model.Template{Name: "KS-1", Author: "alice", Assembly: asm})
+		if err != nil {
+			t.Fatalf("新建引用长 ID 的模板草稿应能存下，得到 %v", err)
+		}
+		readBack(t, tpl, asm)
+	})
+	t.Run("保存", func(t *testing.T) {
+		tpl, err := s.CreateTemplate(t.Context(), model.Template{Name: "KS-2", Author: "alice"})
+		if err != nil {
+			t.Fatalf("新建模板：%v", err)
+		}
+		tpl.Assembly = map[string][]model.Instance{"分区": {{HookID: longID(), HookVersion: 1}}}
+		saved, err := s.SaveTemplateDraft(t.Context(), tpl)
+		if err != nil {
+			t.Fatalf("保存引用长 ID 的模板草稿应能存下，得到 %v", err)
+		}
+		readBack(t, saved, tpl.Assembly)
+	})
+}
+
+func templateKey(tpl model.Template) model.TemplateKey {
+	return model.TemplateKey{ID: tpl.ID, Version: tpl.Version}
 }
 
 // connect 不经仓储，另开一个连到 dsn 的连接，测试结束时关闭；连接上没提交的事务随之回滚。

@@ -145,7 +145,8 @@ func Test多出来的索引与约束也算不一致(t *testing.T) {
 		[]string{"DROP INDEX idx_hosts_arch", "ALTER TABLE hosts DROP CONSTRAINT chk_hosts_sn"})
 }
 
-// 本任务的三张表没有外键（任务 8、9 的表才有），这里用两张临时的表查外键的比对：列、被引用的表与列、删除时的动作。
+// 外键比对的几种偏差（列、被引用的表与列、删除时的动作）用几张临时的表造：被引用的表要能换成一张同构的，才查得出比的
+// 是被引用的表本身。
 func Test外键缺了或者变了被查出来(t *testing.T) {
 	s := openStore(t, newSchema(t))
 	execAll(t, s,
@@ -197,6 +198,61 @@ func Test只看当前schema(t *testing.T) {
 		"isos chk_isos_state", "audit_log idx_audit_log_at")
 }
 
+// 「每个身份同时最多一个未审批的版本」靠的是部分唯一索引。它被改成全表唯一时，一个身份就只能有一个版本：版本 1 审批
+// 之后，再也开不了新版本。同名的索引已经存在，AutoMigrate 不会改它。
+func Test部分唯一索引改成全表唯一被查出来并拒绝启动(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	execAll(t, s, `DROP INDEX idx_hook_versions_unapproved`,
+		`CREATE UNIQUE INDEX idx_hook_versions_unapproved ON hook_versions (hook_id)`)
+	wantMismatches(t, mismatchesOf(t, s, tables), "hook_versions idx_hook_versions_unapproved")
+	wantRefused(t, dsn, []string{"idx_hook_versions_unapproved", "WHERE " + unapproved},
+		[]string{"DROP INDEX idx_hook_versions_unapproved"})
+}
+
+// 删模板草稿时，它记着的 hook 引用要随它一起删掉（CASCADE）。外键的删除动作被改成 RESTRICT，草稿就删不掉了。
+func Test模板引用的外键改了删除动作被查出来并拒绝启动(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	execAll(t, s, `ALTER TABLE template_hook_refs DROP CONSTRAINT fk_template_hook_refs_template`,
+		`ALTER TABLE template_hook_refs ADD CONSTRAINT fk_template_hook_refs_template FOREIGN KEY (template_id, template_version)
+			REFERENCES template_versions (template_id, version) ON DELETE RESTRICT`)
+	wantMismatches(t, mismatchesOf(t, s, tables), "template_hook_refs fk_template_hook_refs_template")
+	wantRefused(t, dsn, []string{"fk_template_hook_refs_template", "ON DELETE CASCADE"},
+		[]string{"ALTER TABLE template_hook_refs DROP CONSTRAINT fk_template_hook_refs_template"})
+}
+
+// 版本表的 CHECK 收下的状态要与 model 认的完全相同（VersionState.Valid 的注释），理由同 ISO 的状态。
+func Test版本状态的CHECK与model一致(t *testing.T) {
+	s := openStore(t, newSchema(t))
+	execAll(t, s, `INSERT INTO hooks (id, name, name_key, builtin, last_version) VALUES ('h', 'H', 'h', false, 1)`,
+		`INSERT INTO templates (id, name, name_key, builtin, last_version) VALUES ('t', 'T', 't', false, 1)`)
+	candidates := []model.VersionState{model.VersionDraft, model.VersionReview, model.VersionApproved,
+		model.VersionDeprecated, "", "Approved", "rejected", "draft "}
+	for _, c := range []struct{ chk, insert, remove string }{
+		{"chk_hook_versions_state", `INSERT INTO hook_versions (hook_id, version, description, state, author, approver,
+			builtin, params, timeout_sec, required, impls, rev) VALUES ('h', 1, '', ?, '', '', false, 'null', 0, false, 'null', 1)`,
+			`DELETE FROM hook_versions`},
+		{"chk_template_versions_state", `INSERT INTO template_versions (template_id, version, state, author, approver,
+			builtin, derived_from, family, series, body, params, bindings, assembly, rev)
+			VALUES ('t', 1, ?, '', '', false, 'null', '', 'null', '', 'null', 'null', 'null', 1)`,
+			`DELETE FROM template_versions`},
+	} {
+		for _, state := range candidates {
+			err := s.db.WithContext(t.Context()).Exec(c.insert, string(state)).Error
+			var pe *pgconn.PgError
+			rejected := errors.As(err, &pe) && pe.Code == "23514" && pe.ConstraintName == c.chk
+			switch {
+			case err != nil && !rejected:
+				t.Fatalf("%s 写入状态 %q：%v", c.chk, state, err)
+			case rejected == state.Valid():
+				t.Errorf("%s 状态 %q：model 认不认是 %v，CHECK 拒不拒是 %v", c.chk, state, state.Valid(), rejected)
+			}
+			execAll(t, s, c.remove) // 写进去的删掉：同一个身份同时只能有一个未审批的版本
+		}
+	}
+}
+
 // isos 的 CHECK 收下的状态要与 model 认的完全相同（ISOState.Valid 的注释）：CHECK 少了一个，model 认的状态写不进库；
 // 多了一个，坏数据就有了落脚处。
 func TestISO状态的CHECK与model一致(t *testing.T) {
@@ -237,11 +293,6 @@ func Test唯一约束的翻译表与期望值一致(t *testing.T) {
 }
 
 func Test数据库错误的翻译(t *testing.T) {
-	// 本任务的表没有外键，借一份带外键的期望值查 23503 的翻译。它换掉了包级的 tables，不能与别的测试并行
-	old := tables
-	tables = append(slices.Clone(tables), table{name: "probe_child", foreign: []foreign{{name: "fk_probe_child_parent"}}})
-	t.Cleanup(func() { tables = old })
-
 	pg := func(code, constraint string) error {
 		return fmt.Errorf("包了一层：%w", &pgconn.PgError{Code: code, ConstraintName: constraint})
 	}
@@ -256,10 +307,12 @@ func Test数据库错误的翻译(t *testing.T) {
 	}{
 		{"主键撞了", pg("23505", "hosts_pkey"), false, holder, store.ErrDuplicate, "sn"},
 		{"SHA256 撞了", pg("23505", "idx_isos_sha256"), false, holder, store.ErrDuplicate, "sha256"},
+		{"hook 的名字撞了", pg("23505", "idx_hooks_name_key"), false, holder, store.ErrDuplicate, "name"},
+		{"模板的名字撞了", pg("23505", "idx_templates_name_key"), false, holder, store.ErrDuplicate, "name"},
 		{"查不到已有的那一个，原样返回", pg("23505", "idx_isos_sha256"), false, func(string) string { return "" }, nil, ""},
 		{"认不出的唯一约束原样返回", pg("23505", "isos_pkey"), false, holder, nil, ""},
-		{"删除时外键报 ErrReferenced", pg("23503", "fk_probe_child_parent"), true, nil, store.ErrReferenced, ""},
-		{"写入时外键报 ErrNotFound", pg("23503", "fk_probe_child_parent"), false, nil, store.ErrNotFound, ""},
+		{"删除时外键报 ErrReferenced", pg("23503", "fk_hook_versions_hook"), true, nil, store.ErrReferenced, ""},
+		{"写入时外键报 ErrNotFound", pg("23503", "fk_template_hook_refs_template"), false, nil, store.ErrNotFound, ""},
 		{"认不出的外键原样返回", pg("23503", "fk_nobody"), true, nil, nil, ""},
 		{"CHECK 报 ErrInvalid", pg("23514", "chk_isos_state"), false, nil, store.ErrInvalid, ""},
 		{"认不出的 CHECK 原样返回", pg("23514", "chk_nobody"), false, nil, nil, ""},

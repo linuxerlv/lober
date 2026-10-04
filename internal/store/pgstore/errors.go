@@ -19,8 +19,10 @@ const (
 // duplicateFields 是撞上时翻成 DuplicateError 的唯一约束（主键或唯一索引），值是 DuplicateError.Field。名字要与
 // schema.go 的期望值一致，由 Test唯一约束的翻译表与期望值一致 守着。
 var duplicateFields = map[string]string{
-	"hosts_pkey":      "sn",
-	"idx_isos_sha256": "sha256",
+	"hosts_pkey":             "sn",
+	"idx_isos_sha256":        "sha256",
+	"idx_hooks_name_key":     "name",
+	"idx_templates_name_key": "name",
 }
 
 // translate 把一次写入的数据库错误翻成契约的错误。只翻认得的约束，认不出的原样返回，不猜：
