@@ -32,14 +32,22 @@ var _ store.Store = (*Store)(nil)
 
 // data 是仓储的全部记录。
 type data struct {
-	hosts  map[string]model.Host // 键是 SN
-	isos   map[string]model.ISO  // 键是 ID
-	audits []store.AuditEntry    // 只追加，按 ID 升序；ID 就是下标加 1
+	hosts    map[string]model.Host            // 键是 SN
+	isos     map[string]model.ISO             // 键是 ID
+	hooks    map[string]ident                 // hook 的身份，键是 ID
+	hookVers map[model.HookKey]model.Hook     // hook 的版本；名字只在身份上，这里的 Name 为空
+	tpls     map[string]ident                 // 模板的身份，键是 ID
+	tplVers  map[model.TemplateKey]tplVersion // 模板的版本，连同它引用的 hook 版本
+	audits   []store.AuditEntry               // 只追加，按 ID 升序；ID 就是下标加 1
 }
 
 // New 返回一个空的内存仓储。
 func New() *Store {
-	return &Store{d: &data{hosts: map[string]model.Host{}, isos: map[string]model.ISO{}}}
+	return &Store{d: &data{
+		hosts: map[string]model.Host{}, isos: map[string]model.ISO{},
+		hooks: map[string]ident{}, hookVers: map[model.HookKey]model.Hook{},
+		tpls: map[string]ident{}, tplVers: map[model.TemplateKey]tplVersion{},
+	}}
 }
 
 // Close 见 store.Store。内存仓储没有要释放的资源。
@@ -47,7 +55,12 @@ func (s *Store) Close() error { return nil }
 
 // clone 是写操作的暂存：各张表浅拷贝一份。审计截掉多余的容量，暂存里追加时就另起一块，不会写进已提交的那块。
 func (d *data) clone() *data {
-	return &data{hosts: maps.Clone(d.hosts), isos: maps.Clone(d.isos), audits: slices.Clip(d.audits)}
+	return &data{
+		hosts: maps.Clone(d.hosts), isos: maps.Clone(d.isos),
+		hooks: maps.Clone(d.hooks), hookVers: maps.Clone(d.hookVers),
+		tpls: maps.Clone(d.tpls), tplVers: maps.Clone(d.tplVers),
+		audits: slices.Clip(d.audits),
+	}
 }
 
 // tx 是一次写操作的暂存。
@@ -140,122 +153,9 @@ func staleRev(what string, have, got int64) error {
 	return errorf(store.ErrConflict, "%s 现在的 Rev 是 %d，收到的是 %d：重读之后再判断", what, have, got)
 }
 
-// 下面是还没做的方法，返回 errNotImplemented：hook 与模板由任务 5 实现，任务与事件由任务 6 实现，届时连同这一节
-// 一起删掉。
+// 下面是还没做的方法，返回 errNotImplemented：任务与事件由任务 6 实现，届时连同这一节一起删掉。
 
 var errNotImplemented = errors.New("memstore：尚未实现")
-
-func (s *Store) CreateHook(context.Context, model.Hook) (model.Hook, error) {
-	return model.Hook{}, errNotImplemented
-}
-
-func (s *Store) SaveHookDraft(context.Context, model.Hook) (model.Hook, error) {
-	return model.Hook{}, errNotImplemented
-}
-
-func (s *Store) NewHookVersion(context.Context, string, int, string) (model.Hook, error) {
-	return model.Hook{}, errNotImplemented
-}
-
-func (s *Store) SubmitHook(context.Context, model.HookKey, int64, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) ApproveHook(context.Context, model.HookKey, int64, string, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) RejectHook(context.Context, model.HookKey, int64, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) DeprecateHook(context.Context, model.HookKey, int64, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) RenameHook(context.Context, string, string, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) DeleteHookDraft(context.Context, model.HookKey, int64) error {
-	return errNotImplemented
-}
-
-func (s *Store) GetHook(context.Context, model.HookKey) (model.Hook, error) {
-	return model.Hook{}, errNotImplemented
-}
-
-func (s *Store) GetHooks(context.Context, []model.HookKey) (map[model.HookKey]model.Hook, error) {
-	return nil, errNotImplemented
-}
-
-func (s *Store) ListHookVersions(context.Context, string) ([]model.Hook, error) {
-	return nil, errNotImplemented
-}
-
-func (s *Store) ListHooks(context.Context, store.HookQuery) (store.Page[model.Hook], error) {
-	return store.Page[model.Hook]{}, errNotImplemented
-}
-
-func (s *Store) EnsureBuiltinHook(context.Context, model.Hook) error {
-	return errNotImplemented
-}
-
-func (s *Store) CreateTemplate(context.Context, model.Template) (model.Template, error) {
-	return model.Template{}, errNotImplemented
-}
-
-func (s *Store) SaveTemplateDraft(context.Context, model.Template) (model.Template, error) {
-	return model.Template{}, errNotImplemented
-}
-
-func (s *Store) NewTemplateVersion(context.Context, string, int, string) (model.Template, error) {
-	return model.Template{}, errNotImplemented
-}
-
-func (s *Store) DeriveTemplate(context.Context, model.TemplateKey, string, string) (model.Template, error) {
-	return model.Template{}, errNotImplemented
-}
-
-func (s *Store) SubmitTemplate(context.Context, model.TemplateKey, int64, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) ApproveTemplate(context.Context, model.TemplateKey, int64, string, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) RejectTemplate(context.Context, model.TemplateKey, int64, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) DeprecateTemplate(context.Context, model.TemplateKey, int64, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) RenameTemplate(context.Context, string, string, store.Audit) error {
-	return errNotImplemented
-}
-
-func (s *Store) DeleteTemplateDraft(context.Context, model.TemplateKey, int64) error {
-	return errNotImplemented
-}
-
-func (s *Store) GetTemplate(context.Context, model.TemplateKey) (model.Template, error) {
-	return model.Template{}, errNotImplemented
-}
-
-func (s *Store) ListTemplateVersions(context.Context, string) ([]model.Template, error) {
-	return nil, errNotImplemented
-}
-
-func (s *Store) ListTemplates(context.Context, store.TemplateQuery) (store.Page[model.Template], error) {
-	return store.Page[model.Template]{}, errNotImplemented
-}
-
-func (s *Store) EnsureBuiltinTemplate(context.Context, model.Template) error {
-	return errNotImplemented
-}
 
 func (s *Store) CreateTasks(context.Context, []model.Task, store.Audit) ([]model.Task, error) {
 	return nil, errNotImplemented

@@ -37,6 +37,8 @@ func RunAll(t *testing.T, h Harness) {
 	t.Run("主机", func(t *testing.T) { RunHosts(t, h) })
 	t.Run("ISO", func(t *testing.T) { RunISOs(t, h) })
 	t.Run("审计", func(t *testing.T) { RunAudit(t, h) })
+	t.Run("hook", func(t *testing.T) { RunHooks(t, h) })
+	t.Run("模板", func(t *testing.T) { RunTemplates(t, h) })
 }
 
 // testCase 是一个用例，跑在一个全新的空仓储上。
