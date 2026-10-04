@@ -22,15 +22,8 @@ func (harness) Open(t *testing.T) store.Store {
 	return s
 }
 
-func Test主机契约(t *testing.T) { storetest.RunHosts(t, harness{}) }
-
-func TestISO契约(t *testing.T) { storetest.RunISOs(t, harness{}) }
-
-func Test审计契约(t *testing.T) { storetest.RunAudit(t, harness{}) }
-
-func TestHook契约(t *testing.T) { storetest.RunHooks(t, harness{}) }
-
-func Test模板契约(t *testing.T) { storetest.RunTemplates(t, harness{}) }
+// 内存实现实现了完整的契约，跑全部分组。
+func Test契约(t *testing.T) { storetest.RunAll(t, harness{}) }
 
 // 失败注入只在测试里打开：New 构造的仓储，FaultActor 只是一个普通的操作者。
 func TestNew不注入失败(t *testing.T) {

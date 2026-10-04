@@ -6,7 +6,6 @@
 package memstore
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -38,7 +37,10 @@ type data struct {
 	hookVers map[model.HookKey]model.Hook     // hook 的版本；名字只在身份上，这里的 Name 为空
 	tpls     map[string]ident                 // 模板的身份，键是 ID
 	tplVers  map[model.TemplateKey]tplVersion // 模板的版本，连同它引用的 hook 版本
-	audits   []store.AuditEntry               // 只追加，按 ID 升序；ID 就是下标加 1
+	tasks    map[string]model.Task            // 键是 ID
+	// events 的键是任务 ID，值按 Seq 升序，Seq 就是下标加 1。只追加：追加时另起一块，不写进已提交的那块（appendEvents）。
+	events map[string][]store.Event
+	audits []store.AuditEntry // 只追加，按 ID 升序；ID 就是下标加 1
 }
 
 // New 返回一个空的内存仓储。
@@ -47,6 +49,7 @@ func New() *Store {
 		hosts: map[string]model.Host{}, isos: map[string]model.ISO{},
 		hooks: map[string]ident{}, hookVers: map[model.HookKey]model.Hook{},
 		tpls: map[string]ident{}, tplVers: map[model.TemplateKey]tplVersion{},
+		tasks: map[string]model.Task{}, events: map[string][]store.Event{},
 	}}
 }
 
@@ -59,6 +62,7 @@ func (d *data) clone() *data {
 		hosts: maps.Clone(d.hosts), isos: maps.Clone(d.isos),
 		hooks: maps.Clone(d.hooks), hookVers: maps.Clone(d.hookVers),
 		tpls: maps.Clone(d.tpls), tplVers: maps.Clone(d.tplVers),
+		tasks: maps.Clone(d.tasks), events: maps.Clone(d.events),
 		audits: slices.Clip(d.audits),
 	}
 }
@@ -151,40 +155,4 @@ func badID(id string) error {
 // staleRev 是调用方带回的 Rev 与现在的对不上：记录在它读过之后改过了。
 func staleRev(what string, have, got int64) error {
 	return errorf(store.ErrConflict, "%s 现在的 Rev 是 %d，收到的是 %d：重读之后再判断", what, have, got)
-}
-
-// 下面是还没做的方法，返回 errNotImplemented：任务与事件由任务 6 实现，届时连同这一节一起删掉。
-
-var errNotImplemented = errors.New("memstore：尚未实现")
-
-func (s *Store) CreateTasks(context.Context, []model.Task, store.Audit) ([]model.Task, error) {
-	return nil, errNotImplemented
-}
-
-func (s *Store) GetTask(context.Context, string) (model.Task, error) {
-	return model.Task{}, errNotImplemented
-}
-
-func (s *Store) FindOpenTask(context.Context, string) (model.Task, bool, error) {
-	return model.Task{}, false, errNotImplemented
-}
-
-func (s *Store) ListTasks(context.Context, store.TaskQuery) (store.Page[model.Task], error) {
-	return store.Page[model.Task]{}, errNotImplemented
-}
-
-func (s *Store) TransitionTask(context.Context, string, store.TaskExpect, model.TaskState, []store.NewEvent) (model.Task, []store.Appended, error) {
-	return model.Task{}, nil, errNotImplemented
-}
-
-func (s *Store) TransitionTaskByUser(context.Context, string, store.TaskExpect, model.TaskState, []store.NewEvent, store.Audit) (model.Task, []store.Appended, error) {
-	return model.Task{}, nil, errNotImplemented
-}
-
-func (s *Store) AppendEvents(context.Context, string, []store.NewEvent) ([]store.Appended, error) {
-	return nil, errNotImplemented
-}
-
-func (s *Store) ListEvents(context.Context, string, int64, int) ([]store.Event, error) {
-	return nil, errNotImplemented
 }

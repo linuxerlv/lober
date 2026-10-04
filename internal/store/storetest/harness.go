@@ -39,6 +39,9 @@ func RunAll(t *testing.T, h Harness) {
 	t.Run("审计", func(t *testing.T) { RunAudit(t, h) })
 	t.Run("hook", func(t *testing.T) { RunHooks(t, h) })
 	t.Run("模板", func(t *testing.T) { RunTemplates(t, h) })
+	t.Run("任务", func(t *testing.T) { RunTasks(t, h) })
+	t.Run("事件", func(t *testing.T) { RunEvents(t, h) })
+	t.Run("并发", func(t *testing.T) { RunConcurrency(t, h) })
 }
 
 // testCase 是一个用例，跑在一个全新的空仓储上。

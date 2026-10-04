@@ -92,7 +92,7 @@ func (s *Store) ImportHosts(_ context.Context, hs []model.Host, a store.Audit) (
 	return out, nil
 }
 
-// DeleteHost 见 store.Hosts。被任务引用时报 ErrReferenced 的检查随任务一起实现：在那之前建不出任务，也就没有引用。
+// DeleteHost 见 store.Hosts。被任务引用的不能删，任务结束了也一样（referencedBy）。
 func (s *Store) DeleteHost(_ context.Context, sn string, rev int64, a store.Audit) error {
 	if err := store.CheckAudit(a); err != nil {
 		return err
@@ -100,6 +100,9 @@ func (s *Store) DeleteHost(_ context.Context, sn string, rev int64, a store.Audi
 	return s.write(func(t *tx) error {
 		if _, err := t.hostAt(sn, rev); err != nil {
 			return err
+		}
+		if by, ok := t.referencedBy(func(task model.Task) bool { return task.HostSN == sn }); ok {
+			return errorf(store.ErrReferenced, "主机 %s 被任务 %s 引用：已建的任务要一直查得到它", sn, by)
 		}
 		delete(t.hosts, sn)
 		return t.addAudit(a, "host", sn)

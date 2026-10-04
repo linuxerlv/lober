@@ -96,7 +96,7 @@ func (s *Store) DeprecateISO(_ context.Context, id string, rev int64, a store.Au
 	})
 }
 
-// DeleteISO 见 store.ISOs。被任务引用时报 ErrReferenced 的检查随任务一起实现：在那之前建不出任务，也就没有引用。
+// DeleteISO 见 store.ISOs。被任务引用的只能废弃、不能删，任务结束了也一样（referencedBy）。
 func (s *Store) DeleteISO(_ context.Context, id string, rev int64, a store.Audit) error {
 	if err := store.CheckAudit(a); err != nil {
 		return err
@@ -107,6 +107,9 @@ func (s *Store) DeleteISO(_ context.Context, id string, rev int64, a store.Audit
 	return s.write(func(t *tx) error {
 		if _, err := t.isoAt(id, rev); err != nil {
 			return err
+		}
+		if by, ok := t.referencedBy(func(task model.Task) bool { return task.ISOID == id }); ok {
+			return errorf(store.ErrReferenced, "ISO %s 被任务 %s 引用：只能废弃，已建的任务要一直查得到它", id, by)
 		}
 		delete(t.isos, id)
 		return t.addAudit(a, "iso", id)

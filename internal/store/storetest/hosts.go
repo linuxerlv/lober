@@ -12,7 +12,7 @@ import (
 )
 
 // RunHosts 是主机这一组（C6、C7）：登记、修改、CSV 导入、删除与查询。每台主机写一条审计由审计那一组查；删除被
-// 任务引用的主机，留到任务那一组。
+// 任务引用的主机写在这里（hostDeleteReferenced），由任务那一组跑：只实现了主机的仓储照样能跑这一组。
 func RunHosts(t *testing.T, h Harness) {
 	runCases(t, h, []testCase{
 		{"登记后读回来与写进去的相同，Rev 为 1", hostCreateReadBack},
@@ -333,6 +333,23 @@ func hostDelete(t *testing.T, s store.Store) {
 	wantIs(t, s.DeleteHost(t.Context(), "SN-1", h.Rev, anAudit("host.delete")), store.ErrNotFound, "再删一次")
 	// 删掉之后，同一个 SN 能重新登记，Rev 从 1 起
 	wantEqual(t, mustCreateHost(t, s, model.Host{SN: "SN-1"}).Rev, 1, "重新登记的 Rev")
+}
+
+// 主机被任务引用之后不能删（C26）：已建的任务要一直查得到它的主机，任务结束了也一样。没被引用的主机照常能删。由任务那一组
+// 跑（RunTasks）。
+func hostDeleteReferenced(t *testing.T, s store.Store) {
+	ctx := t.Context()
+	f := newFixture(t, s)
+	hs := mustTaskHosts(t, s, "SN-1", "SN-2")
+	task := f.mustCreate(t, s, hs[0])[0]
+	before := taskSnapshot(t, s)
+	wantIs(t, s.DeleteHost(ctx, "SN-1", hs[0].Rev, anAudit("host.delete")), store.ErrReferenced, "删除有未结束任务的主机")
+	wantTasksUnchanged(t, s, before, "删除被拒时")
+	mustTransition(t, s, task, model.TaskDone)
+	before = taskSnapshot(t, s)
+	wantIs(t, s.DeleteHost(ctx, "SN-1", hs[0].Rev, anAudit("host.delete")), store.ErrReferenced, "删除任务都已结束的主机")
+	wantTasksUnchanged(t, s, before, "删除被拒时")
+	must(t, s.DeleteHost(ctx, "SN-2", hs[1].Rev, anAudit("host.delete")), "删除没被引用的主机")
 }
 
 func hostGetHosts(t *testing.T, s store.Store) {

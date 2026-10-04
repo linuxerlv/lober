@@ -13,7 +13,7 @@ import (
 )
 
 // RunISOs 是 ISO 这一组（C2、C4、C5、C26）：新建、第 4 层导入用的系统更新、废弃、删除与查询。删除被任务引用的
-// ISO，留到任务那一组。
+// ISO 写在这里（isoDeleteReferenced），由任务那一组跑：只实现了 ISO 的仓储照样能跑这一组。
 func RunISOs(t *testing.T, h Harness) {
 	runCases(t, h, []testCase{
 		{"新建：生成的 ID 合规，State 为 acquiring，Rev 为 1", isoCreate},
@@ -447,6 +447,26 @@ func isoDelete(t *testing.T, s store.Store) {
 	must(t, s.DeprecateISO(t.Context(), r.ID, r.Rev, anAudit("iso.deprecate")), "废弃")
 	must(t, s.DeleteISO(t.Context(), r.ID, r.Rev+1, anAudit("iso.delete")), "删除已废弃的")
 	mustReadyISO(t, s, rockyISO("R2"), 7)
+}
+
+// 被任务引用的 ISO 只能废弃、不能删除（C26）：废弃之后、任务结束之后也删不掉，已建的任务要一直查得到它。没被引用的照常
+// 能删。由任务那一组跑（RunTasks）。
+func isoDeleteReferenced(t *testing.T, s store.Store) {
+	ctx := t.Context()
+	f := newFixture(t, s)
+	task := f.mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
+	iso := mustGetISO(t, s, f.iso.ID)
+	before := taskSnapshot(t, s)
+	wantIs(t, s.DeleteISO(ctx, iso.ID, iso.Rev, anAudit("iso.delete")), store.ErrReferenced, "删除被未结束任务引用的 ISO")
+	wantTasksUnchanged(t, s, before, "删除被拒时")
+	must(t, s.DeprecateISO(ctx, iso.ID, iso.Rev, anAudit("iso.deprecate")), "废弃被引用的 ISO")
+	mustTransition(t, s, task, model.TaskDone)
+	iso = mustGetISO(t, s, iso.ID)
+	before = taskSnapshot(t, s)
+	wantIs(t, s.DeleteISO(ctx, iso.ID, iso.Rev, anAudit("iso.delete")), store.ErrReferenced, "删除已废弃、任务都已结束的 ISO")
+	wantTasksUnchanged(t, s, before, "删除被拒时")
+	other := mustCreateISO(t, s, rockyISO("Other"))
+	must(t, s.DeleteISO(ctx, other.ID, other.Rev, anAudit("iso.delete")), "删除没被引用的 ISO")
 }
 
 func isoBadID(t *testing.T, s store.Store) {
