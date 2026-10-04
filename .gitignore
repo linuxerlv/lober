@@ -32,6 +32,9 @@ internal/console/ui/dist/
 !internal/console/ui/dist/_placeholder-keeps-embed-underscore-mode.js
 /.wf-*.js
 
+# 本机测试库的 DSN（一行，带口令），由 pgstore 的测试夹具读取，不入库。
+/.pgtest.dsn
+
 # Claude Code 的隔离工作区（EnterWorktree 建在这里）。必须被忽略：worktree 是
 # 完整的工作副本，不忽略会让它的全部内容出现在 git status 里，也会让 git 在
 # worktree 内向上发现父检出，导致命令写到 worktree 之外。
