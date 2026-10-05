@@ -5,14 +5,13 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
 )
 
 // AppendEvents 见 store.Events。空的一批也要任务存在：调用方拿错了任务 ID，不能当成追加成功。
 func (s *Store) AppendEvents(_ context.Context, taskID string, es []store.NewEvent) ([]store.Appended, error) {
-	if !model.ValidID(taskID) {
-		return nil, badID(taskID)
+	if err := store.CheckID(taskID); err != nil {
+		return nil, err
 	}
 	if err := store.CheckEvents(es); err != nil {
 		return nil, err
@@ -31,17 +30,11 @@ func (s *Store) AppendEvents(_ context.Context, taskID string, es []store.NewEve
 	return out, nil
 }
 
-// ListEvents 见 store.Events。afterSeq 为负报 ErrInvalid；任务不存在报 ErrNotFound，同 AppendEvents。
+// ListEvents 见 store.Events。afterSeq 为负报 ErrInvalid（store.CheckEventQuery）；任务不存在报 ErrNotFound，同 AppendEvents。
 func (s *Store) ListEvents(_ context.Context, taskID string, afterSeq int64, limit int) ([]store.Event, error) {
-	if !model.ValidID(taskID) {
-		return nil, badID(taskID)
-	}
-	n, err := store.CheckQuery("", limit)
+	n, err := store.CheckEventQuery(taskID, afterSeq, limit)
 	if err != nil {
 		return nil, err
-	}
-	if afterSeq < 0 {
-		return nil, errorf(store.ErrInvalid, "afterSeq 不能为负，收到 %d", afterSeq)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

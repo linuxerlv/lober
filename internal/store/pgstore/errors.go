@@ -89,11 +89,6 @@ func errorf(kind error, format string, args ...any) error {
 	return fmt.Errorf("%w：%s", kind, fmt.Sprintf(format, args...))
 }
 
-// badID 是收到的 ID 不合 model.ValidID。
-func badID(id string) error {
-	return errorf(store.ErrInvalid, "ID %q 不合格式", id)
-}
-
 // staleRev 是调用方带回的 Rev 与现在的对不上：记录在它读过之后改过了。
 func staleRev(what string, have, got int64) error {
 	return errorf(store.ErrConflict, "%s 现在的 Rev 是 %d，收到的是 %d：重读之后再判断", what, have, got)

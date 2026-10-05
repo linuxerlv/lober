@@ -4,8 +4,11 @@ import (
 	"cmp"
 	"crypto/rand"
 	"encoding/base32"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -16,7 +19,8 @@ import (
 	"github.com/lober/lober/internal/core/model"
 )
 
-// 两份实现共用的纯函数：入参校验、生成 ID、提取模板的 hook 引用，以及在事务里重跑第 1 层判定的封装。
+// 两份实现共用的纯函数：入参校验、生成 ID、游标的编解码、提取模板的 hook 引用，以及在事务里重跑第 1 层判定的封装。
+// 主机与 ISO 的检查在 check_registry.go，hook 与模板的在 check_authoring.go。
 
 // 入参的上限，单位都是字节。
 const (
@@ -108,10 +112,39 @@ func eventProblem(e NewEvent) string {
 	return ""
 }
 
+// CheckEventQuery 查 ListEvents 的入参，返回实际要取的条数：任务 ID 合格式（CheckID），limit 的规则同 CheckQuery，
+// afterSeq 不能为负。不合的报 ErrInvalid。
+func CheckEventQuery(taskID string, afterSeq int64, limit int) (int, error) {
+	if err := CheckID(taskID); err != nil {
+		return 0, err
+	}
+	n, err := CheckQuery("", limit)
+	if err != nil {
+		return 0, err
+	}
+	if afterSeq < 0 {
+		return 0, invalidf("afterSeq 不能为负，收到 %d", afterSeq)
+	}
+	return n, nil
+}
+
+// CheckTransition 查任务推进的入参（TransitionTask、TransitionTaskByUser）：任务 ID 合格式（CheckID），目标状态是 model
+// 认得的（TaskState.Valid），带的事件合规则（CheckEvents）。不合的报 ErrInvalid，整个推进不生效。一步推进合不合规矩
+// 不在这里查，那是第 7 层状态机的事。
+func CheckTransition(id string, to model.TaskState, events []NewEvent) error {
+	if err := CheckID(id); err != nil {
+		return err
+	}
+	if !to.Valid() {
+		return invalidf("任务的目标状态 %q 不认识", to)
+	}
+	return CheckEvents(events)
+}
+
 // CheckQuery 查分页的入参，返回实际要取的条数：limit 为 0 时取 100，1–500 照用，负数或超过 500 报 ErrInvalid。
 //
-// cursor 是上一页的 Next，空串表示从头取。游标由各实现自己编码，认不出的由实现报 ErrInvalid；这里只挡掉存不下
-// 的串（不是合法的 UTF-8，或含 NUL）：仓储给出的游标都存得下，存不下的连查询参数都当不了。
+// cursor 是上一页的 Next，空串表示从头取。非空的游标由实现用 DecodeCursor 解开，认不出的报 ErrInvalid；这里只挡掉
+// 存不下的串（不是合法的 UTF-8，或含 NUL）：仓储给出的游标都存得下，存不下的连查询参数都当不了。
 func CheckQuery(cursor string, limit int) (int, error) {
 	switch {
 	case !model.StorableText(cursor):
@@ -124,11 +157,80 @@ func CheckQuery(cursor string, limit int) (int, error) {
 	return limit, nil
 }
 
+// 游标是上一页最后一条的排序键，连同列表的名字编成 JSON 数组，再做 base64url：调用方看不出里面是什么，也就不会依赖它；
+// 改坏的、别的列表给的游标都认得出来，报 ErrInvalid。两份实现的列表顺序相同（见各查询类型的说明），排序键也就相同，
+// 编解码用这同一份，认不认一个游标两边才一致。
+
+// EncodeCursor 把列表 list 的排序键 key 编成游标。排序键只有字符串与整数。
+func EncodeCursor(list string, key ...any) string {
+	b, _ := json.Marshal(append([]any{list}, key...)) // 字符串与整数的编码不会失败
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// DecodeCursor 把 EncodeCursor 给出的游标解回排序键，key 是各项的指针，个数与类型都要与编的时候相同，否则报 ErrInvalid。
+// 解出的串要存得下：仓储给出的游标都是，藏着 NUL 的只能是伪造的，拿去查询还会让 PostgreSQL 报编码错误。
+func DecodeCursor(cursor, list string, key ...any) error {
+	bad := invalidf("游标 %q 不是这个列表上一页给出的 Next", cursor)
+	b, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return bad
+	}
+	var parts []json.RawMessage
+	var name string
+	if json.Unmarshal(b, &parts) != nil || len(parts) != len(key)+1 || json.Unmarshal(parts[0], &name) != nil || name != list {
+		return bad
+	}
+	for i, k := range key {
+		if json.Unmarshal(parts[i+1], k) != nil {
+			return bad
+		}
+		if s, ok := k.(*string); ok && !model.StorableText(*s) {
+			return bad
+		}
+	}
+	return nil
+}
+
+// CheckID 查收到的 ISO、hook、模板或任务的 ID：过 model.ValidID，不合的报 ErrInvalid，不当成找不到。
+func CheckID(id string) error {
+	if !model.ValidID(id) {
+		return invalidf("ID %q 不合格式", id)
+	}
+	return nil
+}
+
+// CheckVersionKey 查收到的 hook 或模板的版本键：ID 过 CheckID，版本号从 1 起。不合的报 ErrInvalid，不当成找不到。
+func CheckVersionKey(id string, version int) error {
+	if err := CheckID(id); err != nil {
+		return err
+	}
+	if version < 1 {
+		return invalidf("版本号要从 1 起，收到 %d", version)
+	}
+	return nil
+}
+
+// VersionID 是 hook 或模板的一个版本在审计对象、Subject 与报错里的写法：「ID@版本」，与第 1 层判定里的相同。
+func VersionID(id string, version int) string {
+	return id + "@" + strconv.Itoa(version)
+}
+
+// CheckSN 查按 SN 找任务时收到的 SN（FindOpenTask）：要是规范化之后的写法，与 model.NormalizeSN 的结果相同，否则报
+// ErrInvalid。登记过的主机只有这种写法，拿别的写法去找，找不到也不说明这台主机没有任务。
+func CheckSN(sn string) error {
+	if !normalizedSN(sn) {
+		return invalidf("SN %q 不是规范化之后的写法：调用方要先经 model.NormalizeSN", sn)
+	}
+	return nil
+}
+
 // CheckNewTasks 是批量建任务的第 1 步：查入参本身，不合格报 ErrInvalid。前提是：
 //
 //   - 一批至少一个任务。
 //   - 每个任务的 ID、State、Rev 都是零值，由仓储填；CreatedAt 大于 0；CreatedBy 是非空的可存文本。
 //   - Snapshot.Schema 等于 model.SnapshotSchema；HostSN、ISOID、TemplateID、TemplateVersion 与快照里的一致。
+//   - 快照里的每个串都存得下（model.StorableText），嵌套的结构、切片与 map 里的也算，map 的键也算：pgstore 把快照存成
+//     jsonb，jsonb 不收 NUL，encoding/json 还会把非法的 UTF-8 换成 U+FFFD，固化下来的就不是写进去的那份（C29）。
 //   - ID 的格式对：HostSN 已经规范化（与 model.NormalizeSN 的结果相同），ISOID 与 TemplateID 过
 //     model.ValidID，TemplateVersion 从 1 起。
 //   - 同一批的 ISO 与模板版本都相同（spec §2.7）。
@@ -164,6 +266,8 @@ func newTaskProblem(t, first model.Task) string {
 		return fmt.Sprintf("的快照格式是 %d，应为 %d", s.Schema, model.SnapshotSchema)
 	case t.HostSN != s.Host.SN || t.ISOID != s.ISO.ID || t.TemplateID != s.Template.ID || t.TemplateVersion != s.Template.Version:
 		return "的 HostSN、ISOID、TemplateID、TemplateVersion 与快照里的不一致"
+	case !storableValue(reflect.ValueOf(s)):
+		return "的快照里有存不下的文本：不是合法的 UTF-8，或含 NUL"
 	case !normalizedSN(t.HostSN):
 		return "的 HostSN 不是规范化之后的 SN"
 	case !model.ValidID(t.ISOID) || !model.ValidID(t.TemplateID) || t.TemplateVersion < 1:
@@ -172,6 +276,36 @@ func newTaskProblem(t, first model.Task) string {
 		return "的 ISO 或模板版本与第 1 个任务的不同：同一批只用一个 ISO 和一个模板版本"
 	}
 	return ""
+}
+
+// storableValue 报告 v 里的每个串（包括 map 的键）都存得下（model.StorableText）。快照层层嵌套，逐层走一遍：model 以后
+// 给它加了字段也照样查到。
+func storableValue(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.String:
+		return model.StorableText(v.String())
+	case reflect.Struct:
+		for i := range v.NumField() {
+			if !storableValue(v.Field(i)) {
+				return false
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := range v.Len() {
+			if !storableValue(v.Index(i)) {
+				return false
+			}
+		}
+	case reflect.Map:
+		for it := v.MapRange(); it.Next(); {
+			if !storableValue(it.Key()) || !storableValue(it.Value()) {
+				return false
+			}
+		}
+	case reflect.Pointer, reflect.Interface:
+		return v.IsNil() || storableValue(v.Elem())
+	}
+	return true
 }
 
 // normalizedSN 报告 sn 是不是规范化之后的 SN：登记过的主机只有这种，别的写法永远对不上号。
@@ -222,7 +356,7 @@ func HookRefs(t model.Template) []model.HookKey {
 // 能批）由调用方先查。
 func ApproveHookProblems(h model.Hook, approver string) error {
 	ps := activation.Hook(h)
-	ps = append(ps, approverProblems(h.Author, approver, model.Subject{Kind: "hook", ID: versionID(h.ID, h.Version)})...)
+	ps = append(ps, approverProblems(h.Author, approver, model.Subject{Kind: "hook", ID: VersionID(h.ID, h.Version)})...)
 	return rejected(ps)
 }
 
@@ -231,7 +365,7 @@ func ApproveHookProblems(h model.Hook, approver string) error {
 // 加读锁后取出：引用的版本刚被废弃，就会报 hook_ref_deprecated；缺了的当作不存在，报 hook_ref_missing。
 func ApproveTemplateProblems(t model.Template, hooks map[model.HookKey]model.Hook, approver string) error {
 	ps := activation.Template(t, hooks)
-	ps = append(ps, approverProblems(t.Author, approver, model.Subject{Kind: "template", ID: versionID(t.ID, t.Version)})...)
+	ps = append(ps, approverProblems(t.Author, approver, model.Subject{Kind: "template", ID: VersionID(t.ID, t.Version)})...)
 	return rejected(ps)
 }
 
@@ -250,6 +384,12 @@ func BatchProblems(in admission.BatchInput, missing []string) error {
 		return nil
 	}
 	return &BatchError{Result: res}
+}
+
+// OpenTaskProblems 是推进到未结束的状态时，主机 sn 已有另一个未结束的任务（C31，比如失败的任务重试时，期间又建了新
+// 任务）：返回 ProblemsError(ErrRejected)，问题与准入判定对这台主机报的相同（admission.HostSelectable）。
+func OpenTaskProblems(sn string) error {
+	return &ProblemsError{Kind: ErrRejected, Problems: admission.HostSelectable(model.Host{SN: sn}, true)}
 }
 
 // passed 报告一批的判定结果是否通过：Common 与 ByHost 里全都没有问题。
@@ -282,16 +422,16 @@ func rejected(ps []model.Problem) error {
 	return &ProblemsError{Kind: ErrRejected, Problems: ps}
 }
 
-// versionID 是 hook 或模板的一个版本在 Subject 里的 ID：「ID@版本」，与第 1 层判定里的写法相同。
-func versionID(id string, version int) string {
-	return id + "@" + strconv.Itoa(version)
-}
-
 func validAction(s string) bool {
 	return len(s) <= actionMaxBytes && actionPattern.MatchString(s)
 }
 
+// errorf 返回属于 kind 这一类的错误，写明是怎么回事；调用方用 errors.Is 判断类别。
+func errorf(kind error, format string, args ...any) error {
+	return fmt.Errorf("%w：%s", kind, fmt.Sprintf(format, args...))
+}
+
 // invalidf 返回包着 ErrInvalid 的错误，写明哪一条前提不满足。
 func invalidf(format string, args ...any) error {
-	return fmt.Errorf("%w：%s", ErrInvalid, fmt.Sprintf(format, args...))
+	return errorf(ErrInvalid, format, args...)
 }

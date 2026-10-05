@@ -27,7 +27,7 @@ func (s *Store) ListAudit(ctx context.Context, q store.AuditQuery) (store.Page[s
 	}
 	var before int64
 	if q.Cursor != "" {
-		if err := decodeCursor(q.Cursor, "audit", &before); err != nil {
+		if err := store.DecodeCursor(q.Cursor, "audit", &before); err != nil {
 			return store.Page[store.AuditEntry]{}, err
 		}
 	}
@@ -56,5 +56,5 @@ func (s *Store) ListAudit(ctx context.Context, q store.AuditQuery) (store.Page[s
 	if err := db.Order("id DESC").Limit(limit + 1).Find(&rows).Error; err != nil {
 		return store.Page[store.AuditEntry]{}, err
 	}
-	return page(rows, limit, auditRow.entry, func(r auditRow) string { return encodeCursor("audit", r.ID) })
+	return page(rows, limit, auditRow.entry, func(r auditRow) string { return store.EncodeCursor("audit", r.ID) })
 }

@@ -3,7 +3,6 @@ package pgstore
 import (
 	"context"
 	"errors"
-	"reflect"
 	"slices"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -22,7 +21,8 @@ var finishedStates = []string{string(model.TaskDone), string(model.TaskFailed), 
 // forShare 是读锁：别的事务照样能读、能同样加读锁，但改不了、删不掉这一行，要等本事务结束。
 var forShare = clause.Locking{Strength: "SHARE"}
 
-// CreateTasks 见 store.Tasks。任务逐个插入：撞上 idx_tasks_open 时，才知道撞上的是哪一台。
+// CreateTasks 见 store.Tasks。快照里的串都存得下，由 store.CheckNewTasks 查过：jsonb 不收 NUL，encoding/json 还会把非法的
+// UTF-8 换成 U+FFFD。任务逐个插入：撞上 idx_tasks_open 时，才知道撞上的是哪一台。
 func (s *Store) CreateTasks(ctx context.Context, ts []model.Task, a store.Audit) ([]model.Task, error) {
 	if err := store.CheckAudit(a); err != nil {
 		return nil, err
@@ -33,9 +33,6 @@ func (s *Store) CreateTasks(ctx context.Context, ts []model.Task, a store.Audit)
 	rows := make([]taskRow, len(ts))
 	ids := make([]string, len(ts))
 	for i, t := range ts {
-		if !storableValue(reflect.ValueOf(t.Snapshot)) {
-			return nil, errorf(store.ErrInvalid, "第 %d 个任务的快照里有存不下的文本：不是合法的 UTF-8，或含 NUL", i+1)
-		}
 		t.ID, t.State, t.Rev = store.NewID(), model.TaskPending, 1
 		row, err := toTaskRow(t)
 		if err != nil {
@@ -184,8 +181,8 @@ func openTasksOf(tx *gorm.DB, sns []string) (map[string]bool, error) {
 
 // GetTask 见 store.Tasks。
 func (s *Store) GetTask(ctx context.Context, id string) (model.Task, error) {
-	if !model.ValidID(id) {
-		return model.Task{}, badID(id)
+	if err := store.CheckID(id); err != nil {
+		return model.Task{}, err
 	}
 	var row taskRow
 	switch err := s.read(ctx).Where("id = ?", id).Take(&row).Error; {
@@ -197,11 +194,10 @@ func (s *Store) GetTask(ctx context.Context, id string) (model.Task, error) {
 	return row.task()
 }
 
-// FindOpenTask 见 store.Tasks。SN 不是规范化之后的写法报 ErrInvalid：登记过的主机只有那种写法，拿别的写法去找，找不到也不
-// 说明这台主机没有任务。
+// FindOpenTask 见 store.Tasks。SN 不是规范化之后的写法报 ErrInvalid（store.CheckSN）。
 func (s *Store) FindOpenTask(ctx context.Context, sn string) (model.Task, bool, error) {
-	if n, err := model.NormalizeSN(sn); err != nil || n != sn {
-		return model.Task{}, false, errorf(store.ErrInvalid, "SN %q 不是规范化之后的写法：调用方要先经 model.NormalizeSN", sn)
+	if err := store.CheckSN(sn); err != nil {
+		return model.Task{}, false, err
 	}
 	var row taskRow
 	switch err := s.read(ctx).Where("host_sn = ? AND state NOT IN ?", sn, finishedStates).Take(&row).Error; {
@@ -226,7 +222,7 @@ func (s *Store) ListTasks(ctx context.Context, q store.TaskQuery) (store.Page[mo
 	var afterAt int64
 	var afterID string
 	if q.Cursor != "" {
-		if err := decodeCursor(q.Cursor, "tasks", &afterAt, &afterID); err != nil {
+		if err := store.DecodeCursor(q.Cursor, "tasks", &afterAt, &afterID); err != nil {
 			return store.Page[model.Task]{}, err
 		}
 	}
@@ -260,7 +256,7 @@ func (s *Store) ListTasks(ctx context.Context, q store.TaskQuery) (store.Page[mo
 	if err := db.Order(`created_at DESC, id COLLATE "C"`).Limit(limit + 1).Find(&rows).Error; err != nil {
 		return store.Page[model.Task]{}, err
 	}
-	return page(rows, limit, taskRow.task, func(r taskRow) string { return encodeCursor("tasks", r.CreatedAt, r.ID) })
+	return page(rows, limit, taskRow.task, func(r taskRow) string { return store.EncodeCursor("tasks", r.CreatedAt, r.ID) })
 }
 
 // TransitionTask 见 store.Tasks。
@@ -276,20 +272,14 @@ func (s *Store) TransitionTaskByUser(ctx context.Context, id string, expect stor
 	return s.transition(ctx, id, expect, to, events, &a)
 }
 
-// transition 是两种推进共用的部分，a 为 nil 时不写审计（系统发起的推进）。先查 ID、目标状态与事件；再给任务行加写锁、比对
-// 期望值，追加事件，用一条 UPDATE 写下状态、Rev 与事件的计数，最后写审计。一步推进合不合规矩不在这里判断，那是第 7 层状态机
-// 的事。
+// transition 是两种推进共用的部分，a 为 nil 时不写审计（系统发起的推进）。先查 ID、目标状态与事件（store.CheckTransition）；
+// 再给任务行加写锁、比对期望值，追加事件，用一条 UPDATE 写下状态、Rev 与事件的计数，最后写审计。一步推进合不合规矩不在这里
+// 判断，那是第 7 层状态机的事。
 //
 // C31 不先查：推进不锁主机，先查的话，别人刚建、还没提交的任务查不到，两边就都落了库。推进到未结束的状态时由 idx_tasks_open
-// 挡住，撞上时整个推进回滚，问题与准入判定报的相同（admission.HostSelectable）。
+// 挡住，撞上时整个推进回滚，问题与准入判定报的相同（store.OpenTaskProblems）。
 func (s *Store) transition(ctx context.Context, id string, expect store.TaskExpect, to model.TaskState, events []store.NewEvent, a *store.Audit) (model.Task, []store.Appended, error) {
-	switch {
-	case !model.ValidID(id):
-		return model.Task{}, nil, badID(id)
-	case !to.Valid():
-		return model.Task{}, nil, errorf(store.ErrInvalid, "任务的目标状态 %q 不认识", to)
-	}
-	if err := store.CheckEvents(events); err != nil {
+	if err := store.CheckTransition(id, to, events); err != nil {
 		return model.Task{}, nil, err
 	}
 	var row taskRow
@@ -309,7 +299,7 @@ func (s *Store) transition(ctx context.Context, id string, expect store.TaskExpe
 		row.State, row.Rev = string(to), row.Rev+1
 		if err := tx.Model(&taskRow{ID: id}).Select("state", "rev", "last_seq").Updates(&row).Error; err != nil {
 			if openTaskTaken(err) {
-				return &store.ProblemsError{Kind: store.ErrRejected, Problems: admission.HostSelectable(model.Host{SN: row.HostSN}, true)}
+				return store.OpenTaskProblems(row.HostSN)
 			}
 			return err
 		}
@@ -339,37 +329,6 @@ func lockTask(tx *gorm.DB, id string) (taskRow, error) {
 		return taskRow{}, err
 	}
 	return row, nil
-}
-
-// storableValue 报告 v 里的每个串（包括 map 的键）都存得下（model.StorableText）。快照存成 jsonb：jsonb 不收 NUL，
-// encoding/json 还会把非法的 UTF-8 换成 U+FFFD，固化下来的就不是写进去的那份（C29）。快照层层嵌套，逐层走一遍，model 以后
-// 给它加了字段也照样查到。
-func storableValue(v reflect.Value) bool {
-	switch v.Kind() {
-	case reflect.String:
-		return model.StorableText(v.String())
-	case reflect.Struct:
-		for i := range v.NumField() {
-			if !storableValue(v.Field(i)) {
-				return false
-			}
-		}
-	case reflect.Slice, reflect.Array:
-		for i := range v.Len() {
-			if !storableValue(v.Index(i)) {
-				return false
-			}
-		}
-	case reflect.Map:
-		for it := v.MapRange(); it.Next(); {
-			if !storableValue(it.Key()) || !storableValue(it.Value()) {
-				return false
-			}
-		}
-	case reflect.Pointer, reflect.Interface:
-		return v.IsNil() || storableValue(v.Elem())
-	}
-	return true
 }
 
 // openTaskTaken 报告 err 是不是撞上了 idx_tasks_open：这台主机已有另一个未结束的任务（C31）。

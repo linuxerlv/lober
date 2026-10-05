@@ -232,11 +232,11 @@ func Test存不下的键与过滤条件当作没有(t *testing.T) {
 			t.Errorf("ListAudit 按操作者 %q 应得到空的一页，得到 %+v、%v", bad, p, err)
 		}
 	}
-	// 游标里藏着存不下的串：仓储给不出这样的游标，同样认不出来
-	if _, err := s.ListHosts(ctx, store.HostQuery{Cursor: encodeCursor("hosts", "SN\x00")}); !errors.Is(err, store.ErrInvalid) {
+	// 游标里藏着存不下的串：仓储给不出这样的游标，同样认不出来（store.DecodeCursor），不把数据库的编码错误交给调用方
+	if _, err := s.ListHosts(ctx, store.HostQuery{Cursor: store.EncodeCursor("hosts", "SN\x00")}); !errors.Is(err, store.ErrInvalid) {
 		t.Errorf("主机的游标藏着 NUL 应报 ErrInvalid，得到 %v", err)
 	}
-	if _, err := s.ListISOs(ctx, store.ISOQuery{Cursor: encodeCursor("isos", "a\x00", "b")}); !errors.Is(err, store.ErrInvalid) {
+	if _, err := s.ListISOs(ctx, store.ISOQuery{Cursor: store.EncodeCursor("isos", "a\x00", "b")}); !errors.Is(err, store.ErrInvalid) {
 		t.Errorf("ISO 的游标藏着 NUL 应报 ErrInvalid，得到 %v", err)
 	}
 }
@@ -931,40 +931,6 @@ func Test推进与追加事件等对方提交之后再比对与分配(t *testing
 				t.Fatalf("库里应留着对方推进之后的 %+v，得到 %+v、%v", want, got, err)
 			}
 		})
-	}
-}
-
-// 快照存成 jsonb：jsonb 不收 NUL，encoding/json 还会把非法的 UTF-8 换成 U+FFFD，固化下来的快照（C29）就不是写进去的那份。
-// 所以写入之前先查快照里的每个串（包括 map 的键）都存得下，存不下的报 ErrInvalid，什么都不写，也不把数据库的编码错误交给
-// 调用方。snapshot.Build 用存得下的记录构建，走不到这里；契约测试没有这几例，这里补上。
-func Test快照里有存不下的文本报ErrInvalid(t *testing.T) {
-	s := openStore(t, newSchema(t))
-	ctx := t.Context()
-	f := newTaskFixture(t, s, "SN-1")
-	audits := auditCount(t, s)
-	for _, c := range []struct {
-		name string
-		mod  func(snap *model.Snapshot)
-	}{
-		{"正文含 NUL", func(snap *model.Snapshot) { snap.Template.Body = "a\x00b" }},
-		{"属性值不是 UTF-8", func(snap *model.Snapshot) { snap.Host.Attrs = map[string]string{"rack": "\xff"} }},
-		{"属性键不是 UTF-8", func(snap *model.Snapshot) { snap.Host.Attrs = map[string]string{"\xff": "A1"} }},
-		{"实例参数的取值含 NUL", func(snap *model.Snapshot) {
-			snap.Slots = []model.SnapshotSlot{{Seq: 1, Name: "分区", Instances: []model.SnapshotInstance{{HookID: "lvm", HookVersion: 1,
-				Params: map[string]model.SnapshotValue{"disk": {Type: "text", List: true, Items: []string{"sda", "a\x00"}}}}}}}
-		}},
-	} {
-		in := f.tasks("SN-1")
-		c.mod(&in[0].Snapshot)
-		if _, err := s.CreateTasks(ctx, in, store.Audit{Actor: "alice", Action: "task.create", At: 1}); !errors.Is(err, store.ErrInvalid) {
-			t.Errorf("%s：应报 ErrInvalid，得到 %v", c.name, err)
-		}
-	}
-	if p, err := s.ListTasks(ctx, store.TaskQuery{}); err != nil || len(p.Items) != 0 {
-		t.Fatalf("快照存不下时一个任务都不建，得到 %+v、%v", p.Items, err)
-	}
-	if n := auditCount(t, s); n != audits {
-		t.Fatalf("快照存不下时不写审计：审计从 %d 条变成了 %d 条", audits, n)
 	}
 }
 

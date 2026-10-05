@@ -29,7 +29,7 @@ func (s *Store) CreateHost(ctx context.Context, h model.Host, a store.Audit) (mo
 	if err := store.CheckAudit(a); err != nil {
 		return model.Host{}, err
 	}
-	if err := checkHosts([]model.Host{h}); err != nil {
+	if err := store.CheckHosts([]model.Host{h}); err != nil {
 		return model.Host{}, err
 	}
 	h.Rev = 1
@@ -54,7 +54,7 @@ func (s *Store) UpdateHost(ctx context.Context, h model.Host, a store.Audit) (mo
 	if err := store.CheckAudit(a); err != nil {
 		return model.Host{}, err
 	}
-	if err := checkHosts([]model.Host{h}); err != nil {
+	if err := store.CheckHosts([]model.Host{h}); err != nil {
 		return model.Host{}, err
 	}
 	row, err := toHostRow(h)
@@ -84,10 +84,7 @@ func (s *Store) ImportHosts(ctx context.Context, hs []model.Host, a store.Audit)
 	if err := store.CheckAudit(a); err != nil {
 		return nil, err
 	}
-	if len(hs) == 0 {
-		return nil, errorf(store.ErrInvalid, "一批至少要有一台主机")
-	}
-	if err := checkHosts(hs); err != nil {
+	if err := store.CheckHosts(hs); err != nil {
 		return nil, err
 	}
 	rows := make([]hostRow, len(hs))
@@ -194,16 +191,13 @@ func (s *Store) GetHosts(ctx context.Context, sns []string) (map[string]model.Ho
 // ListHosts 见 store.Hosts。按 SN 的字节序排，游标是上一页最后一台的 SN。SN 前缀用 starts_with 比，不用 LIKE：
 // _、% 与反斜杠都按原样比，不必转义。
 func (s *Store) ListHosts(ctx context.Context, q store.HostQuery) (store.Page[model.Host], error) {
-	limit, err := store.CheckQuery(q.Cursor, q.Limit)
+	limit, err := store.CheckHostQuery(q)
 	if err != nil {
 		return store.Page[model.Host]{}, err
 	}
-	if (q.AttrKey == "") != (q.AttrValue == "") {
-		return store.Page[model.Host]{}, errorf(store.ErrInvalid, "AttrKey 与 AttrValue 要么都给，要么都不给")
-	}
 	var after string
 	if q.Cursor != "" {
-		if err := decodeCursor(q.Cursor, "hosts", &after); err != nil {
+		if err := store.DecodeCursor(q.Cursor, "hosts", &after); err != nil {
 			return store.Page[model.Host]{}, err
 		}
 	}
@@ -225,40 +219,7 @@ func (s *Store) ListHosts(ctx context.Context, q store.HostQuery) (store.Page[mo
 	if err := db.Order(`sn COLLATE "C"`).Limit(limit + 1).Find(&rows).Error; err != nil {
 		return store.Page[model.Host]{}, err
 	}
-	return page(rows, limit, hostRow.host, func(r hostRow) string { return encodeCursor("hosts", r.SN) })
-}
-
-// checkHosts 查要写入的一批主机，登记与修改是只有一台的批：SN 已经规范化，记录过 Host.Validate，批里 SN 不重复。
-//
-// 能用原因代码表达的问题都收进 ProblemsError(ErrInvalid)，与 model 的校验完全相同：按入参的顺序，每台先报批内重复
-// （只在这个 SN 第一次出现时报一条），再报 NormalizeSN 与 Host.Validate 的问题。SN 合法却不是规范化之后的写法，
-// 是调用方漏了规范化，model 的校验对它没有问题可报，报不带问题的 ErrInvalid。规则与内存实现的同名函数相同，由
-// 契约测试守着两边一致。
-func checkHosts(hs []model.Host) error {
-	count := make(map[string]int, len(hs))
-	for _, h := range hs {
-		count[h.SN]++
-	}
-	var ps []model.Problem
-	for _, h := range hs {
-		if count[h.SN] > 1 {
-			ps = append(ps, model.NewProblem("host_duplicate_in_batch", model.Subject{Kind: "host", ID: h.SN}))
-			count[h.SN] = 0
-		}
-		n, err := model.NormalizeSN(h.SN)
-		var p model.Problem
-		switch {
-		case errors.As(err, &p):
-			ps = append(ps, p)
-		case n != h.SN:
-			return errorf(store.ErrInvalid, "SN %q 不是规范化之后的写法 %q：调用方要先经 model.NormalizeSN", h.SN, n)
-		}
-		ps = append(ps, h.Validate()...)
-	}
-	if len(ps) > 0 {
-		return &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
-	}
-	return nil
+	return page(rows, limit, hostRow.host, func(r hostRow) string { return store.EncodeCursor("hosts", r.SN) })
 }
 
 // lockHost 在事务 tx 里给 SN 为 sn 的主机加写锁并取出它：没登记报 ErrNotFound，Rev 不是 rev 报 ErrConflict。

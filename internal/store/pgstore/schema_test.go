@@ -98,6 +98,17 @@ func Test复合索引改建成单列被查出来并拒绝启动(t *testing.T) {
 	wantRefused(t, dsn, []string{"idx_audit_log_target", "target_kind, target_id"}, []string{"DROP INDEX idx_audit_log_target"})
 }
 
+// 索引比的是列的集合与顺序：只换顺序、列还是那两个，也算不一致。(target_kind, target_id) 换成 (target_id, target_kind)
+// 之后，只按 TargetKind 过滤审计的查询就用不上它了：复合索引只对开头的列管用。同名的索引已经存在，AutoMigrate 不再动它。
+func Test复合索引的列换了顺序被查出来并拒绝启动(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	execAll(t, s, `DROP INDEX idx_audit_log_target`, `CREATE INDEX idx_audit_log_target ON audit_log (target_id, target_kind)`)
+	wantMismatches(t, mismatchesOf(t, s, tables), "audit_log idx_audit_log_target")
+	wantRefused(t, dsn, []string{"idx_audit_log_target", "现在是 (target_id, target_kind)", "应为 (target_kind, target_id)"},
+		[]string{"DROP INDEX idx_audit_log_target"})
+}
+
 func Test改掉WHERE被查出来并拒绝启动(t *testing.T) {
 	dsn := newSchema(t)
 	s := openStore(t, dsn)
@@ -117,6 +128,17 @@ func Test主键的列变了被查出来(t *testing.T) {
 	s := openStore(t, newSchema(t))
 	execAll(t, s, `ALTER TABLE audit_log DROP CONSTRAINT audit_log_pkey`, `ALTER TABLE audit_log ADD PRIMARY KEY (id, at)`)
 	wantMismatches(t, mismatchesOf(t, s, tables), "audit_log 主键")
+}
+
+// 主键同样比列的顺序：task_events 的 (task_id, seq) 换成 (seq, task_id)，唯一性不变，按任务续读事件（ListEvents 按 task_id
+// 取、按 seq 排）却用不上它了。AutoMigrate 不改已有的主键，重新 Open 要拒绝启动。
+func Test主键的列换了顺序被查出来并拒绝启动(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	execAll(t, s, `ALTER TABLE task_events DROP CONSTRAINT task_events_pkey`, `ALTER TABLE task_events ADD PRIMARY KEY (seq, task_id)`)
+	wantMismatches(t, mismatchesOf(t, s, tables), "task_events 主键")
+	wantRefused(t, dsn, []string{"task_events 主键", "是 (seq, task_id)", "应为 (task_id, seq)"},
+		[]string{"ALTER TABLE task_events DROP CONSTRAINT task_events_pkey", "ALTER TABLE task_events ADD PRIMARY KEY (task_id, seq)"})
 }
 
 func Test改掉CHECK被查出来并拒绝启动(t *testing.T) {

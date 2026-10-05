@@ -131,16 +131,17 @@ func (r hookVersionRow) hook() (model.Hook, error) {
 		Author: r.Author, Approver: r.Approver, Builtin: r.Builtin, TimeoutSec: r.TimeoutSec, Required: r.Required, Rev: r.Rev,
 	}
 	if err := decodeJSON(r.Params, &h.Params); err != nil {
-		return model.Hook{}, fmt.Errorf("hook %s 的参数声明：%w", versionID(r.HookID, r.Version), err)
+		return model.Hook{}, fmt.Errorf("hook %s 的参数声明：%w", store.VersionID(r.HookID, r.Version), err)
 	}
 	if err := decodeJSON(r.Impls, &h.Impls); err != nil {
-		return model.Hook{}, fmt.Errorf("hook %s 的实现：%w", versionID(r.HookID, r.Version), err)
+		return model.Hook{}, fmt.Errorf("hook %s 的实现：%w", store.VersionID(r.HookID, r.Version), err)
 	}
 	return h, nil
 }
 
-func (r hookVersionRow) meta() meta {
-	return meta{name: r.Name, author: r.Author, approver: r.Approver, state: model.VersionState(r.State), builtin: r.Builtin}
+// meta 是这个版本里由仓储管的字段，不必解开 JSON 的列。
+func (r hookVersionRow) meta() store.VersionMeta {
+	return store.VersionMeta{Name: r.Name, State: model.VersionState(r.State), Author: r.Author, Approver: r.Approver, Builtin: r.Builtin}
 }
 
 // toTemplateVersionRow 把模板版本 t 转成一行，名字不存。
@@ -175,14 +176,15 @@ func (r templateVersionRow) template() (model.Template, error) {
 		{"取值来源", r.Bindings, &t.Bindings}, {"装配表", r.Assembly, &t.Assembly},
 	} {
 		if err := decodeJSON(f.col, f.into); err != nil {
-			return model.Template{}, fmt.Errorf("模板 %s 的%s：%w", versionID(r.TemplateID, r.Version), f.what, err)
+			return model.Template{}, fmt.Errorf("模板 %s 的%s：%w", store.VersionID(r.TemplateID, r.Version), f.what, err)
 		}
 	}
 	return t, nil
 }
 
-func (r templateVersionRow) meta() meta {
-	return meta{name: r.Name, author: r.Author, approver: r.Approver, state: model.VersionState(r.State), builtin: r.Builtin}
+// meta 同 hookVersionRow.meta。
+func (r templateVersionRow) meta() store.VersionMeta {
+	return store.VersionMeta{Name: r.Name, State: model.VersionState(r.State), Author: r.Author, Approver: r.Approver, Builtin: r.Builtin}
 }
 
 // refRows 是模板版本 t 在 template_hook_refs 里的行：它引用的 hook 版本，去重、排过序（store.HookRefs）。只记 HookID 合

@@ -2,8 +2,6 @@ package pgstore
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 
 	"gorm.io/driver/postgres"
@@ -132,35 +130,5 @@ func emptyPage[T any]() store.Page[T] {
 	return store.Page[T]{Items: []T{}}
 }
 
-// 游标是上一页最后一条的排序键，连同列表的名字编成 JSON 数组，再做 base64url：调用方看不出里面是什么，也就不会
-// 依赖它；改坏的、别的列表给的游标都认得出来，报 ErrInvalid。
-
-// encodeCursor 把列表 list 的排序键 key 编成游标。
-func encodeCursor(list string, key ...any) string {
-	b, _ := json.Marshal(append([]any{list}, key...)) // 排序键只有字符串与整数，编码不会失败
-	return base64.RawURLEncoding.EncodeToString(b)
-}
-
-// decodeCursor 把 encodeCursor 给出的游标解回排序键，key 是各项的指针。解出的串要存得下：仓储给出的游标都是，藏着
-// NUL 的只能是伪造的，拿去查询还会让 PostgreSQL 报编码错误。
-func decodeCursor(cursor, list string, key ...any) error {
-	bad := errorf(store.ErrInvalid, "游标 %q 不是这个列表上一页给出的 Next", cursor)
-	b, err := base64.RawURLEncoding.DecodeString(cursor)
-	if err != nil {
-		return bad
-	}
-	var parts []json.RawMessage
-	var name string
-	if json.Unmarshal(b, &parts) != nil || len(parts) != len(key)+1 || json.Unmarshal(parts[0], &name) != nil || name != list {
-		return bad
-	}
-	for i, k := range key {
-		if json.Unmarshal(parts[i+1], k) != nil {
-			return bad
-		}
-		if s, ok := k.(*string); ok && !storable(*s) {
-			return bad
-		}
-	}
-	return nil
-}
+// 游标由 store.EncodeCursor 编出、store.DecodeCursor 解开，与内存实现用同一份：排序键是上一页最后一条的。解出的串都
+// 存得下，拿去查询不会让 PostgreSQL 报编码错误。

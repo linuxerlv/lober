@@ -6,8 +6,6 @@
 package memstore
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -113,43 +111,11 @@ func page[T any](items []T, limit int, clone func(T) T, cursorOf func(T) string)
 	return p
 }
 
-// 游标是上一页最后一条的排序键，连同列表的名字编成 JSON 数组，再做 base64url：调用方看不出里面是什么，也就不会
-// 依赖它；改坏的、别的列表给的游标都认得出来，报 ErrInvalid。
-
-// encodeCursor 把列表 list 的排序键 key 编成游标。
-func encodeCursor(list string, key ...any) string {
-	b, _ := json.Marshal(append([]any{list}, key...)) // 排序键只有字符串与整数，编码不会失败
-	return base64.RawURLEncoding.EncodeToString(b)
-}
-
-// decodeCursor 把 encodeCursor 给出的游标解回排序键，key 是各项的指针。
-func decodeCursor(cursor, list string, key ...any) error {
-	bad := errorf(store.ErrInvalid, "游标 %q 不是这个列表上一页给出的 Next", cursor)
-	b, err := base64.RawURLEncoding.DecodeString(cursor)
-	if err != nil {
-		return bad
-	}
-	var parts []json.RawMessage
-	var name string
-	if json.Unmarshal(b, &parts) != nil || len(parts) != len(key)+1 || json.Unmarshal(parts[0], &name) != nil || name != list {
-		return bad
-	}
-	for i, k := range key {
-		if json.Unmarshal(parts[i+1], k) != nil {
-			return bad
-		}
-	}
-	return nil
-}
+// 游标由 store.EncodeCursor 编出、store.DecodeCursor 解开，与 pgstore 用同一份：排序键是上一页最后一条的。
 
 // errorf 返回属于 kind 这一类的错误，写明是怎么回事；调用方用 errors.Is 判断类别。
 func errorf(kind error, format string, args ...any) error {
 	return fmt.Errorf("%w：%s", kind, fmt.Sprintf(format, args...))
-}
-
-// badID 是收到的 ID 不合 model.ValidID。
-func badID(id string) error {
-	return errorf(store.ErrInvalid, "ID %q 不合格式", id)
 }
 
 // staleRev 是调用方带回的 Rev 与现在的对不上：记录在它读过之后改过了。

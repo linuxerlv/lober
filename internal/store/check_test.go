@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"maps"
@@ -190,6 +191,149 @@ func TestCheckQuery的游标(t *testing.T) {
 	}
 }
 
+// wantInvalid 要求 err 报 ErrInvalid，what 写明是哪一例。在循环里用，一例不过不挡着别的例子。
+func wantInvalid(t *testing.T, err error, what string) {
+	t.Helper()
+	if !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("%s：应报 ErrInvalid，得到 %v", what, err)
+	}
+}
+
+func TestCheckID(t *testing.T) {
+	for _, id := range []string{"a", "0", "builtin-kickstart", store.NewID(), strings.Repeat("a", 64)} {
+		if err := store.CheckID(id); err != nil {
+			t.Errorf("ID %q 应通过，得到 %v", id, err)
+		}
+	}
+	for _, id := range []string{"", "Bad", "a@1", "-a", "a.b", "a/b", "a b", "a_b", strings.Repeat("a", 65)} {
+		wantInvalid(t, store.CheckID(id), fmt.Sprintf("ID %q", id))
+	}
+}
+
+func TestCheckVersionKey(t *testing.T) {
+	wantErr(t, store.CheckVersionKey("lvm", 1), nil)
+	wantErr(t, store.CheckVersionKey("builtin-lvm", 12), nil)
+	for _, c := range []struct {
+		id      string
+		version int
+	}{{"lvm", 0}, {"lvm", -1}, {"", 1}, {"LVM", 1}, {"lvm@1", 1}} {
+		wantInvalid(t, store.CheckVersionKey(c.id, c.version), fmt.Sprintf("版本键 %q@%d", c.id, c.version))
+	}
+}
+
+// 版本在 Subject 与审计对象里的写法与第 1 层判定的相同：激活判定报的问题与审批时重跑报的，指的是同一个版本。
+func TestVersionID与第1层判定的写法相同(t *testing.T) {
+	if got := store.VersionID("lvm", 12); got != "lvm@12" {
+		t.Errorf("VersionID 得到 %q，应为 lvm@12", got)
+	}
+	h := reviewHook()
+	h.Impls = nil // 没有实现：激活判定报 hook_no_impl，Subject 指向这个版本
+	ps := activation.Hook(h)
+	if len(ps) == 0 || ps[0].Subject.ID != store.VersionID(h.ID, h.Version) {
+		t.Errorf("激活判定的 Subject 是 %v，应指向 %s", ps, store.VersionID(h.ID, h.Version))
+	}
+}
+
+// 按 SN 找任务时，SN 没规范化是调用方漏了规范化：当成「没有任务」，机器就会从本地盘启动，这台主机的任务却一直等着。
+func TestCheckSN(t *testing.T) {
+	wantErr(t, store.CheckSN("SN-1"), nil)
+	for _, sn := range []string{"sn-1", " SN-1", "SN-1\n", "", "SN\x00", "0000000000"} {
+		wantInvalid(t, store.CheckSN(sn), fmt.Sprintf("SN %q", sn))
+	}
+}
+
+// 游标对调用方不透明，两份实现编解码用同一份：认不认一个游标两边一致。
+func TestCursor的编解码(t *testing.T) {
+	c := store.EncodeCursor("tasks", int64(300), "abc")
+	if n, err := store.CheckQuery(c, 0); err != nil || n != 100 {
+		t.Fatalf("编出的游标应过 CheckQuery，得到 %d、%v", n, err)
+	}
+	var at int64
+	var id string
+	wantErr(t, store.DecodeCursor(c, "tasks", &at, &id), nil)
+	if at != 300 || id != "abc" {
+		t.Fatalf("解回的排序键是 %d、%q，应为 300、abc", at, id)
+	}
+	var name string // ISO 的名称可以用中文、带引号与反斜杠，照原样往返
+	wantErr(t, store.DecodeCursor(store.EncodeCursor("isos", `Rocky "9.6" \ 中文`, "x"), "isos", &name, &id), nil)
+	if name != `Rocky "9.6" \ 中文` || id != "x" {
+		t.Fatalf("解回的排序键是 %q、%q", name, id)
+	}
+
+	var sn string
+	for _, b := range []struct {
+		name   string
+		cursor string
+		list   string
+		key    []any
+	}{
+		{"别的列表给的", c, "audit", []any{&at, &id}},
+		{"排序键少了一项", c, "tasks", []any{&at}},
+		{"排序键多了一项", c, "tasks", []any{&at, &id, &name}},
+		{"排序键的类型不对", store.EncodeCursor("tasks", "300", "abc"), "tasks", []any{&at, &id}},
+		{"空串", "", "hosts", []any{&sn}},
+		{"不是 base64url", "这不是游标", "hosts", []any{&sn}},
+		{"不是 JSON 数组", base64.RawURLEncoding.EncodeToString([]byte(`{"hosts":"SN-1"}`)), "hosts", []any{&sn}},
+		// 仓储给出的游标都存得下，藏着 NUL 的只能是伪造的：PostgreSQL 拿它查询会报编码错误
+		{"排序键里藏着 NUL", store.EncodeCursor("hosts", "SN\x00"), "hosts", []any{&sn}},
+		{"第二个排序键里藏着 NUL", store.EncodeCursor("isos", "Rocky", "a\x00"), "isos", []any{&name, &id}},
+	} {
+		wantInvalid(t, store.DecodeCursor(b.cursor, b.list, b.key...), b.name)
+	}
+}
+
+func TestCheckEventQuery(t *testing.T) {
+	for _, c := range []struct {
+		after int64
+		limit int
+		want  int
+	}{{0, 0, 100}, {7, 1, 1}, {1 << 40, 500, 500}} {
+		if n, err := store.CheckEventQuery("task-1", c.after, c.limit); err != nil || n != c.want {
+			t.Errorf("afterSeq %d、limit %d 应取 %d 条，得到 %d、%v", c.after, c.limit, c.want, n, err)
+		}
+	}
+	for _, c := range []struct {
+		name  string
+		id    string
+		after int64
+		limit int
+	}{
+		{"任务 ID 不合格式", "Task 1", 0, 0},
+		{"afterSeq 为负", "task-1", -1, 0},
+		{"limit 超过 500", "task-1", 0, 501},
+		{"limit 为负", "task-1", 0, -1},
+	} {
+		_, err := store.CheckEventQuery(c.id, c.after, c.limit)
+		wantInvalid(t, err, c.name)
+	}
+}
+
+// 推进的入参：仓储只查 ID、目标状态与事件本身，一步推进合不合规矩（退回、从结束的状态再改）由第 7 层判断，这里都放过。
+func TestCheckTransition(t *testing.T) {
+	for _, to := range []model.TaskState{model.TaskPending, model.TaskBooting, model.TaskDone, model.TaskCancelled} {
+		wantErr(t, store.CheckTransition("task-1", to, nil), nil)
+	}
+	wantErr(t, store.CheckTransition("task-1", model.TaskBooting, []store.NewEvent{goodEvent(), goodEvent()}), nil)
+	for _, id := range []string{"", "Task-1", "a@1", "a/b"} {
+		wantInvalid(t, store.CheckTransition(id, model.TaskBooting, nil), fmt.Sprintf("任务 ID %q", id))
+	}
+	for _, to := range []model.TaskState{"", "Pending", "started", "done "} {
+		wantInvalid(t, store.CheckTransition("task-1", to, nil), fmt.Sprintf("目标状态 %q", to))
+	}
+	bad := goodEvent()
+	bad.Kind = "boot"
+	wantInvalid(t, store.CheckTransition("task-1", model.TaskBooting, []store.NewEvent{goodEvent(), bad}), "带了不合规则的事件")
+}
+
+// 推进撞上 C31 时，问题与准入判定对这台主机报的相同：向导与推进说的是同一句话。
+func TestOpenTaskProblems(t *testing.T) {
+	want := admission.HostSelectable(model.Host{SN: "SN-1"}, true)
+	if codes := codesOf(want); !slices.Equal(codes, []model.Code{"host_has_open_task"}) {
+		t.Fatalf("反例没造对：%v", want)
+	}
+	wantRejected(t, store.OpenTaskProblems("SN-1"), want)
+}
+
 // newTask 是一个合规则的待建任务：快照里的主机、ISO 与模板版本和任务字段一致。快照的其余部分这里不看。
 func newTask(sn string) model.Task {
 	return model.Task{
@@ -248,6 +392,7 @@ func TestCheckNewTasks每条前提各一个反例(t *testing.T) {
 		{"ISOID 与快照不一致", func(t *model.Task) { t.Snapshot.ISO.ID = "iso-other" }, perTask},
 		{"TemplateID 与快照不一致", func(t *model.Task) { t.Snapshot.Template.ID = "other" }, perTask},
 		{"TemplateVersion 与快照不一致", func(t *model.Task) { t.Snapshot.Template.Version = 5 }, perTask},
+		{"快照里有存不下的文本", func(t *model.Task) { t.Snapshot.Template.Body = "a\x00b" }, perTask},
 		{"同一批的 ISO 不同", func(t *model.Task) { t.ISOID, t.Snapshot.ISO.ID = "iso-other", "iso-other" }, sameBatch},
 		{"同一批的模板不同", func(t *model.Task) { t.TemplateID, t.Snapshot.Template.ID = "other", "other" }, sameBatch},
 		{"同一批的模板版本不同", func(t *model.Task) { t.TemplateVersion, t.Snapshot.Template.Version = 5, 5 }, sameBatch},
@@ -267,6 +412,47 @@ func TestCheckNewTasks每条前提各一个反例(t *testing.T) {
 					wantErr(t, store.CheckNewTasks(ts), store.ErrInvalid)
 				})
 			}
+		})
+	}
+}
+
+// 快照里的每个串都要存得下（spec §3 总则）：pgstore 把快照存成 jsonb，jsonb 不收 NUL，encoding/json 还会把非法的 UTF-8
+// 换成 U+FFFD，固化下来的快照（C29）就不是写进去的那份。嵌套在结构、切片与 map 里的都要查到，map 的键也算；中文、制表符
+// 与别的控制字符都存得下，照收。
+func TestCheckNewTasks快照里的文本都要存得下(t *testing.T) {
+	slotWith := func(in model.SnapshotInstance) []model.SnapshotSlot {
+		return []model.SnapshotSlot{{Seq: 1, Name: "分区"}, {Seq: 2, Name: "装后配置", Exec: true, Instances: []model.SnapshotInstance{{HookID: "nic"}, in}}}
+	}
+	cases := []struct {
+		name string
+		mod  func(s *model.Snapshot)
+		want error
+	}{
+		{"中文、制表符与控制字符照收", func(s *model.Snapshot) {
+			s.Template.Body = "中文\t\x01\n"
+			s.Host.Attrs = map[string]string{"机柜": "A 区\x7f"}
+			s.Slots = slotWith(model.SnapshotInstance{HookID: "lvm", Body: "#!/bin/sh\n\x1b[0m"})
+		}, nil},
+		{"族含 NUL", func(s *model.Snapshot) { s.Family = "linux\x00" }, store.ErrInvalid},
+		{"模板的正文含 NUL", func(s *model.Snapshot) { s.Template.Body = "a\x00b" }, store.ErrInvalid},
+		{"ISO 的名称不是 UTF-8", func(s *model.Snapshot) { s.ISO.Name = "Rocky\xff" }, store.ErrInvalid},
+		{"属性的值不是 UTF-8", func(s *model.Snapshot) { s.Host.Attrs = map[string]string{"rack": "\xff"} }, store.ErrInvalid},
+		{"属性的键不是 UTF-8", func(s *model.Snapshot) { s.Host.Attrs = map[string]string{"\xff": "A1"} }, store.ErrInvalid},
+		{"制品的路径含 NUL", func(s *model.Snapshot) { s.ISO.Artifacts = map[string]string{"kernel": "vmlinuz\x00"} }, store.ErrInvalid},
+		{"模板参数取值的一项含 NUL", func(s *model.Snapshot) {
+			s.Template.Params = map[string]model.SnapshotValue{"dns": {Type: "ip", List: true, Items: []string{"10.0.0.53", "a\x00"}}}
+		}, store.ErrInvalid},
+		{"插槽名不是 UTF-8", func(s *model.Snapshot) { s.Slots = []model.SnapshotSlot{{Seq: 1, Name: "\xfe"}} }, store.ErrInvalid},
+		{"第二个实例的正文含 NUL", func(s *model.Snapshot) { s.Slots = slotWith(model.SnapshotInstance{HookID: "lvm", Body: "a\x00"}) }, store.ErrInvalid},
+		{"实例参数的键不是 UTF-8", func(s *model.Snapshot) {
+			s.Slots = slotWith(model.SnapshotInstance{HookID: "lvm", Params: map[string]model.SnapshotValue{"\xff": {Type: "text"}}})
+		}, store.ErrInvalid},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ts := []model.Task{newTask("SN-1"), newTask("SN-2")}
+			c.mod(&ts[1].Snapshot)
+			wantErr(t, store.CheckNewTasks(ts), c.want)
 		})
 	}
 }

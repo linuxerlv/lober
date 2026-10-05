@@ -16,7 +16,7 @@ func (s *Store) CreateISO(_ context.Context, iso model.ISO, a store.Audit) (mode
 	if err := store.CheckAudit(a); err != nil {
 		return model.ISO{}, err
 	}
-	if err := checkNewISO(iso); err != nil {
+	if err := store.CheckNewISO(iso); err != nil {
 		return model.ISO{}, err
 	}
 	iso = model.ISO{ID: store.NewID(), Name: iso.Name, Family: iso.Family, Series: iso.Series, State: model.ISOAcquiring, Rev: 1}
@@ -30,34 +30,19 @@ func (s *Store) CreateISO(_ context.Context, iso model.ISO, a store.Audit) (mode
 	return iso, nil
 }
 
-// UpdateISO 见 store.ISOs。已废弃的 ISO 报 ErrImmutable：废弃是要审计的决定，不审计的系统更新不能把它撤掉。
-// 写进来的文本有一处存不下，不论置为什么状态都报 ErrInvalid（checkISOText）。
+// UpdateISO 见 store.ISOs。入参先过 store.CheckISOUpdate；读到现有的记录之后，再过 store.CheckISOUpdateFrom：已废弃的报
+// ErrImmutable，改了族、系与名称报 ErrInvalid，置为 ready 的要过完整性判定，写进来的文本都要存得下。
 func (s *Store) UpdateISO(_ context.Context, iso model.ISO) (model.ISO, error) {
-	switch {
-	case !model.ValidID(iso.ID):
-		return model.ISO{}, badID(iso.ID)
-	case iso.State == model.ISODeprecated:
-		return model.ISO{}, errorf(store.ErrInvalid, "系统更新不能把 ISO 置为已废弃：废弃要审计，走 DeprecateISO")
-	case !iso.State.Valid():
-		return model.ISO{}, errorf(store.ErrInvalid, "ISO 的状态 %q 不认识", iso.State)
+	if err := store.CheckISOUpdate(iso); err != nil {
+		return model.ISO{}, err
 	}
 	iso = cloneISO(iso)
 	err := s.write(func(t *tx) error {
 		old, err := t.isoAt(iso.ID, iso.Rev)
-		switch {
-		case err != nil:
+		if err != nil {
 			return err
-		case old.State == model.ISODeprecated:
-			return errorf(store.ErrImmutable, "ISO %s 已废弃，不再接受系统更新", iso.ID)
-		case iso.Family != old.Family || iso.Series != old.Series || iso.Name != old.Name:
-			return errorf(store.ErrInvalid, "系统更新不能改 ISO %s 的族、系与名称", iso.ID)
 		}
-		if iso.State == model.ISOReady { // C5：导入完成的 ISO 必须通过完整性判定
-			if ps := iso.Validate(); len(ps) > 0 {
-				return &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
-			}
-		}
-		if err := checkISOText(iso); err != nil { // 不论置为什么状态：Validate 不看制品与 SHA256，别的状态也不跑它
+		if err := store.CheckISOUpdateFrom(old, iso); err != nil {
 			return err
 		}
 		if other := t.sha256Holder(iso); other != "" {
@@ -78,16 +63,16 @@ func (s *Store) DeprecateISO(_ context.Context, id string, rev int64, a store.Au
 	if err := store.CheckAudit(a); err != nil {
 		return err
 	}
-	if !model.ValidID(id) {
-		return badID(id)
+	if err := store.CheckID(id); err != nil {
+		return err
 	}
 	return s.write(func(t *tx) error {
 		iso, err := t.isoAt(id, rev)
 		if err != nil {
 			return err
 		}
-		if iso.State != model.ISOReady {
-			return errorf(store.ErrConflict, "ISO %s 现为 %s，只有 ready 的能废弃", id, iso.State)
+		if err := store.CheckISODeprecation(id, iso.State); err != nil {
+			return err
 		}
 		iso.State = model.ISODeprecated
 		iso.Rev++
@@ -101,8 +86,8 @@ func (s *Store) DeleteISO(_ context.Context, id string, rev int64, a store.Audit
 	if err := store.CheckAudit(a); err != nil {
 		return err
 	}
-	if !model.ValidID(id) {
-		return badID(id)
+	if err := store.CheckID(id); err != nil {
+		return err
 	}
 	return s.write(func(t *tx) error {
 		if _, err := t.isoAt(id, rev); err != nil {
@@ -118,8 +103,8 @@ func (s *Store) DeleteISO(_ context.Context, id string, rev int64, a store.Audit
 
 // GetISO 见 store.ISOs。
 func (s *Store) GetISO(_ context.Context, id string) (model.ISO, error) {
-	if !model.ValidID(id) {
-		return model.ISO{}, badID(id)
+	if err := store.CheckID(id); err != nil {
+		return model.ISO{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -139,7 +124,7 @@ func (s *Store) ListISOs(_ context.Context, q store.ISOQuery) (store.Page[model.
 	}
 	var after model.ISO // 只用 Name 与 ID；没有游标时两者为空，排在任何 ISO 之前
 	if q.Cursor != "" {
-		if err := decodeCursor(q.Cursor, "isos", &after.Name, &after.ID); err != nil {
+		if err := store.DecodeCursor(q.Cursor, "isos", &after.Name, &after.ID); err != nil {
 			return store.Page[model.ISO]{}, err
 		}
 	}
@@ -152,73 +137,21 @@ func (s *Store) ListISOs(_ context.Context, q store.ISOQuery) (store.Page[model.
 		}
 	}
 	slices.SortFunc(items, compareISOs)
-	return page(items, limit, cloneISO, func(iso model.ISO) string { return encodeCursor("isos", iso.Name, iso.ID) }), nil
+	return page(items, limit, cloneISO, func(iso model.ISO) string { return store.EncodeCursor("isos", iso.Name, iso.ID) }), nil
 }
 
-// checkNewISO 查 CreateISO 的入参。其余字段由仓储与第 4 层的导入填，调用方填了，多半是把别的记录当成了新建的入参。
-func checkNewISO(iso model.ISO) error {
-	switch {
-	case iso.ID != "" || iso.Version != "" || iso.Arch != "" || iso.State != "" || iso.SHA256 != "" ||
-		iso.Artifacts != nil || iso.Offers != nil || iso.Rev != 0:
-		return errorf(store.ErrInvalid, "新建 ISO 只填 Name、Family、Series，其余由仓储与导入填")
-	case !iso.Family.Valid() || !iso.Series.Valid() || iso.Series.Family() != iso.Family:
-		return errorf(store.ErrInvalid, "族 %q 与系 %q 对不上：两者都要是目录里的原样写法，系要属于族（C2）", iso.Family, iso.Series)
-	case !model.StorableText(iso.Name):
-		return errorf(store.ErrInvalid, "ISO 的名称存不下：不是合法的 UTF-8，或含 NUL")
-	}
-	return nil
-}
-
-// checkISOText 查系统更新写进来的文本都存得下（model.StorableText，spec §3 总则）：版本、架构、SHA256、制品的角色
-// 与路径、提供的集合名、选项的值与显示名。PostgreSQL 的 text 与 jsonb 都不收 NUL，jsonb 还会把非法的 UTF-8 换成
-// U+FFFD，读回来的就不是写进去的。名称、族与系不能经系统更新改，新建时已经查过。
-func checkISOText(iso model.ISO) error {
-	bad := func(what string) error {
-		return errorf(store.ErrInvalid, "ISO %s 的%s存不下：不是合法的 UTF-8，或含 NUL", iso.ID, what)
-	}
-	switch {
-	case !model.StorableText(iso.Version):
-		return bad("版本")
-	case !model.StorableText(string(iso.Arch)):
-		return bad("架构")
-	case !model.StorableText(iso.SHA256):
-		return bad(" SHA256 ")
-	}
-	for role, path := range iso.Artifacts {
-		if !model.StorableText(role) || !model.StorableText(path) {
-			return bad("制品")
-		}
-	}
-	for name, opts := range iso.Offers {
-		if !model.StorableText(name) {
-			return bad("提供的集合名")
-		}
-		for _, o := range opts {
-			if !model.StorableText(o.Value) || !model.StorableText(o.Label) {
-				return bad("提供的选项")
-			}
-		}
-	}
-	return nil
-}
-
-// sha256Holder 返回已经占着 iso 的 SHA256 的另一个 ISO 的 ID，没有时返回空串（C4）。条件与 pgstore 的部分唯一索引
-// 相同：空的 SHA256 与导入失败的 ISO 都不占位，所以导入失败的 ISO 可以记下与别的 ISO 相同的内容，指向那一个
-// （spec §5.1 第 3 步）。
+// sha256Holder 返回已经占着 iso 的 SHA256 的另一个 ISO 的 ID，没有时返回空串（C4）。谁占着它见 store.HoldsSHA256：空的
+// SHA256 与导入失败的 ISO 都不占位，与 pgstore 的部分唯一索引同一个条件。
 func (d *data) sha256Holder(iso model.ISO) string {
-	if !holdsSHA256(iso) {
+	if !store.HoldsSHA256(iso) {
 		return ""
 	}
 	for id, other := range d.isos {
-		if id != iso.ID && holdsSHA256(other) && other.SHA256 == iso.SHA256 {
+		if id != iso.ID && store.HoldsSHA256(other) && other.SHA256 == iso.SHA256 {
 			return id
 		}
 	}
 	return ""
-}
-
-func holdsSHA256(iso model.ISO) bool {
-	return iso.SHA256 != "" && iso.State != model.ISOFailed
 }
 
 // isoAt 取 ID 为 id、Rev 为 rev 的 ISO：不存在报 ErrNotFound，Rev 对不上报 ErrConflict。

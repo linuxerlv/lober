@@ -5,7 +5,6 @@ import (
 	"errors"
 	"reflect"
 	"slices"
-	"strconv"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -19,15 +18,9 @@ var hookContentColumns = []string{"description", "params", "timeout_sec", "requi
 
 // CreateHook 见 store.Hooks。名字撞了由唯一索引 idx_hooks_name_key 报出来，不先查：先查再插，两次同时新建就都查不到。
 func (s *Store) CreateHook(ctx context.Context, h model.Hook) (model.Hook, error) {
-	if h.ID != "" || h.Version != 0 || h.State != "" || h.Approver != "" || h.Builtin || h.Rev != 0 {
-		return model.Hook{}, errorf(store.ErrInvalid, "新建 hook 只带内容与作者：ID、版本、状态、审批人、内置标记与 Rev 由仓储填")
-	}
-	if err := checkAuthor(h.Author); err != nil {
+	name, key, err := store.CheckNewHook(h)
+	if err != nil {
 		return model.Hook{}, err
-	}
-	name, key, ps := normalizeName(h.Name, model.Subject{Kind: "hook"}) // 还没有 ID
-	if ps = append(ps, hookTextProblems(h, "")...); len(ps) > 0 {
-		return model.Hook{}, &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
 	}
 	h.ID, h.Version, h.Name, h.State, h.Rev = store.NewID(), 1, name, model.VersionDraft, 1
 	row, err := toHookVersionRow(h)
@@ -47,13 +40,10 @@ func (s *Store) CreateHook(ctx context.Context, h model.Hook) (model.Hook, error
 }
 
 // SaveHookDraft 见 store.Hooks。保存替换的是内容；名字、状态、作者、审批人与内置标记由仓储管，带来的与库里的不同报
-// ErrInvalid（checkSameMeta）。
+// ErrInvalid（store.CheckSameMeta）。
 func (s *Store) SaveHookDraft(ctx context.Context, h model.Hook) (model.Hook, error) {
-	if err := checkKey(h.ID, h.Version); err != nil {
+	if err := store.CheckHookDraft(h); err != nil {
 		return model.Hook{}, err
-	}
-	if ps := hookTextProblems(h, versionID(h.ID, h.Version)); len(ps) > 0 {
-		return model.Hook{}, &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
 	}
 	var row hookVersionRow
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -61,11 +51,11 @@ func (s *Store) SaveHookDraft(ctx context.Context, h model.Hook) (model.Hook, er
 		if err != nil {
 			return err
 		}
-		what := "hook " + versionID(h.ID, h.Version)
-		if err := checkDraft(what, old.meta()); err != nil {
+		what := "hook " + store.VersionID(h.ID, h.Version)
+		if err := store.CheckDraft(what, old.meta()); err != nil {
 			return err
 		}
-		if err := checkSameMeta(what, old.meta(), hookMeta(h)); err != nil {
+		if err := store.CheckSameMeta(what, old.meta(), store.HookMeta(h)); err != nil {
 			return err
 		}
 		h.Rev = old.Rev + 1
@@ -82,10 +72,10 @@ func (s *Store) SaveHookDraft(ctx context.Context, h model.Hook) (model.Hook, er
 
 // NewHookVersion 见 store.Hooks。新版本的号由 allocVersion 分配，删掉的草稿的号不再发。
 func (s *Store) NewHookVersion(ctx context.Context, id string, from int, author string) (model.Hook, error) {
-	if err := checkKey(id, from); err != nil {
+	if err := store.CheckVersionKey(id, from); err != nil {
 		return model.Hook{}, err
 	}
-	if err := checkAuthor(author); err != nil {
+	if err := store.CheckAuthor(author); err != nil {
 		return model.Hook{}, err
 	}
 	var row hookVersionRow
@@ -128,7 +118,7 @@ func (s *Store) ApproveHook(ctx context.Context, k model.HookKey, rev int64, app
 	if err := store.CheckAudit(a); err != nil {
 		return err
 	}
-	if err := checkApprover(approver); err != nil {
+	if err := store.CheckApprover(approver); err != nil {
 		return err
 	}
 	return s.hookStep(ctx, k, rev, a, model.VersionReview, model.VersionApproved, func(h *model.Hook) error {
@@ -161,7 +151,7 @@ func (s *Store) DeprecateHook(ctx context.Context, k model.HookKey, rev int64, a
 // 转换之前对锁住之后读到的版本跑它，返回错误就什么都不写（审批的重跑判定）。审计写在转换之后，写失败时整个事务回滚。
 func (s *Store) hookStep(ctx context.Context, k model.HookKey, rev int64, a store.Audit, from, to model.VersionState,
 	apply func(h *model.Hook) error) error {
-	if err := checkKey(k.ID, k.Version); err != nil {
+	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
 		return err
 	}
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -169,8 +159,8 @@ func (s *Store) hookStep(ctx context.Context, k model.HookKey, rev int64, a stor
 		if err != nil {
 			return err
 		}
-		target := versionID(k.ID, k.Version)
-		if err := checkStep("hook "+target, row.meta(), from); err != nil {
+		target := store.VersionID(k.ID, k.Version)
+		if err := store.CheckStep("hook "+target, row.meta(), from); err != nil {
 			return err
 		}
 		if apply != nil {
@@ -197,10 +187,10 @@ func (s *Store) RenameHook(ctx context.Context, id, name string, a store.Audit) 
 	if err := store.CheckAudit(a); err != nil {
 		return err
 	}
-	if !model.ValidID(id) {
-		return badID(id)
+	if err := store.CheckID(id); err != nil {
+		return err
 	}
-	display, key, ps := normalizeName(name, model.Subject{Kind: "hook", ID: id})
+	display, key, ps := store.NormalizeName(name, model.Subject{Kind: "hook", ID: id})
 	if len(ps) > 0 {
 		return &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
 	}
@@ -210,7 +200,7 @@ func (s *Store) RenameHook(ctx context.Context, id, name string, a store.Audit) 
 // DeleteHookDraft 见 store.Hooks。先锁身份、再锁版本，次序与别的写入一致：删的是最后一个版本时要连身份一起删，同时
 // 给这个身份开新版本的那一次排在后面。引用查的是 template_hook_refs，它由保存模板的各个版本时维护。
 func (s *Store) DeleteHookDraft(ctx context.Context, k model.HookKey, rev int64) error {
-	if err := checkKey(k.ID, k.Version); err != nil {
+	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
 		return err
 	}
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -224,8 +214,8 @@ func (s *Store) DeleteHookDraft(ctx context.Context, k model.HookKey, rev int64)
 		if err != nil {
 			return err
 		}
-		what := "hook " + versionID(k.ID, k.Version)
-		if err := checkDraft(what, row.meta()); err != nil {
+		what := "hook " + store.VersionID(k.ID, k.Version)
+		if err := store.CheckDraft(what, row.meta()); err != nil {
 			return err
 		}
 		var by []templateHookRefRow
@@ -236,7 +226,7 @@ func (s *Store) DeleteHookDraft(ctx context.Context, k model.HookKey, rev int64)
 			return err
 		case len(by) > 0: // 报按键排在最前的那一个，说法每次都一样
 			return errorf(store.ErrReferenced, "%s 被模板 %s 引用：先改掉那个模板的装配表，或删掉那个模板草稿", what,
-				versionID(by[0].TemplateID, by[0].TemplateVersion))
+				store.VersionID(by[0].TemplateID, by[0].TemplateVersion))
 		}
 		if err := tx.Delete(&hookVersionRow{HookID: k.ID, Version: k.Version}).Error; err != nil {
 			return err
@@ -248,7 +238,7 @@ func (s *Store) DeleteHookDraft(ctx context.Context, k model.HookKey, rev int64)
 
 // GetHook 见 store.Hooks。
 func (s *Store) GetHook(ctx context.Context, k model.HookKey) (model.Hook, error) {
-	if err := checkKey(k.ID, k.Version); err != nil {
+	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
 		return model.Hook{}, err
 	}
 	row, ok, err := hookVersionAt(s.read(ctx), k)
@@ -264,7 +254,7 @@ func (s *Store) GetHook(ctx context.Context, k model.HookKey) (model.Hook, error
 // GetHooks 见 store.Hooks。键先全部查过格式，有一个不合就报 ErrInvalid，不当成找不到。
 func (s *Store) GetHooks(ctx context.Context, ks []model.HookKey) (map[model.HookKey]model.Hook, error) {
 	for _, k := range ks {
-		if err := checkKey(k.ID, k.Version); err != nil {
+		if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
 			return nil, err
 		}
 	}
@@ -287,8 +277,8 @@ func (s *Store) GetHooks(ctx context.Context, ks []model.HookKey) (map[model.Hoo
 
 // ListHookVersions 见 store.Hooks。身份至少有一个版本（删掉最后一个版本时身份一起删掉），一个都没取到就是身份不存在。
 func (s *Store) ListHookVersions(ctx context.Context, id string) ([]model.Hook, error) {
-	if !model.ValidID(id) {
-		return nil, badID(id)
+	if err := store.CheckID(id); err != nil {
+		return nil, err
 	}
 	var rows []hookVersionRow
 	if err := hookTables.joined(s.read(ctx)).Where("hook_versions.hook_id = ?", id).Order("hook_versions.version").
@@ -323,20 +313,17 @@ func (s *Store) ListHooks(ctx context.Context, q store.HookQuery) (store.Page[mo
 		return store.Page[model.Hook]{}, err
 	}
 	return page(rows, limit, hookVersionRow.hook, func(r hookVersionRow) string {
-		return encodeCursor(hookTables.idents, r.NameKey, r.HookID)
+		return store.EncodeCursor(hookTables.idents, r.NameKey, r.HookID)
 	})
 }
 
 // EnsureBuiltinHook 见 store.Hooks。比的是版本的全部字段，名字按身份上的，Rev 不比：内置的版本写入之后不会再变。
 func (s *Store) EnsureBuiltinHook(ctx context.Context, h model.Hook) error {
-	id := versionID(h.ID, h.Version)
-	key, ps, err := checkBuiltin(h.ID, h.Version, hookMeta(h), model.Subject{Kind: "hook", ID: id})
+	key, err := store.CheckBuiltinHook(h)
 	if err != nil {
 		return err
 	}
-	if ps = append(ps, hookTextProblems(h, id)...); len(ps) > 0 {
-		return &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
-	}
+	id := store.VersionID(h.ID, h.Version)
 	h.Rev = 1
 	row, err := toHookVersionRow(h)
 	if err != nil {
@@ -392,7 +379,7 @@ func lockHookVersion(tx *gorm.DB, k model.HookKey, rev int64) (hookVersionRow, e
 	case err != nil:
 		return hookVersionRow{}, err
 	case row.Rev != rev:
-		return hookVersionRow{}, staleRev("hook "+versionID(k.ID, k.Version), row.Rev, rev)
+		return hookVersionRow{}, staleRev("hook "+store.VersionID(k.ID, k.Version), row.Rev, rev)
 	}
 	return row, nil
 }
@@ -414,34 +401,11 @@ func hookVersionsIn(db *gorm.DB, ks []model.HookKey, lock ...clause.Expression) 
 }
 
 func hookNotFound(k model.HookKey) error {
-	return errorf(store.ErrNotFound, "hook %s 不存在", versionID(k.ID, k.Version))
+	return errorf(store.ErrNotFound, "hook %s 不存在", store.VersionID(k.ID, k.Version))
 }
 
-func hookMeta(h model.Hook) meta {
-	return meta{name: h.Name, state: h.State, author: h.Author, approver: h.Approver, builtin: h.Builtin}
-}
-
-// hookTextProblems 是 hook 版本 h 里存不下的文本（model.StorableText，spec §3 总则），每一处一条 text_not_storable：
-// 说明落在 hook 整体上，参数声明与实现按位置，Subject 的写法同激活判定，id 是「ID@版本」，新建时为空。text 与 jsonb
-// 都不收 NUL，encoding/json 还会把非法的 UTF-8 换成 U+FFFD，读回来的就不是写进去的，所以族、系、种类这些照目录取值的
-// 字段也查。规则与内存实现的同名函数相同，由契约测试守着两边一致。
-func hookTextProblems(h model.Hook, id string) []model.Problem {
-	whole := model.Subject{Kind: "hook", ID: id}
-	var ps []model.Problem
-	if !model.StorableText(h.Description) {
-		ps = append(ps, notStorable(whole))
-	}
-	ps = append(ps, declTextProblems(h.Params, whole)...)
-	for i, impl := range h.Impls {
-		if !storable(impl.Body, string(impl.Family), string(impl.Kind), string(impl.Interpreter)) ||
-			!storableAll(impl.Series) || !storableAll(impl.Timings) {
-			ps = append(ps, notStorable(model.Subject{Kind: "impl", ID: id, Path: "impl/" + strconv.Itoa(i+1)}))
-		}
-	}
-	return ps
-}
-
-// 下面是 hook 与模板共用的部分：两边的身份、版本与名字规则一一对应（store.Templates 的说明），表也一一对应。
+// 下面是 hook 与模板共用的部分：两边的身份、版本与名字规则一一对应（store.Templates 的说明），表也一一对应。入参与版本
+// 状态的检查是两份实现共用的，在 store 包（check_authoring.go）；这里只有身份表与版本表怎么读写。
 
 // versioning 是 hook 或模板的身份表与版本表，共用的读写按它取表名。表名都是常量，拼进 SQL 也不会有注入。
 type versioning struct {
@@ -585,7 +549,7 @@ func (s *Store) nameHolder(ctx context.Context, v versioning, key string) func(s
 
 // listQuery 查 ListHooks 与 ListTemplates 的入参，给出取一页的查询（多取一条）与条数。每个身份一项：默认是最新的版本，
 // approvedOnly 时是当前的已审批版本，规则同 model.CurrentApproved（已审批的最高版本），没有就跳过；状态的过滤看的是选出
-// 的那一项。名字的前缀与名字的 key 比，只把 ASCII 字母转成小写；starts_with 按原样比，_、% 与反斜杠不必转义。按名字的
+// 的那一项。名字的前缀按 store.NameKeyPrefix 转了再与名字的 key 比；starts_with 按原样比，_、% 与反斜杠不必转义。按名字的
 // key、再按 ID 的字节序排，游标是上一页最后一项的这两样。条件存不下时查询为 nil：什么都匹配不上。
 func (v versioning) listQuery(db *gorm.DB, cursor string, limit int, prefix string, states []model.VersionState,
 	approvedOnly bool) (*gorm.DB, int, error) {
@@ -595,7 +559,7 @@ func (v versioning) listQuery(db *gorm.DB, cursor string, limit int, prefix stri
 	}
 	var afterKey, afterID string
 	if cursor != "" {
-		if err := decodeCursor(cursor, v.idents, &afterKey, &afterID); err != nil {
+		if err := store.DecodeCursor(cursor, v.idents, &afterKey, &afterID); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -614,7 +578,7 @@ func (v versioning) listQuery(db *gorm.DB, cursor string, limit int, prefix stri
 	}
 	db = v.joined(db).Where(v.versions + ".version = (" + pick + ")")
 	if prefix != "" {
-		db = db.Where("starts_with("+v.idents+".name_key, ?)", asciiLower(prefix))
+		db = db.Where("starts_with("+v.idents+".name_key, ?)", store.NameKeyPrefix(prefix))
 	}
 	if len(keep) > 0 {
 		db = db.Where(v.versions+".state IN ?", keep)
@@ -624,148 +588,4 @@ func (v versioning) listQuery(db *gorm.DB, cursor string, limit int, prefix stri
 		db = db.Where("("+key+" > ? OR ("+key+" = ? AND "+id+" > ?))", afterKey, afterKey, afterID)
 	}
 	return db.Order(key + ", " + id).Limit(n + 1), n, nil
-}
-
-// meta 是版本里由仓储管的字段，hook 与模板同名同义。
-type meta struct {
-	name, author, approver string
-	state                  model.VersionState
-	builtin                bool
-}
-
-// 下面的检查与内存实现的同名函数规则相同，由契约测试守着两边一致。
-
-// versionID 是一个版本在审计对象、Subject 与报错里的写法：「ID@版本」，与第 1 层判定里的相同。
-func versionID(id string, version int) string {
-	return id + "@" + strconv.Itoa(version)
-}
-
-// checkKey 查收到的版本键：ID 过 model.ValidID，版本号从 1 起。不合的报 ErrInvalid，不当成找不到。
-func checkKey(id string, version int) error {
-	switch {
-	case !model.ValidID(id):
-		return badID(id)
-	case version < 1:
-		return errorf(store.ErrInvalid, "版本号要从 1 起，收到 %d", version)
-	}
-	return nil
-}
-
-// checkAuthor 查新版本的作者：审批人不能是作者（C22），没有作者这条就无从查起；作者要写进库里，还得存得下。
-func checkAuthor(author string) error {
-	if author == "" || !model.StorableText(author) {
-		return errorf(store.ErrInvalid, "作者要是非空的可存文本，收到 %q", author)
-	}
-	return nil
-}
-
-// checkApprover 查审批人存得下。空的或就是作者的，由重跑的判定报出（activation.Approver）。
-func checkApprover(approver string) error {
-	if !model.StorableText(approver) {
-		return errorf(store.ErrInvalid, "审批人 %q 存不下：不是合法的 UTF-8，或含 NUL", approver)
-	}
-	return nil
-}
-
-// normalizeName 按 model.NormalizeName 规范化名字；不合法时返回它的问题，Subject 换成 subj。
-func normalizeName(raw string, subj model.Subject) (display, key string, ps []model.Problem) {
-	display, key, err := model.NormalizeName(raw)
-	var p model.Problem
-	if errors.As(err, &p) {
-		p.Subject = subj
-		return "", "", []model.Problem{p}
-	}
-	return display, key, nil
-}
-
-// checkStep 查版本 what 能不能从 from 转出：内置的只读（C25），状态不对是不合规矩的转换，调用方重读之后再判断。
-func checkStep(what string, m meta, from model.VersionState) error {
-	switch {
-	case m.builtin:
-		return errorf(store.ErrImmutable, "%s 是内置的，只读", what)
-	case m.state != from:
-		return errorf(store.ErrConflict, "%s 现为 %s，这一步要从 %s 转出", what, m.state, from)
-	}
-	return nil
-}
-
-// checkDraft 查版本 what 是不是能改、能删的草稿：内置的只读（C25），已提交、已审批与已废弃的都不能改（C23）。
-func checkDraft(what string, m meta) error {
-	switch {
-	case m.builtin:
-		return errorf(store.ErrImmutable, "%s 是内置的，只读", what)
-	case m.state != model.VersionDraft:
-		return errorf(store.ErrImmutable, "%s 现为 %s，只有草稿能改、能删", what, m.state)
-	}
-	return nil
-}
-
-// checkSameMeta 查保存时带来的、由仓储管的字段与库里的相同：名字改用 Rename，状态只经状态转换改，作者在开版本时定下，
-// 审批人由审批写，内置标记只由装载内置内容写。不同的报 ErrInvalid，不悄悄丢掉。
-func checkSameMeta(what string, old, in meta) error {
-	switch {
-	case in.name != old.name:
-		return errorf(store.ErrInvalid, "%s 的名字是 %q，收到的是 %q：改名要另走 Rename", what, old.name, in.name)
-	case in != old:
-		return errorf(store.ErrInvalid, "%s 的状态、作者、审批人与内置标记只由仓储写，保存时要原样带回", what)
-	}
-	return nil
-}
-
-// checkBuiltin 查装载的内置版本：要是内置的已审批版本，键合格式，作者与审批人存得下，名字已经是规范的写法（再规范化
-// 一次不变，库里存的与程序自带的才比得上）。不合这些的是程序的错，报 ErrInvalid。返回名字的 key，以及名字不合法时的
-// 问题（Subject 为 subj），由调用方与文本的问题一起报。
-func checkBuiltin(id string, version int, m meta, subj model.Subject) (string, []model.Problem, error) {
-	if err := checkKey(id, version); err != nil {
-		return "", nil, err
-	}
-	switch {
-	case !m.builtin || m.state != model.VersionApproved:
-		return "", nil, errorf(store.ErrInvalid, "装载的内置内容要是内置的已审批版本，收到内置为 %v、状态为 %s", m.builtin, m.state)
-	case !storable(m.author, m.approver):
-		return "", nil, errorf(store.ErrInvalid, "内置内容的作者或审批人存不下：不是合法的 UTF-8，或含 NUL")
-	}
-	display, key, ps := normalizeName(m.name, subj)
-	if len(ps) == 0 && display != m.name {
-		return "", nil, errorf(store.ErrInvalid, "内置内容的名字 %q 不是规范的写法 %q", m.name, display)
-	}
-	return key, ps, nil
-}
-
-func notStorable(s model.Subject) model.Problem {
-	return model.NewProblem("text_not_storable", s)
-}
-
-// storableAll 同 storable，收的是 catalog 里那些以字符串为底的类型。
-func storableAll[S ~string](ss []S) bool {
-	return !slices.ContainsFunc(ss, func(s S) bool { return !model.StorableText(string(s)) })
-}
-
-// declTextProblems 是参数声明里存不下的文本，每个声明一条，Path 为 param/<序号>，其余同 whole。
-func declTextProblems(decls []model.ParamDecl, whole model.Subject) []model.Problem {
-	var ps []model.Problem
-	for i, d := range decls {
-		ok := storable(d.Name, d.Label, string(d.Type), d.Default, d.Offer)
-		for _, o := range d.Options {
-			ok = ok && storable(o.Value, o.Label)
-		}
-		if !ok {
-			s := whole
-			s.Path = "param/" + strconv.Itoa(i+1)
-			ps = append(ps, notStorable(s))
-		}
-	}
-	return ps
-}
-
-// asciiLower 只把 ASCII 的大写字母转成小写，名字的 key 就是这样来的（model.NormalizeName）。strings.ToLower 按 Unicode
-// 的规则转，会把开尔文符号 K（U+212A）转成 k，前缀就会匹配上本不该匹配的名字。
-func asciiLower(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if 'A' <= c && c <= 'Z' {
-			b[i] = c + 'a' - 'A'
-		}
-	}
-	return string(b)
 }

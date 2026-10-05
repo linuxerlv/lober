@@ -24,19 +24,13 @@ type tplVersion struct {
 
 // CreateTemplate 见 store.Templates。派生要记来源，只能走 DeriveTemplate，所以入参不能带 DerivedFrom。
 func (s *Store) CreateTemplate(_ context.Context, tpl model.Template) (model.Template, error) {
-	if tpl.ID != "" || tpl.Version != 0 || tpl.State != "" || tpl.Approver != "" || tpl.Builtin || tpl.DerivedFrom != nil || tpl.Rev != 0 {
-		return model.Template{}, errorf(store.ErrInvalid, "新建模板只带内容与作者：ID、版本、状态、审批人、内置标记、派生来源与 Rev 由仓储填，派生走 DeriveTemplate")
-	}
-	if err := checkAuthor(tpl.Author); err != nil {
+	name, key, err := store.CheckNewTemplate(tpl)
+	if err != nil {
 		return model.Template{}, err
-	}
-	name, key, ps := normalizeName(tpl.Name, model.Subject{Kind: "template"}) // 还没有 ID
-	if ps = append(ps, templateTextProblems(tpl, "")...); len(ps) > 0 {
-		return model.Template{}, &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
 	}
 	tpl = cloneTemplate(tpl)
 	tpl.ID, tpl.Version, tpl.Name, tpl.State, tpl.Rev = store.NewID(), 1, name, model.VersionDraft, 1
-	err := s.write(func(t *tx) error {
+	err = s.write(func(t *tx) error {
 		if other := nameHolder(t.tpls, key, ""); other != "" {
 			return &store.DuplicateError{Field: "name", Existing: other}
 		}
@@ -52,11 +46,8 @@ func (s *Store) CreateTemplate(_ context.Context, tpl model.Template) (model.Tem
 
 // SaveTemplateDraft 见 store.Templates。规则同 SaveHookDraft；派生来源只由派生写，保存时改了也报 ErrInvalid。
 func (s *Store) SaveTemplateDraft(_ context.Context, tpl model.Template) (model.Template, error) {
-	if err := checkKey(tpl.ID, tpl.Version); err != nil {
+	if err := store.CheckTemplateDraft(tpl); err != nil {
 		return model.Template{}, err
-	}
-	if ps := templateTextProblems(tpl, versionID(tpl.ID, tpl.Version)); len(ps) > 0 {
-		return model.Template{}, &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
 	}
 	tpl = cloneTemplate(tpl)
 	err := s.write(func(t *tx) error {
@@ -64,15 +55,15 @@ func (s *Store) SaveTemplateDraft(_ context.Context, tpl model.Template) (model.
 		if err != nil {
 			return err
 		}
-		what := "模板 " + versionID(tpl.ID, tpl.Version)
-		if err := checkDraft(what, tplMeta(old)); err != nil {
+		what := "模板 " + store.VersionID(tpl.ID, tpl.Version)
+		if err := store.CheckDraft(what, store.TemplateMeta(old)); err != nil {
 			return err
 		}
-		if err := checkSameMeta(what, tplMeta(old), tplMeta(tpl)); err != nil {
+		if err := store.CheckSameMeta(what, store.TemplateMeta(old), store.TemplateMeta(tpl)); err != nil {
 			return err
 		}
-		if !reflect.DeepEqual(tpl.DerivedFrom, old.DerivedFrom) {
-			return errorf(store.ErrInvalid, "%s 的派生来源只由派生写，保存时要原样带回", what)
+		if err := store.CheckSameDerivedFrom(what, old.DerivedFrom, tpl.DerivedFrom); err != nil {
+			return err
 		}
 		tpl.Rev++
 		t.putTemplate(tpl)
@@ -87,10 +78,10 @@ func (s *Store) SaveTemplateDraft(_ context.Context, tpl model.Template) (model.
 // NewTemplateVersion 见 store.Templates。规则同 NewHookVersion；派生来源跟着内容照抄：来源出了新版本时，派生模板的每个
 // 版本都要能比出差异（C24）。
 func (s *Store) NewTemplateVersion(_ context.Context, id string, from int, author string) (model.Template, error) {
-	if err := checkKey(id, from); err != nil {
+	if err := store.CheckVersionKey(id, from); err != nil {
 		return model.Template{}, err
 	}
-	if err := checkAuthor(author); err != nil {
+	if err := store.CheckAuthor(author); err != nil {
 		return model.Template{}, err
 	}
 	var out model.Template
@@ -113,13 +104,13 @@ func (s *Store) NewTemplateVersion(_ context.Context, id string, from int, autho
 // DeriveTemplate 见 store.Templates。复制的是来源版本的族、系、正文、参数、取值来源与装配表；名字、作者与派生来源是
 // 新身份自己的。
 func (s *Store) DeriveTemplate(_ context.Context, from model.TemplateKey, name, author string) (model.Template, error) {
-	if err := checkKey(from.ID, from.Version); err != nil {
+	if err := store.CheckVersionKey(from.ID, from.Version); err != nil {
 		return model.Template{}, err
 	}
-	if err := checkAuthor(author); err != nil {
+	if err := store.CheckAuthor(author); err != nil {
 		return model.Template{}, err
 	}
-	display, key, ps := normalizeName(name, model.Subject{Kind: "template"}) // 新身份还没有 ID
+	display, key, ps := store.NormalizeName(name, model.Subject{Kind: "template"}) // 新身份还没有 ID
 	if len(ps) > 0 {
 		return model.Template{}, &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
 	}
@@ -161,7 +152,7 @@ func (s *Store) ApproveTemplate(_ context.Context, k model.TemplateKey, rev int6
 	if err := store.CheckAudit(a); err != nil {
 		return err
 	}
-	if err := checkApprover(approver); err != nil {
+	if err := store.CheckApprover(approver); err != nil {
 		return err
 	}
 	return s.templateStep(k, rev, a, model.VersionReview, model.VersionApproved, func(t *tx, tpl *model.Template) error {
@@ -197,7 +188,7 @@ func (s *Store) DeprecateTemplate(_ context.Context, k model.TemplateKey, rev in
 
 // templateStep 同 hookStep，转的是模板版本 k；apply 还拿得到这次写入的暂存，审批要从里面取引用的 hook 版本。
 func (s *Store) templateStep(k model.TemplateKey, rev int64, a store.Audit, from, to model.VersionState, apply func(t *tx, tpl *model.Template) error) error {
-	if err := checkKey(k.ID, k.Version); err != nil {
+	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
 		return err
 	}
 	return s.write(func(t *tx) error {
@@ -205,8 +196,8 @@ func (s *Store) templateStep(k model.TemplateKey, rev int64, a store.Audit, from
 		if err != nil {
 			return err
 		}
-		target := versionID(k.ID, k.Version)
-		if err := checkStep("模板 "+target, tplMeta(tpl), from); err != nil {
+		target := store.VersionID(k.ID, k.Version)
+		if err := store.CheckStep("模板 "+target, store.TemplateMeta(tpl), from); err != nil {
 			return err
 		}
 		if apply != nil {
@@ -226,10 +217,10 @@ func (s *Store) RenameTemplate(_ context.Context, id, name string, a store.Audit
 	if err := store.CheckAudit(a); err != nil {
 		return err
 	}
-	if !model.ValidID(id) {
-		return badID(id)
+	if err := store.CheckID(id); err != nil {
+		return err
 	}
-	display, key, ps := normalizeName(name, model.Subject{Kind: "template", ID: id})
+	display, key, ps := store.NormalizeName(name, model.Subject{Kind: "template", ID: id})
 	if len(ps) > 0 {
 		return &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
 	}
@@ -245,7 +236,7 @@ func (s *Store) RenameTemplate(_ context.Context, id, name string, a store.Audit
 // 审计仍可能记着这个草稿的键，它的版本号不再发（allocVersion），这些键不会对到别的内容上。它记着的 hook 引用随它一起
 // 删掉。
 func (s *Store) DeleteTemplateDraft(_ context.Context, k model.TemplateKey, rev int64) error {
-	if err := checkKey(k.ID, k.Version); err != nil {
+	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
 		return err
 	}
 	return s.write(func(t *tx) error {
@@ -253,7 +244,7 @@ func (s *Store) DeleteTemplateDraft(_ context.Context, k model.TemplateKey, rev 
 		if err != nil {
 			return err
 		}
-		if err := checkDraft("模板 "+versionID(k.ID, k.Version), tplMeta(tpl)); err != nil {
+		if err := store.CheckDraft("模板 "+store.VersionID(k.ID, k.Version), store.TemplateMeta(tpl)); err != nil {
 			return err
 		}
 		delete(t.tplVers, k)
@@ -266,7 +257,7 @@ func (s *Store) DeleteTemplateDraft(_ context.Context, k model.TemplateKey, rev 
 
 // GetTemplate 见 store.Templates。
 func (s *Store) GetTemplate(_ context.Context, k model.TemplateKey) (model.Template, error) {
-	if err := checkKey(k.ID, k.Version); err != nil {
+	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
 		return model.Template{}, err
 	}
 	s.mu.Lock()
@@ -280,8 +271,8 @@ func (s *Store) GetTemplate(_ context.Context, k model.TemplateKey) (model.Templ
 
 // ListTemplateVersions 见 store.Templates。身份不存在报 ErrNotFound。
 func (s *Store) ListTemplateVersions(_ context.Context, id string) ([]model.Template, error) {
-	if !model.ValidID(id) {
-		return nil, badID(id)
+	if err := store.CheckID(id); err != nil {
+		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -316,19 +307,14 @@ func (s *Store) ListTemplates(_ context.Context, q store.TemplateQuery) (store.P
 	return identPage(s.d.tpls, q.NamePrefix, after, limit, "templates", pick, keep, cloneTemplate), nil
 }
 
-// EnsureBuiltinTemplate 见 store.Templates，规则同 EnsureBuiltinHook。内置模板不是派生来的，带了派生来源报 ErrInvalid。
+// EnsureBuiltinTemplate 见 store.Templates，规则同 EnsureBuiltinHook。内置模板不是派生来的，带了派生来源报 ErrInvalid
+// （store.CheckBuiltinTemplate）。
 func (s *Store) EnsureBuiltinTemplate(_ context.Context, tpl model.Template) error {
-	id := versionID(tpl.ID, tpl.Version)
-	key, ps, err := checkBuiltin(tpl.ID, tpl.Version, tplMeta(tpl), model.Subject{Kind: "template", ID: id})
+	key, err := store.CheckBuiltinTemplate(tpl)
 	if err != nil {
 		return err
 	}
-	if tpl.DerivedFrom != nil {
-		return errorf(store.ErrInvalid, "内置模板 %s 不是派生来的，不能带派生来源", id)
-	}
-	if ps = append(ps, templateTextProblems(tpl, id)...); len(ps) > 0 {
-		return &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
-	}
+	id := store.VersionID(tpl.ID, tpl.Version)
 	tpl = cloneTemplate(tpl)
 	tpl.Rev = 1
 	return s.write(func(t *tx) error {
@@ -362,7 +348,7 @@ func (d *data) templateAt(k model.TemplateKey, rev int64) (model.Template, error
 	case !ok:
 		return model.Template{}, templateNotFound(k)
 	case tpl.Rev != rev:
-		return model.Template{}, staleRev("模板 "+versionID(k.ID, k.Version), tpl.Rev, rev)
+		return model.Template{}, staleRev("模板 "+store.VersionID(k.ID, k.Version), tpl.Rev, rev)
 	}
 	return tpl, nil
 }
@@ -395,53 +381,11 @@ func compareTemplateKeys(a, b model.TemplateKey) int {
 }
 
 func templateNotFound(k model.TemplateKey) error {
-	return errorf(store.ErrNotFound, "模板 %s 不存在", versionID(k.ID, k.Version))
+	return errorf(store.ErrNotFound, "模板 %s 不存在", store.VersionID(k.ID, k.Version))
 }
 
-func tplMeta(tpl model.Template) meta {
-	return meta{name: tpl.Name, state: tpl.State, author: tpl.Author, approver: tpl.Approver, builtin: tpl.Builtin}
-}
-
-func tplInfo(tpl model.Template) (int, meta) { return tpl.Version, tplMeta(tpl) }
-
-// templateTextProblems 是模板版本 tpl 里存不下的文本，规则同 hookTextProblems：正文、族与系落在模板整体上；参数声明按
-// 位置；模板参数的取值来源按参数名，Path 为 tpl/<参数名>；装配表按插槽名，插槽名本身落在插槽上，实例按顺序落在
-// <插槽名>/<序号>，实例的取值来源落在 <插槽名>/<序号>/<参数名>。map 按键排过序，同一份模板每次报得一样。
-func templateTextProblems(tpl model.Template, id string) []model.Problem {
-	whole := model.Subject{Kind: "template", ID: id}
-	var ps []model.Problem
-	if !storable(tpl.Body, string(tpl.Family)) || !storableAll(tpl.Series) {
-		ps = append(ps, notStorable(whole))
-	}
-	ps = append(ps, declTextProblems(tpl.Params, whole)...)
-	for _, name := range slices.Sorted(maps.Keys(tpl.Bindings)) {
-		if !bindingStorable(name, tpl.Bindings[name]) {
-			s := whole
-			s.Path = model.TemplateFieldKey(name)
-			ps = append(ps, notStorable(s))
-		}
-	}
-	for _, slot := range slices.Sorted(maps.Keys(tpl.Assembly)) {
-		at := func(path string) model.Subject { return model.Subject{Kind: "slot", ID: id, Path: path} }
-		if !model.StorableText(slot) {
-			ps = append(ps, notStorable(at(slot)))
-		}
-		for i, in := range tpl.Assembly[slot] {
-			if !model.StorableText(in.HookID) {
-				ps = append(ps, notStorable(at(model.InstancePath(slot, i+1))))
-			}
-			for _, name := range slices.Sorted(maps.Keys(in.Bindings)) {
-				if !bindingStorable(name, in.Bindings[name]) {
-					ps = append(ps, notStorable(at(model.InstanceFieldKey(slot, i+1, name))))
-				}
-			}
-		}
-	}
-	return ps
-}
-
-func bindingStorable(name string, b model.Binding) bool {
-	return storable(name, string(b.Source), b.Value, b.Attr)
+func tplInfo(tpl model.Template) (int, store.VersionMeta) {
+	return tpl.Version, store.TemplateMeta(tpl)
 }
 
 // cloneTemplate 深拷贝一个模板版本：派生来源、系、参数、取值来源与装配表（实例里的指针与取值来源）各拷一份。nil 拷出来

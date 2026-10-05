@@ -16,7 +16,7 @@ func (s *Store) ListAudit(_ context.Context, q store.AuditQuery) (store.Page[sto
 	}
 	before := int64(math.MaxInt64)
 	if q.Cursor != "" {
-		if err := decodeCursor(q.Cursor, "audit", &before); err != nil {
+		if err := store.DecodeCursor(q.Cursor, "audit", &before); err != nil {
 			return store.Page[store.AuditEntry]{}, err
 		}
 	}
@@ -29,7 +29,7 @@ func (s *Store) ListAudit(_ context.Context, q store.AuditQuery) (store.Page[sto
 		}
 	}
 	keep := func(e store.AuditEntry) store.AuditEntry { return e } // 条目只有值字段，复制一份就是深拷贝
-	return page(items, limit, keep, func(e store.AuditEntry) string { return encodeCursor("audit", e.ID) }), nil
+	return page(items, limit, keep, func(e store.AuditEntry) string { return store.EncodeCursor("audit", e.ID) }), nil
 }
 
 // auditMatches 报告 e 是否满足 q 的各个过滤条件：都是完全相等，From、To 是含两端的时间范围，零值表示不按它过滤。

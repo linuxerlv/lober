@@ -303,7 +303,9 @@ func taskCreateAfterFinished(t *testing.T, s store.Store) {
 	wantEqual(t, len(slices.Concat(taskPages(t, s, store.TaskQuery{HostSN: "SN-1"})...)), 4, "这台主机的任务数")
 }
 
-// 批量建任务的第 1 步：入参本身不合前提就报 ErrInvalid，什么都不写。每条前提一个反例，规则见 store.CheckNewTasks。
+// 批量建任务的第 1 步：入参本身不合前提就报 ErrInvalid，什么都不写。每条前提一个反例，规则见 store.CheckNewTasks。快照里
+// 有存不下的文本也算（spec §3 总则）：pgstore 把快照存成 jsonb，固化下来的就不是写进去的那份（C29）；内存实现照样要报，
+// 第 5 层跑在它上面的测试才看得到生产环境会报的错。串藏在嵌套的结构、切片与 map 的键里也要查出来，几种位置各一例。
 func taskCreateInvalid(t *testing.T, s store.Store) {
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1", "SN-2")
@@ -338,6 +340,13 @@ func taskCreateInvalid(t *testing.T, s store.Store) {
 		{"ISOID 与快照不一致", at(1, func(task *model.Task) { task.Snapshot.ISO.ID = other.ID })},
 		{"TemplateID 与快照不一致", at(0, func(task *model.Task) { task.Snapshot.Template.ID = "other" })},
 		{"TemplateVersion 与快照不一致", at(1, func(task *model.Task) { task.Snapshot.Template.Version++ })},
+		{"快照的正文含 NUL", at(0, func(task *model.Task) { task.Snapshot.Template.Body = "a\x00b" })},
+		{"快照里属性的值不是 UTF-8", at(1, func(task *model.Task) { task.Snapshot.Host.Attrs = map[string]string{"rack": "\xff"} })},
+		{"快照里属性的键不是 UTF-8", at(0, func(task *model.Task) { task.Snapshot.Host.Attrs = map[string]string{"\xff": "A1"} })},
+		{"快照里实例参数的取值含 NUL", at(1, func(task *model.Task) {
+			task.Snapshot.Slots = []model.SnapshotSlot{{Seq: 1, Name: "分区", Instances: []model.SnapshotInstance{{HookID: "lvm", HookVersion: 1,
+				Params: map[string]model.SnapshotValue{"disk": {Type: "text", List: true, Items: []string{"sda", "a\x00"}}}}}}}
+		})},
 		{"HostSN 没有规范化", at(0, func(task *model.Task) { task.HostSN, task.Snapshot.Host.SN = "sn-1", "sn-1" })},
 		{"ISOID 不合 ID 的格式", all(func(task *model.Task) { task.ISOID, task.Snapshot.ISO.ID = "ISO 1", "ISO 1" })},
 		{"TemplateID 不合 ID 的格式", all(func(task *model.Task) { task.TemplateID, task.Snapshot.Template.ID = "tpl@1", "tpl@1" })},

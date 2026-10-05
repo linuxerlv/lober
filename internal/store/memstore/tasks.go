@@ -85,8 +85,8 @@ func (t *tx) admit(batch []model.Task) error {
 
 // GetTask 见 store.Tasks。
 func (s *Store) GetTask(_ context.Context, id string) (model.Task, error) {
-	if !model.ValidID(id) {
-		return model.Task{}, badID(id)
+	if err := store.CheckID(id); err != nil {
+		return model.Task{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -97,11 +97,10 @@ func (s *Store) GetTask(_ context.Context, id string) (model.Task, error) {
 	return cloneTask(task), nil
 }
 
-// FindOpenTask 见 store.Tasks。SN 不是规范化之后的写法报 ErrInvalid：登记过的主机只有那种写法，拿别的写法去找，找不到也不
-// 说明这台主机没有任务。
+// FindOpenTask 见 store.Tasks。SN 不是规范化之后的写法报 ErrInvalid（store.CheckSN）。
 func (s *Store) FindOpenTask(_ context.Context, sn string) (model.Task, bool, error) {
-	if n, err := model.NormalizeSN(sn); err != nil || n != sn {
-		return model.Task{}, false, errorf(store.ErrInvalid, "SN %q 不是规范化之后的写法：调用方要先经 model.NormalizeSN", sn)
+	if err := store.CheckSN(sn); err != nil {
+		return model.Task{}, false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -120,7 +119,7 @@ func (s *Store) ListTasks(_ context.Context, q store.TaskQuery) (store.Page[mode
 	}
 	after := model.Task{CreatedAt: math.MaxInt64} // 只用 CreatedAt 与 ID；没有游标时排在任何任务之前
 	if q.Cursor != "" {
-		if err := decodeCursor(q.Cursor, "tasks", &after.CreatedAt, &after.ID); err != nil {
+		if err := store.DecodeCursor(q.Cursor, "tasks", &after.CreatedAt, &after.ID); err != nil {
 			return store.Page[model.Task]{}, err
 		}
 	}
@@ -133,7 +132,7 @@ func (s *Store) ListTasks(_ context.Context, q store.TaskQuery) (store.Page[mode
 		}
 	}
 	slices.SortFunc(items, compareTasks)
-	return page(items, limit, cloneTask, func(task model.Task) string { return encodeCursor("tasks", task.CreatedAt, task.ID) }), nil
+	return page(items, limit, cloneTask, func(task model.Task) string { return store.EncodeCursor("tasks", task.CreatedAt, task.ID) }), nil
 }
 
 // TransitionTask 见 store.Tasks。
@@ -149,16 +148,11 @@ func (s *Store) TransitionTaskByUser(_ context.Context, id string, expect store.
 	return s.transition(id, expect, to, events, &a)
 }
 
-// transition 是两种推进共用的部分，a 为 nil 时不写审计（系统发起的推进）。先查 ID、目标状态与事件，再在暂存里查期望值与
-// C31，然后写状态、追加事件，最后写审计，写失败时整次丢掉。一步推进合不合规矩不在这里判断，那是第 7 层状态机的事。
+// transition 是两种推进共用的部分，a 为 nil 时不写审计（系统发起的推进）。先查 ID、目标状态与事件（store.CheckTransition），
+// 再在暂存里查期望值与 C31，然后写状态、追加事件，最后写审计，写失败时整次丢掉。一步推进合不合规矩不在这里判断，那是第 7 层
+// 状态机的事。
 func (s *Store) transition(id string, expect store.TaskExpect, to model.TaskState, events []store.NewEvent, a *store.Audit) (model.Task, []store.Appended, error) {
-	switch {
-	case !model.ValidID(id):
-		return model.Task{}, nil, badID(id)
-	case !to.Valid():
-		return model.Task{}, nil, errorf(store.ErrInvalid, "任务的目标状态 %q 不认识", to)
-	}
-	if err := store.CheckEvents(events); err != nil {
+	if err := store.CheckTransition(id, to, events); err != nil {
 		return model.Task{}, nil, err
 	}
 	var out model.Task
@@ -173,8 +167,7 @@ func (s *Store) transition(id string, expect store.TaskExpect, to model.TaskStat
 				id, task.State, task.Rev, expect.State, expect.Rev)
 		}
 		if _, open := t.openTask(task.HostSN, id); open && !to.Finished() {
-			// C31：问题与准入判定报的相同（admission.HostSelectable）
-			return &store.ProblemsError{Kind: store.ErrRejected, Problems: admission.HostSelectable(model.Host{SN: task.HostSN}, true)}
+			return store.OpenTaskProblems(task.HostSN) // C31：问题与准入判定报的相同
 		}
 		task.State, task.Rev = to, task.Rev+1
 		t.tasks[id] = task
