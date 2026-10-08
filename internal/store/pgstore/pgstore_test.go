@@ -22,7 +22,6 @@ import (
 	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
-	"github.com/lober/lober/internal/store/storetest"
 )
 
 // 测试夹具：每次 Open 在测试库里新建一个 schema，用完删掉，几个代理同时跑测试也互不干扰。测试库怎么准备见 doc.go。
@@ -153,13 +152,17 @@ func openStore(t *testing.T, dsn string) *Store {
 	return s
 }
 
-// installFault 在 s 的 schema 里给审计表装上失败注入（storetest.Harness 的要求）：Actor 为 storetest.FaultActor 的
-// 插入一律抛错，抛在动作本身写完之后、同一个事务里。只有测试的 schema 有这个触发器，Open 建的表上没有这条路。
+// faultActor 是失败注入用的保留操作者。openContract 打开的仓储里，Actor 为它的审计写入失败，契约用例借此证明审计写
+// 失败时动作一起回滚（spec §6.2 第 8 条）。生产环境里它只是一个普通的字符串。
+const faultActor = "lober-test-fault"
+
+// installFault 在 s 的 schema 里给审计表装上失败注入：Actor 为 faultActor 的插入一律抛错，抛在动作本身写完之后、同一个
+// 事务里。只有测试的 schema 有这个触发器，Open 建的表上没有这条路。
 func installFault(t *testing.T, s *Store) {
 	t.Helper()
 	fn := `CREATE FUNCTION lober_test_fault() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-	IF NEW.actor = '` + strings.ReplaceAll(storetest.FaultActor, "'", "''") + `' THEN
+	IF NEW.actor = '` + strings.ReplaceAll(faultActor, "'", "''") + `' THEN
 		RAISE EXCEPTION 'lober_test_fault：注入的审计写入失败';
 	END IF;
 	RETURN NEW;
@@ -173,22 +176,18 @@ $$`
 	}
 }
 
-// harness 给契约测试一个全新的空仓储，装好了失败注入。
-type harness struct{}
-
-func (harness) Open(t *testing.T) store.Store {
+// openContract 给契约用例（contract_*_test.go）一个全新的空仓储，装好了失败注入，测试结束时由 t.Cleanup 收拾。
+func openContract(t *testing.T) *Store {
+	t.Helper()
 	s := openStore(t, newSchema(t))
 	installFault(t, s)
 	return s
 }
 
-// PostgreSQL 实现实现了完整的契约，跑全部分组。
-func Test契约(t *testing.T) { storetest.RunAll(t, harness{}) }
-
-// 失败注入只在测试的 schema 里：Open 建的表上，FaultActor 只是一个普通的操作者。
+// 失败注入只在测试的 schema 里：Open 建的表上，faultActor 只是一个普通的操作者。
 func TestOpen不注入失败(t *testing.T) {
 	s := openStore(t, newSchema(t))
-	a := store.Audit{Actor: storetest.FaultActor, Action: "host.create", At: 1_790_000_000}
+	a := store.Audit{Actor: faultActor, Action: "host.create", At: 1_790_000_000}
 	if _, err := s.CreateHost(t.Context(), model.Host{SN: "SN-1"}, a); err != nil {
 		t.Fatalf("Open 建的表不该注入失败：%v", err)
 	}
@@ -196,7 +195,7 @@ func TestOpen不注入失败(t *testing.T) {
 	if err != nil {
 		t.Fatalf("列出审计：%v", err)
 	}
-	if len(p.Items) != 1 || p.Items[0].Actor != storetest.FaultActor {
+	if len(p.Items) != 1 || p.Items[0].Actor != faultActor {
 		t.Fatalf("审计应写下这一条，得到 %+v", p.Items)
 	}
 }
@@ -812,6 +811,7 @@ func Test推进撞上没提交的新任务由部分唯一索引兜底(t *testing
 	if es, err := s.ListEvents(ctx, failed.ID, 0, 0); err != nil || len(es) != 0 {
 		t.Fatalf("推进被拒之后不写事件，得到 %+v、%v", es, err)
 	}
+	wantSeqCounter(t, s, failed.ID, 0, "推进撞上索引、回滚之后")
 	if n := auditCount(t, s); n != audits {
 		t.Fatalf("推进被拒之后不写审计：审计从 %d 条变成了 %d 条", audits, n)
 	}
@@ -911,7 +911,7 @@ func Test建任务等主机上没提交的新任务提交之后逐台报出(t *t
 // 推进与追加事件都先给任务行加写锁（lockTask 的 FOR UPDATE），比对期望值、分配 Seq、查已有的 Key 都看锁住之后读到的数据。
 // 另开一个连接当先到的那一次：在没提交的事务里照仓储的写法推进一步，并追加一条带 Key 的事件。带着旧期望值的推进要等它提交，
 // 再报 ErrConflict（C33）；追加要等它提交，再接着它的 Seq 分配，同一个 Key 报告为 Duplicate。没有这把锁，推进读到旧的 Rev，
-// 等对方提交之后照样写入、把它覆盖掉；追加读到旧的计数，分到同一个 Seq，撞上主键。RunConcurrency 的用例要靠调度撞在一起，
+// 等对方提交之后照样写入、把它覆盖掉；追加读到旧的计数，分到同一个 Seq，撞上主键。Test契约并发 的用例要靠调度撞在一起，
 // 撞不上时钉不住这一点。
 func Test推进与追加事件等对方提交之后再比对与分配(t *testing.T) {
 	hold := `WITH u AS (UPDATE tasks SET state = 'booting', rev = rev + 1, last_seq = last_seq + 1 WHERE id = $1 RETURNING id) ` +

@@ -278,28 +278,24 @@ func Test存储层的依赖规则(t *testing.T) {
 		src  string
 		want []finding
 	}{
-		// 一、契约与契约测试只依赖标准库、层 1 和契约。
+		// 一、契约只依赖标准库、层 1 和契约自己。
 		{"store 用层 1 白名单以外的标准库不报", pkgStore,
 			importing("context", "crypto/rand", "encoding/base32", "sync", pkgModel, pkgActivation, pkgAdmission), nil},
-		{"storetest import testing 与契约不报", pkgStoretest, importing("testing", pkgStore, pkgModel), nil},
 		{"store import 实现要报", pkgStore, importing(pkgPgstore), []finding{{ruleContract, pkgPgstore}}},
-		{"storetest import pgstore 要报", pkgStoretest, importing(pkgStore, pkgPgstore),
-			[]finding{{ruleContract, pkgPgstore}}},
 		{"store import gorm 要报", pkgStore, importing("gorm.io/gorm"), []finding{{ruleContract, "gorm.io/gorm"}}},
 		{"cgo 的 C 不算标准库", pkgStore, importing("C"), []finding{{ruleContract, "C"}}},
 		{"前缀相撞的 internal/storex 不算契约", pkgStore, importing(storex), []finding{{ruleContract, storex}}},
-		// 新加的包与契约放行的一样多：不依赖第三方模块，也不依赖 pgstore 与 storetest。
+		// 新加的包与契约放行的一样多：不依赖第三方模块，也不依赖 pgstore。
 		{"存储层新加的包按契约的规则查", pkgStore + "/cache",
-			importing("context", "sync", pkgStore, pkgModel, pkgAdmission, thirdParty, "gorm.io/gorm", pkgPgstore, pkgStoretest),
-			[]finding{{ruleContract, thirdParty}, {ruleContract, "gorm.io/gorm"}, {ruleContract, pkgPgstore},
-				{ruleContract, pkgStoretest}}},
+			importing("context", "sync", pkgStore, pkgModel, pkgAdmission, thirdParty, "gorm.io/gorm", pkgPgstore),
+			[]finding{{ruleContract, thirdParty}, {ruleContract, "gorm.io/gorm"}, {ruleContract, pkgPgstore}}},
 
-		// 二、只有 pgstore 能依赖 gorm 与 pgx v5，并且不依赖契约测试。
+		// 二、只有 pgstore 能依赖 gorm 与 pgx v5；存储层别的包，除了契约，它也不依赖。
 		{"pgstore import gorm 与 pgx v5 不报", pkgPgstore, importing("database/sql",
 			"gorm.io/gorm", "gorm.io/gorm/logger", "gorm.io/driver/postgres",
 			"github.com/jackc/pgx/v5", "github.com/jackc/pgx/v5/pgconn", pkgStore, pkgModel), nil},
-		{"pgstore import storetest 要报", pkgPgstore, importing(pkgStoretest),
-			[]finding{{rulePgstore, pkgStoretest}}},
+		{"pgstore import 存储层新加的包要报", pkgPgstore, importing(pkgStore + "/cache"),
+			[]finding{{rulePgstore, pkgStore + "/cache"}}},
 		// pgx 按整段比对：别的大版本、前缀相撞的路径都不算。
 		{"pgstore import 别的第三方模块要报", pkgPgstore,
 			importing("github.com/lib/pq", "github.com/jackc/pgx/v4", "github.com/jackc/pgx/v5x", thirdParty),
@@ -321,8 +317,8 @@ func Test存储层总检查接上了每一项(t *testing.T) {
 		"internal/store/pgstore/pg.go":      {Data: []byte(importing("gorm.io/gorm", "github.com/lib/pq"))},
 		"internal/store/pgstore/cgo.go":     {Data: []byte(importing("C"))},
 		"internal/store/pgstore/x_linux.go": {Data: []byte(importing("github.com/jackc/pgx/v4"))},
-		// 测试文件不查：pgstore 的测试本来就要 import storetest。
-		"internal/store/pgstore/x_windows_test.go": {Data: []byte(importing(pkgStoretest))},
+		// 测试文件不查：测试 import 的包，生产代码不许用的也不报。
+		"internal/store/pgstore/x_windows_test.go": {Data: []byte(importing("github.com/lib/pq"))},
 	}
 	pkgs := []goPackage{
 		{ImportPath: pkgStore, GoFiles: []string{"store.go"}},

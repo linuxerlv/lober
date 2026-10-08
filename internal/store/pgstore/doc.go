@@ -1,5 +1,5 @@
-// Package pgstore 是仓储的 PostgreSQL 实现（spec §4.2），也是唯一的一份实现。它用 GORM 访问数据库，跑 storetest 里
-// 的契约测试。
+// Package pgstore 是仓储的 PostgreSQL 实现（spec §4.2），也是唯一的一份实现。它用 GORM 访问数据库，契约测试在同一个包
+// 的 contract_*_test.go 里。
 //
 // # 建表与表结构断言
 //
@@ -33,5 +33,5 @@
 //
 // 每次 Open 新建一个 lober_t_ 加随机串的 schema，DSN 的 search_path 只指向它，用完连同里面的一切删掉，所以几个人
 // 同时跑测试也互不干扰。测试进程中途被杀时会留下 schema，可以手工 DROP SCHEMA lober_t_... CASCADE。审计的失败
-// 注入（storetest.FaultActor）是测试 schema 里审计表上的一个触发器，Open 建的表上没有这条路。
+// 注入（pgstore_test.go 的 faultActor）是测试 schema 里审计表上的一个触发器，Open 建的表上没有这条路。
 package pgstore

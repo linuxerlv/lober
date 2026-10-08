@@ -182,7 +182,7 @@ func (s *Store) hookStep(ctx context.Context, k model.HookKey, rev int64, a stor
 	return translate(err, false, nil)
 }
 
-// RenameHook 见 store.Hooks。
+// RenameHook 见 store.Hooks。名字走用户的入口（store.NormalizeName），用了保留前缀报 name_reserved。
 func (s *Store) RenameHook(ctx context.Context, id, name string, a store.Audit) error {
 	if err := store.CheckAudit(a); err != nil {
 		return err
@@ -317,7 +317,8 @@ func (s *Store) ListHooks(ctx context.Context, q store.HookQuery) (store.Page[mo
 	})
 }
 
-// EnsureBuiltinHook 见 store.Hooks。比的是版本的全部字段，名字按身份上的，Rev 不比：内置的版本写入之后不会再变。
+// EnsureBuiltinHook 见 store.Hooks。比的是版本的全部字段，名字按身份上的，Rev 不比：内置的版本写入之后不会再变。名字
+// 走内置装载的入口（store.CheckBuiltinHook），必须带保留前缀；名字随身份定下，见 ensureBuiltinIdent。
 func (s *Store) EnsureBuiltinHook(ctx context.Context, h model.Hook) error {
 	key, err := store.CheckBuiltinHook(h)
 	if err != nil {
@@ -497,8 +498,9 @@ func (v versioning) dropIfEmpty(tx *gorm.DB, id string) error {
 	return tx.Table(v.idents).Where("id = ?", id).Delete(&ident{}).Error
 }
 
-// ensureBuiltinIdent 确认内置版本 version 所属的身份：不存在就建一个内置的身份，名字被别的身份占了由唯一索引报出来；已
-// 存在的要是内置的、名字也相同，否则程序自带的内容与库里的对不上（ErrBuiltinMismatch）：名字在身份上，各版本共用。身份上
+// ensureBuiltinIdent 确认内置版本 version 所属的身份：不存在就建一个内置的身份，名字被别的身份占了由唯一索引报出来（用户
+// 的身份用不了保留前缀，占着它的只会是另一个内置身份）；已存在的要是内置的、名字也相同，否则程序自带的内容与库里的对不上
+// （ErrBuiltinMismatch）：名字在身份上，各版本共用，随身份定下，以后的版本不能换名，要改名只能换一个新 ID。身份上
 // 分配过的最大版本号随装载的版本更新。
 func (v versioning) ensureBuiltinIdent(tx *gorm.DB, id string, version int, name, key string) error {
 	x, ok, err := v.lockIdent(tx, id)

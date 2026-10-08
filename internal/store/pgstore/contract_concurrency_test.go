@@ -1,4 +1,4 @@
-package storetest
+package pgstore
 
 import (
 	"errors"
@@ -12,11 +12,11 @@ import (
 	"github.com/lober/lober/internal/store"
 )
 
-// RunConcurrency 是并发这一组（C30、C31、C33，spec §6.2 第 4 条）：多个 goroutine 同时调用，只按最终结果断言（恰好一个成功、
-// Seq 连续不重不缺），不依赖调度的先后。考验的是 pgstore 的加锁与约束：用例失败时，先查是不是
-// 没加锁、加锁的顺序不一致，或者在事务外读了数据，不要靠重试或加大超时让它变绿。
-func RunConcurrency(t *testing.T, h Harness) {
-	runCases(t, h, []testCase{
+// Test契约并发 是并发这一组（C30、C31、C33，spec §6.2 第 4 条）：多个 goroutine 同时调用，只按最终结果断言（恰好一个成功、
+// Seq 连续不重不缺），不依赖调度的先后。这一组考验的是加锁与约束：用例失败时，先查是不是没加锁、加锁的顺序不一致，
+// 或者在事务外读了数据，不要靠重试或加大超时让它变绿。
+func Test契约并发(t *testing.T) {
+	runCases(t, []testCase{
 		{"同一台主机的几批任务同时提交，恰好一批成功，其余报 host_has_open_task", concurrentBatches},
 		{"不同主机的几批任务同时提交，全都成功", concurrentDisjointBatches},
 		{"同一个任务用同一个期望值同时推进，恰好一次成功，只有它带的事件落库", concurrentTransitions},
@@ -46,7 +46,7 @@ func together(n int, fn func(i int)) {
 // 几批都是这三台主机，顺序各不相同：拿锁的顺序要是跟着入参走，两批就会互相等死。恰好一批成功（C31）；其余的报
 // BatchError，里面只有 host_has_open_task。在事务里重跑准入时每台都报，靠部分唯一索引兜底时可能只报撞上的那一台，所以
 // 不要求每台都报。
-func concurrentBatches(t *testing.T, s store.Store) {
+func concurrentBatches(t *testing.T, s *Store) {
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1", "SN-2", "SN-3")
 	batches := make([][]model.Task, workers)
@@ -96,7 +96,7 @@ func concurrentBatches(t *testing.T, s store.Store) {
 }
 
 // 加锁只挡同一台主机：几批的主机互不相同时，同时提交都要成功，不能把别的主机的批也挡下来。
-func concurrentDisjointBatches(t *testing.T, s store.Store) {
+func concurrentDisjointBatches(t *testing.T, s *Store) {
 	f := newFixture(t, s)
 	batches := make([][]model.Task, workers)
 	for i := range batches {
@@ -111,7 +111,7 @@ func concurrentDisjointBatches(t *testing.T, s store.Store) {
 }
 
 // 条件推进（C33）：同一个期望值只有一次生效，其余报 ErrConflict。事件与状态在同一个事务里写，所以只有成功那一次带的事件落库。
-func concurrentTransitions(t *testing.T, s store.Store) {
+func concurrentTransitions(t *testing.T, s *Store) {
 	task := mustTask(t, s)
 	expect := store.TaskExpect{State: task.State, Rev: task.Rev}
 	errs := make([]error, workers)
@@ -142,7 +142,7 @@ func concurrentTransitions(t *testing.T, s store.Store) {
 
 // 同一个任务同时追加：每个 goroutine 追加 rounds 批、每批两条。全部 Seq 从 1 起连续、不重、不缺，一批的两条相邻（一批在
 // 一个事务里分配），并且每个 Seq 落库的正是追加结果里报的那一条。
-func concurrentAppends(t *testing.T, s store.Store) {
+func concurrentAppends(t *testing.T, s *Store) {
 	const rounds = 20
 	id := mustTask(t, s).ID
 	got := make([][]store.Appended, workers)
@@ -192,7 +192,7 @@ func concurrentAppends(t *testing.T, s store.Store) {
 }
 
 // 同一个信号同时重发了几次：只落一条，恰好一次报告为新写的，其余报告 Duplicate，Seq 都是那一条的。
-func concurrentSameKey(t *testing.T, s store.Store) {
+func concurrentSameKey(t *testing.T, s *Store) {
 	id := mustTask(t, s).ID
 	got := make([][]store.Appended, workers)
 	errs := make([]error, workers)

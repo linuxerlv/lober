@@ -1,14 +1,16 @@
-// Package storetest 是仓储的测试集（spec §7.2 第 2 条）。实现只有 pgstore 一份，它在自己的测试里实现 Harness，
-// 再调用这里按聚合分组的 Run 函数。
+package pgstore
+
+// 契约测试（spec §7.2 第 2 条）：仓储契约的用例按聚合分在 contract_*_test.go 里，每个文件一个以 Test契约 开头的入口，
+// 由 go test 直接发现。这个文件放各组共用的部分。
 //
-// 用例只经 store 的接口观察仓储，不碰实现的内部；每个用例 Open 一个全新的空仓储，互不影响。记录用
-// reflect.DeepEqual 比较，nil 与空的 map、切片算不同：写进去什么，就要读出什么。列表的顺序按字节序比较，不随
-// 数据库的排序规则变。
+// 用例经 store 的接口观察仓储。接口看不到的只有三处，用例直接查列：任务的事件计数 last_seq、身份上分配过的最大版本号
+// last_version、模板版本的引用表 template_hook_refs。每个用例 openContract 一个全新的空仓储，互不影响。记录用
+// reflect.DeepEqual 比较，nil 与空的 map、切片算不同：写进去什么，就要读出什么。列表的顺序按字节序比较，不随数据库的
+// 排序规则变。
 //
 // 装查询结果的切片与 map 不是写进去的值，一律不为 nil：一页没有条目时 Items 是长度为 0 的切片，GetHosts 一台都
 // 没取到时是空 map。第 5 层编成 JSON 就是 [] 与 {}；nil 会编成 null，与 OpenAPI 描述的数组、对象对不上（前端的
 // 类型由它生成，spec §6.2 第 10 条）。
-package storetest
 
 import (
 	"errors"
@@ -20,39 +22,16 @@ import (
 	"github.com/lober/lober/internal/store"
 )
 
-// FaultActor 是失败注入用的保留操作者。Harness 打开的仓储里，Actor 为它的审计写入失败，用例借此证明审计写失败时
-// 动作一起回滚（spec §6.2 第 8 条）。生产环境里它只是一个普通的字符串。
-const FaultActor = "lober-test-fault"
-
-// Harness 是一份实现接入契约测试的方式。
-type Harness interface {
-	// Open 返回一个全新的空仓储，测试结束时由 t.Cleanup 收拾。审计的 Actor 为 FaultActor 时，
-	// 这条审计的写入必须在动作本身写完之后、同一个事务里失败。
-	Open(t *testing.T) store.Store
-}
-
-// RunAll 跑全部分组。
-func RunAll(t *testing.T, h Harness) {
-	t.Run("主机", func(t *testing.T) { RunHosts(t, h) })
-	t.Run("ISO", func(t *testing.T) { RunISOs(t, h) })
-	t.Run("审计", func(t *testing.T) { RunAudit(t, h) })
-	t.Run("hook", func(t *testing.T) { RunHooks(t, h) })
-	t.Run("模板", func(t *testing.T) { RunTemplates(t, h) })
-	t.Run("任务", func(t *testing.T) { RunTasks(t, h) })
-	t.Run("事件", func(t *testing.T) { RunEvents(t, h) })
-	t.Run("并发", func(t *testing.T) { RunConcurrency(t, h) })
-}
-
 // testCase 是一个用例，跑在一个全新的空仓储上。
 type testCase struct {
 	name string
-	run  func(t *testing.T, s store.Store)
+	run  func(t *testing.T, s *Store)
 }
 
-// runCases 把每个用例作为子测试依次跑，各自 Open 一个仓储。
-func runCases(t *testing.T, h Harness, cases []testCase) {
+// runCases 把每个用例作为子测试依次跑，各自 openContract 一个仓储。
+func runCases(t *testing.T, cases []testCase) {
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) { c.run(t, h.Open(t)) })
+		t.Run(c.name, func(t *testing.T) { c.run(t, openContract(t)) })
 	}
 }
 
@@ -181,7 +160,7 @@ type contents struct {
 	Audit []store.AuditEntry
 }
 
-func snapshot(t *testing.T, s store.Store) contents {
+func snapshot(t *testing.T, s *Store) contents {
 	t.Helper()
 	return contents{
 		Hosts: slices.Concat(hostPages(t, s, store.HostQuery{Limit: 500})...),
@@ -191,7 +170,7 @@ func snapshot(t *testing.T, s store.Store) contents {
 }
 
 // wantUnchanged 要求仓储里的记录与 before 相同：动作没有落库，审计也没有写。
-func wantUnchanged(t *testing.T, s store.Store, before contents, what string) {
+func wantUnchanged(t *testing.T, s *Store, before contents, what string) {
 	t.Helper()
 	if after := snapshot(t, s); !reflect.DeepEqual(after, before) {
 		t.Fatalf("%s仓储不应有变化：\n之前 %+v\n之后 %+v", what, before, after)

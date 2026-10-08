@@ -125,7 +125,8 @@ func (s *Store) NewTemplateVersion(ctx context.Context, id string, from int, aut
 }
 
 // DeriveTemplate 见 store.Templates。复制的是来源版本的族、系、正文、参数、取值来源与装配表；名字、作者与派生来源是新
-// 身份自己的。来源只读不锁：派生出的是一份独立的副本，来源之后怎么改都与它无关（C24）。
+// 身份自己的。来源只读不锁：派生出的是一份独立的副本，来源之后怎么改都与它无关（C24）。派生是用户的路径，名字走用户的
+// 入口（store.NormalizeName）：从内置模板派生时也不能沿用带保留前缀的名字。
 func (s *Store) DeriveTemplate(ctx context.Context, from model.TemplateKey, name, author string) (model.Template, error) {
 	if err := store.CheckVersionKey(from.ID, from.Version); err != nil {
 		return model.Template{}, err
@@ -254,7 +255,7 @@ func (s *Store) templateStep(ctx context.Context, k model.TemplateKey, rev int64
 	return translate(err, false, nil)
 }
 
-// RenameTemplate 见 store.Templates。
+// RenameTemplate 见 store.Templates。名字走用户的入口，规则同 RenameHook。
 func (s *Store) RenameTemplate(ctx context.Context, id, name string, a store.Audit) error {
 	if err := store.CheckAudit(a); err != nil {
 		return err
@@ -361,8 +362,8 @@ func (s *Store) ListTemplates(ctx context.Context, q store.TemplateQuery) (store
 	})
 }
 
-// EnsureBuiltinTemplate 见 store.Templates，规则同 EnsureBuiltinHook。内置模板不是派生来的，带了派生来源报 ErrInvalid
-// （store.CheckBuiltinTemplate）。
+// EnsureBuiltinTemplate 见 store.Templates，规则同 EnsureBuiltinHook：名字必须带保留前缀，随身份定下。内置模板不是派生
+// 来的，带了派生来源报 ErrInvalid（store.CheckBuiltinTemplate）。
 func (s *Store) EnsureBuiltinTemplate(ctx context.Context, tpl model.Template) error {
 	key, err := store.CheckBuiltinTemplate(tpl)
 	if err != nil {

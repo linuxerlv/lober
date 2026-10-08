@@ -32,13 +32,12 @@ const (
 	layer1    = modulePath + "/" + layer1Dir
 )
 
-// storeDir 是存储层（第 2 层）相对模块根的目录：它自己和它下面的包都算存储层。下面是存储层规则点名的三个包，
+// storeDir 是存储层（第 2 层）相对模块根的目录：它自己和它下面的包都算存储层。下面是存储层规则点名的两个包，
 // pkgStore 既是存储层的根，也是契约包。
 const (
-	storeDir     = "internal/store"
-	pkgStore     = modulePath + "/" + storeDir
-	pkgStoretest = pkgStore + "/storetest"
-	pkgPgstore   = pkgStore + "/pgstore"
+	storeDir   = "internal/store"
+	pkgStore   = modulePath + "/" + storeDir
+	pkgPgstore = pkgStore + "/pgstore"
 )
 
 // 层内方向规则点名的包。
@@ -88,10 +87,10 @@ const (
 	ruleListed   rule = "含非测试 .go 文件的目录都要出现在 go list ./... 里，否则守卫查不到它"
 
 	// 存储层的两条规则（第 2 层计划任务 2），都照计划「包与文件」表写成白名单。
-	ruleContract rule = "store 与 storetest 只依赖标准库、internal/core/... 和 internal/store：契约和契约测试不依赖 pgstore，" +
+	ruleContract rule = "store 只依赖标准库、internal/core/... 和 internal/store：契约不依赖 pgstore，" +
 		"也不依赖第三方模块；存储层新加的包也按这一条查"
 	rulePgstore rule = "pgstore 只依赖标准库、internal/core/...、internal/store，以及 gorm.io/... 与 github.com/jackc/pgx/v5/...：" +
-		"第三方模块只有这两家，也不依赖 storetest"
+		"第三方模块只有这两家"
 )
 
 // violation 是守卫查出的一处违规。
@@ -156,8 +155,8 @@ func checkLayer1(fsys fs.FS, dirs []string, pkgs []goPackage) []violation {
 	return found
 }
 
-// Test存储层依赖守卫 照第 2 层计划任务 2 的两条规则查存储层各包的 import：契约与契约测试不依赖 pgstore，pgstore 也
-// 不依赖契约测试，第三方模块只有 pgstore 能用，也只能是 gorm 与 pgx。层 1 不依赖存储层，由 Test层1依赖守卫 查。
+// Test存储层依赖守卫 照第 2 层计划任务 2 的两条规则查存储层各包的 import：契约不依赖 pgstore，第三方模块只有 pgstore
+// 能用，也只能是 gorm 与 pgx。层 1 不依赖存储层，由 Test层1依赖守卫 查。
 func Test存储层依赖守卫(t *testing.T) {
 	gomod := goModPath(t)
 	root := filepath.Dir(gomod)
@@ -447,8 +446,8 @@ func checkStoreFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
 }
 
 // storeRule 返回存储层的包 pkg import imp 违反的规则，不违反时返回空串。两条规则都是白名单，照计划「包与文件」表：
-// 标准库、层 1 与契约包 internal/store 谁都能用，pgstore 另可用 gorm 与 pgx v5，此外一律不许，所以契约不依赖实现，
-// 实现也不依赖契约测试。三个包以外、存储层新加的包按契约的规则查，要放宽就先改这里。
+// 标准库、层 1 与契约包 internal/store 谁都能用，pgstore 另可用 gorm 与 pgx v5，此外一律不许，所以契约不依赖实现。
+// 两个包以外、存储层新加的包按契约的规则查，要放宽就先改这里。
 //
 // 第 1 层的标准库白名单不套用到这里：仓储要用 context、sync、crypto/rand 这类包。cgo 的 C 不是标准库，照样要报。
 func storeRule(pkg, imp string) rule {

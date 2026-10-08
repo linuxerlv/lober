@@ -1,6 +1,7 @@
-package storetest
+package pgstore
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -13,16 +14,16 @@ import (
 	"github.com/lober/lober/internal/store"
 )
 
-// RunTemplates 是模板这一组（C12–C17、C22–C26）：名字、版本的生命周期、内置内容与查询由 versioned 的共用用例查，与
+// Test契约模板 是模板这一组（C12–C17、C22–C26）：名字、版本的生命周期、内置内容与查询由 versioned 的共用用例查，与
 // hook 那一组是同一份；这里另查模板自己的：文本存不下、派生、审批时连同引用的 hook 版本一起重跑激活判定、按系过滤、
 // 引用关系（删 hook 草稿），以及深拷贝。
-func RunTemplates(t *testing.T, h Harness) {
-	runCases(t, h, templateOps.cases())
-	runCases(t, h, []testCase{
+func Test契约模板(t *testing.T) {
+	runCases(t, templateOps.cases())
+	runCases(t, []testCase{
 		{"正文与别的文本存不下报 text_not_storable，问题落在那一处", templateUnstorable},
 		{"DerivedFrom 只由派生写：新建时带了、保存时改了都报 ErrInvalid", templateDerivedFromFixed},
 		{"派生：复制来源的全部内容，记下来源；来源什么状态都可以；不审计", templateDerive},
-		{"派生：名字照样要唯一、合规则，来源不存在报 ErrNotFound，作者不合法报 ErrInvalid", templateDeriveBad},
+		{"派生：名字照样要唯一、合规则、不用保留前缀，来源不存在报 ErrNotFound，作者不合法报 ErrInvalid", templateDeriveBad},
 		{"审批：激活判定不通过报 ProblemsError(ErrRejected)，问题与直接调用 activation 的相同，状态不变", templateApproveRejected},
 		{"审批：对引用的 hook 版本重跑判定，刚被废弃的报 hook_ref_deprecated", templateApproveHookRefs},
 		{"ListTemplates 按系过滤，看的是给出的那一项", templateListSeries},
@@ -30,7 +31,7 @@ func RunTemplates(t *testing.T, h Harness) {
 		{"hook 与模板的名字各管各的", templateNamespaces},
 		{"返回值与入参都是拷贝：Series、Params、Bindings、Assembly、DerivedFrom 是深拷贝", templateCopies},
 	})
-	runAudited(t, h, templateOps.auditedOps())
+	runAudited(t, templateOps.auditedOps())
 }
 
 // kickstartBody 是一份能通过激活判定的 kickstart 正文：三个必需部件各一次，一个片段插槽，引用模板参数 hostname。
@@ -63,6 +64,7 @@ func fullTemplate(name string) model.Template {
 // templateOps 把 Templates 的方法接进共用用例。
 var templateOps = versioned[model.Template]{
 	kind:   "template",
+	idents: templateTables.idents,
 	sample: sampleTemplate,
 	full:   fullTemplate,
 	head: func(t model.Template) head {
@@ -98,50 +100,50 @@ var templateOps = versioned[model.Template]{
 			t.Assembly["分区"][0].Bindings["disk"] = model.Binding{Source: model.BindingFixed, Value: "/dev/vdb"}
 		}},
 	},
-	create: func(ctx context.Context, s store.Store, t model.Template) (model.Template, error) {
+	create: func(ctx context.Context, s *Store, t model.Template) (model.Template, error) {
 		return s.CreateTemplate(ctx, t)
 	},
-	save: func(ctx context.Context, s store.Store, t model.Template) (model.Template, error) {
+	save: func(ctx context.Context, s *Store, t model.Template) (model.Template, error) {
 		return s.SaveTemplateDraft(ctx, t)
 	},
-	newVersion: func(ctx context.Context, s store.Store, id string, from int, author string) (model.Template, error) {
+	newVersion: func(ctx context.Context, s *Store, id string, from int, author string) (model.Template, error) {
 		return s.NewTemplateVersion(ctx, id, from, author)
 	},
-	submit: func(ctx context.Context, s store.Store, id string, v int, rev int64, a store.Audit) error {
+	submit: func(ctx context.Context, s *Store, id string, v int, rev int64, a store.Audit) error {
 		return s.SubmitTemplate(ctx, model.TemplateKey{ID: id, Version: v}, rev, a)
 	},
-	approve: func(ctx context.Context, s store.Store, id string, v int, rev int64, approver string, a store.Audit) error {
+	approve: func(ctx context.Context, s *Store, id string, v int, rev int64, approver string, a store.Audit) error {
 		return s.ApproveTemplate(ctx, model.TemplateKey{ID: id, Version: v}, rev, approver, a)
 	},
-	reject: func(ctx context.Context, s store.Store, id string, v int, rev int64, a store.Audit) error {
+	reject: func(ctx context.Context, s *Store, id string, v int, rev int64, a store.Audit) error {
 		return s.RejectTemplate(ctx, model.TemplateKey{ID: id, Version: v}, rev, a)
 	},
-	deprecate: func(ctx context.Context, s store.Store, id string, v int, rev int64, a store.Audit) error {
+	deprecate: func(ctx context.Context, s *Store, id string, v int, rev int64, a store.Audit) error {
 		return s.DeprecateTemplate(ctx, model.TemplateKey{ID: id, Version: v}, rev, a)
 	},
-	rename: func(ctx context.Context, s store.Store, id, name string, a store.Audit) error {
+	rename: func(ctx context.Context, s *Store, id, name string, a store.Audit) error {
 		return s.RenameTemplate(ctx, id, name, a)
 	},
-	deleteDraft: func(ctx context.Context, s store.Store, id string, v int, rev int64) error {
+	deleteDraft: func(ctx context.Context, s *Store, id string, v int, rev int64) error {
 		return s.DeleteTemplateDraft(ctx, model.TemplateKey{ID: id, Version: v}, rev)
 	},
-	get: func(ctx context.Context, s store.Store, id string, v int) (model.Template, error) {
+	get: func(ctx context.Context, s *Store, id string, v int) (model.Template, error) {
 		return s.GetTemplate(ctx, model.TemplateKey{ID: id, Version: v})
 	},
-	versions: func(ctx context.Context, s store.Store, id string) ([]model.Template, error) {
+	versions: func(ctx context.Context, s *Store, id string) ([]model.Template, error) {
 		return s.ListTemplateVersions(ctx, id)
 	},
-	list: func(ctx context.Context, s store.Store, q listQuery) (store.Page[model.Template], error) {
+	list: func(ctx context.Context, s *Store, q listQuery) (store.Page[model.Template], error) {
 		return s.ListTemplates(ctx, store.TemplateQuery{NamePrefix: q.NamePrefix, States: q.States, ApprovedOnly: q.ApprovedOnly, Cursor: q.Cursor, Limit: q.Limit})
 	},
-	ensureBuiltin: func(ctx context.Context, s store.Store, t model.Template) error {
+	ensureBuiltin: func(ctx context.Context, s *Store, t model.Template) error {
 		return s.EnsureBuiltinTemplate(ctx, t)
 	},
 }
 
 // 规则同 hook：每一处一条 text_not_storable，Subject 的写法同激活判定。顺序是模板整体（正文、族与系）、参数声明、模板
 // 参数的取值来源（按参数名），再是装配表：按插槽名，插槽名本身、其中的实例按顺序、实例的取值来源按参数名。
-func templateUnstorable(t *testing.T, s store.Store) {
+func templateUnstorable(t *testing.T, s *Store) {
 	draft := templateOps.mustCreateFrom(t, s, fullTemplate("Base-1"))
 	before := authoredSnapshot(t, s)
 	slot := func(id, path string) model.Problem { return notStorable("slot", id, path) }
@@ -213,7 +215,7 @@ func templateUnstorable(t *testing.T, s store.Store) {
 
 // DerivedFrom 记的是派生的来源（C24），只由 DeriveTemplate 写、由开新版本照抄：新建时带了它，等于没经派生就声称有来源；
 // 保存时改了它，来源的提示与差异就对不上了。
-func templateDerivedFromFixed(t *testing.T, s store.Store) {
+func templateDerivedFromFixed(t *testing.T, s *Store) {
 	ctx := t.Context()
 	src := templateOps.mustCreate(t, s, "Src")
 	srcKey := model.TemplateKey{ID: src.ID, Version: 1}
@@ -240,9 +242,9 @@ func templateDerivedFromFixed(t *testing.T, s store.Store) {
 // 派生复制来源的族、系、正文、参数、取值来源与装配表，建一个新身份的版本 1 草稿，作者是给的那一个，DerivedFrom 记下
 // 来源（C24）。来源是草稿、待审批、已审批、已废弃或内置的都可以；之后来源改了，派生出的不受影响。派生不审计。开新版本
 // 时 DerivedFrom 照抄：来源出了新版本，派生模板的每个版本都要能比出差异。
-func templateDerive(t *testing.T, s store.Store) {
+func templateDerive(t *testing.T, s *Store) {
 	ctx := t.Context()
-	must(t, s.EnsureBuiltinTemplate(ctx, templateOps.with(fullTemplate("Builtin-KS"), func(h *head) {
+	must(t, s.EnsureBuiltinTemplate(ctx, templateOps.with(fullTemplate("lober:KS"), func(h *head) {
 		h.ID, h.Version, h.State, h.Author, h.Builtin = "builtin-ks", 1, model.VersionApproved, "lober", true
 	})), "装载内置模板")
 	lvm := hookOps.to(t, s, hookOps.mustCreate(t, s, "LVM"), model.VersionApproved) // 来源要审批，引用的 hook 就得是已审批的
@@ -281,6 +283,8 @@ func templateDerive(t *testing.T, s store.Store) {
 	next := templateOps.newVersionOf(t, s, approved)
 	wantEqual(t, next.DerivedFrom, approved.DerivedFrom, "新版本的 DerivedFrom")
 	wantEqual(t, next.Version, 2, "派生出的模板开的新版本")
+	// 装载的内置模板、派生出的与新开的版本都引用着 hook 版本，三条写入路径都要记下引用
+	wantRefsRecorded(t, s, "装载内置模板、派生与开新版本之后")
 }
 
 // referencing 把 fullTemplate 里那个实例改成引用 k。
@@ -289,7 +293,7 @@ func referencing(t model.Template, k model.HookKey) model.Template {
 	return t
 }
 
-func templateDeriveBad(t *testing.T, s store.Store) {
+func templateDeriveBad(t *testing.T, s *Store) {
 	ctx := t.Context()
 	src := templateOps.mustCreate(t, s, "Src")
 	from := model.TemplateKey{ID: src.ID, Version: 1}
@@ -301,6 +305,12 @@ func templateDeriveBad(t *testing.T, s store.Store) {
 	for _, name := range []string{"", "Derived 1", "派生"} {
 		_, err := s.DeriveTemplate(ctx, from, name, "carol")
 		wantProblems(t, err, store.ErrInvalid, []model.Problem{nameProblem(t, name, model.Subject{Kind: "template"})}, fmt.Sprintf("派生时名字为 %q", name))
+	}
+	// 派生是用户的路径：用了保留前缀报 name_reserved，新身份还没有 ID（C12）
+	for _, name := range reservedNames {
+		_, err := s.DeriveTemplate(ctx, from, name, "carol")
+		wantProblems(t, err, store.ErrInvalid, []model.Problem{reservedProblem(t, name, model.Subject{Kind: "template"})},
+			fmt.Sprintf("派生时名字用了保留前缀 %q", name))
 	}
 	for _, author := range []string{"", "\xff"} {
 		_, err := s.DeriveTemplate(ctx, from, "Derived", author)
@@ -318,7 +328,7 @@ func templateDeriveBad(t *testing.T, s store.Store) {
 }
 
 // 同 hook：审批在事务里对最新数据重跑激活判定与审批人的检查，问题与直接调用第 1 层得到的完全相同，被拒时状态不变。
-func templateApproveRejected(t *testing.T, s store.Store) {
+func templateApproveRejected(t *testing.T, s *Store) {
 	in := sampleTemplate("Base-1")
 	in.Body = strings.Replace(kickstartBody, "{{lober:cleanup}}\n", "", 1) // part_missing
 	tpl := templateOps.to(t, s, templateOps.mustCreateFrom(t, s, in), model.VersionReview)
@@ -340,7 +350,7 @@ func templateApproveRejected(t *testing.T, s store.Store) {
 
 // 模板引用的是 hook 的具体版本（C23）。审批时在同一个事务里取出（pgstore 加读锁）这些版本，对它们的最新状态重跑判定：
 // 模板提交之后、审批之前 hook 版本被废弃，批不了，报 hook_ref_deprecated（C26）；没审批的、不存在的同样拦下。
-func templateApproveHookRefs(t *testing.T, s store.Store) {
+func templateApproveHookRefs(t *testing.T, s *Store) {
 	ctx := t.Context()
 	lvm := hookOps.to(t, s, hookOps.mustCreate(t, s, "LVM"), model.VersionApproved)
 	draftHook := hookOps.mustCreate(t, s, "NIC")
@@ -380,7 +390,7 @@ func templateApproveHookRefs(t *testing.T, s store.Store) {
 }
 
 // 按系过滤只列勾了这个系的，看的是给出的那一项：默认是最新的版本，ApprovedOnly 时是当前的已审批版本。
-func templateListSeries(t *testing.T, s store.Store) {
+func templateListSeries(t *testing.T, s *Store) {
 	ctx := t.Context()
 	withSeries := func(name string, series ...catalog.Series) model.Template {
 		in := sampleTemplate(name)
@@ -424,7 +434,7 @@ func templateListSeries(t *testing.T, s store.Store) {
 // 包括模板的草稿与待审批的版本，这个草稿就删不掉（ErrReferenced，C26）；模板改掉装配表、或者模板草稿删了之后，就能删。
 // 只引用了同一个 hook 的别的版本，不挡这个版本。派生出的版本 1 也是一次保存：它照抄来源的装配表，来源引用的 hook 草稿
 // 它也引用。
-func templateRefs(t *testing.T, s store.Store) {
+func templateRefs(t *testing.T, s *Store) {
 	ctx := t.Context()
 	refTo := func(name string, ks ...model.HookKey) model.Template {
 		in := sampleTemplate(name)
@@ -462,6 +472,7 @@ func templateRefs(t *testing.T, s store.Store) {
 	v1 := templateOps.to(t, s, refTo("Base-3", disk1.Key()), model.VersionApproved)
 	refTo("Base-4", model.HookKey{ID: disk1.ID, Version: 1})
 	v2 := templateOps.newVersionOf(t, s, v1)
+	wantRefsRecorded(t, s, "开新版本之后") // 版本 2 照抄版本 1 的装配表，也引用 disk@1
 	v2.Assembly = map[string][]model.Instance{"分区": {{HookID: disk2.ID, HookVersion: 2}}}
 	v2, err = s.SaveTemplateDraft(ctx, v2)
 	must(t, err, "模板版本 2 改成引用 disk@2")
@@ -484,8 +495,42 @@ func templateRefs(t *testing.T, s store.Store) {
 	must(t, deleteHook(raid), "都不再引用之后删除")
 }
 
+// hookRef 是 template_hook_refs 的一行：模板版本 Template 引用了 hook 版本 Hook。
+type hookRef struct {
+	TemplateID      string
+	TemplateVersion int
+	HookID          string
+	HookVersion     int
+}
+
+// wantRefsRecorded 直接查 template_hook_refs（接口看不到这张表）：它的行要恰好是库里每个模板版本按 store.HookRefs 算出的
+// 引用，只记 HookID 合 model.ValidID 的（见 refRows）。经接口只有 DeleteHookDraft 读这张表，它碰得到的只有 hook 草稿；开新
+// 版本与装载内置模板记下的引用指向的都是已审批的 hook 版本，漏记了经接口查不出来（S5-8）。
+func wantRefsRecorded(t *testing.T, s *Store, what string) {
+	t.Helper()
+	var want []hookRef
+	for _, tpl := range authoredSnapshot(t, s).Templates {
+		for _, k := range store.HookRefs(tpl) {
+			if model.ValidID(k.ID) {
+				want = append(want, hookRef{tpl.ID, tpl.Version, k.ID, k.Version})
+			}
+		}
+	}
+	var got []hookRef
+	err := s.db.WithContext(t.Context()).Raw(`SELECT template_id, template_version, hook_id, hook_version FROM template_hook_refs`).
+		Scan(&got).Error
+	must(t, err, "读 template_hook_refs")
+	byKey := func(a, b hookRef) int {
+		return cmp.Or(strings.Compare(a.TemplateID, b.TemplateID), cmp.Compare(a.TemplateVersion, b.TemplateVersion),
+			strings.Compare(a.HookID, b.HookID), cmp.Compare(a.HookVersion, b.HookVersion))
+	}
+	slices.SortFunc(want, byKey)
+	slices.SortFunc(got, byKey)
+	wantItems(t, got, want, what+"：template_hook_refs 的行与各模板版本的 HookRefs")
+}
+
 // hook 与模板各有自己的名字空间（各自的身份表上各有一个唯一索引）：同一个名字可以同时是一个 hook 和一个模板。
-func templateNamespaces(t *testing.T, s store.Store) {
+func templateNamespaces(t *testing.T, s *Store) {
 	h := hookOps.mustCreate(t, s, "Same-Name")
 	tpl := templateOps.mustCreate(t, s, "same-name")
 	other := hookOps.mustCreate(t, s, "Other")
@@ -499,7 +544,7 @@ func templateNamespaces(t *testing.T, s store.Store) {
 }
 
 // templateCopies：改了入参或返回值里的切片、map、指针与它们里面的元素，仓储里的数据都不变。
-func templateCopies(t *testing.T, s store.Store) {
+func templateCopies(t *testing.T, s *Store) {
 	mutate := func(tpl model.Template) {
 		tpl.Series[0] = "ubuntu"
 		tpl.Params[0].Label = "改了"
@@ -559,7 +604,7 @@ func templateCopies(t *testing.T, s store.Store) {
 	wantEqual(t, templateOps.mustGet(t, s, next.ID, 2), wantNext, "改了新版本的返回值之后")
 	wantEqual(t, templateOps.mustGet(t, s, approved.ID, 1), approved, "改了新版本的返回值之后，来源版本")
 
-	b := templateOps.builtin("builtin-ks", 1, "Builtin-KS") // 内容同 fullTemplate，插槽里有实例
+	b := templateOps.builtin("builtin-ks", 1, "lober:KS") // 内容同 fullTemplate，插槽里有实例
 	must(t, s.EnsureBuiltinTemplate(ctx, b), "装载内置")
 	wantBuiltin := templateOps.mustGet(t, s, b.ID, 1)
 	mutate(b)
