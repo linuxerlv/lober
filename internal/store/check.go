@@ -19,7 +19,7 @@ import (
 	"github.com/lober/lober/internal/core/model"
 )
 
-// 两份实现共用的纯函数：入参校验、生成 ID、游标的编解码、提取模板的 hook 引用，以及在事务里重跑第 1 层判定的封装。
+// 实现调用的纯函数：入参校验、生成 ID、游标的编解码、提取模板的 hook 引用，以及在事务里重跑第 1 层判定的封装。
 // 主机与 ISO 的检查在 check_registry.go，hook 与模板的在 check_authoring.go。
 
 // 入参的上限，单位都是字节。
@@ -53,7 +53,7 @@ func NewID() string {
 }
 
 // CheckAudit 查要审计的方法收到的审计：零值报 ErrAuditRequired，表示调用方漏了审计；只要有一个字段不是零值，
-// 就按 Audit 各字段的规则查，不合规则报 ErrInvalid。两份实现在写任何东西之前调用它。
+// 就按 Audit 各字段的规则查，不合规则报 ErrInvalid。实现在写任何东西之前调用它。
 func CheckAudit(a Audit) error {
 	if a == (Audit{}) {
 		return ErrAuditRequired
@@ -158,8 +158,8 @@ func CheckQuery(cursor string, limit int) (int, error) {
 }
 
 // 游标是上一页最后一条的排序键，连同列表的名字编成 JSON 数组，再做 base64url：调用方看不出里面是什么，也就不会依赖它；
-// 改坏的、别的列表给的游标都认得出来，报 ErrInvalid。两份实现的列表顺序相同（见各查询类型的说明），排序键也就相同，
-// 编解码用这同一份，认不认一个游标两边才一致。
+// 改坏的、别的列表给的游标都认得出来，报 ErrInvalid。各列表的排序键见各查询类型的说明，编解码只有这一份，认得什么样的
+// 游标不随实现里查询的写法变。
 
 // EncodeCursor 把列表 list 的排序键 key 编成游标。排序键只有字符串与整数。
 func EncodeCursor(list string, key ...any) string {
@@ -333,7 +333,7 @@ func duplicateSNs(ts []model.Task) error {
 	return &ProblemsError{Kind: ErrInvalid, Problems: ps}
 }
 
-// HookRefs 列出模板装配表引用的 hook 版本，去重，按 ID、版本排序。保存模板的任何一个版本时，两份实现都用它
+// HookRefs 列出模板装配表引用的 hook 版本，去重，按 ID、版本排序。保存模板的任何一个版本时，实现都用它
 // 维护「这个版本引用了哪些 hook 版本」，删 hook 草稿、审批与建任务时都靠这份记录。装配表是 map，排过序，同一个
 // 模板每次得到的结果才一样，加锁的顺序也就固定。草稿可以引用不存在的版本（激活时才报 hook_ref_missing），这里
 // 照样列出。

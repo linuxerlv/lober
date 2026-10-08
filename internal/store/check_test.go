@@ -179,7 +179,7 @@ func TestCheckQuery的条数(t *testing.T) {
 	}
 }
 
-// 游标对调用方不透明，由各实现自己编码；共用的检查只挡掉存不下的串。
+// 游标对调用方不透明，由实现用 DecodeCursor 解开；CheckQuery 只挡掉存不下的串。
 func TestCheckQuery的游标(t *testing.T) {
 	if n, err := store.CheckQuery("opaque-cursor", 0); err != nil || n != 100 {
 		t.Errorf("存得下的游标应放过，得到 %d、%v", n, err)
@@ -242,7 +242,7 @@ func TestCheckSN(t *testing.T) {
 	}
 }
 
-// 游标对调用方不透明，两份实现编解码用同一份：认不认一个游标两边一致。
+// 游标对调用方不透明，编解码只有这一份：认得什么样的游标，由这里钉住。
 func TestCursor的编解码(t *testing.T) {
 	c := store.EncodeCursor("tasks", int64(300), "abc")
 	if n, err := store.CheckQuery(c, 0); err != nil || n != 100 {

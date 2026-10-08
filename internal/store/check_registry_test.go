@@ -12,7 +12,7 @@ import (
 	"github.com/lober/lober/internal/store"
 )
 
-// 主机与 ISO 的入参检查：两份实现调用的就是这一份，契约测试再在两份实现上各跑一遍。
+// 主机与 ISO 的入参检查：pgstore 调用的就是这一份，契约测试再在 pgstore 上跑一遍。
 
 func TestCheckHosts合规则的通过(t *testing.T) {
 	full := model.Host{SN: "SN-1", Arch: "x86_64", Firmware: "uefi", Attrs: map[string]string{"rack": "A1", "hostname": "机柜 A 的 1 号"}}

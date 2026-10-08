@@ -1,5 +1,5 @@
-// Package pgstore 是仓储的 PostgreSQL 实现（spec §4.2），用 GORM 访问数据库，跑 storetest 里与内存实现同一套契约
-// 测试。
+// Package pgstore 是仓储的 PostgreSQL 实现（spec §4.2），也是唯一的一份实现。它用 GORM 访问数据库，跑 storetest 里
+// 的契约测试。
 //
 // # 建表与表结构断言
 //
@@ -12,8 +12,8 @@
 // # 数据怎么存
 //
 // 列名由 GORM 按字段名转成 snake_case；属性、制品、提供的集合这类嵌套的 model 值存成 jsonb，nil 存成 JSON 的
-// null：写进去什么就读出什么，nil 与空的 map、切片读回来也不同。列表一律按字节序排（COLLATE "C"），与内存实现
-// 一致，不随库的排序规则变。PostgreSQL 的 text 与 jsonb 不收 NUL 和非法的 UTF-8，所以写入前先查文本存不存得下；
+// null：写进去什么就读出什么，nil 与空的 map、切片读回来也不同。列表一律按字节序排（COLLATE "C"），不随库的排序
+// 规则变。PostgreSQL 的 text 与 jsonb 不收 NUL 和非法的 UTF-8，所以写入前先查文本存不存得下；
 // 存不下的键不可能登记过，按它查找、过滤都当作没有。
 //
 // 每个写操作是一个事务：先对要改的行加写锁（SELECT ... FOR UPDATE）、比对 Rev，再写动作本身，最后写审计。数据库的

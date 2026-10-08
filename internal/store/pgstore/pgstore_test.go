@@ -182,7 +182,7 @@ func (harness) Open(t *testing.T) store.Store {
 	return s
 }
 
-// PostgreSQL 实现实现了完整的契约，与内存实现跑同一套全部分组。
+// PostgreSQL 实现实现了完整的契约，跑全部分组。
 func Test契约(t *testing.T) { storetest.RunAll(t, harness{}) }
 
 // 失败注入只在测试的 schema 里：Open 建的表上，FaultActor 只是一个普通的操作者。
@@ -201,8 +201,8 @@ func TestOpen不注入失败(t *testing.T) {
 	}
 }
 
-// 存不下的键不可能登记过（PostgreSQL 的 text 不收 NUL 与非法的 UTF-8）：按它查、删、过滤，结果与内存实现相同，
-// 不把数据库的编码错误交给调用方。契约测试没有这几例，这里补上。
+// 存不下的键不可能登记过（PostgreSQL 的 text 不收 NUL 与非法的 UTF-8）：按它查、删报 ErrNotFound，按它过滤得到空的
+// 一页，都当作没有，不把数据库的编码错误交给调用方。契约测试没有这几例，这里补上。
 func Test存不下的键与过滤条件当作没有(t *testing.T) {
 	s := openStore(t, newSchema(t))
 	ctx := t.Context()
@@ -232,12 +232,36 @@ func Test存不下的键与过滤条件当作没有(t *testing.T) {
 			t.Errorf("ListAudit 按操作者 %q 应得到空的一页，得到 %+v、%v", bad, p, err)
 		}
 	}
-	// 游标里藏着存不下的串：仓储给不出这样的游标，同样认不出来（store.DecodeCursor），不把数据库的编码错误交给调用方
-	if _, err := s.ListHosts(ctx, store.HostQuery{Cursor: store.EncodeCursor("hosts", "SN\x00")}); !errors.Is(err, store.ErrInvalid) {
-		t.Errorf("主机的游标藏着 NUL 应报 ErrInvalid，得到 %v", err)
-	}
-	if _, err := s.ListISOs(ctx, store.ISOQuery{Cursor: store.EncodeCursor("isos", "a\x00", "b")}); !errors.Is(err, store.ErrInvalid) {
-		t.Errorf("ISO 的游标藏着 NUL 应报 ErrInvalid，得到 %v", err)
+	// 游标里藏着存不下的串：仓储给不出这样的游标，同样认不出来（store.DecodeCursor），不把数据库的编码错误交给调用方。
+	// 每个带游标的列表都试一遍，NUL 放在排序键的不同位置；审计的排序键只有整数，藏不进串。
+	for _, c := range []struct {
+		name string
+		list func() error
+	}{
+		{"主机", func() error {
+			_, err := s.ListHosts(ctx, store.HostQuery{Cursor: store.EncodeCursor("hosts", "SN\x00")})
+			return err
+		}},
+		{"ISO", func() error {
+			_, err := s.ListISOs(ctx, store.ISOQuery{Cursor: store.EncodeCursor("isos", "a\x00", "b")})
+			return err
+		}},
+		{"hook", func() error {
+			_, err := s.ListHooks(ctx, store.HookQuery{Cursor: store.EncodeCursor("hooks", "lvm", "a\x00")})
+			return err
+		}},
+		{"模板", func() error {
+			_, err := s.ListTemplates(ctx, store.TemplateQuery{Cursor: store.EncodeCursor("templates", "\x00", "a")})
+			return err
+		}},
+		{"任务", func() error {
+			_, err := s.ListTasks(ctx, store.TaskQuery{Cursor: store.EncodeCursor("tasks", int64(1), "a\x00")})
+			return err
+		}},
+	} {
+		if err := c.list(); !errors.Is(err, store.ErrInvalid) {
+			t.Errorf("%s的游标藏着 NUL 应报 ErrInvalid，得到 %v", c.name, err)
+		}
 	}
 }
 
@@ -679,7 +703,7 @@ func Test同时占用同一个名字由唯一索引兜底报出对方(t *testing
 }
 
 // 草稿可以引用不存在的 hook 版本（激活时才报 hook_ref_missing），引用的 ID 只要是可存文本，再长也存得下（spec §3 总则：
-// 能存成 UTF-8 文本的草稿都能存），与内存实现一致。template_hook_refs 的主键与 (hook_id, hook_version) 的索引都带着
+// 能存成 UTF-8 文本的草稿都能存）。template_hook_refs 的主键与 (hook_id, hook_version) 的索引都带着
 // hook_id，btree 索引的一行最多两千七百来个字节，压不下去的长 ID 写进去就超了（SQLSTATE 54000）。契约测试里的 ID
 // 都短，钉不住这一点。随机的小写字母压不下去；种子固定，每次跑的都一样。
 func Test模板草稿引用很长的hookID照样存得下(t *testing.T) {

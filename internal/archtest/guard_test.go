@@ -267,7 +267,7 @@ func Test总检查接上了每一项(t *testing.T) {
 	})
 }
 
-// 存储层的三条规则（第 2 层计划任务 2）各有正反例。三条都是白名单，照计划「包与文件」表；第 1 层的标准库
+// 存储层的两条规则（第 2 层计划任务 2）各有正反例。两条都是白名单，照计划「包与文件」表；第 1 层的标准库
 // 白名单不套用到这里。
 func Test存储层的依赖规则(t *testing.T) {
 	thirdParty := "github.com/google/btree"
@@ -282,29 +282,24 @@ func Test存储层的依赖规则(t *testing.T) {
 		{"store 用层 1 白名单以外的标准库不报", pkgStore,
 			importing("context", "crypto/rand", "encoding/base32", "sync", pkgModel, pkgActivation, pkgAdmission), nil},
 		{"storetest import testing 与契约不报", pkgStoretest, importing("testing", pkgStore, pkgModel), nil},
-		{"store import 实现要报", pkgStore, importing(pkgMemstore), []finding{{ruleContract, pkgMemstore}}},
-		{"storetest import 两份实现都要报", pkgStoretest, importing(pkgStore, pkgMemstore, pkgPgstore),
-			[]finding{{ruleContract, pkgMemstore}, {ruleContract, pkgPgstore}}},
+		{"store import 实现要报", pkgStore, importing(pkgPgstore), []finding{{ruleContract, pkgPgstore}}},
+		{"storetest import pgstore 要报", pkgStoretest, importing(pkgStore, pkgPgstore),
+			[]finding{{ruleContract, pkgPgstore}}},
 		{"store import gorm 要报", pkgStore, importing("gorm.io/gorm"), []finding{{ruleContract, "gorm.io/gorm"}}},
 		{"cgo 的 C 不算标准库", pkgStore, importing("C"), []finding{{ruleContract, "C"}}},
-		{"存储层新加的包按契约的规则查", pkgStore + "/cache", importing(pkgStore, "gorm.io/gorm"),
-			[]finding{{ruleContract, "gorm.io/gorm"}}},
+		{"前缀相撞的 internal/storex 不算契约", pkgStore, importing(storex), []finding{{ruleContract, storex}}},
+		// 新加的包与契约放行的一样多：不依赖第三方模块，也不依赖 pgstore 与 storetest。
+		{"存储层新加的包按契约的规则查", pkgStore + "/cache",
+			importing("context", "sync", pkgStore, pkgModel, pkgAdmission, thirdParty, "gorm.io/gorm", pkgPgstore, pkgStoretest),
+			[]finding{{ruleContract, thirdParty}, {ruleContract, "gorm.io/gorm"}, {ruleContract, pkgPgstore},
+				{ruleContract, pkgStoretest}}},
 
-		// 二、memstore 不依赖任何第三方模块，也不依赖另一份实现。
-		{"memstore import 契约与层 1 不报", pkgMemstore,
-			importing("context", "sync", pkgStore, pkgModel, pkgAdmission), nil},
-		{"memstore import 第三方模块要报", pkgMemstore, importing(thirdParty, "gorm.io/gorm"),
-			[]finding{{ruleMemstore, thirdParty}, {ruleMemstore, "gorm.io/gorm"}}},
-		{"memstore import pgstore 与 storetest 要报", pkgMemstore, importing(pkgPgstore, pkgStoretest),
-			[]finding{{ruleMemstore, pkgPgstore}, {ruleMemstore, pkgStoretest}}},
-		{"前缀相撞的 internal/storex 不算契约", pkgMemstore, importing(storex), []finding{{ruleMemstore, storex}}},
-
-		// 三、只有 pgstore 能依赖 gorm 与 pgx v5，并且不依赖另一份实现。
+		// 二、只有 pgstore 能依赖 gorm 与 pgx v5，并且不依赖契约测试。
 		{"pgstore import gorm 与 pgx v5 不报", pkgPgstore, importing("database/sql",
 			"gorm.io/gorm", "gorm.io/gorm/logger", "gorm.io/driver/postgres",
 			"github.com/jackc/pgx/v5", "github.com/jackc/pgx/v5/pgconn", pkgStore, pkgModel), nil},
-		{"pgstore import memstore 与 storetest 要报", pkgPgstore, importing(pkgMemstore, pkgStoretest),
-			[]finding{{rulePgstore, pkgMemstore}, {rulePgstore, pkgStoretest}}},
+		{"pgstore import storetest 要报", pkgPgstore, importing(pkgStoretest),
+			[]finding{{rulePgstore, pkgStoretest}}},
 		// pgx 按整段比对：别的大版本、前缀相撞的路径都不算。
 		{"pgstore import 别的第三方模块要报", pkgPgstore,
 			importing("github.com/lib/pq", "github.com/jackc/pgx/v4", "github.com/jackc/pgx/v5x", thirdParty),
@@ -321,27 +316,28 @@ func Test存储层的依赖规则(t *testing.T) {
 // 真实的树是干净的，存储层的总检查漏接了哪一项，Test存储层依赖守卫 照样通过，所以组合也要有反例。
 func Test存储层总检查接上了每一项(t *testing.T) {
 	fsys := fstest.MapFS{ // 以模块根为根
-		"internal/store/store.go":            {Data: []byte(importing(pkgMemstore))},
-		"internal/store/memstore/mem.go":     {Data: []byte(importing("gorm.io/gorm"))},
-		"internal/store/memstore/cgo.go":     {Data: []byte(importing("C"))},
-		"internal/store/memstore/x_linux.go": {Data: []byte(importing(pkgPgstore))},
-		// 测试文件不查：memstore 的测试本来就要 import storetest。
-		"internal/store/memstore/x_windows_test.go": {Data: []byte(importing(pkgStoretest))},
+		"internal/store/store.go": {Data: []byte(importing(pkgPgstore))},
+		// gorm 只有 pgstore 能用：pg.go 要是被当成别的包，gorm 也会报。
+		"internal/store/pgstore/pg.go":      {Data: []byte(importing("gorm.io/gorm", "github.com/lib/pq"))},
+		"internal/store/pgstore/cgo.go":     {Data: []byte(importing("C"))},
+		"internal/store/pgstore/x_linux.go": {Data: []byte(importing("github.com/jackc/pgx/v4"))},
+		// 测试文件不查：pgstore 的测试本来就要 import storetest。
+		"internal/store/pgstore/x_windows_test.go": {Data: []byte(importing(pkgStoretest))},
 	}
 	pkgs := []goPackage{
 		{ImportPath: pkgStore, GoFiles: []string{"store.go"}},
-		{ImportPath: pkgMemstore, GoFiles: []string{"mem.go"}, CgoFiles: []string{"cgo.go"},
+		{ImportPath: pkgPgstore, GoFiles: []string{"pg.go"}, CgoFiles: []string{"cgo.go"},
 			IgnoredGoFiles: []string{"x_linux.go", "x_windows_test.go"}},
 	}
-	got := checkStore(fsys, []string{".", "memstore", "pgstore"}, pkgs)
-	// 依次是目录覆盖，再是各包的 import：store.go 按契约的规则报、mem.go 按 memstore 的规则报，说明包名接对了；
+	got := checkStore(fsys, []string{".", "pgstore", "probeonly"}, pkgs)
+	// 依次是目录覆盖，再是各包的 import：store.go 按契约的规则报、pg.go 按 pgstore 的规则报，说明包名接对了；
 	// cgo 文件与被构建约束排除的文件也解析了，在本平台不编译的文件躲不过守卫。第 1 层对这两类文件本身的要求
 	// 不套用到存储层，所以不报它们。
 	assertFindings(t, got, "", []finding{
-		{ruleListed, "internal/store/pgstore"},
-		{ruleContract, pkgMemstore},
-		{ruleMemstore, "gorm.io/gorm"},
-		{ruleMemstore, "C"},
-		{ruleMemstore, pkgPgstore},
+		{ruleListed, "internal/store/probeonly"},
+		{ruleContract, pkgPgstore},
+		{rulePgstore, "github.com/lib/pq"},
+		{rulePgstore, "C"},
+		{rulePgstore, "github.com/jackc/pgx/v4"},
 	})
 }

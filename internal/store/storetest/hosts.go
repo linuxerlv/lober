@@ -371,8 +371,8 @@ func hostGetHosts(t *testing.T, s store.Store) {
 }
 
 func hostListPaging(t *testing.T, s store.Store) {
-	// 这几个 SN 按字节序排，与常见的语言排序规则（忽略标点、不分大小写）排出来不同。顺序以字节序为准，两份实现
-	// 才排得一样
+	// 这几个 SN 按字节序排，与常见的语言排序规则（忽略标点、不分大小写）排出来不同。顺序以字节序为准，不随
+	// 数据库的排序规则变（契约见 store.types.go）
 	var in []model.Host
 	for _, sn := range []string{"SN_1", "SN-9", "SN 1", "A-1", "SN.2", "SN-10", "SN1"} {
 		in = append(in, model.Host{SN: sn})

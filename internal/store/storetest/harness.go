@@ -1,14 +1,13 @@
-// Package storetest 是仓储的契约测试套件（spec §7.2 第 2 条）。内存与 PostgreSQL 两份实现各在自己的测试里实现
-// Harness，再调用这里按聚合分组的 Run 函数：两份实现跑的是同一套用例，行为因此一致。
+// Package storetest 是仓储的测试集（spec §7.2 第 2 条）。实现只有 pgstore 一份，它在自己的测试里实现 Harness，
+// 再调用这里按聚合分组的 Run 函数。
 //
-// 用例只经 store 的接口观察仓储，不碰任何一份实现的内部；每个用例 Open 一个全新的空仓储，互不影响。记录用
+// 用例只经 store 的接口观察仓储，不碰实现的内部；每个用例 Open 一个全新的空仓储，互不影响。记录用
 // reflect.DeepEqual 比较，nil 与空的 map、切片算不同：写进去什么，就要读出什么。列表的顺序按字节序比较，不随
 // 数据库的排序规则变。
 //
 // 装查询结果的切片与 map 不是写进去的值，一律不为 nil：一页没有条目时 Items 是长度为 0 的切片，GetHosts 一台都
 // 没取到时是空 map。第 5 层编成 JSON 就是 [] 与 {}；nil 会编成 null，与 OpenAPI 描述的数组、对象对不上（前端的
-// 类型由它生成，spec §6.2 第 10 条）。第 5 层的 HTTP 测试跑在 memstore 上，测不出另一份实现给的 nil，所以由契约
-// 钉住。
+// 类型由它生成，spec §6.2 第 10 条）。
 package storetest
 
 import (

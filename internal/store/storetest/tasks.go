@@ -304,8 +304,8 @@ func taskCreateAfterFinished(t *testing.T, s store.Store) {
 }
 
 // 批量建任务的第 1 步：入参本身不合前提就报 ErrInvalid，什么都不写。每条前提一个反例，规则见 store.CheckNewTasks。快照里
-// 有存不下的文本也算（spec §3 总则）：pgstore 把快照存成 jsonb，固化下来的就不是写进去的那份（C29）；内存实现照样要报，
-// 第 5 层跑在它上面的测试才看得到生产环境会报的错。串藏在嵌套的结构、切片与 map 的键里也要查出来，几种位置各一例。
+// 有存不下的文本也算（spec §3 总则）：pgstore 把快照存成 jsonb，固化下来的就不是写进去的那份（C29）。串藏在嵌套的结构、
+// 切片与 map 的键里也要查出来，几种位置各一例。
 func taskCreateInvalid(t *testing.T, s store.Store) {
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1", "SN-2")

@@ -6,8 +6,8 @@ import (
 	"github.com/lober/lober/internal/core/model"
 )
 
-// 主机与 ISO 的入参检查，两份实现调用同一份：规则写两遍就会走偏（计划「包与文件」）。要查库里数据的那一半（SN 登没
-// 登记、SHA256 被谁占着）由实现在事务里查，判定的条件仍在这里。
+// 主机与 ISO 的入参检查，不用查库就能定下，所以放在契约包、不随存储的写法走（计划「包与文件」）。要查库里数据的那一半
+// （SN 登没登记、SHA256 被谁占着）由实现在事务里查，判定的条件仍在这里。
 
 // CheckHosts 查要写入的一批主机：CreateHost、UpdateHost 是只有一台的批，ImportHosts 一批至少一台。SN 已经规范化，记录
 // 过 Host.Validate，批里 SN 不重复。

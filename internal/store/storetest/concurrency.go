@@ -13,7 +13,7 @@ import (
 )
 
 // RunConcurrency 是并发这一组（C30、C31、C33，spec §6.2 第 4 条）：多个 goroutine 同时调用，只按最终结果断言（恰好一个成功、
-// Seq 连续不重不缺），不依赖调度的先后。内存实现靠一把锁就能过，真正考验的是 pgstore 的加锁与约束：用例失败时，先查是不是
+// Seq 连续不重不缺），不依赖调度的先后。考验的是 pgstore 的加锁与约束：用例失败时，先查是不是
 // 没加锁、加锁的顺序不一致，或者在事务外读了数据，不要靠重试或加大超时让它变绿。
 func RunConcurrency(t *testing.T, h Harness) {
 	runCases(t, h, []testCase{

@@ -12,7 +12,7 @@ import (
 	"github.com/lober/lober/internal/store"
 )
 
-// hook 与模板的入参与版本状态的检查：两份实现调用的就是这一份，契约测试再在两份实现上各跑一遍。
+// hook 与模板的入参与版本状态的检查：pgstore 调用的就是这一份，契约测试再在 pgstore 上跑一遍。
 
 // wantPlainInvalid 要求 err 是不带问题的 ErrInvalid：调用方或程序自己的错，没有面向操作员的原因代码可报。
 func wantPlainInvalid(t *testing.T, err error, what string) {

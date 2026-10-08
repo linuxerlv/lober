@@ -404,8 +404,8 @@ func hookNotFound(k model.HookKey) error {
 	return errorf(store.ErrNotFound, "hook %s 不存在", store.VersionID(k.ID, k.Version))
 }
 
-// 下面是 hook 与模板共用的部分：两边的身份、版本与名字规则一一对应（store.Templates 的说明），表也一一对应。入参与版本
-// 状态的检查是两份实现共用的，在 store 包（check_authoring.go）；这里只有身份表与版本表怎么读写。
+// 下面是 hook 与模板共用的部分：hook 与模板的身份、版本与名字规则一一对应（store.Templates 的说明），表也一一对应。入参
+// 与版本状态的检查不用查库就能定下，放在 store 包（check_authoring.go）；这里只有身份表与版本表怎么读写。
 
 // versioning 是 hook 或模板的身份表与版本表，共用的读写按它取表名。表名都是常量，拼进 SQL 也不会有注入。
 type versioning struct {

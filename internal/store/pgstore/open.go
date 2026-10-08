@@ -95,8 +95,8 @@ func (s *Store) read(ctx context.Context) *gorm.DB {
 // forUpdate 给读到的行加写锁，直到事务结束：比对 Rev 与写入之间，别的事务改不了这一行。
 var forUpdate = clause.Locking{Strength: "UPDATE"}
 
-// storable 报告这些串是不是都存得下（model.StorableText）。存不下的键不可能登记过，按它查找、过滤都当作没有，与内存
-// 实现一致；不先挡下，PostgreSQL 会报编码错误。
+// storable 报告这些串是不是都存得下（model.StorableText）。存不下的键不可能登记过，按它查找、过滤都当作没有；不先
+// 挡下，PostgreSQL 会报编码错误。
 func storable(ss ...string) bool {
 	for _, s := range ss {
 		if !model.StorableText(s) {
@@ -130,5 +130,5 @@ func emptyPage[T any]() store.Page[T] {
 	return store.Page[T]{Items: []T{}}
 }
 
-// 游标由 store.EncodeCursor 编出、store.DecodeCursor 解开，与内存实现用同一份：排序键是上一页最后一条的。解出的串都
-// 存得下，拿去查询不会让 PostgreSQL 报编码错误。
+// 游标由 store.EncodeCursor 编出、store.DecodeCursor 解开：排序键是上一页最后一条的。解出的串都存得下，拿去查询
+// 不会让 PostgreSQL 报编码错误。

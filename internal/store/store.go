@@ -130,7 +130,7 @@ type Templates interface {
 type Tasks interface {
 	// CreateTasks 一次建出一批任务（C29、C30、C31），每个任务写一条审计：
 	//  1. 先查入参（CheckNewTasks），不合格报 ErrInvalid。快照里的每个串都要存得下（model.StorableText），存不下的
-	//     固化不下来：两份实现都经 CheckNewTasks 报，不只是 PostgreSQL 存不进去。
+	//     固化不下来：由 CheckNewTasks 在写之前报出，不等到 PostgreSQL 存不进去。
 	//  2. 开事务，按 SN 升序给涉及的主机加写锁，对 ISO、模板版本和它引用的 hook 版本加读锁。拿锁的顺序固定，
 	//     两批同时提交时就不会互相等死。
 	//  3. 用锁住之后读到的数据重跑准入判定（BatchProblems），没登记的 SN 报 host_not_registered。任何一处有
