@@ -28,6 +28,7 @@ func Test契约任务(t *testing.T) {
 		{"建任务：入参的每条前提各一个反例，都报 ErrInvalid，什么都不写", taskCreateInvalid},
 		{"建任务：批里 SN 重复报 host_duplicate_in_batch", taskCreateDuplicate},
 		{"建任务：ISO 或模板版本不存在报 ErrNotFound", taskCreateMissing},
+		{"建任务：一批的主机多于一批（batchSize）：分批加锁与查未结束的任务，第二批的照样逐台报出、照样建上", taskCreateManyBatches},
 	})
 	runCases(t, rejectedCases())
 	runCases(t, []testCase{
@@ -43,6 +44,7 @@ func Test契约任务(t *testing.T) {
 		{"查询：ListTasks 按 CreatedAt 倒序、再按 ID，翻页与一次全取相同", taskListPaging},
 		{"查询：ListTasks 按主机、状态、时间范围过滤", taskListFilters},
 		{"查询：ListTasks 的查询不合规则报 ErrInvalid", taskListInvalid},
+		{"查询：ListTasks 的 Limit 为 0 时每页 100 条", taskListDefaultLimit},
 		{"返回值与入参都是拷贝：快照是深拷贝", taskCopies},
 	})
 	runAudited(t, taskAuditedOps())
@@ -387,6 +389,50 @@ func taskCreateDuplicate(t *testing.T, s *Store) {
 	wantTasksUnchanged(t, s, before, "批里 SN 重复时")
 }
 
+// 一次给多于一批（batchSize）的主机建任务：给主机加锁（lockHosts，按加锁的次序分批）与查已有的未结束任务（openTasksOf，
+// 按入参的顺序分批）都分批做，这里两处都走到第二批。排在最后的两台按 SN 与按入参都落在第二批，它们已有未结束的任务：整批
+// 被拦下，两台逐台报出 host_has_open_task（C30），只靠插入时撞上 idx_tasks_open 兜底是报不全的；两个任务结束之后，整批都
+// 建上，每台一条审计。
+func taskCreateManyBatches(t *testing.T, s *Store) {
+	ctx := t.Context()
+	f := newFixture(t, s)
+	n := batchSize + 2
+	var in []model.Host
+	for i := range n {
+		in = append(in, taskHost(fmt.Sprintf("SN-%05d", i)))
+	}
+	hs := mustImport(t, s, in)
+	busy := f.mustCreate(t, s, hs[n-2:]...)
+	batch := f.newTasks(t, hs...)
+	audits := len(auditEntries(t, s))
+	_, err := s.CreateTasks(ctx, batch, anAudit("task.create"))
+	var be *store.BatchError
+	if !errors.As(err, &be) || !errors.Is(err, store.ErrRejected) {
+		t.Fatalf("有两台已有未结束的任务，应报 BatchError(ErrRejected)，得到 %v", err)
+	}
+	want := slices.Concat(admission.HostSelectable(hs[n-2], true), admission.HostSelectable(hs[n-1], true))
+	wantEqual(t, batchProblems(be), want, "第二批里的两台都要报出")
+	for _, task := range busy {
+		mustTransition(t, s, task, model.TaskDone)
+	}
+	got, err := s.CreateTasks(ctx, batch, anAudit("task.create"))
+	must(t, err, "那两台的任务结束之后再建")
+	if len(got) != n {
+		t.Fatalf("给 %d 台建任务，返回了 %d 个", n, len(got))
+	}
+	for i, task := range got {
+		if task.HostSN != hs[i].SN || task.State != model.TaskPending {
+			t.Fatalf("第 %d 个任务是 %s 的、状态 %s，应是 %s 的、pending", i+1, task.HostSN, task.State, hs[i].SN)
+		}
+	}
+	if n := len(slices.Concat(taskPages(t, s, store.TaskQuery{States: []model.TaskState{model.TaskPending}, Limit: 500})...)); n != len(got) {
+		t.Fatalf("未结束的任务应恰好是这一批的 %d 个，得到 %d 个", len(got), n)
+	}
+	if added := len(auditEntries(t, s)) - audits; added != n { // 被拦下的那一次不写审计，系统推进也不写
+		t.Fatalf("建上 %d 个任务应写 %d 条审计，写了 %d 条", n, n, added)
+	}
+}
+
 // 向导里选中之后，ISO 被删了，或者模板草稿被删了：按键找不到，报 ErrNotFound，什么都不写。
 func taskCreateMissing(t *testing.T, s *Store) {
 	ctx := t.Context()
@@ -694,7 +740,9 @@ func taskFindOpen(t *testing.T, s *Store) {
 		mustTransition(t, s, task, end)
 		find("SN-1", model.Task{}, false, "任务刚结束为 "+string(end))
 	}
-	for _, sn := range []string{"sn-1", " SN-1", "SN-1\n", ""} {
+	// 存不下的 SN（含 NUL，或不是合法的 UTF-8）也不是规范化之后的写法：照样报 ErrInvalid，不当成「没有任务」，也不报数据库的
+	// 编码错误（store 的包说明）
+	for _, sn := range []string{"sn-1", " SN-1", "SN-1\n", "", "SN-1\x00", "SN-1\xff"} {
 		_, _, err := s.FindOpenTask(ctx, sn)
 		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("FindOpenTask(%q)", sn))
 	}
@@ -753,15 +801,39 @@ func taskListFilters(t *testing.T, s *Store) {
 		{"只给终点", store.TaskQuery{CreatedTo: 100}, []model.Task{a}},
 		{"几个条件同时给", store.TaskQuery{HostSN: "SN-1", States: []model.TaskState{model.TaskPending, model.TaskFailed}, CreatedTo: 250}, []model.Task{a}},
 		{"没有匹配的", store.TaskQuery{HostSN: "SN-9"}, nil},
+		// 空的切片与 nil 一样不过滤：第 5 层把 JSON 的空数组解出来就是它，当成「状态在空集合里」就一条都不给了
+		{"状态给空切片等于不过滤", store.TaskQuery{States: []model.TaskState{}}, []model.Task{a, b, c, d, e}},
 	} {
 		q.q.Limit = 1 // 一条一页：翻页时过滤也要对
 		wantItems(t, slices.Concat(taskPages(t, s, q.q)...), sortedTasks(q.want), q.name)
 	}
+	// 存不下的过滤条件谁都不是（store 的包说明）：当作没有，得到空的一页，不报数据库的编码错误
+	for _, bad := range []string{"\x00", "\xff"} {
+		for _, q := range []store.TaskQuery{
+			{HostSN: "SN-1" + bad}, {States: []model.TaskState{model.TaskState("pending" + bad)}},
+			{HostSN: "SN-1", States: []model.TaskState{model.TaskState(bad)}},
+		} {
+			wantItems(t, slices.Concat(taskPages(t, s, q)...), nil, fmt.Sprintf("ListTasks(%#v)", q))
+		}
+	}
+}
+
+func taskListDefaultLimit(t *testing.T, s *Store) {
+	var in []model.Host
+	for i := range defaultPageSize + 1 {
+		in = append(in, taskHost(fmt.Sprintf("SN-%03d", i)))
+	}
+	newFixture(t, s).mustCreate(t, s, mustImport(t, s, in)...) // 一批建出 101 个任务
+	wantDefaultLimit(t, slices.Concat(taskPages(t, s, store.TaskQuery{Limit: 500})...), func(cursor string) (store.Page[model.Task], error) {
+		return s.ListTasks(t.Context(), store.TaskQuery{Cursor: cursor})
+	})
 }
 
 func taskListInvalid(t *testing.T, s *Store) {
 	newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)
-	for _, q := range []store.TaskQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"}} {
+	// 排序键为 null 的游标是伪造的：收下的话 created_at < 0，翻出空的一页、Next 为空，调用方以为翻到头了
+	for _, q := range []store.TaskQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"},
+		{Cursor: store.EncodeCursor("tasks", nil, nil)}} {
 		_, err := s.ListTasks(t.Context(), q)
 		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("Limit %d、Cursor %q", q.Limit, q.Cursor))
 	}

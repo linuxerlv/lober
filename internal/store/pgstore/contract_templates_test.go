@@ -420,6 +420,9 @@ func templateListSeries(t *testing.T, s *Store) {
 		{"ApprovedOnly 时看当前的已审批版本", store.TemplateQuery{Series: "rocky", ApprovedOnly: true}, []model.Template{moved1}},
 		{"ApprovedOnly 时的 almalinux", store.TemplateQuery{Series: "almalinux", ApprovedOnly: true}, nil},
 		{"与名字前缀同时给", store.TemplateQuery{Series: "rocky", NamePrefix: "ROCKY"}, []model.Template{rocky}},
+		// 存不下的系谁都没勾（store 的包说明）：当作没有，得到空的一页，不报数据库的编码错误
+		{"系含 NUL", store.TemplateQuery{Series: "rocky\x00"}, nil},
+		{"系不是 UTF-8", store.TemplateQuery{Series: "rocky\xff"}, nil},
 	} {
 		c.q.Limit = 1 // 一条一页：翻页时过滤也要对
 		got := slices.Concat(allPages(t, func(cursor string) (store.Page[model.Template], error) {

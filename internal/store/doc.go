@@ -15,6 +15,10 @@
 //   - 仓储不读时钟。Audit.At、Task.CreatedAt、NewEvent.At 都由调用方给，必须大于 0，否则报 ErrInvalid。
 //   - ID 由仓储用 NewID 生成，内置的 hook 与模板用自己带的固定 ID；收到的 ID 先过 model.ValidID（CheckID、
 //     CheckVersionKey），不合规则报 ErrInvalid。
+//   - 存不下的查找键与过滤条件当作没有：含 NUL 或不是合法 UTF-8 的串（model.StorableText 为假）不可能登记过。
+//     GetHost、DeleteHost 按这样的 SN 报 ErrNotFound，GetHosts 的结果里没有它；各个 List 的过滤条件里有这样的串
+//     时不报错，Items 为空；切片的过滤条件里有这样的元素，它谁都不是。不把数据库的编码错误交给调用方。FindOpenTask
+//     例外，它要求 SN 已经规范化，存不下的 SN 同样报 ErrInvalid（CheckSN）。
 //   - 可变的记录都带乐观锁版本 Rev：新建时为 1，每次写入加 1。调用方改记录时把读到的 Rev 原样带回，对不上报
 //     ErrConflict，重读之后再判断（spec §6.2 第 4 条）。
 //   - 要审计的方法最后一个参数是 Audit。审计在同一个事务里、在动作本身的写入之后写，审计写失败时动作一起

@@ -93,7 +93,8 @@ func CheckISOUpdate(iso model.ISO) error {
 //   - old 已废弃报 ErrImmutable：废弃是要审计的决定，不审计的系统更新不能把它撤掉。
 //   - 族、系与名称不能经系统更新改，iso 与 old 的不同报 ErrInvalid。
 //   - 要置为 ready 的必须通过 ISO.Validate（C5），否则报 ProblemsError(ErrInvalid)，问题原样带出。
-//   - 写进来的文本都要存得下（CheckISOText），不论置为什么状态：Validate 不看制品与 SHA256，别的状态也不跑它。
+//   - 写进来的文本都要存得下、SHA256 要合格式（CheckISOText），不论置为什么状态：Validate 不看制品与 SHA256，别的
+//     状态也不跑它。
 //
 // 都过了，实现再查 SHA256 有没有被别的 ISO 占着（HoldsSHA256）。
 func CheckISOUpdateFrom(old, iso model.ISO) error {
@@ -111,9 +112,13 @@ func CheckISOUpdateFrom(old, iso model.ISO) error {
 	return CheckISOText(iso)
 }
 
-// CheckISOText 查系统更新写进来的文本都存得下（model.StorableText，spec §3 总则）：版本、架构、SHA256、制品的角色与
-// 路径、提供的集合名、选项的值与显示名，存不下的报 ErrInvalid。PostgreSQL 的 text 与 jsonb 都不收 NUL，encoding/json
+// CheckISOText 查系统更新写进来的文本都存得下（model.StorableText，spec §3 总则）：版本、架构、制品的角色与路径、
+// 提供的集合名、选项的值与显示名，存不下的报 ErrInvalid。PostgreSQL 的 text 与 jsonb 都不收 NUL，encoding/json
 // 还会把非法的 UTF-8 换成 U+FFFD，读回来的就不是写进去的。名称、族与系不能经系统更新改，新建时已经查过。
+//
+// SHA256 查得更严：只能是空串，或是 64 位小写十六进制（^[0-9a-f]{64}$），否则报 ErrInvalid。C4 按它去重，同一份内容
+// 写成大写就成了另一份；它也不一定是程序算出来的，获取中的 ISO 可能先记下操作员填的期望值（C3）。超长的值不先挡下，
+// pgstore 会撞上部分唯一索引 idx_isos_sha256 的 btree 行长上限，报出没翻译的数据库错误。
 func CheckISOText(iso model.ISO) error {
 	bad := func(what string) error {
 		return invalidf("ISO %s 的%s存不下：不是合法的 UTF-8，或含 NUL", iso.ID, what)
@@ -123,8 +128,9 @@ func CheckISOText(iso model.ISO) error {
 		return bad("版本")
 	case !model.StorableText(string(iso.Arch)):
 		return bad("架构")
-	case !model.StorableText(iso.SHA256):
-		return bad(" SHA256 ")
+	case iso.SHA256 != "" && !lowerHexSHA256(iso.SHA256):
+		return invalidf("ISO %s 的 SHA256 不是 64 位小写十六进制（收到 %d 字节）：只能为空，或是内容的 SHA-256 摘要的小写"+
+			"十六进制写法", iso.ID, len(iso.SHA256))
 	}
 	for role, path := range iso.Artifacts {
 		if !model.StorableText(role) || !model.StorableText(path) {
@@ -142,6 +148,19 @@ func CheckISOText(iso model.ISO) error {
 		}
 	}
 	return nil
+}
+
+// lowerHexSHA256 报告 s 是不是 64 位小写十六进制，即 SHA-256 摘要的规范写法。
+func lowerHexSHA256(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := range len(s) {
+		if c := s[i]; !('0' <= c && c <= '9' || 'a' <= c && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // HoldsSHA256 报告 ISO 占不占着它的 SHA256（C4）：空的 SHA256 与导入失败的 ISO 都不占位，所以导入失败的 ISO 可以记下

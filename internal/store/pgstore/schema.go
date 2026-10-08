@@ -286,7 +286,9 @@ func compareTable(t table, idx []actualIndex, cons []actualConstraint) []mismatc
 			indexes[a.Name] = a
 		}
 	}
-	wantPK := strings.Join(t.primary, ", ")
+	// 主键的名字也要比：translate 按名字认出主键撞车（duplicateFields 里的 hosts_pkey），名字对不上，撞上已登记的 SN 只会报出
+	// 原样的数据库错误。列不对时只报列：照那条改法重建的主键，名字就是 PostgreSQL 默认的「表名_pkey」
+	wantPK, wantPKName := strings.Join(t.primary, ", "), t.name+"_pkey"
 	switch {
 	case pk == nil:
 		add("主键", "没有主键，应为 (%s)。主键只在建表时建，AutoMigrate 不会补：手工 ALTER TABLE %s ADD PRIMARY KEY (%s)",
@@ -294,6 +296,9 @@ func compareTable(t table, idx []actualIndex, cons []actualConstraint) []mismatc
 	case pk.Cols != wantPK:
 		add("主键", "主键 %s 是 (%s)，应为 (%s)。AutoMigrate 不改已有的主键：先 ALTER TABLE %s DROP CONSTRAINT %s，"+
 			"再 ALTER TABLE %s ADD PRIMARY KEY (%s)", pk.Name, pk.Cols, wantPK, t.name, pk.Name, t.name, wantPK)
+	case pk.Name != wantPKName:
+		add("主键", "主键叫 %s，应为 %s：翻译数据库错误时按这个名字认出主键撞车。AutoMigrate 不改已有约束的名字："+
+			"手工 ALTER TABLE %s RENAME CONSTRAINT %s TO %s", pk.Name, wantPKName, t.name, pk.Name, wantPKName)
 	}
 
 	for _, w := range t.indexes {

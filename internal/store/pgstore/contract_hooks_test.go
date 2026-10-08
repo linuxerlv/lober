@@ -25,6 +25,7 @@ func Test契约hook(t *testing.T) {
 		{"审批：激活判定不通过报 ProblemsError(ErrRejected)，问题与直接调用 activation 的相同，状态不变", hookApproveRejected},
 		{"返回值与入参都是拷贝：Params、Impls 是深拷贝", hookCopies},
 		{"GetHooks 只放存在的，一个都没取到时是空 map", hookGetHooks},
+		{"GetHooks 的键多于一批（batchSize）：分批查，第二批里的照样取到", hookGetHooksManyBatches},
 	})
 	runAudited(t, hookOps.auditedOps())
 }
@@ -292,6 +293,21 @@ func hookGetHooks(t *testing.T, s *Store) {
 	}
 }
 
+// 批量取的键数不设上限，多于一条语句查得下的一批（batchSize）时按入参的次序分批查，两批取到的合在一起：a 是第一个键，
+// b 是第 batchSize+1 个，落在第二批，中间是 a 不存在的版本。
+func hookGetHooksManyBatches(t *testing.T, s *Store) {
+	a := hookOps.mustCreate(t, s, "A")
+	b := hookOps.mustCreate(t, s, "B")
+	ks := []model.HookKey{a.Key()}
+	for v := 2; len(ks) < batchSize; v++ {
+		ks = append(ks, model.HookKey{ID: a.ID, Version: v}) // a 只有版本 1
+	}
+	ks = append(ks, b.Key())
+	got, err := s.GetHooks(t.Context(), ks)
+	must(t, err, fmt.Sprintf("批量取 %d 个键", len(ks)))
+	wantEqual(t, got, map[model.HookKey]model.Hook{a.Key(): a, b.Key(): b}, "批量取的结果")
+}
+
 // 下面是 hook 与模板共用的部分。仓储契约里 Templates 与 Hooks 一一对应，名字、生命周期、内置内容与查询的规则相同，
 // 用例也只写一份，经 versioned 分别跑在两边：规则写两遍就会走偏，用例也一样。
 
@@ -550,17 +566,19 @@ type auditedOp struct {
 }
 
 // runAudited 查 ops 与审计写在同一个事务里（spec §6.2 第 8 条）。四项检查与审计那一组相同，只是快照换成 hook、模板与
-// 审计：审计那一组只覆盖主机与 ISO，它的快照（contents）不看 hook 与模板。
+// 审计：审计那一组只覆盖主机与 ISO，它的快照（contents）不看 hook 与模板。四组与组里的各个方法都并行跑，同 eachAudited。
 func runAudited(t *testing.T, ops []auditedOp) {
 	each := func(t *testing.T, check func(t *testing.T, s *Store, call auditedCall)) {
 		for _, op := range ops {
 			t.Run(op.name, func(t *testing.T) {
+				t.Parallel()
 				s := openContract(t)
 				check(t, s, op.prepare(t, s))
 			})
 		}
 	}
 	t.Run("零值审计报 ErrAuditRequired，什么都不写", func(t *testing.T) {
+		t.Parallel()
 		each(t, func(t *testing.T, s *Store, call auditedCall) {
 			before := authoredSnapshot(t, s)
 			_, err := call(store.Audit{})
@@ -571,6 +589,7 @@ func runAudited(t *testing.T, ops []auditedOp) {
 		})
 	})
 	t.Run("审计不合法报 ErrInvalid，什么都不写", func(t *testing.T) {
+		t.Parallel()
 		each(t, func(t *testing.T, s *Store, call auditedCall) {
 			before := authoredSnapshot(t, s)
 			for _, a := range []store.Audit{{Actor: "alice", Action: "approve", At: at0}, {Action: "hook.approve", At: at0}, {Actor: "alice", Action: "hook.approve"}} {
@@ -583,6 +602,7 @@ func runAudited(t *testing.T, ops []auditedOp) {
 		})
 	})
 	t.Run("审计写失败时动作也不落库", func(t *testing.T) {
+		t.Parallel()
 		each(t, func(t *testing.T, s *Store, call auditedCall) {
 			before := authoredSnapshot(t, s)
 			_, err := call(store.Audit{Actor: faultActor, Action: "test.fault", At: at0})
@@ -600,6 +620,7 @@ func runAudited(t *testing.T, ops []auditedOp) {
 		})
 	})
 	t.Run("成功时写一条审计，对象由仓储填", func(t *testing.T) {
+		t.Parallel()
 		each(t, func(t *testing.T, s *Store, call auditedCall) {
 			before := auditEntries(t, s)
 			a := store.Audit{Actor: "张三", Action: "test.audited", Detail: "理由：缺少分区说明", At: at0 + 1}
@@ -689,6 +710,7 @@ func (k versioned[V]) cases() []testCase {
 		{"列表：按名字前缀过滤，只有 ASCII 字母不分大小写，_、% 与反斜杠按原样比", k.listPrefix},
 		{"列表：按状态过滤，看的是给出的那一项", k.listStates},
 		{"列表：查询不合规则报 ErrInvalid", k.listInvalid},
+		{"列表：Limit 为 0 时每页 100 条", k.listDefaultLimit},
 	}
 }
 
@@ -1355,6 +1377,10 @@ func (k versioned[V]) listPrefix(t *testing.T, s *Store) {
 		{"K", nil},
 		{"net ", nil},
 		{"", []string{"K-Tool", "Net%B", `Net\Z`, "Net_A", "NetAZ", "NetXA", "NetYB", "Nic-1"}},
+		// 存不下的前缀谁的名字都不是（store 的包说明）：当作没有，得到空的一页，不报数据库的编码错误
+		{"Net\x00", nil},
+		{"Net\xff", nil},
+		{"\x00", nil},
 	} {
 		wantItems(t, k.names(k.listed(t, s, listQuery{NamePrefix: c.prefix})), c.want, fmt.Sprintf("前缀 %q", c.prefix))
 	}
@@ -1378,9 +1404,24 @@ func (k versioned[V]) listStates(t *testing.T, s *Store) {
 		{"已废弃", listQuery{States: []model.VersionState{model.VersionDeprecated}}, []V{d}},
 		{"ApprovedOnly 再按已审批过滤", listQuery{ApprovedOnly: true, States: []model.VersionState{model.VersionApproved}}, []V{c, e1}},
 		{"ApprovedOnly 再按草稿过滤", listQuery{ApprovedOnly: true, States: []model.VersionState{model.VersionDraft}}, nil},
+		// 空的切片与 nil 一样不过滤：第 5 层把 JSON 的空数组解出来就是它，当成「状态在空集合里」就一条都不给了
+		{"状态给空切片等于不过滤", listQuery{States: []model.VersionState{}}, []V{a, b, c, d, e2}},
+		{"ApprovedOnly 时状态给空切片也不过滤", listQuery{ApprovedOnly: true, States: []model.VersionState{}}, []V{c, e1}},
+		// 存不下的状态谁都不是（store 的包说明）：当作没有，不报数据库的编码错误
+		{"状态含 NUL", listQuery{States: []model.VersionState{"draft\x00"}}, nil},
+		{"状态不是 UTF-8", listQuery{States: []model.VersionState{"draft\xff"}}, nil},
 	} {
 		wantItems(t, k.listed(t, s, q.q), q.want, q.name)
 	}
+}
+
+func (k versioned[V]) listDefaultLimit(t *testing.T, s *Store) {
+	for i := range defaultPageSize + 1 {
+		k.mustCreate(t, s, fmt.Sprintf("Base-%03d", i))
+	}
+	wantDefaultLimit(t, slices.Concat(k.pages(t, s, listQuery{Limit: 500})...), func(cursor string) (store.Page[V], error) {
+		return k.list(t.Context(), s, listQuery{Cursor: cursor})
+	})
 }
 
 func (k versioned[V]) listInvalid(t *testing.T, s *Store) {

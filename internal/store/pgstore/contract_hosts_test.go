@@ -3,9 +3,12 @@ package pgstore
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
@@ -29,6 +32,7 @@ func Test契约主机(t *testing.T) {
 		{"导入时有一台的 SN 合法却没规范化，整批报 ErrInvalid、不写", hostImportNotNormalized},
 		{"导入时批内 SN 重复报 host_duplicate_in_batch", hostImportDuplicate},
 		{"导入空的一批报 ErrInvalid", hostImportEmpty},
+		{"一次导入多于一批的主机：分批写入、读回与审计，每一台都对", hostImportManyBatches},
 		{"删除之后读不到；Rev 对不上报 ErrConflict，没登记的报 ErrNotFound", hostDelete},
 		{"GetHosts 只放存在的，一台都没取到时是空 map", hostGetHosts},
 		{"ListHosts 按 SN 的字节序，翻三页以上与一次全取相同", hostListPaging},
@@ -36,6 +40,7 @@ func Test契约主机(t *testing.T) {
 		{"ListHosts 按 SN 前缀过滤，_、% 与反斜杠按原样比", hostListPrefix},
 		{"ListHosts 按属性过滤，值要完全相等", hostListAttr},
 		{"ListHosts 的查询不合规则报 ErrInvalid", hostListInvalid},
+		{"存不下的 SN 与过滤条件当作没有：取、删报 ErrNotFound，列表为空，不报数据库的编码错误", hostUnstorableKeys},
 		{"返回值与入参都是拷贝", hostCopies},
 	})
 }
@@ -315,6 +320,69 @@ func hostImportEmpty(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "空的一批")
 }
 
+// CSV 一次可能导入几千台，多于一条语句写得下的一批（batchSize）：写入、读回 Rev 与写审计都分批做，这里要走到第三批。入参打乱
+// 了顺序：写入按加锁的次序分批，读回按入参的顺序分批，两边的批不重合。每三台里有一台已经登记，导入时整条替换、Rev 加 1；其余
+// 新建，Rev 为 1。返回值按入参的顺序，每台都要对；GetHosts 一次全部取到；每台恰好一条审计，按入参的顺序写。
+func hostImportManyBatches(t *testing.T, s *Store) {
+	n := 2*batchSize + 1
+	var old, in []model.Host
+	for i := range n {
+		sn := fmt.Sprintf("SN-%05d", i)
+		if i%3 == 0 {
+			old = append(old, model.Host{SN: sn, Arch: "aarch64"})
+		}
+		in = append(in, model.Host{SN: sn, Attrs: map[string]string{"rack": fmt.Sprintf("R%d", i)}})
+	}
+	_, err := s.ImportHosts(t.Context(), old, anAudit("host.preload"))
+	must(t, err, "先登记三分之一")
+	r := rand.New(rand.NewPCG(7, 3)) // 种子固定，每次打乱得都一样
+	r.Shuffle(len(in), func(i, j int) { in[i], in[j] = in[j], in[i] })
+	registered := map[string]bool{}
+	for _, h := range old {
+		registered[h.SN] = true
+	}
+	want := make([]model.Host, len(in))
+	wantBySN := make(map[string]model.Host, len(in))
+	for i, h := range in {
+		h.Rev = 1
+		if registered[h.SN] {
+			h.Rev = 2 // 整条替换：原来登记的架构也清掉了
+		}
+		want[i], wantBySN[h.SN] = h, h
+	}
+
+	got := mustImport(t, s, in)
+	if len(got) != n {
+		t.Fatalf("导入 %d 台，返回了 %d 台", n, len(got))
+	}
+	for i := range want {
+		if !reflect.DeepEqual(got[i], want[i]) {
+			t.Fatalf("返回值的第 %d 台是 %+v，应为 %+v", i+1, got[i], want[i])
+		}
+	}
+	read, err := s.GetHosts(t.Context(), append(snsOf(in), "SN-MISSING"))
+	must(t, err, "一次取回全部")
+	if len(read) != n {
+		t.Fatalf("GetHosts 应取到 %d 台，取到 %d 台", n, len(read))
+	}
+	for sn, h := range wantBySN {
+		if !reflect.DeepEqual(read[sn], h) {
+			t.Fatalf("GetHosts 取到的 %s 是 %+v，应为 %+v", sn, read[sn], h)
+		}
+	}
+	entries := slices.Concat(auditPages(t, s, store.AuditQuery{Action: "host.import", Limit: 500})...)
+	var targets []string
+	for _, e := range slices.Backward(entries) { // 新的在前，倒过来就是写入的顺序
+		if e.TargetKind != "host" {
+			t.Fatalf("导入的审计 %+v：对象应是主机", e)
+		}
+		targets = append(targets, e.TargetID)
+	}
+	if !slices.Equal(targets, snsOf(in)) {
+		t.Fatalf("导入 %d 台应按入参的顺序每台写一条审计，写了 %d 条", n, len(targets))
+	}
+}
+
 func hostDelete(t *testing.T, s *Store) {
 	h := mustCreateHost(t, s, fullHost("SN-1"))
 	other := mustCreateHost(t, s, fullHost("SN-2"))
@@ -469,6 +537,37 @@ func hostListInvalid(t *testing.T, s *Store) {
 		_, err := s.ListHosts(t.Context(), q)
 		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("Limit %d、Cursor %q", q.Limit, q.Cursor))
 	}
+}
+
+// 存不下的串（含 NUL，或不是合法的 UTF-8）不可能登记过，PostgreSQL 的 text 不收它们：按它取、删报 ErrNotFound，批量取时不放它，
+// 按它过滤得到空的一页，都当作没有，不把数据库的编码错误交给调用方（store 的包说明）。另有一台的属性值恰好是 U+FFFD：非法的
+// UTF-8 经 encoding/json 就成了它，按 0xFF 过滤不能把它选中。
+func hostUnstorableKeys(t *testing.T, s *Store) {
+	ctx := t.Context()
+	h := mustCreateHost(t, s, fullHost("SN-1"))
+	replacement := string(utf8.RuneError) // U+FFFD
+	replaced := mustCreateHost(t, s, model.Host{SN: "SN-2", Attrs: map[string]string{"rack": replacement}})
+	before := snapshot(t, s)
+	for _, bad := range []string{"\x00", "\xff"} {
+		for _, sn := range []string{"SN-1" + bad, bad} {
+			_, err := s.GetHost(ctx, sn)
+			wantIs(t, err, store.ErrNotFound, fmt.Sprintf("GetHost(%q)", sn))
+			wantIs(t, s.DeleteHost(ctx, sn, h.Rev, anAudit("host.delete")), store.ErrNotFound, fmt.Sprintf("DeleteHost(%q)", sn))
+			got, err := s.GetHosts(ctx, []string{sn, "SN-1"})
+			must(t, err, fmt.Sprintf("GetHosts 带着 %q", sn))
+			wantEqual(t, got, map[string]model.Host{"SN-1": h}, fmt.Sprintf("GetHosts 带着 %q", sn))
+		}
+		for _, q := range []store.HostQuery{
+			{SNPrefix: "SN" + bad}, {SNPrefix: bad},
+			{AttrKey: "rack", AttrValue: bad}, {AttrKey: "rack", AttrValue: "A1" + bad}, {AttrKey: "rack" + bad, AttrValue: "A1"},
+		} {
+			wantItems(t, slices.Concat(hostPages(t, s, q)...), nil, fmt.Sprintf("ListHosts(%#v)", q))
+		}
+	}
+	wantUnchanged(t, s, before, "按存不下的键取、删与过滤之后")
+	// 属性值是 U+FFFD 的那一台照样按它自己的值选得中：上面选不中它，不是因为它没存下
+	wantItems(t, slices.Concat(hostPages(t, s, store.HostQuery{AttrKey: "rack", AttrValue: replacement})...), []model.Host{replaced},
+		"按 U+FFFD 过滤")
 }
 
 func hostCopies(t *testing.T, s *Store) {

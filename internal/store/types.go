@@ -61,7 +61,8 @@ type Page[T any] struct {
 }
 
 // 下面是各查询类型。它们都带 Cursor 与 Limit，规则由 CheckQuery 查：Cursor 是上一页的 Next，空串表示从头取；
-// Limit 为 0 时取 100，1–500 照用，超过 500 报 ErrInvalid。过滤条件为零值表示不按它过滤。
+// Limit 为 0 时取 100，1–500 照用，超过 500 报 ErrInvalid。过滤条件为零值表示不按它过滤；切片的过滤条件（States）
+// 为 nil 与为空切片相同，都表示不按它过滤，不是「状态在空集合里」：第 5 层把 JSON 里的空数组解出来就是空切片。
 //
 // 顺序固定，翻页才不会漏也不会重：主机按 SN；ISO、hook、模板按名字的 key，再按 ID；任务按 CreatedAt 倒序，
 // 再按 ID；审计按 ID 倒序。事件不分页，由 ListEvents 按 Seq 续读。

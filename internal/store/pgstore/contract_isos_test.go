@@ -27,6 +27,7 @@ func Test契约ISO(t *testing.T) {
 		{"系统更新：置为 ready 时 ISO.Validate 的问题原样带出", isoUpdateReadyInvalid},
 		{"系统更新：已是 ready 的改成不合法的记录，同样带出 ISO.Validate 的问题", isoUpdateStillReadyInvalid},
 		{"系统更新：文本存不下报 ErrInvalid，不论置为什么状态", isoUpdateUnstorable},
+		{"系统更新：SHA256 不是空串也不是 64 位小写十六进制，报 ErrInvalid", isoUpdateBadSHA256},
 		{"系统更新：不能置为 deprecated，状态不认识的报 ErrInvalid", isoUpdateBadState},
 		{"系统更新：已废弃的不能再改，报 ErrImmutable", isoUpdateDeprecated},
 		{"SHA256 撞上未失败的 ISO 报 DuplicateError，对方导入失败之后就能写", isoSHA256},
@@ -36,6 +37,7 @@ func Test契约ISO(t *testing.T) {
 		{"ListISOs 按名称的字节序、再按 ID，翻页与一次全取相同", isoListPaging},
 		{"ListISOs 按族、系、状态过滤", isoListFilters},
 		{"ListISOs 的查询不合规则报 ErrInvalid", isoListInvalid},
+		{"ListISOs 的 Limit 为 0 时每页 100 条", isoListDefaultLimit},
 		{"Artifacts、Offers 是深拷贝", isoCopies},
 	})
 }
@@ -339,6 +341,28 @@ func isoUpdateUnstorable(t *testing.T, s *Store) {
 	}
 }
 
+// SHA256 只能为空，或是 64 位小写十六进制（store.CheckISOText）。C4 按它去重：同一份内容写成大写就成了另一份；超长的值不先
+// 挡下，会撞上 idx_isos_sha256 的 btree 行长上限，报出没翻译的 54000。不论置为什么状态都查：获取中的 ISO 可能在字节到齐之前
+// 就记下了操作员填的期望值（C3）。
+func isoUpdateBadSHA256(t *testing.T, s *Store) {
+	iso := mustCreateISO(t, s, rockyISO("R"))
+	before := snapshot(t, s)
+	for _, c := range []struct{ name, sum string }{
+		{"大写", strings.ToUpper(sha256Of(0xabc))},
+		{"超长", strings.Repeat("5a", 2048)},
+		{"非十六进制", sha256Of(1)[:63] + "g"},
+	} {
+		for _, state := range []model.ISOState{model.ISOAcquiring, model.ISOImporting, model.ISOFailed, model.ISOReady} {
+			in := imported(iso, state, 1)
+			in.SHA256 = c.sum
+			_, err := s.UpdateISO(t.Context(), in)
+			wantIs(t, err, store.ErrInvalid, fmt.Sprintf("SHA256 %s，置为 %s", c.name, state))
+		}
+	}
+	wantUnchanged(t, s, before, "SHA256 不合格式时")
+	mustUpdateISO(t, s, imported(iso, model.ISOImporting, 0xabc)) // 同一份内容写成小写就能写
+}
+
 // 废弃要审计，只能走 DeprecateISO。
 func isoUpdateBadState(t *testing.T, s *Store) {
 	acquiring := mustCreateISO(t, s, rockyISO("A"))
@@ -527,9 +551,22 @@ func isoListFilters(t *testing.T, s *Store) {
 		{"按几个状态", store.ISOQuery{States: []model.ISOState{model.ISOFailed, model.ISODeprecated}}, []model.ISO{desktop, esxi}},
 		{"族与状态同时给", store.ISOQuery{Family: "linux", States: []model.ISOState{model.ISOReady, model.ISOImporting}}, []model.ISO{ready, alma}},
 		{"组合不上的为空", store.ISOQuery{Family: "windows", Series: "rocky"}, nil},
+		// 空的切片与 nil 一样不过滤：第 5 层把 JSON 的空数组解出来就是它，当成「状态在空集合里」就一条都不给了
+		{"状态给空切片等于不过滤", store.ISOQuery{States: []model.ISOState{}}, []model.ISO{acquiring, ready, alma, server, desktop, esxi}},
 	} {
 		c.q.Limit = 1 // 一条一页：翻页时过滤也要对
 		wantItems(t, slices.Concat(isoPages(t, s, c.q)...), c.want, c.name)
+	}
+	// 存不下的过滤条件谁都不是（store 的包说明）：当作没有，得到空的一页，不报数据库的编码错误
+	for _, bad := range []string{"\x00", "\xff"} {
+		for _, q := range []store.ISOQuery{
+			{Family: catalog.Family("linux" + bad)},
+			{Series: catalog.Series("rocky" + bad)},
+			{States: []model.ISOState{model.ISOState("ready" + bad)}},
+			{Family: "linux", States: []model.ISOState{model.ISOState(bad)}},
+		} {
+			wantItems(t, slices.Concat(isoPages(t, s, q)...), nil, fmt.Sprintf("ListISOs(%#v)", q))
+		}
 	}
 }
 
@@ -539,6 +576,15 @@ func isoListInvalid(t *testing.T, s *Store) {
 		_, err := s.ListISOs(t.Context(), q)
 		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("Limit %d、Cursor %q", q.Limit, q.Cursor))
 	}
+}
+
+func isoListDefaultLimit(t *testing.T, s *Store) {
+	for i := range defaultPageSize + 1 {
+		mustCreateISO(t, s, rockyISO(fmt.Sprintf("ISO-%03d", i)))
+	}
+	wantDefaultLimit(t, slices.Concat(isoPages(t, s, store.ISOQuery{Limit: 500})...), func(cursor string) (store.Page[model.ISO], error) {
+		return s.ListISOs(t.Context(), store.ISOQuery{Cursor: cursor})
+	})
 }
 
 func isoCopies(t *testing.T, s *Store) {

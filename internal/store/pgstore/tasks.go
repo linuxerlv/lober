@@ -145,10 +145,11 @@ func admit(tx *gorm.DB, batch []model.Task) (admission.BatchInput, error) {
 	return in, store.BatchProblems(in, missing)
 }
 
-// lockHosts 在事务 tx 里给 sns 这几台主机加写锁并取出，没登记的不在结果里。按 SN 的字节序加锁（LockRows 在排序之后，行按
-// ORDER BY 的顺序上锁），与 ImportHosts 写主机的顺序相同：两批同时提交时，等待不会成环。分块也按这个顺序取。
+// lockHosts 在事务 tx 里给 sns 这几台主机加写锁并取出，没登记的不在结果里。按 hostLockOrder 的次序加锁（LockRows 在排序
+// 之后，行按 ORDER BY 的顺序上锁，ORDER BY 与 hostLockOrder 是同一个次序），与 ImportHosts 写主机的次序相同：两批同时提交、
+// 或者导入同时在写其中几台时，等待不会成环。分块也按这个次序取。
 func lockHosts(tx *gorm.DB, sns []string) (map[string]hostRow, error) {
-	sorted := slices.Sorted(slices.Values(sns))
+	sorted := hostLockOrder(sns, func(sn string) string { return sn })
 	out := make(map[string]hostRow, len(sorted))
 	for chunk := range slices.Chunk(sorted, batchSize) {
 		var rows []hostRow

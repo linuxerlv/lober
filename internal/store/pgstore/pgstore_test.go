@@ -25,6 +25,10 @@ import (
 )
 
 // 测试夹具：每次 Open 在测试库里新建一个 schema，用完删掉，几个代理同时跑测试也互不干扰。测试库怎么准备见 doc.go。
+//
+// 别的包的测试用导出的 pgtest，DSN 从哪读、临时 schema、每个仓储的连接上限、同时打开的仓储数、失败注入，规则都和这里
+// 一样。这里用不了它：pgtest 依赖 pgstore，包内测试再 import 它就成环（import cycle not allowed in test）；包内测试还要
+// 拿 *Store 与 schema 的 DSN 做白盒断言，pgtest 只给 store.Store。所以这份留着，改了哪一边的规则，另一边要跟着改。
 
 // dsnEnv 是给测试库 DSN 的环境变量；没设时，从模块根逐级往上找 dsnFile。
 const (
@@ -34,6 +38,14 @@ const (
 
 // maxTestConns 是每个测试仓储的连接上限：几个代理会同时跑测试，本机的 max_connections 只有 100。
 const maxTestConns = 4
+
+// maxTestOpen 是这个测试进程里同时在用的临时 schema 数上限，与 pgtest 的 maxOpen 相同，数字怎么定的见那边。契约用例并行
+// 跑（runCases），不限的话几十个用例同时建 schema、开仓储，一个进程就能撑满 max_connections。
+const maxTestOpen = 4
+
+// testSlots 是限住同时在用的临时 schema 数的信号量：newSchema 先占一个位，schema 删掉之后才让出来。位都占满时，newSchema
+// 等到有用例结束；一个用例同时建的 schema 超过 maxTestOpen 个，会一直等下去。
+var testSlots = make(chan struct{}, maxTestOpen)
 
 // testDSN 是测试库的 DSN。两处都没有就失败、不跳过：跳过会让 make check 在存储层零覆盖的情况下变绿。
 func testDSN(t *testing.T) string {
@@ -83,9 +95,11 @@ func moduleRoot(t *testing.T) string {
 }
 
 // newSchema 在测试库里新建一个 lober_t_ 加随机串的 schema，返回 search_path 只有它的 DSN；测试结束时连同里面的
-// 一切删掉。
+// 一切删掉。建之前先占 testSlots 的一个位，删掉之后才让出来（Cleanup 后进先出，让位登记在最前）。
 func newSchema(t *testing.T) string {
 	t.Helper()
+	testSlots <- struct{}{}
+	t.Cleanup(func() { <-testSlots })
 	base := testDSN(t)
 	name := "lober_t_" + store.NewID()
 	adminExec(t, t.Context(), base, "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize())
@@ -132,10 +146,10 @@ func withSearchPath(dsn, schema string) (string, error) {
 	return u.String(), nil
 }
 
-// openStore 用 dsn 打开仓储，限住连接数，测试结束时关闭。
+// openStore 用 dsn 打开仓储，经 WithMaxConns 限住连接数（与装配点同一个入口），测试结束时关闭。
 func openStore(t *testing.T, dsn string) *Store {
 	t.Helper()
-	s, err := Open(t.Context(), dsn)
+	s, err := Open(t.Context(), dsn, WithMaxConns(maxTestConns))
 	if err != nil {
 		t.Fatalf("Open：%v", err)
 	}
@@ -144,11 +158,6 @@ func openStore(t *testing.T, dsn string) *Store {
 			t.Errorf("关闭仓储：%v", err)
 		}
 	})
-	sqlDB, err := s.db.DB()
-	if err != nil {
-		t.Fatalf("取连接池：%v", err)
-	}
-	sqlDB.SetMaxOpenConns(maxTestConns)
 	return s
 }
 
@@ -200,39 +209,43 @@ func TestOpen不注入失败(t *testing.T) {
 	}
 }
 
-// 存不下的键不可能登记过（PostgreSQL 的 text 不收 NUL 与非法的 UTF-8）：按它查、删报 ErrNotFound，按它过滤得到空的
-// 一页，都当作没有，不把数据库的编码错误交给调用方。契约测试没有这几例，这里补上。
-func Test存不下的键与过滤条件当作没有(t *testing.T) {
+// 连接池的上限由装配点从配置读出来、经 WithMaxConns 传给 Open（S7-7）；不传就用 database/sql 的默认值，不设上限。
+// 几个选项都传时，后传的为准。
+func TestOpen按选项设连接池上限(t *testing.T) {
+	dsn := newSchema(t)
+	for _, c := range []struct {
+		name string
+		opts []Option
+		want int // sql.DBStats.MaxOpenConnections，0 表示不设上限
+	}{
+		{"不传", nil, 0},
+		{"传 3", []Option{WithMaxConns(3)}, 3},
+		{"后传的为准", []Option{WithMaxConns(3), WithMaxConns(5)}, 5},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, err := Open(t.Context(), dsn, c.opts...)
+			if err != nil {
+				t.Fatalf("Open：%v", err)
+			}
+			defer s.Close()
+			sqlDB, err := s.db.DB()
+			if err != nil {
+				t.Fatalf("取连接池：%v", err)
+			}
+			if got := sqlDB.Stats().MaxOpenConnections; got != c.want {
+				t.Fatalf("连接池的上限 = %d，应为 %d", got, c.want)
+			}
+		})
+	}
+}
+
+// 游标里藏着存不下的串（PostgreSQL 的 text 不收 NUL）：仓储给不出这样的游标，认不出来（store.DecodeCursor），报
+// ErrInvalid，不把数据库的编码错误交给调用方。每个带游标的列表都试一遍，NUL 放在排序键的不同位置；审计的排序键只有整数，
+// 藏不进串。契约测试里的坏游标是解不开的串与排序键为 null 的，排序键里藏着 NUL 的只在这里。按存不下的键取、删与过滤
+// 当作没有，见契约测试（hostUnstorableKeys 与 ISO、任务、审计各组列表的过滤用例）。
+func Test游标里藏着存不下的串报ErrInvalid(t *testing.T) {
 	s := openStore(t, newSchema(t))
 	ctx := t.Context()
-	if _, err := s.CreateHost(ctx, model.Host{SN: "SN-1"}, store.Audit{Actor: "alice", Action: "host.create", At: 1}); err != nil {
-		t.Fatalf("登记：%v", err)
-	}
-	for _, bad := range []string{"SN\x00-1", "SN-1\xff"} {
-		if _, err := s.GetHost(ctx, bad); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("GetHost(%q) 应报 ErrNotFound，得到 %v", bad, err)
-		}
-		if err := s.DeleteHost(ctx, bad, 1, store.Audit{Actor: "alice", Action: "host.delete", At: 1}); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("DeleteHost(%q) 应报 ErrNotFound，得到 %v", bad, err)
-		}
-		m, err := s.GetHosts(ctx, []string{bad, "SN-1"})
-		if err != nil || len(m) != 1 {
-			t.Errorf("GetHosts 带着 %q 应只取到 SN-1，得到 %v、%v", bad, m, err)
-		}
-		for _, q := range []store.HostQuery{{SNPrefix: bad}, {AttrKey: "rack", AttrValue: bad}, {AttrKey: bad, AttrValue: "A1"}} {
-			if p, err := s.ListHosts(ctx, q); err != nil || p.Items == nil || len(p.Items) != 0 {
-				t.Errorf("ListHosts(%+v) 应得到空的一页，得到 %+v、%v", q, p, err)
-			}
-		}
-		if p, err := s.ListISOs(ctx, store.ISOQuery{Family: "linux", States: []model.ISOState{model.ISOState(bad)}}); err != nil || p.Items == nil || len(p.Items) != 0 {
-			t.Errorf("ListISOs 按状态 %q 应得到空的一页，得到 %+v、%v", bad, p, err)
-		}
-		if p, err := s.ListAudit(ctx, store.AuditQuery{Actor: bad}); err != nil || p.Items == nil || len(p.Items) != 0 {
-			t.Errorf("ListAudit 按操作者 %q 应得到空的一页，得到 %+v、%v", bad, p, err)
-		}
-	}
-	// 游标里藏着存不下的串：仓储给不出这样的游标，同样认不出来（store.DecodeCursor），不把数据库的编码错误交给调用方。
-	// 每个带游标的列表都试一遍，NUL 放在排序键的不同位置；审计的排序键只有整数，藏不进串。
 	for _, c := range []struct {
 		name string
 		list func() error

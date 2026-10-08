@@ -78,8 +78,9 @@ func (s *Store) UpdateHost(ctx context.Context, h model.Host, a store.Audit) (mo
 	return row.host()
 }
 
-// ImportHosts 见 store.Hosts。按 SN 的顺序写：同时导入的两批按同一个顺序给行加锁，不会互相等死。写完在同一个事务里
-// 读回各台的 Rev，这些行此时由本事务锁着，读到的就是本次写下的。返回值与审计都按入参的顺序。
+// ImportHosts 见 store.Hosts。按 hostLockOrder 的次序写，写一行就锁住一行：同时导入的两批、导入与批量建任务，都按同一个
+// 次序给行加锁，不会互相等死。写完在同一个事务里读回各台的 Rev，这些行此时由本事务锁着，读到的就是本次写下的。返回值
+// 与审计都按入参的顺序。
 func (s *Store) ImportHosts(ctx context.Context, hs []model.Host, a store.Audit) ([]model.Host, error) {
 	if err := store.CheckAudit(a); err != nil {
 		return nil, err
@@ -97,8 +98,7 @@ func (s *Store) ImportHosts(ctx context.Context, hs []model.Host, a store.Audit)
 		}
 		rows[i], sns[i] = row, h.SN
 	}
-	sorted := slices.Clone(rows)
-	slices.SortFunc(sorted, func(x, y hostRow) int { return strings.Compare(x.SN, y.SN) })
+	sorted := hostLockOrder(rows, func(r hostRow) string { return r.SN })
 	err := s.write(ctx, func(tx *gorm.DB) error {
 		for chunk := range slices.Chunk(sorted, batchSize) {
 			if err := tx.Clauses(upsertHost).Create(&chunk).Error; err != nil {
@@ -220,6 +220,16 @@ func (s *Store) ListHosts(ctx context.Context, q store.HostQuery) (store.Page[mo
 		return store.Page[model.Host]{}, err
 	}
 	return page(rows, limit, hostRow.host, func(r hostRow) string { return store.EncodeCursor("hosts", r.SN) })
+}
+
+// hostLockOrder 是给多台主机加锁的次序：按 SN 的字节序升序，与 SQL 里的 ORDER BY sn COLLATE "C" 相同。凡在一个事务里给
+// 多台主机加锁，都先按它排好、再按排好的顺序逐台加锁（ImportHosts 写主机；CreateTasks 经 lockHosts 加写锁）：任意两个
+// 事务按同一个次序拿锁，等待就不会成环，不会互相等死（SQLSTATE 40P01）。各处自己排一遍，一处改了次序，只在 CSV 导入撞上
+// 批量建任务时才出错。返回排好的副本，xs 不动；sn 取出一项的 SN。
+func hostLockOrder[T any](xs []T, sn func(T) string) []T {
+	out := slices.Clone(xs)
+	slices.SortFunc(out, func(a, b T) int { return strings.Compare(sn(a), sn(b)) })
+	return out
 }
 
 // lockHost 在事务 tx 里给 SN 为 sn 的主机加写锁并取出它：没登记报 ErrNotFound，Rev 不是 rev 报 ErrConflict。

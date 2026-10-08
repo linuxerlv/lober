@@ -202,6 +202,21 @@ func TestCheckISOText(t *testing.T) {
 		c.mod(&iso)
 		wantInvalid(t, store.CheckISOText(iso), c.name+"存不下")
 	}
+
+	// SHA256 只能为空，或是 64 位小写十六进制：C4 按它去重，大小写不同的两个值会被当成两份内容；超长的值不先挡下，
+	// pgstore 会撞上 idx_isos_sha256 的 btree 行长上限，报出没翻译的 54000。
+	empty := readyISO()
+	empty.SHA256 = ""
+	wantErr(t, store.CheckISOText(empty), nil)
+	for _, c := range []struct{ name, sum string }{
+		{"大写", strings.ToUpper(strings.Repeat("5a", 32))},
+		{"超长", strings.Repeat("5a", 2048)},
+		{"非十六进制", strings.Repeat("5a", 31) + "5g"},
+	} {
+		iso := readyISO()
+		iso.SHA256 = c.sum
+		wantInvalid(t, store.CheckISOText(iso), "SHA256 "+c.name)
+	}
 }
 
 // C4：内容相同的只导入一次。空的 SHA256 与导入失败的 ISO 不占位，导入失败的可以记下与别的 ISO 相同的内容、指向那一个；

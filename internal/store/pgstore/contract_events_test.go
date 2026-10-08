@@ -17,6 +17,7 @@ func Test契约事件(t *testing.T) {
 		{"Seq 每个任务从 1 起连续，不同任务互不影响，读回来与写进去的相同，不写审计", eventSeq},
 		{"同一个 Key 再追加报告 Duplicate，Seq 是原来那条的，不新增；同一批里重复的也一样", eventDuplicate},
 		{"同一个 Key 在不同任务里可以各用一次", eventKeyPerTask},
+		{"一次追加多于一批（batchSize）：分批写入与分批查已有的 Key，第二批的照样写上，原样重发照样认出", eventManyBatches},
 		{"推进时带的事件与 AppendEvents 共用 Seq 与 Key；结束了的任务照样能追加", eventWithTransition},
 		{"事件不合法报 ErrInvalid，整批不写", eventInvalid},
 		{"任务不存在报 ErrNotFound，ID 不合格式报 ErrInvalid", eventMissingTask},
@@ -89,6 +90,29 @@ func eventKeyPerTask(t *testing.T, s *Store) {
 		wantEqual(t, mustAppend(t, s, task.ID, keyed("sig-1")), []store.Appended{{Seq: 1}}, "任务 "+task.ID+" 第一次用 sig-1")
 	}
 	wantEqual(t, mustAppend(t, s, ts[0].ID, keyed("sig-1")), []store.Appended{{Seq: 1, Duplicate: true}}, "同一个任务再用一次")
+}
+
+// 一次追加的条数不设上限（store.CheckEvents 只查每一条），第 7 层一次补报的信号可能多于一条语句写得下的一批（batchSize）：
+// 写入按入参的次序分批，查已有的 Key 按 Key 的字节序分批，这里多出的一条在两边都落在第二批（sig-1000 排在最后）。Seq 照样
+// 从 1 起连续；原样重发一次，每一条都报告为 Duplicate、Seq 是原来那条的，一条都不新增，计数也不动。
+func eventManyBatches(t *testing.T, s *Store) {
+	id := mustTask(t, s).ID
+	n := batchSize + 1
+	in := make([]store.NewEvent, n)
+	first, again := make([]store.Appended, n), make([]store.Appended, n)
+	want := make([]store.Event, n)
+	for i := range n {
+		seq := int64(i + 1)
+		in[i] = store.NewEvent{At: at0 + seq, Kind: "signal.recv", Key: fmt.Sprintf("sig-%04d", i)}
+		first[i], again[i] = store.Appended{Seq: seq}, store.Appended{Seq: seq, Duplicate: true}
+		want[i] = store.Event{TaskID: id, Seq: seq, NewEvent: in[i]}
+	}
+	wantEqual(t, mustAppend(t, s, id, in...), first, "第一次追加")
+	wantEqual(t, allEvents(t, s, id), want, "读回来的事件")
+	wantEqual(t, mustAppend(t, s, id, in...), again, "原样重发")
+	wantSeqCounter(t, s, id, int64(n), "原样重发之后")
+	wantEqual(t, allEvents(t, s, id), want, "原样重发之后读回来的事件")
+	wantEqual(t, mustAppend(t, s, id, keyed("sig-new")), []store.Appended{{Seq: int64(n + 1)}}, "重发之后追加新的")
 }
 
 // 推进时带的事件与 AppendEvents 是同一份日志：Seq 接着分配，Key 互相去重。带的事件里有已存在的 Key，照样推进，那条报告为
