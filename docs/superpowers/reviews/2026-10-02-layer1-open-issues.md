@@ -15,7 +15,7 @@
 
 ## 修补结果
 
-2026-10-02 按你的决定修补，计划见 `docs/superpowers/plans/2026-10-02-layer1-fixups.md`。第 1 节 10 条、第 2 节 19 条全部落实（T13-8 随 L-7 一起做）；第 3 节只并入了 T7-5（随 L-6 进 ISO.Validate），其余 14 条仍归后续层，没有动。每条的做法和测试名写在条目标题下的「结果」一行。各条「出处」里的行号指 d45fbf3，修补后已经变了。
+2026-10-02 按你的决定修补，计划见 `docs/superpowers/plans/2026-10-02-layer1-fixups.md`。第 1 节 10 条、第 2 节 19 条全部落实（T13-8 随 L-7 一起做）；第 3 节这一轮只并入了 T7-5（随 L-6 进 ISO.Validate），其余 14 条仍归后续层；后来 L-8 里字段键那一项随修补轮之后的 C-3 修掉了（036f397），见 L-8 下面的结果。每条的做法和测试名写在条目标题下的「结果」一行。各条「出处」里的行号指 d45fbf3，修补后已经变了。
 
 修补轮的提交，都在 `feat/core-model` 上：
 
@@ -633,7 +633,7 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ## 3. 归后续层处理
 
-属于后续层的事，或要等后续层才有真实用途。写这一层的计划时纳入即可。修补轮只并入了 T7-5（随 L-6），其余 14 条没有动。
+属于后续层的事，或要等后续层才有真实用途。写这一层的计划时纳入即可。修补轮只并入了 T7-5（随 L-6）；之后 L-8 里字段键那一项随 C-3 修掉（036f397），L-8 的其余部分和另外 13 条仍归后续层。
 
 ### T4-2　网关须先检查 iPXE 换算结果，不能传空值
 
@@ -726,6 +726,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：T8 建议：给后续层的提醒，不算本任务的缺陷：列号按 rune 计是计划定的
 
 ### L-8　标识常量、字段键与 ID@版本在各包各写一遍
+
+结果：字段键一项已修，其余仍归第 3、5 层（2026-10-08 补记，出自第 2 层清单的 S10-5）。字段键随 C-3 修掉了（036f397）：TemplateFieldKey、InstancePath、InstanceFieldKey 放在 model（problem.go）而不是 params，因为依赖守卫不许 activation 依赖 params；activation、params、snapshot 共用这一份，Test同一格在激活判定与参数求值里标在同一处 钉住两边一致。所以下面建议里「第 5 层做接口时，params 导出字段键构造函数」不用再做。「ID@版本」仍是五处各拼一份：activation/hook.go、admission/admission.go、params/params.go、snapshot/build.go，以及第 2 层的 store.VersionID。要收成一份，可以在 model 给 HookKey、TemplateKey 加 String()，几处都改调它；不是改用 store.VersionID，因为第 1 层不许依赖 store，而 store 本来就依赖第 1 层，反过来引用还会成环。catalog 的常量、全局词表和 Subject.Kind 常量仍留给第 3、5 层。
 
 第 3、5 层。①catalog 没有为族、格式、系、时机、解释器、部件、系统值、架构、固件导出常量，后续层只能把 rocky 这类标识写成字面量，拼错要等 Valid() 或测试才发现；也没有导出全局词表，第 5、6 层列下拉框只能经 Families、SeriesOf 反推。②字段键（tpl/、插槽名/序号/）在 params 与 snapshot 里各拼一次，「ID@版本」在四个包里各拼一次，Subject.Kind 的八个取值和 ParamType 全是字面量。字段键目前有 TestBuild回归41b2fbe 兜底，一边改了测试会失败，不会静默丢值。model 已为 ISOState、VersionState、ImplKind、BindingSource 导出常量，两种做法并存。建议照计划「由第一个用到它的层加进来」的做法：第 3 层要按格式、类型分支时，导出对应的带类型常量（命名如 FormatKickstart、ParamCIDR），表也改用常量书写；第 5 层做接口时，params 导出字段键构造函数，model 提供 Subject.Kind 常量和 HookKey、TemplateKey 的 String()，catalog 导出全局词表。常量是纯追加，越早加，要迁移的字面量越少。
 

@@ -8,20 +8,99 @@
 - 68 条已经被验收修正或后续任务解决了，或者属于合理的偏差。
 - 37 条只是表述上的问题，或者没有实际影响。
 - 4 条需要你拍板，放在第 1 节。
-- 28 条应该在第 3 层开工前修掉，放在第 2 节。其中 14 条属于两份实现会不一致的问题。
+- 28 条应该在第 3 层开工前修掉，放在第 2 节。其中 14 条当时标着「（两份实现不一致）」，见下一段。
 - 15 条归到后续的层去处理，放在第 3 节。
 
-标题末尾标着「（两份实现不一致）」的条目，毛病都出在同一个地方：同样的调用，内存实现和 pgstore 可能给出不同的结果。这些条目分两种。有的现在就会给出不同的结果；有的现在两边一致，只是没有测试防着，代码或环境一变就会走岔。所以正文里写着「目前一致」的条目，和标记并不矛盾。这些条目要优先修，因为第 5 层的接口测试跑在内存实现上。两份实现一旦不一致，第 5 层的测试发现不了，问题要到生产环境里才会出现。第 2 层的契约测试，本来就是为了防住这种情况。
+写这份清单时（b61ba0a），internal/store 的接口有两份实现：内存实现 memstore 和 PostgreSQL 实现 pgstore。第 2 节有 14 条当时在标题末尾标着「（两份实现不一致）」，说的是同样的调用，两份实现可能给出不同的结果，或者眼下一致、只是没有测试防着。它们原本排在前面，因为原计划让第 5 层的接口测试跑在内存实现上，两边一旦不一致，问题要到生产环境才会出现。2026-10-08 你定了删掉内存实现，只留 pgstore（见「你的决定」一节），这条排序理由随之消失。修补时 13 条去掉了这个标记，它们讲的其实是 pgstore 自己的缺陷；S9-1 的标记改成「（pgstore 与 model 可能不一致）」，因为 pgstore 和 model 之间仍可能对不上。
 
-上面这一段是 2026-10-07 写的。2026-10-08 你定了删掉内存实现，所以这段的理由不再成立，见下一节。
+## 修补结果
+
+2026-10-08 按你的决定修补，计划见 `docs/superpowers/plans/2026-10-08-layer2-fixups.md`。第 1 节 4 条都已落实。第 2 节 28 条在「删掉 memstore」的新前提下逐条重判过：25 条已修；S6-3、S5-6、S6-4 的理由随 memstore 删除而消失，不修。第 3 节顺带做了几条：S7-7 与 S5-8 已修，L-7 的注释部分已改，S5-2、S5-3、S5-7 写进了原计划「留给后续层的约定」的第 5 层；S6-5 讲的是 memstore 的 cloneTask，整条作废；其余仍归后续层。每条的做法和测试名写在条目标题下的「结果」一行。
+
+正文各条的问题、影响、选项、建议写的是 b61ba0a 时的情形，那时 memstore 和 storetest 都还在。正文里说「内存实现」「两份实现」「storetest」的地方，都指那时的代码；修补后的情形以「结果」为准。出处里的行号指 b61ba0a，修补后已经变了。出处里 memstore 的路径已经删掉；storetest 各文件的内容按聚合并进了 pgstore 的 contract_*_test.go（比如 storetest/hosts.go 对应 contract_hosts_test.go），属于 package pgstore。
+
+修补轮的提交，都在 `feat/store` 上：
+
+| 提交 | 任务 | 内容 |
+|---|---|---|
+| 0b7cf57 | — | 修补前：本清单改写成正常中文，记下 10-08 的决定 |
+| fda1c88 | — | 修补计划：6 条决定、25 条应修项、12 个任务 |
+| 73ac12c | U1 | spec 只留 PostgreSQL 一份实现，新增 §6.4「测试环境与生产环境」；S10-2、S10-3、L-8b、S5-1 的 spec 部分；原计划追加本轮决定，任务 4–6 加历史横幅 |
+| 5dcfe69 | U2 | 删掉 memstore 与守卫里对应的规则，清掉「与内存实现一致」的注释，补 hook、模板、任务三个列表的 NUL 游标用例 |
+| 8e7e9be | U3 | storetest 并进 pgstore 的 contract_*_test.go，补 last_seq、last_version、template_hook_refs 三处白盒断言 |
+| dbea587 | U5 | 保留前缀 `lober:` 与原因代码 name_reserved；S5-1 的注释；S3-14 的 Subject 写法表 |
+| f7d05d8 | U4 | 导出测试夹具 pgtest（DSN、Open、FaultActor）；pgstore.Open 加 WithMaxConns（S7-7） |
+| 5e58281 | U7 | 写事务固定 READ COMMITTED（S7-1）；S8-1（修了两轮）、S7-6、S4-4 |
+| 7b9de91 | U8 | S7-3、S4-3、L-6、S7-5、S7-4、S2-11、S4-5、S6-2、S4-8 |
+| f0f30eb | U6 | 契约用例并行，信号量限并发（S4-2） |
+| 7829943 | U8 补漏 | L-6 的死锁测试 hostlock_test.go：新建的文件，7b9de91 用 git add -u 没带上 |
+| 1770b24 | U9 | 契约注释补齐：S4-6、S4-1、L-7 的注释；原计划「各查询类型」那一行与「留给后续层的约定」 |
+| 38a2a4e | U10 | model 导出 TaskStates，结束状态只有一份出处（S9-1） |
+| d2652fe | U11 | S3-13、S2-15、S4-7、S5-5 的测试与样例 |
+| 与本节同一个提交 | U12 | 本清单与第 1 层清单同步（含 S10-5） |
+
+各条「结果」里写的是任务名（U1 到 U12），对应的提交号查上面这张表。
+
+逐条：
+
+| 条目 | 结果 | 提交 |
+|---|---|---|
+| S10-2 | 选 A，前缀定为 `lober:` | 73ac12c、dbea587，后续层的约定随 U9 |
+| S4-2 | 选 B，同时打开的测试仓储限在 4 个 | f7d05d8、f0f30eb |
+| L-8b | 不加退役状态，spec 补装机历史和两条接受的风险 | 73ac12c |
+| S10-3 | 选 A，hook 不能派生 | 73ac12c |
+| S7-1 | 已修 | 5e58281 |
+| S4-5 | 已修 | 7b9de91 |
+| S8-1 | 已修（修了两轮） | 5e58281 |
+| S4-4 | 已修 | 5e58281 |
+| S7-6 | 已修 | 5e58281 |
+| S7-3 | 已修，12 处分批循环覆盖了 9 处 | 7b9de91 |
+| S4-3 | 已修 | 7b9de91 |
+| S6-2 | 已修 | 7b9de91 |
+| S9-1 | 已修，model 导出状态清单 | U10 |
+| L-6 | 已修 | 7b9de91、7829943 |
+| S2-15 | 已修（测试） | U11 |
+| S4-7 | 已修（测试） | U11 |
+| S7-5 | 已修 | 7b9de91 |
+| S6-1 | 已修（白盒断言） | 8e7e9be |
+| S4-6 | 已修（注释） | 5dcfe69 清掉旧说法，U9 |
+| S5-1 | 已修（文档与注释） | 73ac12c、dbea587，后续层的约定随 U9 |
+| S3-14 | 已修（注释） | dbea587 |
+| S4-1 | 已修（注释） | U9 |
+| S10-5 | 已修（文档） | U12 |
+| S7-4 | 已修 | 7b9de91 |
+| S3-13 | 已修（测试） | U11 |
+| S2-11 | 已修 | 5dcfe69 换夹具，7b9de91 |
+| S5-5 | 已修（样例） | U11 |
+| S5-4 | 已修（白盒断言） | 8e7e9be |
+| S4-8 | 已修 | 7b9de91 |
+| S6-3 | 不修：理由随 memstore 删除而消失 | — |
+| S5-6 | 不修：理由随 memstore 删除而消失 | — |
+| S6-4 | 不修：理由随 memstore 删除而消失 | — |
+| S7-7（第 3 节） | 已修 | f7d05d8，装配点的约定随 U9 |
+| S5-8（第 3 节） | 已修（白盒断言） | 8e7e9be |
+| L-7（第 3 节） | 注释部分已改，比对仍归第 5 层 | U9 |
+| S5-2、S5-3、S5-7（第 3 节） | 写进原计划「留给后续层的约定」，仍归第 5 层 | U9 |
+| S6-5（第 3 节） | 整条作废 | 5dcfe69 |
+| L-8（第 3 节） | 前提消失，建议仍成立，仍归第 5 层 | — |
+
+### 和计划设想不同的几件事
+
+下面几件事以提交说明为准，这里只摘要。
+
+1. 测试夹具的规则现在有两份（U4，f7d05d8）。计划要 pgstore_test 改用 pgtest，做不到：pgtest 依赖 pgstore，pgstore 包内的测试再 import 它，会报 import cycle not allowed in test（执行者用 go vet -overlay 验证过）。所以 pgstore 包内的夹具留着，只改成经 WithMaxConns 限连接数；U6 加的信号量也是两份，pgtest.Open 一份，pgstore 包内的 newSchema 一份。两边靠注释互相提醒同步。要去掉这份重复，得新加一个不依赖 pgstore 的低层包，这和整体验收的「internal/store 下只剩三个包：契约、pgstore、pgtest」冲突，留待你拍板。另外，pgtest.Open 装失败注入改用另开的 pgx 连接，所以 pgstore 不必像计划设想的那样导出数据库句柄。
+2. S8-1 修了两轮（U7，5e58281）。第一轮照计划用 ON CONFLICT (id) DO NOTHING，只解决了「先到的已插入、还没提交」这一种交错。复查时用探针发现另一种：两条 INSERT 都在对方插入之前通过了预检查时，因为 id 是唯一的仲裁索引，后到的一路会在 idx_*_name_key 上撞车报 23505，而 nameHolder 查到的占用者正是自己那个 ID，于是返回 DuplicateError{name, 自己的 ID}，装配点只能拒绝启动。探针 300 轮里重现 53 轮（17.7%）。第二轮改成不带目标的 ON CONFLICT DO NOTHING，让所有唯一索引都当仲裁；锁不到身份时在事务内按 name_key 查占用者，查到报 DuplicateError{name, 对方 ID}，查不到报 ErrConflict。回归用例跑 200 轮，改回旧写法时「同一个 ID」那组报红（27%–31%）；另有「不同 ID 同名」一组，证明不带目标的 DO NOTHING 没把该报的名字冲突吞掉。独立验证另写探针跑了 3600 轮，0 失败。
+3. 分批循环没有全部覆盖（U8，7b9de91）。S7-3 列的不全，grep 出来一共 12 处分批循环，现在覆盖了 9 处。剩下 3 处与 hook 引用有关，要凑上千个 hook 版本，成本高，暂不覆盖。
+4. pgstore 整包的耗时。U6 的提交说明记的是并行前 142 秒、并行后 90 秒，其中契约部分从 117 秒降到 53 秒，其余串行的测试约 37 秒；U8 在这期间还新增了一次导入 2001 台、建任务 1002 台、五个列表各 101 条数据这类用例。并发数定在 4 是按实测曲线：串行 117 秒、2 路 73、4 路 53、8 路 44、16 路 49，瓶颈在数据库这边的 DDL，过了 4 收益不大，最坏情况的连接数却要翻倍。U12 写这一节时，在含 U9–U11 改动的工作区里复测过一次整包：86 秒。
+5. 契约测试的叶子子测试，搬家时 250 个，与搬家前逐条对应，一个没少（8e7e9be）；现在是 261 个（U12 时用 go test -v 数的）。
 
 ## 你的决定（2026-10-08）
 
-第 1 节的 4 条都定了，第 2 节的 28 条你整节同意。决定还没落地，这一节只记决定本身。具体怎么改要另写一轮修补计划，照第 1 层的先例（`docs/superpowers/plans/2026-10-02-layer1-fixups.md`）。
+第 1 节的 4 条都定了，第 2 节的 28 条你整节同意。这些决定都已在 2026-10-08 的修补轮落地：修补计划照第 1 层的先例（`docs/superpowers/plans/2026-10-02-layer1-fixups.md`）另写了一份，是 `docs/superpowers/plans/2026-10-08-layer2-fixups.md`，结果见上面的「修补结果」。这一节只记决定本身。
 
 | 条目 | 决定 |
 |---|---|
-| S10-2 | 选 A：保留前缀的判定放在第 1 层的 model 里，另加一个原因代码 |
+| S10-2 | 选 A：保留前缀的判定放在第 1 层的 model 里，另加一个原因代码。前缀定为 `lober:`（见修补计划） |
 | S4-2 | 选 B：契约用例并行跑，用信号量限制并发 |
 | L-8b | 不加退役状态，等于选 A。一台主机可以先后有多个安装任务，这就是它的装机历史 |
 | S10-3 | 选 A：hook 不能派生。模板派生之后要换 hook，b 不存在就先建一个，再在原位把 a 换成 b |
@@ -29,21 +108,23 @@
 
 还有两条决定不属于清单里的条目：
 
-- 测试和生产都用 PostgreSQL，分成两个环境。内存实现 memstore 删掉，只留 pgstore。
-- 「分环境」具体怎么分，现在还无据可依。spec 没有讲部署形态或环境划分的章节，装配点 cmd/lober 也还不存在，生产那边的 DSN 从哪来、配置什么格式都没定。测试这边已经分开了：专用角色和库 lober_test（角色不是超级用户），每个用例一个临时 schema。所以要补的是生产侧，spec 里加一节，写明两边各自的 DSN 来源、角色权限，以及库或实例怎么隔开。装配点要到第 5 层才出现（spec §7.4），连接池（S7-7）和事务隔离级别（S7-1）可以一并写进那一节。
+- 测试和生产都用 PostgreSQL，分成两个环境。内存实现 memstore 删掉，只留 pgstore。已落地：memstore 在 5dcfe69 删除，storetest 在 8e7e9be 并进 pgstore。
+- 「分环境」具体怎么分，当时还无据可依。spec 没有讲部署形态或环境划分的章节，装配点 cmd/lober 也还不存在，生产那边的 DSN 从哪来、配置什么格式都没定。测试这边已经分开了：专用角色和库 lober_test（角色不是超级用户），每个用例一个临时 schema。所以要补的是生产侧，spec 里加一节，写明两边各自的 DSN 来源、角色权限，以及库或实例怎么隔开。装配点要到第 5 层才出现（spec §7.4），连接池（S7-7）和事务隔离级别（S7-1）可以一并写进那一节。已落地：spec 新增 §6.4「测试环境与生产环境」（73ac12c），写了四件事：两个环境跑同一份代码，区别只在连哪个库；测试环境的角色、库、临时 schema 与连接串只从 `LOBER_TEST_PG_DSN` 或 `.pgtest.dsn` 读；生产环境只定到「连接串由装配点读配置得到」，模块自己不读环境变量和文件，所以配错一个变量不会让生产连到测试库；两边都固定 READ COMMITTED，并用同一个 PostgreSQL 大版本。生产侧的角色权限、配置格式没有写，留到装配点在第 5 层出现时再定。连接池没写进 spec：pgstore.Open 加了 WithMaxConns（f7d05d8），装配点从配置读出上限再传进来这一条，写进了原计划「留给后续层的约定」（U9）。
 
 ### 删掉 memstore 之后，这份清单有几处要跟着改
 
-这条决定推翻的是第 2 层计划第 56 行自己加的前提，也就是「第 5 层的 HTTP 测试也用 memstore」，不是 spec 的规定。spec §7.2 第 5 条只要求每个接口都有 HTTP 测试，没说用哪份存储。但 spec 有四处写着两份实现跑同一套契约测试，都要改：§4.2（第 224 行）、§6.1（第 316 行）、§6.3（第 346 行，那里拿内存实现能模拟回滚当论据）、§7.2 第 2 条（第 364 行）。
+这一小节是修补前写的，下面各处在修补轮都处理过了，怎么处理的写在每一处后面的括号里。
+
+这条决定推翻的是第 2 层计划第 56 行自己加的前提，也就是「第 5 层的 HTTP 测试也用 memstore」，不是 spec 的规定。spec §7.2 第 5 条只要求每个接口都有 HTTP 测试，没说用哪份存储。但 spec 有四处写着两份实现跑同一套契约测试，都要改：§4.2（第 224 行）、§6.1（第 316 行）、§6.3（第 346 行，那里拿内存实现能模拟回滚当论据）、§7.2 第 2 条（第 364 行）。（已改，73ac12c：§4.2、§6.1、§7.2 第 2 条，连同 §7.1、§7.2 第 5 条，都改成只有 pgstore 一份、测试连测试环境的真实库、找不到连接串就失败不跳过；§6.3 的结论「事务不做成切面」没动，只把第二条理由换成加锁顺序：事务放进 ctx 传，加锁的先后会散到调用方，仓储定死的顺序就守不住。）
 
 清单这边要改的地方：
 
-- 上一节给「（两份实现不一致）」排优先级的理由不再成立。只剩一份实现，就谈不上两边走偏。
-- 带这个标记的 14 条里，大多数讲的其实是 pgstore 自己的缺陷：没翻译的 SQLSTATE、从没走到的分批路径、手写的状态清单、两处各写一份的加锁顺序。删掉 memstore 不影响这些条目该不该修，只是标记和「影响」段的措辞要改。
-- 有两条的理由会消失或大幅削弱。S4-3 要把用例从 pgstore_test 搬进 storetest，图的就是让两份实现都跑。S4-7 的变异验证做在 memstore 上，而 pgstore 本来有部分唯一索引兜底。这两条修补时要重新判断还值不值得做。
-- 各条「建议」里凡是写着「两份实现都跑」「两边各加一份」的，都要改写。
-- storetest 这个包的定位也要重写。它不再是跨两份实现的契约测试，而是 pgstore 的测试集。
-- 第 4、5 层的 HTTP 测试改用 PostgreSQL 之后，测试耗时会在 S4-2 已经实测的 137 秒上继续涨。你给 S4-2 选的 B（并行加信号量）正好是对着这件事的。
+- 开头那一段给「（两份实现不一致）」排优先级的理由不再成立。只剩一份实现，就谈不上两边走偏。（开头那一段已改写。）
+- 带这个标记的 14 条里，大多数讲的其实是 pgstore 自己的缺陷：没翻译的 SQLSTATE、从没走到的分批路径、手写的状态清单、两处各写一份的加锁顺序。删掉 memstore 不影响这些条目该不该修，只是标记和「影响」段的措辞要改。（13 条去掉了标记，S9-1 改成「（pgstore 与 model 可能不一致）」；「影响」段保留原文，修补后的说法写在各条的「结果」里。）
+- 有两条的理由会消失或大幅削弱。S4-3 要把用例从 pgstore_test 搬进 storetest，图的就是让两份实现都跑。S4-7 的变异验证做在 memstore 上，而 pgstore 本来有部分唯一索引兜底。这两条修补时要重新判断还值不值得做。（重判后两条都照修：S4-3 在 7b9de91，S4-7 随 U11。为什么仍值得做，见各条的「结果」。）
+- 各条「建议」里凡是写着「两份实现都跑」「两边各加一份」的，都要改写。（各条的「建议」保留原文，只有 S2-22 的选项 ② 改了措辞；修补时按什么口径做，写在各条的「结果」里。）
+- storetest 这个包的定位也要重写。它不再是跨两份实现的契约测试，而是 pgstore 的测试集。（storetest 已在 8e7e9be 并进 pgstore 的 contract_*_test.go，属于 package pgstore；术语表跟着改了。）
+- 第 4、5 层的 HTTP 测试改用 PostgreSQL 之后，测试耗时会在 S4-2 已经实测的 137 秒上继续涨。你给 S4-2 选的 B（并行加信号量）正好是对着这件事的。（U6 并行之后，pgstore 整包从 142 秒降到 90 秒，见「修补结果」。）
 
 ### 装机历史：现在的代码已经支持，缺三样
 
@@ -55,7 +136,7 @@
 - 按主机查会越来越慢。tasks.host_sn 上没有覆盖全表的普通索引，这就是归在第 3 节的 S9-2。任务多了以后，按主机列装机历史会退化成顺序扫描。
 - 「一次」和「一个任务」对不上。失败的任务是在原任务上重试，从 failed 推回 pending，用的是同一个任务 ID（storetest/tasks.go:616-628；spec 第 304 行写的是重试沿用原来的快照）。所以一个任务里可能装过不止一次，而历史列表上只看得到它当前的状态。要让每一次尝试都单独占一行，就得改成重试另建一个任务。这一条等第 5 层做历史视图时再定。
 
-L-8b 原来的问题还留着，这是选项 A 的代价：主机只要建过一次任务就永远删不掉，又没有废弃状态可用。退役、报废、换过主板的机器会一直留在主机列表和向导的候选里，只能靠界面过滤筛掉。ISO 那边同根的问题也还在：被任务引用过的 ISO 删不掉，§5.1 第 5 步要求「删 ISO 时一并删除」的原始字节也就一直占着磁盘。第 4 层设计 ISO 的导入与清理时要一起想。
+L-8b 原来的问题还留着，这是选项 A 的代价：主机只要建过一次任务就永远删不掉，又没有废弃状态可用。退役、报废、换过主板的机器会一直留在主机列表和向导的候选里，只能靠界面过滤筛掉。ISO 那边同根的问题也还在：被任务引用过的 ISO 删不掉，§5.1 第 5 步要求「删 ISO 时一并删除」的原始字节也就一直占着磁盘。第 4 层设计 ISO 的导入与清理时要一起想。这两条代价已作为接受的风险记进 spec §8（73ac12c）。
 
 因为不加退役状态，另外两个问题也就不存在了：主机还有未结束任务时能不能退役，以及退役的主机遇到 CSV 导入怎么算。后面那条你说待会再聊，等真要加状态时再定。
 
@@ -75,12 +156,13 @@ L-8b 原来的问题还留着，这是选项 A 的代价：主机只要建过一
 - 建议：第 2、3 节用它代替「选项」，写的是建议怎么修。
 - 出处：列出这一条的依据，包括代码的文件路径和行号，以及计划和 spec 里的条目。
 - 合并自：列出这一条是由哪几条原始记录合并来的，引的是记录的原文。
+- 结果：修补轮（2026-10-08）之后加的，写在条目标题的下面，说明这一条最后怎么处理、在哪个提交、测试叫什么。上面几个标签的内容都保留原文。
 
 ## 文中反复出现的几个说法
 
-- 两份实现：internal/store 定义的接口有两份实现。一份是内存实现 memstore，另一份是 PostgreSQL 实现 pgstore。
-- 契约、契约测试：契约指 internal/store 包本身，两份实现都要遵守它。它包括四部分：每个聚合一个接口（合成 Store）；错误、审计、事件、分页这些共用类型；两份实现共用的纯函数，写在 check*.go 里，比如 CheckQuery、DecodeCursor、HookRefs，正文说的「共用函数」「共用检查」指的就是它们；以及注释里写明的行为约定，这些注释主要在 store.go、types.go、errors.go、doc.go 里。正文里说「存储契约」「store 契约」，指的也是它。契约测试是 storetest 包里的一套测试，两份实现跑的是同一套。
-- pg 专有测试：写在 pgstore 包里、只对 PostgreSQL 实现跑的测试，比如 schema_test.go 里的测试，以及 pgstore_test.go 里除 Test契约 以外的测试。它们不属于契约测试，内存实现不跑。Test契约 也写在 pgstore_test.go 里，但它是在 pgstore 上跑契约测试的入口。
+- 两份实现：b61ba0a 时，internal/store 定义的接口有两份实现。一份是内存实现 memstore，另一份是 PostgreSQL 实现 pgstore。memstore 已在修补轮删除（5dcfe69），现在只有 pgstore 一份；正文里说「两份实现」「内存实现」的地方，都指 b61ba0a 时的代码。
+- 契约、契约测试：契约指 internal/store 包本身，pgstore 要遵守它。它包括四部分：每个聚合一个接口（合成 Store）；错误、审计、事件、分页这些共用类型；共用的纯函数，写在 check*.go 里，比如 CheckQuery、DecodeCursor、HookRefs，正文说的「共用函数」「共用检查」指的就是它们（b61ba0a 时由两份实现共用，现在由 pgstore 调用）；以及注释里写明的行为约定，这些注释主要在 store.go、types.go、errors.go、doc.go 里。正文里说「存储契约」「store 契约」，指的也是它。契约测试在 b61ba0a 时是 storetest 包里的一套测试，两份实现跑的是同一套；修补轮把它并进了 pgstore 的 contract_*_test.go（8e7e9be），属于 package pgstore，入口是 Test契约主机、Test契约ISO 这类 Test契约Xxx，可以直接查库做白盒断言。
+- pg 专有测试：写在 pgstore 包里、只对 PostgreSQL 实现跑的测试，比如 schema_test.go 里的测试，以及 pgstore_test.go 里除 Test契约 以外的测试。它们不属于契约测试，内存实现不跑。Test契约 也写在 pgstore_test.go 里，但它是在 pgstore 上跑契约测试的入口。这是 b61ba0a 时的分法；契约测试并进 pgstore 之后，两类测试都在 pgstore 包里，正文里的说法仍按当时的分法。
 - 探针、探针克隆：评审和核实时另开的一份代码克隆，专门用来跑实验。比如在 DSN 上加参数，或者补几条断言看结果。
 - 变异验证：故意把代码改坏，看测试能不能发现。如果改坏以后测试照样全绿，就说明这个行为没有被测试钉住。
 - 存储层守卫：internal/archtest 里的测试 Test存储层依赖守卫，用来检查存储层的依赖规则。具体的检查写在它调用的 checkStore 函数里，checkStore 靠解析 import 来判断。正文里单说「守卫」，指的也是它。
@@ -95,7 +177,9 @@ L-8b 原来的问题还留着，这是选项 A 的代价：主机只要建过一
 
 ### S10-2　内置专用的名字前缀该在哪一层拦，还没定；直接把拦截写进现有的名字规则，内置内容就装不进去了
 
-决定：选 A（2026-10-08），还没落地。判定放在第 1 层的 model 里，另加一个原因代码。用户的几条路径经它拦下，内置内容的装载反过来要求名字必须带前缀。前缀本身用什么字符串，要在第 3 层写第一份内置内容之前一起定。要改的是 spec §6.2 第 11 条（第 330 行）和 C12（第 173 行）；§4.2 第 226 行「判定规则仍然只有层 1 一份」正是选 A 的依据。
+结果：选 A，已落实，前缀定为 `lober:`。model 导出 ReservedNamePrefix 与 NameReserved，按规范化后的 key 比前缀，所以 LOBER:x 也算保留，lober-base、lobertest 不算；新增原因代码 name_reserved。规范化拆成两个方向：用户的五条路径（CheckNewHook、CheckNewTemplate、DeriveTemplate、RenameHook、RenameTemplate）用了前缀报 ProblemsError(ErrInvalid)；内置装载反过来要求必带前缀，不带或只是像前缀（lober-xxx）都报 ErrInvalid。契约用例里不带前缀的内置名字一并改掉（dbea587）。spec 的 C12 与 §6.2 第 11 条已改（73ac12c）；原计划「留给后续层的约定」里第 3 层那条随 U9 改成前缀已定，第 5 层补了「派生对话框预填来源名字时去掉前缀」。测试：TestNameReserved按key判定保留前缀、TestReservedNamePrefix是合规则的key、TestAlign保留名字前缀与ReservedNamePrefix一致，契约用例「内置：入参不是规范的内置已审批版本，或名字不带保留前缀，报 ErrInvalid」。
+
+决定：选 A（2026-10-08）。判定放在第 1 层的 model 里，另加一个原因代码。用户的几条路径经它拦下，内置内容的装载反过来要求名字必须带前缀。前缀本身用什么字符串，要在第 3 层写第一份内置内容之前一起定。要改的是 spec §6.2 第 11 条（第 330 行）和 C12（第 173 行）；§4.2 第 226 行「判定规则仍然只有层 1 一份」正是选 A 的依据。
 
 问题：spec §6.2 第 11 条，和计划里「留给后续层的约定」一节的第 3 层条目，提的是同一个要求。它们都写了「先定一个只给内置内容用的名字前缀，并在名字规则里拦下用户用它」。内置内容指的是程序自带、启动时由 EnsureBuiltin 装进仓储的那部分内容。但这两处都没写前缀具体是什么，也没写要在哪一层拦。而现在的代码里，用户的操作和内置内容的装载走的是同一条路。用户这边的操作是新建、派生和改名，对应 CheckNewHook、CheckNewTemplate、DeriveTemplate、RenameHook、RenameTemplate。内置内容的装载由 checkBuiltin 负责。两边都是先调 store.NormalizeName，再由它调到 model.NormalizeName。
 
@@ -111,13 +195,15 @@ C. 不用前缀，让内置内容和用户内容的名字各占一个空间。�
 
 前缀本身用什么字符串，也要一起定下来。定的时候要遵守名字规则：名字只收可打印 ASCII，长度 1 到 64 个字符，不能含空格。这件事最晚在第 3 层写第一份内置内容之前定。我倾向 A。
 
-出处：spec §6.2 第 11 条（第 330 行）；计划「留给后续层的约定」第 503 行；internal/store/check_authoring.go:37-47、94、111、222-237；pgstore/hooks.go:193、pgstore/templates.go:136、265（内存实现对应处同样）
+出处：spec §6.2 第 11 条（第 330 行）；计划「留给后续层的约定」第 503 行；internal/store/check_authoring.go:37-47、94、111、222-237；pgstore/hooks.go:193、pgstore/templates.go:136、265
 
 合并自：S10 should：spec 第 330 行「并在名字规则里拦下用户用它」有歧义
 
 ### S4-2　pgstore 包的测试要跑 137 秒，超过了计划定的一分钟上限
 
-决定：选 B（2026-10-08），还没落地。契约用例并行跑，用信号量限制并发，不够再考虑 C。这一条和「测试也用 PostgreSQL」是连在一起的：第 4、5 层的测试改用 PostgreSQL 之后，耗时还会在 137 秒上继续涨。只涉及计划第 440 行和测试代码，spec 条款不受影响。
+结果：选 B，已落实。runCases、eachAudited、runAudited 的子测试加了 t.Parallel；同时打开的测试仓储由信号量限在 4 个，pgtest.Open 一份（f7d05d8），pgstore 包内的 newSchema 一份（f0f30eb）。测锁等待和本身测并发的用例照旧串行：writeWhileHeld 那一类、L-6 的死锁测试、EnsureBuiltin 的并发装载用例。排查过共享状态：测试里没有给包级变量赋值，也没有 os.Setenv、os.Chdir。pgstore 整包从 142 秒降到 90 秒，-count=3 连跑三遍稳定；没有走到选项 C。原计划的一分钟线改写成实测数据与信号量的理由，并注明信号量只管一个测试进程，第 4、5、7 层也连库之后 go test 会同时跑好几个包。并发数为什么定 4、连接数怎么算，见「修补结果」与 f0f30eb 的提交说明。
+
+决定：选 B（2026-10-08）。契约用例并行跑，用信号量限制并发，不够再考虑 C。这一条和「测试也用 PostgreSQL」是连在一起的：第 4、5 层的测试改用 PostgreSQL 之后，耗时还会在 137 秒上继续涨。只涉及计划第 440 行和测试代码，spec 条款不受影响。
 
 问题：每个契约用例都要经过 harness.Open 新建一个 schema。接着要对这个 schema 里的 10 张表跑 AutoMigrate，做表结构断言，再装上用来注入失败的触发器。而且这些用例全部串行执行，internal/store 下面没有一处用到 t.Parallel。我在 HEAD 的克隆里关掉缓存重跑了一次 pgstore 包，用时 137.1 秒。这和验收时报告的 137 秒一致。计划任务 7 的「风险」写的是：单个包在一分钟以内就不用优化，超过了要报告。
 
@@ -139,6 +225,8 @@ C. 复用 schema。一种做法是每组用例只迁移一次，用例之间执�
 
 ### L-8b　主机只要被任务引用过就永远删不掉，而主机又没有废弃状态
 
+结果：按决定不加退役状态，模型和代码都没改，只补了 spec 的记录（73ac12c）。§2.7 补上装机历史：一台主机同一时刻最多一个未结束的任务（C31），上一个结束后可以再建，按主机列出的任务就是它的装机历史，失败后重试沿用同一个任务。§8 风险表加了两行，都标「接受（2026-10-08）」：主机没有废弃状态，被任务引用过就删不掉；被任务引用过的 ISO 删不掉，原始字节一直占着磁盘，由第 4 层设计导入与清理时处理。§5.1 第 5 步补了一句指向后者，C26 写明主机没有废弃状态。
+
 决定：不加退役状态（2026-10-08），等于选 A，模型不用改。你定的是：一台主机可以在不同时间先后有多个安装任务，一个任务就是一次装机，每个任务的状态就是那一次的最终状态；这就是它的装机历史。因为不涉及给机器停机重启，只是新建任务，所以多个历史并存没问题。这一点现在的代码已经支持，另见上面「装机历史：现在的代码已经支持，缺三样」。选 A 的代价也在那里：主机永远删不掉的问题留着，ISO 那边同根的问题留给第 4 层。下面的选项 B 和 C 保留，只作记录。
 
 问题：tasks.host_sn 上的外键是 RESTRICT。内存实现的 referencedBy 也一样，它把已经结束的任务也算作引用。契约测试 hostDeleteReferenced 还专门测了这一点：任务结束了，主机照样删不掉。另一方面，任务只增不删，存储契约里没有删除任务的方法。结果是，一台主机只要建过一次任务，就永远删不掉。spec C26 规定，被引用的对象「只能废弃，不能删除」。可是 model.Host 只有 SN、架构、固件、属性和 Rev 这几项，没有废弃状态。所以就算想按 C26 把主机废弃掉，也做不到。计划的错误表照着 C26 写了 ErrReferenced，但是没有讨论这个后果。这个问题是在给层间评审第 8 条（L-8）分类时顺带发现的。原来的条目没有把它单独列出来，所以这里拆成单独一条。
@@ -157,13 +245,17 @@ ISO 也有根源相同的问题。ISO 虽然可以废弃，记录留着本身也
 
 这件事最晚要在第 5 层写计划之前定下来。选 B 要改第 1、2 层，所以越早定，返工越少。我倾向 B。
 
-出处：internal/store/store.go:33-34；memstore/hosts.go:91-106、memstore/tasks.go:196-209；pgstore/rows_tasks.go:30-33；pgstore/schema.go:129-144；storetest/hosts.go:340（hostDeleteReferenced）；internal/core/model/registry.go:12-24；spec C26（第 193 行）、§5.1 第 5 步（第 274 行）
+出处：internal/store/store.go:33-34；pgstore/rows_tasks.go:30-33；pgstore/schema.go:129-144；storetest/hosts.go:340（hostDeleteReferenced）；internal/core/model/registry.go:12-24；spec C26（第 193 行）、§5.1 第 5 步（第 274 行）
 
 合并自：L-8 分类时补充的「另外一点：主机没有废弃状态，被任何任务（包括已结束的）引用过，就永远删不掉」
 
 ### S10-3　spec 读起来像是 hook 也能派生，但存储契约里只有 DeriveTemplate
 
-决定：选 A（2026-10-08），还没落地。你说从来没设计过 hook a 派生出 hook b。要表达的是另一件事：对一个模板，如果要把其中的 hook a 换成 b，先检查 b 在不在，不在就先建一个，在就直接把 a 从模板里移出、把 b 插进来。所以 hook 没有派生，不加 DeriveHook。spec §2.5（第 116 行）已经定义了「用 b 覆盖 a」：在副本里原位替换，插槽和顺序不变，同名参数的取值沿用。改文档时要照这条写明是原位替换，别写成「移出再插入」，免得读成位置可以变。要改的是 §2.8（第 142 行）和 C25（第 192 行）里「hook……要改就先派生」，以及 §5.2 第 284 行「hook 的流程相同」，因为那个流程的第 1 步含派生。§7.2 第 6 条（第 368 行）本来就符合这个读法，不用改。
+结果：选 A，已落实，只改文档（73ac12c）。§2.8 写明只有模板能派生，hook 不能；要把其中的 hook a 换成 b，先看 b 在不在，不在就新建一个，再在派生出的模板里按 §2.5 的「用 b 覆盖 a」原位替换。§5.2 原来的「hook 的流程相同」改写成 hook 的流程不同：不能派生，也没有正文、装配和预览这三步；在模板里换 hook 是第 3 步装配时做的。C24 开头加了「只有模板能派生，hook 不能」。C25 没动，见下面决定段里的更正。§7.2 第 6 条本来就符合这个读法，也没动。
+
+决定：选 A（2026-10-08）。你说从来没设计过 hook a 派生出 hook b。要表达的是另一件事：对一个模板，如果要把其中的 hook a 换成 b，先检查 b 在不在，不在就先建一个，在就直接把 a 从模板里移出、把 b 插进来。所以 hook 没有派生，不加 DeriveHook。spec §2.5（第 116 行）已经定义了「用 b 覆盖 a」：在副本里原位替换，插槽和顺序不变，同名参数的取值沿用。改文档时要照这条写明是原位替换，别写成「移出再插入」，免得读成位置可以变。要改的是 §2.8（第 142 行）里「内置模板和 hook 只读……要改就先派生」，以及 §5.2 第 284 行「hook 的流程相同」，因为那个流程的第 1 步含派生。§7.2 第 6 条（第 368 行）本来就符合这个读法，不用改。
+
+更正（2026-10-08）：这一段原先说 C25（第 192 行）里也有「hook……要改就先派生」，要一起改。这一点不对。C25 的原文是「内置模板和 hook 只读，出厂即已审批，随 lober 版本发布新版本，旧版本保留」，没有「派生」二字；引起误读的是 §2.8 和 §5.2。所以修补时 C25 没有动。
 
 问题：spec §2.8 写的是「内置模板和 hook 只读……要改就先派生」。§5.2 又说「hook 的流程相同」，而这个流程的第 1 步就是新建或派生。两处连起来读，hook 好像也能派生。但是计划和存储契约里只有 DeriveTemplate，model.Hook 也没有 DerivedFrom 字段。C24 只说要「记下来源模板和版本」，提到的只有模板。§7.2 第 6 条的前端验收写的是「派生内置模板、换一个 hook 再审批」，照这句话看，hook 又像是不派生的。这几句话都是 spec 原来就有的，不是这一层引入的。但是它们决定了内置 hook 要怎么改。
 
@@ -185,9 +277,11 @@ B. 加一个 DeriveHook。model.Hook 要加 DerivedFrom 字段，golden 也要�
 
 这一节列的是实际存在的缺陷，或者缺了的保护。这些问题按计划和 spec 就能判断该怎么修，所以不需要你拍板。你只要同意修就行。
 
-决定：28 条你全部同意修（2026-10-08），还没落地。但删掉 memstore 这条决定会动到这一节：S4-3 和 S4-7 的理由会消失或大幅削弱，各条「建议」里写着「两份实现都跑」「两边各加一份」的地方都要改写，标着「（两份实现不一致）」的标记也要重新考虑。详见上面「删掉 memstore 之后，这份清单有几处要跟着改」。写修补计划时要先过一遍这 28 条，逐条确认还成不成立。
+决定：28 条你全部同意修（2026-10-08）。修补计划在删掉 memstore 的前提下把 28 条逐条重判过：25 条已修；S6-3、S5-6、S6-4 的理由随 memstore 删除而消失，不修。标着「（两份实现不一致）」的 14 条，13 条去掉了标记，S9-1 改成「（pgstore 与 model 可能不一致）」。原来拿「两份实现会走偏」当论据的几条（S4-3、S4-4、S7-6、S5-5、S5-4，以及理由被削弱的 S4-7），为什么只剩 pgstore 也照样要修，写在各条的「结果」里。汇总见开头的「修补结果」。
 
-### S7-1　写事务没有固定为 READ COMMITTED，谁改了默认隔离级别就会冒出 40001　（两份实现不一致）
+### S7-1　写事务没有固定为 READ COMMITTED，谁改了默认隔离级别就会冒出 40001
+
+结果：已修（5e58281）。write 改成 Transaction(fn, &sql.TxOptions{Isolation: sql.LevelReadCommitted})；pgstore 的写入全都经 s.write（25 处调用），改这一处就覆盖全部。pgstore 的包说明和 spec §6.4 都写明了这个前提。测试：Test写事务不随连接默认的隔离级别变，在 DSN 上设 repeatable read，先 SHOW 确认参数生效，再跑一个 writeWhileHeld 用例，断言仍报 ErrConflict。
 
 问题：pgstore 的 write 方法开事务时调的是 s.db.WithContext(ctx).Transaction(fn)，没有传 TxOptions。也就是说，事务用哪一级隔离，完全取决于连接的默认值。能改这个默认值的地方有好几处：DSN 参数，ALTER DATABASE/ROLE … SET default_transaction_isolation，还有 postgresql.conf。可是 pgstore 里有一串操作都依赖 READ COMMITTED 的两条性质。第一条是，FOR UPDATE 会等对方提交，然后读到最新的行；第二条是，每条语句都看得到刚提交的数据。依赖这两条性质的操作有：主机与 ISO 的乐观锁、hook 与模板版本的写入、任务推进、事件 Seq 的分配，以及建任务时加锁之后重跑的准入判定。
 
@@ -199,7 +293,9 @@ B. 加一个 DeriveHook。model.Hook 要加 DerivedFrom 字段，golden 也要�
 
 合并自：S7 should：…open.go:84 write 没有固定隔离级别…
 
-### S4-5　没有人检查 SHA256 的格式，值太长时 pgstore 会原样报出 54000　（两份实现不一致）
+### S4-5　没有人检查 SHA256 的格式，值太长时 pgstore 会原样报出 54000
+
+结果：已修（7b9de91）。CheckISOText 规定 SHA256 只能是空串，或是 64 位小写十六进制，否则报 ErrInvalid，不论置为什么状态都查；超长的值在到达部分唯一索引之前就被挡下，不会再报出没翻译的 54000。store.go 里 UpdateISO 的注释写明了这条格式要求。测试：TestCheckISOText 补了大写、超长、非十六进制三个反例，契约用例 isoUpdateBadSHA256 同样是这三个。
 
 问题：系统更新 ISO 时走的是 UpdateISO。UpdateISO 只用 CheckISOText 检查 SHA256 存不存得下，不检查它的格式和长度。ISO.Validate 也不看这个字段。
 
@@ -211,7 +307,9 @@ B. 加一个 DeriveHook。model.Hook 要加 DerivedFrom 字段，golden 也要�
 
 合并自：S4 should「UpdateISO 不检查 SHA256 的写法」
 
-### S8-1　两路同时首次装载同一份内置内容时，后到的一路会原样报出主键冲突 23505　（两份实现不一致）
+### S8-1　两路同时首次装载同一份内置内容时，后到的一路会原样报出主键冲突 23505
+
+结果：已修（5e58281），修了两轮，经过见「修补结果」。EnsureBuiltinHook 与 EnsureBuiltinTemplate 改成先确定并锁住身份，再查版本、比对内容：先用不带目标的 INSERT 身份 … ON CONFLICT DO NOTHING，再用 lockIdent 锁住；锁不到身份时在事务内按 name_key 查占用者，查到报 DuplicateError{name, 对方 ID}，查不到报 ErrConflict。后到的一路会等先到的提交，看得到它写下的版本，于是返回 nil。装载路径不会再撞名字索引，translate 的 holder 因此传 nil。新顺序只在 READ COMMITTED 下成立，所以排在 S7-1 之后做。测试：Test同时装载同一份内置内容后到的等先到的提交之后什么都不做、Test同时首次装载同一个新身份两路都没看到对方（跑 200 轮，另有「不同 ID 同名」一组）。
 
 问题：EnsureBuiltinHook 和 EnsureBuiltinTemplate 的步骤是这样的。它们先不加锁地查一下版本在不在，用的是 hookVersionAt 和 templateVersionAt。查不到，才进 ensureBuiltinIdent 去锁住身份（也就是 hooks 或 templates 表里的那一行），身份不存在就新建。最后才插入版本。这样就会有两种撞车的情形。身份还不存在时，两路都会调 createIdent，后到的一路撞上 hooks_pkey（模板是 templates_pkey）。身份已经存在时，后到的一路等到锁以后，不再查一遍版本，而是直接插入。于是它撞上 hook_versions_pkey（模板是 template_versions_pkey）。这几个主键都不在 duplicateFields 里，所以 translate 把 23505 原样返回。S8 的探针在 READ COMMITTED 下把两种情形都复现了。契约（store.go:96-98、spec §6.2 第 11 条）写的是「已存在并且内容相同，什么都不做」。而内存实现是在一把锁下做的，第二次调用会返回 nil。
 
@@ -223,7 +321,9 @@ B. 加一个 DeriveHook。model.Hook 要加 DerivedFrom 字段，golden 也要�
 
 合并自：S8 concerns：Race windows I did not translate…（Two EnsureBuiltin calls racing on the same new ID 那一处）；S8 should：EnsureBuiltinHook / EnsureBuiltinTemplate：两次同时首次装载同一个新的内置 ID 时…；S8 should：两处没翻译的竞态，我核对过都可以接受…（EnsureBuiltin 那一处）；layer_should 第 4 条：pgstore 的 EnsureBuiltinHook 与 EnsureBuiltinTemplate 先查版本在不在，之后才锁身份
 
-### S4-4　伪造的游标里有 null 元素时，审计列表和任务列表在两份实现上翻出的页不一样　（两份实现不一致）
+### S4-4　伪造的游标里有 null 元素时，审计列表和任务列表在两份实现上翻出的页不一样
+
+结果：已修（5e58281）。DecodeCursor 遇到值为 null 的排序键报 ErrInvalid。只剩一份实现之后，「两份实现翻出的页不一样」这个论据不在了，但 pgstore 单独就是错的：审计和任务列表收下这种游标，会返回空页且 Next 为空，第 5 层回 200 和空列表，调用方以为翻到头了；其余列表静默从头翻，和 check.go 注释承诺的「改坏的都认得出来」不符。测试：TestCursor的编解码 补了整个排序键为 null、排序键全为 null、第二个排序键为 null 三例，契约用例 auditListInvalid 与 taskListInvalid 各补一例。
 
 问题：提交 b61ba0a 已经把游标的编码和解码收拢到一处，也就是共用的 store.DecodeCursor。但是 json.Unmarshal 遇到 null 时既不报错，也不改动目标值。所以元素为 null 的游标照样会被收下。check.go 的注释说「改坏的……都认得出来，报 ErrInvalid」，实际行为和这句话不符。
 
@@ -233,11 +333,13 @@ B. 加一个 DeriveHook。model.Hook 要加 DerivedFrom 字段，golden 也要�
 
 建议：让 DecodeCursor 遇到值为 null 的元素就直接报 ErrInvalid。两份实现共用这个函数，所以只改一处，两边同时生效。另外，storetest（两份实现共用的契约测试）里的各个 *ListInvalid 用例，都补一个含 null 的游标。
 
-出处：internal/store/check.go:170-192（DecodeCursor）；memstore/audit.go:17-22；memstore/tasks.go:120-125；pgstore/audit.go:28-33；pgstore/tasks.go:222-228
+出处：internal/store/check.go:170-192（DecodeCursor）；pgstore/audit.go:28-33；pgstore/tasks.go:222-228
 
 合并自：S4 should「decodeCursor 会收下 JSON null」
 
-### S7-6　撞上唯一索引后，如果查不到是谁占着这个值，pgstore 就把 23505 原样返回　（两份实现不一致）
+### S7-6　撞上唯一索引后，如果查不到是谁占着这个值，pgstore 就把 23505 原样返回
+
+结果：已修（5e58281）。translate 里约束认得、holder 却查不到占用者时，改报 ErrConflict，调用方重试必然得到成功或 DuplicateError。只剩一份实现之后，这条不再是「对照内存实现只给两种结果」，而是契约自己的要求：并发撞车只给成功或 DuplicateError，第三种结果第 4、5 层只能当内部错误。translate、isos.go 两处、nameHolder、ErrConflict、UpdateISO、CreateHook、EnsureBuiltinHook 的注释都改了，EnsureBuiltin* 的注释写明报 ErrConflict 时由装配点重试。测试：Test数据库错误的翻译 里原来「查不到已有的那一个，原样返回」那一例，换成「查不到占着 SHA256 的那一个报 ErrConflict」「查不到占着名字的那一个报 ErrConflict」两例。
 
 问题：pgstore 的一笔写入撞上 idx_isos_sha256 或 idx_*_name_key 之后，所在的事务就已经中止了。要把这个错误翻成 DuplicateError，pgstore 得在事务外面再查一次，找出占着这个值的那一方。可是对方可能恰好在这几毫秒里变了：它可能被改成了导入失败，可能被删掉了，也可能改了名。还有一种情况是对方的最后一个版本被删掉了，身份也跟着被删除。在这几种情况下，pgstore 都查不到对方，于是负责翻译数据库错误的 translate 就把 23505 原样返回了（errors.go:45-50）。
 
@@ -255,7 +357,9 @@ B. 加一个 DeriveHook。model.Hook 要加 DerivedFrom 字段，golden 也要�
 
 合并自：S7 concerns：The race fallback in UpdateISO is untested…（未测的一半已由 629c72e 的 Test同时写同一份内容由索引兜底报出对方 补上）；S7 should：UpdateISO 撞上 idx_isos_sha256 后会在事务外查出对方…；S8 should：两处没翻译的竞态，我核对过都可以接受…（nameHolder 那一处）
 
-### S7-3　代码按 1000 行一批分批处理，但没有一个用例走到过第二批　（两份实现不一致）
+### S7-3　代码按 1000 行一批分批处理，但没有一个用例走到过第二批
+
+结果：已修（7b9de91），12 处分批循环覆盖了 9 处。这里列的五个函数不全，grep batchSize 还有事件、hook、任务与模板里的几处。契约用例 hostImportManyBatches 一次导入 2001 台，走到第三批，断言每台的 Rev 都对、GetHosts 全部取到、审计条数等于台数；taskCreateManyBatches 用 1002 台主机建任务，走到第二批；另补 hookGetHooksManyBatches（GetHooks 传 1001 个键）与 eventManyBatches（一次追加 1001 条带 Key 的事件，走到查已有 Key 的第二批）。剩下 3 处与 hook 引用有关，要凑上千个 hook 版本，成本高，暂不覆盖。变异验证：让循环只跑第一批，只有对应的用例报红。
 
 问题：pgstore 里有好几处代码都按 batchSize=1000 分批处理。它们是 ImportHosts、GetHosts、addAudits，以及建任务时用到的 lockHosts 和 openTasksOf。其中 ImportHosts 有两个分批循环，写入用一个，读回 Rev 用一个。契约测试和 pgstore_test 一次最多只用到 101 台主机（hostListDefaultLimit），所以所有分批循环都只走到了第一批。内存实现不分批，不受这个问题影响。
 
@@ -267,7 +371,9 @@ B. 加一个 DeriveHook。model.Hook 要加 DerivedFrom 字段，golden 也要�
 
 合并自：S7 should：ImportHosts、GetHosts 和 addAudits 都按 batchSize（1000）分批…
 
-### S4-3　GetHost、DeleteHost、GetHosts 和各个 List 把存不进数据库的查找键和过滤条件当作没有，这条规则只在 pgstore_test 里有测试　（两份实现不一致）
+### S4-3　GetHost、DeleteHost、GetHosts 和各个 List 把存不进数据库的查找键和过滤条件当作没有，这条规则只在 pgstore_test 里有测试
+
+结果：已修（7b9de91）。清单当时说删掉 memstore 后要重判这条，因为搬进 storetest 图的是让两份实现都跑。重判后照修：这条规则是第 4、5、7 层看得见的接口约定，/hosts/%FF、?prefix=%00 这类请求要得到「没有」，而不是没翻译的编码错误，所以要钉在契约用例里，并写进 store/doc.go；storetest 并进 pgstore 之后，契约用例本来就在 pgstore 包里。补全了 ISO 的 Family/Series、审计的 TargetKind/TargetID/Action、任务的 HostSN/States、hook 的 NamePrefix、模板的 Series；pgstore_test 里和契约用例重复的那半段删掉，只留契约用例没有的游标部分。测试：契约用例 hostUnstorableKeys（含属性值恰好是 U+FFFD 的一台），以及各组的列表过滤用例（isoListFilters、auditListFilters、taskListFilters、templateListSeries 等）。
 
 问题：PostgreSQL 的 text 类型存不了 NUL 字符，也存不了非法的 UTF-8。所以 pgstore 在 GetHost、DeleteHost、GetHosts 和各个 List 方法里，会先用 storable() 检查一遍。遇到这类存不下的键和过滤条件，pgstore 一律当作没有。正因为这样，pgstore 返回的结果才和内存实现一致。
 
@@ -283,7 +389,9 @@ S4 做过一次变异验证，也就是故意改坏代码，看测试能不能�
 
 合并自：S4 deferred「契约测试没有钉住这种情况：查询条件或查找键是存不下的串」；S4 should「读路径收到存不下的文本时，两份实现会走偏」；S7 deviations：Added behaviour the plan doesn't list: keys and filters that can't be stored…；S7 concerns：storetest has no cases for unstorable keys or filters…（键与过滤条件那一半）；S7 should：storetest 没有「存不下的键与过滤条件」和「游标里藏着 NUL」这两类用例…（键与过滤条件那一半）
 
-### S6-2　状态过滤传入空切片（不是 nil）时该怎么算，没有测试钉住，pgstore 一旦换成 GORM 的惯用写法就会出错　（两份实现不一致）
+### S6-2　状态过滤传入空切片（不是 nil）时该怎么算，没有测试钉住，pgstore 一旦换成 GORM 的惯用写法就会出错
+
+结果：已修（7b9de91）。types.go 写明切片的过滤条件（States）为 nil 与为空切片相同，都表示不按它过滤，不是「状态在空集合里」，理由是第 5 层把 JSON 里的空数组解出来就是空切片。ISO、hook、模板、任务四组过滤用例各补一条「状态给空切片等于不过滤」，hook 与模板另有 ApprovedOnly 时的一条。
 
 问题：过滤条件是长度为 0 的切片时，两份实现都当作不过滤。S6 在探针里试过：在 ISO、任务、hook、模板四个列表上传空切片，两边都返回了全部记录。所以目前两边是一致的。但是 types.go 只写了「过滤条件为零值表示不按它过滤」。空切片并不是零值，所以这句话管不到它。我还 grep 过，没有一个用例传过空切片。
 
@@ -291,11 +399,13 @@ S4 做过一次变异验证，也就是故意改坏代码，看测试能不能�
 
 建议：在 types.go 里写明，nil 和空切片都表示不按这个条件过滤。然后在 ISO、hook、模板、任务这四组过滤用例里，各补一条传空切片的用例。
 
-出处：internal/store/types.go:63-64；memstore/isos.go:173-176、memstore/hooks.go:267、memstore/tasks.go:218-221；pgstore/isos.go:160-182、pgstore/hooks.go:566-585、pgstore/tasks.go:229-248
+出处：internal/store/types.go:63-64；pgstore/isos.go:160-182、pgstore/hooks.go:566-585、pgstore/tasks.go:229-248
 
 合并自：S6 should「空的非 nil 过滤切片没钉住」
 
-### S9-1　finishedStates 是一份手写的清单，没有测试保证它和 model 一致　（两份实现不一致）
+### S9-1　finishedStates 是一份手写的清单，没有测试保证它和 model 一致　（pgstore 与 model 可能不一致）
+
+结果：已修（U10），用的是这里「更稳的做法」，没用「加一行断言」。model 导出 TaskStates，按状态机的顺序列出全部任务状态，每次返回副本；Valid 改成按它判断，免得 switch 里加了状态、清单漏了照样逃过。pgstore 的 finishedStates 由它按 Finished 算出，schema_test 的 candidates 也从它出发，另加了几个非法写法；契约用例 taskCreateAfterFinished、taskFindOpen 里遍历结束状态的循环改成遍历清单。这样 model 一加结束状态，CHECK 和索引谓词由 Test任务状态的CHECK与C31的索引都与model一致 报红，FindOpenTask 和建任务时查未结束任务的那条查询由契约用例报红。标题的标记改成「（pgstore 与 model 可能不一致）」而不是去掉：只剩一份实现，但 pgstore 和 model 之间仍可能对不上。测试：TestTaskStates按状态机的顺序列出全部状态、TestTaskStates列出了全部TaskState常量（从源码里找出全部 TaskState 常量来比对）、TestTaskStates每次给的是副本、TestTaskStateValid只认清单里的状态、Test查未结束任务用的结束状态由model的清单算出。
 
 问题：pgstore 的 openTasksOf 和 FindOpenTask 要知道哪些状态算已结束，用的是一份手写的清单 finishedStates。内存实现用的则是 model.TaskState.Finished()。索引 idx_tasks_open 的谓词倒是有测试钉在 model 上（Test任务状态的CHECK与C31的索引都与model一致），finishedStates 却没有被钉住。而且那个测试里的 candidates 也是手写的。目前 finishedStates、idx_tasks_open 的谓词和 model.TaskState.Finished() 这三处是一致的。现有的三种结束状态，也都有契约用例 taskFindOpen 覆盖。
 
@@ -303,11 +413,13 @@ S4 做过一次变异验证，也就是故意改坏代码，看测试能不能�
 
 建议：在那个测试里加一行断言：finishedStates 恰好等于 candidates 里 Finished() 为真的那些状态。更稳的做法是让 model 导出一份全部任务状态的清单。candidates 和 finishedStates 都从这份清单出发，按 Finished() 算出来。
 
-出处：internal/store/pgstore/tasks.go:17-19、171、203；pgstore/schema_test.go:318-362；memstore/tasks.go:169、189
+出处：internal/store/pgstore/tasks.go:17-19、171、203；pgstore/schema_test.go:318-362
 
 合并自：S9 should：小问题：tasks.go:20 的 finishedStates 是「已结束的状态」的第三份手写清单…
 
-### L-6　导入主机和建任务各自排了一遍加锁顺序，没有测试保证两边一致　（两份实现不一致）
+### L-6　导入主机和建任务各自排了一遍加锁顺序，没有测试保证两边一致
+
+结果：已修（7b9de91，测试文件补在 7829943）。抽出 hostLockOrder 决定给多台主机加锁的次序（按 SN 的字节序升序），ImportHosts 与 CreateTasks 都调它，注释写明凡在一个事务里给多台主机加锁都按它。测试：Test同时导入主机与建任务不会互相等死（hostlock_test.go），多轮同时跑主机重叠的 ImportHosts（入参顺序打乱）与 CreateTasks，断言没有 40P01、最终结果正确；它本身在测并发，保持串行。变异验证：把 ImportHosts 改成倒序加锁，3 次都在第 2 轮报 40P01。
 
 问题：ImportHosts 先用 strings.Compare 给主机排序，再按排好的顺序 upsert。CreateTasks 加锁走的是 lockHosts。lockHosts 先用 slices.Sorted 排序，再在 SQL 里写 ORDER BY sn COLLATE C FOR UPDATE。现在两处都按 SN 的字节序升序加锁，所以行为是正确的。但这套排序逻辑是两边各写了一份。现有的并发测试只覆盖同一个方法自己跟自己并发，例如 Test同时导入同一组主机不会互相等死、concurrentBatches 等。storetest 和 pgstore_test 里都没有这样的用例：ImportHosts 和 CreateTasks 同时跑，而且两边涉及的主机有重叠。所以就算把 ImportHosts 改成倒序，现有测试也照样全部通过。内存实现只用一把锁，不涉及这个问题。
 
@@ -319,7 +431,9 @@ S4 做过一次变异验证，也就是故意改坏代码，看测试能不能�
 
 合并自：layer_should 第 6 条：跨方法的锁顺序没有测试钉住
 
-### S2-15　Detail 和 CreatedBy 的测试只拿 NUL 做反例，没有用非法 UTF-8　（两份实现不一致）
+### S2-15　Detail 和 CreatedBy 的测试只拿 NUL 做反例，没有用非法 UTF-8
+
+结果：已修（U11），只改测试。TestCheckAudit各字段的规则 加了「Detail 不是 UTF-8」，TestCheckNewTasks每条前提各一个反例 加了「CreatedBy 不是 UTF-8」，各用一个 0xFF 字节；原来的「CreatedBy 存不下」改名为「CreatedBy 含 NUL」。只剩一份实现之后，「内存实现照存、pgstore 撞上 22021」这个对照不在了，但校验一旦被改坏，pgstore 照样会撞上 22021、报出没翻译的错误，所以仍要补。
 
 问题：有三处测试专门测「存不下」的值，也就是数据库存不进去的值。可它们的反例只用了 NUL，没有用非法 UTF-8。这三处是：check_test 里 CheckAudit 的 Detail（第 66 行）和 CheckNewTasks 的 CreatedBy（第 389 行），以及 storetest 的 taskCreateInvalid（tasks.go:337）。S2 的探针试过一次：把 Detail 和 CreatedBy 这两处的校验改成只查 NUL，结果 internal/store 和 memstore 的测试照样全部通过。不过两份实现目前调用的是同一个函数，所以眼下还没有出现不一致。
 
@@ -331,7 +445,9 @@ S4 做过一次变异验证，也就是故意改坏代码，看测试能不能�
 
 合并自：任务2 should：测试粒度（已在探针里验证）：CheckAudit 的 Detail 和 CheckNewTasks 的 CreatedBy 测「存不下」时只用了 NUL…；任务2 should：测试的边界缺口：…② CheckAudit 的 Detail、CheckNewTasks 的 CreatedBy 只测了 NUL…
 
-### S4-7　SHA256 撞车的测试没覆盖写入的一方还停在「获取中」的情况　（两份实现不一致）
+### S4-7　SHA256 撞车的测试没覆盖写入的一方还停在「获取中」的情况
+
+结果：已修（U11），只改测试。契约用例 isoSHA256 加了一例：B 停在获取中，SHA256 写成那个 ready 占位 ISO 的 SHA256，断言 DuplicateError{sha256, 对方 ID}，紧接着的 wantUnchanged 断言数据没变；TestHoldsSHA256 补了一行：acquiring 为 true。清单当时说这条在删掉 memstore 后要重判：原来的变异验证做在内存实现上，而 pgstore 有部分唯一索引兜底。重判后照修，成本只有几行：pgstore 预检查用的 sha256Holder 调的就是共用的 HoldsSHA256，新加的那一行直接钉住这个判定，契约那一例钉住对外给出的结果。
 
 问题：isoSHA256 测的是 SHA256 撞车。撞车涉及两方，一方是占位的，另一方是写入的 B。测试里 B 的状态只设成过 importing 和 ready。获取中（acquiring）这个状态只出现在占位的一方。TestHoldsSHA256 的表里也没有 acquiring 这一行。S4 做过一次变异验证：让内存实现的 sha256Holder 遇到处于 acquiring 的写入方时，直接返回空串。结果契约测试照样全部通过。
 
@@ -339,11 +455,13 @@ S4 做过一次变异验证，也就是故意改坏代码，看测试能不能�
 
 建议：在 isoSHA256 里加一例，让 B 停在 acquiring，并把 B 的 SHA256 写成那个处于 ready 状态的占位 ISO 的 SHA256。这一例要断言返回 DuplicateError{sha256, 对方 ID}，并用 wantUnchanged 断言数据没有变。TestHoldsSHA256 再补一行：acquiring 为 true。
 
-出处：internal/store/storetest/isos.go:373-408（isoSHA256）；internal/store/check_registry_test.go:209-225（TestHoldsSHA256）；memstore/isos.go:145-155
+出处：internal/store/storetest/isos.go:373-408（isoSHA256）；internal/store/check_registry_test.go:209-225（TestHoldsSHA256）
 
 合并自：S4 should「测试缺口（小）：SHA256 撞键时」
 
-### S7-5　表结构检查不核对主键的名字，可翻译数据库错误时恰恰要靠 hosts_pkey 这个名字来认　（两份实现不一致）
+### S7-5　表结构检查不核对主键的名字，可翻译数据库错误时恰恰要靠 hosts_pkey 这个名字来认
+
+结果：已修（7b9de91）。compareTable 检查主键时加了一条：主键的名字应等于表名加 _pkey，对不上就报出来，并写明怎么用 ALTER TABLE … RENAME CONSTRAINT 改回来。测试：Test主键改了名被查出来并拒绝启动。
 
 问题：Open 时核对表结构用的是 compareTable。它检查主键时只比列，不比名字。而 translate 负责把 PostgreSQL 的错误翻译成 DuplicateError 这类错误，它恰恰要靠 duplicateFields 里登记的 hosts_pkey，才能认出这是 SN 撞车。Test唯一约束的翻译表与期望值一致 这个测试也只检查一件事：翻译表里的名字符合「表名_pkey」的写法，并不去查数据库里的主键实际叫什么。
 
@@ -355,7 +473,9 @@ S4 做过一次变异验证，也就是故意改坏代码，看测试能不能�
 
 合并自：S7 should：…errors.go:22 翻译表靠 hosts_pkey 这个名字认出主键撞车…
 
-### S6-1　任务推进被回滚以后，事件的 Seq 还连不连续，现在没有测试钉住　（两份实现不一致）
+### S6-1　任务推进被回滚以后，事件的 Seq 还连不连续，现在没有测试钉住
+
+结果：已修（8e7e9be），用并包换来的白盒断言，比这里建议的「追加一条事件再断言」更直接。wantSeqCounter 直接查 tasks.last_seq，连同事件条数与 max(seq) 三者比对，用在推进被 C31 挡下、期望值对不上、撞上部分唯一索引三处。变异验证：把 last_seq 改成在事务外分配，新断言报红，原有的 wantTasksUnchanged 等一个都抓不到。
 
 问题：pgstore 用计数列 last_seq 给任务的事件分配 Seq（序号）。last_seq 和任务状态写在同一条 UPDATE 里，也在同一个事务里。所以一次推进（把任务推到下一个状态）如果被 C31 挡下，它带的事件和计数会一起回滚。这个行为现在是对的，但没有测试钉住它。storetest 里的两个契约测试 taskTransitionConflict 和 taskTransitionOpenTask，在推进被拒以后都没有再追加事件，自然也就没有断言新事件的 Seq 紧接在已提交的那一条后面。last_seq 不是 model.Task 的字段，因此 wantTasksUnchanged 检查不到它。pgstore_test 里还有一个测试，名叫 Test推进撞上没提交的新任务由部分唯一索引兜底，它也只断言了「没写事件」。内存实现的情况不同。它的 Seq 是按事件个数算出来的，天然不会留下空号。
 
@@ -368,6 +488,8 @@ S4 做过一次变异验证，也就是故意改坏代码，看测试能不能�
 合并自：S6 should「Seq 在回滚之后是否仍然连续」
 
 ### S4-6　store 包的接口注释没有跟上实现和契约测试
+
+结果：已修（U9），只改注释和原计划「共用类型」表里「各查询类型」那一行（b61ba0a 时的第 90 行），行为和测试都没动；「与内存实现一致」这类旧说法先由 5dcfe69 清掉。七条逐条补进 store.go、types.go、errors.go、doc.go 和几处实现注释：① CreateHost 分清 ProblemsError 与不带问题清单的 ErrInvalid，ImportHosts 补上空批和没规范化的 SN；② UpdateISO 与 ErrImmutable 写明已废弃的 ISO 报 ErrImmutable，状态不认识或文本存不下报 ErrInvalid；③ types.go 写明字符串一律按字节序比较（pgstore 用 COLLATE "C"），ISO 按 Name 再按 ID、区分大小写，任务同一时刻按 ID 升序；④ doc.go 写明装结果的切片与 map 不为 nil，理由只留「第 5 层编成 JSON 是 [] 与 {}，nil 会编成 null」，Events 的说明写明追加事件不改任务的 State 与 Rev；⑤ NewHookVersion 写明新版本号是分配过的最大版本号加 1、删掉的草稿用过的号不再发，ListHookVersions 补上身份不存在报 ErrNotFound；⑥ CreateTasks、FindOpenTask、ListEvents、AppendEvents 补上各自的报法，已结束的任务照样能追加事件，事件的 Key 区分大小写；⑦ 那四处注释改成只有 DeleteHookDraft 读 template_hook_refs，审批模板与建任务用 HookRefs 现算。⑤ 里「spec 里也没写」那一半没有改 spec。
 
 问题：我逐条对过 HEAD 的代码。下面这些行为只写在实现注释、提交说明或测试用例里。store 包的接口注释要么没写，要么写得不对：
 
@@ -395,6 +517,8 @@ S4 做过一次变异验证，也就是故意改坏代码，看测试能不能�
 
 ### S5-1　内置内容的名字一旦装进库里就再也改不了，但 spec 和注释都没写这一点
 
+结果：已修，只改文档与注释。spec §6.2 第 11 条补上「名字随身份定下，以后的版本不能换名，换了名同样拒绝启动；要改名，只能换一个新 ID」（73ac12c）；ErrBuiltinMismatch、EnsureBuiltinHook、ensureBuiltinIdent 的注释同样写明（dbea587）；原计划「留给后续层的约定」的第 3 层那条随 U9 补上这一句。建议里「第 3 层要再加一条用例，把发布过的各个内置版本依次装进同一个库」，以及内置版本不能废弃、旧身份会一直出现在向导里的问题，仍归第 3 层。
+
 问题：内置内容的名字记在身份上。这里的「身份」指一个 hook 或模板本身，它的各个版本都挂在身份下面。内置身份不能改名，改了会报 ErrImmutable。内置版本则更严，连废弃都不允许。
 
 EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本换了一个名字。这种情况下，PostgreSQL 实现和内存实现里的 ensureBuiltinIdent 都会报 ErrBuiltinMismatch。契约测试 builtinEnsure 的 b3 用例专门钉住了这个行为。
@@ -411,11 +535,13 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 同一个根源还带出了另一个问题：内置版本不能废弃。以后如果某个 lober 版本不再带某个内置模板，库里的旧身份仍然是已审批状态。结果是，它会一直出现在向导里。第 3 层设计装载流程时，要把这件事一并考虑进去，比如由第 5 层按程序当前带的内置清单来过滤。保留的名字前缀必须在第一份内置内容之前定下来，原因也在这里（见 S10-2）。
 
-出处：spec §6.2 第 11 条（第 330 行）；计划「留给后续层的约定」第 503 行；internal/store/errors.go:37-39；store.go:96-98；pgstore/hooks.go:500-516；memstore/hooks.go:520-537；storetest/hooks.go:1133-1138、1156-1157
+出处：spec §6.2 第 11 条（第 330 行）；计划「留给后续层的约定」第 503 行；internal/store/errors.go:37-39；store.go:96-98；pgstore/hooks.go:500-516；storetest/hooks.go:1133-1138、1156-1157
 
 合并自：S5 should「「留给后续层的约定」的第 3 层可以补一条」；S10 should：同文件 :330（§6.2 第 11 条）：契约测试 builtinEnsure 还钉住了另一种情况；S10 should：spec 第 330 行（§6.2 第 11 条）漏了一条拒绝启动的情形
 
 ### S3-14　model.Subject 的写法表前后矛盾，还漏了两种情况：针对整个身份时和新建时该怎么填
+
+结果：已修（dbea587），只改注释。problem.go 的 Subject 写法表修掉五处：① 参数声明与实现按位置写，取值来源的字段键是例外、带参数名；② 模板一节补上 Kind 为 template；③ sn_placeholder 另给规范化之后的 SN；④ param_unknown_field 的 Path 是原样的键；⑤ 补上改名时 ID 是身份 ID、新建与派生时 ID 为空这两种写法。S10-2 新加的 name_reserved 也写进了这张表：由仓储的用户入口产出，Subject 同 hook 与模板里名称的问题。
 
 问题：model.Subject 由 Kind、ID、Path，以及正文里的行号 Line、列号 Col 几项组成，用来标明一条问题落在哪个对象的哪个位置。problem.go 里 Subject 的注释列了一张写法表，说明各种情况下这几项怎么填。这段注释还写明「第 5、6 层按它解析，以后不要随手改」。但是这张表有几处不对：
 
@@ -439,11 +565,13 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 建议：只改注释。先把上面几处改过来，再补两行说明。一行写：针对整个身份的问题，ID 是身份 ID。另一行写：新建与派生时 ID 为空，Kind 与 Path 照版本级的写法填，也就是和针对单个版本时一样。
 
-出处：internal/core/model/problem.go:25-47；model/ident.go:39-48；params/params.go:260-266；internal/store/check_authoring.go:94、111、243-253；pgstore/hooks.go:193；pgstore/templates.go:136、265（内存实现对应处同样）
+出处：internal/core/model/problem.go:25-47；model/ident.go:39-48；params/params.go:260-266；internal/store/check_authoring.go:94、111、243-253；pgstore/hooks.go:193；pgstore/templates.go:136、265
 
 合并自：任务3 should：internal/core/model/problem.go:31：Subject 注释写「系的列表与参数名只出现在说明里，不进 Path」…；任务3 should：internal/core/model/problem.go:42–47 的 Subject 文档（C-4）写明第 5、6 层要按它解析…；layer_should 第 9 条：model.Subject 的写法表（problem.go:30-44）里 hook 与模板只有版本级的「ID@版本」
 
 ### S4-1　传进来的 SN 没规范化时，按 SN 查找的几个方法结果各不相同，契约里也没写
+
+结果：已修（U9），只改注释，行为不变。store.go 的 Hosts 说明写明这条规则：带整条记录的写入（CreateHost、UpdateHost、ImportHosts，以及 CreateTasks）和 FindOpenTask 查 SN 规范化了没有，其余按 SN 查找的照原样去找，找不到就是没有；为什么写入和 FindOpenTask 要查、其余的不查，理由一并写明。FindOpenTask 的注释另写了网关不能把漏了规范化当成「没有任务」。原计划「留给后续层的约定」的第 5 层补了「按 SN 调仓储之前先经 model.NormalizeSN 规范化」。
 
 问题：两份实现（内存版 memstore 和 PostgreSQL 版 pgstore）在这件事上的表现完全相同。S4 的探针在两份实现上都实测过，我也对过代码。假设 SN-1 已经登记过，再拿没规范化的 sn-1 去调用这几个方法，结果是这样的：GetHost 和 DeleteHost 会报 ErrNotFound；GetHosts 返回一个空 map；ListTasks 按 HostSN=sn-1 查，返回的是空页；FindOpenTask 和 UpdateHost 则报 ErrInvalid。
 
@@ -455,11 +583,13 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 建议：在 store.go 里，给 Hosts 的说明和 FindOpenTask 都写明这条规则和背后的理由。另外，在计划的「留给后续层的约定」里，给第 5 层补一句「按 SN 调仓储之前先规范化」。这件事可以和 S4-6 一起改。
 
-出处：internal/store/store.go:22-39、142-144；check.go:218-225（CheckSN）；check_registry.go:12-46（CheckHosts）；memstore/hosts.go:92-130；pgstore/hosts.go:136-189
+出处：internal/store/store.go:22-39、142-144；check.go:218-225（CheckSN）；check_registry.go:12-46（CheckHosts）；pgstore/hosts.go:136-189
 
 合并自：S4 should「SN-1 已登记时，DeleteHost 与 GetHost 收到合法但没规范化的」；S6 should「按 SN 查询的约定不一致」
 
 ### S10-5　第 1 层清单里 L-8 提到的字段键问题已经随 C-3 修掉，但条目还没更新
+
+结果：已修（U12），只改文档。第 1 层清单的 L-8 下面补了结果，第 18 行和第 3 节开头「其余 14 条没有动」的说法一并改掉。和这里的建议有一处不同：拼「ID@版本」的那几处不能改用 store.VersionID。第 1 层不许依赖 store，而 store 本来就依赖第 1 层，反过来引用会成环；所以结果里只写了在 model 给 HookKey、TemplateKey 加 String() 这一种做法。
 
 问题：C-3（提交 036f397）已经把 TemplateFieldKey、InstancePath、InstanceFieldKey 放进了 model（problem.go:58-71）。现在 activation、params、snapshot 共用这一份。但是第 1 层遗留问题清单的 L-8（第 730 行）还写着「字段键在 params 与 snapshot 里各拼一次」。L-8 还建议「第 5 层做接口时，params 导出字段键构造函数」。另外，清单第 18 行和第 3 节开头（第 636 行）也还写着「其余 14 条没有动」。
 
@@ -473,6 +603,8 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S7-4　models 和 tables 应该一一对应，但这条约定只写在注释里，没有测试检查
 
+结果：已修（7b9de91）。测试：Test行类型与表结构的期望值一一对应，断言 models 里十个行类型的 TableName() 集合等于 tables 的表名集合。
+
 问题：open.go:23 的注释说，models 里的表和 schema.go 里的 tables 一一对应。models 是 open.go 里登记的行类型，tables 是 schema.go 里列出的表。checkSchema 负责断言表结构，但它只检查 tables 里列出的表。schema_test 里也没有测试去比对这两份清单。
 
 影响：假设有人往 models 里加了一个行类型，却忘了在 tables 里登记。那么那张表的主键、索引、外键和 CHECK，就完全不在断言的检查范围内。这样一来，AutoMigrate 的两个盲区又没人守了，因为计划里说过，这些断言是唯一的防线。偏偏后面的第 4 层（ISO 来源）和第 5 层（用户与会话）都要加表。
@@ -484,6 +616,8 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 合并自：S7 should：…open.go:27 models 与 schema.go 的 tables「一一对应」只写在注释里…
 
 ### S3-13　两个用例检查勾选的各系有没有并起来看，但只抓得住一个方向的退化
+
+结果：已修（U11），只改测试。Test锁在默认值上却没有默认值 里的 inOneTicked 反过来写：splitPart 的第一份留空，volgroup 那一行放进第二份，引用落在模板勾的第二个系上，抓「只留第一个有引用的系」的退化；Test取值来源取不出正文或片段要的子值 里引用落在 rocky 的那一例（gw）不动，抓「只留最后一个系」的退化。两例的注释互相指明了方向。
 
 问题：activation 里新加了两个用例，检查的是模板勾了几个系时，会不会把这几个系各自选中的片段并起来看。这里的「系」是模板勾选的对象，rocky 就是一个系；每个系会从每个 hook 里选中覆盖它的那份片段，而一份片段可以同时覆盖几个系。这两个用例里起决定作用的引用都在 rocky 的片段里，而 rocky 恰好是模板勾的第一个系。所以这两个用例只抓得住一种退化，就是代码只留最后一个系。S3 的探针试过另一个方向：把 template.go:224-227 改成只留第一个有引用的系（只在 refs 为空时才取）。结果 internal/core 的测试照样全部通过。
 
@@ -497,6 +631,8 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S2-11　存储层的守卫不会把被构建约束排除掉的文件报出来
 
+结果：已修（7b9de91）。checkStore 对 IgnoredGoFiles（含 _test.go）也报违规，规则的说明文字不再限于第 1 层；cgo 没有另加规则，「C 不算标准库」那一条已经挡住它。Test存储层总检查接上了每一项 的夹具在 5dcfe69 由 memstore 换成了 pgstore，现在断言 x_linux.go 和 x_windows_test.go 都被报出来。
+
 问题：遇到被构建约束排除的文件，存储层守卫的检查函数 checkStore 只解析它们的 import，却不像第 1 层那样把这类文件本身当成违规报出来（第 1 层靠的是 ruleIgnored）。测试也是照这个行为写的：Test存储层总检查接上了每一项 这个测试专门断言，x_linux.go 和 x_windows_test.go 不会被报出来。这是任务 2 有意做的取舍，checkStore 的注释里写明了。
 
 影响：假如 pgstore 里出现一个 *_linux_test.go，或者有人给测试文件加了一个 //go:build 标签，PostgreSQL 契约测试在 Windows 上就会静默地不跑，make check 却照样是绿的。计划「开工前」一节要防的正是这种情况，它的说法是「跳过会让存储层零覆盖也变绿」。pgstore 包现在跑一遍要 137 秒，所以有人想提速的时候，最容易走到的就是这一步。
@@ -508,6 +644,8 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 合并自：任务2 deviation：Two layer-1 rules are not applied to the store layer…；任务2 should：存储层守卫只解析被构建约束排除的文件的 import，不把这类文件本身报出来…
 
 ### S5-5　往返读写的测试漏掉了参数声明和取值来源里的四个字段
+
+结果：已修（U11），只改样例。做法和建议略有不同：sampleHook 没动，因为建任务的夹具用它，而 Rocky 的 ISO 不提供 profiles、必填的参数又没有值，参数求值会报错；另加了 fullHook，在 sampleHook 上多两个参数，一个列表参数声明为必填，一个 enum 的选项取自 ISO 提供的集合（Offer）。hookOps 的 full 和 hookCopies 改用它；fullTemplate 的取值来源设了 Editable 为 true。variants 里加了参数是否列表、是否必填、选项集合，以及取值来源可不可改四项。只剩一份实现之后，这条的理由从「两份实现的拷贝方式」换成 pgstore 自己：以后要是把其中哪个字段拆成单独的列，或者内置内容的比对改成逐个字段，这些字段会悄悄丢掉或漏比。
 
 问题：ParamDecl 是参数声明，Binding 是取值来源。storetest 的样例数据里，ParamDecl.List、ParamDecl.Required、ParamDecl.Offer 和 Binding.Editable 这四个字段都是零值，这一点我 grep 过。其中 ParamDecl.Offer 只在那个存不下的反例里出现过。因为都是零值，深拷贝、往返读写（写进去再读出来比对）和 builtinEnsure 的比对，三处都没有覆盖到这四个字段。目前这四个字段还不会丢，因为 pgstore 把 model 类型整个编成 jsonb 来存，内存实现也是按结构体整体拷贝。
 
@@ -521,6 +659,8 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S5-4　开新版本失败以后，版本号是否还连续，现在没有用例检查
 
+结果：已修（8e7e9be），用并包换来的白盒断言。wantLastVersion 直接查身份表的 last_version，断言开新版本失败以后计数没跳号。只剩一份实现之后，不再拿内存实现的暂存作对照，直接看 pgstore 自己的计数列。变异验证：让版本号在失败以后仍加 1，新断言报红。
+
 问题：两份实现都是在同一次写入里分配版本号的。内存实现在暂存里分配，pgstore（PostgreSQL 实现）在事务里分配，所以现在的行为是对的。但是有两个用例没有把这一点钉住，也就是没有用断言把它固定下来。第一个是 newVersionPending。这个用例里，开新版本先报了两次 ErrConflict，之后才开出一个版本，可用例并没有断言这个版本的版本号。第二个是 newVersionBad。这个用例在开新版本失败以后，就没有再开过新版本。S5 做过一次变异验证，也就是故意把实现改错，看测试能不能发现。这次的改法是：让内存实现的 NewHookVersion 在报出 ErrConflict 或 ErrNotFound 之后，另起一次写入，把计数加 1。结果契约测试（两份实现共用的那套测试）仍然全部通过。
 
 影响：这种错误的后果是版本号中间会出现空洞，也就是跳过几个号。它不涉及数据本身。优先级低。
@@ -532,6 +672,8 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 合并自：S5 should「版本计数器的原子性没被钉住（探针证实）」
 
 ### S4-8　Limit 传 0 时应该默认取 100 条，但只有 ListHosts 有用例检查这一点
+
+结果：已修（7b9de91）。共用的辅助函数 wantDefaultLimit：准备 101 条数据，Limit 传 0，第一页 100 条且 Next 非空，第二页 1 条。ListISOs、ListAudit、ListHooks、ListTemplates、ListTasks 各补一例（isoListDefaultLimit、auditListDefaultLimit、taskListDefaultLimit，hook 与模板共用一份）。
 
 问题：各个列表方法每次取多少条，用的都是共用函数 CheckQuery 返回的条数，所以两份实现目前是一致的。但是只有 hostListDefaultLimit 这个用例钉住了「Limit 为 0 时取 100」。ListISOs、ListAudit、ListHooks、ListTemplates、ListTasks 都缺一个对应的用例。这个用例要做的是：Limit 传 0，同时数据多于 100 条。
 
@@ -545,17 +687,21 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S6-3　一个请求同时有两类问题时应该报哪一类错误，没有用例检查
 
+结果：理由随 memstore 删除而消失，不修。这条怕的是某份实现调了检查顺序，同一个请求在测试里和在生产上拿到不同的状态码；现在只剩 pgstore 一份实现，第 5 层的测试也连 PostgreSQL，不存在两边不同。
+
 问题：两份实现做检查的先后顺序是一样的。它们都是先查审计，再查入参，其中入参检查用的是共用函数。接着用键去取要用的数据，先取 ISO，再取模板。最后做重跑判定。推进任务时，两边的顺序也一样：先过 CheckTransition，再确认任务存在，然后核对期望值，最后检查 C31。S6 的探针把下面几种组合逐一核对过。传入的审计是零值、入参又不合格时，两边都报 ErrAuditRequired。ISO 和主机都找不到时，两边都报 ErrNotFound。事件不合法、期望值又对不上时，两边都报 ErrInvalid。身份（版本所属的那个带名字的对象）上有草稿、来源版本又不存在时，两边都报 ErrNotFound。也就是说，两份实现目前是一致的，但是没有用例把这些情况钉住。
 
 影响：第 5 层的 HTTP 接口是按错误类别来映射状态码的。可是第 5 层的接口测试跑在内存实现上，生产环境用的却是 pgstore。所以哪天某份实现调整了检查顺序，同一个请求在测试里和在生产上就会拿到不同的状态码。优先级低。
 
 建议：在 taskCreateInvalid、taskTransitionInvalid、taskCreateMissing 这三个用例里，各补一个组合输入的例子，并断言报出来的是哪一类错误。
 
-出处：internal/store/memstore/tasks.go:18-84、154-184；pgstore/tasks.go:26-146、281-319；storetest/tasks.go:309-395、571-596
+出处：internal/store/pgstore/tasks.go:26-146、281-319；storetest/tasks.go:309-395、571-596
 
 合并自：S6 should「检查的先后顺序没有用例钉住」
 
 ### S5-6　改名以后，单个取和批量取返回的名字对不对，测试没有断言
+
+结果：理由随 memstore 删除而消失，不修。这条比的是两份实现各自的读取路径；现在只剩 pgstore，读版本的地方都经 joined 连上身份表带出现在的名字，读取路径只有一条。
 
 问题：renameIdentity 这个用例在改名之后，只比对了 ListHookVersions 和 ListTemplateVersions 的结果。templateNamespaces 这个用例比对的也是列表。至于 GetHook、GetHooks、GetTemplate 这三个方法在改名之后返回什么名字，用例都没有断言。两份实现在读版本时，名字都是从身份上带出来的。内存实现靠的是 d.hook，pgstore 靠的是 joined 连表。所以两边目前是一致的。
 
@@ -568,6 +714,8 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 合并自：S5 should「「返回的每个版本，Name 都是身份现在的名字」在改名之后只查了两处」
 
 ### S6-4　检查深拷贝的用例只改了 TransitionTask 的返回值，没有改用户发起推进的返回值
+
+结果：理由随 memstore 删除而消失，不修。深拷贝用例在 pgstore 上永远是绿的：返回值每次从库里读出、从 JSON 解出，改 Go 里的值碰不到库里的行，两种推进以后拆开来写也一样。
 
 问题：taskCopies 是检查深拷贝的用例，它会去改动方法返回的任务。但它只改动了 TransitionTask 的返回值，没有改 TransitionTaskByUser 的返回值。目前这样没有问题，原因有两个。一是在两份实现里，这两种推进走的都是同一个 transition。二是 pgstore 的返回值每次都是从 JSON 解出来的，天生就是一份新副本。
 
@@ -582,6 +730,8 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 ## 3. 这些问题归到后续各层去处理
 
 这一节的条目，要么本来就是后续某一层的事，要么要等到后续那一层才真正用得上。写到那一层的计划时，把对应的条目纳入就行。
+
+修补轮顺带做了几条：S7-7、S5-8 已修；L-7 的注释部分已改；S5-2、S5-3、S5-7 写进了原计划「留给后续层的约定」的第 5 层；S6-5 整条作废；L-8 的前提消失、建议仍成立；S2-22 只改了选项 ② 的措辞。这几条的标题下都有「结果」。S1-6、S2-12、S2-13、S3-10、S9-2、S2-24 没有动。
 
 ### S1-6　ValidID 的注释保证通过它的都是安全词，但这条保证只有 6 个样本在守
 
@@ -621,6 +771,8 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S2-22　判断内置内容是否「内容相同」用的是 DeepEqual，所以 nil 和空切片会被当成不同
 
+结果：没有动，仍归第 3 层。memstore 删除之后只剩 pgstore 的两处比对（EnsureBuiltinHook、EnsureBuiltinTemplate），选项 ② 原来写的「两份实现共用」「两份实现都要改」跟着改了措辞。
+
 问题：内置内容指程序自带的那份版本，启动时要和库里的版本比对。两份实现（memstore 和 pgstore）的做法一样：先把 Rev 置为 1，再用 reflect.DeepEqual 比较库里读回的版本和程序自带的版本。jsonb 写进去什么，读出来就是什么，所以两份实现的比较结果是一致的。也就是说，这不是两份实现不一致的问题。
 
 影响：风险出在跨版本升级上。假设程序升级以后，同一个内置版本只是把 nil 写成了空切片，或者反过来。这时语义并没有变，但比较照样会报 ErrBuiltinMismatch，程序会拒绝启动。契约测试都是从空库开始跑的，所以测不出这种情况。它只会在老库升级时冒出来，属于只在生产环境出现的那一类问题。
@@ -629,11 +781,11 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ① 保持严格比较，另外加一条测试。这条测试给每个内置版本的序列化结果记一份指纹（golden）。同一个版本的指纹一旦变了，测试就失败，逼着人去升版本号。代价是多出一份要随版本更新的 golden，不过第 2 层不用动。
 
-② 比较之前，先把 nil 和空的切片、map 规范成同一种形式。规范函数放在 store 里，两份实现共用。代价是两份实现都要改，而且 builtinEnsure 要加一个例子，断言「nil 与空切片算相同」。
+② 比较之前，先把 nil 和空的切片、map 规范成同一种形式。规范函数放在 store 里，pgstore 的 EnsureBuiltinHook 与 EnsureBuiltinTemplate 共用。代价是这两处比对都要改，而且 builtinEnsure 要加一个例子，断言「nil 与空切片算相同」。
 
 我倾向 ①。
 
-出处：memstore/hooks.go:271-293、templates.go:312-335；pgstore/hooks.go:320-353、templates.go:364-398；storetest/hooks.go:1099-1139；spec §6.2 第 11 条
+出处：internal/store/pgstore/hooks.go:320-353、templates.go:364-398；storetest/hooks.go:1099-1139；spec §6.2 第 11 条
 
 合并自：任务2 should：计划把共用纯函数限定为九个…（EnsureBuiltin* 的「内容相同」，特别是 nil 与空切片怎么算）
 
@@ -651,6 +803,8 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### L-7　建任务时重跑准入，用的是任务里钉住的模板版本，和 admission 的注释说的不一样
 
+结果：注释部分已改（U9），比对仍归第 5 层。admission 的 TemplateUsable 与 BatchInput.Template、store.go 里 CreateTasks 的第 3 步都写明：重跑准入用的是任务里钉住的版本，不另取当前版本，已被新版本取代、但仍是已审批的旧版本照样通过；它是不是当前版本，由第 5 层在提交时用 model.CurrentApproved 比对。仓储没有加锁，行为不变。
+
 问题：两份实现（memstore 和 pgstore）在建任务时，都会重跑一遍准入。重跑时，它们按任务里钉住的 TemplateID/TemplateVersion 取出模板版本，交给准入检查。「钉住」指的是任务上记下了具体用哪个模板、哪个版本。但是 BatchInput.Template 和 TemplateUsable 的注释要求，交给准入的应该是调用方用 model.CurrentApproved 取出的版本。这样一来，如果操作员还停在控制台的建任务向导里，期间有新版本获批，他提交上来的仍是旧版本。旧版本此时还处于已审批状态，所以任务照样建得成。在这一点上，两份实现是一致的。
 
 影响：C23 规定，向导里每个模板只提供它当前的已审批版本。现在守住这条规定的，只有向导自己的筛选。
@@ -659,11 +813,13 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 建议：第 5 层在处理向导提交时，用 CurrentApproved 取出当前版本来比对。如果提交的版本已经被取代，就整批拒绝，并提示操作员换成新版本。需要的话，可以为此追加一个原因代码。仓储（也就是 store 这一层）保持现状，不另外加锁。比对和提交之间虽然会留下一个毫秒级的窗口，但这个窗口可以接受。注释现在就可以改，要改的是 admission 里的两处，以及 store.go 里 CreateTasks 的第 3 步。改后的注释要写明：重跑准入用的是任务里钉住的版本，它是不是当前版本，由第 5 层在提交时比对。这几处注释可以随 S4-6 一起改。如果你希望允许用旧的已审批版本建任务，那就只改注释，不加比对。
 
-出处：internal/core/admission/admission.go:50-51、92；memstore/tasks.go:62-67；pgstore/tasks.go:103-113；internal/store/store.go:131-139；spec C23（第 190 行）、§5.2 第 5 步（第 282 行）、§5.3 第 3、6 步（第 292、295 行）
+出处：internal/core/admission/admission.go:50-51、92；pgstore/tasks.go:103-113；internal/store/store.go:131-139；spec C23（第 190 行）、§5.2 第 5 步（第 282 行）、§5.3 第 3、6 步（第 292、295 行）
 
 合并自：layer_should 第 7 条：CreateTasks 把任务钉住的模板版本原样交给准入
 
 ### S5-3　GetHooks 只要碰到一个格式不对的键，就整批报 ErrInvalid
+
+结果：仍归第 5 层，GetHooks 保持严格。建议里要写进约定的那一条已随 U9 写进原计划「留给后续层的约定」的第 5 层：取草稿引用的 hook 之前，先滤掉不合 model.ValidID 的引用，缺的 hook 交给激活判定报 hook_ref_missing；两处以上要这样做时，再在 store 里加辅助函数。
 
 问题：模板草稿里的 Instance.HookID 可以是任何存得下的字符串。HookRefs 负责列出草稿引用了哪些 hook，这样的 ID 它也照样列出来。可是两份实现的 GetHooks 只要遇到一个不符合 ValidID 的键，就整批报 ErrInvalid。storetest 里的 hookGetHooks 专门测了这个行为，把它固定了下来。仓储自己的审批和建任务倒不受影响：在探针克隆里，拿同一份引用了 Bad ID 的草稿去审批，两份实现报的都是 hook_ref_missing。
 
@@ -673,11 +829,13 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 建议：第 5 层在取草稿引用的 hook 之前，先滤掉不符合 ValidID 的引用。这样一来，缺失的 hook 就交给激活判定，由它报 hook_ref_missing。到时候如果有两处以上的代码要这样做，就在 store 里加一个辅助函数，只返回格式合法的引用。这个做法要写进「留给后续层的约定」里第 5 层那部分。
 
-出处：internal/store/memstore/hooks.go:217-233；pgstore/hooks.go:254-276；storetest/hooks.go（hookGetHooks）；internal/store/check.go:336-351（HookRefs）；doc.go:16-17
+出处：internal/store/pgstore/hooks.go:254-276；storetest/hooks.go（hookGetHooks）；internal/store/check.go:336-351（HookRefs）；doc.go:16-17
 
 合并自：S5 should「GetHooks 只要有一个键格式不对就报 ErrInvalid」
 
 ### S5-2　一份草稿被别的模板当作派生来源，删掉它以后，那些模板的 DerivedFrom 就悬空了
+
+结果：按建议保持现状，仍归第 5 层。要写进约定的那一条已随 U9 写进原计划「留给后续层的约定」的第 5 层：派生来源可能已被删除，「来源出了新版本」的提示（C24）这时按同一来源身份下剩下的版本算，连来源的身份也没了就不提示。
 
 问题：DeriveTemplate 可以拿任何状态的版本当来源，草稿也可以。DeleteTemplateDraft 删草稿时，不会去看别的模板的 DerivedFrom。探针实测过，两份实现都会放行这样的删除。于是，派生模板的 DerivedFrom 就指向了一个已经不存在的版本。如果删的是来源模板的最后一个版本，连来源模板的身份都不在了。不过 DerivedFrom 不会因此错指到别的内容上，因为用过的版本号不会再发，NewID 又是随机的。内存实现在 DeleteTemplateDraft 的注释里写明，这样做是有意的。另一方面，spec C26 规定，被模板或任务引用的对象只能废弃，不能删除；可草稿又不能废弃，计划里的 ErrReferenced 也只列了主机、ISO 和 hook 草稿。所以 spec 和计划这两处说法之间有缺口。
 
@@ -687,11 +845,13 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 建议：保持现状。在「留给后续层的约定」里第 5 层那部分写明：派生来源可能已经被删除；这时，提示改按同一来源身份下剩下的其他版本来算；如果连来源的身份也没了，就不提示。
 
-出处：internal/store/memstore/templates.go:235-256；pgstore/templates.go:272-298；spec C24、C26（第 191、193 行）；计划「错误」一节 ErrReferenced（第 101 行）
+出处：internal/store/pgstore/templates.go:272-298；spec C24、C26（第 191、193 行）；计划「错误」一节 ErrReferenced（第 101 行）
 
 合并自：S5 concern「Deleting a template draft that another template was derived from is not blocked」
 
-### L-8　ErrReferenced 只带一段文字，两份实现写的文字还不一样　（两份实现不一致）
+### L-8　ErrReferenced 只带一段文字，两份实现写的文字还不一样
+
+结果：前提随 memstore 删除而消失，建议仍成立，仍归第 5 层；标题末尾的「（两份实现不一致）」也一并去掉了。现在只有 pgstore 一份实现，删被任务引用的主机或 ISO 时，报的文字都是从外键报错翻译来的，谈不上「两份实现写的文字不一样」。但第 5 层仍拿不到结构化的「被谁引用」，hook 草稿被模板挡着删不掉时指不出是哪个模板，所以带类型的 ReferencedError（Unwrap 之后是 ErrReferenced，带上引用方的类别和 ID）照旧在第 5 层做删除接口时加，由 pgstore 来填。
 
 问题：删除一台被任务引用的主机，或者一个被任务引用的 ISO 时，两份实现都会返回 ErrReferenced，但附带的文字不同。内存实现写的是「主机 SN-1 被任务 xxx 引用」。pgstore 的这个错误是从数据库的外键报错翻译过来的，所以写的是「还有别的记录经外键 fk_tasks_host 引用它」。DeleteHookDraft 这一处两边是一致的：两份实现都会写出引用它的模板 ID@版本。
 
@@ -701,7 +861,7 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 建议：第 5 层做删除接口时，加一个带类型的 ReferencedError，它 Unwrap 之后是 ErrReferenced。这个错误里带上引用方的类别和 ID，两份实现都要填。pgstore 可以这样实现：先锁住主机或 ISO，再在同一个事务里查引用它的任务。因为建任务时要先给主机加写锁、给 ISO 加读锁，所以这样查到的任务不会有遗漏。外键照旧留着兜底。不过对主机和 ISO 来说，引用它的任务本身没有办法处置。所以这个新错误真正有用的地方是 hook 草稿那一处。主机永远删不掉的问题另见 L-8b。
 
-出处：internal/store/memstore/hosts.go:100-102、memstore/isos.go:96-98；pgstore/errors.go:51-58；pgstore/hooks.go:221-230；internal/store/errors.go:27-28
+出处：internal/store/pgstore/errors.go:51-58；pgstore/hooks.go:221-230；internal/store/errors.go:27-28
 
 合并自：layer_should 第 8 条：ErrReferenced 只带文字，两边还不一样
 
@@ -733,17 +893,21 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S5-7　驳回审批时不强制写理由，这件事留给第 5 层来管
 
+结果：仍归第 5 层，仓储照旧不查 Detail。建议里要写进约定的那一条已随 U9 写进原计划「留给后续层的约定」的第 5 层：驳回接口要求非空的理由，并放进 Audit.Detail。
+
 问题：两份实现在驳回时只检查审计记录是否合规，并不要求 Detail 有内容。也就是说，驳回时 Detail 可以是空的。但是 spec §5.2 第 5 步写的是「驳回要写理由」。
 
 影响：doc.go 里约定了仓储层不做业务判定，所以这条规则只能靠第 5 层来保证。如果第 5 层也不管，驳回时就可以不留理由。
 
 建议：第 5 层的驳回接口应该要求调用方给出非空的理由，并把理由放进 Audit.Detail。这条约定要写进「留给后续层的约定」里第 5 层的那部分。
 
-出处：internal/store/store.go:80-81；memstore/hooks.go:115-121、pgstore/hooks.go:133-139；spec §5.2 第 5 步（第 282 行）
+出处：internal/store/store.go:80-81；pgstore/hooks.go:133-139；spec §5.2 第 5 步（第 282 行）
 
 合并自：S5 concern「RejectHook and RejectTemplate do not require a reason」
 
 ### S5-8　「开新版本」和「装载内置模板」这两条路径都会写引用记录，但没有测试钉住
+
+结果：已修（8e7e9be），用并包换来的白盒断言，没等第二个读者出现，走的是这里说的「另一个办法」。wantRefsRecorded 读整张 template_hook_refs，和每个模板版本按 store.HookRefs 算出的引用逐行比对，是全表的不变式，比只查单个版本更严；开新版本、装载内置模板这两条路径都在覆盖之内。变异验证：让 insertRefs 少记一条，新断言报红，原有的断言一个都抓不到。
 
 问题：两份实现在这两条路径上其实都记下了模板对 hook 版本的引用。内存实现的 putTemplate 每次都会重新算一遍 HookRefs，pgstore 在这两处都调了 insertRefs。缺的只是用例。之所以缺，是因为从接口上看不出这两条路径有没有记下引用。如今读 template_hook_refs 这张表的只有一处，就是 pgstore 的 DeleteHookDraft。建任务时也不读这张表，两份实现都是用 HookRefs 当场算出引用（任务 9）。而这两条路径记下的引用，指向的 hook 版本都已经审批，永远删不掉，DeleteHookDraft 碰不到它们：
 
@@ -754,11 +918,13 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 建议：等后续层给这张表加第二个读者时，再补上用例。这个读者多半是第 5 层的一类查询，比如「哪些模板引用了这个 hook 版本」。另一个办法是在 pgstore_test 的 harness 里加一项不变式检查，检查每个模板版本在表里的行都等于 refRows 的结果。任务 8 的评审已经在探针里验证过这项检查。至于 store.go 里「建任务都靠它」这个说法，已经单独列在 S4-6。
 
-出处：internal/store/pgstore/templates.go:119、395（refRows）；memstore/templates.go:356-361（putTemplate）；storetest/templates.go:427 起（templateRefs）
+出处：internal/store/pgstore/templates.go:119、395（refRows）；storetest/templates.go:427 起（templateRefs）
 
 合并自：S5 should「引用表有两条写入路径没有测试钉住」
 
 ### S7-7　注释说连接池由装配点来调，但装配点其实调不了
+
+结果：已修（f7d05d8），没等到第 5 层。pgstore.Open 改成 Open(ctx, dsn, opts ...Option)，新增 WithMaxConns：选函数式可选参数，是因为现有调用不用改，而且上限在用到第一个连接之前就设好了。注释改成连接池的上限由装配点从配置读出来、经 WithMaxConns 传入，不传就不设上限。装配点那一侧的约定随 U9 写进了原计划「留给后续层的约定」；装配点本身仍在第 5 层。测试：TestOpen按选项设连接池上限。
 
 问题：pgstore 的 Open 上有一句注释，原文是：「连接池的大小用 database/sql 的默认值，由装配点按部署调整」。装配点就是 spec 里负责把各个模块接起来的 cmd/lober。可是 Store.db 没有导出，Open 也只接收 ctx 和 dsn 两个参数，所以装配点根本没有入口去调连接池。而 database/sql 默认的 MaxOpenConns 是不设上限的，测试夹具是自己另外把它设成了 4。
 
@@ -772,13 +938,15 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S6-5　cloneTask 是逐个字段手写的，第 7 层往 Task 上加字段时需要有测试把关
 
+结果：整条作废。它讲的是 memstore 的 cloneTask，随 memstore 删除（5dcfe69）一起没了。pgstore 没有手写的深拷贝：返回的任务每次从库里读出，改 Go 里的值碰不到库里的行（同 S6-4）。
+
 问题：memstore 的 cloneTask 是逐个字段手写的深拷贝。S6 对照 model.Task 和各个快照类型核对过，确认它覆盖了现有的全部引用类型字段。如果在探针里把它改成浅拷贝，契约测试 taskCopies 能抓出来。
 
 影响：按计划里「留给后续层的约定」，第 7 层要往 Task 上加一批执行字段，比如 token、引导次数和时机进度。如果新加的字段是 map、切片或指针，而 cloneTask 没有跟着改，taskCopies 是查不出来的，因为它只改动现有的字段。
 
 建议：第 7 层加字段时，同时加一个反射测试。这个测试遍历 model.Task 里所有引用类型的字段，确认拷贝前后的两份数据不共享底层存储。这个测试也可以现在就加。
 
-出处：internal/store/memstore/tasks.go:227-262
+出处：原出处是内存实现里的 cloneTask，那个文件已随包删除（5dcfe69）
 
 合并自：S6 should「cloneTask（memstore/tasks.go:235）逐字段手写深拷贝」
 
