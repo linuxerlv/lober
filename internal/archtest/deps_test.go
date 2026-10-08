@@ -32,13 +32,17 @@ const (
 	layer1    = modulePath + "/" + layer1Dir
 )
 
-// storeDir 是存储层（第 2 层）相对模块根的目录：它自己和它下面的包都算存储层。下面是存储层规则点名的两个包，
-// pkgStore 既是存储层的根，也是契约包。
+// storeDir 是存储层（第 2 层）相对模块根的目录：它自己和它下面的包都算存储层。下面是存储层规则点名的三个包，
+// pkgStore 既是存储层的根，也是契约包；pkgPgtest 是给别的层的测试用的 PostgreSQL 夹具。
 const (
 	storeDir   = "internal/store"
 	pkgStore   = modulePath + "/" + storeDir
 	pkgPgstore = pkgStore + "/pgstore"
+	pkgPgtest  = pkgPgstore + "/pgtest"
 )
+
+// pgxV5 是 pgx v5 的模块路径：它和它下面的包算 pgx v5。
+const pgxV5 = "github.com/jackc/pgx/v5"
 
 // 层内方向规则点名的包。
 const (
@@ -82,15 +86,17 @@ const (
 	ruleDecision rule = "activation、params、admission、snapshot 之间只允许 snapshot import params"
 	ruleClock    rule = "层 1 不读时钟，当前时间由调用方传入"
 	ruleDotTime  rule = "不点导入 time，否则读时钟的调用认不出来"
-	ruleIgnored  rule = "层 1 的文件都参与构建：被构建约束排除的文件在本平台不编译也不测试，按族命名的 x_linux.go 也会被排除"
+	ruleIgnored  rule = "层 1 与存储层的文件都参与构建，测试文件也一样：被构建约束排除的文件在本平台不编译也不测试，按族命名的 x_linux.go 也会被排除"
 	ruleParse    rule = "源文件要能解析，守卫才查得了"
 	ruleListed   rule = "含非测试 .go 文件的目录都要出现在 go list ./... 里，否则守卫查不到它"
 
-	// 存储层的两条规则（第 2 层计划任务 2），都照计划「包与文件」表写成白名单。
+	// 存储层的三条规则：前两条是第 2 层计划任务 2 的，第三条是修补计划任务 U4 的，都照计划「包与文件」表写成白名单。
 	ruleContract rule = "store 只依赖标准库、internal/core/... 和 internal/store：契约不依赖 pgstore，" +
 		"也不依赖第三方模块；存储层新加的包也按这一条查"
 	rulePgstore rule = "pgstore 只依赖标准库、internal/core/...、internal/store，以及 gorm.io/... 与 github.com/jackc/pgx/v5/...：" +
 		"第三方模块只有这两家"
+	rulePgtest rule = "pgtest 只依赖标准库、internal/store、internal/store/pgstore 与 github.com/jackc/pgx/v5/...：" +
+		"它是测试夹具，经 pgstore 起仓储，不直接用 gorm，也不依赖层 1"
 )
 
 // violation 是守卫查出的一处违规。
@@ -155,8 +161,9 @@ func checkLayer1(fsys fs.FS, dirs []string, pkgs []goPackage) []violation {
 	return found
 }
 
-// Test存储层依赖守卫 照第 2 层计划任务 2 的两条规则查存储层各包的 import：契约不依赖 pgstore，第三方模块只有 pgstore
-// 能用，也只能是 gorm 与 pgx。层 1 不依赖存储层，由 Test层1依赖守卫 查。
+// Test存储层依赖守卫 照存储层的三条规则查各包的 import：契约不依赖 pgstore，第三方模块只有 pgstore 能用，也只能是
+// gorm 与 pgx；测试夹具 pgtest 另有一条，只许 pgx、契约与 pgstore。被构建约束排除的文件也报出来（checkStore）。层 1 不
+// 依赖存储层，由 Test层1依赖守卫 查。
 func Test存储层依赖守卫(t *testing.T) {
 	gomod := goModPath(t)
 	root := filepath.Dir(gomod)
@@ -172,13 +179,15 @@ func Test存储层依赖守卫(t *testing.T) {
 }
 
 // checkStore 是存储层守卫的全部检查，参数同 checkLayer1，dirs 相对 internal/store：先查有没有目录漏出 go list，
-// 再逐个包查非测试源文件的 import。
+// 再逐个包查文件构成与非测试源文件的 import。
 //
-// 第 1 层对文件构成的要求（不用 cgo、文件都参与构建）不套用到这里，只是 cgo 文件与被构建约束排除的文件照样
-// 解析：在本平台不编译的文件，import 的包照样按规则查，躲不过守卫；cgo 的 C 本身就违反规则。
+// 被构建约束排除的文件同第 1 层一样报出来（ignoredFiles），测试文件也算：pgstore 里多一个 *_linux_test.go，或者给
+// 测试文件加一个 //go:build，PostgreSQL 契约测试在 Windows 上就静默不跑，make check 照样是绿的。被排除的非测试
+// 文件照样解析，import 的包照样按规则查。cgo 不另报：C 不算标准库，import 那一条已经挡住它。
 func checkStore(fsys fs.FS, dirs []string, pkgs []goPackage) []violation {
 	found := unlistedDirs(storeDir, dirs, pkgs)
 	for _, p := range pkgs {
+		found = append(found, ignoredFiles(p)...)
 		found = append(found, checkSources(fsys, p, checkStoreFile)...)
 	}
 	return found
@@ -346,14 +355,20 @@ func parseFile(fsys fs.FS, fset *token.FileSet, name string) (*ast.File, error) 
 	return parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
 }
 
-// checkBuildFiles 要求层 1 的包没有 cgo 文件，也没有被构建约束排除的文件。族标识 linux、
+// checkBuildFiles 要求层 1 的包没有 cgo 文件，也没有被构建约束排除的文件（ignoredFiles）。族标识 linux、
 // windows 恰好是 GOOS 名，按族命名的 repo_linux.go 会被 Go 当成平台约束（T1-3）。
-// 被排除的测试文件也算：它在这个平台上静默不跑。
 func checkBuildFiles(p goPackage) []violation {
 	var found []violation
 	for _, name := range p.CgoFiles {
 		found = append(found, violation{rule: ruleCgo, pkg: p.ImportPath, subject: name})
 	}
+	return append(found, ignoredFiles(p)...)
+}
+
+// ignoredFiles 把包里被构建约束排除的文件逐个报出来，第 1 层与存储层都查。被排除的测试文件也算：它在这个平台上静默
+// 不跑。
+func ignoredFiles(p goPackage) []violation {
+	var found []violation
 	for _, name := range p.IgnoredGoFiles {
 		found = append(found, violation{rule: ruleIgnored, pkg: p.ImportPath, subject: name})
 	}
@@ -445,13 +460,22 @@ func checkStoreFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
 	return found
 }
 
-// storeRule 返回存储层的包 pkg import imp 违反的规则，不违反时返回空串。两条规则都是白名单，照计划「包与文件」表：
+// storeRule 返回存储层的包 pkg import imp 违反的规则，不违反时返回空串。三条规则都是白名单，照计划「包与文件」表：
 // 标准库、层 1 与契约包 internal/store 谁都能用，pgstore 另可用 gorm 与 pgx v5，此外一律不许，所以契约不依赖实现。
-// 两个包以外、存储层新加的包按契约的规则查，要放宽就先改这里。
+// pgtest 单列一条：它要 import pgx 与 pgstore，按契约的规则查会报违规；它也不用层 1。三个包以外、存储层新加的包
+// 按契约的规则查，要放宽就先改这里。
 //
-// 第 1 层的标准库白名单不套用到这里：仓储要用 context、sync、crypto/rand 这类包。cgo 的 C 不是标准库，照样要报。
+// 第 1 层的标准库白名单不套用到这里：仓储要用 context、sync、crypto/rand 这类包，夹具要用 testing。cgo 的 C 不是
+// 标准库，照样要报。
 func storeRule(pkg, imp string) rule {
-	if (isStd(imp) && imp != "C") || inLayer1(imp) || imp == pkgStore {
+	std := isStd(imp) && imp != "C"
+	if pkg == pkgPgtest {
+		if std || imp == pkgStore || imp == pkgPgstore || under(imp, pgxV5) {
+			return ""
+		}
+		return rulePgtest
+	}
+	if std || inLayer1(imp) || imp == pkgStore {
 		return ""
 	}
 	switch pkg {
@@ -467,5 +491,5 @@ func storeRule(pkg, imp string) rule {
 // pgDriver 报告 imp 是不是 pgstore 能用的第三方包：gorm.io 下的包，以及 pgx v5 和它下面的包。按整段比对，
 // github.com/jackc/pgx/v4 与 github.com/jackc/pgx/v5x 都不算。
 func pgDriver(imp string) bool {
-	return strings.HasPrefix(imp, "gorm.io/") || under(imp, "github.com/jackc/pgx/v5")
+	return strings.HasPrefix(imp, "gorm.io/") || under(imp, pgxV5)
 }

@@ -267,8 +267,8 @@ func Test总检查接上了每一项(t *testing.T) {
 	})
 }
 
-// 存储层的两条规则（第 2 层计划任务 2）各有正反例。两条都是白名单，照计划「包与文件」表；第 1 层的标准库
-// 白名单不套用到这里。
+// 存储层的三条规则（第 2 层计划任务 2，以及修补计划任务 U4 的 pgtest）各有正反例。三条都是白名单，照计划「包与文件」
+// 表；第 1 层的标准库白名单不套用到这里。
 func Test存储层的依赖规则(t *testing.T) {
 	thirdParty := "github.com/google/btree"
 	storex := "github.com/lober/lober/internal/storex"
@@ -301,6 +301,21 @@ func Test存储层的依赖规则(t *testing.T) {
 			importing("github.com/lib/pq", "github.com/jackc/pgx/v4", "github.com/jackc/pgx/v5x", thirdParty),
 			[]finding{{rulePgstore, "github.com/lib/pq"}, {rulePgstore, "github.com/jackc/pgx/v4"},
 				{rulePgstore, "github.com/jackc/pgx/v5x"}, {rulePgstore, thirdParty}}},
+
+		// 三、pgtest 是测试夹具：标准库（含 testing）、pgx v5、契约与 pgstore 以外一律不许。按契约的规则查，
+		// pgx 与 pgstore 都会被报出来。
+		{"pgtest import pgx v5、契约与 pgstore 不报", pkgPgtest, importing("context", "os", "testing",
+			pgxV5, pgxV5+"/pgconn", pkgStore, pkgPgstore), nil},
+		// 它经 pgstore 起仓储，用不着 gorm；它也不做判定，用不着层 1。
+		{"pgtest import gorm 与层 1 要报", pkgPgtest, importing("gorm.io/gorm", "gorm.io/driver/postgres", pkgModel),
+			[]finding{{rulePgtest, "gorm.io/gorm"}, {rulePgtest, "gorm.io/driver/postgres"}, {rulePgtest, pkgModel}}},
+		{"pgtest import 别的第三方模块与存储层新加的包要报", pkgPgtest,
+			importing("C", "github.com/lib/pq", "github.com/jackc/pgx/v4", "github.com/jackc/pgx/v5x", pkgStore+"/cache"),
+			[]finding{{rulePgtest, "C"}, {rulePgtest, "github.com/lib/pq"}, {rulePgtest, "github.com/jackc/pgx/v4"},
+				{rulePgtest, "github.com/jackc/pgx/v5x"}, {rulePgtest, pkgStore + "/cache"}}},
+		// 包名按整条路径比对：pgtest 下面新加的包不沾它的放宽，按契约的规则查。
+		{"pgtest 下面新加的包按契约的规则查", pkgPgtest + "/seed", importing(pgxV5, pkgPgstore),
+			[]finding{{ruleContract, pgxV5}, {ruleContract, pkgPgstore}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -326,12 +341,14 @@ func Test存储层总检查接上了每一项(t *testing.T) {
 			IgnoredGoFiles: []string{"x_linux.go", "x_windows_test.go"}},
 	}
 	got := checkStore(fsys, []string{".", "pgstore", "probeonly"}, pkgs)
-	// 依次是目录覆盖，再是各包的 import：store.go 按契约的规则报、pg.go 按 pgstore 的规则报，说明包名接对了；
-	// cgo 文件与被构建约束排除的文件也解析了，在本平台不编译的文件躲不过守卫。第 1 层对这两类文件本身的要求
-	// 不套用到存储层，所以不报它们。
+	// 依次是目录覆盖，再逐个包：先报被构建约束排除的文件（测试文件也算：*_linux_test.go 在 Windows 上静默不跑，契约测试
+	// 就零覆盖了），再是 import。store.go 按契约的规则报、pg.go 按 pgstore 的规则报，说明包名接对了；cgo 文件与被排除的
+	// 非测试文件也解析了，在本平台不编译的文件躲不过守卫。cgo 不另报：C 不算标准库，import 那一条已经挡住它。
 	assertFindings(t, got, "", []finding{
 		{ruleListed, "internal/store/probeonly"},
 		{ruleContract, pkgPgstore},
+		{ruleIgnored, "x_linux.go"},
+		{ruleIgnored, "x_windows_test.go"},
 		{rulePgstore, "github.com/lib/pq"},
 		{rulePgstore, "C"},
 		{rulePgstore, "github.com/jackc/pgx/v4"},

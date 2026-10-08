@@ -2,6 +2,7 @@ package pgstore
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"gorm.io/driver/postgres"
@@ -31,9 +32,28 @@ var models = []any{
 // batchSize 是一条语句最多写或查的行数：PostgreSQL 一条语句最多 65535 个参数，CSV 导入一次可能有几千台主机。
 const batchSize = 1000
 
-// Open 连上 dsn 指的库，对本层的全部行类型跑 AutoMigrate，再做表结构断言（见包说明）。断言不过就关闭连接，返回的
-// 错误逐条写出差在哪里、该怎么改。连接池的大小用 database/sql 的默认值，由装配点按部署调整。
-func Open(ctx context.Context, dsn string) (*Store, error) {
+// Option 是 Open 的一项可选设置，由装配点按部署从配置读出来传入；不传的都用默认值。同一项传了几次，后传的为准。
+type Option func(*options)
+
+// options 汇总 Open 的可选设置，零值就是全部取默认值。
+type options struct {
+	maxConns int // 连接池的连接上限，不大于 0 表示不设上限
+}
+
+// WithMaxConns 把连接池的连接上限设为 n（database/sql 的 SetMaxOpenConns），n 不大于 0 表示不设上限。不传时用
+// database/sql 的默认值，也是不设上限：第 7 层大批主机同时回报时，连接数可能撑满库的 max_connections。
+func WithMaxConns(n int) Option {
+	return func(o *options) { o.maxConns = n }
+}
+
+// Open 连上 dsn 指的库，按 opts 设好连接池，对本层的全部行类型跑 AutoMigrate，再做表结构断言（见包说明）。断言不过
+// 就关闭连接，返回的错误逐条写出差在哪里、该怎么改。连接池的上限由装配点从配置读出来、经 WithMaxConns 传入，不传就
+// 用 database/sql 的默认值。
+func Open(ctx context.Context, dsn string, opts ...Option) (*Store, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger:                 logger.Discard, // 调用日志是第 5 层的切面，这里不另记
 		SkipDefaultTransaction: true,           // 写操作都显式开事务，单条语句不必再包一层
@@ -43,19 +63,20 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		return nil, fmt.Errorf("pgstore：连接数据库：%w", err)
 	}
 	s := &Store{db: db}
-	if err := s.start(ctx); err != nil {
+	if err := s.start(ctx, o); err != nil {
 		s.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-// start 确认连得上，建表，再断言表结构。
-func (s *Store) start(ctx context.Context) error {
+// start 按 o 设好连接池，确认连得上，建表，再断言表结构。
+func (s *Store) start(ctx context.Context, o options) error {
 	sqlDB, err := s.db.DB()
 	if err != nil {
 		return fmt.Errorf("pgstore：取连接池：%w", err)
 	}
+	sqlDB.SetMaxOpenConns(o.maxConns) // 在用到第一个连接之前设，建表与断言时也不超过上限
 	if err := sqlDB.PingContext(ctx); err != nil {
 		return fmt.Errorf("pgstore：连接数据库：%w", err)
 	}
@@ -83,8 +104,12 @@ func (s *Store) Close() error {
 
 // write 在一个事务里执行 fn：fn 返回 nil 才提交，否则回滚，一次写要么全做、要么全不做（spec §6.2 第 8 条）。返回时
 // 事务已经结束（第 9 条）。
+//
+// 隔离级别在这里固定为 READ COMMITTED，不取连接的默认值（spec §6.4，见包说明）：DSN、ALTER DATABASE/ROLE … SET
+// default_transaction_isolation 与 postgresql.conf 都改得了默认值，改成 repeatable read 或 serializable 时，加锁之后
+// 等到的是 SQLSTATE 40001，不是对方提交之后的最新数据。全部写入都经这里开事务，所以只此一处。
 func (s *Store) write(ctx context.Context, fn func(tx *gorm.DB) error) error {
-	return s.db.WithContext(ctx).Transaction(fn)
+	return s.db.WithContext(ctx).Transaction(fn, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 }
 
 // read 是不开事务的查询。
