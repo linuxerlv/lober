@@ -277,6 +277,11 @@ func TestCursor的编解码(t *testing.T) {
 		// 仓储给出的游标都存得下，藏着 NUL 的只能是伪造的：PostgreSQL 拿它查询会报编码错误
 		{"排序键里藏着 NUL", store.EncodeCursor("hosts", "SN\x00"), "hosts", []any{&sn}},
 		{"第二个排序键里藏着 NUL", store.EncodeCursor("isos", "Rocky", "a\x00"), "isos", []any{&name, &id}},
+		// 仓储给出的排序键没有 null，带 null 的只能是伪造的。json.Unmarshal 遇到 null 既不报错也不改目标值，不挡下的话
+		// 排序键停在初值上：审计与任务列表翻出空的一页、Next 为空，调用方以为翻到头了
+		{"整个排序键为 null", store.EncodeCursor("audit", nil), "audit", []any{&at}},
+		{"排序键全为 null", store.EncodeCursor("tasks", nil, nil), "tasks", []any{&at, &id}},
+		{"第二个排序键为 null", store.EncodeCursor("tasks", int64(300), nil), "tasks", []any{&at, &id}},
 	} {
 		wantInvalid(t, store.DecodeCursor(b.cursor, b.list, b.key...), b.name)
 	}

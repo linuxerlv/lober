@@ -28,7 +28,9 @@ var duplicateFields = map[string]string{
 // translate 把一次写入的数据库错误翻成契约的错误。只翻认得的约束，认不出的原样返回，不猜：
 //
 //   - 23505（唯一约束）：按约束名翻成 DuplicateError。已有的那一个由 holder 查：撞上之后事务已经中止，要在事务外
-//     另查；holder 为 nil 或者没查到，原样返回。
+//     另查。查不到是因为占着它的那一方在这几毫秒里刚好变了（导入失败、删掉、改了名），约束是认得的，所以报
+//     ErrConflict：调用方重读之后再写，得到的必然是成功或 DuplicateError。holder 为 nil 表示这次写入本不该撞上它，
+//     撞上了就当认不出，原样返回。
 //   - 23503（外键）：期望值里的外键。del 为真（删除）时翻成 ErrReferenced：别的记录还引用着它；否则（插入、更新）
 //     翻成 ErrNotFound：要引用的记录不存在。
 //   - 23514（CHECK）：期望值里的 CHECK，翻成 ErrInvalid。入参在写入之前都查过，撞上的是漏查的前提。
@@ -48,6 +50,7 @@ func translate(err error, del bool, holder func(field string) string) error {
 		if existing := holder(field); existing != "" {
 			return &store.DuplicateError{Field: field, Existing: existing}
 		}
+		return errorf(store.ErrConflict, "撞上了 %s，再查时占着这个 %s 的那一方已经变了：重读之后再判断", pe.ConstraintName, field)
 	case codeForeign:
 		if !knownConstraint(pe.ConstraintName, true) {
 			return err

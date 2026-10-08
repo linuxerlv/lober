@@ -18,7 +18,8 @@ var (
 	// ErrNotFound：按键找不到。
 	ErrNotFound = errors.New("store：找不到")
 	// ErrConflict：Rev 或期望的状态对不上，或者已有一个未审批的版本又要新开一个。调用方重读之后再判断
-	// （spec §6.2 第 4 条）。
+	// （spec §6.2 第 4 条）。还有一种：写入撞上了名字或 SHA256 的唯一约束，再查时占着它的那一方刚好变了（导入失败、
+	// 删掉、改了名），报不出是谁；重读之后再写，得到的必然是成功或 DuplicateError。
 	ErrConflict = errors.New("store：Rev 或状态对不上，重读之后再判断")
 	// ErrDuplicate：唯一键撞了，总是包在 DuplicateError 里。
 	ErrDuplicate = errors.New("store：唯一键重复")

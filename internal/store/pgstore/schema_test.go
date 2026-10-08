@@ -141,6 +141,40 @@ func Test主键的列换了顺序被查出来并拒绝启动(t *testing.T) {
 		[]string{"ALTER TABLE task_events DROP CONSTRAINT task_events_pkey", "ALTER TABLE task_events ADD PRIMARY KEY (task_id, seq)"})
 }
 
+// 主键还要比名字：translate 按 duplicateFields 里登记的 hosts_pkey 认出 SN 撞车。主键被手工改了名，列照旧，Open 要是照样
+// 通过，撞上已登记的 SN 就只报出原样的 23505，不是 DuplicateError。AutoMigrate 不改已有约束的名字，重新 Open 要拒绝启动，
+// 并写明怎么改回来。
+func Test主键改了名被查出来并拒绝启动(t *testing.T) {
+	dsn := newSchema(t)
+	s := openStore(t, dsn)
+	execAll(t, s, `ALTER TABLE hosts RENAME CONSTRAINT hosts_pkey TO hosts_sn_key`)
+	wantMismatches(t, mismatchesOf(t, s, tables), "hosts 主键")
+	wantRefused(t, dsn, []string{"hosts 主键", "hosts_sn_key", "应为 hosts_pkey"},
+		[]string{"ALTER TABLE hosts RENAME CONSTRAINT hosts_sn_key TO hosts_pkey"})
+}
+
+// models 里的行类型与 tables 的期望值要一一对应（open.go 的 models 注释）：AutoMigrate 按 models 建表，断言只查 tables 列出的
+// 表。往 models 里加了行类型却没登记期望值，那张表的主键、索引、外键与 CHECK 就都不在断言的范围里，AutoMigrate 的两个盲区
+// 又没人守了；反过来，tables 里多出一张 models 没有的表，Open 建不出它，断言只会报它缺了主键。第 4、5 层还要加表。
+func Test行类型与表结构的期望值一一对应(t *testing.T) {
+	var fromModels, fromTables []string
+	for _, m := range models {
+		named, ok := m.(interface{ TableName() string })
+		if !ok {
+			t.Fatalf("行类型 %T 没有 TableName：表名要显式写出，不随 GORM 的命名规则变", m)
+		}
+		fromModels = append(fromModels, named.TableName())
+	}
+	for _, tb := range tables {
+		fromTables = append(fromTables, tb.name)
+	}
+	slices.Sort(fromModels)
+	slices.Sort(fromTables)
+	if !slices.Equal(fromModels, fromTables) {
+		t.Fatalf("models 的表是 %q，tables 的期望值是 %q：两边要一一对应", fromModels, fromTables)
+	}
+}
+
 func Test改掉CHECK被查出来并拒绝启动(t *testing.T) {
 	dsn := newSchema(t)
 	s := openStore(t, dsn)
@@ -397,7 +431,11 @@ func Test数据库错误的翻译(t *testing.T) {
 		{"SHA256 撞了", pg("23505", "idx_isos_sha256"), false, holder, store.ErrDuplicate, "sha256"},
 		{"hook 的名字撞了", pg("23505", "idx_hooks_name_key"), false, holder, store.ErrDuplicate, "name"},
 		{"模板的名字撞了", pg("23505", "idx_templates_name_key"), false, holder, store.ErrDuplicate, "name"},
-		{"查不到已有的那一个，原样返回", pg("23505", "idx_isos_sha256"), false, func(string) string { return "" }, nil, ""},
+		// 约束认得，只是占着它的那一方在事务外查的时候刚好变了（导入失败、删掉、改了名）：重读之后必然是成功或
+		// DuplicateError，所以报 ErrConflict，不报原样的数据库错误
+		{"查不到占着 SHA256 的那一个报 ErrConflict", pg("23505", "idx_isos_sha256"), false, func(string) string { return "" }, store.ErrConflict, ""},
+		{"查不到占着名字的那一个报 ErrConflict", pg("23505", "idx_templates_name_key"), false, func(string) string { return "" }, store.ErrConflict, ""},
+		{"没给 holder 的写入撞上认得的唯一约束，原样返回", pg("23505", "hosts_pkey"), false, nil, nil, ""},
 		{"认不出的唯一约束原样返回", pg("23505", "isos_pkey"), false, holder, nil, ""},
 		{"删除时外键报 ErrReferenced", pg("23503", "fk_hook_versions_hook"), true, nil, store.ErrReferenced, ""},
 		{"写入时外键报 ErrNotFound", pg("23503", "fk_template_hook_refs_template"), false, nil, store.ErrNotFound, ""},

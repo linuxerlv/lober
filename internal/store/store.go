@@ -45,8 +45,10 @@ type ISOs interface {
 	CreateISO(ctx context.Context, iso model.ISO, a Audit) (model.ISO, error)
 	// UpdateISO 是第 4 层导入用的系统更新，不审计：可以改 Version、Arch、State、SHA256、Artifacts、Offers；
 	// 改 Family、Series、Name 报 ErrInvalid。要置为 ready 时必须通过 ISO.Validate，否则报
-	// ProblemsError(ErrInvalid)；不能经它置为 deprecated。SHA256 撞上另一个不是导入失败的 ISO，报
-	// DuplicateError，Existing 是对方的 ID（C4）。
+	// ProblemsError(ErrInvalid)；不能经它置为 deprecated。SHA256 只能为空串，或是 64 位小写十六进制（SHA-256 摘要
+	// 的规范写法，大写的不收），不论置为什么状态都查，否则报 ErrInvalid：C4 按它去重，同一份内容写成大写就成了另一份。
+	// SHA256 撞上另一个不是导入失败的 ISO，报 DuplicateError，Existing 是对方的 ID（C4）；对方恰好在这期间导入失败
+	// 或被删掉、报不出是谁时，报 ErrConflict，重读之后再更新。
 	UpdateISO(ctx context.Context, iso model.ISO) (model.ISO, error)
 	// DeprecateISO 只能把 ready 改成 deprecated，其他状态报 ErrConflict。
 	DeprecateISO(ctx context.Context, id string, rev int64, a Audit) error
@@ -64,8 +66,8 @@ type ISOs interface {
 type Hooks interface {
 	// CreateHook 建一个新身份，加上版本 1 的草稿；入参不带 ID 与版本。名字按 model.NormalizeName 规范化，
 	// 不合法或用了保留前缀（name_reserved，C12）报 ProblemsError(ErrInvalid)；key 被别的身份占了报
-	// DuplicateError。说明与每份实现的正文都要是可存文本，否则报 ProblemsError(ErrInvalid)，问题是
-	// text_not_storable。
+	// DuplicateError，占着它的身份恰好在这期间改了名或被删掉、报不出是谁时，报 ErrConflict，重读之后再写。说明与
+	// 每份实现的正文都要是可存文本，否则报 ProblemsError(ErrInvalid)，问题是 text_not_storable。
 	CreateHook(ctx context.Context, h model.Hook) (model.Hook, error)
 	// SaveHookDraft 保存草稿。只能改草稿，否则报 ErrImmutable；Name 必须等于身份现在的名字，否则报
 	// ErrInvalid（改名用 RenameHook）；Rev 对不上报 ErrConflict。
@@ -98,6 +100,8 @@ type Hooks interface {
 	// 不审计：同一个 ID 与版本不存在就写入；已存在并且内容相同，什么都不做；内容不同报 ErrBuiltinMismatch；
 	// 名字被别的身份占了，报 DuplicateError。名字必须带保留前缀 model.ReservedNamePrefix（C12），不带报 ErrInvalid。
 	// 名字随身份定下：身份已在库里时，以后的版本不能换名，换了名同样报 ErrBuiltinMismatch；要改名只能换一个新 ID。
+	// 两次同时装载同一个版本时，后到的一次等先到的提交，内容相同同样什么都不做。占着名字的身份或要装载的身份恰好在
+	// 这期间变了时报 ErrConflict（规则同 CreateHook），由装配点重试；装配点把它当作装载失败，程序就会拒绝启动。
 	EnsureBuiltinHook(ctx context.Context, h model.Hook) error
 }
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"cmp"
 	"crypto/rand"
 	"encoding/base32"
@@ -168,7 +169,9 @@ func EncodeCursor(list string, key ...any) string {
 }
 
 // DecodeCursor 把 EncodeCursor 给出的游标解回排序键，key 是各项的指针，个数与类型都要与编的时候相同，否则报 ErrInvalid。
-// 解出的串要存得下：仓储给出的游标都是，藏着 NUL 的只能是伪造的，拿去查询还会让 PostgreSQL 报编码错误。
+// 解出的串要存得下：仓储给出的游标都是，藏着 NUL 的只能是伪造的，拿去查询还会让 PostgreSQL 报编码错误。排序键为 null
+// 的同样只能是伪造的，也报 ErrInvalid：json.Unmarshal 遇到 null 既不报错也不改目标值，收下的话排序键停在初值上，审计与
+// 任务列表翻出空的一页、Next 为空，调用方以为翻到头了，别的列表则悄悄从头翻起。
 func DecodeCursor(cursor, list string, key ...any) error {
 	bad := invalidf("游标 %q 不是这个列表上一页给出的 Next", cursor)
 	b, err := base64.RawURLEncoding.DecodeString(cursor)
@@ -181,7 +184,7 @@ func DecodeCursor(cursor, list string, key ...any) error {
 		return bad
 	}
 	for i, k := range key {
-		if json.Unmarshal(parts[i+1], k) != nil {
+		if string(bytes.TrimSpace(parts[i+1])) == "null" || json.Unmarshal(parts[i+1], k) != nil {
 			return bad
 		}
 		if s, ok := k.(*string); ok && !model.StorableText(*s) {

@@ -13,7 +13,9 @@ import (
 // Test契约审计 是审计这一组（spec §6.2 第 8 条、§7.2 第 2 条）：要审计的方法与审计写在同一个事务里，以及审计的查询。
 // 这里覆盖主机与 ISO 的方法；hook、模板与任务的方法由它们各自的分组覆盖。
 func Test契约审计(t *testing.T) {
+	// 四项检查各是一组，组本身不开仓储：也并行，各组的用例才与 runCases 的一起跑，不必一组等一组
 	t.Run("零值审计报 ErrAuditRequired，什么都不写", func(t *testing.T) {
+		t.Parallel()
 		eachAudited(t, func(t *testing.T, s *Store, call auditedCall) {
 			before := snapshot(t, s)
 			_, err := call(store.Audit{})
@@ -24,6 +26,7 @@ func Test契约审计(t *testing.T) {
 		})
 	})
 	t.Run("审计不合法报 ErrInvalid，什么都不写", func(t *testing.T) {
+		t.Parallel()
 		eachAudited(t, func(t *testing.T, s *Store, call auditedCall) {
 			before := snapshot(t, s)
 			for _, a := range []store.Audit{
@@ -40,6 +43,7 @@ func Test契约审计(t *testing.T) {
 		})
 	})
 	t.Run("审计写失败时动作也不落库", func(t *testing.T) {
+		t.Parallel()
 		eachAudited(t, func(t *testing.T, s *Store, call auditedCall) {
 			before := snapshot(t, s)
 			_, err := call(store.Audit{Actor: faultActor, Action: "test.fault", At: at0})
@@ -59,6 +63,7 @@ func Test契约审计(t *testing.T) {
 		})
 	})
 	t.Run("成功时每个对象写一条审计，对象由仓储填", func(t *testing.T) {
+		t.Parallel()
 		eachAudited(t, func(t *testing.T, s *Store, call auditedCall) {
 			before := auditEntries(t, s)
 			a := store.Audit{Actor: "张三", Action: "test.audited", Detail: "理由：换机房", At: at0 + 1}
@@ -83,6 +88,7 @@ func Test契约审计(t *testing.T) {
 		{"ListAudit 新的在前，各种过滤都对", auditListFilters},
 		{"ListAudit 翻页与一次全取相同，翻页中途写的不插进后面的页", auditListPaging},
 		{"ListAudit 的查询不合规则报 ErrInvalid", auditListInvalid},
+		{"ListAudit 的 Limit 为 0 时每页 100 条", auditListDefaultLimit},
 	})
 }
 
@@ -145,10 +151,11 @@ var auditedOps = []struct {
 	}},
 }
 
-// eachAudited 给每个要审计的方法 openContract 一个仓储、备好记录，再交给 check。
+// eachAudited 给每个要审计的方法 openContract 一个仓储、备好记录，再交给 check。各个方法并行跑，同 runCases。
 func eachAudited(t *testing.T, check func(t *testing.T, s *Store, call auditedCall)) {
 	for _, op := range auditedOps {
 		t.Run(op.name, func(t *testing.T) {
+			t.Parallel()
 			s := openContract(t)
 			check(t, s, op.prepare(t, s))
 		})
@@ -264,6 +271,15 @@ func auditListFilters(t *testing.T, s *Store) {
 		c.q.Limit = 1 // 一条一页：翻页时过滤也要对
 		wantItems(t, slices.Concat(auditPages(t, s, c.q)...), want, c.name)
 	}
+	// 存不下的过滤条件谁都不是（store 的包说明）：当作没有，得到空的一页，不报数据库的编码错误
+	for _, bad := range []string{"\x00", "\xff"} {
+		for _, q := range []store.AuditQuery{
+			{TargetKind: "host" + bad}, {TargetID: "SN-1" + bad}, {Actor: "alice" + bad}, {Action: "host.create" + bad},
+			{Actor: "alice", TargetKind: bad},
+		} {
+			wantItems(t, slices.Concat(auditPages(t, s, q)...), nil, fmt.Sprintf("ListAudit(%#v)", q))
+		}
+	}
 }
 
 func auditListPaging(t *testing.T, s *Store) {
@@ -292,9 +308,22 @@ func auditListPaging(t *testing.T, s *Store) {
 	wantItems(t, slices.Concat(first.Items, rest), whole.Items, "翻页中途写了新审计")
 }
 
+func auditListDefaultLimit(t *testing.T, s *Store) {
+	var in []model.Host
+	for i := range defaultPageSize + 1 {
+		in = append(in, model.Host{SN: fmt.Sprintf("SN-%03d", i)})
+	}
+	mustImport(t, s, in) // 每台一条审计
+	wantDefaultLimit(t, auditEntries(t, s), func(cursor string) (store.Page[store.AuditEntry], error) {
+		return s.ListAudit(t.Context(), store.AuditQuery{Cursor: cursor})
+	})
+}
+
 func auditListInvalid(t *testing.T, s *Store) {
 	mustCreateHost(t, s, fullHost("SN-1"))
-	for _, q := range []store.AuditQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"}} {
+	// 排序键为 null 的游标是伪造的：收下的话 id < 0，翻出空的一页、Next 为空，调用方以为翻到头了
+	for _, q := range []store.AuditQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"},
+		{Cursor: store.EncodeCursor("audit", nil)}} {
 		_, err := s.ListAudit(t.Context(), q)
 		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("Limit %d、Cursor %q", q.Limit, q.Cursor))
 	}

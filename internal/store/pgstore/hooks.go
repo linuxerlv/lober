@@ -318,7 +318,12 @@ func (s *Store) ListHooks(ctx context.Context, q store.HookQuery) (store.Page[mo
 }
 
 // EnsureBuiltinHook 见 store.Hooks。比的是版本的全部字段，名字按身份上的，Rev 不比：内置的版本写入之后不会再变。名字
-// 走内置装载的入口（store.CheckBuiltinHook），必须带保留前缀；名字随身份定下，见 ensureBuiltinIdent。
+// 走内置装载的入口（store.CheckBuiltinHook），必须带保留前缀；名字随身份定下，见 ensureBuiltinIdent。名字被别的身份
+// 占着由 ensureBuiltinIdent 在事务里查出来，报 DuplicateError：装载撞不上名字的唯一索引，translate 不用 holder。
+//
+// 先确定并锁住身份（ensureBuiltinIdent），锁住之后才查版本：两路同时装载同一个版本时，后到的一路等先到的一路提交，看得到
+// 它写下的版本，内容相同就什么都不做。先查版本再锁身份的话，后到的一路看不到对方还没提交的版本，会去建同一个身份或写
+// 同一个版本，撞上主键。这个次序只在 READ COMMITTED 下成立（见 write）。
 func (s *Store) EnsureBuiltinHook(ctx context.Context, h model.Hook) error {
 	key, err := store.CheckBuiltinHook(h)
 	if err != nil {
@@ -331,26 +336,26 @@ func (s *Store) EnsureBuiltinHook(ctx context.Context, h model.Hook) error {
 		return err
 	}
 	err = s.write(ctx, func(tx *gorm.DB) error {
+		if err := hookTables.ensureBuiltinIdent(tx, h.ID, h.Version, h.Name, key); err != nil {
+			return err
+		}
 		old, ok, err := hookVersionAt(tx, h.Key())
 		switch {
 		case err != nil:
 			return err
-		case ok:
-			cur, err := old.hook()
-			if err != nil {
-				return err
-			}
-			if !reflect.DeepEqual(cur, h) {
-				return errorf(store.ErrBuiltinMismatch, "内置的 hook %s 与库里的同一版本不同：改了内置内容就要升版本号", id)
-			}
-			return nil
+		case !ok:
+			return tx.Omit(clause.Associations).Create(&row).Error
 		}
-		if err := hookTables.ensureBuiltinIdent(tx, h.ID, h.Version, h.Name, key); err != nil {
+		cur, err := old.hook()
+		if err != nil {
 			return err
 		}
-		return tx.Omit(clause.Associations).Create(&row).Error
+		if !reflect.DeepEqual(cur, h) {
+			return errorf(store.ErrBuiltinMismatch, "内置的 hook %s 与库里的同一版本不同：改了内置内容就要升版本号", id)
+		}
+		return nil
 	})
-	return translate(err, false, s.nameHolder(ctx, hookTables, key))
+	return translate(err, false, nil)
 }
 
 // 下面是 hook 版本的读取，都连上身份表带出现在的名字（hookTables.joined）。
@@ -498,17 +503,37 @@ func (v versioning) dropIfEmpty(tx *gorm.DB, id string) error {
 	return tx.Table(v.idents).Where("id = ?", id).Delete(&ident{}).Error
 }
 
-// ensureBuiltinIdent 确认内置版本 version 所属的身份：不存在就建一个内置的身份，名字被别的身份占了由唯一索引报出来（用户
-// 的身份用不了保留前缀，占着它的只会是另一个内置身份）；已存在的要是内置的、名字也相同，否则程序自带的内容与库里的对不上
-// （ErrBuiltinMismatch）：名字在身份上，各版本共用，随身份定下，以后的版本不能换名，要改名只能换一个新 ID。身份上
-// 分配过的最大版本号随装载的版本更新。
+// ensureBuiltinIdent 确认内置版本 version 所属的身份，并给它加写锁，直到事务结束。
+//
+// 先插入一个内置的身份，撞上任何一个唯一约束就什么都不做：ON CONFLICT DO NOTHING 不带冲突目标，主键与名字的唯一索引
+// 都当仲裁。别的事务刚插入同一个 ID 或同一个名字、还没提交时，这一步等它结束：对方提交了就什么都不做，回滚了就照常插入。
+// 只拿主键当仲裁（ON CONFLICT (id)）不够：两路同时首次装载同一个新身份，都在对方插入之前查过冲突的话，后到的一路在名字
+// 的索引上等先到的提交，之后直接报 23505，在事务外查到的占着名字的身份正是它自己要装载的，只能报出 DuplicateError。
+//
+// 再锁住身份。锁不到说明插入时撞上的是别的身份占着的名字（用户的身份用不了保留前缀，占着它的通常是另一个内置身份）：在
+// 事务里按名字的 key 查出那个身份，报 DuplicateError；查不到说明它恰好改了名或删掉了，或者这个 ID 的身份恰好删掉了，报
+// ErrConflict，重读之后再装。锁到了就比对：要是内置的、名字也相同，否则程序自带的内容与库里的对不上
+// （ErrBuiltinMismatch）：名字在身份上，各版本共用，随身份定下，以后的版本不能换名，要改名只能换一个新 ID。身份上分配
+// 过的最大版本号随装载的版本更新。
 func (v versioning) ensureBuiltinIdent(tx *gorm.DB, id string, version int, name, key string) error {
+	err := tx.Table(v.idents).Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&ident{ID: id, Name: name, NameKey: key, Builtin: true, LastVersion: version}).Error
+	if err != nil {
+		return err
+	}
 	x, ok, err := v.lockIdent(tx, id)
 	switch {
 	case err != nil:
 		return err
 	case !ok:
-		return v.createIdent(tx, ident{ID: id, Name: name, NameKey: key, Builtin: true, LastVersion: version})
+		holder, err := v.nameOwner(tx, key)
+		switch {
+		case err != nil:
+			return err
+		case holder == "":
+			return errorf(store.ErrConflict, "装载内置的 %s %s 时撞上的身份已经变了：重读之后再判断", v.kind, id)
+		}
+		return &store.DuplicateError{Field: "name", Existing: holder}
 	case !x.Builtin || x.Name != name:
 		return errorf(store.ErrBuiltinMismatch, "%s %s 在库里名为 %q（内置：%v），程序自带的是内置的 %q", v.kind, id, x.Name, x.Builtin, name)
 	case version > x.LastVersion:
@@ -538,15 +563,24 @@ func (s *Store) rename(ctx context.Context, v versioning, id, name, key string, 
 }
 
 // nameHolder 是 translate 要的 holder：撞上名字的唯一索引之后事务已经中止，在事务外查出占着 key 的身份。查不到（对方
-// 刚好又删掉了）就返回空串，translate 原样返回撞上的数据库错误。
+// 刚好改了名，或者删掉了最后一个版本、身份随之删掉）或查失败就返回空串，translate 报 ErrConflict。
 func (s *Store) nameHolder(ctx context.Context, v versioning, key string) func(string) string {
 	return func(string) string {
-		var ids []string
-		if err := s.read(ctx).Table(v.idents).Where("name_key = ?", key).Limit(1).Pluck("id", &ids).Error; err != nil || len(ids) == 0 {
+		id, err := v.nameOwner(s.read(ctx), key)
+		if err != nil {
 			return ""
 		}
-		return ids[0]
+		return id
 	}
+}
+
+// nameOwner 在 db 里查出名字的 key 为 key 的身份，没有就返回空串。
+func (v versioning) nameOwner(db *gorm.DB, key string) (string, error) {
+	var ids []string
+	if err := db.Table(v.idents).Where("name_key = ?", key).Limit(1).Pluck("id", &ids).Error; err != nil || len(ids) == 0 {
+		return "", err
+	}
+	return ids[0], nil
 }
 
 // listQuery 查 ListHooks 与 ListTemplates 的入参，给出取一页的查询（多取一条）与条数。每个身份一项：默认是最新的版本，

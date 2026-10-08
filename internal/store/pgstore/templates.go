@@ -362,8 +362,8 @@ func (s *Store) ListTemplates(ctx context.Context, q store.TemplateQuery) (store
 	})
 }
 
-// EnsureBuiltinTemplate 见 store.Templates，规则同 EnsureBuiltinHook：名字必须带保留前缀，随身份定下。内置模板不是派生
-// 来的，带了派生来源报 ErrInvalid（store.CheckBuiltinTemplate）。
+// EnsureBuiltinTemplate 见 store.Templates，规则同 EnsureBuiltinHook：名字必须带保留前缀，随身份定下；先确定并锁住身份，
+// 锁住之后才查版本。内置模板不是派生来的，带了派生来源报 ErrInvalid（store.CheckBuiltinTemplate）。
 func (s *Store) EnsureBuiltinTemplate(ctx context.Context, tpl model.Template) error {
 	key, err := store.CheckBuiltinTemplate(tpl)
 	if err != nil {
@@ -376,26 +376,26 @@ func (s *Store) EnsureBuiltinTemplate(ctx context.Context, tpl model.Template) e
 		return err
 	}
 	err = s.write(ctx, func(tx *gorm.DB) error {
+		if err := templateTables.ensureBuiltinIdent(tx, tpl.ID, tpl.Version, tpl.Name, key); err != nil {
+			return err
+		}
 		old, ok, err := templateVersionAt(tx, model.TemplateKey{ID: tpl.ID, Version: tpl.Version})
 		switch {
 		case err != nil:
 			return err
-		case ok:
-			cur, err := old.template()
-			if err != nil {
-				return err
-			}
-			if !reflect.DeepEqual(cur, tpl) {
-				return errorf(store.ErrBuiltinMismatch, "内置的模板 %s 与库里的同一版本不同：改了内置内容就要升版本号", id)
-			}
-			return nil
+		case !ok:
+			return insertTemplateVersion(tx, row, refRows(tpl))
 		}
-		if err := templateTables.ensureBuiltinIdent(tx, tpl.ID, tpl.Version, tpl.Name, key); err != nil {
+		cur, err := old.template()
+		if err != nil {
 			return err
 		}
-		return insertTemplateVersion(tx, row, refRows(tpl))
+		if !reflect.DeepEqual(cur, tpl) {
+			return errorf(store.ErrBuiltinMismatch, "内置的模板 %s 与库里的同一版本不同：改了内置内容就要升版本号", id)
+		}
+		return nil
 	})
-	return translate(err, false, s.nameHolder(ctx, templateTables, key))
+	return translate(err, false, nil)
 }
 
 // 下面是模板版本的写入与读取，规则同 hook 的那几个函数。引用随版本一起写：保存模板的任何一个版本时，它引用了哪些 hook

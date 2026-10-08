@@ -42,7 +42,8 @@ func (s *Store) CreateISO(ctx context.Context, iso model.ISO, a store.Audit) (mo
 // ErrImmutable，改了族、系与名称报 ErrInvalid，置为 ready 的要过完整性判定，写进来的文本都要存得下。
 //
 // SHA256 先在事务里查有没有别的 ISO 占着（C4），好报出对方的 ID；两次更新同时写同一份内容时，部分唯一索引
-// idx_isos_sha256 兜底，撞上之后在事务外查出对方。
+// idx_isos_sha256 兜底，撞上之后在事务外查出对方。对方在这期间刚好导入失败或删掉了、查不到时报 ErrConflict
+// （translate）：重读之后再更新，得到的必然是成功或 DuplicateError。
 func (s *Store) UpdateISO(ctx context.Context, iso model.ISO) (model.ISO, error) {
 	if err := store.CheckISOUpdate(iso); err != nil {
 		return model.ISO{}, err
@@ -76,7 +77,7 @@ func (s *Store) UpdateISO(ctx context.Context, iso model.ISO) (model.ISO, error)
 	})
 	if err != nil {
 		return model.ISO{}, translate(err, false, func(string) string {
-			other, _ := sha256Holder(s.read(ctx), iso) // 查不到就原样返回撞上的数据库错误
+			other, _ := sha256Holder(s.read(ctx), iso) // 查不到（对方刚好导入失败或删掉了），translate 报 ErrConflict
 			return other
 		})
 	}

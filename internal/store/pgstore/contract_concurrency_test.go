@@ -1,10 +1,14 @@
 package pgstore
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -219,4 +223,245 @@ func concurrentSameKey(t *testing.T, s *Store) {
 	wantEqual(t, allEvents(t, s, id), []store.Event{{TaskID: id, Seq: 1, NewEvent: store.NewEvent{
 		At: at0, Kind: "signal.recv", Key: "sig-1", Fields: map[string]string{"by": strconv.Itoa(winner)},
 	}}}, "落库的事件")
+}
+
+// 下面几个测试要另开一个连接、让对方停在没提交的事务里（writeWhileHeld），用的是 pgstore_test.go 的 newSchema 与
+// openStore，不走 runCases：测锁等待的用例保持串行。
+
+// 写事务的隔离级别由 pgstore 开事务时指定为 READ COMMITTED，不取连接的默认值（spec §6.4）：加锁之后重读最新的数据靠的
+// 就是这一级。连接的默认值可以由 DSN、ALTER DATABASE/ROLE … SET default_transaction_isolation 或 postgresql.conf 改掉；
+// 运维为了「更安全」设成 repeatable read 或 serializable 时，FOR UPDATE 等到对方提交之后不再重读，而是报 SQLSTATE
+// 40001，契约里没有这一类，第 5、7 层只能当内部错误。这里在 DSN 上把连接的默认值设成 repeatable read，跑一次要等对方
+// 提交的写入：照样报 ErrConflict。
+func Test写事务不随连接默认的隔离级别变(t *testing.T) {
+	dsn, err := withRuntimeParam(newSchema(t), "default_transaction_isolation", "repeatable read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := openStore(t, dsn)
+	ctx := t.Context()
+	var level string
+	if err := s.db.WithContext(ctx).Raw(`SHOW default_transaction_isolation`).Row().Scan(&level); err != nil {
+		t.Fatalf("查连接默认的隔离级别：%v", err)
+	}
+	if level != "repeatable read" {
+		t.Fatalf("DSN 上的 default_transaction_isolation 没生效，连接默认的是 %q：这样就什么都没测到", level)
+	}
+	h, err := s.CreateHost(ctx, model.Host{SN: "SN-1", Arch: "x86_64", Firmware: "uefi"}, anAudit("host.create"))
+	must(t, err, "登记")
+	err = writeWhileHeld(t, dsn, `UPDATE hosts SET arch = 'aarch64', rev = rev + 1 WHERE sn = $1`, h.SN, func() error {
+		in := h
+		in.Firmware = "bios"
+		_, err := s.UpdateHost(ctx, in, anAudit("host.update"))
+		return err
+	})
+	wantIs(t, err, store.ErrConflict, fmt.Sprintf("对方提交之后 Rev 已是 %d，带着 %d 修改", h.Rev+1, h.Rev))
+	want := h
+	want.Arch, want.Rev = "aarch64", h.Rev+1
+	got, err := s.GetHost(ctx, h.SN)
+	must(t, err, "读回")
+	wantEqual(t, got, want, "库里应留着对方写下的")
+}
+
+// withRuntimeParam 给 DSN 加一个连接参数，写法同 withSearchPath：URL 形式加在查询参数里，key=value 形式接在末尾、值加
+// 单引号。出错时不带 DSN 原文，免得把口令打进测试输出。
+func withRuntimeParam(dsn, key, value string) (string, error) {
+	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
+		return dsn + " " + key + "='" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value) + "'", nil
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", errors.New("测试库的 DSN 不是合法的 URL（为免泄露口令，不打出原文）")
+	}
+	q := u.Query()
+	q.Set(key, value)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+// 两路同时装载同一份内置内容（spec §6.2 第 11 条）：先到的一路还没提交时，后到的一路要等它提交，再看到它写下的版本，
+// 内容相同就什么都不做、返回 nil（store.Hooks 的 EnsureBuiltinHook）。所以 EnsureBuiltin* 先确定身份（INSERT … ON
+// CONFLICT DO NOTHING 会等先到的一路提交），再锁住身份，锁住之后才查版本。要是先不加锁地查版本、查不到再锁身份，
+// 后到的一路看不到对方还没提交的版本：身份也是新的，就去建身份，撞上 hooks_pkey；身份已在，就等到锁之后直接写版本，
+// 撞上 hook_versions_pkey。两处都是没翻译的 23505，装配点只能拒绝启动。另开一个连接当先到的一路，照仓储的写法在没提交
+// 的事务里写下身份与版本；契约里的装载都是串行的，钉不住这一点。新的写法只在 READ COMMITTED 下成立：ON CONFLICT 与
+// FOR UPDATE 等到对方提交之后，在 repeatable read 下报的是 40001（见 Test写事务不随连接默认的隔离级别变）。
+//
+// writeWhileHeld 让先到的一路写下身份之后，后到的一路才开始；两路都在对方插入身份之前查过冲突的交错，见
+// Test同时首次装载同一个新身份两路都没看到对方。
+func Test同时装载同一份内置内容后到的等先到的提交之后什么都不做(t *testing.T) {
+	const id, name, key = "builtin-base", "lober:Base", "lober:base"
+	// 装载的内置版本都是最小的内容：版本行的各列好在 SQL 里照写
+	hook := func(version int) model.Hook {
+		return model.Hook{ID: id, Version: version, Name: name, State: model.VersionApproved, Author: "lober", Builtin: true, Rev: 1}
+	}
+	template := func(version int) model.Template {
+		return model.Template{ID: id, Version: version, Name: name, State: model.VersionApproved, Author: "lober", Builtin: true, Rev: 1}
+	}
+	kinds := []struct {
+		name   string
+		idents string
+		// insert 是版本表与列，values 是身份 ID 与版本号之后各列的值，与 hook、template 给出的内容相同
+		insert, values string
+		ensure         func(ctx context.Context, s *Store, version int) error
+		listed         func(ctx context.Context, s *Store) (any, error) // 身份 id 的全部版本
+		want           func(versions ...int) any                        // 只有这几个版本时 listed 应得到的
+	}{
+		{"hook", "hooks",
+			"hook_versions (hook_id, version, description, state, author, approver, builtin, params, timeout_sec, required, impls, rev)",
+			"'', 'approved', 'lober', '', true, 'null', 0, false, 'null', 1",
+			func(ctx context.Context, s *Store, version int) error { return s.EnsureBuiltinHook(ctx, hook(version)) },
+			func(ctx context.Context, s *Store) (any, error) {
+				vs, err := s.ListHookVersions(ctx, id)
+				return vs, err
+			},
+			func(versions ...int) any {
+				out := make([]model.Hook, len(versions))
+				for i, v := range versions {
+					out[i] = hook(v)
+				}
+				return out
+			}},
+		{"模板", "templates",
+			"template_versions (template_id, version, state, author, approver, builtin, derived_from, family, series, body, params, " +
+				"bindings, assembly, rev)",
+			"'approved', 'lober', '', true, 'null', '', 'null', '', 'null', 'null', 'null', 1",
+			func(ctx context.Context, s *Store, version int) error {
+				return s.EnsureBuiltinTemplate(ctx, template(version))
+			},
+			func(ctx context.Context, s *Store) (any, error) {
+				vs, err := s.ListTemplateVersions(ctx, id)
+				return vs, err
+			},
+			func(versions ...int) any {
+				out := make([]model.Template, len(versions))
+				for i, v := range versions {
+					out[i] = template(v)
+				}
+				return out
+			}},
+	}
+	for _, c := range []struct {
+		name    string
+		before  []int  // 先装好的版本
+		ident   string // 先到的一路对身份做的事，RETURNING id 给写版本用；%s 是身份表
+		version int    // 两路都装载的版本
+	}{
+		{"新身份", nil, `INSERT INTO %s (id, name, name_key, builtin, last_version) VALUES ($1, '` + name + `', '` + key +
+			`', true, 1) RETURNING id`, 1},
+		{"已有身份的新版本", []int{1}, `UPDATE %s SET last_version = 2 WHERE id = $1 RETURNING id`, 2},
+	} {
+		for _, k := range kinds {
+			t.Run(c.name+"："+k.name, func(t *testing.T) {
+				dsn := newSchema(t)
+				s := openStore(t, dsn)
+				ctx := t.Context()
+				for _, v := range c.before {
+					must(t, k.ensure(ctx, s, v), fmt.Sprintf("先装好版本 %d", v))
+				}
+				hold := fmt.Sprintf("WITH w AS ("+c.ident+") INSERT INTO %s SELECT id, %d, %s FROM w", k.idents, k.insert, c.version, k.values)
+				err := writeWhileHeld(t, dsn, hold, id, func() error { return k.ensure(ctx, s, c.version) })
+				must(t, err, fmt.Sprintf("先到的一路装好版本 %d 并提交之后，后到的一路装载同样的内容", c.version))
+				all := append(slices.Clone(c.before), c.version)
+				got, err := k.listed(ctx, s)
+				must(t, err, "列出版本")
+				if want := k.want(all...); !reflect.DeepEqual(got, want) {
+					t.Fatalf("库里应只有版本 %v，内容都是装载的：\n得到 %+v\n应为 %+v", all, got, want)
+				}
+				var idents, last int64
+				if err := s.db.WithContext(ctx).Raw("SELECT count(*), max(last_version) FROM "+k.idents).Row().Scan(&idents, &last); err != nil {
+					t.Fatalf("查身份：%v", err)
+				}
+				if idents != 1 || last != int64(c.version) {
+					t.Fatalf("应只有一个身份，分配过的最大版本号是 %d，得到 %d 个身份、%d", c.version, idents, last)
+				}
+			})
+		}
+	}
+}
+
+// 两路同时首次装载同一个新的内置身份，两条 INSERT 都在对方插入之前查过冲突（spec §6.2 第 11 条）：后到的一路照样要等
+// 先到的提交，之后什么都不做、返回 nil。插入身份只拿主键当仲裁（ON CONFLICT (id) DO NOTHING）时，后到的一路在名字的
+// 唯一索引 idx_*_name_key 上等先到的提交，之后直接报 23505；在事务外查到的占着名字的身份正是它自己要装载的，报出
+// DuplicateError{name, 自己的 ID}，装配点只能拒绝启动。所以插入身份的冲突不带目标，主键与名字的唯一索引都当仲裁。
+//
+// 这种交错靠两条 INSERT 撞在一起，排不出来，只能靠调度碰：用 together(2) 跑 rounds 轮，每轮一个新的 ID。本机实测旧写法
+// 每轮出错的占 15% 到 30%，按 15% 算，200 轮一次都不出错的概率也小于 1e-14。这个测试本身在测并发，保持串行。
+//
+// 不带目标的 DO NOTHING 不能把该报的错也吞掉：两个不同的内置 ID 同时用同一个名字，恰好一路成功，另一路报
+// DuplicateError，Existing 是成功的那一路，它的身份也不建。
+func Test同时首次装载同一个新身份两路都没看到对方(t *testing.T) {
+	const rounds = 200
+	for _, k := range []struct {
+		name             string
+		idents, versions string
+		ensure           func(ctx context.Context, s *Store, id, name string) error
+	}{
+		{"hook", "hooks", "hook_versions", func(ctx context.Context, s *Store, id, name string) error {
+			return s.EnsureBuiltinHook(ctx, model.Hook{ID: id, Version: 1, Name: name, State: model.VersionApproved,
+				Author: "lober", Builtin: true, Rev: 1})
+		}},
+		{"模板", "templates", "template_versions", func(ctx context.Context, s *Store, id, name string) error {
+			return s.EnsureBuiltinTemplate(ctx, model.Template{ID: id, Version: 1, Name: name, State: model.VersionApproved,
+				Author: "lober", Builtin: true, Rev: 1})
+		}},
+	} {
+		// race 跑 rounds 轮：第 r 轮两路同时装载，各自的 ID 是 ids(r) 里的，名字都是 lober:Race-r。返回每轮两路的结果
+		race := func(t *testing.T, s *Store, ids func(r int) [2]string) [][2]error {
+			ctx := t.Context()
+			out := make([][2]error, rounds)
+			for r := range out {
+				id, name := ids(r), fmt.Sprintf("lober:Race-%d", r)
+				together(2, func(i int) { out[r][i] = k.ensure(ctx, s, id[i], name) })
+			}
+			return out
+		}
+		// wantRows 要求身份表与版本表各有 n 行：每轮只建出一个身份、一个版本
+		wantRows := func(t *testing.T, s *Store, n int64) {
+			t.Helper()
+			var idents, versions int64
+			if err := s.db.WithContext(t.Context()).Raw("SELECT (SELECT count(*) FROM "+k.idents+"), (SELECT count(*) FROM "+
+				k.versions+")").Row().Scan(&idents, &versions); err != nil {
+				t.Fatalf("数身份与版本：%v", err)
+			}
+			if idents != n || versions != n {
+				t.Fatalf("应有 %d 个身份、%d 个版本，得到 %d 个身份、%d 个版本", n, n, idents, versions)
+			}
+		}
+
+		t.Run("同一个 ID："+k.name, func(t *testing.T) {
+			s := openStore(t, newSchema(t))
+			failed, first := 0, error(nil)
+			for _, errs := range race(t, s, func(r int) [2]string {
+				id := fmt.Sprintf("builtin-race-%d", r)
+				return [2]string{id, id}
+			}) {
+				if err := errors.Join(errs[:]...); err != nil {
+					failed++
+					if first == nil {
+						first = err
+					}
+				}
+			}
+			if failed > 0 {
+				t.Fatalf("%d 轮里有 %d 轮没有两路都返回 nil，第一个错误：%v", rounds, failed, first)
+			}
+			wantRows(t, s, rounds)
+		})
+
+		t.Run("不同 ID 同名："+k.name, func(t *testing.T) {
+			s := openStore(t, newSchema(t))
+			ids := func(r int) [2]string {
+				return [2]string{fmt.Sprintf("builtin-a-%d", r), fmt.Sprintf("builtin-b-%d", r)}
+			}
+			for r, errs := range race(t, s, ids) {
+				won := slices.Index(errs[:], nil)
+				if won < 0 || errs[1-won] == nil {
+					t.Fatalf("第 %d 轮应恰好一路成功，得到 %v；%v", r+1, errs[0], errs[1])
+				}
+				wantDuplicate(t, errs[1-won], "name", ids(r)[won], fmt.Sprintf("第 %d 轮没成功的那一路", r+1))
+			}
+			wantRows(t, s, rounds)
+		})
+	}
 }
