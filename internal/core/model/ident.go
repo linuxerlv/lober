@@ -85,12 +85,27 @@ func repeatsOneByte(sn string) bool {
 //
 // 返回的 error 是 Problem，代码为 name_invalid。Subject 留空：名称属于哪个对象
 // 只有调用方知道，由调用方填上。
+//
+// 保留前缀不在这里拦：用户的名字和内置内容的名字都走这条规则，前缀对两边的要求正好相反（用户不能用，内置的必须带），
+// 由调用方拿 key 问 NameReserved。
 func NormalizeName(raw string) (display, key string, err error) {
 	display = strings.TrimSpace(raw)
 	if reason := nameInvalidReason(display); reason != "" {
 		return "", "", NewProblem("name_invalid", Subject{}, reason)
 	}
 	return display, strings.ToLower(display), nil // 走到这里只剩 ASCII，ToLower 只会动 ASCII 字母
+}
+
+// ReservedNamePrefix 是只给内置内容用的名字前缀（spec C12）：用户新建、派生和改名时用了它就拒绝（name_reserved），
+// 内置内容的名字反过来必须带它。它和正文里系统部件的命名空间 {{lober:…}} 是同一个词，用户一看就知道是系统给的。
+// 写成规范化之后的 key 的样子（小写），NameReserved 拿它直接与 key 比。
+const ReservedNamePrefix = "lober:"
+
+// NameReserved 判断规范化后的 key（NormalizeName 返回的第二个值）是不是用了保留前缀。比较按 key（小写）做，所以
+// LOBER:x 也算；lober-base、lober 这类只是长得像的不算。判定只有这一份（spec §4.2）：仓储的用户入口与内置装载、
+// 第 5 层的预检都问它。
+func NameReserved(key string) bool {
+	return strings.HasPrefix(key, ReservedNamePrefix)
 }
 
 // nameInvalidReason 返回名称不合法的原因，取 codes.go 登记的 nameReason* 之一；合法时返回空串。

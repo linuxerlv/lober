@@ -28,23 +28,31 @@ const (
 // 位置，可空；Line、Col 是正文位置，从 1 起，列按 rune 计，不适用时为 0。
 //
 // 各处的写法如下，与修补计划 U6 的表一致（T9-1、C-4）；第 5、6 层按它解析，以后不要随手改。n 都从 1 起，
-// 是在列表里的位置；系的列表与参数名只出现在说明里，不进 Path，重名的声明、勾了同一组系的实现因此分得开。
+// 是在列表里的位置。参数声明和实现按位置写，即 param/<n>、impl/<n>，不写参数名，也不写系的列表：重名的声明、
+// 勾了同一组系的实现因此分得开。取值来源的字段键是例外，要带参数名（tpl/<参数名>、<插槽名>/<n>/<参数名>）。
 //   - 主机：Kind 为 host，ID 为 SN。主机整体的问题（未结束的任务、批内重复、平台冲突、SN 不是安全词、
 //     没登记）Path 为空；登记的架构、固件不合法时 Path 为 arch、firmware；属性的问题 Path 为属性键。
 //   - ISO：Kind 为 iso，ID 为 ISO 的 ID。状态不可用时 Path 为空；记录不合法时 Path 为 family、series、
 //     arch、version、name，提供的集合为 offers/<集合名>。
-//   - hook：ID 为「hook ID@版本」。整体的问题 Kind 为 hook、Path 为空；第 n 个参数声明 Kind 为 hook、
-//     Path 为 param/<n>；第 n 份实现 Kind 为 impl、Path 为 impl/<n>，正文位置另带行列。
-//   - 模板：ID 为「模板 ID@版本」。整体与正文的问题 Kind 为 template、Path 为空，正文位置另带行列；第 n 个
-//     参数声明 Path 为 param/<n>；模板参数的取值来源 Path 为 tpl/<参数名>（TemplateFieldKey）。插槽的问题
-//     Kind 为 slot、Path 为插槽名，出自正文的另带行列；插槽里第 n 个实例 Path 为 <插槽名>/<n>（InstancePath），
-//     实例参数的取值来源为 <插槽名>/<n>/<参数名>（InstanceFieldKey）。
+//   - hook：针对单个版本时 ID 为「hook ID@版本」。整体的问题 Kind 为 hook、Path 为空；第 n 个参数声明 Kind 为
+//     hook、Path 为 param/<n>；第 n 份实现 Kind 为 impl、Path 为 impl/<n>，正文位置另带行列。
+//   - 模板：针对单个版本时 ID 为「模板 ID@版本」。整体与正文的问题 Kind 为 template、Path 为空，正文位置另带行列；
+//     第 n 个参数声明 Kind 为 template、Path 为 param/<n>；模板参数的取值来源 Kind 为 template、Path 为
+//     tpl/<参数名>（TemplateFieldKey）。插槽的问题 Kind 为 slot、Path 为插槽名，出自正文的另带行列；插槽里第 n 个
+//     实例 Path 为 <插槽名>/<n>（InstancePath），实例参数的取值来源为 <插槽名>/<n>/<参数名>（InstanceFieldKey）。
+//   - hook 与模板的另外两种 ID，由仓储（internal/store）给出。针对整个身份的问题，ID 是身份 ID，不带 @版本：改名
+//     （RenameHook、RenameTemplate）时名称的问题是 {hook 或 template, 身份 ID}。新建与派生（CheckNewHook、
+//     CheckNewTemplate、DeriveTemplate）时身份还没有 ID，ID 为空，Kind 与 Path 照针对单个版本时的写法填：名称的
+//     问题是 {hook 或 template, 空}，第 n 份实现存不下的文本是 {impl, 空, impl/<n>}。
 //   - 参数求值的一格：Kind 为 param，ID 为主机 SN，Path 为字段键，写法同上面两种取值来源，同一格在激活与
-//     建任务时标在同一处。
+//     建任务时标在同一处。param_unknown_field 是例外：Path 原样照搬提交上来的键，不一定合字段键的写法。
 //   - 正文扫描：Kind 为 body，ID 与 Path 为空，只带行列；调用方换成正文所属的对象，保留行列。
 //
-// 只有调用方知道对象的，Subject 留空、由调用方填上：参数声明的校验、取值的解析与取子值、名称的规范化、
-// 审批人的校验。NormalizeSN 只给 Kind，SN 合法时另给 ID。
+// 只有调用方知道对象的，Subject 留空、由调用方填上：参数声明的校验、取值的解析与取子值、名称的规范化
+// （NormalizeName 的 name_invalid）、审批人的校验。保留前缀的判定 NameReserved 只回答是与否，不产出问题；
+// name_reserved 由仓储的用户入口（store.NormalizeName）产出，Subject 同上面 hook 与模板里名称的问题。内置内容
+// 装载时名称的问题针对单个版本，ID 为「ID@版本」。NormalizeSN 报 sn_invalid 时只给 Kind；报 sn_placeholder 时
+// 另给 ID，即规范化之后的 SN。
 type Subject struct {
 	Kind, ID, Path string
 	Line, Col      int

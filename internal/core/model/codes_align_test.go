@@ -136,6 +136,20 @@ func TestAlignSSH公钥算法与支持的算法一致(t *testing.T) {
 	}
 }
 
+// name_reserved 的说明与下一步各写了一遍保留前缀，两处都要与 ReservedNamePrefix 一致：前缀改了而说明没跟上，
+// 被拒的人照着说明改不对。
+func TestAlign保留名字前缀与ReservedNamePrefix一致(t *testing.T) {
+	found := alignFind(t, "name_reserved", alignText(t, "name_reserved"), `以 (\S+) 开头`)
+	if len(found) != 2 {
+		t.Errorf("name_reserved 的说明与下一步应各写一遍保留前缀，找到 %d 处", len(found))
+	}
+	for _, m := range found {
+		if m[1] != ReservedNamePrefix {
+			t.Errorf("name_reserved 写的前缀是 %q，ReservedNamePrefix 是 %q", m[1], ReservedNamePrefix)
+		}
+	}
+}
+
 // attr_key_invalid 的说明与下一步各列了一遍保留键，两处都要与 hostReservedAttrs 一致：漏列一个，
 // 被拒的人对照说明找不出原因。
 func TestAlign保留属性键与hostReservedAttrs一致(t *testing.T) {

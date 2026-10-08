@@ -34,16 +34,44 @@ func TemplateMeta(t model.Template) VersionMeta {
 	return VersionMeta{Name: t.Name, State: t.State, Author: t.Author, Approver: t.Approver, Builtin: t.Builtin}
 }
 
-// NormalizeName 按 model.NormalizeName 规范化 hook 或模板的名字（C12）：返回规范的写法 display 与名字的 key，大小写
-// 不同也算同名，唯一约束按 key。不合法时返回 model 给的问题，Subject 换成 subj。
+// 名字的规范化有两个入口（spec C12、§6.2 第 11 条）：用户的入口 NormalizeName 拦下保留前缀，内置装载的入口
+// normalizeBuiltinName 反过来要求必须带它。两边的名字规则与前缀判定都只问 model（model.NormalizeName、
+// model.NameReserved），这里只决定用了前缀算对还是算错。
+
+// NormalizeName 是用户的入口：新建、派生与改名（CheckNewHook、CheckNewTemplate、DeriveTemplate、RenameHook、
+// RenameTemplate）都经它，第 5 层的预检也该调它，报出的原因才与仓储的相同。按 model.NormalizeName 规范化 hook 或模板的
+// 名字（C12），返回规范的写法 display 与名字的 key，大小写不同也算同名，唯一约束按 key。名字不合法时返回 model 给的
+// name_invalid；合法但用了保留前缀（model.NameReserved）时返回 name_reserved，参数是 display。两种问题的 Subject 都是
+// subj，返回问题时 display 与 key 为空。
 func NormalizeName(raw string, subj model.Subject) (display, key string, ps []model.Problem) {
 	display, key, err := model.NormalizeName(raw)
 	var p model.Problem
-	if errors.As(err, &p) {
+	switch {
+	case errors.As(err, &p):
 		p.Subject = subj
 		return "", "", []model.Problem{p}
+	case model.NameReserved(key):
+		return "", "", []model.Problem{model.NewProblem("name_reserved", subj, display)}
 	}
 	return display, key, nil
+}
+
+// normalizeBuiltinName 是内置装载的入口（checkBuiltin），返回名字的 key。名字不合法时与用户的入口一样返回 name_invalid，
+// Subject 为 subj，由调用方与文本的问题一起报；名字不是规范的写法（再规范化一次会变，库里存的与程序自带的就比不上），
+// 或者没带保留前缀，是程序自己的错，报不带问题的 ErrInvalid。
+func normalizeBuiltinName(raw string, subj model.Subject) (string, []model.Problem, error) {
+	display, key, err := model.NormalizeName(raw)
+	var p model.Problem
+	switch {
+	case errors.As(err, &p):
+		p.Subject = subj
+		return "", []model.Problem{p}, nil
+	case display != raw:
+		return "", nil, invalidf("内置内容的名字 %q 不是规范的写法 %q", raw, display)
+	case !model.NameReserved(key):
+		return "", nil, invalidf("内置内容的名字 %q 要以保留前缀 %s 开头（spec C12）", raw, model.ReservedNamePrefix)
+	}
+	return key, nil, nil
 }
 
 // NameKeyPrefix 把列表的 NamePrefix（HookQuery、TemplateQuery）转成与名字的 key 比的前缀：只把 ASCII 的大写字母转成
@@ -82,8 +110,8 @@ func CheckApprover(approver string) error {
 //
 //   - 只带内容与作者：ID、版本、状态、审批人、内置标记与 Rev 由仓储填，填了报 ErrInvalid。
 //   - 作者合 CheckAuthor。
-//   - 名字不合法（NormalizeName；还没有 ID，Subject 不带 ID），说明或实现里有存不下的文本（HookTextProblems），问题
-//     一起收进 ProblemsError(ErrInvalid)，先名字、后文本。
+//   - 名字不合法或用了保留前缀（NormalizeName；还没有 ID，Subject 不带 ID），说明或实现里有存不下的文本
+//     （HookTextProblems），问题一起收进 ProblemsError(ErrInvalid)，先名字、后文本。
 func CheckNewHook(h model.Hook) (name, key string, err error) {
 	if h.ID != "" || h.Version != 0 || h.State != "" || h.Approver != "" || h.Builtin || h.Rev != 0 {
 		return "", "", invalidf("新建 hook 只带内容与作者：ID、版本、状态、审批人、内置标记与 Rev 由仓储填")
@@ -186,8 +214,9 @@ func CheckSameDerivedFrom(what string, old, in *model.TemplateKey) error {
 }
 
 // CheckBuiltinHook 查 EnsureBuiltinHook 装载的版本 h，都过了返回名字的 key。h 要是内置的已审批版本，键合格式，作者与
-// 审批人存得下，名字已经是规范的写法（再规范化一次不变，库里存的与程序自带的才比得上）：不合这些的是程序的错，报
-// ErrInvalid。名字不合法、内容里有存不下的文本，问题一起收进 ProblemsError(ErrInvalid)，Subject 指向这个版本。
+// 审批人存得下，名字已经是规范的写法（再规范化一次不变，库里存的与程序自带的才比得上）并且带保留前缀
+// model.ReservedNamePrefix（C12，与用户的入口正好相反）：不合这些的是程序的错，报 ErrInvalid。名字不合法、内容里有存
+// 不下的文本，问题一起收进 ProblemsError(ErrInvalid)，Subject 指向这个版本。
 func CheckBuiltinHook(h model.Hook) (key string, err error) {
 	id := VersionID(h.ID, h.Version)
 	key, ps, err := checkBuiltin(h.ID, h.Version, HookMeta(h), model.Subject{Kind: "hook", ID: id})
@@ -229,11 +258,7 @@ func checkBuiltin(id string, version int, m VersionMeta, subj model.Subject) (st
 	case !storable(m.Author, m.Approver):
 		return "", nil, invalidf("内置内容的作者或审批人存不下：不是合法的 UTF-8，或含 NUL")
 	}
-	display, key, ps := NormalizeName(m.Name, subj)
-	if len(ps) == 0 && display != m.Name {
-		return "", nil, invalidf("内置内容的名字 %q 不是规范的写法 %q", m.Name, display)
-	}
-	return key, ps, nil
+	return normalizeBuiltinName(m.Name, subj)
 }
 
 // HookTextProblems 是 hook 版本 h 里存不下的文本（model.StorableText，spec §3 总则），每一处一条 text_not_storable：

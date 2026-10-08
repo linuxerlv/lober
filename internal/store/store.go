@@ -63,8 +63,9 @@ type ISOs interface {
 // 同时最多一个未审批的版本（草稿或待审批）；已审批与已废弃的版本永不删除，只能删草稿。
 type Hooks interface {
 	// CreateHook 建一个新身份，加上版本 1 的草稿；入参不带 ID 与版本。名字按 model.NormalizeName 规范化，
-	// 不合法报 ProblemsError(ErrInvalid)；key 被别的身份占了报 DuplicateError。说明与每份实现的正文都要是
-	// 可存文本，否则报 ProblemsError(ErrInvalid)，问题是 text_not_storable。
+	// 不合法或用了保留前缀（name_reserved，C12）报 ProblemsError(ErrInvalid)；key 被别的身份占了报
+	// DuplicateError。说明与每份实现的正文都要是可存文本，否则报 ProblemsError(ErrInvalid)，问题是
+	// text_not_storable。
 	CreateHook(ctx context.Context, h model.Hook) (model.Hook, error)
 	// SaveHookDraft 保存草稿。只能改草稿，否则报 ErrImmutable；Name 必须等于身份现在的名字，否则报
 	// ErrInvalid（改名用 RenameHook）；Rev 对不上报 ErrConflict。
@@ -95,7 +96,8 @@ type Hooks interface {
 	ListHooks(ctx context.Context, q HookQuery) (Page[model.Hook], error)
 	// EnsureBuiltinHook 装载一个内置的 hook 版本（Builtin 为 true，State 为 approved，spec §6.2 第 11 条），
 	// 不审计：同一个 ID 与版本不存在就写入；已存在并且内容相同，什么都不做；内容不同报 ErrBuiltinMismatch；
-	// 名字被用户建的身份占了，报 DuplicateError。
+	// 名字被别的身份占了，报 DuplicateError。名字必须带保留前缀 model.ReservedNamePrefix（C12），不带报 ErrInvalid。
+	// 名字随身份定下：身份已在库里时，以后的版本不能换名，换了名同样报 ErrBuiltinMismatch；要改名只能换一个新 ID。
 	EnsureBuiltinHook(ctx context.Context, h model.Hook) error
 }
 

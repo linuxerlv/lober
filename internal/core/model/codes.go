@@ -382,6 +382,15 @@ var codeTable = map[Code]codeSpec{
 	"host_not_registered": {CategoryState, 0,
 		"这台主机还没登记，或者已经被删了",
 		"到主机列表里重新登记它，再建任务"},
+
+	// —— 第 2 层修补轮追加（plans/2026-10-08-layer2-fixups.md 任务 U5，S10-2） ——
+
+	// 用户新建、派生或改名时，名称用了只给内置内容用的前缀（NameReserved，spec C12），比较不分大小写。名称先要合
+	// name_invalid 的规则，不合的只报 name_invalid。由仓储的用户入口（store.NormalizeName）产出，Subject 同名称的其他
+	// 问题：新建与派生时为 {hook 或 template, 空}，改名时为 {hook 或 template, 身份 ID}。参数：规范化之后的名称。
+	"name_reserved": {CategoryInvalid, 1,
+		"名称「%[1]v」不能用：以 lober: 开头的名称只给 lober 自带的内置内容用",
+		"换一个不以 lober: 开头的名称，大写的写法也算在内；照着内置内容起名时，要把这个前缀去掉"},
 }
 
 // 下面是代码表的补充：产出代码的函数在本包里、可选的措辞（不合法的原因、各类型

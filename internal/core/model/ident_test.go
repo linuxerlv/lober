@@ -196,6 +196,49 @@ func TestNormalizeName拒收空白中文与不可见字符(t *testing.T) {
 	}
 }
 
+// 保留前缀 lober: 只给内置内容用（spec C12）。判定按规范化之后的 key 做，所以大小写不同的写法也算；只是长得像、
+// 没有冒号或冒号前多了字符的不算。
+func TestNameReserved按key判定保留前缀(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{"lober:Base", true},
+		{"LOBER:base", true},
+		{"Lober:Kickstart", true},
+		{"  lober:x\t", true}, // 首尾空白先去掉
+		{"lober:", true},      // 只有前缀也算用了它
+		{"lober-base", false},
+		{"lober_base", false},
+		{"lober", false},
+		{"lobe:r", false},
+		{"xlober:a", false},
+		{"Rocky-lober:x", false}, // 前缀只看开头
+		{"Rocky-Base", false},
+	}
+	for _, c := range cases {
+		_, key, err := NormalizeName(c.raw)
+		if err != nil {
+			t.Fatalf("用例的名字 %q 应当合名字规则：%v", c.raw, err)
+		}
+		if got := NameReserved(key); got != c.want {
+			t.Errorf("NameReserved(%q)（名字 %q 的 key）= %v，应为 %v", key, c.raw, got, c.want)
+		}
+	}
+}
+
+// 前缀本身要是规范化之后的 key（小写，没有首尾空白），否则按 key 比永远比不上；它也要合名字规则，内置内容才起得出
+// 带它的名字。
+func TestReservedNamePrefix是合规则的key(t *testing.T) {
+	if ReservedNamePrefix != "lober:" {
+		t.Errorf("保留前缀是 %q，spec C12 定的是 lober:", ReservedNamePrefix)
+	}
+	display, key, err := NormalizeName(ReservedNamePrefix + "Base")
+	if err != nil || display != ReservedNamePrefix+"Base" || key != ReservedNamePrefix+"base" {
+		t.Errorf("带前缀的名字规范化得到 %q、%q、%v，应原样收下、key 只把字母转成小写", display, key, err)
+	}
+}
+
 func TestValidIdent(t *testing.T) {
 	for _, s := range []string{"a", "disk", "ip_addr", "nic2", "a_", "a" + strings.Repeat("b", 31)} {
 		if !ValidIdent(s) {

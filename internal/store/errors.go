@@ -34,8 +34,9 @@ var (
 	// ErrRejected：在事务里对加锁后的最新数据重跑第 1 层的判定，没有通过：审批时重跑激活判定，建任务时重跑
 	// 准入判定。总是包在 ProblemsError 或 BatchError 里。
 	ErrRejected = errors.New("store：重跑判定没有通过")
-	// ErrBuiltinMismatch：装载内置内容时，库里同一个 ID 与版本的内容和程序自带的不同（spec §6.2 第 11 条）：
-	// 有人改了内置内容却没有升版本号。
+	// ErrBuiltinMismatch：装载内置内容时，程序自带的与库里的对不上（spec §6.2 第 11 条），有两种情形。一是同一个
+	// ID 与版本的内容不同：有人改了内置内容却没有升版本号。二是名字不同：名字记在身份上，随身份定下，以后的版本
+	// 不能换名，换了名照样报它，只在装过旧版本的库上才报得出来。要改名只能换一个新 ID，旧身份和它的版本留在库里。
 	ErrBuiltinMismatch = errors.New("store：内置内容与库里同一版本的不同")
 )
 

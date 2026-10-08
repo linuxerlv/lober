@@ -61,6 +61,9 @@ var extraCodes = map[Code]Category{
 
 	// 第 2 层（plans/2026-10-03-rewrite-layer2-store.md 任务 1）。
 	"host_not_registered": CategoryState, // 建任务时批里的 SN 没有登记，由仓储在事务里重跑准入时报
+
+	// 第 2 层修补轮（plans/2026-10-08-layer2-fixups.md 任务 U5，S10-2）。
+	"name_reserved": CategoryInvalid, // 用户新建、派生或改名时用了保留前缀 lober:
 }
 
 func TestCode表与附录总表逐项一致(t *testing.T) {
@@ -82,9 +85,9 @@ func TestCode表与附录总表逐项一致(t *testing.T) {
 		}
 		want[c] = cat
 	}
-	// 附录 58 个、整层验收 1 个、修补轮 10 个、第 2 层 1 个。以后再追加代码，这个数要跟着改。
-	if len(want) != 70 {
-		t.Fatalf("附录加上追加的代码应共 70 个，测试里有 %d 个", len(want))
+	// 附录 58 个、整层验收 1 个、修补轮 10 个、第 2 层 1 个、第 2 层修补轮 1 个。以后再追加代码，这个数要跟着改。
+	if len(want) != 71 {
+		t.Fatalf("附录加上追加的代码应共 71 个，测试里有 %d 个", len(want))
 	}
 	for c, cat := range want {
 		if got := c.Category(); got != cat {
@@ -192,6 +195,10 @@ func TestCode修补轮登记的参数个数(t *testing.T) {
 func TestCode第2层登记的参数个数(t *testing.T) {
 	if spec, ok := codeTable["host_not_registered"]; !ok || spec.args != 0 {
 		t.Errorf("host_not_registered 应登记为不带参数：登记了 %v，参数 %d 个", ok, spec.args)
+	}
+	// name_reserved 带一个参数：规范化之后的名字（store.NormalizeName 按这个个数调用）。
+	if spec, ok := codeTable["name_reserved"]; !ok || spec.args != 1 {
+		t.Errorf("name_reserved 应登记为带一个参数：登记了 %v，参数 %d 个", ok, spec.args)
 	}
 }
 

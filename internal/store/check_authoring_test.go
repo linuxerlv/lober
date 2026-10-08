@@ -46,12 +46,30 @@ func TestNormalizeName(t *testing.T) {
 		t.Errorf("规范化得到 %q、%q、%v，应为 Rocky-Base、rocky-base、没有问题", display, key, ps)
 	}
 	// 不合法时问题与 model 的相同，只是 Subject 指向调用方给的对象
-	for _, raw := range []string{"", "Rocky Base", "中文", strings.Repeat("a", 65)} {
+	for _, raw := range []string{"", "Rocky Base", "中文", strings.Repeat("a", 65), "lober:Rocky Base"} {
 		display, key, ps := store.NormalizeName(raw, subj)
 		if want := []model.Problem{nameProblem(t, raw, subj)}; display != "" || key != "" || !reflect.DeepEqual(ps, want) {
 			t.Errorf("名字 %q 得到 %q、%q、%v，应为两个空串与 %v", raw, display, key, ps, want)
 		}
 	}
+	// 这是用户的入口：用了保留前缀（按 key 比，大小写不同也算）报 name_reserved，参数是规范的写法
+	for _, raw := range []string{"lober:Base", " LOBER:Base ", "Lober:"} {
+		display, key, ps := store.NormalizeName(raw, subj)
+		if want := []model.Problem{reservedProblem(strings.TrimSpace(raw), subj)}; display != "" || key != "" || !reflect.DeepEqual(ps, want) {
+			t.Errorf("名字 %q 得到 %q、%q、%v，应为两个空串与 %v", raw, display, key, ps, want)
+		}
+	}
+	// 只是长得像的不算
+	for _, raw := range []string{"lober-base", "lober", "Rocky-lober:x"} {
+		if display, _, ps := store.NormalizeName(raw, subj); display != raw || ps != nil {
+			t.Errorf("名字 %q 没用保留前缀，应原样收下，得到 %q、%v", raw, display, ps)
+		}
+	}
+}
+
+// reservedProblem 是用户的入口对名字 display（规范的写法）报的 name_reserved，Subject 为 s。
+func reservedProblem(display string, s model.Subject) model.Problem {
+	return model.NewProblem("name_reserved", s, display)
 }
 
 // 前缀与名字的 key 一样只转 ASCII 字母：开尔文符号 K（U+212A）按 Unicode 转成 k，就会匹配上本不该匹配的名字。
@@ -133,6 +151,12 @@ func TestCheckNewHook(t *testing.T) {
 		notStorableAt(model.Subject{Kind: "hook"}), notStorableAt(model.Subject{Kind: "impl", Path: "impl/1"})}
 	_, _, err := store.CheckNewHook(h)
 	wantProblemsErr(t, err, store.ErrInvalid, want)
+	// 用户新建时用了保留前缀：name_reserved 与文本的问题一起报，先名字、后文本
+	h = newHook()
+	h.Name, h.Description = " LOBER:LVM ", "分区\x00"
+	want = []model.Problem{reservedProblem("LOBER:LVM", model.Subject{Kind: "hook"}), notStorableAt(model.Subject{Kind: "hook"})}
+	_, _, err = store.CheckNewHook(h)
+	wantProblemsErr(t, err, store.ErrInvalid, want)
 }
 
 func TestCheckNewTemplate(t *testing.T) {
@@ -163,6 +187,10 @@ func TestCheckNewTemplate(t *testing.T) {
 	want := []model.Problem{nameProblem(t, tpl.Name, model.Subject{Kind: "template"}), notStorableAt(model.Subject{Kind: "template"})}
 	_, _, err := store.CheckNewTemplate(tpl)
 	wantProblemsErr(t, err, store.ErrInvalid, want)
+	tpl = newTemplate()
+	tpl.Name = "lober:Kickstart"
+	_, _, err = store.CheckNewTemplate(tpl)
+	wantProblemsErr(t, err, store.ErrInvalid, []model.Problem{reservedProblem("lober:Kickstart", model.Subject{Kind: "template"})})
 }
 
 func TestCheckHookDraft与CheckTemplateDraft(t *testing.T) {
@@ -252,28 +280,34 @@ func TestCheckSameDerivedFrom(t *testing.T) {
 	}
 }
 
-// builtinHook 是程序自带的一个内置 hook 版本：内置的已审批版本，名字是规范的写法。builtinTemplate 同。
+// builtinHook 是程序自带的一个内置 hook 版本：内置的已审批版本，名字是带保留前缀的规范写法。builtinTemplate 同。
 func builtinHook() model.Hook {
 	h := reviewHook()
-	h.ID, h.Version, h.Name, h.State, h.Author, h.Approver, h.Builtin = "builtin-lvm", 1, "Builtin-LVM", model.VersionApproved, "lober", "lober", true
+	h.ID, h.Version, h.Name, h.State, h.Author, h.Approver, h.Builtin = "builtin-lvm", 1, "lober:LVM", model.VersionApproved, "lober", "lober", true
 	return h
 }
 
 func builtinTemplate() model.Template {
 	tpl := reviewTemplate()
-	tpl.ID, tpl.Version, tpl.Name, tpl.State, tpl.Author, tpl.Approver, tpl.Builtin = "builtin-kickstart", 1, "Builtin-Kickstart",
+	tpl.ID, tpl.Version, tpl.Name, tpl.State, tpl.Author, tpl.Approver, tpl.Builtin = "builtin-kickstart", 1, "lober:Kickstart",
 		model.VersionApproved, "lober", "lober", true
 	return tpl
 }
 
 // 装载内置内容（spec §6.2 第 11 条）：不合规则的是程序的错，报不带问题的 ErrInvalid；名字与文本的问题同新建时一样逐条
-// 报，Subject 指向这个版本。
+// 报，Subject 指向这个版本。名字必须带保留前缀（C12），与用户的入口正好相反。
 func TestCheckBuiltinHook与CheckBuiltinTemplate(t *testing.T) {
-	if key, err := store.CheckBuiltinHook(builtinHook()); err != nil || key != "builtin-lvm" {
+	if key, err := store.CheckBuiltinHook(builtinHook()); err != nil || key != "lober:lvm" {
 		t.Fatalf("内置 hook 应通过并给出名字的 key，得到 %q、%v", key, err)
 	}
-	if key, err := store.CheckBuiltinTemplate(builtinTemplate()); err != nil || key != "builtin-kickstart" {
+	if key, err := store.CheckBuiltinTemplate(builtinTemplate()); err != nil || key != "lober:kickstart" {
 		t.Fatalf("内置模板应通过并给出名字的 key，得到 %q、%v", key, err)
+	}
+	// 前缀按 key 比，大写的写法也算带了
+	upper := builtinHook()
+	upper.Name = "LOBER:LVM"
+	if key, err := store.CheckBuiltinHook(upper); err != nil || key != "lober:lvm" {
+		t.Errorf("大写前缀的内置 hook 应通过，得到 %q、%v", key, err)
 	}
 	for _, c := range []struct {
 		name string
@@ -285,7 +319,9 @@ func TestCheckBuiltinHook与CheckBuiltinTemplate(t *testing.T) {
 		{"ID 不合格式", func(h *model.Hook) { h.ID = "Builtin-LVM" }},
 		{"作者存不下", func(h *model.Hook) { h.Author = "\xff" }},
 		{"审批人存不下", func(h *model.Hook) { h.Approver = "a\x00" }},
-		{"名字不是规范的写法：再规范化一次会变，库里的与程序自带的就比不上", func(h *model.Hook) { h.Name = " Builtin-LVM" }},
+		{"名字不是规范的写法：再规范化一次会变，库里的与程序自带的就比不上", func(h *model.Hook) { h.Name = " lober:LVM" }},
+		{"名字不带保留前缀", func(h *model.Hook) { h.Name = "Builtin-LVM" }},
+		{"名字只是长得像保留前缀", func(h *model.Hook) { h.Name = "lober-LVM" }},
 	} {
 		h := builtinHook()
 		c.mod(&h)
@@ -298,7 +334,8 @@ func TestCheckBuiltinHook与CheckBuiltinTemplate(t *testing.T) {
 		mod  func(tpl *model.Template)
 	}{
 		{"不是内置的", func(tpl *model.Template) { tpl.Builtin = false }},
-		{"名字不是规范的写法", func(tpl *model.Template) { tpl.Name = "Builtin-Kickstart " }},
+		{"名字不是规范的写法", func(tpl *model.Template) { tpl.Name = "lober:Kickstart " }},
+		{"名字不带保留前缀", func(tpl *model.Template) { tpl.Name = "Builtin-Kickstart" }},
 		{"带了派生来源", func(tpl *model.Template) { tpl.DerivedFrom = &model.TemplateKey{ID: "base", Version: 1} }},
 	} {
 		tpl := builtinTemplate()
@@ -308,12 +345,12 @@ func TestCheckBuiltinHook与CheckBuiltinTemplate(t *testing.T) {
 	}
 
 	h := builtinHook()
-	h.Name, h.Description = "Builtin LVM", "\x00"
+	h.Name, h.Description = "lober:Builtin LVM", "\x00"
 	_, err := store.CheckBuiltinHook(h)
 	subj := model.Subject{Kind: "hook", ID: "builtin-lvm@1"}
 	wantProblemsErr(t, err, store.ErrInvalid, []model.Problem{nameProblem(t, h.Name, subj), notStorableAt(subj)})
 	tpl := builtinTemplate()
-	tpl.Name, tpl.Body = "Builtin Kickstart", "\xff"
+	tpl.Name, tpl.Body = "lober:Builtin Kickstart", "\xff"
 	_, err = store.CheckBuiltinTemplate(tpl)
 	subj = model.Subject{Kind: "template", ID: "builtin-kickstart@1"}
 	wantProblemsErr(t, err, store.ErrInvalid, []model.Problem{nameProblem(t, tpl.Name, subj), notStorableAt(subj)})
