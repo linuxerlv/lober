@@ -312,11 +312,16 @@ func taskCreateSnapshot(t *testing.T, s *Store) {
 func taskCreateAfterFinished(t *testing.T, s *Store) {
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1")
-	for _, end := range []model.TaskState{model.TaskDone, model.TaskFailed, model.TaskCancelled} {
+	ended := 0
+	for _, end := range model.TaskStates() { // model 认的结束状态逐个试，不另抄（S9-1）
+		if !end.Finished() {
+			continue
+		}
 		mustTransition(t, s, f.mustCreate(t, s, hs...)[0], end)
+		ended++
 	}
 	f.mustCreate(t, s, hs...)
-	wantEqual(t, len(slices.Concat(taskPages(t, s, store.TaskQuery{HostSN: "SN-1"})...)), 4, "这台主机的任务数")
+	wantEqual(t, len(slices.Concat(taskPages(t, s, store.TaskQuery{HostSN: "SN-1"})...)), ended+1, "这台主机的任务数")
 }
 
 // 批量建任务的第 1 步：入参本身不合前提就报 ErrInvalid，什么都不写。每条前提一个反例，规则见 store.CheckNewTasks。快照里
@@ -731,7 +736,10 @@ func taskFindOpen(t *testing.T, s *Store) {
 	}
 	find("SN-1", model.Task{}, false, "还没有任务")
 	find("SN-9", model.Task{}, false, "没登记的主机")
-	for _, end := range []model.TaskState{model.TaskDone, model.TaskFailed, model.TaskCancelled} {
+	for _, end := range model.TaskStates() { // model 认的结束状态逐个试，不另抄（S9-1）
+		if !end.Finished() {
+			continue
+		}
 		task := f.mustCreate(t, s, hs[0])[0]
 		find("SN-1", task, true, "刚建好的任务")
 		find("SN-2", model.Task{}, false, "别的主机")

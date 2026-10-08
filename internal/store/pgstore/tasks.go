@@ -14,9 +14,18 @@ import (
 	"github.com/lober/lober/internal/store"
 )
 
-// finishedStates 是结束了的任务的状态（model.TaskState.Finished），与 idx_tasks_open 的谓词一致：查「这台主机有没有未结束的
-// 任务」时用它。
-var finishedStates = []string{string(model.TaskDone), string(model.TaskFailed), string(model.TaskCancelled)}
+// finishedStates 是结束了的任务的状态：查「这台主机有没有未结束的任务」时用它（openTasksOf、FindOpenTask）。它由
+// model.TaskStates 按 Finished 算出，不另抄（S9-1）；idx_tasks_open 的谓词是写死的，由 Test任务状态的CHECK与C31的索引都与model一致
+// 钉在 model 上。
+var finishedStates = func() []string {
+	var out []string
+	for _, st := range model.TaskStates() {
+		if st.Finished() {
+			out = append(out, string(st))
+		}
+	}
+	return out
+}()
 
 // forShare 是读锁：别的事务照样能读、能同样加读锁，但改不了、删不掉这一行，要等本事务结束。
 var forShare = clause.Locking{Strength: "SHARE"}

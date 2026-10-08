@@ -370,8 +370,9 @@ func Test任务状态的CHECK与C31的索引都与model一致(t *testing.T) {
 		var pe *pgconn.PgError
 		return errors.As(err, &pe) && pe.Code == code && pe.ConstraintName == name
 	}
-	candidates := []model.TaskState{model.TaskPending, model.TaskBooting, model.TaskInstalling, model.TaskRebooting,
-		model.TaskInitializing, model.TaskDone, model.TaskFailed, model.TaskCancelled, "", "Pending", "started", "done "}
+	// model 认的状态取自 model.TaskStates，不在这里另抄：model 加了状态，CHECK 与索引谓词没跟上，这里就报红（S9-1）
+	candidates := slices.Concat(model.TaskStates(),
+		[]model.TaskState{"", "Pending", "started", "done ", " booting", "canceled", "FAILED", "init"})
 	for _, state := range candidates {
 		err := insert("a", state)
 		rejected := rejectedBy(err, "23514", "chk_tasks_state")
@@ -392,6 +393,20 @@ func Test任务状态的CHECK与C31的索引都与model一致(t *testing.T) {
 			}
 		}
 		execAll(t, s, `DELETE FROM tasks`)
+	}
+}
+
+// 查「这台主机有没有未结束的任务」用的 finishedStates，要恰好是 model.TaskStates 里 Finished 为真的那些，顺序也相同（S9-1）：
+// 它要是又写回手抄的清单，model 加了结束状态，FindOpenTask 与建任务时的那条查询就和 model 对不上了。
+func Test查未结束任务用的结束状态由model的清单算出(t *testing.T) {
+	var want []string
+	for _, st := range model.TaskStates() {
+		if st.Finished() {
+			want = append(want, string(st))
+		}
+	}
+	if len(want) == 0 || !slices.Equal(finishedStates, want) {
+		t.Errorf("finishedStates 是 %q，应为 model.TaskStates 里 Finished 为真的 %q", finishedStates, want)
 	}
 }
 

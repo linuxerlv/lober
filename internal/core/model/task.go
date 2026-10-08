@@ -1,6 +1,10 @@
 package model
 
-import "github.com/lober/lober/internal/core/catalog"
+import (
+	"slices"
+
+	"github.com/lober/lober/internal/core/catalog"
+)
 
 // TaskState 是装机任务的状态。字面量会存进数据库，发布后不能改名。状态只进不退（C33），
 // 由第 7 层的状态机推进；本层只定下取值，并判断任务结束了没有。
@@ -17,6 +21,15 @@ const (
 	TaskCancelled    TaskState = "cancelled"    // 已取消
 )
 
+// TaskStates 是全部任务状态，顺序与状态机一致。哪些状态存在、哪些算已结束，只以它和 Finished 为准（S9-1）：Valid 按它判断，
+// 第 2 层查未结束任务用的结束状态由它按 Finished 算出，CHECK 约束与 C31 索引谓词的测试也从它出发。加状态就加在这里，
+// 这几处跟着变或者报红。每次返回一份副本，调用方改了不影响别人。
+func TaskStates() []TaskState {
+	return slices.Clone(taskStates)
+}
+
+var taskStates = []TaskState{TaskPending, TaskBooting, TaskInstalling, TaskRebooting, TaskInitializing, TaskDone, TaskFailed, TaskCancelled}
+
 // Finished 报告任务是否已结束：done、failed、cancelled 三种。一台主机同一时刻最多有一个未结束
 // 的任务（C31），结束了才能再建。不认识的状态算未结束：宁可挡住这台主机再建任务，也不让它同时
 // 有两个任务在装。
@@ -28,14 +41,10 @@ func (s TaskState) Finished() bool {
 	return false
 }
 
-// Valid 报告 s 是不是任务的状态，只认原样的写法（T7-2）。第 2 层的 CHECK 约束、第 7 层推进状态之前
+// Valid 报告 s 是不是任务的状态（在 TaskStates 里），只认原样的写法（T7-2）。第 2 层的 CHECK 约束、第 7 层推进状态之前
 // 的检查都用它，不另抄取值表。
 func (s TaskState) Valid() bool {
-	switch s {
-	case TaskPending, TaskBooting, TaskInstalling, TaskRebooting, TaskInitializing, TaskDone, TaskFailed, TaskCancelled:
-		return true
-	}
-	return false
+	return slices.Contains(taskStates, s)
 }
 
 // Task 是一个装机任务：一台主机、一个 ISO、一个模板版本，外加建成时固化的快照（C27、C29）。
