@@ -23,7 +23,8 @@ var (
 	ErrConflict = errors.New("store：Rev 或状态对不上，重读之后再判断")
 	// ErrDuplicate：唯一键撞了，总是包在 DuplicateError 里。
 	ErrDuplicate = errors.New("store：唯一键重复")
-	// ErrImmutable：改已审批、已废弃或内置的版本，或者改内置的身份（C23、C25）。
+	// ErrImmutable：改已审批、已废弃或内置的版本，或者改内置的身份（C23、C25）。系统更新（UpdateISO）碰到已废弃的
+	// ISO 也报它：废弃是要审计的决定，不审计的更新不能把它撤掉。
 	ErrImmutable = errors.New("store：不能修改")
 	// ErrReferenced：删除被引用的对象：主机或 ISO 被任务引用，hook 草稿被模板版本引用（C26）。
 	ErrReferenced = errors.New("store：仍被引用，不能删除")

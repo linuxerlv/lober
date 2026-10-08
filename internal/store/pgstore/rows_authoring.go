@@ -188,7 +188,8 @@ func (r templateVersionRow) meta() store.VersionMeta {
 }
 
 // refRows 是模板版本 t 在 template_hook_refs 里的行：它引用的 hook 版本，去重、排过序（store.HookRefs）。只记 HookID 合
-// model.ValidID 的：库里每个 hook 版本的 ID 都合它，别的 ID 永远对不上任何版本，删 hook 草稿与建任务查到的结果不变。草稿
+// model.ValidID 的：库里每个 hook 版本的 ID 都合它，别的 ID 永远对不上任何版本，删 hook 草稿查到的结果不变（建任务与
+// 审批模板不读这张表，用 store.HookRefs 现算）。草稿
 // 却可以引用这样的 ID（激活时才报 hook_ref_missing），它可以很长，原样写进这张表的主键与索引，压不下去时就超过 btree
 // 索引一行的上限（SQLSTATE 54000），能存成 UTF-8 文本的草稿反倒存不下了（spec §3 总则）。
 func refRows(t model.Template) []templateHookRefRow {

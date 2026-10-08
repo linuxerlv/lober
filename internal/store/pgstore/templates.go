@@ -399,7 +399,7 @@ func (s *Store) EnsureBuiltinTemplate(ctx context.Context, tpl model.Template) e
 }
 
 // 下面是模板版本的写入与读取，规则同 hook 的那几个函数。引用随版本一起写：保存模板的任何一个版本时，它引用了哪些 hook
-// 版本都在同一个事务里记下，删 hook 草稿与建任务都靠这份记录。
+// 版本都在同一个事务里记下，删 hook 草稿靠这份记录；审批模板与建任务不读它，用 store.HookRefs 现算。
 
 // insertNewTemplate 在事务 tx 里建新身份与它的版本 tpl，连同版本引用的 hook 版本。名字撞了由唯一索引报出来。
 func insertNewTemplate(tx *gorm.DB, tpl model.Template, key string) (templateVersionRow, error) {

@@ -19,16 +19,25 @@ type Store interface {
 	Close() error
 }
 
-// Hosts 是主机的登记（C6、C7）。SN 是主机的身份，也是它的键。
+// Hosts 是主机的登记（C6、C7）。SN 是主机的身份，也是它的键；登记过的 SN 都是规范化之后的写法（model.NormalizeSN）。
+//
+// 收到合法却没规范化的 SN（如 sn-1）时，带整条记录的写入（CreateHost、UpdateHost、ImportHosts，以及
+// Tasks.CreateTasks）和 Tasks.FindOpenTask 报 ErrInvalid；其余按 SN 查找的不查规范化，照原样去找，找不到就是没有：
+// GetHost 与 DeleteHost 报 ErrNotFound，GetHosts 的结果里没有它，ListTasks 按它过滤得到空页。写入要查，否则 sn-1 会
+// 登记成 SN-1 之外的另一台主机（C6）；FindOpenTask 要查，因为网关不能把漏了规范化当成「没有任务」，否则机器会从本地盘
+// 启动、任务一直等着。其余的查找当成找不到没有这种后果，统一报 ErrInvalid 反倒会让 GetHosts 因为一个这样的 SN 整批
+// 失败。调用方按 SN 调仓储之前要先经 model.NormalizeSN，漏了的话拿到的是找不到，不是入参不合法。
 type Hosts interface {
-	// CreateHost 登记一台主机，Rev 置 1。SN 必须已经规范化（与 model.NormalizeSN 的结果相同），并且
-	// Host.Validate 通过，否则报 ProblemsError(ErrInvalid)；SN 已登记报 DuplicateError。
+	// CreateHost 登记一台主机，Rev 置 1。SN 不合法（model.NormalizeSN 报出问题）或 Host.Validate 不通过，报
+	// ProblemsError(ErrInvalid)；SN 合法却没规范化（与 NormalizeSN 的结果不同），是调用方漏了规范化，model 的校验对它
+	// 没有问题可报，报不带问题清单的 ErrInvalid（CheckHosts）。SN 已登记报 DuplicateError。
 	CreateHost(ctx context.Context, h model.Host, a Audit) (model.Host, error)
-	// UpdateHost 按 SN 整条替换架构、固件与属性。Rev 对不上报 ErrConflict；成功后 Rev 加 1。
+	// UpdateHost 按 SN 整条替换架构、固件与属性，入参的规则同 CreateHost。Rev 对不上报 ErrConflict；成功后 Rev 加 1。
 	UpdateHost(ctx context.Context, h model.Host, a Audit) (model.Host, error)
 	// ImportHosts 是 CSV 批量导入：已登记的 SN 整条替换，不比 Rev；没登记的新建。一条不合法，整批都不写，
-	// ProblemsError(ErrInvalid) 列出每一条的问题（Subject 为 host 与 SN）；批里 SN 重复报
-	// host_duplicate_in_batch。每台主机写一条审计。
+	// ProblemsError(ErrInvalid) 列出每一条的问题（Subject 为 host 与 SN，NormalizeSN 报的两种见 model.Subject）；
+	// 批里 SN 重复报 host_duplicate_in_batch。空的一批报 ErrInvalid；批里只要有一台的 SN 合法却没规范化，不论排在
+	// 第几，整批报不带问题清单的 ErrInvalid，规则同 CreateHost。每台主机写一条审计。
 	ImportHosts(ctx context.Context, hs []model.Host, a Audit) ([]model.Host, error)
 	// DeleteHost 删除一台主机；有任务引用报 ErrReferenced。
 	DeleteHost(ctx context.Context, sn string, rev int64, a Audit) error
@@ -44,8 +53,10 @@ type ISOs interface {
 	// ErrInvalid。仓储生成 ID，State 为 acquiring，Rev 为 1。
 	CreateISO(ctx context.Context, iso model.ISO, a Audit) (model.ISO, error)
 	// UpdateISO 是第 4 层导入用的系统更新，不审计：可以改 Version、Arch、State、SHA256、Artifacts、Offers；
-	// 改 Family、Series、Name 报 ErrInvalid。要置为 ready 时必须通过 ISO.Validate，否则报
-	// ProblemsError(ErrInvalid)；不能经它置为 deprecated。SHA256 只能为空串，或是 64 位小写十六进制（SHA-256 摘要
+	// 改 Family、Series、Name 报 ErrInvalid。已废弃的 ISO 不再接受系统更新，报 ErrImmutable：废弃是要审计的决定，
+	// 不审计的更新不能把它撤掉。目标状态不认识，或者是 deprecated（废弃走 DeprecateISO），报 ErrInvalid；写进来的文本
+	// （版本、架构、制品、提供的集合与选项）存不下，同样报 ErrInvalid（CheckISOText）。要置为 ready 时必须通过
+	// ISO.Validate，否则报 ProblemsError(ErrInvalid)。SHA256 只能为空串，或是 64 位小写十六进制（SHA-256 摘要
 	// 的规范写法，大写的不收），不论置为什么状态都查，否则报 ErrInvalid：C4 按它去重，同一份内容写成大写就成了另一份。
 	// SHA256 撞上另一个不是导入失败的 ISO，报 DuplicateError，Existing 是对方的 ID（C4）；对方恰好在这期间导入失败
 	// 或被删掉、报不出是谁时，报 ErrConflict，重读之后再更新。
@@ -72,7 +83,9 @@ type Hooks interface {
 	// SaveHookDraft 保存草稿。只能改草稿，否则报 ErrImmutable；Name 必须等于身份现在的名字，否则报
 	// ErrInvalid（改名用 RenameHook）；Rev 对不上报 ErrConflict。
 	SaveHookDraft(ctx context.Context, h model.Hook) (model.Hook, error)
-	// NewHookVersion 复制版本 from 的内容，建下一个版本号的草稿，作者为 author。已有草稿或待审批的版本报
+	// NewHookVersion 复制版本 from 的内容，建下一个版本号的草稿，作者为 author。新版本号是这个身份分配过的最大版本号
+	// 加 1，不是现有版本里最大的加 1：删掉的草稿用过的号不再发，那个草稿的键可能还记在调用方手里的旧副本、派生模板的
+	// DerivedFrom 与审计里，号再发出去，它们就会对到另一份内容上。被拒的开新版本不占号。已有草稿或待审批的版本报
 	// ErrConflict；内置的报 ErrImmutable。
 	NewHookVersion(ctx context.Context, id string, from int, author string) (model.Hook, error)
 	// SubmitHook：draft → review。
@@ -92,7 +105,7 @@ type Hooks interface {
 	GetHook(ctx context.Context, k model.HookKey) (model.Hook, error)
 	// GetHooks 按版本批量取，结果只放存在的。
 	GetHooks(ctx context.Context, ks []model.HookKey) (map[model.HookKey]model.Hook, error)
-	// ListHookVersions 返回一个身份的全部版本，按版本号升序。
+	// ListHookVersions 返回一个身份的全部版本，按版本号升序；身份不存在报 ErrNotFound。
 	ListHookVersions(ctx context.Context, id string) ([]model.Hook, error)
 	// ListHooks 每个身份一项，见 HookQuery.ApprovedOnly。
 	ListHooks(ctx context.Context, q HookQuery) (Page[model.Hook], error)
@@ -107,8 +120,8 @@ type Hooks interface {
 
 // Templates 是模板的身份与版本（C12–C17、C22–C26）。各方法与 Hooks 一一对应（CreateTemplate 对 CreateHook，依此
 // 类推），没写注释的规则相同；另有四处不同：可以派生（DeriveTemplate）；审批时连带它引用的 hook 版本一起判定；ListTemplates 可以按系过滤；
-// 保存模板的任何一个版本时，仓储同时维护这个版本引用了哪些 hook 版本（HookRefs），DeleteHookDraft 与建任务都
-// 靠它。
+// 保存模板的任何一个版本时，仓储同时记下这个版本引用了哪些 hook 版本（HookRefs），DeleteHookDraft 靠这份记录查
+// hook 草稿有没有被引用。审批模板与建任务不读这份记录，对锁住的模板版本用 HookRefs 现算要加读锁的 hook 版本。
 type Templates interface {
 	CreateTemplate(ctx context.Context, t model.Template) (model.Template, error)
 	SaveTemplateDraft(ctx context.Context, t model.Template) (model.Template, error)
@@ -138,15 +151,19 @@ type Tasks interface {
 	//  1. 先查入参（CheckNewTasks），不合格报 ErrInvalid。快照里的每个串都要存得下（model.StorableText），存不下的
 	//     固化不下来：由 CheckNewTasks 在写之前报出，不等到 PostgreSQL 存不进去。
 	//  2. 开事务，按 SN 升序给涉及的主机加写锁，对 ISO、模板版本和它引用的 hook 版本加读锁。拿锁的顺序固定，
-	//     两批同时提交时就不会互相等死。
-	//  3. 用锁住之后读到的数据重跑准入判定（BatchProblems），没登记的 SN 报 host_not_registered。任何一处有
+	//     两批同时提交时就不会互相等死。ISO 或模板版本不存在报 ErrNotFound：按键找不到，准入无从判起。
+	//  3. 用锁住之后读到的数据重跑准入判定（BatchProblems），没登记的 SN 报 host_not_registered。判定用的是任务里
+	//     钉住的模板版本（TemplateID、TemplateVersion），不另取当前的已审批版本：已被新版本取代、但仍是已审批的
+	//     旧版本照样通过。它是不是当前版本（C23）由第 5 层在提交时用 model.CurrentApproved 比对。任何一处有
 	//     问题，整批回滚，报 BatchError，不写任务，也不写审计。
 	//  4. 全部通过才写：ID 用 NewID 生成，State 为 pending，Rev 为 1。并发下撞上「一台主机一个未结束任务」的
 	//     约束时，同样回滚并报 BatchError，问题是 host_has_open_task。
 	CreateTasks(ctx context.Context, ts []model.Task, a Audit) ([]model.Task, error)
 	GetTask(ctx context.Context, id string) (model.Task, error)
 	// FindOpenTask 找这台主机未结束的那个任务（C31 保证最多一个），给第 7 层引导时用；没有时第二个返回值为
-	// false。
+	// false。sn 要是规范化之后的写法（与 model.NormalizeSN 的结果相同），否则报 ErrInvalid（CheckSN），不当成没有
+	// 任务：按 SN 查找的方法里只有它查。网关不能把漏了规范化当成「没有任务」，否则机器会从本地盘启动、任务一直等着
+	// （见 Hosts 的说明）。
 	FindOpenTask(ctx context.Context, sn string) (model.Task, bool, error)
 	ListTasks(ctx context.Context, q TaskQuery) (Page[model.Task], error)
 	// TransitionTask 是系统发起的条件推进，不审计：当前的状态与 Rev 都等于 expect 才写入，否则报 ErrConflict；
@@ -158,13 +175,15 @@ type Tasks interface {
 	TransitionTaskByUser(ctx context.Context, id string, expect TaskExpect, to model.TaskState, events []NewEvent, a Audit) (model.Task, []Appended, error)
 }
 
-// Events 是任务的追加式日志，不审计。
+// Events 是任务的追加式日志，不审计。追加事件不算改任务：任务的 State 与 Rev 都不变，调用方手里的 TaskExpect
+// 照样有效。已结束的任务照样可以追加，迟到的信号只记为事件。
 type Events interface {
-	// AppendEvents 给任务追加事件，Seq 由仓储按任务连续分配。Key 已存在的那一条跳过，报告为 Duplicate，
-	// 不是错误：第 7 层收到重发的信号时据此去重。任务不存在报 ErrNotFound；事件不合法（CheckEvents）报
+	// AppendEvents 给任务追加事件，Seq 由仓储按任务连续分配。Key 区分大小写；Key 已存在的那一条跳过，报告为
+	// Duplicate，不是错误：第 7 层收到重发的信号时据此去重。任务不存在报 ErrNotFound；事件不合法（CheckEvents）报
 	// ErrInvalid，整批不写。
 	AppendEvents(ctx context.Context, taskID string, es []NewEvent) ([]Appended, error)
-	// ListEvents 返回 Seq 大于 afterSeq 的事件，按 Seq 升序；limit 的规则同分页（CheckQuery）。
+	// ListEvents 返回 Seq 大于 afterSeq 的事件，按 Seq 升序；limit 的规则同分页（CheckQuery），afterSeq 为负报
+	// ErrInvalid（CheckEventQuery）。任务不存在报 ErrNotFound，同 AppendEvents。
 	ListEvents(ctx context.Context, taskID string, afterSeq int64, limit int) ([]Event, error)
 }
 

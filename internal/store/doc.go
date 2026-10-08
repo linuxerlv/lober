@@ -10,6 +10,9 @@
 //
 //   - 第一个参数是 ctx，最后一个返回值是 error。
 //   - 返回的切片与 map 都是深拷贝，调用方改了也不影响仓储里的数据；入参也先拷贝再存。
+//   - 装结果的切片与 map 一律不为 nil，没有结果时是长度为 0 的切片或空 map：Page.Items、GetHosts 与 GetHooks 的
+//     结果、ListEvents 的结果，以及 AppendEvents 与两种推进返回的 []Appended。第 5 层编成 JSON 是 [] 与 {}，nil 会
+//     编成 null，与 OpenAPI 对不上。记录自己的字段不在此列：写进去什么就读出什么，nil 与空的 map、切片读回来不同。
 //   - 改记录按整条替换，把字段改成零值也要存下：清空属性、把固件改回空都是正当的写入。pgstore 为此显式列出
 //     要写的列，契约测试专门覆盖「改成零值」。
 //   - 仓储不读时钟。Audit.At、Task.CreatedAt、NewEvent.At 都由调用方给，必须大于 0，否则报 ErrInvalid。

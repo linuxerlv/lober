@@ -64,8 +64,10 @@ type Page[T any] struct {
 // Limit 为 0 时取 100，1–500 照用，超过 500 报 ErrInvalid。过滤条件为零值表示不按它过滤；切片的过滤条件（States）
 // 为 nil 与为空切片相同，都表示不按它过滤，不是「状态在空集合里」：第 5 层把 JSON 里的空数组解出来就是空切片。
 //
-// 顺序固定，翻页才不会漏也不会重：主机按 SN；ISO、hook、模板按名字的 key，再按 ID；任务按 CreatedAt 倒序，
-// 再按 ID；审计按 ID 倒序。事件不分页，由 ListEvents 按 Seq 续读。
+// 顺序固定，翻页才不会漏也不会重。字符串一律按字节序比较，不随数据库的排序规则变（pgstore 用 COLLATE "C"）：
+// 主机按 SN；ISO 按 Name 再按 ID，ISO 的名字不规范化、没有 key，所以区分大小写，与 hook、模板不同；hook 与模板
+// 按名字的 key（model.NormalizeName），再按 ID；任务按 CreatedAt 倒序，同一时刻按 ID 升序；审计按 ID 倒序。事件
+// 不分页，由 ListEvents 按 Seq 升序续读。
 
 // HostQuery 查主机。
 type HostQuery struct {

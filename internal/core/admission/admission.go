@@ -47,8 +47,10 @@ func ISOUsable(iso model.ISO, hosts []model.Host) []model.Problem {
 	return out
 }
 
-// TemplateUsable 判断模板能不能配这个 ISO 建任务。t 必须是调用方用 model.CurrentApproved
-// 取出的版本：向导里每个模板只提供它（C23）。
+// TemplateUsable 判断模板能不能配这个 ISO 建任务。向导筛候选时，t 是调用方用 model.CurrentApproved
+// 取出的版本：向导里每个模板只提供它（C23）。第 2 层建任务时在事务里重跑准入，t 是任务里钉住的版本
+// （TemplateID、TemplateVersion），不另取当前版本：已被新版本取代、但仍是已审批的旧版本照样通过。
+// 这里不查 t 是不是当前版本，那由第 5 层在提交时用 model.CurrentApproved 比对。
 //
 // 这里不重做激活判定。批准时已经查过引用的 hook 版本存在且已审批，批准之后它们只可能被
 // 废弃（C23 已审批的不可修改，C26 只许废弃、不许删除），所以只查四件事，依次报出：这个版本
@@ -89,7 +91,9 @@ type BatchInput struct {
 	Hosts    []model.Host
 	OpenTask map[string]bool // SN → 是否已有未结束的任务
 	ISO      model.ISO
-	Template model.Template // 调用方用 model.CurrentApproved 取出的版本
+	// Template 是这一批用的模板版本，见 TemplateUsable。第 2 层在事务里重跑时是任务里钉住的版本，不另取
+	// 当前版本；它是不是当前的已审批版本（model.CurrentApproved）由第 5 层在提交时比对。
+	Template model.Template
 	Hooks    map[model.HookKey]model.Hook
 }
 

@@ -336,10 +336,10 @@ func duplicateSNs(ts []model.Task) error {
 	return &ProblemsError{Kind: ErrInvalid, Problems: ps}
 }
 
-// HookRefs 列出模板装配表引用的 hook 版本，去重，按 ID、版本排序。保存模板的任何一个版本时，实现都用它
-// 维护「这个版本引用了哪些 hook 版本」，删 hook 草稿、审批与建任务时都靠这份记录。装配表是 map，排过序，同一个
-// 模板每次得到的结果才一样，加锁的顺序也就固定。草稿可以引用不存在的版本（激活时才报 hook_ref_missing），这里
-// 照样列出。
+// HookRefs 列出模板装配表引用的 hook 版本，去重，按 ID、版本排序。怎么提取引用只有这一份：保存模板的任何一个版本时，
+// 实现用它记下「这个版本引用了哪些 hook 版本」，删 hook 草稿时查这份记录；审批模板与建任务时不读这份记录，pgstore 对
+// 锁住的模板版本用 HookRefs 现算要加读锁的 hook 版本。装配表是 map，排过序，同一个模板每次得到的结果才一样，加锁的
+// 顺序也就固定。草稿可以引用不存在的版本（激活时才报 hook_ref_missing），这里照样列出。
 func HookRefs(t model.Template) []model.HookKey {
 	var refs []model.HookKey
 	for _, insts := range t.Assembly {

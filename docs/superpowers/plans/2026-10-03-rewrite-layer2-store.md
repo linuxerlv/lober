@@ -96,7 +96,7 @@
 | `Event` | `TaskID`、仓储分配的 `Seq`（每个任务从 1 起、连续），以及 NewEvent 的字段 |
 | `Appended` | 追加一条事件的结果：`Seq`，以及 `Duplicate`。Key 已存在时 Duplicate 为 true，Seq 是原来那一条的 |
 | `Page[T]` | `Items` 与 `Next`。Next 是不透明的游标，空串表示没有下一页 |
-| 各查询类型 | 都带 `Cursor string` 与 `Limit int`：Limit 为 0 时取 100，1–500 照用，超过 500 报 ErrInvalid。顺序固定：主机按 SN；ISO、hook、模板按名字的 key，再按 ID；任务按 CreatedAt 倒序，再按 ID；审计按 ID 倒序；事件按 Seq |
+| 各查询类型 | 都带 `Cursor string` 与 `Limit int`：Limit 为 0 时取 100，1–500 照用，超过 500 报 ErrInvalid。顺序固定，字符串一律按字节序比较（pgstore 用 `COLLATE "C"`）：主机按 SN；ISO 按 Name 再按 ID（ISO 的名字不规范化，区分大小写）；hook、模板按名字的 key，再按 ID；任务按 CreatedAt 倒序、同一时刻按 ID 升序；审计按 ID 倒序；事件不分页，由 ListEvents 按 Seq 升序续读 |
 | `TaskExpect` | 条件推进的期望值：`State` 与 `Rev` |
 
 ### 错误
@@ -511,9 +511,15 @@ func (s *Store) Close() error
 
 ## 留给后续层的约定
 
-- 第 3 层：内置 hook 与模板的名字，和用户建的共用一个名字空间。用户先用了某个名字，以后的版本又带了同名的内置内容，启动时 EnsureBuiltin 会报 DuplicateError、拒绝启动。写内置内容之前，先定一个只给内置内容用的名字前缀，并在名字规则里拦下用户用它。
+- 第 3 层：内置 hook 与模板的名字，和用户建的共用一个名字空间。只给内置内容用的名字前缀已定为 `lober:`（C12，比较不分大小写，判定在第 1 层的 `model.NameReserved`）：用户新建、派生和改名时用了它报 `name_reserved`；内置内容的名字必须带它，不带的 EnsureBuiltin 报 ErrInvalid，拒绝启动。名字随身份定下，以后的版本不能换名，换了名 EnsureBuiltin 报 ErrBuiltinMismatch，同样拒绝启动，而且只在装过旧版本的库上才报得出来；要改名只能换新 ID，旧身份和它的版本留在库里（S5-1）。
 - 第 4 层：ISO 的获取来源加新表；导入期间的状态与字段，只通过 UpdateISO 改。
-- 第 5 层：用户、角色与会话加新表；把仓储的错误映射成 HTTP 状态码与说明，需要新的原因代码时照例追加；保存草稿前做的规范化（L-4b），在调用仓储之前完成。
+- 第 5 层：用户、角色与会话加新表；把仓储的错误映射成 HTTP 状态码与说明，需要新的原因代码时照例追加；保存草稿前做的规范化（L-4b），在调用仓储之前完成。另有五条：
+  - 按 SN 调仓储之前先经 `model.NormalizeSN` 规范化（S4-1）。仓储只在带整条记录的写入和 FindOpenTask 上查 SN 规范化了没有，其余按 SN 查找的照原样去找；漏了这一步，`/hosts/sn-1` 拿到的是 404，而不是 400。
+  - 派生对话框预填来源的名字时，去掉 `lober:` 前缀：内置模板只能派生（C25），名字都带这个前缀，原样预填的话，用户一提交就撞上 `name_reserved`。
+  - 派生来源可能已被删除（S5-2）：草稿也能当来源，删草稿时不看别的模板的 DerivedFrom。「来源出了新版本」的提示（C24）这时按同一来源身份下剩下的版本算；连来源的身份也没了，就不提示。
+  - 取草稿引用的 hook 之前，先滤掉不合 `model.ValidID` 的引用（S5-3）：GetHooks 碰到一个格式不对的键就整批报 ErrInvalid；滤掉之后，缺的 hook 交给激活判定报 `hook_ref_missing`。两处以上要这样做时，在 store 里加一个只返回格式合法引用的辅助函数。
+  - 驳回接口要求非空的理由，并放进 Audit.Detail（S5-7）：仓储驳回时不查 Detail 有没有内容，spec §5.2 第 5 步的「驳回要写理由」只能由第 5 层保证。
+- 装配点（第 5 层第一次出现，spec §7.4）：连接池的上限从配置读出来，经 `pgstore.WithMaxConns` 传给 pgstore（S7-7，代码已随修补计划 U4 加上）。不传就是 database/sql 的默认值，不设上限，第 7 层大批主机同时回报时可能撑满库的 `max_connections`。
 - 第 7 层：token、引导次数、时机进度这些执行字段，加在 tasks 表上（AutoMigrate 加列是安全的），并扩展 TransitionTask，让它们和状态在同一个条件写入里提交（spec §6.2 第 4 条：token 和「进入引导中」一起写入）。事件的 Kind 与 Fields 由第 7 层定，仓储不解释它们。
 - 任何一层要修改本层已有的索引或约束，都得自己写一步先删掉旧定义的升级动作：AutoMigrate 不会改。表结构断言会在启动时把没做这一步的库拦下来。
 

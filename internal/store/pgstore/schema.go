@@ -115,8 +115,8 @@ var tables = []table{
 		},
 	},
 	{
-		// 模板的每个版本引用了哪些 hook 版本，删 hook 草稿与建任务时查它。刻意不对 hook_versions 建外键：草稿可以引用
-		// 不存在的版本，激活时才报 hook_ref_missing
+		// 模板的每个版本引用了哪些 hook 版本，只有删 hook 草稿时查它（DeleteHookDraft）；审批模板与建任务不读它，用
+		// store.HookRefs 现算。刻意不对 hook_versions 建外键：草稿可以引用不存在的版本，激活时才报 hook_ref_missing
 		name:    "template_hook_refs",
 		primary: []string{"template_id", "template_version", "hook_id", "hook_version"},
 		indexes: []index{{name: "idx_template_hook_refs_hook", columns: []string{"hook_id", "hook_version"}}},
