@@ -413,6 +413,11 @@ func isoSHA256(t *testing.T, s *Store) {
 			wantDuplicate(t, err, "sha256", holder.ID, fmt.Sprintf("B 置为 %s 时撞上 %s 的 ISO", state, holder.Name))
 		}
 	}
+	// 写入的一方停在获取中、只记下内容的 SHA256，同样撞上（S4-7）：获取中的 ISO 自己也占位，写进来的这一份就得先过查重
+	inAcquiring := b
+	inAcquiring.SHA256 = ready.SHA256
+	_, err := s.UpdateISO(t.Context(), inAcquiring)
+	wantDuplicate(t, err, "sha256", ready.ID, "B 停在获取中时撞上 ready 的 ISO")
 	wantUnchanged(t, s, before, "SHA256 撞了时")
 
 	// B 自己置为导入失败、记下撞上的内容，可以写：导入失败的不占这个 SHA256（spec §5.1 第 3 步）
@@ -420,7 +425,7 @@ func isoSHA256(t *testing.T, s *Store) {
 	// 占着这份内容的那一个（ready 的）导入失败之后，B 就能重新导入它；这时轮到对方撞上 B
 	a := mustUpdateISO(t, s, imported(ready, model.ISOFailed, 3))
 	b = mustUpdateISO(t, s, imported(b, model.ISOImporting, 3))
-	_, err := s.UpdateISO(t.Context(), imported(a, model.ISOReady, 3))
+	_, err = s.UpdateISO(t.Context(), imported(a, model.ISOReady, 3))
 	wantDuplicate(t, err, "sha256", b.ID, "撞上导入中的 B")
 
 	// 空的 SHA256 不占位

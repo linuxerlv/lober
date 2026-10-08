@@ -49,14 +49,14 @@ func sampleTemplate(name string) model.Template {
 	}
 }
 
-// fullTemplate 是 sampleTemplate 再往插槽里放一个 hook 实例：实例覆盖了超时与是否必需，带一条取值来源。被引用的 hook
-// 版本不必存在：草稿可以引用不存在的版本，激活时才报 hook_ref_missing。
+// fullTemplate 是 sampleTemplate 再往插槽里放一个 hook 实例：实例覆盖了超时与是否必需，带一条取值来源，写死的值在向导里
+// 可改（Editable，S5-5）。被引用的 hook 版本不必存在：草稿可以引用不存在的版本，激活时才报 hook_ref_missing。
 func fullTemplate(name string) model.Template {
 	t := sampleTemplate(name)
 	sec, required := 300, false
 	t.Assembly = map[string][]model.Instance{"分区": {{
 		HookID: "lvm", HookVersion: 1, TimeoutSec: &sec, Required: &required,
-		Bindings: map[string]model.Binding{"disk": {Source: model.BindingFixed, Value: "/dev/vda"}},
+		Bindings: map[string]model.Binding{"disk": {Source: model.BindingFixed, Value: "/dev/vda", Editable: true}},
 	}}}
 	return t
 }
@@ -97,7 +97,12 @@ var templateOps = versioned[model.Template]{
 		{"实例引用的 hook 版本", func(t *model.Template) { t.Assembly["分区"][0].HookVersion = 2 }},
 		{"实例覆盖的超时", func(t *model.Template) { *t.Assembly["分区"][0].TimeoutSec = 600 }},
 		{"实例的取值来源", func(t *model.Template) { // 引用的 hook 版本没变：只比引用关系查不出来
-			t.Assembly["分区"][0].Bindings["disk"] = model.Binding{Source: model.BindingFixed, Value: "/dev/vdb"}
+			t.Assembly["分区"][0].Bindings["disk"] = model.Binding{Source: model.BindingFixed, Value: "/dev/vdb", Editable: true}
+		}},
+		{"实例的取值来源可不可改", func(t *model.Template) {
+			b := t.Assembly["分区"][0].Bindings["disk"]
+			b.Editable = false
+			t.Assembly["分区"][0].Bindings["disk"] = b
 		}},
 	},
 	create: func(ctx context.Context, s *Store, t model.Template) (model.Template, error) {

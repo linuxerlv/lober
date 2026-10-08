@@ -541,7 +541,8 @@ func Test取值来源取不出正文或片段要的子值(t *testing.T) {
 		// hook 自己的激活判定拦得住这样的默认值，这里给的却是已审批的版本：在这条规则之前批准的照样能被引用。
 		{"实例参数沿用 hook 的 IPv6 默认值", gwHook(gwDefault, netmask),
 			model.Subject{Kind: "slot", ID: tplID, Path: "分区/1/gw"}},
-		// 所勾各系选中的片段不同，引用要并起来查：只看其中一个系，另一个系的主机建任务时照样报错。
+		// 所勾各系选中的片段不同，引用要并起来查：只看其中一个系，另一个系的主机建任务时照样报错。取 netmask 的是模板
+		// 勾的第一个系 rocky，只留最后一个系的退化由这一例抓；反方向的见 Test锁在默认值上却没有默认值（S3-13）。
 		{"实例参数写死了 IPv6，只有一个系的片段取了 netmask", all(gwSplit, setInstBinding("分区", 0, "gw", fixed(ipv6))),
 			model.Subject{Kind: "slot", ID: tplID, Path: "分区/1/gw"}},
 	}
@@ -596,8 +597,10 @@ func Test锁在默认值上却没有默认值(t *testing.T) {
 		h.Impls = append(h.Impls, model.Impl{Family: "linux", Series: []catalog.Series{"debian"}, Kind: model.ImplFragment,
 			Body: "d-i partman-auto-lvm/new_vg_name string {{param:vg}}\n"})
 	})
-	// 片段拆成每个系一份，只有 rocky 的那份引用它：所勾各系选中的片段要并起来看。
-	inOneTicked := vgHook(func(h *model.Hook) { splitPart(h, "volgroup {{param:vg}} pv.01", "") })
+	// 片段拆成每个系一份，只有 almalinux 的那份引用它：所勾各系选中的片段要并起来看。引用放在模板勾的第二个系
+	// 那里，与 Test取值来源取不出正文或片段要的子值 里放在 rocky 的那一例方向相反：只留第一个有引用的系的退化由
+	// 这一例抓，只留最后一个系的由那一例抓（S3-13）。
+	inOneTicked := vgHook(func(h *model.Hook) { splitPart(h, "", "volgroup {{param:vg}} pv.01") })
 	cases := []struct {
 		name string
 		mod  tplMod

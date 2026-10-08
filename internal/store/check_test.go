@@ -64,6 +64,7 @@ func TestCheckAudit各字段的规则(t *testing.T) {
 		{"Detail 恰好 4096 字节", func(a *store.Audit) { a.Detail = strings.Repeat("a", 4096) }, nil},
 		{"Detail 超过 4096 字节", func(a *store.Audit) { a.Detail = strings.Repeat("a", 4097) }, store.ErrInvalid},
 		{"Detail 含 NUL", func(a *store.Audit) { a.Detail = "理由\x00" }, store.ErrInvalid},
+		{"Detail 不是 UTF-8", func(a *store.Audit) { a.Detail = "理由\xff" }, store.ErrInvalid},
 		{"At 为 0", func(a *store.Audit) { a.At = 0 }, store.ErrInvalid},
 		{"At 为负", func(a *store.Audit) { a.At = -1 }, store.ErrInvalid},
 	}
@@ -391,7 +392,8 @@ func TestCheckNewTasks每条前提各一个反例(t *testing.T) {
 		{"CreatedAt 为 0", func(t *model.Task) { t.CreatedAt = 0 }, perTask},
 		{"CreatedAt 为负", func(t *model.Task) { t.CreatedAt = -1 }, perTask},
 		{"CreatedBy 为空", func(t *model.Task) { t.CreatedBy = "" }, perTask},
-		{"CreatedBy 存不下", func(t *model.Task) { t.CreatedBy = "al\x00ice" }, perTask},
+		{"CreatedBy 含 NUL", func(t *model.Task) { t.CreatedBy = "al\x00ice" }, perTask},
+		{"CreatedBy 不是 UTF-8", func(t *model.Task) { t.CreatedBy = "al\xffice" }, perTask},
 		{"快照格式不对", func(t *model.Task) { t.Snapshot.Schema = model.SnapshotSchema + 1 }, perTask},
 		{"HostSN 与快照不一致", func(t *model.Task) { t.Snapshot.Host.SN = "SN-9" }, perTask},
 		{"ISOID 与快照不一致", func(t *model.Task) { t.Snapshot.ISO.ID = "iso-other" }, perTask},

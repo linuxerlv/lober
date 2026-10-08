@@ -51,12 +51,24 @@ func sampleHook(name string) model.Hook {
 	}
 }
 
+// fullHook 是 sampleHook 再加两个参数，参数声明的每个字段就都有不是零值的了（S5-5）：一个列表参数声明了必填，一个 enum
+// 的选项取自 ISO 提供的集合 profiles。它照样能通过激活判定。sampleHook 不带这两个：建任务的夹具用它，Rocky 的 ISO
+// 不提供 profiles，必填的参数又没有值，参数求值会报错。
+func fullHook(name string) model.Hook {
+	h := sampleHook(name)
+	h.Params = append(h.Params,
+		model.ParamDecl{Name: "pkgs", Label: "软件包", Type: "word", List: true, Required: true},
+		model.ParamDecl{Name: "profile", Label: "安装类型", Type: "enum", Offer: "profiles"},
+	)
+	return h
+}
+
 // hookOps 把 Hooks 的方法接进共用用例。
 var hookOps = versioned[model.Hook]{
 	kind:   "hook",
 	idents: hookTables.idents,
 	sample: sampleHook,
-	full:   sampleHook, // sampleHook 的每一层都已有东西
+	full:   fullHook,
 	head: func(h model.Hook) head {
 		return head{h.ID, h.Version, h.Name, h.State, h.Author, h.Approver, h.Builtin, h.Rev}
 	},
@@ -79,6 +91,9 @@ var hookOps = versioned[model.Hook]{
 	variants: []variant[model.Hook]{
 		{"说明", func(h *model.Hook) { h.Description += "（改过）" }},
 		{"参数的默认值", func(h *model.Hook) { h.Params[2].Default = "ext4" }},
+		{"参数是否列表", func(h *model.Hook) { h.Params[3].List = false }},
+		{"参数是否必填", func(h *model.Hook) { h.Params[3].Required = false }},
+		{"参数的选项集合", func(h *model.Hook) { h.Params[4].Offer = "editions" }},
 		{"超时", func(h *model.Hook) { h.TimeoutSec = 900 }},
 		{"是否必需", func(h *model.Hook) { h.Required = false }},
 		{"实现的正文", func(h *model.Hook) { h.Impls[0].Body += "clearpart --all\n" }},
@@ -227,10 +242,10 @@ func hookCopies(t *testing.T, s *Store) {
 		h.Impls[1].Body = "改了"
 	}
 	ctx := t.Context()
-	in := sampleHook("Base-1")
+	in := fullHook("Base-1")
 	got, err := s.CreateHook(ctx, in)
 	must(t, err, "新建")
-	want := hookOps.withHead(sampleHook("Base-1"), hookOps.head(got))
+	want := hookOps.withHead(fullHook("Base-1"), hookOps.head(got))
 	mutate(in)
 	mutate(got)
 	wantEqual(t, hookOps.mustGet(t, s, want.ID, 1), want, "改了新建的入参与返回值之后")
@@ -337,8 +352,8 @@ type versioned[V any] struct {
 	kind   string // hook 或 template：Subject 的 Kind，也是审计对象的 TargetKind
 	idents string // 身份表：分配过的最大版本号 last_version 记在这里，经接口看不到（lastVersion）
 	// sample 是新建的入参：内容齐全、能通过激活判定，不带 ID 与版本，作者是 alice。full 同 sample，再把 sample 为了能
-	// 审批而空着的地方填上（模板插槽里的实例，引用的 hook 不必存在），内容的每一层都有东西：装载内置内容不跑激活判定，
-	// 内置的入参用它。
+	// 审批、能建任务而空着的地方填上（模板插槽里的实例，引用的 hook 不必存在；hook 里必填的列表参数与选项取自 ISO 的
+	// enum），内容的每一层、每个字段都有东西：装载内置内容不跑激活判定，内置的入参用它。
 	sample, full func(name string) V
 	head         func(v V) head
 	withHead     func(v V, h head) V

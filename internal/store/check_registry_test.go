@@ -220,7 +220,7 @@ func TestCheckISOText(t *testing.T) {
 }
 
 // C4：内容相同的只导入一次。空的 SHA256 与导入失败的 ISO 不占位，导入失败的可以记下与别的 ISO 相同的内容、指向那一个；
-// 已废弃的照样占着，内容相同的不能再导入一份。
+// 已废弃的照样占着，内容相同的不能再导入一份；获取中的也占着，内容的 SHA256 可能在字节到齐之前就记下了。
 func TestHoldsSHA256(t *testing.T) {
 	sum := strings.Repeat("5a", 32)
 	for _, c := range []struct {
@@ -228,6 +228,7 @@ func TestHoldsSHA256(t *testing.T) {
 		want bool
 	}{
 		{model.ISO{SHA256: sum, State: model.ISOReady}, true},
+		{model.ISO{SHA256: sum, State: model.ISOAcquiring}, true},
 		{model.ISO{SHA256: sum, State: model.ISOImporting}, true},
 		{model.ISO{SHA256: sum, State: model.ISODeprecated}, true},
 		{model.ISO{SHA256: sum, State: model.ISOFailed}, false},
