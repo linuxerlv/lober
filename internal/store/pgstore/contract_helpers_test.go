@@ -8,6 +8,9 @@ package pgstore
 // reflect.DeepEqual 比较，nil 与空的 map、切片算不同：写进去什么，就要读出什么。列表的顺序按字节序比较，不随数据库的
 // 排序规则变。
 //
+// 用例经 runCases、eachAudited、runAudited 并行跑（t.Parallel），所以用例之间不能共享可变的状态：包级的变量只读，记录都
+// 写进自己的仓储。测锁等待的测试（writeWhileHeld）与本身就在测并发的测试不走这三个入口，保持串行。
+//
 // 装查询结果的切片与 map 不是写进去的值，一律不为 nil：一页没有条目时 Items 是长度为 0 的切片，GetHosts 一台都
 // 没取到时是空 map。第 5 层编成 JSON 就是 [] 与 {}；nil 会编成 null，与 OpenAPI 描述的数组、对象对不上（前端的
 // 类型由它生成，spec §6.2 第 10 条）。
@@ -28,10 +31,14 @@ type testCase struct {
 	run  func(t *testing.T, s *Store)
 }
 
-// runCases 把每个用例作为子测试依次跑，各自 openContract 一个仓储。
+// runCases 把每个用例作为子测试并行跑，各自 openContract 一个仓储：每个用例一个 schema，彼此看不见，同时跑也互不干扰。
+// 同时打开的仓储数由 newSchema 里的信号量限住（testSlots）。用例里的子测试共用这个用例的仓储，照旧依次跑。
 func runCases(t *testing.T, cases []testCase) {
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) { c.run(t, openContract(t)) })
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			c.run(t, openContract(t))
+		})
 	}
 }
 
@@ -151,6 +158,32 @@ func wantPaged[T any](t *testing.T, pages [][]T, limit int, want []T, what strin
 		}
 	}
 	wantItems(t, slices.Concat(pages...), want, what)
+}
+
+// defaultPageSize 是 Limit 为 0 时每页取的条数（store.CheckQuery）。
+const defaultPageSize = 100
+
+// wantDefaultLimit 查各个列表「Limit 为 0 时取 100」：仓储里恰好有 defaultPageSize+1 条，want 是它们按列表的顺序排好的样子
+// （用例用 Limit 500 一次取出）。list 带着给定的游标、Limit 为 0 取一页：第一页 100 条且 Next 不为空，第二页只剩 1 条且 Next
+// 为空，两页拼起来就是 want。实现写成 Limit(q.Limit+1) 这类回退，要等库里真有许多数据才暴露，这里先钉住。
+func wantDefaultLimit[T any](t *testing.T, want []T, list func(cursor string) (store.Page[T], error)) {
+	t.Helper()
+	if len(want) != defaultPageSize+1 {
+		t.Fatalf("用例要先备好 %d 条，备了 %d 条", defaultPageSize+1, len(want))
+	}
+	first, err := list("")
+	must(t, err, "Limit 为 0 取第 1 页")
+	if len(first.Items) != defaultPageSize || first.Next == "" {
+		t.Fatalf("Limit 为 0 时应取 %d 条并给出下一页，得到 %d 条，Next %q", defaultPageSize, len(first.Items), first.Next)
+	}
+	rest, err := list(first.Next)
+	must(t, err, "Limit 为 0 取第 2 页")
+	if len(rest.Items) != 1 || rest.Next != "" {
+		t.Fatalf("第 2 页应只剩 1 条、Next 为空，得到 %d 条，Next %q", len(rest.Items), rest.Next)
+	}
+	if !reflect.DeepEqual(slices.Concat(first.Items, rest.Items), want) {
+		t.Fatal("Limit 为 0 翻出的两页拼起来，与一次取出的全部不同")
+	}
 }
 
 // contents 是经接口看得见的全部记录，用来断言一次被拒绝或失败的写入什么都没改。

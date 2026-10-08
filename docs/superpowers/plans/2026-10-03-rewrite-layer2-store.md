@@ -448,7 +448,7 @@ func (s *Store) Close() error
 
 **风险：**
 - `go mod tidy` 之后检查 go.sum，确认没有带进计划外的模块；pgx 的版本由 gorm 的驱动决定，在提交说明里写明解析出来的是哪个版本。
-- 每次 Open 都要建 schema 和跑 AutoMigrate，测试会慢一些。只要单个包在一分钟以内就不用优化；超过了，在报告里写明耗时。
+- 每次 Open 都要建 schema 和跑 AutoMigrate，测试会慢一些。原定单个包在一分钟以内就不用优化。串行时 pgstore 包要 137 秒（S4-2 实测；第 2 层修补加了用例之后是 142 秒），超了，所以契约用例改为并行（2026-10-08，修补计划 U6）：runCases、eachAudited、runAudited 的子测试加 t.Parallel，每个用例各用一个 schema，互不干扰。同时打开的仓储数由夹具里的信号量限住，4 个（pgtest 的 maxOpen，pgstore 包内测试的 maxTestOpen 与它相同）：每个仓储最多 4 个连接，几个代理同时跑测试共用 max_connections（本机 100，测试角色能用 97），不限会撑满；一个进程最多占 20 个，四个进程同时到顶也只占 80 个，再往上加，瓶颈在库里建表，快得不多。并行后 pgstore 包是 90 秒，其中契约用例从 117 秒降到 53 秒，剩下的约 37 秒是串行的表结构断言与锁等待测试。仍超一分钟，再考虑复用 schema（S4-2 的选项 C）。信号量只管一个测试进程：第 4、5、7 层也连库之后，go test 会同时跑好几个包，各占各的位，合起来可能比一个包多出几倍。
 - 本机的 PostgreSQL 跑在 Windows 上，Linux 上的实测由主会话在任务 10 之后做。
 
 ### 任务 8：PostgreSQL 实现的 hook 与模板
