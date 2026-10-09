@@ -20,10 +20,12 @@ import (
 // 这里用的是同一套取值规则，不会有两份结果对不上。插槽的顺序也不靠调用方给，自己重新扫描正文去取。
 //
 // 草稿没过激活判定也要能预览（C22），所以渲染依赖的前提由这里自己守住（L-7）。依次查下面几样，
-// 有问题就返回这一样的问题，不产出快照，也不再往下查。前三样在正常流程里已被激活判定、准入判定与
+// 有问题就返回这一样的问题，不产出快照，也不再往下查。前四样在正常流程里已被激活判定、准入判定与
 // 参数求值挡住，这里是最后一道：错的快照要到机器装到一半才会暴露。
 //   - ISO 的系不在模板所勾的系里，或不是目录里的系（推不出族与格式）：报 series_not_ticked，只报
 //     这一条。模板本不为这个系而写，接着求值只会多出一串因它而起的 impl_missing_for_series。
+//   - 正文里的插槽（见 slotProblems），每处都查、问题都报：重名报 slot_duplicate，执行插槽的时机该格式
+//     不支持报 slot_timing_unsupported，与激活判定报的相同。正文本身不成立，参数的问题等它改好再报。
 //   - 参数求值有问题：原样返回。
 //   - 插槽里的实例（见 instance），每个都查、问题都报：引用的 hook 不在 in.Hooks 里报
 //     hook_ref_missing，没有覆盖该系的实现报 impl_missing_for_series，与参数求值报的相同；所选实现
@@ -31,8 +33,8 @@ import (
 //   - {{sys:sn}}（见 unsafeSN）：正文或所选片段引用了它、而主机 SN 不是安全词时报 sn_unsafe_in_body。
 //     准入判定与参数求值都不查这一条；建任务与预览都要经这里构建快照，所以都在装机之前被拒。
 //
-// 渲染因此可以依赖三条不变式：执行插槽里只有带摘要的脚本，片段插槽里只有片段，Family 与 Format
-// 非空。
+// 渲染因此可以依赖五条不变式：执行插槽里只有带摘要的脚本，片段插槽里只有片段，Family 与 Format
+// 非空，执行插槽的时机该格式支持，正文里的插槽名与 Slots 一一对应、没有重名。
 //
 // 同样的输入得到深度相等的快照，用 encoding/json 编码两次字节相同：列表按正文与装配表的顺序，
 // map 由 encoding/json 按键排序。快照里的 map 与切片都是新建的，不与入参共用；没有内容的也给
@@ -45,11 +47,41 @@ func Build(in params.Input) (model.Snapshot, []model.Problem) {
 		subject := model.Subject{Kind: "template", ID: templateRef(t)}
 		return model.Snapshot{}, []model.Problem{model.NewProblem("series_not_ticked", subject, string(series))}
 	}
+	if ps := slotProblems(t, series.Format()); len(ps) > 0 {
+		return model.Snapshot{}, ps
+	}
 	res := params.Evaluate(in)
 	if len(res.Problems) > 0 {
 		return model.Snapshot{}, res.Problems
 	}
 	return buildFrom(in, res)
+}
+
+// slotProblems 按正文里的顺序查模板 t 的每个插槽：名字不重复，执行插槽的时机格式 format 支持。两条与
+// 激活判定查插槽的相同（C14），Subject 也相同，落在插槽上、带行列；重名的报在后出现的那一处，同一处两条
+// 都犯就两条都报。扫描错误归激活判定报，写错的插槽占位符不算插槽。
+//
+// 激活判定已拦下这两样，构建还要再查，是因为渲染依赖它们：快照的 Slots 不记正文里的插槽段对应哪一个，
+// 重名时渲染可能拿片段插槽的实例去展开同名的执行插槽段；时机该格式不支持的执行插槽，安装器里没有地方跑。
+func slotProblems(t model.Template, format catalog.Format) []model.Problem {
+	body, _ := scan.Scan(t.Body)
+	var out []model.Problem
+	seen := make(map[string]bool, len(body.Slots))
+	for _, seg := range body.Segments {
+		if seg.Kind != scan.KindSlot {
+			continue
+		}
+		slot := seg.Slot
+		at := model.Subject{Kind: "slot", ID: templateRef(t), Path: slot.Name, Line: seg.Line, Col: seg.Col}
+		if seen[slot.Name] {
+			out = append(out, model.NewProblem("slot_duplicate", at, slot.Name))
+		}
+		seen[slot.Name] = true
+		if slot.Exec && !slices.Contains(format.Timings(), slot.Timing) {
+			out = append(out, model.NewProblem("slot_timing_unsupported", at, slot.Timing, format))
+		}
+	}
+	return out
 }
 
 // buildFrom 是 Build 在参数求值通过之后的部分，res 是 in 的求值结果。单独拆出来，是为了测得到
@@ -139,19 +171,13 @@ type builder struct {
 }
 
 // slots 按正文里出现的顺序列出插槽，连同各实例的问题（见 instance）；有问题时这些插槽不完整，
-// 由调用方丢掉。重名的只按第一次出现的算，与参数求值一致：插槽重名由激活判定报（slot_duplicate），
-// 草稿照样能预览，后面那几处的类型与时机也就不拿来查适配。扫描错误也归激活判定报，写错的占位符
-// 原样留在正文里。
+// 由调用方丢掉。插槽重名在 Build 里已经拒了（slotProblems），这里每个插槽名只出现一次，序号就是它在
+// 正文里的位置。扫描错误归激活判定报，写错的占位符原样留在正文里。
 func (b builder) slots() ([]model.SnapshotSlot, []model.Problem) {
 	body, _ := scan.Scan(b.in.Template.Body)
 	out := make([]model.SnapshotSlot, 0, len(body.Slots))
 	var problems []model.Problem
-	seen := make(map[string]bool, len(body.Slots))
 	for _, s := range body.Slots {
-		if seen[s.Name] {
-			continue
-		}
-		seen[s.Name] = true
 		insts := b.in.Template.Assembly[s.Name]
 		slot := model.SnapshotSlot{
 			Seq: len(out) + 1, Name: s.Name, Exec: s.Exec, Timing: s.Timing,

@@ -446,10 +446,67 @@ func TestIsSafeWord与计划的字符集和长度一致(t *testing.T) {
 			t.Errorf("IsSafeWord(%q) 应为 false", s)
 		}
 	}
-	// 以 - 或 @ 开头的也照收（T6-3 只补了文档）：要不要拒收，留到第 3 层写内置模板之前再定，到时改这里。
-	for _, s := range []string{"w", strings.Repeat("w", 128), "VMWARE-42-1A", "Asia/Shanghai", "ops@lab:a^b+c=d_e.f", "--setopt=sslverify=0", "@x"} {
+	for _, s := range []string{"w", strings.Repeat("w", 128), "VMWARE-42-1A", "Asia/Shanghai", "ops@lab:a^b+c=d_e.f"} {
 		if !IsSafeWord(s) {
 			t.Errorf("IsSafeWord(%q) 应为 true", s)
+		}
+	}
+}
+
+// 以 - 或 @ 开头的不是安全词（T6-3 选 B）：以 - 开头的放进 shell 命令的参数位置会被当成选项，加引号也挡不住
+// （dnf install -y {{param:pkg}} 填进 --setopt=sslverify=0 就关掉了校验）；以 @ 开头的在 PowerShell 里会被当成
+// 展开。只限开头，这两个字符在别处照收。
+func TestIsSafeWord拒收以减号或at开头的串(t *testing.T) {
+	for _, s := range []string{"-", "-x", "--setopt=sslverify=0", "-1", "@", "@x", "@lab:a"} {
+		if IsSafeWord(s) {
+			t.Errorf("IsSafeWord(%q) 应为 false", s)
+		}
+	}
+	for _, s := range []string{"a-", "a@", "x--y", "ops@lab", "kernel-5.14.0", "a-@b", "0-", "_-x", "+@x"} {
+		if !IsSafeWord(s) {
+			t.Errorf("IsSafeWord(%q) 应为 true", s)
+		}
+	}
+}
+
+// 首字符的限制只管整串就是安全词的取值，也就是 word 与 enum：以 - 开头的 word、以 @ 开头的 enum 都拒收。别的
+// 类型不受它牵连，没有合理的取值因此被误杀：int 的负数本来就以 - 开头，它按自己的语法解析；diskpath 总以
+// /dev/ 开头，段里的 - 照收；sshkey 的注释在算法与公钥之后，不在开头，以 - 或 @ 开头的注释照收。
+func TestParse首字符的限制只管word与enum(t *testing.T) {
+	bad := []struct {
+		decl ParamDecl
+		raw  string
+	}{
+		{ParamDecl{Name: "pkg", Type: "word"}, "--setopt=sslverify=0"},
+		{ParamDecl{Name: "pkg", Type: "word"}, "@x"},
+		{ParamDecl{Name: "edition", Type: "enum", Offer: "editions"}, "-Pro"},
+		{ParamDecl{Name: "edition", Type: "enum", Offer: "editions"}, "@Pro"},
+	}
+	for _, c := range bad {
+		if v, err := c.decl.Parse(c.raw); err == nil {
+			t.Errorf("%s（%s）：%q 应拒收，得到 %q", c.decl.Name, c.decl.Type, c.raw, v.Canonical())
+		}
+	}
+	ok := []struct {
+		decl      ParamDecl
+		raw, want string
+	}{
+		{ParamDecl{Name: "count", Type: "int"}, "-12", "-12"},
+		{ParamDecl{Name: "offset", Type: "int", Min: int64p(-100), Max: int64p(-1)}, "-007", "-7"},
+		{ParamDecl{Name: "disk", Type: "diskpath"}, "/dev/disk/by-id/-x", "/dev/disk/by-id/-x"},
+		{ParamDecl{Name: "key", Type: "sshkey"}, "ssh-ed25519 " + keyEd25519B64 + " -laptop", "ssh-ed25519 " + keyEd25519B64 + " -laptop"},
+		{ParamDecl{Name: "key", Type: "sshkey"}, "ssh-ed25519 " + keyEd25519B64 + " @work", "ssh-ed25519 " + keyEd25519B64 + " @work"},
+	}
+	for _, c := range ok {
+		if got := mustParse(t, c.decl, c.raw).Canonical(); got != c.want {
+			t.Errorf("%s（%s）：%q 的规范形式应为 %q，得到 %q", c.decl.Name, c.decl.Type, c.raw, c.want, got)
+		}
+	}
+	// enum 的静态选项值同样不能以 - 或 @ 开头：它原样进正文，与取值是一回事。
+	for _, v := range []string{"-x", "@x"} {
+		d := ParamDecl{Name: "profile", Type: "enum", Options: []Option{{"server", "服务器"}, {v, "坏选项"}}}
+		if ps := d.Validate(); len(ps) != 1 || ps[0].Code != "param_decl_invalid" {
+			t.Errorf("选项值 %q：应报 param_decl_invalid，得到 %v", v, ps)
 		}
 	}
 }
@@ -624,6 +681,39 @@ func TestValueSub不适用时报param_accessor_invalid(t *testing.T) {
 		p := asProblem(t, err)
 		if p.Code != "param_accessor_invalid" || !strings.Contains(p.Message, "「"+c.sub+"」") {
 			t.Errorf("%s：应报 param_accessor_invalid 并点出子值名 %q，得到 %s：%s", name, c.sub, p.Code, p.Message)
+		}
+	}
+}
+
+// 哪些类型有哪些子值、子值是什么类型，只登记在 cidrAccessors 一处（T6-6）：激活判定按声明查引用的子值、
+// 渲染取子值都问 SubType，不另抄一份。只有 cidr 有子值，addr 与 netmask 是 ip，prefix 是 int；取出的
+// 子值的类型与 Value.Sub 给的一致。
+func TestParamTypeSubType只有cidr有子值(t *testing.T) {
+	v4 := mustParse(t, ParamDecl{Name: "addr", Type: "cidr"}, "10.0.0.3/8")
+	for sub, want := range map[string]ParamType{"addr": "ip", "prefix": "int", "netmask": "ip"} {
+		got, ok := ParamType("cidr").SubType(sub)
+		if !ok || got != want {
+			t.Errorf("cidr 的 %s 应是 %s，得到 %q、%v", sub, want, got, ok)
+		}
+		if v, err := v4.Sub(sub); err != nil || v.typ != got {
+			t.Errorf("cidr 的 %s：SubType 给 %q，Value.Sub 给 %q（%v），两边应一致", sub, got, v.typ, err)
+		}
+	}
+	// 别的类型什么子值都没有，不认识的类型与大小写不对的写法也一样。
+	for _, typ := range append(slices.Clone(paramTypes), "", "CIDR", "string") {
+		if typ == "cidr" {
+			continue
+		}
+		for _, sub := range []string{"addr", "prefix", "netmask"} {
+			if got, ok := typ.SubType(sub); ok || got != "" {
+				t.Errorf("%q 不应有子值 %s，得到 %q、%v", typ, sub, got, ok)
+			}
+		}
+	}
+	// 子值名写错：大小写不对、不认识、为空、把 |join 或带点的整串当成子值名。
+	for _, sub := range []string{"Addr", "mask", "", "|join", "addr.netmask"} {
+		if got, ok := ParamType("cidr").SubType(sub); ok || got != "" {
+			t.Errorf("cidr 不应有子值 %q，得到 %q、%v", sub, got, ok)
 		}
 	}
 }

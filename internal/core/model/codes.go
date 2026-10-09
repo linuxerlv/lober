@@ -165,11 +165,13 @@ var codeTable = map[Code]codeSpec{
 	"template_mixed_formats": {CategoryIncomplete, 1,
 		"模板勾的系不是同一种格式：%[1]v",
 		"一个模板只能勾同一种格式的系，正文按这种格式写；其他格式的系另建模板"},
-	// 插槽名重复。参数：插槽名。
+	// 插槽名重复，不论类型；每多出现一次报一条，落在后出现的那一处。快照构建也报它（第 3 层任务 1）：
+	// 草稿照样能预览，渲染却要依赖正文里的插槽名与快照一一对应。两处的 Subject 相同：Kind 为 slot，
+	// ID 为「模板 ID@版本」，Path 为插槽名，带行列。参数：插槽名。
 	"slot_duplicate": {CategoryIncomplete, 1,
 		"插槽「%[1]v」在正文里出现了不止一次",
 		"插槽名在一个模板里要唯一；给其中一个改名"},
-	// 执行插槽的时机该格式不支持。参数：时机、格式。
+	// 执行插槽的时机该格式不支持。快照构建也报它，理由与 Subject 同 slot_duplicate。参数：时机、格式。
 	"slot_timing_unsupported": {CategoryIncomplete, 2,
 		"%[2]v 格式不支持执行时机「%[1]v」",
 		"把这个执行插槽改成 %[2]v 格式支持的时机"},
@@ -310,7 +312,7 @@ var codeTable = map[Code]codeSpec{
 	// 产出，Subject 的 Kind 为 host，ID 为 SN。参数：SN。
 	"sn_unsafe_in_body": {CategoryIncompatible, 1,
 		"主机 SN「%[1]v」不是安全词，原样代入模板正文或所选片段里的 {{sys:sn}} 可能改变应答文件的结构",
-		"能代入 {{sys:sn}} 的 SN 只能由字母、数字和 ._:/@^+=- 组成，不能有空格；给这台主机换一个不引用 {{sys:sn}} 的模板，" +
+		"能代入 {{sys:sn}} 的 SN 只能由字母、数字和 ._:/@^+=- 组成，不能有空格，也不能以 - 或 @ 开头；给这台主机换一个不引用 {{sys:sn}} 的模板，" +
 			"或在模板正文与片段里去掉 {{sys:sn}}、改用取自主机属性的 word 参数，审批后再建任务"},
 
 	// —— 第 1 层修补轮追加（plans/2026-10-02-layer1-fixups.md「新增代码」，括号里是遗留问题清单的条目） ——
@@ -417,7 +419,7 @@ const (
 // 内容照计划任务 6 的类型表，由参数取值的 Parse 按声明的类型选用。列表的项数与总长
 // 规则写在该代码的下一步里；int 的具体范围见下面的 intRange*。
 var paramValueFormats = map[string]string{
-	"word":     "由 1–128 个字母、数字或 ._:/@^+=- 字符组成的串",
+	"word":     "由 1–128 个字母、数字或 ._:/@^+=- 字符组成的串，不能以 - 或 @ 开头",
 	"int":      "十进制整数",
 	"enum":     "列出的选项之一",
 	"ip":       "不带 zone 的 IPv4 或 IPv6 地址，IPv4 的各段不带前导零",

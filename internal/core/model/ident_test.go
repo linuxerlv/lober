@@ -273,6 +273,37 @@ func TestValidID收仓储生成的与内置的ID(t *testing.T) {
 	}
 }
 
+// 「合 ValidID 的都是安全词」逐个字符核对（S1-6）：0x00–0x7F 里每个字符拼在 a 的前后，再加几个非 ASCII
+// 字符，凡 ValidID 收的，IsSafeWord 也得收。字符拼在开头和结尾两处试：安全词收紧了首字符（不以 - 或 @
+// 开头），ValidID 本来就不收这两种开头，所以仍是子集；以后若对结尾另加限制，这里先报红。长度那一半
+// 另比上限：ValidID 收的最长串也不能超出安全词的上限。
+func TestValidID合它的都是安全词(t *testing.T) {
+	if idMaxLen > safeWordMaxLen {
+		t.Errorf("ID 最长 %d 个字符，超出了安全词的上限 %d", idMaxLen, safeWordMaxLen)
+	}
+	var chars []rune
+	for r := range rune(0x80) {
+		chars = append(chars, r)
+	}
+	chars = append(chars, 0x00a0, 0xff41, '名') // 不换行空格、全角的 a、汉字
+	accepted := 0
+	for _, r := range chars {
+		for _, s := range []string{string(r) + "a", "a" + string(r)} {
+			if !ValidID(s) {
+				continue
+			}
+			accepted++
+			if !IsSafeWord(s) {
+				t.Errorf("ValidID(%q) 为 true，IsSafeWord 却不收它", s)
+			}
+		}
+	}
+	// 小写字母与数字各拼两处，- 只能拼在结尾：没收到这么多，说明 ValidID 的规则变了，这里要跟着核对。
+	if want := (26+10)*2 + 1; accepted != want {
+		t.Errorf("ValidID 收了 %d 个拼出的串，应为 %d 个", accepted, want)
+	}
+}
+
 // 每一例只犯一条规则。
 func TestValidID拒收(t *testing.T) {
 	cases := []struct{ name, s string }{

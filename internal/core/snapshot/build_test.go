@@ -14,6 +14,7 @@ import (
 	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/core/params"
+	"github.com/lober/lober/internal/core/scan"
 )
 
 const hostSN = "SN-0001"
@@ -167,7 +168,7 @@ func scalar(typ model.ParamType, item string) model.SnapshotValue {
 	return model.SnapshotValue{Type: typ, Items: []string{item}}
 }
 
-// mustBuild 构建快照，并核对渲染要依赖的三条不变式（L-7，见 Build 的文档）：每个构建得出的快照
+// mustBuild 构建快照，并核对渲染要依赖的五条不变式（L-7，见 Build 的文档）：每个构建得出的快照
 // 都要满足，不只是专门测它们的那几例。
 func mustBuild(t *testing.T, in params.Input) model.Snapshot {
 	t.Helper()
@@ -177,6 +178,20 @@ func mustBuild(t *testing.T, in params.Input) model.Snapshot {
 	}
 	if snap.Family == "" || snap.Format == "" {
 		t.Errorf("族与格式应非空：%q、%q", snap.Family, snap.Format)
+	}
+	body, _ := scan.Scan(snap.Template.Body)
+	if len(body.Slots) != len(snap.Slots) {
+		t.Errorf("正文里有 %d 个插槽，快照里有 %d 个，应一一对应：%+v", len(body.Slots), len(snap.Slots), body.Slots)
+	}
+	for i, s := range body.Slots {
+		if i < len(snap.Slots) && (snap.Slots[i].Name != s.Name || snap.Slots[i].Exec != s.Exec || snap.Slots[i].Timing != s.Timing) {
+			t.Errorf("正文里第 %d 个插槽是 %+v，快照里是 %+v", i+1, s, snap.Slots[i])
+		}
+	}
+	for _, s := range snap.Slots {
+		if s.Exec && !slices.Contains(snap.Format.Timings(), s.Timing) {
+			t.Errorf("执行插槽 %s 的时机 %s 不在 %s 格式支持的时机里", s.Name, s.Timing, snap.Format)
+		}
 	}
 	for _, s := range snap.Slots {
 		for i, inst := range s.Instances {
@@ -842,20 +857,141 @@ func TestBuild空集合在JSON里不是null(t *testing.T) {
 	}
 }
 
-// 插槽重名、参数重名由激活判定拦下（slot_duplicate、param_decl_invalid），草稿照样能预览。这里与
-// 参数求值一样只按第一次出现的算：插槽不重复列出，序号连续；参数的类型按进了表单的那个声明记。
-// 重名的插槽插在正文中间，后面还有两个插槽：序号若按扫描到的位置编，它们会往后错一位（T11-10③）。
-// 它写成执行插槽，「分区」里的片段也不按它查适配。
-func TestBuild重名的插槽与参数只算第一次出现(t *testing.T) {
+// 参数重名由激活判定拦下（param_decl_invalid），草稿照样能预览。这里与参数求值一样只按第一次出现的算：
+// 参数的类型按进了表单的那个声明记。插槽重名不同，构建时就拒，见下一个测试。
+func TestBuild重名的参数只算第一次出现(t *testing.T) {
 	in := baselineInput("rocky")
-	replaceInBody(t, &in, "{{slot:账号}}\n", "{{slot:账号}}\n{{slot:分区@firstboot}}\n")
 	in.Template.Params = append(in.Template.Params, model.ParamDecl{Name: "hostname", Label: "重名的主机名", Type: "word"})
 	got := mustBuild(t, in)
 	want := mustBuild(t, baselineInput("rocky"))
-	if !reflect.DeepEqual(got.Slots, want.Slots) {
-		t.Errorf("插槽是\n%s\n应与没有重名时相同：\n%s", indentJSON(t, got.Slots), indentJSON(t, want.Slots))
-	}
 	if !reflect.DeepEqual(got.Template.Params, want.Template.Params) {
 		t.Errorf("模板参数的取值是 %v，应与没有重名时相同：%v", got.Template.Params, want.Template.Params)
 	}
+}
+
+// bodySlotAt 是落在正文里插槽 name 上的问题应有的代码与对象，带它在正文里的行列。
+func bodySlotAt(code model.Code, id, name string, line, col int) model.Problem {
+	return model.Problem{Code: code, Subject: model.Subject{Kind: "slot", ID: id, Path: name, Line: line, Col: col}}
+}
+
+// 插槽重名在构建时就拒，不论类型：渲染要把正文里的插槽段对到快照的 Slots，快照里重名的只能留一个，
+// 渲染就可能拿片段插槽的实例去展开同名的执行插槽段。激活判定也报它，草稿却照样能预览，所以这里守住
+// 「正文里的插槽名与 Slots 一一对应」。每多出现一次报一条，落在后出现的那一处，与激活判定一致。
+func TestBuild正文里插槽重名时不产出快照(t *testing.T) {
+	cases := []struct {
+		name     string
+		old, new string
+		want     []model.Problem
+	}{
+		{"片段插槽写了两次", "{{slot:账号}}\n", "{{slot:账号}}\n{{slot:分区}}\n",
+			[]model.Problem{bodySlotAt("slot_duplicate", "baseline@3", "分区", 8, 1)}},
+		// 执行插槽可以写在行内，问题带上它所在的列。
+		{"执行插槽写了两次", "{{lober:firstboot}}\n", "echo {{slot:装后配置@post-target}}\n{{lober:firstboot}}\n",
+			[]model.Problem{bodySlotAt("slot_duplicate", "baseline@3", "装后配置", 13, 6)}},
+		// 片段插槽后跟同名的执行插槽：从前构建只留第一个，渲染会拿「分区」的片段去对这个执行插槽段。
+		{"片段插槽后跟同名的执行插槽", "{{slot:账号}}\n", "{{slot:账号}}\n{{slot:分区@firstboot}}\n",
+			[]model.Problem{bodySlotAt("slot_duplicate", "baseline@3", "分区", 8, 1)}},
+		{"三个同名", "{{slot:账号}}\n", "{{slot:账号}}\n{{slot:分区}}\n{{slot:分区@post-target}}\n", []model.Problem{
+			bodySlotAt("slot_duplicate", "baseline@3", "分区", 8, 1),
+			bodySlotAt("slot_duplicate", "baseline@3", "分区", 9, 1),
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := baselineInput("rocky")
+			replaceInBody(t, &in, c.old, c.new)
+			for _, p := range mustFail(t, in, c.want...) {
+				if !strings.Contains(p.Message, "「"+p.Subject.Path+"」") {
+					t.Errorf("slot_duplicate 的说明应点出插槽名：%s", p.Message)
+				}
+			}
+		})
+	}
+	// 与 series_not_ticked 一样在求值之前查：正文本身就不成立，参数的问题等它改好了再报。ISO 的系没勾时
+	// 仍只报 series_not_ticked 那一条。
+	t.Run("参数求值也有问题", func(t *testing.T) {
+		in := baselineInput("rocky")
+		replaceInBody(t, &in, "{{slot:账号}}\n", "{{slot:账号}}\n{{slot:分区}}\n")
+		in.Entered["tpl/nope"] = "x"
+		mustFail(t, in, bodySlotAt("slot_duplicate", "baseline@3", "分区", 8, 1))
+	})
+	t.Run("ISO 的系也没勾", func(t *testing.T) {
+		in := baselineInput("debian")
+		replaceInBody(t, &in, "{{slot:账号}}\n", "{{slot:账号}}\n{{slot:分区}}\n")
+		mustFail(t, in, templateAt("series_not_ticked"))
+	})
+}
+
+// bareInput 是只有一行正文 line 的草稿模板配 s 系的 ISO：没有参数、装配表为空，参数求值没有可报的。
+func bareInput(s catalog.Series, line string) params.Input {
+	return params.Input{
+		Template: model.Template{ID: "bare", Version: 1, Name: "最小模板", State: model.VersionDraft,
+			Family: s.Family(), Series: []catalog.Series{s}, Body: line},
+		ISO:  isoFor(s),
+		Host: model.Host{SN: hostSN},
+	}
+}
+
+// allTimings 是目录里的四个时机。目录没有列出全部时机的公开查询，所以写死在这里：逐个确认它们都认识，
+// 再确认各格式支持的时机都在其中，目录加了第五个时机，下面的矩阵不会静默漏掉它。
+var allTimings = []catalog.Timing{"pre", "post-installer", "post-target", "firstboot"}
+
+// 执行插槽的时机要在该格式的时机表里（C14）。激活判定也报它，草稿却照样能预览，所以这里守住「执行插槽的
+// 时机该格式支持」，渲染不必另查。逐个系、逐个时机按目录核对：支持的照常构建，不支持的报一条落在插槽上的
+// 问题，说明点出时机与格式。目录里只有 unattend 与 esxi-ks 有不支持的时机，其余格式四个都支持；
+// 写错的时机在扫描时就是 timing_unknown，成不了插槽，查不到这里。
+//
+// 支不支持在 t.Run 之前就算好：子测试被 -run 滤掉时闭包不执行，unsupported 若在闭包里记，父测试的断言就会
+// 误报「目录改了」。
+func TestBuild执行插槽的时机该格式不支持时不产出快照(t *testing.T) {
+	for _, tm := range allTimings {
+		if !tm.Valid() {
+			t.Fatalf("%s 不是目录里的时机", tm)
+		}
+	}
+	unsupported := map[catalog.Format]bool{}
+	for _, fam := range catalog.Families() {
+		for _, s := range catalog.SeriesOf(fam) {
+			for _, tm := range s.Format().Timings() {
+				if !slices.Contains(allTimings, tm) {
+					t.Errorf("%s 格式支持的时机 %s 不在 allTimings 里，矩阵查不到它", s.Format(), tm)
+				}
+			}
+			for _, tm := range allTimings {
+				supported := slices.Contains(s.Format().Timings(), tm)
+				if !supported {
+					unsupported[s.Format()] = true
+				}
+				t.Run(string(s)+"@"+string(tm), func(t *testing.T) {
+					in := bareInput(s, "{{slot:x@"+string(tm)+"}}\n")
+					if supported {
+						mustBuild(t, in)
+						return
+					}
+					ps := mustFail(t, in, bodySlotAt("slot_timing_unsupported", "bare@1", "x", 1, 1))
+					if msg := ps[0].Message; !strings.Contains(msg, "「"+string(tm)+"」") || !strings.Contains(msg, string(s.Format())) {
+						t.Errorf("slot_timing_unsupported 的说明应点出时机与格式：%s", msg)
+					}
+				})
+			}
+		}
+	}
+	if want := map[catalog.Format]bool{"unattend": true, "esxi-ks": true}; !reflect.DeepEqual(unsupported, want) {
+		t.Errorf("有不支持的时机的格式是 %v，应为 %v：目录改了，这里的说明跟着核对", unsupported, want)
+	}
+	// 不靠目录推算的两例：Windows 没有装后，ESXi 没有目标系统内的装后。
+	mustFail(t, bareInput("windows-server", "{{slot:x@post-target}}\n"), bodySlotAt("slot_timing_unsupported", "bare@1", "x", 1, 1))
+	mustFail(t, bareInput("esxi", "{{slot:x@post-target}}\n"), bodySlotAt("slot_timing_unsupported", "bare@1", "x", 1, 1))
+}
+
+// 两条一起查、问题按正文里的位置排：同一个插槽既重名、时机又不支持，两条都报，与激活判定一致。和重名一样
+// 在求值之前查，参数求值的问题不报。
+func TestBuild插槽重名与时机不支持一起报(t *testing.T) {
+	in := bareInput("windows-server", "{{slot:x@post-target}}\n{{slot:y@firstboot}}\n{{slot:x@post-installer}}\n")
+	in.Entered = map[params.FieldKey]string{"tpl/nope": "x"}
+	mustFail(t, in,
+		bodySlotAt("slot_timing_unsupported", "bare@1", "x", 1, 1),
+		bodySlotAt("slot_duplicate", "bare@1", "x", 3, 1),
+		bodySlotAt("slot_timing_unsupported", "bare@1", "x", 3, 1),
+	)
 }

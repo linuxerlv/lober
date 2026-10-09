@@ -304,7 +304,7 @@ func (r *bodyRules) param(seg scan.Segment, s model.Subject) []model.Problem {
 		return []model.Problem{model.NewProblem("param_text_in_fragment", s, ref.Name)}
 	}
 	var out []model.Problem
-	if ref.Sub != "" && !subOK(info.decl, ref.Sub) {
+	if _, ok := info.decl.Type.SubType(ref.Sub); ref.Sub != "" && !ok {
 		out = append(out, model.NewProblem("param_accessor_invalid", s, ref.Sub))
 	}
 	if ref.Join && !info.decl.List {
@@ -324,28 +324,16 @@ func (r *bodyRules) param(seg scan.Segment, s model.Subject) []model.Problem {
 	return out
 }
 
-// subOK 拿一个 IPv4 的 cidr 样例按声明解析，再取子值：哪些类型有哪些子值只在 model 里
-// 登记一处，这里不另抄一份。样例对别的类型要么解析不了，要么解析成该类型的值、取子值时被
-// 拒，结果都对。netmask 只适用于 IPv4，取值是不是 IPv6 要看具体的值，见 valueProblems。
-func subOK(d model.ParamDecl, sub string) bool {
-	v, err := model.ParamDecl{Name: d.Name, Type: d.Type}.Parse("192.0.2.1/24")
-	if err != nil {
-		return false
-	}
-	_, err = v.Sub(sub)
-	return err == nil
-}
-
 // valueProblems 查 raw 能不能作为参数 d 的取值：通过类型校验（C19），并取得出 subs 里的每个子值
-// （L-4）。按类型就取不了的子值已在引用处报过（subOK），这里跳过，不连带再报一遍；剩下的只取决于
-// 取值本身，比如 IPv6 的 cidr 取不出 netmask。有一个取不出就报，与参数求值一致。问题指向 s。
+// （L-4）。按类型就取不了的子值（model.ParamType.SubType）已在引用处报过，这里跳过，不连带再报一遍；
+// 剩下的只取决于取值本身，比如 IPv6 的 cidr 取不出 netmask。有一个取不出就报，与参数求值一致。问题指向 s。
 func valueProblems(d model.ParamDecl, raw string, subs []string, s model.Subject) []model.Problem {
 	v, err := d.Parse(raw)
 	if err != nil {
 		return []model.Problem{withSubject(err, s)}
 	}
 	for _, sub := range subs {
-		if !subOK(d, sub) {
+		if _, ok := d.Type.SubType(sub); !ok {
 			continue
 		}
 		if _, err := v.Sub(sub); err != nil {

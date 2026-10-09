@@ -287,20 +287,32 @@ func ipv4Netmask(p netip.Prefix) (string, bool) {
 	return netip.AddrFrom4(mask).String(), true
 }
 
-// Sub 取子值，列表逐项取，结果仍是列表。只有 cidr 有子值：addr 与 netmask 是 ip，prefix 是
-// int，netmask 只适用于 IPv4。看的是声明的类型，不看取值长得像不像 cidr。不适用时 error 是
-// Problem，代码为 param_accessor_invalid，Subject 留空，由调用方填上。
-func (v Value) Sub(name string) (Value, error) {
+// SubType 报告类型 t 有没有子值 name，有的话给出子值的类型。只看类型：netmask 只适用于 IPv4，
+// 取值是不是 IPv6 要看具体的值，见 Value.Sub。激活判定按声明查正文与片段引用的子值，问的就是它；
+// 哪些类型有哪些子值只在 cidrAccessors 登记这一处（T6-6）。
+func (t ParamType) SubType(name string) (ParamType, bool) {
 	acc, ok := cidrAccessors[name]
-	if !ok || v.typ != "cidr" {
+	if !ok || t != "cidr" {
+		return "", false
+	}
+	return acc.typ, true
+}
+
+// Sub 取子值，列表逐项取，结果仍是列表。只有 cidr 有子值：addr 与 netmask 是 ip，prefix 是
+// int，netmask 只适用于 IPv4。看的是声明的类型（SubType），不看取值长得像不像 cidr。不适用时
+// error 是 Problem，代码为 param_accessor_invalid，Subject 留空，由调用方填上。
+func (v Value) Sub(name string) (Value, error) {
+	typ, ok := v.typ.SubType(name)
+	if !ok {
 		return Value{}, NewProblem("param_accessor_invalid", Subject{}, name)
 	}
-	out := Value{typ: acc.typ, items: make([]string, 0, len(v.items))}
+	get := cidrAccessors[name].get
+	out := Value{typ: typ, items: make([]string, 0, len(v.items))}
 	for _, item := range v.items {
 		// 各项是 Parse 产出的规范形式，解析不会出错。万一出了错，get 对无效的前缀也只会
 		// 返回无意义的值而不会 panic，这里一并按不适用处理。
 		p, err := netip.ParsePrefix(item)
-		sub, ok := acc.get(p)
+		sub, ok := get(p)
 		if err != nil || !ok {
 			return Value{}, NewProblem("param_accessor_invalid", Subject{}, name)
 		}
@@ -326,25 +338,31 @@ func (i Impl) Expanded() bool {
 	return i.Kind != ImplScript
 }
 
-// IsSafeWord 判断安全词：1–128 个 [A-Za-z0-9._:/@^+=-]。它不含引号、空白、$、#、%、<>&、
-// 反斜杠和花括号，放进七种格式里带引号的位置、XML 文本、kickstart 与 preseed 的指令值、
+// IsSafeWord 判断安全词：1–128 个 [A-Za-z0-9._:/@^+=-]，不以 - 或 @ 开头。它不含引号、空白、$、#、
+// %、<>&、反斜杠和花括号，放进七种格式里带引号的位置、XML 文本、kickstart 与 preseed 的指令值、
 // shell 参数，都不会改变结构，也拼不出占位符或 Jinja 表达式。放宽任何一个字符，都要先在
 // 七种格式的文本、引号和 shell 位置里逐一确认。
 //
+// 开头的两条限制是 T6-3 选 B（第 3 层，2026-10-09）：以 - 开头的取值放进 shell 命令的参数位置会被当成
+// 选项，dnf install -y {{param:pkg}} 填进 --setopt=sslverify=0 就关掉了校验，加引号也挡不住；以 @ 开头的
+// 在 PowerShell 里会被当成展开，YAML 裸值也不能以它开头。
+//
 // 这是安全词唯一的一份判定：参数取值与 enum 选项值按它查，快照构建也按它查 {{sys:sn}} 要代入
-// 的主机 SN（SN 的登记规则比它宽），别处不另抄字符集。
+// 的主机 SN（SN 的登记规则比它宽），别处不另抄字符集。sshkey 的注释只查字符集与长度（safeChars）：
+// 它在算法与公钥之后，不在取值的开头。
 //
-// 结构不变不等于语义不变，下面这些由模板作者按格式留意（计划任务 6 的「安全词」，遗留问题 T6-3）：
+// 结构不变不等于语义不变，下面这些仍由模板作者按格式留意（计划任务 6 的「安全词」，遗留问题 T6-3）：
 //
-//   - YAML 裸值不能以 @ 开头，以 : 结尾会被读成映射键。
-//   - 以 - 开头的取值（int 的负数也是）放进 shell 命令的参数位置，会被当成选项：dnf install -y
-//     {{param:pkg}} 填进 --setopt=sslverify=0，就关掉了校验。加引号挡不住，要把参数放在 -- 之后。
-//   - Windows 的命令行另有讲究：cmd 里 ^ 是转义符，= 会把批处理的参数断开；PowerShell 里以 @ 开头
-//     会被当成展开，以 - 开头会被当成参数名。这两处至少要加引号；unattend 不把参数放进 cmd 与
-//     PowerShell 的参数位置。
-//
-// 字符集不为这些收紧。要不要拒收以 - 或 @ 开头的取值，留到第 3 层写内置模板之前再定。
+//   - YAML 裸值以 : 结尾会被读成映射键。
+//   - int 的负数照样以 - 开头，放进 shell 命令的参数位置同样会被当成选项，要把参数放在 -- 之后。
+//   - Windows 的 cmd 另有讲究：^ 是转义符，= 会把批处理的参数断开，放进 cmd 至少要加引号；unattend
+//     不把参数放进 cmd 与 PowerShell 的参数位置。
 func IsSafeWord(s string) bool {
+	return safeChars(s) && s[0] != '-' && s[0] != '@'
+}
+
+// safeChars 是安全词去掉开头限制的部分：1–128 个安全词字符。
+func safeChars(s string) bool {
 	if s == "" || len(s) > safeWordMaxLen {
 		return false
 	}
@@ -455,7 +473,8 @@ var sshKeyFields = map[string]int{
 	"sk-ecdsa-sha2-nistp256@openssh.com": 4, // 算法名、曲线名、公钥点、application
 }
 
-// parseSSHKey 收「算法 base64[ 注释]」，多余的空格压成一个；只认空格分隔，注释是安全词。
+// parseSSHKey 收「算法 base64[ 注释]」，多余的空格压成一个；只认空格分隔，注释由安全词的字符组成，
+// 可以以 - 或 @ 开头：它不在取值的开头（见 IsSafeWord）。
 // base64 要能解开，解出的 blob 不超过 16384 字节、要与算法对得上，截断或拼错的公钥不必等装完机
 // 登不上才发现。
 func parseSSHKey(_ ParamDecl, s string) (string, bool) {
@@ -469,7 +488,7 @@ func parseSSHKey(_ ParamDecl, s string) (string, bool) {
 		}
 		fields = append(fields, f)
 	}
-	if len(fields) < 2 || (len(fields) == 3 && !IsSafeWord(fields[2])) {
+	if len(fields) < 2 || (len(fields) == 3 && !safeChars(fields[2])) {
 		return "", false
 	}
 	algo, key := fields[0], fields[1]

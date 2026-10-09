@@ -227,7 +227,7 @@ func TestAlignESXi只走UEFI与目录一致(t *testing.T) {
 }
 
 // 安全词的字符抄在三处：sn_unsafe_in_body 的下一步，word、diskpath 的格式。逐个试 0x21–0x7E 里字母、
-// 数字以外的字符，夹在两个字母中间试：以后若对首尾另加限制（T6-3 留待第 3 层定），不影响这里比字符集。
+// 数字以外的字符，夹在两个字母中间试：首字符另有限制（T6-3 选 B，见下一个测试），不影响这里比字符集。
 func TestAlign安全词字符与IsSafeWord一致(t *testing.T) {
 	var accepted []string
 	for r := rune(0x21); r <= 0x7e; r++ {
@@ -246,6 +246,26 @@ func TestAlign安全词字符与IsSafeWord一致(t *testing.T) {
 				alignSame(t, c.where+" 的安全词字符", strings.Split(m[1], ""), accepted)
 			}
 		})
+	}
+}
+
+// 安全词不能以哪些字符开头（T6-3 选 B），抄在 sn_unsafe_in_body 的下一步与 word 的格式里，要与 IsSafeWord
+// 一致：逐个试安全词字符集里字母、数字以外的字符，夹在中间收、放在开头不收的，就是不能开头的字符。
+func TestAlign安全词不能开头的字符与IsSafeWord一致(t *testing.T) {
+	var leading []string
+	for r := rune(0x21); r <= 0x7e; r++ {
+		if s := string(r); !isASCIIAlnum(byte(r)) && IsSafeWord("a"+s+"b") && !IsSafeWord(s+"b") {
+			leading = append(leading, s)
+		}
+	}
+	texts := []struct{ where, text string }{
+		{"sn_unsafe_in_body", alignText(t, "sn_unsafe_in_body")},
+		{"paramValueFormats[word]", paramValueFormats["word"]},
+	}
+	for _, c := range texts {
+		for _, m := range alignFind(t, c.where, c.text, `不能?以 (\S+(?: 或 \S+)*) 开头`) {
+			alignSame(t, c.where+" 说的不能开头的字符", alignSplit(m[1]), leading)
+		}
 	}
 }
 
