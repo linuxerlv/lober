@@ -1,4 +1,4 @@
-package pgstore
+package pgstore_test
 
 import (
 	"context"
@@ -13,6 +13,8 @@ import (
 	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/store/pgstore"
+	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
 // Test契约hook 是 hook 这一组（C8–C12、C22、C23、C25）：名字、版本的生命周期、内置内容与查询由 versioned 的共用用例查，
@@ -66,7 +68,7 @@ func fullHook(name string) model.Hook {
 // hookOps 把 Hooks 的方法接进共用用例。
 var hookOps = versioned[model.Hook]{
 	kind:   "hook",
-	idents: hookTables.idents,
+	idents: pgstore.HookIdentsForTest,
 	sample: sampleHook,
 	full:   fullHook,
 	head: func(h model.Hook) head {
@@ -99,48 +101,48 @@ var hookOps = versioned[model.Hook]{
 		{"实现的正文", func(h *model.Hook) { h.Impls[0].Body += "clearpart --all\n" }},
 		{"实现的时机", func(h *model.Hook) { h.Impls[1].Timings = []catalog.Timing{"firstboot"} }},
 	},
-	create: func(ctx context.Context, s *Store, h model.Hook) (model.Hook, error) {
+	create: func(ctx context.Context, s *pgstore.Store, h model.Hook) (model.Hook, error) {
 		return s.CreateHook(ctx, h)
 	},
-	save: func(ctx context.Context, s *Store, h model.Hook) (model.Hook, error) {
+	save: func(ctx context.Context, s *pgstore.Store, h model.Hook) (model.Hook, error) {
 		return s.SaveHookDraft(ctx, h)
 	},
-	newVersion: func(ctx context.Context, s *Store, id string, from int, author string) (model.Hook, error) {
+	newVersion: func(ctx context.Context, s *pgstore.Store, id string, from int, author string) (model.Hook, error) {
 		return s.NewHookVersion(ctx, id, from, author)
 	},
-	submit: func(ctx context.Context, s *Store, id string, v int, rev int64, a store.Audit) error {
+	submit: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a store.Audit) error {
 		return s.SubmitHook(ctx, model.HookKey{ID: id, Version: v}, rev, a)
 	},
-	approve: func(ctx context.Context, s *Store, id string, v int, rev int64, approver string, a store.Audit) error {
+	approve: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, approver string, a store.Audit) error {
 		return s.ApproveHook(ctx, model.HookKey{ID: id, Version: v}, rev, approver, a)
 	},
-	reject: func(ctx context.Context, s *Store, id string, v int, rev int64, a store.Audit) error {
+	reject: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a store.Audit) error {
 		return s.RejectHook(ctx, model.HookKey{ID: id, Version: v}, rev, a)
 	},
-	deprecate: func(ctx context.Context, s *Store, id string, v int, rev int64, a store.Audit) error {
+	deprecate: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a store.Audit) error {
 		return s.DeprecateHook(ctx, model.HookKey{ID: id, Version: v}, rev, a)
 	},
-	rename: func(ctx context.Context, s *Store, id, name string, a store.Audit) error {
+	rename: func(ctx context.Context, s *pgstore.Store, id, name string, a store.Audit) error {
 		return s.RenameHook(ctx, id, name, a)
 	},
-	deleteDraft: func(ctx context.Context, s *Store, id string, v int, rev int64) error {
+	deleteDraft: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64) error {
 		return s.DeleteHookDraft(ctx, model.HookKey{ID: id, Version: v}, rev)
 	},
-	get: func(ctx context.Context, s *Store, id string, v int) (model.Hook, error) {
+	get: func(ctx context.Context, s *pgstore.Store, id string, v int) (model.Hook, error) {
 		return s.GetHook(ctx, model.HookKey{ID: id, Version: v})
 	},
-	versions: func(ctx context.Context, s *Store, id string) ([]model.Hook, error) {
+	versions: func(ctx context.Context, s *pgstore.Store, id string) ([]model.Hook, error) {
 		return s.ListHookVersions(ctx, id)
 	},
-	list: func(ctx context.Context, s *Store, q listQuery) (store.Page[model.Hook], error) {
+	list: func(ctx context.Context, s *pgstore.Store, q listQuery) (store.Page[model.Hook], error) {
 		return s.ListHooks(ctx, store.HookQuery{NamePrefix: q.NamePrefix, States: q.States, ApprovedOnly: q.ApprovedOnly, Cursor: q.Cursor, Limit: q.Limit})
 	},
-	ensureBuiltin: func(ctx context.Context, s *Store, h model.Hook) error { return s.EnsureBuiltinHook(ctx, h) },
+	ensureBuiltin: func(ctx context.Context, s *pgstore.Store, h model.Hook) error { return s.EnsureBuiltinHook(ctx, h) },
 }
 
 // 能存成 UTF-8 文本的草稿都能存（spec §3 总则），存不下的新建与保存都拒收：每一处一条 text_not_storable，按 hook 整体、
 // 参数声明、实现的顺序，Subject 的写法同激活判定。新建时还没有 ID，Subject 的 ID 为空；保存时是「ID@版本」。
-func hookUnstorable(t *testing.T, s *Store) {
+func hookUnstorable(t *testing.T, s *pgstore.Store) {
 	draft := hookOps.mustCreate(t, s, "Base-1")
 	before := authoredSnapshot(t, s)
 	for _, c := range []struct {
@@ -201,7 +203,7 @@ func hookUnstorable(t *testing.T, s *Store) {
 
 // 审批在事务里对加锁后读到的版本重跑激活判定与审批人的检查，问题与直接调用第 1 层得到的完全相同：先激活判定，
 // 后审批人。被拒时状态与 Rev 都不变，改好之后同一个版本照样能批。
-func hookApproveRejected(t *testing.T, s *Store) {
+func hookApproveRejected(t *testing.T, s *pgstore.Store) {
 	in := sampleHook("Base-1")
 	in.Impls = nil               // hook_no_impl
 	in.Params[0].Default = "sda" // diskpath 的默认值要以 /dev/ 开头：param_decl_invalid
@@ -232,7 +234,7 @@ func hookApproveRejected(t *testing.T, s *Store) {
 }
 
 // hookCopies：改了入参或返回值里的切片、指针与它们里面的元素，仓储里的数据都不变（包说明里的约定）。
-func hookCopies(t *testing.T, s *Store) {
+func hookCopies(t *testing.T, s *pgstore.Store) {
 	mutate := func(h model.Hook) {
 		h.Params[0].Label = "改了"
 		*h.Params[1].Min = 99
@@ -286,7 +288,7 @@ func hookCopies(t *testing.T, s *Store) {
 	wantEqual(t, hookOps.mustGet(t, s, want.ID, 1), want, "改了装载内置的入参之后")
 }
 
-func hookGetHooks(t *testing.T, s *Store) {
+func hookGetHooks(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	a := hookOps.mustCreate(t, s, "A")
 	b := hookOps.to(t, s, hookOps.mustCreate(t, s, "B"), model.VersionApproved)
@@ -310,11 +312,11 @@ func hookGetHooks(t *testing.T, s *Store) {
 
 // 批量取的键数不设上限，多于一条语句查得下的一批（batchSize）时按入参的次序分批查，两批取到的合在一起：a 是第一个键，
 // b 是第 batchSize+1 个，落在第二批，中间是 a 不存在的版本。
-func hookGetHooksManyBatches(t *testing.T, s *Store) {
+func hookGetHooksManyBatches(t *testing.T, s *pgstore.Store) {
 	a := hookOps.mustCreate(t, s, "A")
 	b := hookOps.mustCreate(t, s, "B")
 	ks := []model.HookKey{a.Key()}
-	for v := 2; len(ks) < batchSize; v++ {
+	for v := 2; len(ks) < pgstore.BatchSizeForTest; v++ {
 		ks = append(ks, model.HookKey{ID: a.ID, Version: v}) // a 只有版本 1
 	}
 	ks = append(ks, b.Key())
@@ -363,19 +365,19 @@ type versioned[V any] struct {
 	// 一个查得出来（builtinEnsure）。
 	variants []variant[V]
 
-	create        func(ctx context.Context, s *Store, v V) (V, error)
-	save          func(ctx context.Context, s *Store, v V) (V, error)
-	newVersion    func(ctx context.Context, s *Store, id string, from int, author string) (V, error)
-	submit        func(ctx context.Context, s *Store, id string, version int, rev int64, a store.Audit) error
-	approve       func(ctx context.Context, s *Store, id string, version int, rev int64, approver string, a store.Audit) error
-	reject        func(ctx context.Context, s *Store, id string, version int, rev int64, a store.Audit) error
-	deprecate     func(ctx context.Context, s *Store, id string, version int, rev int64, a store.Audit) error
-	rename        func(ctx context.Context, s *Store, id, name string, a store.Audit) error
-	deleteDraft   func(ctx context.Context, s *Store, id string, version int, rev int64) error
-	get           func(ctx context.Context, s *Store, id string, version int) (V, error)
-	versions      func(ctx context.Context, s *Store, id string) ([]V, error)
-	list          func(ctx context.Context, s *Store, q listQuery) (store.Page[V], error)
-	ensureBuiltin func(ctx context.Context, s *Store, v V) error
+	create        func(ctx context.Context, s *pgstore.Store, v V) (V, error)
+	save          func(ctx context.Context, s *pgstore.Store, v V) (V, error)
+	newVersion    func(ctx context.Context, s *pgstore.Store, id string, from int, author string) (V, error)
+	submit        func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64, a store.Audit) error
+	approve       func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64, approver string, a store.Audit) error
+	reject        func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64, a store.Audit) error
+	deprecate     func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64, a store.Audit) error
+	rename        func(ctx context.Context, s *pgstore.Store, id, name string, a store.Audit) error
+	deleteDraft   func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64) error
+	get           func(ctx context.Context, s *pgstore.Store, id string, version int) (V, error)
+	versions      func(ctx context.Context, s *pgstore.Store, id string) ([]V, error)
+	list          func(ctx context.Context, s *pgstore.Store, q listQuery) (store.Page[V], error)
+	ensureBuiltin func(ctx context.Context, s *pgstore.Store, v V) error
 }
 
 // variant 是内容里的一处改动：what 说明改的是哪里，mod 就地改 v，连切片与 map 里的元素一起改，所以每次要给它新造的
@@ -387,26 +389,26 @@ type variant[V any] struct {
 
 // 下面是用例里常用的几步，出错就让用例失败。
 
-func (k versioned[V]) mustCreateFrom(t *testing.T, s *Store, v V) V {
+func (k versioned[V]) mustCreateFrom(t *testing.T, s *pgstore.Store, v V) V {
 	t.Helper()
 	got, err := k.create(t.Context(), s, v)
 	must(t, err, fmt.Sprintf("新建 %s %q", k.kind, k.head(v).Name))
 	return got
 }
 
-func (k versioned[V]) mustCreate(t *testing.T, s *Store, name string) V {
+func (k versioned[V]) mustCreate(t *testing.T, s *pgstore.Store, name string) V {
 	t.Helper()
 	return k.mustCreateFrom(t, s, k.sample(name))
 }
 
-func (k versioned[V]) mustGet(t *testing.T, s *Store, id string, version int) V {
+func (k versioned[V]) mustGet(t *testing.T, s *pgstore.Store, id string, version int) V {
 	t.Helper()
 	got, err := k.get(t.Context(), s, id, version)
 	must(t, err, fmt.Sprintf("读 %s %s@%d", k.kind, id, version))
 	return got
 }
 
-func (k versioned[V]) mustVersions(t *testing.T, s *Store, id string) []V {
+func (k versioned[V]) mustVersions(t *testing.T, s *pgstore.Store, id string) []V {
 	t.Helper()
 	got, err := k.versions(t.Context(), s, id)
 	must(t, err, fmt.Sprintf("列出 %s %s 的版本", k.kind, id))
@@ -421,7 +423,7 @@ func (k versioned[V]) with(v V, mod func(h *head)) V {
 }
 
 // to 把版本 v 沿 draft → review → approved → deprecated 推到 state，审批人是 bob，返回重读的版本。
-func (k versioned[V]) to(t *testing.T, s *Store, v V, state model.VersionState) V {
+func (k versioned[V]) to(t *testing.T, s *pgstore.Store, v V, state model.VersionState) V {
 	t.Helper()
 	ctx := t.Context()
 	for {
@@ -469,7 +471,7 @@ func (k versioned[V]) currentApproved(vs []V) (V, bool) {
 }
 
 // pages 用查询 q 从头翻到尾，返回每一页；游标由它填。
-func (k versioned[V]) pages(t *testing.T, s *Store, q listQuery) [][]V {
+func (k versioned[V]) pages(t *testing.T, s *pgstore.Store, q listQuery) [][]V {
 	t.Helper()
 	return allPages(t, func(cursor string) (store.Page[V], error) {
 		q.Cursor = cursor
@@ -478,7 +480,7 @@ func (k versioned[V]) pages(t *testing.T, s *Store, q listQuery) [][]V {
 }
 
 // listed 是按查询 q 翻完的全部条目，每页一条：翻页时过滤也要对。
-func (k versioned[V]) listed(t *testing.T, s *Store, q listQuery) []V {
+func (k versioned[V]) listed(t *testing.T, s *pgstore.Store, q listQuery) []V {
 	t.Helper()
 	q.Limit = 1
 	return slices.Concat(k.pages(t, s, q)...)
@@ -501,7 +503,7 @@ type authored struct {
 	Audit     []store.AuditEntry
 }
 
-func authoredSnapshot(t *testing.T, s *Store) authored {
+func authoredSnapshot(t *testing.T, s *pgstore.Store) authored {
 	t.Helper()
 	var a authored
 	for _, h := range slices.Concat(hookOps.pages(t, s, listQuery{Limit: 500})...) {
@@ -515,7 +517,7 @@ func authoredSnapshot(t *testing.T, s *Store) authored {
 }
 
 // wantAuthoredUnchanged 要求 hook、模板与审计都与 before 相同：动作没有落库，审计也没有写。
-func wantAuthoredUnchanged(t *testing.T, s *Store, before authored, what string) {
+func wantAuthoredUnchanged(t *testing.T, s *pgstore.Store, before authored, what string) {
 	t.Helper()
 	if after := authoredSnapshot(t, s); !reflect.DeepEqual(after, before) {
 		t.Fatalf("%s仓储不应有变化：\n之前 %+v\n之后 %+v", what, before, after)
@@ -577,24 +579,24 @@ func wantCodes(t *testing.T, ps []model.Problem, codes []model.Code) {
 // auditedOp 是一个要审计的方法：prepare 备好记录，返回调用它的函数，规则同审计那一组的 auditedOps。
 type auditedOp struct {
 	name    string
-	prepare func(t *testing.T, s *Store) auditedCall
+	prepare func(t *testing.T, s *pgstore.Store) auditedCall
 }
 
 // runAudited 查 ops 与审计写在同一个事务里（spec §6.2 第 8 条）。四项检查与审计那一组相同，只是快照换成 hook、模板与
 // 审计：审计那一组只覆盖主机与 ISO，它的快照（contents）不看 hook 与模板。四组与组里的各个方法都并行跑，同 eachAudited。
 func runAudited(t *testing.T, ops []auditedOp) {
-	each := func(t *testing.T, check func(t *testing.T, s *Store, call auditedCall)) {
+	each := func(t *testing.T, check func(t *testing.T, s *pgstore.Store, call auditedCall)) {
 		for _, op := range ops {
 			t.Run(op.name, func(t *testing.T) {
 				t.Parallel()
-				s := openContract(t)
+				s := pgtest.OpenStore(t)
 				check(t, s, op.prepare(t, s))
 			})
 		}
 	}
 	t.Run("零值审计报 ErrAuditRequired，什么都不写", func(t *testing.T) {
 		t.Parallel()
-		each(t, func(t *testing.T, s *Store, call auditedCall) {
+		each(t, func(t *testing.T, s *pgstore.Store, call auditedCall) {
 			before := authoredSnapshot(t, s)
 			_, err := call(store.Audit{})
 			wantIs(t, err, store.ErrAuditRequired, "零值审计")
@@ -605,7 +607,7 @@ func runAudited(t *testing.T, ops []auditedOp) {
 	})
 	t.Run("审计不合法报 ErrInvalid，什么都不写", func(t *testing.T) {
 		t.Parallel()
-		each(t, func(t *testing.T, s *Store, call auditedCall) {
+		each(t, func(t *testing.T, s *pgstore.Store, call auditedCall) {
 			before := authoredSnapshot(t, s)
 			for _, a := range []store.Audit{{Actor: "alice", Action: "approve", At: at0}, {Action: "hook.approve", At: at0}, {Actor: "alice", Action: "hook.approve"}} {
 				_, err := call(a)
@@ -618,9 +620,9 @@ func runAudited(t *testing.T, ops []auditedOp) {
 	})
 	t.Run("审计写失败时动作也不落库", func(t *testing.T) {
 		t.Parallel()
-		each(t, func(t *testing.T, s *Store, call auditedCall) {
+		each(t, func(t *testing.T, s *pgstore.Store, call auditedCall) {
 			before := authoredSnapshot(t, s)
-			_, err := call(store.Audit{Actor: faultActor, Action: "test.fault", At: at0})
+			_, err := call(store.Audit{Actor: pgtest.FaultActor, Action: "test.fault", At: at0})
 			if err == nil {
 				t.Fatal("审计写失败时应报错")
 			}
@@ -636,7 +638,7 @@ func runAudited(t *testing.T, ops []auditedOp) {
 	})
 	t.Run("成功时写一条审计，对象由仓储填", func(t *testing.T) {
 		t.Parallel()
-		each(t, func(t *testing.T, s *Store, call auditedCall) {
+		each(t, func(t *testing.T, s *pgstore.Store, call auditedCall) {
 			before := auditEntries(t, s)
 			a := store.Audit{Actor: "张三", Action: "test.audited", Detail: "理由：缺少分区说明", At: at0 + 1}
 			targets, err := call(a)
@@ -661,8 +663,8 @@ func runAudited(t *testing.T, ops []auditedOp) {
 // auditedOps 是 hook 或模板里要审计的方法。提交、审批、驳回、废弃针对一个版本，审计的对象是「ID@版本」；改名针对
 // 整个身份，对象是 ID。
 func (k versioned[V]) auditedOps() []auditedOp {
-	step := func(name string, from model.VersionState, do func(t *testing.T, s *Store, h head, a store.Audit) error) auditedOp {
-		return auditedOp{name, func(t *testing.T, s *Store) auditedCall {
+	step := func(name string, from model.VersionState, do func(t *testing.T, s *pgstore.Store, h head, a store.Audit) error) auditedOp {
+		return auditedOp{name, func(t *testing.T, s *pgstore.Store) auditedCall {
 			h := k.head(k.to(t, s, k.mustCreate(t, s, "Base-1"), from))
 			return func(a store.Audit) ([]target, error) {
 				return []target{{k.kind, fmt.Sprintf("%s@%d", h.ID, h.Version)}}, do(t, s, h, a)
@@ -670,19 +672,19 @@ func (k versioned[V]) auditedOps() []auditedOp {
 		}}
 	}
 	return []auditedOp{
-		step("提交", model.VersionDraft, func(t *testing.T, s *Store, h head, a store.Audit) error {
+		step("提交", model.VersionDraft, func(t *testing.T, s *pgstore.Store, h head, a store.Audit) error {
 			return k.submit(t.Context(), s, h.ID, h.Version, h.Rev, a)
 		}),
-		step("审批", model.VersionReview, func(t *testing.T, s *Store, h head, a store.Audit) error {
+		step("审批", model.VersionReview, func(t *testing.T, s *pgstore.Store, h head, a store.Audit) error {
 			return k.approve(t.Context(), s, h.ID, h.Version, h.Rev, "bob", a)
 		}),
-		step("驳回", model.VersionReview, func(t *testing.T, s *Store, h head, a store.Audit) error {
+		step("驳回", model.VersionReview, func(t *testing.T, s *pgstore.Store, h head, a store.Audit) error {
 			return k.reject(t.Context(), s, h.ID, h.Version, h.Rev, a)
 		}),
-		step("废弃", model.VersionApproved, func(t *testing.T, s *Store, h head, a store.Audit) error {
+		step("废弃", model.VersionApproved, func(t *testing.T, s *pgstore.Store, h head, a store.Audit) error {
 			return k.deprecate(t.Context(), s, h.ID, h.Version, h.Rev, a)
 		}),
-		{"改名", func(t *testing.T, s *Store) auditedCall {
+		{"改名", func(t *testing.T, s *pgstore.Store) auditedCall {
 			id := k.head(k.mustCreate(t, s, "Base-1")).ID
 			return func(a store.Audit) ([]target, error) {
 				return []target{{k.kind, id}}, k.rename(t.Context(), s, id, "Renamed-1", a)
@@ -729,7 +731,7 @@ func (k versioned[V]) cases() []testCase {
 	}
 }
 
-func (k versioned[V]) createDraft(t *testing.T, s *Store) {
+func (k versioned[V]) createDraft(t *testing.T, s *pgstore.Store) {
 	in := k.sample("  Base-1\t")
 	got, err := k.create(t.Context(), s, in)
 	must(t, err, "新建")
@@ -746,7 +748,7 @@ func (k versioned[V]) createDraft(t *testing.T, s *Store) {
 	}
 }
 
-func (k versioned[V]) createBadName(t *testing.T, s *Store) {
+func (k versioned[V]) createBadName(t *testing.T, s *pgstore.Store) {
 	before := authoredSnapshot(t, s)
 	for _, name := range []string{"", "  ", "Rocky Base", "中文名", "Ｒocky", strings.Repeat("a", 65), "a\x00b", "\xff"} {
 		want := []model.Problem{nameProblem(t, name, model.Subject{Kind: k.kind})} // 还没有 ID，Subject 只有 Kind
@@ -761,7 +763,7 @@ func (k versioned[V]) createBadName(t *testing.T, s *Store) {
 	wantAuthoredUnchanged(t, s, before, "名字不合法时")
 }
 
-func (k versioned[V]) createDuplicate(t *testing.T, s *Store) {
+func (k versioned[V]) createDuplicate(t *testing.T, s *pgstore.Store) {
 	first := k.head(k.mustCreate(t, s, "Base-1"))
 	before := authoredSnapshot(t, s)
 	for _, name := range []string{"Base-1", "base-1", "BASE-1", " bAsE-1 "} {
@@ -773,7 +775,7 @@ func (k versioned[V]) createDuplicate(t *testing.T, s *Store) {
 
 // 新建的入参不带由仓储填的字段（ID、版本、状态、审批人、内置标记、Rev）：调用方填了，多半是把别的记录当成了新建的
 // 入参。作者是审批人检查的依据（C22），空的或存不下的不收。
-func (k versioned[V]) createBadInput(t *testing.T, s *Store) {
+func (k versioned[V]) createBadInput(t *testing.T, s *pgstore.Store) {
 	before := authoredSnapshot(t, s)
 	for _, c := range []struct {
 		what string
@@ -796,7 +798,7 @@ func (k versioned[V]) createBadInput(t *testing.T, s *Store) {
 
 // 保存是整条替换内容：把内容改成零值、把集合清成空的，都是正当的写入，不能被当成「没改」丢掉，nil 与空集合也要
 // 分得开（写进去什么就读出什么）。
-func (k versioned[V]) saveDraft(t *testing.T, s *Store) {
+func (k versioned[V]) saveDraft(t *testing.T, s *pgstore.Store) {
 	cur := k.mustCreate(t, s, "Base-1")
 	for _, c := range []struct {
 		what string
@@ -813,7 +815,7 @@ func (k versioned[V]) saveDraft(t *testing.T, s *Store) {
 }
 
 // 已提交、已审批、已废弃的版本都不能改（C23）：改要开新版本，待审批的先驳回。
-func (k versioned[V]) saveNotDraft(t *testing.T, s *Store) {
+func (k versioned[V]) saveNotDraft(t *testing.T, s *pgstore.Store) {
 	v := k.mustCreate(t, s, "Base-1")
 	for _, state := range []model.VersionState{model.VersionReview, model.VersionApproved, model.VersionDeprecated} {
 		v = k.to(t, s, v, state)
@@ -825,7 +827,7 @@ func (k versioned[V]) saveNotDraft(t *testing.T, s *Store) {
 }
 
 // 名字放在身份上，改名用 rename。保存时 Name 要与身份现在的名字一字不差：大小写不同、带空白都不算。
-func (k versioned[V]) saveName(t *testing.T, s *Store) {
+func (k versioned[V]) saveName(t *testing.T, s *pgstore.Store) {
 	v := k.mustCreate(t, s, "Base-1")
 	id := k.head(v).ID
 	before := authoredSnapshot(t, s)
@@ -844,7 +846,7 @@ func (k versioned[V]) saveName(t *testing.T, s *Store) {
 
 // 状态只能经状态转换改，作者在开版本时定下（审批人检查的依据，C22），审批人由审批写，内置标记只由装载内置内容写：
 // 保存时带来的值与库里的不同，报 ErrInvalid，不悄悄丢掉。
-func (k versioned[V]) saveFixed(t *testing.T, s *Store) {
+func (k versioned[V]) saveFixed(t *testing.T, s *pgstore.Store) {
 	v := k.mustCreate(t, s, "Base-1")
 	before := authoredSnapshot(t, s)
 	for _, c := range []struct {
@@ -863,7 +865,7 @@ func (k versioned[V]) saveFixed(t *testing.T, s *Store) {
 	wantAuthoredUnchanged(t, s, before, "改了不能改的字段时")
 }
 
-func (k versioned[V]) saveConflict(t *testing.T, s *Store) {
+func (k versioned[V]) saveConflict(t *testing.T, s *pgstore.Store) {
 	stale := k.mustCreate(t, s, "Base-1")
 	cur, err := k.save(t.Context(), s, k.edit(stale))
 	must(t, err, "保存")
@@ -881,7 +883,7 @@ func (k versioned[V]) saveConflict(t *testing.T, s *Store) {
 
 // 一个版本走完它能走的每一步：提交、驳回（理由写在审计里）、驳回之后又是草稿，可以保存、再提交、审批、废弃。每步 Rev
 // 加 1，审批写下审批人，废弃之后审批人仍在。
-func (k versioned[V]) lifecycle(t *testing.T, s *Store) {
+func (k versioned[V]) lifecycle(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	cur := k.mustCreate(t, s, "Base-1")
 	h := k.head(cur)
@@ -911,22 +913,22 @@ func (k versioned[V]) lifecycle(t *testing.T, s *Store) {
 type transition struct {
 	name string
 	from model.VersionState
-	do   func(t *testing.T, s *Store, h head) error
+	do   func(t *testing.T, s *pgstore.Store, h head) error
 }
 
 // transitions 是四种状态转换。
 func (k versioned[V]) transitions() []transition {
 	return []transition{
-		{"提交", model.VersionDraft, func(t *testing.T, s *Store, h head) error {
+		{"提交", model.VersionDraft, func(t *testing.T, s *pgstore.Store, h head) error {
 			return k.submit(t.Context(), s, h.ID, h.Version, h.Rev, anAudit(k.kind+".submit"))
 		}},
-		{"审批", model.VersionReview, func(t *testing.T, s *Store, h head) error {
+		{"审批", model.VersionReview, func(t *testing.T, s *pgstore.Store, h head) error {
 			return k.approve(t.Context(), s, h.ID, h.Version, h.Rev, "bob", anAudit(k.kind+".approve"))
 		}},
-		{"驳回", model.VersionReview, func(t *testing.T, s *Store, h head) error {
+		{"驳回", model.VersionReview, func(t *testing.T, s *pgstore.Store, h head) error {
 			return k.reject(t.Context(), s, h.ID, h.Version, h.Rev, anAudit(k.kind+".reject"))
 		}},
-		{"废弃", model.VersionApproved, func(t *testing.T, s *Store, h head) error {
+		{"废弃", model.VersionApproved, func(t *testing.T, s *pgstore.Store, h head) error {
 			return k.deprecate(t.Context(), s, h.ID, h.Version, h.Rev, anAudit(k.kind+".deprecate"))
 		}},
 	}
@@ -934,7 +936,7 @@ func (k versioned[V]) transitions() []transition {
 
 // 只有 draft → review、review → approved、review → draft、approved → deprecated 四步合规矩，其余的带着正确的 Rev 也报
 // ErrConflict：调用方重读之后再判断（spec §6.2 第 4 条）。
-func (k versioned[V]) badTransitions(t *testing.T, s *Store) {
+func (k versioned[V]) badTransitions(t *testing.T, s *pgstore.Store) {
 	for i, state := range []model.VersionState{model.VersionDraft, model.VersionReview, model.VersionApproved, model.VersionDeprecated} {
 		v := k.to(t, s, k.mustCreate(t, s, fmt.Sprintf("Base-%d", i)), state)
 		before := authoredSnapshot(t, s)
@@ -947,7 +949,7 @@ func (k versioned[V]) badTransitions(t *testing.T, s *Store) {
 	}
 }
 
-func (k versioned[V]) transitionConflict(t *testing.T, s *Store) {
+func (k versioned[V]) transitionConflict(t *testing.T, s *pgstore.Store) {
 	for i, step := range k.transitions() {
 		h := k.head(k.to(t, s, k.mustCreate(t, s, fmt.Sprintf("Base-%d", i)), step.from))
 		before := authoredSnapshot(t, s)
@@ -965,7 +967,7 @@ func (k versioned[V]) transitionConflict(t *testing.T, s *Store) {
 
 // 审批人不能是作者（C22），首尾空白与大小写不同也算本人；没有审批人同样批不了。问题与直接调用 activation.Approver 的
 // 相同，Subject 是审批的那个版本。审批人要写进库里，存不下的报 ErrInvalid。被拒时状态与 Rev 都不变。
-func (k versioned[V]) approveApprover(t *testing.T, s *Store) {
+func (k versioned[V]) approveApprover(t *testing.T, s *pgstore.Store) {
 	h := k.head(k.to(t, s, k.mustCreate(t, s, "Base-1"), model.VersionReview))
 	subj := model.Subject{Kind: k.kind, ID: h.ID + "@1"}
 	before := authoredSnapshot(t, s)
@@ -988,7 +990,7 @@ func (k versioned[V]) approveApprover(t *testing.T, s *Store) {
 
 // 新版本复制来源版本的内容，版本号是分配过的最大版本号加 1，作者是给的那一个，没有审批人，Rev 从 1 起。来源可以是已审批
 // 或已废弃的：已有草稿或待审批的版本时开不了新版本（见下一条），所以来源不会是这两种。
-func (k versioned[V]) newVersionCopies(t *testing.T, s *Store) {
+func (k versioned[V]) newVersionCopies(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	v1 := k.to(t, s, k.mustCreate(t, s, "Base-1"), model.VersionApproved)
 	id := k.head(v1).ID
@@ -1015,7 +1017,7 @@ func (k versioned[V]) newVersionCopies(t *testing.T, s *Store) {
 
 // 每个身份同时最多一个未审批的版本（草稿或待审批）。被拒的开新版本不占号：版本号在同一个事务里分配，报 ErrConflict 时
 // 一起回滚，分配过的最大版本号不变（S5-4）。
-func (k versioned[V]) newVersionPending(t *testing.T, s *Store) {
+func (k versioned[V]) newVersionPending(t *testing.T, s *pgstore.Store) {
 	v1 := k.mustCreate(t, s, "Base-1")
 	id := k.head(v1).ID
 	check := func(what string, last int) {
@@ -1038,7 +1040,7 @@ func (k versioned[V]) newVersionPending(t *testing.T, s *Store) {
 }
 
 // 开新版本被拒（ErrNotFound、ErrInvalid）同样不占号，理由同上。
-func (k versioned[V]) newVersionBad(t *testing.T, s *Store) {
+func (k versioned[V]) newVersionBad(t *testing.T, s *pgstore.Store) {
 	id := k.head(k.to(t, s, k.mustCreate(t, s, "Base-1"), model.VersionApproved)).ID
 	before := authoredSnapshot(t, s)
 	_, err := k.newVersion(t.Context(), s, "nosuchid", 1, "carol")
@@ -1055,10 +1057,10 @@ func (k versioned[V]) newVersionBad(t *testing.T, s *Store) {
 
 // wantLastVersion 直接查身份 id 上分配过的最大版本号 last_version，要等于 want。接口只给出开出来的版本，看不到这个计数：
 // 被拒的开新版本要是占了号（比如另起一次写入把计数加 1），之后开出的版本号就会跳过几个，经接口要等到再开一次才看得出来。
-func (k versioned[V]) wantLastVersion(t *testing.T, s *Store, id string, want int, what string) {
+func (k versioned[V]) wantLastVersion(t *testing.T, s *pgstore.Store, id string, want int, what string) {
 	t.Helper()
 	var got int
-	err := s.db.WithContext(t.Context()).Raw("SELECT last_version FROM "+k.idents+" WHERE id = ?", id).Row().Scan(&got)
+	err := s.DBForTest().WithContext(t.Context()).Raw("SELECT last_version FROM "+k.idents+" WHERE id = ?", id).Row().Scan(&got)
 	must(t, err, fmt.Sprintf("查 %s %s 的版本计数", k.kind, id))
 	if got != want {
 		t.Fatalf("%s：%s %s 分配过的最大版本号是 %d，应为 %d", what, k.kind, id, got, want)
@@ -1067,7 +1069,7 @@ func (k versioned[V]) wantLastVersion(t *testing.T, s *Store, id string, want in
 
 // 改名针对整个身份：每个版本的 Name 都换成新名字，版本的 Rev 不变（版本那条记录没改）；旧名字空出来，别的身份能用。
 // 只改大小写也是改名，名字的 key 还是自己的，不算撞上。改名也不动版本号的分配，之后开的新版本接着往后编号。
-func (k versioned[V]) renameIdentity(t *testing.T, s *Store) {
+func (k versioned[V]) renameIdentity(t *testing.T, s *pgstore.Store) {
 	v1 := k.to(t, s, k.mustCreate(t, s, "Base-1"), model.VersionApproved)
 	id := k.head(v1).ID
 	v2, err := k.newVersion(t.Context(), s, id, 1, "carol")
@@ -1087,7 +1089,7 @@ func (k versioned[V]) renameIdentity(t *testing.T, s *Store) {
 	}
 }
 
-func (k versioned[V]) renameBad(t *testing.T, s *Store) {
+func (k versioned[V]) renameBad(t *testing.T, s *pgstore.Store) {
 	id := k.head(k.mustCreate(t, s, "Base-1")).ID
 	other := k.head(k.mustCreate(t, s, "Other-1")).ID
 	before := authoredSnapshot(t, s)
@@ -1110,7 +1112,7 @@ func (k versioned[V]) renameBad(t *testing.T, s *Store) {
 
 // 删的是身份的最后一个版本时，身份一起删掉，名字空出来。身份还有别的版本时只删这个草稿；版本号只增不减，下次开新
 // 版本时跳过删掉的号（为什么见 deleteStale）。删除草稿不审计（spec §6.2 第 8 条：编辑草稿不写审计）。
-func (k versioned[V]) deleteLast(t *testing.T, s *Store) {
+func (k versioned[V]) deleteLast(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	only := k.head(k.mustCreate(t, s, "Base-1"))
 	audits := auditEntries(t, s)
@@ -1141,7 +1143,7 @@ func (k versioned[V]) deleteLast(t *testing.T, s *Store) {
 // 删掉的草稿的键还记在别处：调用方手里的旧副本、派生模板的 DerivedFrom、审计的对象都是「ID@版本」。号再发出去，这些
 // 就会对到另一份内容上；新版本的 Rev 同样从 1 起，带着旧副本保存时 Rev 也对得上，乐观锁拦不住，别人新开的草稿被悄悄
 // 覆盖。所以删掉的号不再发，带着删掉的草稿的键写，一律报 ErrNotFound。
-func (k versioned[V]) deleteStale(t *testing.T, s *Store) {
+func (k versioned[V]) deleteStale(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	v1 := k.to(t, s, k.mustCreate(t, s, "Base-1"), model.VersionApproved)
 	old := k.newVersionOf(t, s, v1) // 调用方手里留着这份版本 2 的草稿
@@ -1156,7 +1158,7 @@ func (k versioned[V]) deleteStale(t *testing.T, s *Store) {
 	wantAuthoredUnchanged(t, s, before, "带着删掉的草稿写时")
 }
 
-func (k versioned[V]) deleteBad(t *testing.T, s *Store) {
+func (k versioned[V]) deleteBad(t *testing.T, s *pgstore.Store) {
 	draft := k.head(k.mustCreate(t, s, "Base-1"))
 	before := authoredSnapshot(t, s)
 	for _, rev := range []int64{0, draft.Rev + 1} {
@@ -1178,7 +1180,7 @@ func (k versioned[V]) deleteBad(t *testing.T, s *Store) {
 // Rev 不算数；内容不同说明有人改了内置内容却没升版本号，报 ErrBuiltinMismatch。内容的每个字段都要比，嵌套的要比到
 // 最里层：最可能被改的是实现的正文这类嵌套的内容，漏比一处，同一个版本号就对应了两份内容（variants 各改一处）。名字
 // 放在身份上，同一身份的版本共用一个名字，别的版本带了另一个名字也算不同。装载不写审计。
-func (k versioned[V]) builtinEnsure(t *testing.T, s *Store) {
+func (k versioned[V]) builtinEnsure(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	b1 := k.builtin("builtin-base", 1, "lober:Base")
 	must(t, k.ensureBuiltin(ctx, s, b1), "装载版本 1")
@@ -1220,7 +1222,7 @@ func (k versioned[V]) builtinEnsure(t *testing.T, s *Store) {
 // 内置与用户建的身份共用一个名字空间（spec §6.2 第 11 条）：名字被别的身份占了，装载报 DuplicateError，Existing 是那个
 // 身份。用户的身份用不了保留前缀（C12），占着内置名字的只可能是另一个内置身份；反过来，用户新建与改名时用内置的名字，
 // 在名字规则里就报 name_reserved，到不了唯一索引。
-func (k versioned[V]) builtinName(t *testing.T, s *Store) {
+func (k versioned[V]) builtinName(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	must(t, k.ensureBuiltin(ctx, s, k.builtin("builtin-base", 1, "lober:Base")), "装载")
 	before := authoredSnapshot(t, s)
@@ -1239,7 +1241,7 @@ func (k versioned[V]) builtinName(t *testing.T, s *Store) {
 
 // 内置内容只读（C25）：内置的身份不能改名、不能开新版本，内置的版本不能保存、删除，也不能转换状态，废弃也不行。要改
 // 就先派生（模板），或者等 lober 发布新版本。
-func (k versioned[V]) builtinImmutable(t *testing.T, s *Store) {
+func (k versioned[V]) builtinImmutable(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	b := k.builtin("builtin-base", 1, "lober:Base")
 	must(t, k.ensureBuiltin(ctx, s, b), "装载")
@@ -1260,7 +1262,7 @@ func (k versioned[V]) builtinImmutable(t *testing.T, s *Store) {
 
 // 内置内容是程序自带的：要是内置的已审批版本，ID 与版本号合格式，名字已经是规范的写法（再规范化一次不变）并且带保留
 // 前缀 lober:（C12），文本都存得下。不合这些的是程序的错，报 ErrInvalid，什么都不写。
-func (k versioned[V]) builtinBadInput(t *testing.T, s *Store) {
+func (k versioned[V]) builtinBadInput(t *testing.T, s *pgstore.Store) {
 	before := authoredSnapshot(t, s)
 	for _, c := range []struct {
 		what string
@@ -1286,7 +1288,7 @@ func (k versioned[V]) builtinBadInput(t *testing.T, s *Store) {
 }
 
 // 收到的 ID 先过 model.ValidID，版本号从 1 起：不合的报 ErrInvalid，不当成找不到。
-func (k versioned[V]) badKey(t *testing.T, s *Store) {
+func (k versioned[V]) badKey(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	v := k.mustCreate(t, s, "Base-1")
 	good := k.head(v).ID
@@ -1320,7 +1322,7 @@ func (k versioned[V]) badKey(t *testing.T, s *Store) {
 }
 
 // newVersionOf 从 v 开一个新版本，作者是 carol。
-func (k versioned[V]) newVersionOf(t *testing.T, s *Store, v V) V {
+func (k versioned[V]) newVersionOf(t *testing.T, s *pgstore.Store, v V) V {
 	t.Helper()
 	h := k.head(v)
 	got, err := k.newVersion(t.Context(), s, h.ID, h.Version, "carol")
@@ -1330,7 +1332,7 @@ func (k versioned[V]) newVersionOf(t *testing.T, s *Store, v V) V {
 
 // 每个身份一项。ApprovedOnly 时给当前的已审批版本，规则同 model.CurrentApproved：废弃的不算，最新的已审批版本被废弃后
 // 回落到上一个（C26）；新版本审批之前，旧版本照常给出（C23）。没有已审批版本的身份跳过。
-func (k versioned[V]) listPerIdentity(t *testing.T, s *Store) {
+func (k versioned[V]) listPerIdentity(t *testing.T, s *pgstore.Store) {
 	a1 := k.to(t, s, k.mustCreate(t, s, "A"), model.VersionApproved)
 	a2 := k.to(t, s, k.newVersionOf(t, s, a1), model.VersionApproved)
 	a3 := k.newVersionOf(t, s, a2) // 最新的是草稿
@@ -1351,7 +1353,7 @@ func (k versioned[V]) listPerIdentity(t *testing.T, s *Store) {
 }
 
 // 按名字的 key（小写）排，而不是按显示的名字：这几个名字按两种排法得到的顺序不同。key 唯一，再按 ID 只是兜底。
-func (k versioned[V]) listPaging(t *testing.T, s *Store) {
+func (k versioned[V]) listPaging(t *testing.T, s *pgstore.Store) {
 	byName := map[string]V{}
 	for _, name := range []string{"b-2", "A-1", "_x", "Z9", "a-10"} {
 		byName[name] = k.mustCreate(t, s, name)
@@ -1373,7 +1375,7 @@ func (k versioned[V]) listPaging(t *testing.T, s *Store) {
 
 // 名字的前缀与名字的 key 比，所以 ASCII 字母不分大小写，与「大小写不同也算同名」一致。名字只收可打印 ASCII，前缀里的
 // 别的字符只按字节比：开尔文符号 K（U+212A）按 Unicode 的规则会转成 k，这里不能把它当成 k。
-func (k versioned[V]) listPrefix(t *testing.T, s *Store) {
+func (k versioned[V]) listPrefix(t *testing.T, s *pgstore.Store) {
 	for _, name := range []string{"Net_A", "NetXA", "Net%B", "NetYB", `Net\Z`, "NetAZ", "Nic-1", "K-Tool"} {
 		k.mustCreate(t, s, name)
 	}
@@ -1402,7 +1404,7 @@ func (k versioned[V]) listPrefix(t *testing.T, s *Store) {
 }
 
 // 状态的过滤看的是给出的那一项：默认是最新的版本，ApprovedOnly 时是当前的已审批版本。
-func (k versioned[V]) listStates(t *testing.T, s *Store) {
+func (k versioned[V]) listStates(t *testing.T, s *pgstore.Store) {
 	a := k.mustCreate(t, s, "A")
 	b := k.to(t, s, k.mustCreate(t, s, "B"), model.VersionReview)
 	c := k.to(t, s, k.mustCreate(t, s, "C"), model.VersionApproved)
@@ -1430,7 +1432,7 @@ func (k versioned[V]) listStates(t *testing.T, s *Store) {
 	}
 }
 
-func (k versioned[V]) listDefaultLimit(t *testing.T, s *Store) {
+func (k versioned[V]) listDefaultLimit(t *testing.T, s *pgstore.Store) {
 	for i := range defaultPageSize + 1 {
 		k.mustCreate(t, s, fmt.Sprintf("Base-%03d", i))
 	}
@@ -1439,7 +1441,7 @@ func (k versioned[V]) listDefaultLimit(t *testing.T, s *Store) {
 	})
 }
 
-func (k versioned[V]) listInvalid(t *testing.T, s *Store) {
+func (k versioned[V]) listInvalid(t *testing.T, s *pgstore.Store) {
 	k.mustCreate(t, s, "Base-1")
 	for _, q := range []listQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"}} {
 		_, err := k.list(t.Context(), s, q)

@@ -1,10 +1,11 @@
-package pgstore
+package pgstore_test
 
 // 契约测试（spec §7.2 第 2 条）：仓储契约的用例按聚合分在 contract_*_test.go 里，每个文件一个以 Test契约 开头的入口，
 // 由 go test 直接发现。这个文件放各组共用的部分。
 //
-// 用例经 store 的接口观察仓储。接口看不到的只有三处，用例直接查列：任务的事件计数 last_seq、身份上分配过的最大版本号
-// last_version、模板版本的引用表 template_hook_refs。每个用例 openContract 一个全新的空仓储，互不影响。记录用
+// 用例经 store 的接口观察仓储。接口看不到的只有三处，用例经 DBForTest（export_test.go）直接查列：任务的事件计数 last_seq、
+// 身份上分配过的最大版本号 last_version、模板版本的引用表 template_hook_refs。每个用例用 pgtest.OpenStore 开一个全新的空
+// 仓储，装好了失败注入，互不影响。记录用
 // reflect.DeepEqual 比较，nil 与空的 map、切片算不同：写进去什么，就要读出什么。列表的顺序按字节序比较，不随数据库的
 // 排序规则变。
 //
@@ -23,21 +24,23 @@ import (
 
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/store/pgstore"
+	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
 // testCase 是一个用例，跑在一个全新的空仓储上。
 type testCase struct {
 	name string
-	run  func(t *testing.T, s *Store)
+	run  func(t *testing.T, s *pgstore.Store)
 }
 
-// runCases 把每个用例作为子测试并行跑，各自 openContract 一个仓储：每个用例一个 schema，彼此看不见，同时跑也互不干扰。
-// 同时打开的仓储数由 newSchema 里的信号量限住（testSlots）。用例里的子测试共用这个用例的仓储，照旧依次跑。
+// runCases 把每个用例作为子测试并行跑，各自用 pgtest.OpenStore 开一个仓储：每个用例一个 schema，彼此看不见，同时跑也互不
+// 干扰。同时打开的仓储数由 pgtest 里的信号量限住。用例里的子测试共用这个用例的仓储，照旧依次跑。
 func runCases(t *testing.T, cases []testCase) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			c.run(t, openContract(t))
+			c.run(t, pgtest.OpenStore(t))
 		})
 	}
 }
@@ -193,7 +196,7 @@ type contents struct {
 	Audit []store.AuditEntry
 }
 
-func snapshot(t *testing.T, s *Store) contents {
+func snapshot(t *testing.T, s *pgstore.Store) contents {
 	t.Helper()
 	return contents{
 		Hosts: slices.Concat(hostPages(t, s, store.HostQuery{Limit: 500})...),
@@ -203,7 +206,7 @@ func snapshot(t *testing.T, s *Store) contents {
 }
 
 // wantUnchanged 要求仓储里的记录与 before 相同：动作没有落库，审计也没有写。
-func wantUnchanged(t *testing.T, s *Store, before contents, what string) {
+func wantUnchanged(t *testing.T, s *pgstore.Store, before contents, what string) {
 	t.Helper()
 	if after := snapshot(t, s); !reflect.DeepEqual(after, before) {
 		t.Fatalf("%s仓储不应有变化：\n之前 %+v\n之后 %+v", what, before, after)

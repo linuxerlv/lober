@@ -1,4 +1,4 @@
-package pgstore
+package pgstore_test
 
 import (
 	"errors"
@@ -8,6 +8,8 @@ import (
 
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/store/pgstore"
+	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
 // Test契约审计 是审计这一组（spec §6.2 第 8 条、§7.2 第 2 条）：要审计的方法与审计写在同一个事务里，以及审计的查询。
@@ -16,7 +18,7 @@ func Test契约审计(t *testing.T) {
 	// 四项检查各是一组，组本身不开仓储：也并行，各组的用例才与 runCases 的一起跑，不必一组等一组
 	t.Run("零值审计报 ErrAuditRequired，什么都不写", func(t *testing.T) {
 		t.Parallel()
-		eachAudited(t, func(t *testing.T, s *Store, call auditedCall) {
+		eachAudited(t, func(t *testing.T, s *pgstore.Store, call auditedCall) {
 			before := snapshot(t, s)
 			_, err := call(store.Audit{})
 			wantIs(t, err, store.ErrAuditRequired, "零值审计")
@@ -27,7 +29,7 @@ func Test契约审计(t *testing.T) {
 	})
 	t.Run("审计不合法报 ErrInvalid，什么都不写", func(t *testing.T) {
 		t.Parallel()
-		eachAudited(t, func(t *testing.T, s *Store, call auditedCall) {
+		eachAudited(t, func(t *testing.T, s *pgstore.Store, call auditedCall) {
 			before := snapshot(t, s)
 			for _, a := range []store.Audit{
 				{Actor: "alice", Action: "import", At: at0}, // Action 不到两段
@@ -44,9 +46,9 @@ func Test契约审计(t *testing.T) {
 	})
 	t.Run("审计写失败时动作也不落库", func(t *testing.T) {
 		t.Parallel()
-		eachAudited(t, func(t *testing.T, s *Store, call auditedCall) {
+		eachAudited(t, func(t *testing.T, s *pgstore.Store, call auditedCall) {
 			before := snapshot(t, s)
-			_, err := call(store.Audit{Actor: faultActor, Action: "test.fault", At: at0})
+			_, err := call(store.Audit{Actor: pgtest.FaultActor, Action: "test.fault", At: at0})
 			if err == nil {
 				t.Fatal("审计写失败时应报错")
 			}
@@ -64,7 +66,7 @@ func Test契约审计(t *testing.T) {
 	})
 	t.Run("成功时每个对象写一条审计，对象由仓储填", func(t *testing.T) {
 		t.Parallel()
-		eachAudited(t, func(t *testing.T, s *Store, call auditedCall) {
+		eachAudited(t, func(t *testing.T, s *pgstore.Store, call auditedCall) {
 			before := auditEntries(t, s)
 			a := store.Audit{Actor: "张三", Action: "test.audited", Detail: "理由：换机房", At: at0 + 1}
 			targets, err := call(a)
@@ -102,15 +104,15 @@ type auditedCall func(a store.Audit) ([]target, error)
 // 多次，被拒绝或失败的调用什么都不改，之后照样能成功。
 var auditedOps = []struct {
 	name    string
-	prepare func(t *testing.T, s *Store) auditedCall
+	prepare func(t *testing.T, s *pgstore.Store) auditedCall
 }{
-	{"CreateHost", func(t *testing.T, s *Store) auditedCall {
+	{"CreateHost", func(t *testing.T, s *pgstore.Store) auditedCall {
 		return func(a store.Audit) ([]target, error) {
 			_, err := s.CreateHost(t.Context(), fullHost("SN-NEW"), a)
 			return []target{{"host", "SN-NEW"}}, err
 		}
 	}},
-	{"UpdateHost", func(t *testing.T, s *Store) auditedCall {
+	{"UpdateHost", func(t *testing.T, s *pgstore.Store) auditedCall {
 		h := mustCreateHost(t, s, fullHost("SN-1"))
 		h.Arch = "aarch64"
 		return func(a store.Audit) ([]target, error) {
@@ -118,32 +120,32 @@ var auditedOps = []struct {
 			return []target{{"host", "SN-1"}}, err
 		}
 	}},
-	{"ImportHosts", func(t *testing.T, s *Store) auditedCall {
+	{"ImportHosts", func(t *testing.T, s *pgstore.Store) auditedCall {
 		mustCreateHost(t, s, fullHost("SN-1"))
 		return func(a store.Audit) ([]target, error) {
 			_, err := s.ImportHosts(t.Context(), []model.Host{{SN: "SN-2"}, {SN: "SN-1"}}, a)
 			return []target{{"host", "SN-2"}, {"host", "SN-1"}}, err
 		}
 	}},
-	{"DeleteHost", func(t *testing.T, s *Store) auditedCall {
+	{"DeleteHost", func(t *testing.T, s *pgstore.Store) auditedCall {
 		h := mustCreateHost(t, s, fullHost("SN-1"))
 		return func(a store.Audit) ([]target, error) {
 			return []target{{"host", "SN-1"}}, s.DeleteHost(t.Context(), "SN-1", h.Rev, a)
 		}
 	}},
-	{"CreateISO", func(t *testing.T, s *Store) auditedCall {
+	{"CreateISO", func(t *testing.T, s *pgstore.Store) auditedCall {
 		return func(a store.Audit) ([]target, error) {
 			iso, err := s.CreateISO(t.Context(), rockyISO("Rocky"), a)
 			return []target{{"iso", iso.ID}}, err
 		}
 	}},
-	{"DeprecateISO", func(t *testing.T, s *Store) auditedCall {
+	{"DeprecateISO", func(t *testing.T, s *pgstore.Store) auditedCall {
 		iso := mustReadyISO(t, s, rockyISO("Rocky"), 1)
 		return func(a store.Audit) ([]target, error) {
 			return []target{{"iso", iso.ID}}, s.DeprecateISO(t.Context(), iso.ID, iso.Rev, a)
 		}
 	}},
-	{"DeleteISO", func(t *testing.T, s *Store) auditedCall {
+	{"DeleteISO", func(t *testing.T, s *pgstore.Store) auditedCall {
 		iso := mustCreateISO(t, s, rockyISO("Rocky"))
 		return func(a store.Audit) ([]target, error) {
 			return []target{{"iso", iso.ID}}, s.DeleteISO(t.Context(), iso.ID, iso.Rev, a)
@@ -151,19 +153,19 @@ var auditedOps = []struct {
 	}},
 }
 
-// eachAudited 给每个要审计的方法 openContract 一个仓储、备好记录，再交给 check。各个方法并行跑，同 runCases。
-func eachAudited(t *testing.T, check func(t *testing.T, s *Store, call auditedCall)) {
+// eachAudited 给每个要审计的方法用 pgtest.OpenStore 开一个仓储、备好记录，再交给 check。各个方法并行跑，同 runCases。
+func eachAudited(t *testing.T, check func(t *testing.T, s *pgstore.Store, call auditedCall)) {
 	for _, op := range auditedOps {
 		t.Run(op.name, func(t *testing.T) {
 			t.Parallel()
-			s := openContract(t)
+			s := pgtest.OpenStore(t)
 			check(t, s, op.prepare(t, s))
 		})
 	}
 }
 
 // auditPages 用查询 q 从头翻到尾，返回每一页；游标由它填。
-func auditPages(t *testing.T, s *Store, q store.AuditQuery) [][]store.AuditEntry {
+func auditPages(t *testing.T, s *pgstore.Store, q store.AuditQuery) [][]store.AuditEntry {
 	t.Helper()
 	return allPages(t, func(cursor string) (store.Page[store.AuditEntry], error) {
 		q.Cursor = cursor
@@ -172,7 +174,7 @@ func auditPages(t *testing.T, s *Store, q store.AuditQuery) [][]store.AuditEntry
 }
 
 // auditEntries 是全部审计，新的在前。
-func auditEntries(t *testing.T, s *Store) []store.AuditEntry {
+func auditEntries(t *testing.T, s *pgstore.Store) []store.AuditEntry {
 	t.Helper()
 	return slices.Concat(auditPages(t, s, store.AuditQuery{Limit: 500})...)
 }
@@ -187,7 +189,7 @@ func wantIDsDescending(t *testing.T, es []store.AuditEntry) {
 	}
 }
 
-func auditListFilters(t *testing.T, s *Store) {
+func auditListFilters(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	by := func(actor, action string, at int64) store.Audit {
 		return store.Audit{Actor: actor, Action: action, At: at}
@@ -282,7 +284,7 @@ func auditListFilters(t *testing.T, s *Store) {
 	}
 }
 
-func auditListPaging(t *testing.T, s *Store) {
+func auditListPaging(t *testing.T, s *pgstore.Store) {
 	var in []model.Host
 	for i := range 7 {
 		in = append(in, model.Host{SN: fmt.Sprintf("SN-%d", i)})
@@ -308,7 +310,7 @@ func auditListPaging(t *testing.T, s *Store) {
 	wantItems(t, slices.Concat(first.Items, rest), whole.Items, "翻页中途写了新审计")
 }
 
-func auditListDefaultLimit(t *testing.T, s *Store) {
+func auditListDefaultLimit(t *testing.T, s *pgstore.Store) {
 	var in []model.Host
 	for i := range defaultPageSize + 1 {
 		in = append(in, model.Host{SN: fmt.Sprintf("SN-%03d", i)})
@@ -319,7 +321,7 @@ func auditListDefaultLimit(t *testing.T, s *Store) {
 	})
 }
 
-func auditListInvalid(t *testing.T, s *Store) {
+func auditListInvalid(t *testing.T, s *pgstore.Store) {
 	mustCreateHost(t, s, fullHost("SN-1"))
 	// 排序键为 null 的游标是伪造的：收下的话 id < 0，翻出空的一页、Next 为空，调用方以为翻到头了
 	for _, q := range []store.AuditQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"},

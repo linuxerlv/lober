@@ -1,14 +1,10 @@
-package pgstore
+package pgstore_test
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"math/rand/v2"
-	"net/url"
-	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -22,181 +18,22 @@ import (
 	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/store/pgstore"
+	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
-// 测试夹具：每次 Open 在测试库里新建一个 schema，用完删掉，几个代理同时跑测试也互不干扰。测试库怎么准备见 doc.go。
+// pgstore 的测试都在外部测试包 pgstore_test 里，夹具只有 pgtest 一份：DSN 从哪读、临时 schema、每个仓储的连接上限、同时
+// 在用的 schema 数、失败注入，规则都在那边。外部测试包才 import 得到它：pgtest 依赖 pgstore，包内测试再 import 它就成环。
+// 白盒断言要用的包内标识符由 export_test.go 导出，名字都以 ForTest 结尾。测试库怎么准备见 doc.go。
 //
-// 别的包的测试用导出的 pgtest，DSN 从哪读、临时 schema、每个仓储的连接上限、同时打开的仓储数、失败注入，规则都和这里
-// 一样。这里用不了它：pgtest 依赖 pgstore，包内测试再 import 它就成环（import cycle not allowed in test）；包内测试还要
-// 拿 *Store 与 schema 的 DSN 做白盒断言，pgtest 只给 store.Store。所以这份留着，改了哪一边的规则，另一边要跟着改。
+// 本文件放只对 PostgreSQL 这份实现才有意义的测试：Open 本身，以及另开一个连接、让对方停在没提交的事务里才造得出的时机。
+// 它们要 schema 的 DSN，用 pgtest.Schema 与 pgtest.OpenAt；契约用例用 pgtest.OpenStore。
 
-// dsnEnv 是给测试库 DSN 的环境变量；没设时，从模块根逐级往上找 dsnFile。
-const (
-	dsnEnv  = "LOBER_TEST_PG_DSN"
-	dsnFile = ".pgtest.dsn"
-)
-
-// maxTestConns 是每个测试仓储的连接上限：几个代理会同时跑测试，本机的 max_connections 只有 100。
-const maxTestConns = 4
-
-// maxTestOpen 是这个测试进程里同时在用的临时 schema 数上限，与 pgtest 的 maxOpen 相同，数字怎么定的见那边。契约用例并行
-// 跑（runCases），不限的话几十个用例同时建 schema、开仓储，一个进程就能撑满 max_connections。
-const maxTestOpen = 4
-
-// testSlots 是限住同时在用的临时 schema 数的信号量：newSchema 先占一个位，schema 删掉之后才让出来。位都占满时，newSchema
-// 等到有用例结束；一个用例同时建的 schema 超过 maxTestOpen 个，会一直等下去。
-var testSlots = make(chan struct{}, maxTestOpen)
-
-// testDSN 是测试库的 DSN。两处都没有就失败、不跳过：跳过会让 make check 在存储层零覆盖的情况下变绿。
-func testDSN(t *testing.T) string {
-	t.Helper()
-	if dsn := strings.TrimSpace(os.Getenv(dsnEnv)); dsn != "" {
-		return dsn
-	}
-	for dir := moduleRoot(t); ; dir = filepath.Dir(dir) {
-		path := filepath.Join(dir, dsnFile)
-		b, err := os.ReadFile(path)
-		switch {
-		case err == nil:
-			if dsn := strings.TrimSpace(string(b)); dsn != "" {
-				return dsn
-			}
-			t.Fatalf("%s 是空的：里面要写一行 DSN（见 pgstore 的包说明）", path)
-		case !errors.Is(err, fs.ErrNotExist):
-			t.Fatalf("读 %s：%v", path, err)
-		}
-		if filepath.Dir(dir) == dir {
-			break
-		}
-	}
-	t.Fatalf("找不到测试库的 DSN：设环境变量 %s，或在模块根目录（或它的任一上级目录）放一个 %s，内容是一行 DSN，"+
-		"如 postgres://lober_test:<口令>@127.0.0.1:5432/lober_test?sslmode=disable。测试角色要拥有这个库、能在里面建 "+
-		"schema，见 pgstore 的包说明", dsnEnv, dsnFile)
-	return ""
-}
-
-// moduleRoot 从测试的工作目录（包目录）往上找到 go.mod 所在的目录。
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("取工作目录：%v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("从工作目录往上找不到 go.mod")
-		}
-		dir = parent
-	}
-}
-
-// newSchema 在测试库里新建一个 lober_t_ 加随机串的 schema，返回 search_path 只有它的 DSN；测试结束时连同里面的
-// 一切删掉。建之前先占 testSlots 的一个位，删掉之后才让出来（Cleanup 后进先出，让位登记在最前）。
-func newSchema(t *testing.T) string {
-	t.Helper()
-	testSlots <- struct{}{}
-	t.Cleanup(func() { <-testSlots })
-	base := testDSN(t)
-	name := "lober_t_" + store.NewID()
-	adminExec(t, t.Context(), base, "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize())
-	t.Cleanup(func() {
-		// t.Context() 在 Cleanup 之前就取消了，删 schema 另用一个
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		adminExec(t, ctx, base, "DROP SCHEMA "+pgx.Identifier{name}.Sanitize()+" CASCADE")
-	})
-	dsn, err := withSearchPath(base, name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return dsn
-}
-
-// adminExec 另开一个连接执行建删 schema 这类语句：仓储的连接都只看得见自己的 schema。
-func adminExec(t *testing.T, ctx context.Context, dsn, sql string) {
-	t.Helper()
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Errorf("连接测试库：%v", err)
-		return
-	}
-	defer conn.Close(ctx)
-	if _, err := conn.Exec(ctx, sql); err != nil {
-		t.Errorf("执行 %s：%v", sql, err)
-	}
-}
-
-// withSearchPath 给 DSN 加上 search_path：URL 形式加在查询参数里，key=value 形式接在末尾。出错时不带 DSN 原文，
-// 免得把口令打进测试输出。
-func withSearchPath(dsn, schema string) (string, error) {
-	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
-		return dsn + " search_path=" + schema, nil
-	}
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return "", errors.New("测试库的 DSN 不是合法的 URL（为免泄露口令，不打出原文）")
-	}
-	q := u.Query()
-	q.Set("search_path", schema)
-	u.RawQuery = q.Encode()
-	return u.String(), nil
-}
-
-// openStore 用 dsn 打开仓储，经 WithMaxConns 限住连接数（与装配点同一个入口），测试结束时关闭。
-func openStore(t *testing.T, dsn string) *Store {
-	t.Helper()
-	s, err := Open(t.Context(), dsn, WithMaxConns(maxTestConns))
-	if err != nil {
-		t.Fatalf("Open：%v", err)
-	}
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("关闭仓储：%v", err)
-		}
-	})
-	return s
-}
-
-// faultActor 是失败注入用的保留操作者。openContract 打开的仓储里，Actor 为它的审计写入失败，契约用例借此证明审计写
-// 失败时动作一起回滚（spec §6.2 第 8 条）。生产环境里它只是一个普通的字符串。
-const faultActor = "lober-test-fault"
-
-// installFault 在 s 的 schema 里给审计表装上失败注入：Actor 为 faultActor 的插入一律抛错，抛在动作本身写完之后、同一个
-// 事务里。只有测试的 schema 有这个触发器，Open 建的表上没有这条路。
-func installFault(t *testing.T, s *Store) {
-	t.Helper()
-	fn := `CREATE FUNCTION lober_test_fault() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-	IF NEW.actor = '` + strings.ReplaceAll(faultActor, "'", "''") + `' THEN
-		RAISE EXCEPTION 'lober_test_fault：注入的审计写入失败';
-	END IF;
-	RETURN NEW;
-END
-$$`
-	trigger := `CREATE TRIGGER lober_test_fault BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION lober_test_fault()`
-	for _, sql := range []string{fn, trigger} {
-		if err := s.db.WithContext(t.Context()).Exec(sql).Error; err != nil {
-			t.Fatalf("装失败注入：%v", err)
-		}
-	}
-}
-
-// openContract 给契约用例（contract_*_test.go）一个全新的空仓储，装好了失败注入，测试结束时由 t.Cleanup 收拾。
-func openContract(t *testing.T) *Store {
-	t.Helper()
-	s := openStore(t, newSchema(t))
-	installFault(t, s)
-	return s
-}
-
-// 失败注入只在测试的 schema 里：Open 建的表上，faultActor 只是一个普通的操作者。
+// 失败注入只在 pgtest.OpenStore 给的仓储上：pgstore.Open 建的表上（pgtest.OpenAt 就是经它打开的），pgtest.FaultActor
+// 只是一个普通的操作者。
 func TestOpen不注入失败(t *testing.T) {
-	s := openStore(t, newSchema(t))
-	a := store.Audit{Actor: faultActor, Action: "host.create", At: 1_790_000_000}
+	s := pgtest.OpenAt(t, pgtest.Schema(t))
+	a := store.Audit{Actor: pgtest.FaultActor, Action: "host.create", At: 1_790_000_000}
 	if _, err := s.CreateHost(t.Context(), model.Host{SN: "SN-1"}, a); err != nil {
 		t.Fatalf("Open 建的表不该注入失败：%v", err)
 	}
@@ -204,7 +41,7 @@ func TestOpen不注入失败(t *testing.T) {
 	if err != nil {
 		t.Fatalf("列出审计：%v", err)
 	}
-	if len(p.Items) != 1 || p.Items[0].Actor != faultActor {
+	if len(p.Items) != 1 || p.Items[0].Actor != pgtest.FaultActor {
 		t.Fatalf("审计应写下这一条，得到 %+v", p.Items)
 	}
 }
@@ -212,23 +49,23 @@ func TestOpen不注入失败(t *testing.T) {
 // 连接池的上限由装配点从配置读出来、经 WithMaxConns 传给 Open（S7-7）；不传就用 database/sql 的默认值，不设上限。
 // 几个选项都传时，后传的为准。
 func TestOpen按选项设连接池上限(t *testing.T) {
-	dsn := newSchema(t)
+	dsn := pgtest.Schema(t)
 	for _, c := range []struct {
 		name string
-		opts []Option
+		opts []pgstore.Option
 		want int // sql.DBStats.MaxOpenConnections，0 表示不设上限
 	}{
 		{"不传", nil, 0},
-		{"传 3", []Option{WithMaxConns(3)}, 3},
-		{"后传的为准", []Option{WithMaxConns(3), WithMaxConns(5)}, 5},
+		{"传 3", []pgstore.Option{pgstore.WithMaxConns(3)}, 3},
+		{"后传的为准", []pgstore.Option{pgstore.WithMaxConns(3), pgstore.WithMaxConns(5)}, 5},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			s, err := Open(t.Context(), dsn, c.opts...)
+			s, err := pgstore.Open(t.Context(), dsn, c.opts...)
 			if err != nil {
 				t.Fatalf("Open：%v", err)
 			}
 			defer s.Close()
-			sqlDB, err := s.db.DB()
+			sqlDB, err := s.DBForTest().DB()
 			if err != nil {
 				t.Fatalf("取连接池：%v", err)
 			}
@@ -244,7 +81,7 @@ func TestOpen按选项设连接池上限(t *testing.T) {
 // 藏不进串。契约测试里的坏游标是解不开的串与排序键为 null 的，排序键里藏着 NUL 的只在这里。按存不下的键取、删与过滤
 // 当作没有，见契约测试（hostUnstorableKeys 与 ISO、任务、审计各组列表的过滤用例）。
 func Test游标里藏着存不下的串报ErrInvalid(t *testing.T) {
-	s := openStore(t, newSchema(t))
+	s := pgtest.OpenAt(t, pgtest.Schema(t))
 	ctx := t.Context()
 	for _, c := range []struct {
 		name string
@@ -282,8 +119,8 @@ func Test游标里藏着存不下的串报ErrInvalid(t *testing.T) {
 // 把导入失败的 ISO 指向已有的那一个（spec §5.1 第 3 步）。契约测试里的撞车都被预查拦下了，走不到这条路；这里另开
 // 一个连接，让 A 的写入停在没提交的事务里，造出这个时机。
 func Test同时写同一份内容由索引兜底报出对方(t *testing.T) {
-	dsn := newSchema(t)
-	s := openStore(t, dsn)
+	dsn := pgtest.Schema(t)
+	s := pgtest.OpenAt(t, dsn)
 	ctx := t.Context()
 	newISO := func(name string) model.ISO {
 		iso, err := s.CreateISO(ctx, model.ISO{Name: name, Family: "linux", Series: "rocky"},
@@ -336,12 +173,12 @@ func Test同时写同一份内容由索引兜底报出对方(t *testing.T) {
 // 同时导入的几批互相重叠时，ImportHosts 按 SN 的顺序写，每批都按同一个顺序给行加锁，等待不会成环，也就不会互相等死
 // （SQLSTATE 40P01）。分几轮，每轮几批同时导入同一组主机，每批打乱入参的顺序；按最终结果断言，不依赖调度的顺序。
 func Test同时导入同一组主机不会互相等死(t *testing.T) {
-	s := openStore(t, newSchema(t))
-	sqlDB, err := s.db.DB()
+	s := pgtest.OpenAt(t, pgtest.Schema(t))
+	sqlDB, err := s.DBForTest().DB()
 	if err != nil {
 		t.Fatalf("取连接池：%v", err)
 	}
-	sqlDB.SetMaxIdleConns(maxTestConns) // 连接留着不关，每轮开始时不必现建，几批才真的同时写
+	sqlDB.SetMaxIdleConns(sqlDB.Stats().MaxOpenConnections) // 连接留着不关，每轮开始时不必现建，几批才真的同时写
 	const workers, rounds, n = 8, 5, 60
 	const imports = workers * rounds
 	hs := make([]model.Host, n)
@@ -417,8 +254,8 @@ func Test同时导入同一组主机不会互相等死(t *testing.T) {
 // 一个连接当先到的那一次：在没提交的事务里改这一行、让 Rev 加 1。带着旧 Rev 的每一种写入都要等它提交，再报
 // ErrConflict，库里留着它写下的内容。
 func Test带着旧Rev的写入等对方提交之后报冲突(t *testing.T) {
-	dsn := newSchema(t)
-	s := openStore(t, dsn)
+	dsn := pgtest.Schema(t)
+	s := pgtest.OpenAt(t, dsn)
 	audit := func(action string) store.Audit { return store.Audit{Actor: "alice", Action: action, At: 1} }
 
 	for i, c := range []struct {
@@ -499,13 +336,13 @@ func Test带着旧Rev的写入等对方提交之后报冲突(t *testing.T) {
 // hook 与模板版本的乐观锁同样靠先对版本行加写锁，道理同上一个测试：另开一个连接当先到的那一次，在没提交的事务里改
 // 这个版本、让 Rev 加 1。带着旧 Rev 的保存、状态转换与删除都要等它提交，再报 ErrConflict，库里留着它写下的内容。
 func Test带着旧Rev写hook与模板版本的等对方提交之后报冲突(t *testing.T) {
-	dsn := newSchema(t)
-	s := openStore(t, dsn)
+	dsn := pgtest.Schema(t)
+	s := pgtest.OpenAt(t, dsn)
 	audit := func(action string) store.Audit { return store.Audit{Actor: "alice", Action: action, At: 1} }
 	// setState 不经仓储把版本 1 置为 state：这里只看加锁与 Rev，不必让内容过激活判定
 	setState := func(t *testing.T, table, owner, id string, state model.VersionState) {
 		t.Helper()
-		if err := s.db.WithContext(t.Context()).Exec("UPDATE "+table+" SET state = ? WHERE "+owner+" = ?", string(state), id).Error; err != nil {
+		if err := s.DBForTest().WithContext(t.Context()).Exec("UPDATE "+table+" SET state = ? WHERE "+owner+" = ?", string(state), id).Error; err != nil {
 			t.Fatalf("置为 %s：%v", state, err)
 		}
 	}
@@ -611,15 +448,15 @@ func Test带着旧Rev写hook与模板版本的等对方提交之后报冲突(t *
 // 都是串行的，钉不住这一点。另开一个连接当先到的那一次：在没提交的事务里照 NewHookVersion 的写法记下分配的版本号 2、写下
 // 版本 2 的草稿。带着同一个来源版本再开，要等它提交，再报 ErrConflict，库里只有它开的那个版本。
 func Test同时开新版本等对方提交之后报冲突(t *testing.T) {
-	dsn := newSchema(t)
-	s := openStore(t, dsn)
+	dsn := pgtest.Schema(t)
+	s := pgtest.OpenAt(t, dsn)
 	ctx := t.Context()
 	h, err := s.CreateHook(ctx, model.Hook{Name: "LVM", Author: "alice"})
 	if err != nil {
 		t.Fatalf("新建 hook：%v", err)
 	}
 	// 不经仓储把版本 1 置为 approved，好在它之上开新版本：这里只看加锁，不必让内容过激活判定
-	if err := s.db.WithContext(ctx).Exec(`UPDATE hook_versions SET state = 'approved' WHERE hook_id = ?`, h.ID).Error; err != nil {
+	if err := s.DBForTest().WithContext(ctx).Exec(`UPDATE hook_versions SET state = 'approved' WHERE hook_id = ?`, h.ID).Error; err != nil {
 		t.Fatalf("置为 approved：%v", err)
 	}
 	hold := `WITH u AS (UPDATE hooks SET last_version = 2 WHERE id = $1 RETURNING id) ` +
@@ -645,8 +482,8 @@ func Test同时开新版本等对方提交之后报冲突(t *testing.T) {
 // 废弃模板引用的 hook 版本：审批要等它提交，再报 hook_ref_deprecated，模板仍待审批。不加读锁的话，审批读到的是废弃
 // 之前的版本，不等就批了下来，批准的模板引用的却是一个已废弃的 hook。契约测试里的废弃都在审批之前提交，钉不住这一点。
 func Test审批模板等引用的hook版本提交之后再判定(t *testing.T) {
-	dsn := newSchema(t)
-	s := openStore(t, dsn)
+	dsn := pgtest.Schema(t)
+	s := pgtest.OpenAt(t, dsn)
 	ctx := t.Context()
 	audit := func(action string) store.Audit { return store.Audit{Actor: "alice", Action: action, At: 1} }
 	h, err := s.CreateHook(ctx, model.Hook{Name: "LVM", Author: "alice", Impls: []model.Impl{{
@@ -692,8 +529,8 @@ func Test审批模板等引用的hook版本提交之后再判定(t *testing.T) {
 // 事务里占住一个名字：用它新建的要等对方提交，再撞上 idx_hooks_name_key，在事务外查出对方，照样报 DuplicateError，
 // 自己什么都没写下。契约测试里的撞名都是串行的，走不到「等对方提交」这一步。
 func Test同时占用同一个名字由唯一索引兜底报出对方(t *testing.T) {
-	dsn := newSchema(t)
-	s := openStore(t, dsn)
+	dsn := pgtest.Schema(t)
+	s := pgtest.OpenAt(t, dsn)
 	ctx := t.Context()
 	err := writeWhileHeld(t, dsn, `INSERT INTO hooks (id, name, name_key, builtin, last_version) VALUES ($1, 'Same', 'same', false, 1)`,
 		"held", func() error {
@@ -705,7 +542,7 @@ func Test同时占用同一个名字由唯一索引兜底报出对方(t *testing
 		t.Fatalf("撞上对方已提交的名字，应报 DuplicateError{name, held}，得到 %v", err)
 	}
 	var idents, versions int64
-	if err := s.db.WithContext(ctx).Raw(`SELECT (SELECT count(*) FROM hooks), (SELECT count(*) FROM hook_versions)`).
+	if err := s.DBForTest().WithContext(ctx).Raw(`SELECT (SELECT count(*) FROM hooks), (SELECT count(*) FROM hook_versions)`).
 		Row().Scan(&idents, &versions); err != nil {
 		t.Fatalf("数行数：%v", err)
 	}
@@ -719,7 +556,7 @@ func Test同时占用同一个名字由唯一索引兜底报出对方(t *testing
 // hook_id，btree 索引的一行最多两千七百来个字节，压不下去的长 ID 写进去就超了（SQLSTATE 54000）。契约测试里的 ID
 // 都短，钉不住这一点。随机的小写字母压不下去；种子固定，每次跑的都一样。
 func Test模板草稿引用很长的hookID照样存得下(t *testing.T) {
-	s := openStore(t, newSchema(t))
+	s := pgtest.OpenAt(t, pgtest.Schema(t))
 	r := rand.New(rand.NewPCG(1, 2))
 	longID := func() string {
 		b := make([]byte, 3000)
@@ -766,8 +603,8 @@ func Test模板草稿引用很长的hookID照样存得下(t *testing.T) {
 // BatchError，结果与准入看得到那次重试时给的相同，只有撞上的那台报 host_has_open_task；任务与审计都没写。契约测试里的撞车
 // 都被准入拦下了，走不到这条路；这里另开一个连接当那次重试，让它停在没提交的事务里。
 func Test建任务撞上没提交的重试由部分唯一索引兜底(t *testing.T) {
-	dsn := newSchema(t)
-	s := openStore(t, dsn)
+	dsn := pgtest.Schema(t)
+	s := pgtest.OpenAt(t, dsn)
 	ctx := t.Context()
 	f := newTaskFixture(t, s, "SN-1", "SN-2")
 	audit := store.Audit{Actor: "alice", Action: "task.create", At: 1}
@@ -799,8 +636,8 @@ func Test建任务撞上没提交的重试由部分唯一索引兜底(t *testing
 // 任务：失败任务的重试要等它提交，再撞上索引，报 ProblemsError(ErrRejected)，问题是 host_has_open_task，推进连同带的事件
 // 与审计都不生效。契约测试里挡住重试的新任务都已提交，钉不住这一点。
 func Test推进撞上没提交的新任务由部分唯一索引兜底(t *testing.T) {
-	dsn := newSchema(t)
-	s := openStore(t, dsn)
+	dsn := pgtest.Schema(t)
+	s := pgtest.OpenAt(t, dsn)
 	ctx := t.Context()
 	f := newTaskFixture(t, s, "SN-1")
 	failed := f.mustFailed(t, s, "SN-1")
@@ -851,8 +688,8 @@ func Test建任务等锁住的记录提交之后再重跑准入(t *testing.T) {
 			func(f taskFixture) string { return f.hook.ID }, "template_blocked_by_deprecated"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			dsn := newSchema(t)
-			s := openStore(t, dsn)
+			dsn := pgtest.Schema(t)
+			s := pgtest.OpenAt(t, dsn)
 			ctx := t.Context()
 			f := newTaskFixture(t, s, "SN-1", "SN-2")
 			err := writeWhileHeld(t, dsn, c.hold, c.key(f), func() error {
@@ -885,8 +722,8 @@ func Test建任务等锁住的记录提交之后再重跑准入(t *testing.T) {
 // 顺序不同时，还会互相等死（SQLSTATE 40P01）。契约测试里只有一台主机有未结束的任务，兜底给的结果恰好与准入的相同；
 // Test建任务等锁住的记录提交之后再重跑准入 里改主机的对方持的是 FOR NO KEY UPDATE，FOR SHARE 也会等它。两处都钉不住这一点。
 func Test建任务等主机上没提交的新任务提交之后逐台报出(t *testing.T) {
-	dsn := newSchema(t)
-	s := openStore(t, dsn)
+	dsn := pgtest.Schema(t)
+	s := pgtest.OpenAt(t, dsn)
 	ctx := t.Context()
 	f := newTaskFixture(t, s, "SN-1", "SN-2")
 	audits := auditCount(t, s)
@@ -931,16 +768,16 @@ func Test推进与追加事件等对方提交之后再比对与分配(t *testing
 		`INSERT INTO task_events (task_id, seq, at, kind, key, fields) SELECT id, 1, 1, 'task.boot', 'sig-1', 'null' FROM u`
 	for _, c := range []struct {
 		name  string
-		write func(ctx context.Context, s *Store, task model.Task) error // 在对方提交之前开始，带着对方提交之前读到的 task
+		write func(ctx context.Context, s *pgstore.Store, task model.Task) error // 在对方提交之前开始，带着对方提交之前读到的 task
 	}{
-		{"带着旧期望值推进", func(ctx context.Context, s *Store, task model.Task) error {
+		{"带着旧期望值推进", func(ctx context.Context, s *pgstore.Store, task model.Task) error {
 			_, _, err := s.TransitionTask(ctx, task.ID, store.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskInstalling, nil)
 			if !errors.Is(err, store.ErrConflict) {
 				return fmt.Errorf("对方提交之后 Rev 已是 %d，带着 %d 推进应报 ErrConflict，得到 %v", task.Rev+1, task.Rev, err)
 			}
 			return nil
 		}},
-		{"追加事件", func(ctx context.Context, s *Store, task model.Task) error {
+		{"追加事件", func(ctx context.Context, s *pgstore.Store, task model.Task) error {
 			got, err := s.AppendEvents(ctx, task.ID,
 				[]store.NewEvent{{At: 1, Kind: "signal.recv", Key: "sig-1"}, {At: 1, Kind: "signal.recv", Key: "sig-2"}})
 			if want := []store.Appended{{Seq: 1, Duplicate: true}, {Seq: 2}}; err != nil || !reflect.DeepEqual(got, want) {
@@ -950,8 +787,8 @@ func Test推进与追加事件等对方提交之后再比对与分配(t *testing
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			dsn := newSchema(t)
-			s := openStore(t, dsn)
+			dsn := pgtest.Schema(t)
+			s := pgtest.OpenAt(t, dsn)
 			ctx := t.Context()
 			in := newTaskFixture(t, s, "SN-1").tasks("SN-1")
 			created, err := s.CreateTasks(ctx, in, store.Audit{Actor: "alice", Action: "task.create", At: 1})
@@ -980,7 +817,7 @@ type taskFixture struct {
 }
 
 // newTaskFixture 登记 sns 这几台主机，备好 ISO、hook 与模板。
-func newTaskFixture(t *testing.T, s *Store, sns ...string) taskFixture {
+func newTaskFixture(t *testing.T, s *pgstore.Store, sns ...string) taskFixture {
 	t.Helper()
 	ctx := t.Context()
 	audit := store.Audit{Actor: "alice", Action: "fixture.setup", At: 1}
@@ -1010,7 +847,7 @@ func newTaskFixture(t *testing.T, s *Store, sns ...string) taskFixture {
 	for _, v := range []struct{ table, owner, id string }{
 		{"hook_versions", "hook_id", hook.ID}, {"template_versions", "template_id", tpl.ID},
 	} {
-		if err := s.db.WithContext(ctx).Exec("UPDATE "+v.table+" SET state = 'approved' WHERE "+v.owner+" = ?", v.id).Error; err != nil {
+		if err := s.DBForTest().WithContext(ctx).Exec("UPDATE "+v.table+" SET state = 'approved' WHERE "+v.owner+" = ?", v.id).Error; err != nil {
 			t.Fatalf("把 %s 置为 approved：%v", v.table, err)
 		}
 	}
@@ -1030,7 +867,7 @@ func (f taskFixture) tasks(sns ...string) []model.Task {
 }
 
 // mustFailed 给主机 sn 建一个任务，再推进到 failed：结束了的任务不占 C31 的位，重试时才回到未结束的状态。
-func (f taskFixture) mustFailed(t *testing.T, s *Store, sn string) model.Task {
+func (f taskFixture) mustFailed(t *testing.T, s *pgstore.Store, sn string) model.Task {
 	t.Helper()
 	ctx := t.Context()
 	created, err := s.CreateTasks(ctx, f.tasks(sn), store.Audit{Actor: "alice", Action: "task.create", At: 1})
@@ -1045,10 +882,10 @@ func (f taskFixture) mustFailed(t *testing.T, s *Store, sn string) model.Task {
 }
 
 // auditCount 是 s 的 schema 里审计的条数。
-func auditCount(t *testing.T, s *Store) int64 {
+func auditCount(t *testing.T, s *pgstore.Store) int64 {
 	t.Helper()
 	var n int64
-	if err := s.db.WithContext(t.Context()).Raw(`SELECT count(*) FROM audit_log`).Row().Scan(&n); err != nil {
+	if err := s.DBForTest().WithContext(t.Context()).Raw(`SELECT count(*) FROM audit_log`).Row().Scan(&n); err != nil {
 		t.Fatalf("数审计：%v", err)
 	}
 	return n

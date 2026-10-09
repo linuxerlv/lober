@@ -1,4 +1,4 @@
-package pgstore
+package pgstore_test
 
 import (
 	"cmp"
@@ -15,6 +15,7 @@ import (
 	"github.com/lober/lober/internal/core/params"
 	coresnapshot "github.com/lober/lober/internal/core/snapshot"
 	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/store/pgstore"
 )
 
 // Test契约任务 是任务这一组（C27–C31、C33）：批量建任务的前提、在事务里重跑准入、条件推进与查询，以及要审计的两个方法。
@@ -57,7 +58,7 @@ type fixture struct {
 	hooks map[model.HookKey]model.Hook // tpl 引用的 hook 版本
 }
 
-func newFixture(t *testing.T, s *Store) fixture {
+func newFixture(t *testing.T, s *pgstore.Store) fixture {
 	t.Helper()
 	lvm := hookOps.to(t, s, hookOps.mustCreate(t, s, "LVM"), model.VersionApproved)
 	tpl := templateOps.mustCreateFrom(t, s, referencing(fullTemplate("Rocky-Base"), lvm.Key()))
@@ -76,7 +77,7 @@ func taskHost(sn string) model.Host {
 }
 
 // mustTaskHosts 登记 sns 这几台主机（taskHost），按 sns 的顺序返回登记之后的记录。
-func mustTaskHosts(t *testing.T, s *Store, sns ...string) []model.Host {
+func mustTaskHosts(t *testing.T, s *pgstore.Store, sns ...string) []model.Host {
 	t.Helper()
 	var hs []model.Host
 	for _, sn := range sns {
@@ -102,14 +103,14 @@ func (f fixture) newTasks(t *testing.T, hs ...model.Host) []model.Task {
 }
 
 // mustCreate 给 hs 这几台主机建一批任务，返回建出的任务。
-func (f fixture) mustCreate(t *testing.T, s *Store, hs ...model.Host) []model.Task {
+func (f fixture) mustCreate(t *testing.T, s *pgstore.Store, hs ...model.Host) []model.Task {
 	t.Helper()
 	got, err := s.CreateTasks(t.Context(), f.newTasks(t, hs...), anAudit("task.create"))
 	must(t, err, fmt.Sprintf("给 %v 建任务", snsOf(hs)))
 	return got
 }
 
-func mustGetTask(t *testing.T, s *Store, id string) model.Task {
+func mustGetTask(t *testing.T, s *pgstore.Store, id string) model.Task {
 	t.Helper()
 	got, err := s.GetTask(t.Context(), id)
 	must(t, err, "读任务 "+id)
@@ -117,7 +118,7 @@ func mustGetTask(t *testing.T, s *Store, id string) model.Task {
 }
 
 // mustTransition 把任务 task 从它现在的状态推进到 to，不带事件，返回推进之后的任务。
-func mustTransition(t *testing.T, s *Store, task model.Task, to model.TaskState) model.Task {
+func mustTransition(t *testing.T, s *pgstore.Store, task model.Task, to model.TaskState) model.Task {
 	t.Helper()
 	got, _, err := s.TransitionTask(t.Context(), task.ID, store.TaskExpect{State: task.State, Rev: task.Rev}, to, nil)
 	must(t, err, fmt.Sprintf("把任务 %s 从 %s 推进到 %s", task.ID, task.State, to))
@@ -139,7 +140,7 @@ func sortedTasks(ts []model.Task) []model.Task {
 }
 
 // taskPages 用查询 q 从头翻到尾，返回每一页；游标由它填。
-func taskPages(t *testing.T, s *Store, q store.TaskQuery) [][]model.Task {
+func taskPages(t *testing.T, s *pgstore.Store, q store.TaskQuery) [][]model.Task {
 	t.Helper()
 	return allPages(t, func(cursor string) (store.Page[model.Task], error) {
 		q.Cursor = cursor
@@ -148,7 +149,7 @@ func taskPages(t *testing.T, s *Store, q store.TaskQuery) [][]model.Task {
 }
 
 // allEvents 是任务 id 的全部事件，按 Seq 从上一次读到的最后一条续读到尾。没有事件的一次也要是长度为 0 的切片（见包说明）。
-func allEvents(t *testing.T, s *Store, id string) []store.Event {
+func allEvents(t *testing.T, s *pgstore.Store, id string) []store.Event {
 	t.Helper()
 	var all []store.Event
 	for range maxPages {
@@ -176,7 +177,7 @@ type taskContents struct {
 	Events map[string][]store.Event // 任务 ID → 它的全部事件
 }
 
-func taskSnapshot(t *testing.T, s *Store) taskContents {
+func taskSnapshot(t *testing.T, s *pgstore.Store) taskContents {
 	t.Helper()
 	c := taskContents{contents: snapshot(t, s), Events: map[string][]store.Event{}}
 	c.Tasks = slices.Concat(taskPages(t, s, store.TaskQuery{Limit: 500})...)
@@ -187,7 +188,7 @@ func taskSnapshot(t *testing.T, s *Store) taskContents {
 }
 
 // wantTasksUnchanged 要求仓储里的记录与 before 相同：动作没有落库，审计也没有写。
-func wantTasksUnchanged(t *testing.T, s *Store, before taskContents, what string) {
+func wantTasksUnchanged(t *testing.T, s *pgstore.Store, before taskContents, what string) {
 	t.Helper()
 	if after := taskSnapshot(t, s); !reflect.DeepEqual(after, before) {
 		t.Fatalf("%s仓储不应有变化：\n之前 %+v\n之后 %+v", what, before, after)
@@ -197,10 +198,10 @@ func wantTasksUnchanged(t *testing.T, s *Store, before taskContents, what string
 // wantSeqCounter 直接查任务 id 的事件计数 last_seq（它不是 model.Task 的字段，wantTasksUnchanged 看不到）：要等于 want，
 // 并且事件恰好是 Seq 1 到 want。推进被拒、整个回滚之后，计数要留在推进之前；要是推进把它带走了（比如改成在事务外分配），
 // 之后追加的事件就会留下空号，违反「每个任务从 1 起连续」（S6-1）。
-func wantSeqCounter(t *testing.T, s *Store, id string, want int64, what string) {
+func wantSeqCounter(t *testing.T, s *pgstore.Store, id string, want int64, what string) {
 	t.Helper()
 	var last, n, top int64
-	err := s.db.WithContext(t.Context()).Raw(`SELECT last_seq, (SELECT count(*) FROM task_events WHERE task_id = ?), `+
+	err := s.DBForTest().WithContext(t.Context()).Raw(`SELECT last_seq, (SELECT count(*) FROM task_events WHERE task_id = ?), `+
 		`(SELECT coalesce(max(seq), 0) FROM task_events WHERE task_id = ?) FROM tasks WHERE id = ?`, id, id, id).Row().Scan(&last, &n, &top)
 	must(t, err, "查任务 "+id+" 的事件计数")
 	if last != want || n != want || top != want {
@@ -212,7 +213,7 @@ func wantSeqCounter(t *testing.T, s *Store, id string, want int64, what string) 
 // 所以每次调用都套上 unchangedOnError：调用失败时，任务、事件、主机与 ISO 也都没变。
 func taskAuditedOps() []auditedOp {
 	return []auditedOp{
-		{"CreateTasks", func(t *testing.T, s *Store) auditedCall {
+		{"CreateTasks", func(t *testing.T, s *pgstore.Store) auditedCall {
 			batch := newFixture(t, s).newTasks(t, mustTaskHosts(t, s, "SN-2", "SN-1")...)
 			return unchangedOnError(t, s, func(a store.Audit) ([]target, error) {
 				got, err := s.CreateTasks(t.Context(), batch, a)
@@ -223,7 +224,7 @@ func taskAuditedOps() []auditedOp {
 				return targets, err
 			})
 		}},
-		{"TransitionTaskByUser", func(t *testing.T, s *Store) auditedCall {
+		{"TransitionTaskByUser", func(t *testing.T, s *pgstore.Store) auditedCall {
 			task := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
 			expect := store.TaskExpect{State: task.State, Rev: task.Rev}
 			events := []store.NewEvent{anEvent("task.cancel", "cancel-1")}
@@ -236,7 +237,7 @@ func taskAuditedOps() []auditedOp {
 }
 
 // unchangedOnError 给 call 套上一层：调用失败时，任务、事件、主机与 ISO 都要与调用之前相同。
-func unchangedOnError(t *testing.T, s *Store, call auditedCall) auditedCall {
+func unchangedOnError(t *testing.T, s *pgstore.Store, call auditedCall) auditedCall {
 	return func(a store.Audit) ([]target, error) {
 		before := taskSnapshot(t, s)
 		targets, err := call(a)
@@ -256,7 +257,7 @@ func batchProblems(be *store.BatchError) []model.Problem {
 	return ps
 }
 
-func taskCreate(t *testing.T, s *Store) {
+func taskCreate(t *testing.T, s *pgstore.Store) {
 	in := newFixture(t, s).newTasks(t, mustTaskHosts(t, s, "SN-2", "SN-1", "SN-3")...)
 	in[1].CreatedAt, in[2].CreatedBy = at0+5, "张三" // 同一批里各任务的时间与建的人照各自的存
 	got, err := s.CreateTasks(t.Context(), in, anAudit("task.create"))
@@ -278,7 +279,7 @@ func taskCreate(t *testing.T, s *Store) {
 }
 
 // 仓储不解释快照，写进去什么就读出什么（C29）：pgstore 把它存成 jsonb，nil 与空的 map、切片要分得开，嵌套的每一层都要在。
-func taskCreateSnapshot(t *testing.T, s *Store) {
+func taskCreateSnapshot(t *testing.T, s *pgstore.Store) {
 	in := newFixture(t, s).newTasks(t, mustTaskHosts(t, s, "SN-1", "SN-2")...)
 	a := &in[0].Snapshot
 	a.Host.Attrs, a.ISO.Artifacts, a.Template.Params, a.Slots = nil, nil, nil, nil
@@ -309,7 +310,7 @@ func taskCreateSnapshot(t *testing.T, s *Store) {
 }
 
 // C31 只挡未结束的任务：任务结束了（完成、失败或取消），就能再给这台主机建一个。
-func taskCreateAfterFinished(t *testing.T, s *Store) {
+func taskCreateAfterFinished(t *testing.T, s *pgstore.Store) {
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1")
 	ended := 0
@@ -327,7 +328,7 @@ func taskCreateAfterFinished(t *testing.T, s *Store) {
 // 批量建任务的第 1 步：入参本身不合前提就报 ErrInvalid，什么都不写。每条前提一个反例，规则见 store.CheckNewTasks。快照里
 // 有存不下的文本也算（spec §3 总则）：pgstore 把快照存成 jsonb，固化下来的就不是写进去的那份（C29）。串藏在嵌套的结构、
 // 切片与 map 的键里也要查出来，几种位置各一例。
-func taskCreateInvalid(t *testing.T, s *Store) {
+func taskCreateInvalid(t *testing.T, s *pgstore.Store) {
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1", "SN-2")
 	other := mustReadyISO(t, s, rockyISO("Other"), 2)
@@ -381,7 +382,7 @@ func taskCreateInvalid(t *testing.T, s *Store) {
 	wantTasksUnchanged(t, s, before, "入参不合前提时")
 }
 
-func taskCreateDuplicate(t *testing.T, s *Store) {
+func taskCreateDuplicate(t *testing.T, s *pgstore.Store) {
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1", "SN-2")
 	before := taskSnapshot(t, s)
@@ -398,10 +399,10 @@ func taskCreateDuplicate(t *testing.T, s *Store) {
 // 按入参的顺序分批）都分批做，这里两处都走到第二批。排在最后的两台按 SN 与按入参都落在第二批，它们已有未结束的任务：整批
 // 被拦下，两台逐台报出 host_has_open_task（C30），只靠插入时撞上 idx_tasks_open 兜底是报不全的；两个任务结束之后，整批都
 // 建上，每台一条审计。
-func taskCreateManyBatches(t *testing.T, s *Store) {
+func taskCreateManyBatches(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	f := newFixture(t, s)
-	n := batchSize + 2
+	n := pgstore.BatchSizeForTest + 2
 	var in []model.Host
 	for i := range n {
 		in = append(in, taskHost(fmt.Sprintf("SN-%05d", i)))
@@ -439,7 +440,7 @@ func taskCreateManyBatches(t *testing.T, s *Store) {
 }
 
 // 向导里选中之后，ISO 被删了，或者模板草稿被删了：按键找不到，报 ErrNotFound，什么都不写。
-func taskCreateMissing(t *testing.T, s *Store) {
+func taskCreateMissing(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1")
@@ -463,61 +464,61 @@ func taskCreateMissing(t *testing.T, s *Store) {
 // SN-1、SN-2 备好一批，再改仓储里的数据，模拟向导筛过之后、提交之前别人做的改动。codes 是期望的问题代码，用来确认反例
 // 造对了，比对见 wantRejected。
 func rejectedCases() []testCase {
-	type prepare func(t *testing.T, s *Store, f fixture, hs []model.Host) []model.Task
+	type prepare func(t *testing.T, s *pgstore.Store, f fixture, hs []model.Host) []model.Task
 	rejected := func(name string, codes []model.Code, prep prepare) testCase {
-		return testCase{"建任务：重跑准入：" + name, func(t *testing.T, s *Store) {
+		return testCase{"建任务：重跑准入：" + name, func(t *testing.T, s *pgstore.Store) {
 			f := newFixture(t, s)
 			wantRejected(t, s, prep(t, s, f, mustTaskHosts(t, s, "SN-1", "SN-2")), codes)
 		}}
 	}
-	deprecateISO := func(t *testing.T, s *Store, f fixture) {
+	deprecateISO := func(t *testing.T, s *pgstore.Store, f fixture) {
 		iso := mustGetISO(t, s, f.iso.ID)
 		must(t, s.DeprecateISO(t.Context(), iso.ID, iso.Rev, anAudit("iso.deprecate")), "废弃 ISO")
 	}
 	return []testCase{
-		rejected("ISO 已废弃", []model.Code{"iso_not_ready"}, func(t *testing.T, s *Store, f fixture, hs []model.Host) []model.Task {
+		rejected("ISO 已废弃", []model.Code{"iso_not_ready"}, func(t *testing.T, s *pgstore.Store, f fixture, hs []model.Host) []model.Task {
 			batch := f.newTasks(t, hs...)
 			deprecateISO(t, s, f)
 			return batch
 		}),
-		rejected("ISO 导入失败", []model.Code{"iso_import_failed"}, func(t *testing.T, s *Store, f fixture, hs []model.Host) []model.Task {
+		rejected("ISO 导入失败", []model.Code{"iso_import_failed"}, func(t *testing.T, s *pgstore.Store, f fixture, hs []model.Host) []model.Task {
 			batch := f.newTasks(t, hs...)
 			iso := mustGetISO(t, s, f.iso.ID)
 			iso.State = model.ISOFailed
 			mustUpdateISO(t, s, iso)
 			return batch
 		}),
-		rejected("模板版本是草稿", []model.Code{"template_not_approved"}, func(t *testing.T, s *Store, f fixture, hs []model.Host) []model.Task {
+		rejected("模板版本是草稿", []model.Code{"template_not_approved"}, func(t *testing.T, s *pgstore.Store, f fixture, hs []model.Host) []model.Task {
 			f.tpl = templateOps.newVersionOf(t, s, f.tpl)
 			return f.newTasks(t, hs...)
 		}),
-		rejected("模板版本已废弃", []model.Code{"template_not_approved"}, func(t *testing.T, s *Store, f fixture, hs []model.Host) []model.Task {
+		rejected("模板版本已废弃", []model.Code{"template_not_approved"}, func(t *testing.T, s *pgstore.Store, f fixture, hs []model.Host) []model.Task {
 			batch := f.newTasks(t, hs...)
 			templateOps.to(t, s, f.tpl, model.VersionDeprecated)
 			return batch
 		}),
-		rejected("模板引用的 hook 版本已废弃", []model.Code{"template_blocked_by_deprecated"}, func(t *testing.T, s *Store, f fixture, hs []model.Host) []model.Task {
+		rejected("模板引用的 hook 版本已废弃", []model.Code{"template_blocked_by_deprecated"}, func(t *testing.T, s *pgstore.Store, f fixture, hs []model.Host) []model.Task {
 			batch := f.newTasks(t, hs...)
 			for _, h := range f.hooks {
 				hookOps.to(t, s, h, model.VersionDeprecated)
 			}
 			return batch
 		}),
-		rejected("主机没登记，或者已经被删了", []model.Code{"host_not_registered", "host_not_registered"}, func(t *testing.T, s *Store, f fixture, hs []model.Host) []model.Task {
+		rejected("主机没登记，或者已经被删了", []model.Code{"host_not_registered", "host_not_registered"}, func(t *testing.T, s *pgstore.Store, f fixture, hs []model.Host) []model.Task {
 			batch := f.newTasks(t, hs[0], taskHost("SN-9"), hs[1])
 			must(t, s.DeleteHost(t.Context(), "SN-2", hs[1].Rev, anAudit("host.delete")), "删除 SN-2")
 			return batch
 		}),
-		rejected("主机已有未结束的任务", []model.Code{"host_has_open_task"}, func(t *testing.T, s *Store, f fixture, hs []model.Host) []model.Task {
+		rejected("主机已有未结束的任务", []model.Code{"host_has_open_task"}, func(t *testing.T, s *pgstore.Store, f fixture, hs []model.Host) []model.Task {
 			f.mustCreate(t, s, hs[0])
 			return f.newTasks(t, hs[1], hs[0])
 		}),
 		// 逐台列出原因（C30）：只报出第一台撞上的不够
-		rejected("两台主机都有未结束的任务时逐台报出", []model.Code{"host_has_open_task", "host_has_open_task"}, func(t *testing.T, s *Store, f fixture, hs []model.Host) []model.Task {
+		rejected("两台主机都有未结束的任务时逐台报出", []model.Code{"host_has_open_task", "host_has_open_task"}, func(t *testing.T, s *pgstore.Store, f fixture, hs []model.Host) []model.Task {
 			f.mustCreate(t, s, hs...)
 			return f.newTasks(t, hs[1], hs[0])
 		}),
-		rejected("主机登记的架构改了，与 ISO 的不符", []model.Code{"arch_mismatch"}, func(t *testing.T, s *Store, f fixture, hs []model.Host) []model.Task {
+		rejected("主机登记的架构改了，与 ISO 的不符", []model.Code{"arch_mismatch"}, func(t *testing.T, s *pgstore.Store, f fixture, hs []model.Host) []model.Task {
 			batch := f.newTasks(t, hs...)
 			h := hs[1]
 			h.Arch = "aarch64"
@@ -525,7 +526,7 @@ func rejectedCases() []testCase {
 			must(t, err, "改 SN-2 的架构")
 			return batch
 		}),
-		rejected("ISO 与主机都有问题时一起报出", []model.Code{"iso_not_ready", "host_not_registered"}, func(t *testing.T, s *Store, f fixture, hs []model.Host) []model.Task {
+		rejected("ISO 与主机都有问题时一起报出", []model.Code{"iso_not_ready", "host_not_registered"}, func(t *testing.T, s *pgstore.Store, f fixture, hs []model.Host) []model.Task {
 			batch := f.newTasks(t, hs[0], taskHost("SN-9"))
 			deprecateISO(t, s, f)
 			return batch
@@ -536,7 +537,7 @@ func rejectedCases() []testCase {
 // wantRejected 建 batch，要求在事务里重跑准入被拦下：BatchError 与对仓储现在的数据直接调用 store.BatchProblems 的结果相同
 // （判定规则只有第 1 层那一份，仓储要做的是把锁住之后读到的数据交给它），问题的代码依次是 codes（batchProblems 的顺序），
 // 并且什么都没写，审计也没写。
-func wantRejected(t *testing.T, s *Store, batch []model.Task, codes []model.Code) {
+func wantRejected(t *testing.T, s *pgstore.Store, batch []model.Task, codes []model.Code) {
 	t.Helper()
 	want := expectedBatch(t, s, batch)
 	wantCodes(t, batchProblems(want), codes)
@@ -552,7 +553,7 @@ func wantRejected(t *testing.T, s *Store, batch []model.Task, codes []model.Code
 
 // expectedBatch 是 batch 对仓储现在的数据跑 store.BatchProblems 的结果：主机、它们有没有未结束的任务、ISO、模板版本与它引用
 // 的 hook 版本都经接口读出，没登记的 SN 按批里的顺序列出。用例造的一批应当过不了准入。
-func expectedBatch(t *testing.T, s *Store, batch []model.Task) *store.BatchError {
+func expectedBatch(t *testing.T, s *pgstore.Store, batch []model.Task) *store.BatchError {
 	t.Helper()
 	ctx := t.Context()
 	in := admission.BatchInput{OpenTask: map[string]bool{}}
@@ -580,7 +581,7 @@ func expectedBatch(t *testing.T, s *Store, batch []model.Task) *store.BatchError
 	return be
 }
 
-func taskTransition(t *testing.T, s *Store) {
+func taskTransition(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	task := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
 	audits := auditEntries(t, s)
@@ -611,7 +612,7 @@ func taskTransition(t *testing.T, s *Store) {
 }
 
 // 条件推进（C33，spec §6.2 第 4 条）：当前的状态与 Rev 都等于期望值才写入，否则报 ErrConflict，调用方重读之后再判断。
-func taskTransitionConflict(t *testing.T, s *Store) {
+func taskTransitionConflict(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	stale := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
 	cur := mustTransition(t, s, stale, model.TaskBooting)
@@ -634,7 +635,7 @@ func taskTransitionConflict(t *testing.T, s *Store) {
 
 // 目标状态不合法、带的事件有一条不合规则（规则同 AppendEvents），都报 ErrInvalid：整个推进不生效，状态不变，合规则的那几条
 // 事件也不写。
-func taskTransitionInvalid(t *testing.T, s *Store) {
+func taskTransitionInvalid(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	task := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
 	expect := store.TaskExpect{State: task.State, Rev: task.Rev}
@@ -661,7 +662,7 @@ func taskTransitionInvalid(t *testing.T, s *Store) {
 	wantTasksUnchanged(t, s, before, "推进不合规则时")
 }
 
-func taskTransitionMissing(t *testing.T, s *Store) {
+func taskTransitionMissing(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...) // 有任务，只是不是要推进的那个
 	before := taskSnapshot(t, s)
@@ -681,7 +682,7 @@ func taskTransitionMissing(t *testing.T, s *Store) {
 
 // C31：一台主机同一时刻最多一个未结束的任务。失败的任务重试回 pending 时，期间又给这台主机建了新任务，就会撞上；系统发起的
 // 推进同样挡住，问题与准入判定报的相同。推进到结束的状态不受这条约束；新任务结束之后，就能推进回未结束的状态。
-func taskTransitionOpenTask(t *testing.T, s *Store) {
+func taskTransitionOpenTask(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1")
@@ -708,7 +709,7 @@ func taskTransitionOpenTask(t *testing.T, s *Store) {
 	}
 }
 
-func taskGet(t *testing.T, s *Store) {
+func taskGet(t *testing.T, s *pgstore.Store) {
 	task := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
 	wantEqual(t, mustGetTask(t, s, task.ID), task, "读回来的")
 	_, err := s.GetTask(t.Context(), "nosuchtask")
@@ -721,7 +722,7 @@ func taskGet(t *testing.T, s *Store) {
 
 // FindOpenTask 给第 7 层引导时按 SN 找任务（C32）。SN 没规范化是调用方漏了规范化，报 ErrInvalid：当成「没有任务」，机器
 // 就会从本地盘启动，这台主机的任务却一直等着。
-func taskFindOpen(t *testing.T, s *Store) {
+func taskFindOpen(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1", "SN-2")
@@ -756,7 +757,7 @@ func taskFindOpen(t *testing.T, s *Store) {
 	}
 }
 
-func taskListPaging(t *testing.T, s *Store) {
+func taskListPaging(t *testing.T, s *pgstore.Store) {
 	f := newFixture(t, s)
 	var want []model.Task
 	// 有几个时间相同：同一时刻建的再按 ID 排，页的边界会落在它们中间
@@ -779,7 +780,7 @@ func taskListPaging(t *testing.T, s *Store) {
 	}
 }
 
-func taskListFilters(t *testing.T, s *Store) {
+func taskListFilters(t *testing.T, s *pgstore.Store) {
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1", "SN-2", "SN-3")
 	create := func(h model.Host, at int64) model.Task {
@@ -826,7 +827,7 @@ func taskListFilters(t *testing.T, s *Store) {
 	}
 }
 
-func taskListDefaultLimit(t *testing.T, s *Store) {
+func taskListDefaultLimit(t *testing.T, s *pgstore.Store) {
 	var in []model.Host
 	for i := range defaultPageSize + 1 {
 		in = append(in, taskHost(fmt.Sprintf("SN-%03d", i)))
@@ -837,7 +838,7 @@ func taskListDefaultLimit(t *testing.T, s *Store) {
 	})
 }
 
-func taskListInvalid(t *testing.T, s *Store) {
+func taskListInvalid(t *testing.T, s *pgstore.Store) {
 	newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)
 	// 排序键为 null 的游标是伪造的：收下的话 created_at < 0，翻出空的一页、Next 为空，调用方以为翻到头了
 	for _, q := range []store.TaskQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"},
@@ -848,7 +849,7 @@ func taskListInvalid(t *testing.T, s *Store) {
 }
 
 // taskCopies：改了入参或返回值里快照的 map、切片与它们里面的元素，仓储里的数据都不变（包说明里的约定）。
-func taskCopies(t *testing.T, s *Store) {
+func taskCopies(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1")

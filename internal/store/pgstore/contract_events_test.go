@@ -1,4 +1,4 @@
-package pgstore
+package pgstore_test
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/store/pgstore"
 )
 
 // Test契约事件 是事件这一组：任务的追加式日志。Seq 按任务从 1 起连续分配，Key 用来去重（第 7 层收到重发的信号时据此只落
@@ -33,7 +34,7 @@ func keyed(key string) store.NewEvent {
 }
 
 // mustAppend 给任务 id 追加 es，返回每一条的结果。
-func mustAppend(t *testing.T, s *Store, id string, es ...store.NewEvent) []store.Appended {
+func mustAppend(t *testing.T, s *pgstore.Store, id string, es ...store.NewEvent) []store.Appended {
 	t.Helper()
 	got, err := s.AppendEvents(t.Context(), id, es)
 	must(t, err, "给任务 "+id+" 追加事件")
@@ -41,12 +42,12 @@ func mustAppend(t *testing.T, s *Store, id string, es ...store.NewEvent) []store
 }
 
 // mustTask 建一个任务，主机是 SN-1。
-func mustTask(t *testing.T, s *Store) model.Task {
+func mustTask(t *testing.T, s *pgstore.Store) model.Task {
 	t.Helper()
 	return newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
 }
 
-func eventSeq(t *testing.T, s *Store) {
+func eventSeq(t *testing.T, s *pgstore.Store) {
 	ts := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1", "SN-2")...)
 	a, b := ts[0].ID, ts[1].ID
 	audits := auditEntries(t, s)
@@ -66,7 +67,7 @@ func eventSeq(t *testing.T, s *Store) {
 
 // 第 7 层收到重发的信号时，同一个 Key 只落一条：已存在的那条跳过，报告为 Duplicate，Seq 是原来那条的，内容不同也不覆盖；
 // 同一批里新的照常写。同一批里 Key 重复，后一条按「Key 已存在」处理。没有 Key 的不去重；Key 区分大小写。
-func eventDuplicate(t *testing.T, s *Store) {
+func eventDuplicate(t *testing.T, s *pgstore.Store) {
 	id := mustTask(t, s).ID
 	first := store.NewEvent{At: at0, Kind: "signal.recv", Key: "sig-1", Fields: map[string]string{"slot": "分区"}}
 	wantEqual(t, mustAppend(t, s, id, first, anEvent("slot.exit", ""), keyed("sig-2")), []store.Appended{{Seq: 1}, {Seq: 2}, {Seq: 3}}, "第一批")
@@ -84,7 +85,7 @@ func eventDuplicate(t *testing.T, s *Store) {
 	wantEqual(t, got[0].NewEvent, first, "Key 重复时原来那条不变")
 }
 
-func eventKeyPerTask(t *testing.T, s *Store) {
+func eventKeyPerTask(t *testing.T, s *pgstore.Store) {
 	ts := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1", "SN-2")...)
 	for _, task := range ts {
 		wantEqual(t, mustAppend(t, s, task.ID, keyed("sig-1")), []store.Appended{{Seq: 1}}, "任务 "+task.ID+" 第一次用 sig-1")
@@ -95,9 +96,9 @@ func eventKeyPerTask(t *testing.T, s *Store) {
 // 一次追加的条数不设上限（store.CheckEvents 只查每一条），第 7 层一次补报的信号可能多于一条语句写得下的一批（batchSize）：
 // 写入按入参的次序分批，查已有的 Key 按 Key 的字节序分批，这里多出的一条在两边都落在第二批（sig-1000 排在最后）。Seq 照样
 // 从 1 起连续；原样重发一次，每一条都报告为 Duplicate、Seq 是原来那条的，一条都不新增，计数也不动。
-func eventManyBatches(t *testing.T, s *Store) {
+func eventManyBatches(t *testing.T, s *pgstore.Store) {
 	id := mustTask(t, s).ID
-	n := batchSize + 1
+	n := pgstore.BatchSizeForTest + 1
 	in := make([]store.NewEvent, n)
 	first, again := make([]store.Appended, n), make([]store.Appended, n)
 	want := make([]store.Event, n)
@@ -117,7 +118,7 @@ func eventManyBatches(t *testing.T, s *Store) {
 
 // 推进时带的事件与 AppendEvents 是同一份日志：Seq 接着分配，Key 互相去重。带的事件里有已存在的 Key，照样推进，那条报告为
 // Duplicate。结束了的任务照样能追加：迟到的信号只记为事件（spec §5.4 第 5 步）。
-func eventWithTransition(t *testing.T, s *Store) {
+func eventWithTransition(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	id := mustTask(t, s).ID
 	_, appended, err := s.TransitionTask(ctx, id, store.TaskExpect{State: model.TaskPending, Rev: 1}, model.TaskBooting,
@@ -134,7 +135,7 @@ func eventWithTransition(t *testing.T, s *Store) {
 }
 
 // 一批里有一条不合规则（store.CheckEvents），整批都不写：同一批里合规则的那几条也不写。
-func eventInvalid(t *testing.T, s *Store) {
+func eventInvalid(t *testing.T, s *pgstore.Store) {
 	id := mustTask(t, s).ID
 	mustAppend(t, s, id, keyed("sig-1"))
 	before := taskSnapshot(t, s)
@@ -165,7 +166,7 @@ func eventInvalid(t *testing.T, s *Store) {
 }
 
 // 任务不存在报 ErrNotFound，空的一批也一样：调用方拿错了任务 ID，不能当成追加成功。
-func eventMissingTask(t *testing.T, s *Store) {
+func eventMissingTask(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	mustTask(t, s) // 有任务，只是不是要找的那个
 	before := taskSnapshot(t, s)
@@ -185,7 +186,7 @@ func eventMissingTask(t *testing.T, s *Store) {
 }
 
 // 结果是长度为 0 的切片，不是 nil（见包说明）：不带事件的追加与推进、没有事件可列的 ListEvents 都是。
-func eventEmpty(t *testing.T, s *Store) {
+func eventEmpty(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	id := mustTask(t, s).ID
 	before := taskSnapshot(t, s)
@@ -206,7 +207,7 @@ func eventEmpty(t *testing.T, s *Store) {
 
 // ListEvents 是第 5 层按事件序号补读用的：只给 Seq 大于 afterSeq 的，按 Seq 升序，最多 limit 条。limit 为 0 时取 100，
 // 超过 500 或为负报 ErrInvalid；afterSeq 为负也报 ErrInvalid。
-func eventList(t *testing.T, s *Store) {
+func eventList(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	id := mustTask(t, s).ID
 	var in []store.NewEvent
@@ -254,7 +255,7 @@ func eventList(t *testing.T, s *Store) {
 }
 
 // Fields 写进去什么就读出什么：nil 读回来是 nil，空 map 读回来是空 map；改了入参或返回值里的 Fields，仓储里的不变。
-func eventFields(t *testing.T, s *Store) {
+func eventFields(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	id := mustTask(t, s).ID
 	events := func() []store.NewEvent {

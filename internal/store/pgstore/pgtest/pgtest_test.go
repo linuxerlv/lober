@@ -156,15 +156,18 @@ func TestOpen占的位在测试结束时让出(t *testing.T) {
 func Test临时schema用完就删(t *testing.T) {
 	var name string
 	t.Run("建", func(t *testing.T) {
-		var dsn string
-		dsn, name = newSchema(t)
-		conn := connect(t, dsn)
-		var current string
-		if err := conn.QueryRow(t.Context(), `SELECT current_schema()`).Scan(&current); err != nil {
-			t.Fatalf("查当前 schema：%v", err)
-		}
-		if current != name {
-			t.Fatalf("DSN 的当前 schema 是 %q，应为新建的 %q", current, name)
+		dsn, created, admin := newSchema(t)
+		defer closeConn(admin)
+		name = created
+		// DSN 与建 schema 的连接（装失败注入用它）都只看得见新建的 schema
+		for what, conn := range map[string]*pgx.Conn{"DSN": connect(t, dsn), "建 schema 的连接": admin} {
+			var current string
+			if err := conn.QueryRow(t.Context(), `SELECT current_schema()`).Scan(&current); err != nil {
+				t.Fatalf("查%s的当前 schema：%v", what, err)
+			}
+			if current != name {
+				t.Fatalf("%s的当前 schema 是 %q，应为新建的 %q", what, current, name)
+			}
 		}
 	})
 	conn := connect(t, DSN(t))

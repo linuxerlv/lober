@@ -1,4 +1,4 @@
-package pgstore
+package pgstore_test
 
 import (
 	"errors"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/store/pgstore"
 )
 
 // Test契约主机 是主机这一组（C6、C7）：登记、修改、CSV 导入、删除与查询。每台主机写一条审计由审计那一组查；删除被
@@ -50,21 +51,21 @@ func fullHost(sn string) model.Host {
 	return model.Host{SN: sn, Arch: "x86_64", Firmware: "uefi", Attrs: map[string]string{"ip": "10.0.0.3/24", "rack": "A1"}}
 }
 
-func mustCreateHost(t *testing.T, s *Store, h model.Host) model.Host {
+func mustCreateHost(t *testing.T, s *pgstore.Store, h model.Host) model.Host {
 	t.Helper()
 	got, err := s.CreateHost(t.Context(), h, anAudit("host.create"))
 	must(t, err, "登记主机 "+h.SN)
 	return got
 }
 
-func mustGetHost(t *testing.T, s *Store, sn string) model.Host {
+func mustGetHost(t *testing.T, s *pgstore.Store, sn string) model.Host {
 	t.Helper()
 	got, err := s.GetHost(t.Context(), sn)
 	must(t, err, "读主机 "+sn)
 	return got
 }
 
-func mustImport(t *testing.T, s *Store, hs []model.Host) []model.Host {
+func mustImport(t *testing.T, s *pgstore.Store, hs []model.Host) []model.Host {
 	t.Helper()
 	got, err := s.ImportHosts(t.Context(), hs, anAudit("host.import"))
 	must(t, err, "导入主机")
@@ -83,7 +84,7 @@ func hostModelProblems(h model.Host) []model.Problem {
 }
 
 // hostPages 用查询 q 从头翻到尾，返回每一页；游标由它填。
-func hostPages(t *testing.T, s *Store, q store.HostQuery) [][]model.Host {
+func hostPages(t *testing.T, s *pgstore.Store, q store.HostQuery) [][]model.Host {
 	t.Helper()
 	return allPages(t, func(cursor string) (store.Page[model.Host], error) {
 		q.Cursor = cursor
@@ -99,7 +100,7 @@ func snsOf(hs []model.Host) []string {
 	return out
 }
 
-func hostCreateReadBack(t *testing.T, s *Store) {
+func hostCreateReadBack(t *testing.T, s *pgstore.Store) {
 	for _, in := range []model.Host{
 		fullHost("SN-1"),
 		{SN: "SN-2"},                             // 只有 SN：属性是 nil，读回来也是 nil
@@ -115,7 +116,7 @@ func hostCreateReadBack(t *testing.T, s *Store) {
 	}
 }
 
-func hostCreateInvalid(t *testing.T, s *Store) {
+func hostCreateInvalid(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	for _, c := range []struct {
 		name string
@@ -145,7 +146,7 @@ func hostCreateInvalid(t *testing.T, s *Store) {
 }
 
 // SN 合法却没规范化，是调用方漏了规范化：model 的校验对它没有问题可报，所以只要求 ErrInvalid。
-func hostCreateNotNormalized(t *testing.T, s *Store) {
+func hostCreateNotNormalized(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	for _, sn := range []string{"sn-1", " SN-1", "SN-1\n"} {
 		_, err := s.CreateHost(t.Context(), model.Host{SN: sn}, anAudit("host.create"))
@@ -154,7 +155,7 @@ func hostCreateNotNormalized(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "SN 没规范化时")
 }
 
-func hostCreateDuplicate(t *testing.T, s *Store) {
+func hostCreateDuplicate(t *testing.T, s *pgstore.Store) {
 	mustCreateHost(t, s, fullHost("SN-1"))
 	before := snapshot(t, s)
 	_, err := s.CreateHost(t.Context(), model.Host{SN: "SN-1", Arch: "aarch64"}, anAudit("host.create"))
@@ -162,7 +163,7 @@ func hostCreateDuplicate(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "SN 重复时")
 }
 
-func hostUpdateReplaces(t *testing.T, s *Store) {
+func hostUpdateReplaces(t *testing.T, s *pgstore.Store) {
 	created := mustCreateHost(t, s, fullHost("SN-1"))
 	in := model.Host{SN: "SN-1", Arch: "aarch64", Firmware: "bios", Attrs: map[string]string{"hostname": "node-1"}, Rev: created.Rev}
 	got, err := s.UpdateHost(t.Context(), in, anAudit("host.update"))
@@ -183,7 +184,7 @@ func hostUpdateReplaces(t *testing.T, s *Store) {
 }
 
 // 清空属性、把固件改回空都是正当的写入，不能被当成「没改」丢掉。先改成空的属性，再改成 nil：写进去什么就读出什么。
-func hostUpdateToZero(t *testing.T, s *Store) {
+func hostUpdateToZero(t *testing.T, s *pgstore.Store) {
 	h := mustCreateHost(t, s, fullHost("SN-1"))
 	for _, attrs := range []map[string]string{{}, nil} {
 		in := model.Host{SN: "SN-1", Attrs: attrs, Rev: h.Rev}
@@ -197,7 +198,7 @@ func hostUpdateToZero(t *testing.T, s *Store) {
 	}
 }
 
-func hostUpdateConflict(t *testing.T, s *Store) {
+func hostUpdateConflict(t *testing.T, s *pgstore.Store) {
 	stale := mustCreateHost(t, s, fullHost("SN-1"))
 	in := stale
 	in.Arch = "aarch64"
@@ -216,7 +217,7 @@ func hostUpdateConflict(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "修改被拒时")
 }
 
-func hostUpdateInvalid(t *testing.T, s *Store) {
+func hostUpdateInvalid(t *testing.T, s *pgstore.Store) {
 	in := mustCreateHost(t, s, fullHost("SN-1"))
 	before := snapshot(t, s)
 	in.Firmware = "EFI"
@@ -228,7 +229,7 @@ func hostUpdateInvalid(t *testing.T, s *Store) {
 
 // 修改按 SN 找主机。SN 没规范化是调用方漏了规范化，报 ErrInvalid；不能拿它去查、报成 ErrNotFound：这台主机其实
 // 登记着。
-func hostUpdateNotNormalized(t *testing.T, s *Store) {
+func hostUpdateNotNormalized(t *testing.T, s *pgstore.Store) {
 	h := mustCreateHost(t, s, fullHost("SN-1"))
 	before := snapshot(t, s)
 	for _, sn := range []string{"sn-1", " SN-1", "SN-1\n"} {
@@ -240,7 +241,7 @@ func hostUpdateNotNormalized(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "SN 没规范化时")
 }
 
-func hostImportMixed(t *testing.T, s *Store) {
+func hostImportMixed(t *testing.T, s *pgstore.Store) {
 	old := mustCreateHost(t, s, fullHost("SN-1"))
 	got, err := s.ImportHosts(t.Context(), []model.Host{
 		{SN: "SN-2", Arch: "x86_64"},
@@ -259,7 +260,7 @@ func hostImportMixed(t *testing.T, s *Store) {
 	wantEqual(t, read, map[string]model.Host{"SN-1": want[1], "SN-2": want[0], "SN-3": want[2]}, "读回来的")
 }
 
-func hostImportInvalid(t *testing.T, s *Store) {
+func hostImportInvalid(t *testing.T, s *pgstore.Store) {
 	mustCreateHost(t, s, fullHost("SN-1"))
 	before := snapshot(t, s)
 	in := []model.Host{
@@ -279,7 +280,7 @@ func hostImportInvalid(t *testing.T, s *Store) {
 
 // CSV 导入最容易收到没规范化的 SN。收下来，「sn-1」就成了和「SN-1」不同的另一台主机，同一台机器有了两条登记（C6）。
 // 所以一批里只要有一台没规范化，不论它排在第几、是不是已登记的那台的另一种写法，整批都报 ErrInvalid，什么都不写。
-func hostImportNotNormalized(t *testing.T, s *Store) {
+func hostImportNotNormalized(t *testing.T, s *pgstore.Store) {
 	mustCreateHost(t, s, fullHost("SN-1"))
 	before := snapshot(t, s)
 	for _, hs := range [][]model.Host{
@@ -295,7 +296,7 @@ func hostImportNotNormalized(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "一台的 SN 没规范化时")
 }
 
-func hostImportDuplicate(t *testing.T, s *Store) {
+func hostImportDuplicate(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	dup := func(sn string) model.Problem {
 		return model.NewProblem("host_duplicate_in_batch", model.Subject{Kind: "host", ID: sn})
@@ -311,7 +312,7 @@ func hostImportDuplicate(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "批内 SN 重复时")
 }
 
-func hostImportEmpty(t *testing.T, s *Store) {
+func hostImportEmpty(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	for _, hs := range [][]model.Host{nil, {}} {
 		_, err := s.ImportHosts(t.Context(), hs, anAudit("host.import"))
@@ -323,8 +324,8 @@ func hostImportEmpty(t *testing.T, s *Store) {
 // CSV 一次可能导入几千台，多于一条语句写得下的一批（batchSize）：写入、读回 Rev 与写审计都分批做，这里要走到第三批。入参打乱
 // 了顺序：写入按加锁的次序分批，读回按入参的顺序分批，两边的批不重合。每三台里有一台已经登记，导入时整条替换、Rev 加 1；其余
 // 新建，Rev 为 1。返回值按入参的顺序，每台都要对；GetHosts 一次全部取到；每台恰好一条审计，按入参的顺序写。
-func hostImportManyBatches(t *testing.T, s *Store) {
-	n := 2*batchSize + 1
+func hostImportManyBatches(t *testing.T, s *pgstore.Store) {
+	n := 2*pgstore.BatchSizeForTest + 1
 	var old, in []model.Host
 	for i := range n {
 		sn := fmt.Sprintf("SN-%05d", i)
@@ -383,7 +384,7 @@ func hostImportManyBatches(t *testing.T, s *Store) {
 	}
 }
 
-func hostDelete(t *testing.T, s *Store) {
+func hostDelete(t *testing.T, s *pgstore.Store) {
 	h := mustCreateHost(t, s, fullHost("SN-1"))
 	other := mustCreateHost(t, s, fullHost("SN-2"))
 	before := snapshot(t, s)
@@ -405,7 +406,7 @@ func hostDelete(t *testing.T, s *Store) {
 
 // 主机被任务引用之后不能删（C26）：已建的任务要一直查得到它的主机，任务结束了也一样。没被引用的主机照常能删。由任务那一组
 // 跑（Test契约任务）。
-func hostDeleteReferenced(t *testing.T, s *Store) {
+func hostDeleteReferenced(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1", "SN-2")
@@ -420,7 +421,7 @@ func hostDeleteReferenced(t *testing.T, s *Store) {
 	must(t, s.DeleteHost(ctx, "SN-2", hs[1].Rev, anAudit("host.delete")), "删除没被引用的主机")
 }
 
-func hostGetHosts(t *testing.T, s *Store) {
+func hostGetHosts(t *testing.T, s *pgstore.Store) {
 	a := mustCreateHost(t, s, fullHost("SN-1"))
 	b := mustCreateHost(t, s, model.Host{SN: "SN-2"})
 	got, err := s.GetHosts(t.Context(), []string{"SN-1", "SN-404", "SN-2", "SN-1"})
@@ -438,7 +439,7 @@ func hostGetHosts(t *testing.T, s *Store) {
 	wantIs(t, err, store.ErrNotFound, "取没登记的主机")
 }
 
-func hostListPaging(t *testing.T, s *Store) {
+func hostListPaging(t *testing.T, s *pgstore.Store) {
 	// 这几个 SN 按字节序排，与常见的语言排序规则（忽略标点、不分大小写）排出来不同。顺序以字节序为准，不随
 	// 数据库的排序规则变（契约见 store.types.go）
 	var in []model.Host
@@ -459,7 +460,7 @@ func hostListPaging(t *testing.T, s *Store) {
 	}
 }
 
-func hostListDefaultLimit(t *testing.T, s *Store) {
+func hostListDefaultLimit(t *testing.T, s *pgstore.Store) {
 	var in []model.Host
 	for i := range 101 {
 		in = append(in, model.Host{SN: fmt.Sprintf("SN-%03d", i)})
@@ -477,7 +478,7 @@ func hostListDefaultLimit(t *testing.T, s *Store) {
 	}
 }
 
-func hostListPrefix(t *testing.T, s *Store) {
+func hostListPrefix(t *testing.T, s *pgstore.Store) {
 	var in []model.Host
 	for _, sn := range []string{"SN_A1", "SNXA1", "SN%B", "SNYB", `SN\Z`, "SNAZ", "SN-1", "AB-1"} {
 		in = append(in, model.Host{SN: sn})
@@ -501,7 +502,7 @@ func hostListPrefix(t *testing.T, s *Store) {
 	}
 }
 
-func hostListAttr(t *testing.T, s *Store) {
+func hostListAttr(t *testing.T, s *pgstore.Store) {
 	mustImport(t, s, []model.Host{
 		{SN: "SN-1", Attrs: map[string]string{"rack": "A1", "role": "web"}},
 		{SN: "SN-2", Attrs: map[string]string{"rack": "A10"}},
@@ -531,7 +532,7 @@ func hostListAttr(t *testing.T, s *Store) {
 	}
 }
 
-func hostListInvalid(t *testing.T, s *Store) {
+func hostListInvalid(t *testing.T, s *pgstore.Store) {
 	mustCreateHost(t, s, fullHost("SN-1"))
 	for _, q := range []store.HostQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"}} {
 		_, err := s.ListHosts(t.Context(), q)
@@ -542,7 +543,7 @@ func hostListInvalid(t *testing.T, s *Store) {
 // 存不下的串（含 NUL，或不是合法的 UTF-8）不可能登记过，PostgreSQL 的 text 不收它们：按它取、删报 ErrNotFound，批量取时不放它，
 // 按它过滤得到空的一页，都当作没有，不把数据库的编码错误交给调用方（store 的包说明）。另有一台的属性值恰好是 U+FFFD：非法的
 // UTF-8 经 encoding/json 就成了它，按 0xFF 过滤不能把它选中。
-func hostUnstorableKeys(t *testing.T, s *Store) {
+func hostUnstorableKeys(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	h := mustCreateHost(t, s, fullHost("SN-1"))
 	replacement := string(utf8.RuneError) // U+FFFD
@@ -570,7 +571,7 @@ func hostUnstorableKeys(t *testing.T, s *Store) {
 		"按 U+FFFD 过滤")
 }
 
-func hostCopies(t *testing.T, s *Store) {
+func hostCopies(t *testing.T, s *pgstore.Store) {
 	want := fullHost("SN-1")
 	want.Rev = 1
 	mutate := func(h model.Host) {

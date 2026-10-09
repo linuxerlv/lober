@@ -1,4 +1,4 @@
-package pgstore
+package pgstore_test
 
 import (
 	"errors"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
 // ImportHosts 与 CreateTasks 给主机加锁的次序是同一个（hostLockOrder）：CSV 导入撞上批量建任务、两边的主机有重叠时，两个事务
@@ -20,8 +21,8 @@ import (
 // 主机至多一个未结束的任务，正是成功那一批给它建的；每台主机的 Rev 是导入的次数加 1。这个测试本身就在测并发，不走 runCases，
 // 保持串行。
 func Test同时导入主机与建任务不会互相等死(t *testing.T) {
-	s := openContract(t)
-	sqlDB, err := s.db.DB()
+	s := pgtest.OpenStore(t)
+	sqlDB, err := s.DBForTest().DB()
 	if err != nil {
 		t.Fatalf("取连接池：%v", err)
 	}

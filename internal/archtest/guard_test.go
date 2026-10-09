@@ -9,6 +9,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -322,6 +325,36 @@ func Test存储层的依赖规则(t *testing.T) {
 			assertFindings(t, checkStoreSource(t, c.pkg, c.src), c.pkg, c.want)
 		})
 	}
+}
+
+// 守卫按 go list ./... 列出的包查（goPackage）。pgstore 的测试都在外部测试包 pgstore_test 里，它不单列成包，被构建约束
+// 排除的文件要记在被测包的 IgnoredGoFiles 里，守卫才报得出 pgstore_test 里的 x_linux_test.go。这一条是 go 命令的行为，
+// 内存里的反例测不到，所以在临时模块里真跑一次 go list：一个包、一个包内测试、两个外部测试文件，其中一个被构建约束排除。
+// 哪天 go list 改了报告方式，这里先红。
+func Test外部测试包的文件记在被测包里(t *testing.T) {
+	root := t.TempDir()
+	const mod = "example.com/m"
+	for name, src := range map[string]string{
+		"go.mod":            "module " + mod + "\n\ngo 1.21\n",
+		"p/p.go":            "package p\n",
+		"p/in_test.go":      "package p\n",
+		"p/x_test.go":       "package p_test\n",
+		"p/x_never_test.go": "//go:build never\n\npackage p_test\n",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := packagesUnder(t, root, mod)
+	want := []goPackage{{ImportPath: mod + "/p", GoFiles: []string{"p.go"}, IgnoredGoFiles: []string{"x_never_test.go"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("go list 列出 %+v，应只有被测包、被排除的外部测试文件记在它的 IgnoredGoFiles 里：%+v", got, want)
+	}
+	assertFindings(t, ignoredFiles(got[0]), mod+"/p", []finding{{ruleIgnored, "x_never_test.go"}})
 }
 
 // 真实的树是干净的，存储层的总检查漏接了哪一项，Test存储层依赖守卫 照样通过，所以组合也要有反例。

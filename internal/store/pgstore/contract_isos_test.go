@@ -1,4 +1,4 @@
-package pgstore
+package pgstore_test
 
 import (
 	"cmp"
@@ -10,6 +10,7 @@ import (
 	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/store/pgstore"
 )
 
 // Test契约ISO 是 ISO 这一组（C2、C4、C5、C26）：新建、第 4 层导入用的系统更新、废弃、删除与查询。删除被任务引用的
@@ -61,21 +62,21 @@ func imported(iso model.ISO, state model.ISOState, n int) model.ISO {
 
 func sha256Of(n int) string { return fmt.Sprintf("%064x", n) }
 
-func mustCreateISO(t *testing.T, s *Store, iso model.ISO) model.ISO {
+func mustCreateISO(t *testing.T, s *pgstore.Store, iso model.ISO) model.ISO {
 	t.Helper()
 	got, err := s.CreateISO(t.Context(), iso, anAudit("iso.create"))
 	must(t, err, "新建 ISO "+iso.Name)
 	return got
 }
 
-func mustUpdateISO(t *testing.T, s *Store, iso model.ISO) model.ISO {
+func mustUpdateISO(t *testing.T, s *pgstore.Store, iso model.ISO) model.ISO {
 	t.Helper()
 	got, err := s.UpdateISO(t.Context(), iso)
 	must(t, err, fmt.Sprintf("把 ISO %s 更新为 %s", iso.Name, iso.State))
 	return got
 }
 
-func mustGetISO(t *testing.T, s *Store, id string) model.ISO {
+func mustGetISO(t *testing.T, s *pgstore.Store, id string) model.ISO {
 	t.Helper()
 	got, err := s.GetISO(t.Context(), id)
 	must(t, err, "读 ISO "+id)
@@ -83,13 +84,13 @@ func mustGetISO(t *testing.T, s *Store, id string) model.ISO {
 }
 
 // mustReadyISO 新建一个 ISO 并经系统更新置为 ready，内容的 SHA256 用 n 区分。
-func mustReadyISO(t *testing.T, s *Store, iso model.ISO, n int) model.ISO {
+func mustReadyISO(t *testing.T, s *pgstore.Store, iso model.ISO, n int) model.ISO {
 	t.Helper()
 	return mustUpdateISO(t, s, imported(mustCreateISO(t, s, iso), model.ISOReady, n))
 }
 
 // isoPages 用查询 q 从头翻到尾，返回每一页；游标由它填。
-func isoPages(t *testing.T, s *Store, q store.ISOQuery) [][]model.ISO {
+func isoPages(t *testing.T, s *pgstore.Store, q store.ISOQuery) [][]model.ISO {
 	t.Helper()
 	return allPages(t, func(cursor string) (store.Page[model.ISO], error) {
 		q.Cursor = cursor
@@ -97,7 +98,7 @@ func isoPages(t *testing.T, s *Store, q store.ISOQuery) [][]model.ISO {
 	})
 }
 
-func isoCreate(t *testing.T, s *Store) {
+func isoCreate(t *testing.T, s *pgstore.Store) {
 	in := model.ISO{Name: "Rocky Linux 9.6 安装盘", Family: "linux", Series: "rocky"}
 	got, err := s.CreateISO(t.Context(), in, anAudit("iso.create"))
 	must(t, err, "新建")
@@ -114,7 +115,7 @@ func isoCreate(t *testing.T, s *Store) {
 	}
 }
 
-func isoCreateBadSeries(t *testing.T, s *Store) {
+func isoCreateBadSeries(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	for _, c := range []struct {
 		family catalog.Family
@@ -134,7 +135,7 @@ func isoCreateBadSeries(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "族与系对不上时")
 }
 
-func isoCreateBadName(t *testing.T, s *Store) {
+func isoCreateBadName(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	for _, name := range []string{"a\x00b", "\xff"} {
 		_, err := s.CreateISO(t.Context(), rockyISO(name), anAudit("iso.create"))
@@ -144,7 +145,7 @@ func isoCreateBadName(t *testing.T, s *Store) {
 }
 
 // 其余字段由仓储与第 4 层的导入填。调用方填了，多半是把别的记录当成了新建的入参。
-func isoCreateExtraFields(t *testing.T, s *Store) {
+func isoCreateExtraFields(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	for _, c := range []struct {
 		field string
@@ -167,7 +168,7 @@ func isoCreateExtraFields(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "多填了字段时")
 }
 
-func isoUpdate(t *testing.T, s *Store) {
+func isoUpdate(t *testing.T, s *pgstore.Store) {
 	created := mustCreateISO(t, s, rockyISO("Rocky"))
 	audits := auditEntries(t, s)
 
@@ -192,7 +193,7 @@ func isoUpdate(t *testing.T, s *Store) {
 }
 
 // 重新导入时，第 4 层把导入得到的字段清回零值。先清成空的 map 与切片，再清成 nil：写进去什么就读出什么。
-func isoUpdateToZero(t *testing.T, s *Store) {
+func isoUpdateToZero(t *testing.T, s *pgstore.Store) {
 	full := imported(mustCreateISO(t, s, windowsISO("WS")), model.ISOImporting, 1)
 	full.Offers = map[string][]model.Option{"editions": {{Value: "ServerStandard", Label: "标准版"}}}
 	iso := mustUpdateISO(t, s, full)
@@ -217,7 +218,7 @@ func isoUpdateToZero(t *testing.T, s *Store) {
 }
 
 // 族与系在新建时声明（C2），导入只核对、不改它们；名称也只在新建时给。
-func isoUpdateFixedFields(t *testing.T, s *Store) {
+func isoUpdateFixedFields(t *testing.T, s *pgstore.Store) {
 	iso := mustCreateISO(t, s, rockyISO("Rocky"))
 	before := snapshot(t, s)
 	for _, c := range []struct {
@@ -236,7 +237,7 @@ func isoUpdateFixedFields(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "改不能改的字段时")
 }
 
-func isoUpdateConflict(t *testing.T, s *Store) {
+func isoUpdateConflict(t *testing.T, s *pgstore.Store) {
 	stale := mustCreateISO(t, s, rockyISO("Rocky"))
 	cur := mustUpdateISO(t, s, imported(stale, model.ISOImporting, 1))
 	before := snapshot(t, s)
@@ -254,7 +255,7 @@ func isoUpdateConflict(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "更新被拒时")
 }
 
-func isoUpdateReadyInvalid(t *testing.T, s *Store) {
+func isoUpdateReadyInvalid(t *testing.T, s *pgstore.Store) {
 	in := mustCreateISO(t, s, windowsISO("WS"))
 	before := snapshot(t, s)
 	in.State = model.ISOReady
@@ -277,7 +278,7 @@ func isoUpdateReadyInvalid(t *testing.T, s *Store) {
 
 // 状态不变、仍为 ready 的系统更新也要过 ISO.Validate。只在转进 ready 时查，ready 的 ISO 就能带着「..」这种版本
 // （它是制品目录里的一段路径，L-6），违反 C5。
-func isoUpdateStillReadyInvalid(t *testing.T, s *Store) {
+func isoUpdateStillReadyInvalid(t *testing.T, s *pgstore.Store) {
 	ready := mustReadyISO(t, s, rockyISO("R"), 1)
 	before := snapshot(t, s)
 	for _, c := range []struct {
@@ -302,7 +303,7 @@ func isoUpdateStillReadyInvalid(t *testing.T, s *Store) {
 // 系统更新写进来的文本都要存得下（spec §3 总则）：PostgreSQL 的 text 与 jsonb 都不收 NUL，jsonb 还会把非法的
 // UTF-8 换成 U+FFFD，读回来的就不是写进去的。置为 ready 时跑的 ISO.Validate 不看制品与 SHA256，其余状态连它也不跑，
 // 所以每一处文本都要查，不论置为什么状态。
-func isoUpdateUnstorable(t *testing.T, s *Store) {
+func isoUpdateUnstorable(t *testing.T, s *pgstore.Store) {
 	iso := mustCreateISO(t, s, windowsISO("WS"))
 	before := snapshot(t, s)
 	states := []model.ISOState{model.ISOAcquiring, model.ISOImporting, model.ISOFailed, model.ISOReady}
@@ -344,7 +345,7 @@ func isoUpdateUnstorable(t *testing.T, s *Store) {
 // SHA256 只能为空，或是 64 位小写十六进制（store.CheckISOText）。C4 按它去重：同一份内容写成大写就成了另一份；超长的值不先
 // 挡下，会撞上 idx_isos_sha256 的 btree 行长上限，报出没翻译的 54000。不论置为什么状态都查：获取中的 ISO 可能在字节到齐之前
 // 就记下了操作员填的期望值（C3）。
-func isoUpdateBadSHA256(t *testing.T, s *Store) {
+func isoUpdateBadSHA256(t *testing.T, s *pgstore.Store) {
 	iso := mustCreateISO(t, s, rockyISO("R"))
 	before := snapshot(t, s)
 	for _, c := range []struct{ name, sum string }{
@@ -364,7 +365,7 @@ func isoUpdateBadSHA256(t *testing.T, s *Store) {
 }
 
 // 废弃要审计，只能走 DeprecateISO。
-func isoUpdateBadState(t *testing.T, s *Store) {
+func isoUpdateBadState(t *testing.T, s *pgstore.Store) {
 	acquiring := mustCreateISO(t, s, rockyISO("A"))
 	ready := mustReadyISO(t, s, rockyISO("R"), 1)
 	before := snapshot(t, s)
@@ -380,7 +381,7 @@ func isoUpdateBadState(t *testing.T, s *Store) {
 }
 
 // 废弃是要审计的决定，不审计的系统更新不能把它撤掉，所以已废弃的 ISO 不再接受系统更新。
-func isoUpdateDeprecated(t *testing.T, s *Store) {
+func isoUpdateDeprecated(t *testing.T, s *pgstore.Store) {
 	ready := mustReadyISO(t, s, rockyISO("R"), 1)
 	must(t, s.DeprecateISO(t.Context(), ready.ID, ready.Rev, anAudit("iso.deprecate")), "废弃")
 	deprecated := mustGetISO(t, s, ready.ID)
@@ -394,7 +395,7 @@ func isoUpdateDeprecated(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "已废弃时")
 }
 
-func isoSHA256(t *testing.T, s *Store) {
+func isoSHA256(t *testing.T, s *pgstore.Store) {
 	// 只有导入失败的 ISO 不占自己的 SHA256，获取中、导入中、ready 与已废弃的都占着（与 pgstore 的部分唯一索引是同一个
 	// 条件）。获取中的也算：内容的 SHA256 可能在字节到齐之前就记下了。另一个 ISO 经系统更新写同样的内容，不论置为
 	// 导入中还是 ready，都撞上占着的那一个
@@ -436,7 +437,7 @@ func isoSHA256(t *testing.T, s *Store) {
 	}
 }
 
-func isoDeprecate(t *testing.T, s *Store) {
+func isoDeprecate(t *testing.T, s *pgstore.Store) {
 	acquiring := mustCreateISO(t, s, rockyISO("acquiring"))
 	importing := mustUpdateISO(t, s, imported(mustCreateISO(t, s, rockyISO("importing")), model.ISOImporting, 1))
 	failed := mustUpdateISO(t, s, imported(mustCreateISO(t, s, rockyISO("failed")), model.ISOFailed, 2))
@@ -457,7 +458,7 @@ func isoDeprecate(t *testing.T, s *Store) {
 	wantIs(t, s.DeprecateISO(t.Context(), ready.ID, want.Rev, anAudit("iso.deprecate")), store.ErrConflict, "再废弃一次")
 }
 
-func isoDelete(t *testing.T, s *Store) {
+func isoDelete(t *testing.T, s *pgstore.Store) {
 	a := mustCreateISO(t, s, rockyISO("A"))
 	b := mustCreateISO(t, s, rockyISO("B"))
 	before := snapshot(t, s)
@@ -480,7 +481,7 @@ func isoDelete(t *testing.T, s *Store) {
 
 // 被任务引用的 ISO 只能废弃、不能删除（C26）：废弃之后、任务结束之后也删不掉，已建的任务要一直查得到它。没被引用的照常
 // 能删。由任务那一组跑（Test契约任务）。
-func isoDeleteReferenced(t *testing.T, s *Store) {
+func isoDeleteReferenced(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	f := newFixture(t, s)
 	task := f.mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
@@ -498,7 +499,7 @@ func isoDeleteReferenced(t *testing.T, s *Store) {
 	must(t, s.DeleteISO(ctx, other.ID, other.Rev, anAudit("iso.delete")), "删除没被引用的 ISO")
 }
 
-func isoBadID(t *testing.T, s *Store) {
+func isoBadID(t *testing.T, s *pgstore.Store) {
 	mustCreateISO(t, s, rockyISO("A"))
 	before := snapshot(t, s)
 	for _, id := range []string{"", "Bad", "a@1", "-a", "a.b", "a/b"} {
@@ -514,7 +515,7 @@ func isoBadID(t *testing.T, s *Store) {
 	wantUnchanged(t, s, before, "ID 不合格式时")
 }
 
-func isoListPaging(t *testing.T, s *Store) {
+func isoListPaging(t *testing.T, s *pgstore.Store) {
 	// 名称按字节序：大写在小写之前，中文在 ASCII 之后；同名的再按 ID，所以页的边界会落在同名的几个中间
 	var want []model.ISO
 	for _, name := range []string{"Rocky 9.6", "Debian 13", "debian 13", "Debian 13", "中文名", "Alma 9", "Debian 13"} {
@@ -534,7 +535,7 @@ func isoListPaging(t *testing.T, s *Store) {
 	}
 }
 
-func isoListFilters(t *testing.T, s *Store) {
+func isoListFilters(t *testing.T, s *pgstore.Store) {
 	// 名称以序号开头，按名称排出来就是建的顺序
 	acquiring := mustCreateISO(t, s, rockyISO("1 rocky"))
 	ready := mustReadyISO(t, s, rockyISO("2 rocky"), 1)
@@ -575,7 +576,7 @@ func isoListFilters(t *testing.T, s *Store) {
 	}
 }
 
-func isoListInvalid(t *testing.T, s *Store) {
+func isoListInvalid(t *testing.T, s *pgstore.Store) {
 	mustCreateISO(t, s, rockyISO("A"))
 	for _, q := range []store.ISOQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"}} {
 		_, err := s.ListISOs(t.Context(), q)
@@ -583,7 +584,7 @@ func isoListInvalid(t *testing.T, s *Store) {
 	}
 }
 
-func isoListDefaultLimit(t *testing.T, s *Store) {
+func isoListDefaultLimit(t *testing.T, s *pgstore.Store) {
 	for i := range defaultPageSize + 1 {
 		mustCreateISO(t, s, rockyISO(fmt.Sprintf("ISO-%03d", i)))
 	}
@@ -592,7 +593,7 @@ func isoListDefaultLimit(t *testing.T, s *Store) {
 	})
 }
 
-func isoCopies(t *testing.T, s *Store) {
+func isoCopies(t *testing.T, s *pgstore.Store) {
 	iso := mustCreateISO(t, s, windowsISO("WS"))
 	importing := func() model.ISO {
 		in := imported(iso, model.ISOImporting, 1)

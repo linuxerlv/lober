@@ -127,6 +127,11 @@ func (v violation) String() string {
 }
 
 // goPackage 是 go list -json 输出里守卫用到的字段。
+//
+// go list ./... 不带 -test 时，外部测试包（比如 pgstore 的测试都属于 pgstore_test）不单列成一个包：它的文件记在被测包的
+// XTestGoFiles 里，与包内测试的 TestGoFiles 一样不查 import；被构建约束排除的文件，不论包名是什么，都记在被测包的
+// IgnoredGoFiles 里，照样报出来。所以守卫按包名判断规则时只见得到 pgstore，见不到 pgstore_test。Test外部测试包的文件记在被测包里
+// 钉住了这一点。
 type goPackage struct {
 	ImportPath     string
 	GoFiles        []string
@@ -463,7 +468,8 @@ func checkStoreFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
 // storeRule 返回存储层的包 pkg import imp 违反的规则，不违反时返回空串。三条规则都是白名单，照计划「包与文件」表：
 // 标准库、层 1 与契约包 internal/store 谁都能用，pgstore 另可用 gorm 与 pgx v5，此外一律不许，所以契约不依赖实现。
 // pgtest 单列一条：它要 import pgx 与 pgstore，按契约的规则查会报违规；它也不用层 1。三个包以外、存储层新加的包
-// 按契约的规则查，要放宽就先改这里。
+// 按契约的规则查，要放宽就先改这里。pgstore 的外部测试包 pgstore_test 不会走到这里：go list 不把它列成包（见 goPackage），
+// 测试文件也不查 import，它 import pgtest 不算违规。
 //
 // 第 1 层的标准库白名单不套用到这里：仓储要用 context、sync、crypto/rand 这类包，夹具要用 testing。cgo 的 C 不是
 // 标准库，照样要报。

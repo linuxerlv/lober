@@ -1,4 +1,4 @@
-package pgstore
+package pgstore_test
 
 import (
 	"cmp"
@@ -12,6 +12,7 @@ import (
 	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/store/pgstore"
 )
 
 // Test契约模板 是模板这一组（C12–C17、C22–C26）：名字、版本的生命周期、内置内容与查询由 versioned 的共用用例查，与
@@ -28,6 +29,7 @@ func Test契约模板(t *testing.T) {
 		{"审批：对引用的 hook 版本重跑判定，刚被废弃的报 hook_ref_deprecated", templateApproveHookRefs},
 		{"ListTemplates 按系过滤，看的是给出的那一项", templateListSeries},
 		{"引用：模板的任一版本引用了 hook 草稿，草稿就删不掉；不再引用之后就能删", templateRefs},
+		{"引用的 hook 版本多于一批：保存时第二批的引用照样记下，审批与建任务时第二批的照样取得出来", hookRefsManyBatches},
 		{"hook 与模板的名字各管各的", templateNamespaces},
 		{"返回值与入参都是拷贝：Series、Params、Bindings、Assembly、DerivedFrom 是深拷贝", templateCopies},
 	})
@@ -64,7 +66,7 @@ func fullTemplate(name string) model.Template {
 // templateOps 把 Templates 的方法接进共用用例。
 var templateOps = versioned[model.Template]{
 	kind:   "template",
-	idents: templateTables.idents,
+	idents: pgstore.TemplateIdentsForTest,
 	sample: sampleTemplate,
 	full:   fullTemplate,
 	head: func(t model.Template) head {
@@ -105,50 +107,50 @@ var templateOps = versioned[model.Template]{
 			t.Assembly["分区"][0].Bindings["disk"] = b
 		}},
 	},
-	create: func(ctx context.Context, s *Store, t model.Template) (model.Template, error) {
+	create: func(ctx context.Context, s *pgstore.Store, t model.Template) (model.Template, error) {
 		return s.CreateTemplate(ctx, t)
 	},
-	save: func(ctx context.Context, s *Store, t model.Template) (model.Template, error) {
+	save: func(ctx context.Context, s *pgstore.Store, t model.Template) (model.Template, error) {
 		return s.SaveTemplateDraft(ctx, t)
 	},
-	newVersion: func(ctx context.Context, s *Store, id string, from int, author string) (model.Template, error) {
+	newVersion: func(ctx context.Context, s *pgstore.Store, id string, from int, author string) (model.Template, error) {
 		return s.NewTemplateVersion(ctx, id, from, author)
 	},
-	submit: func(ctx context.Context, s *Store, id string, v int, rev int64, a store.Audit) error {
+	submit: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a store.Audit) error {
 		return s.SubmitTemplate(ctx, model.TemplateKey{ID: id, Version: v}, rev, a)
 	},
-	approve: func(ctx context.Context, s *Store, id string, v int, rev int64, approver string, a store.Audit) error {
+	approve: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, approver string, a store.Audit) error {
 		return s.ApproveTemplate(ctx, model.TemplateKey{ID: id, Version: v}, rev, approver, a)
 	},
-	reject: func(ctx context.Context, s *Store, id string, v int, rev int64, a store.Audit) error {
+	reject: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a store.Audit) error {
 		return s.RejectTemplate(ctx, model.TemplateKey{ID: id, Version: v}, rev, a)
 	},
-	deprecate: func(ctx context.Context, s *Store, id string, v int, rev int64, a store.Audit) error {
+	deprecate: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a store.Audit) error {
 		return s.DeprecateTemplate(ctx, model.TemplateKey{ID: id, Version: v}, rev, a)
 	},
-	rename: func(ctx context.Context, s *Store, id, name string, a store.Audit) error {
+	rename: func(ctx context.Context, s *pgstore.Store, id, name string, a store.Audit) error {
 		return s.RenameTemplate(ctx, id, name, a)
 	},
-	deleteDraft: func(ctx context.Context, s *Store, id string, v int, rev int64) error {
+	deleteDraft: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64) error {
 		return s.DeleteTemplateDraft(ctx, model.TemplateKey{ID: id, Version: v}, rev)
 	},
-	get: func(ctx context.Context, s *Store, id string, v int) (model.Template, error) {
+	get: func(ctx context.Context, s *pgstore.Store, id string, v int) (model.Template, error) {
 		return s.GetTemplate(ctx, model.TemplateKey{ID: id, Version: v})
 	},
-	versions: func(ctx context.Context, s *Store, id string) ([]model.Template, error) {
+	versions: func(ctx context.Context, s *pgstore.Store, id string) ([]model.Template, error) {
 		return s.ListTemplateVersions(ctx, id)
 	},
-	list: func(ctx context.Context, s *Store, q listQuery) (store.Page[model.Template], error) {
+	list: func(ctx context.Context, s *pgstore.Store, q listQuery) (store.Page[model.Template], error) {
 		return s.ListTemplates(ctx, store.TemplateQuery{NamePrefix: q.NamePrefix, States: q.States, ApprovedOnly: q.ApprovedOnly, Cursor: q.Cursor, Limit: q.Limit})
 	},
-	ensureBuiltin: func(ctx context.Context, s *Store, t model.Template) error {
+	ensureBuiltin: func(ctx context.Context, s *pgstore.Store, t model.Template) error {
 		return s.EnsureBuiltinTemplate(ctx, t)
 	},
 }
 
 // 规则同 hook：每一处一条 text_not_storable，Subject 的写法同激活判定。顺序是模板整体（正文、族与系）、参数声明、模板
 // 参数的取值来源（按参数名），再是装配表：按插槽名，插槽名本身、其中的实例按顺序、实例的取值来源按参数名。
-func templateUnstorable(t *testing.T, s *Store) {
+func templateUnstorable(t *testing.T, s *pgstore.Store) {
 	draft := templateOps.mustCreateFrom(t, s, fullTemplate("Base-1"))
 	before := authoredSnapshot(t, s)
 	slot := func(id, path string) model.Problem { return notStorable("slot", id, path) }
@@ -220,7 +222,7 @@ func templateUnstorable(t *testing.T, s *Store) {
 
 // DerivedFrom 记的是派生的来源（C24），只由 DeriveTemplate 写、由开新版本照抄：新建时带了它，等于没经派生就声称有来源；
 // 保存时改了它，来源的提示与差异就对不上了。
-func templateDerivedFromFixed(t *testing.T, s *Store) {
+func templateDerivedFromFixed(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	src := templateOps.mustCreate(t, s, "Src")
 	srcKey := model.TemplateKey{ID: src.ID, Version: 1}
@@ -247,7 +249,7 @@ func templateDerivedFromFixed(t *testing.T, s *Store) {
 // 派生复制来源的族、系、正文、参数、取值来源与装配表，建一个新身份的版本 1 草稿，作者是给的那一个，DerivedFrom 记下
 // 来源（C24）。来源是草稿、待审批、已审批、已废弃或内置的都可以；之后来源改了，派生出的不受影响。派生不审计。开新版本
 // 时 DerivedFrom 照抄：来源出了新版本，派生模板的每个版本都要能比出差异。
-func templateDerive(t *testing.T, s *Store) {
+func templateDerive(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	must(t, s.EnsureBuiltinTemplate(ctx, templateOps.with(fullTemplate("lober:KS"), func(h *head) {
 		h.ID, h.Version, h.State, h.Author, h.Builtin = "builtin-ks", 1, model.VersionApproved, "lober", true
@@ -298,7 +300,7 @@ func referencing(t model.Template, k model.HookKey) model.Template {
 	return t
 }
 
-func templateDeriveBad(t *testing.T, s *Store) {
+func templateDeriveBad(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	src := templateOps.mustCreate(t, s, "Src")
 	from := model.TemplateKey{ID: src.ID, Version: 1}
@@ -333,7 +335,7 @@ func templateDeriveBad(t *testing.T, s *Store) {
 }
 
 // 同 hook：审批在事务里对最新数据重跑激活判定与审批人的检查，问题与直接调用第 1 层得到的完全相同，被拒时状态不变。
-func templateApproveRejected(t *testing.T, s *Store) {
+func templateApproveRejected(t *testing.T, s *pgstore.Store) {
 	in := sampleTemplate("Base-1")
 	in.Body = strings.Replace(kickstartBody, "{{lober:cleanup}}\n", "", 1) // part_missing
 	tpl := templateOps.to(t, s, templateOps.mustCreateFrom(t, s, in), model.VersionReview)
@@ -355,7 +357,7 @@ func templateApproveRejected(t *testing.T, s *Store) {
 
 // 模板引用的是 hook 的具体版本（C23）。审批时在同一个事务里取出（pgstore 加读锁）这些版本，对它们的最新状态重跑判定：
 // 模板提交之后、审批之前 hook 版本被废弃，批不了，报 hook_ref_deprecated（C26）；没审批的、不存在的同样拦下。
-func templateApproveHookRefs(t *testing.T, s *Store) {
+func templateApproveHookRefs(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	lvm := hookOps.to(t, s, hookOps.mustCreate(t, s, "LVM"), model.VersionApproved)
 	draftHook := hookOps.mustCreate(t, s, "NIC")
@@ -395,7 +397,7 @@ func templateApproveHookRefs(t *testing.T, s *Store) {
 }
 
 // 按系过滤只列勾了这个系的，看的是给出的那一项：默认是最新的版本，ApprovedOnly 时是当前的已审批版本。
-func templateListSeries(t *testing.T, s *Store) {
+func templateListSeries(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	withSeries := func(name string, series ...catalog.Series) model.Template {
 		in := sampleTemplate(name)
@@ -442,7 +444,7 @@ func templateListSeries(t *testing.T, s *Store) {
 // 包括模板的草稿与待审批的版本，这个草稿就删不掉（ErrReferenced，C26）；模板改掉装配表、或者模板草稿删了之后，就能删。
 // 只引用了同一个 hook 的别的版本，不挡这个版本。派生出的版本 1 也是一次保存：它照抄来源的装配表，来源引用的 hook 草稿
 // 它也引用。
-func templateRefs(t *testing.T, s *Store) {
+func templateRefs(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	refTo := func(name string, ks ...model.HookKey) model.Template {
 		in := sampleTemplate(name)
@@ -514,7 +516,7 @@ type hookRef struct {
 // wantRefsRecorded 直接查 template_hook_refs（接口看不到这张表）：它的行要恰好是库里每个模板版本按 store.HookRefs 算出的
 // 引用，只记 HookID 合 model.ValidID 的（见 refRows）。经接口只有 DeleteHookDraft 读这张表，它碰得到的只有 hook 草稿；开新
 // 版本与装载内置模板记下的引用指向的都是已审批的 hook 版本，漏记了经接口查不出来（S5-8）。
-func wantRefsRecorded(t *testing.T, s *Store, what string) {
+func wantRefsRecorded(t *testing.T, s *pgstore.Store, what string) {
 	t.Helper()
 	var want []hookRef
 	for _, tpl := range authoredSnapshot(t, s).Templates {
@@ -525,7 +527,7 @@ func wantRefsRecorded(t *testing.T, s *Store, what string) {
 		}
 	}
 	var got []hookRef
-	err := s.db.WithContext(t.Context()).Raw(`SELECT template_id, template_version, hook_id, hook_version FROM template_hook_refs`).
+	err := s.DBForTest().WithContext(t.Context()).Raw(`SELECT template_id, template_version, hook_id, hook_version FROM template_hook_refs`).
 		Scan(&got).Error
 	must(t, err, "读 template_hook_refs")
 	byKey := func(a, b hookRef) int {
@@ -538,7 +540,7 @@ func wantRefsRecorded(t *testing.T, s *Store, what string) {
 }
 
 // hook 与模板各有自己的名字空间（各自的身份表上各有一个唯一索引）：同一个名字可以同时是一个 hook 和一个模板。
-func templateNamespaces(t *testing.T, s *Store) {
+func templateNamespaces(t *testing.T, s *pgstore.Store) {
 	h := hookOps.mustCreate(t, s, "Same-Name")
 	tpl := templateOps.mustCreate(t, s, "same-name")
 	other := hookOps.mustCreate(t, s, "Other")
@@ -552,7 +554,7 @@ func templateNamespaces(t *testing.T, s *Store) {
 }
 
 // templateCopies：改了入参或返回值里的切片、map、指针与它们里面的元素，仓储里的数据都不变。
-func templateCopies(t *testing.T, s *Store) {
+func templateCopies(t *testing.T, s *pgstore.Store) {
 	mutate := func(tpl model.Template) {
 		tpl.Series[0] = "ubuntu"
 		tpl.Params[0].Label = "改了"

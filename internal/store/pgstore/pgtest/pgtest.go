@@ -7,8 +7,10 @@
 //
 // 它不是 _test.go，别的包的测试才 import 得到它；它 import 了 testing，生产代码不该用它。
 //
-// pgstore 自己的测试用不了它：pgtest 依赖 pgstore，pgstore 的包内测试再 import 它就成环（import cycle not allowed
-// in test）。所以 pgstore_test.go 里留着同样规则的一份，改了这里的规则，那边要跟着改。
+// pgstore 自己的测试也用它，夹具的规则只有这一份。那些测试写在外部测试包 pgstore_test 里：pgtest 依赖 pgstore，
+// pgstore 的包内测试再 import 它就成环（import cycle not allowed in test），外部测试包是另一个包，不成环。它们要做白盒
+// 断言，所以另有三个入口：OpenStore 给具体类型 *pgstore.Store；Schema 只建 schema、给出 DSN，OpenAt 在给定的 DSN 上
+// 打开仓储，供要自己掌握 schema 的测试用。
 package pgtest
 
 import (
@@ -38,22 +40,24 @@ const (
 // maxConns 是每个测试仓储的连接上限。
 const maxConns = 4
 
-// maxOpen 是一个测试进程里同时打开的测试仓储数上限。每个仓储最多 maxConns 个连接，而几个测试进程（go test 同时跑的
-// 几个包、几个代理各自跑的 go test）共用库的 max_connections：一个进程最多占 maxOpen*maxConns 个，给别的进程留出余量。
-// 它只管得到本进程。pgstore 的包内测试有同样的一份（maxTestOpen），两边的数字相同。
+// maxOpen 是一个测试进程里同时在用的临时 schema 数上限。Open 与 OpenStore 在一个 schema 上只开一个仓储，所以它也是这样
+// 打开的测试仓储数上限；用 OpenAt 在同一个 schema 上再开的不另占位，那是串行跑的表结构测试。每个仓储最多 maxConns 个
+// 连接，而几个测试进程（go test 同时跑的几个包、几个代理各自跑的 go test）共用库的 max_connections：一个进程最多占
+// maxOpen*maxConns 个，给别的进程留出余量。它只管得到本进程。
 //
 // 4 是这样定的：本机 max_connections 是 100，去掉留给超级用户的 3 个，测试角色能用 97 个。一个位最多占 maxConns 个连接，
-// 再加装失败注入时另开的 1 个，一个进程最多 20 个，四个进程同时到顶也只占 80 个。实测（2026-10-08，本机）pgstore 的契约
-// 用例串行 117 秒，同时 2、4、8、16 个分别是 73、53、44、49 秒：瓶颈在库里建表建索引，过了 4 个再加，快得不多，最坏情况
-// 下占的连接却翻倍。4 个位时实测一个进程同时最多 9 个连接。
+// 再加建 schema、装失败注入、删 schema 用的 1 个（见 newSchema），一个进程最多 20 个，四个进程同时到顶也只占 80 个。
+// 实测（2026-10-08，本机）pgstore 的契约用例串行 117 秒，同时 2、4、8、16 个分别是 73、53、44、49 秒：瓶颈在库里建表建
+// 索引，过了 4 个再加，快得不多，最坏情况下占的连接却翻倍。4 个位时实测一个进程同时最多 9 个连接。
 const maxOpen = 4
 
-// slots 是限住同时打开的仓储数的信号量：Open 先占一个位，测试结束、仓储关掉、schema 删掉之后才让出来。位都占满时，
-// Open 等到有用例结束；一个用例同时开的仓储超过 maxOpen 个，会一直等下去。
+// slots 是限住同时在用的临时 schema 数的信号量：Schema 先占一个位，测试结束、仓储关掉、schema 删掉之后才让出来。位都
+// 占满时，Schema 等到有用例结束；一个用例同时建的 schema 超过 maxOpen 个，会一直等下去。
 var slots = make(chan struct{}, maxOpen)
 
 // FaultActor 是失败注入的触发条件：审计的 Actor 等于它时，审计写入失败，与审计同一个事务里的动作一起回滚
-// （spec §6.2 第 8 条）。只有 Open 给的仓储有这条路，pgstore.Open 建的表上，它只是一个普通的操作者。
+// （spec §6.2 第 8 条）。只有 Open 与 OpenStore 给的仓储有这条路；pgstore.Open 建的表上（OpenAt 也是经它打开的），
+// 它只是一个普通的操作者。
 const FaultActor = "lober-test-fault"
 
 // DSN 按 spec §6.4 读测试连接串：先 LOBER_TEST_PG_DSN，再从模块根逐级往上找 .pgtest.dsn（并行克隆没有这个文件，靠
@@ -116,19 +120,44 @@ func moduleRoot(t testing.TB) string {
 // schema 一起删掉。并发数由包内的信号量限住，见 spec §6.4：同时打开的仓储最多 maxOpen 个，每个最多 maxConns 个连接。
 func Open(t testing.TB) store.Store {
 	t.Helper()
+	return OpenStore(t)
+}
+
+// OpenStore 同 Open，返回的是具体类型：给 pgstore 自己的测试直接查接口看不到的列。别的层用 Open，只依赖契约。
+func OpenStore(t testing.TB) *pgstore.Store {
+	t.Helper()
 	acquire(t)
-	dsn, _ := newSchema(t)
+	dsn, _, admin := newSchema(t)
+	defer closeConn(admin)
+	s := OpenAt(t, dsn)
+	installFault(t, admin)
+	return s
+}
+
+// Schema 先占一个位，再新建一个临时 schema，返回 search_path 只有它的 DSN，不建表；测试结束时删掉 schema、让出位。给要
+// 自己掌握 schema 的测试：另开连接让对方停在没提交的事务里、在同一个 schema 上再 Open 一次、改坏表结构再断言。
+func Schema(t testing.TB) string {
+	t.Helper()
+	acquire(t)
+	dsn, _, admin := newSchema(t)
+	closeConn(admin)
+	return dsn
+}
+
+// OpenAt 经 pgstore.Open 打开 dsn 指的仓储（多是 Schema 给的），连接上限是 maxConns，测试结束时关闭。它不占位，也不装失败
+// 注入：同一个 schema 可以先后 Open 几次。
+func OpenAt(t testing.TB, dsn string) *pgstore.Store {
+	t.Helper()
 	s, err := pgstore.Open(t.Context(), dsn, pgstore.WithMaxConns(maxConns))
 	if err != nil {
 		t.Fatalf("pgstore.Open：%v", err)
 	}
-	// Cleanup 后进先出：先关仓储，再删 schema，最后让出位
+	// Cleanup 后进先出：先关仓储，再删 schema（newSchema 登记的），最后让出位
 	t.Cleanup(func() {
 		if err := s.Close(); err != nil {
 			t.Errorf("关闭仓储：%v", err)
 		}
 	})
-	installFault(t, dsn)
 	return s
 }
 
@@ -139,31 +168,43 @@ func acquire(t testing.TB) {
 	t.Cleanup(func() { <-slots })
 }
 
-// newSchema 在测试库里新建一个 lober_t_ 加随机串的 schema，返回 search_path 只有它的 DSN 与 schema 的名字；测试结束时
-// 连同里面的一切删掉。
-func newSchema(t testing.TB) (dsn, name string) {
+// newSchema 在测试库里新建一个 lober_t_ 加随机串的 schema，返回 search_path 只有它的 DSN、schema 的名字，以及建它的那个
+// 连接 admin；测试结束时连同 schema 里的一切删掉。admin 不经仓储（仓储的连接都只看得见自己的 schema），它的 search_path
+// 已换成这个 schema，由调用方接着用、用完就关（closeConn）：OpenStore 拿它装失败注入，不必另开。新建连接每次都要做一次
+// 口令认证，本机约 120 毫秒；装失败注入另开一个的话，pgstore 整包测试要多跑十来秒（2026-10-09 实测）。
+func newSchema(t testing.TB) (dsn, name string, admin *pgx.Conn) {
 	t.Helper()
 	base := DSN(t)
 	name = "lober_t_" + store.NewID()
-	if err := adminExec(t.Context(), base, "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize()); err != nil {
+	ident := pgx.Identifier{name}.Sanitize()
+	admin, err := pgx.Connect(t.Context(), base)
+	if err != nil {
+		t.Fatalf("连接测试库：%v", err)
+	}
+	if _, err := admin.Exec(t.Context(), "CREATE SCHEMA "+ident); err != nil {
+		closeConn(admin)
 		t.Fatalf("建 schema：%v", err)
 	}
 	t.Cleanup(func() {
-		// t.Context() 在 Cleanup 之前就取消了，删 schema 另用一个
+		// t.Context() 在 Cleanup 之前就取消了，删 schema 另用一个；admin 这时早已关掉，另开一个连接
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		if err := adminExec(ctx, base, "DROP SCHEMA "+pgx.Identifier{name}.Sanitize()+" CASCADE"); err != nil {
+		if err := adminExec(ctx, base, "DROP SCHEMA "+ident+" CASCADE"); err != nil {
 			t.Errorf("删 schema：%v", err)
 		}
 	})
-	dsn, err := withSearchPath(base, name)
-	if err != nil {
+	if _, err := admin.Exec(t.Context(), "SET search_path TO "+ident); err != nil {
+		closeConn(admin)
+		t.Fatalf("换 search_path：%v", err)
+	}
+	if dsn, err = withSearchPath(base, name); err != nil {
+		closeConn(admin)
 		t.Fatal(err)
 	}
-	return dsn, name
+	return dsn, name, admin
 }
 
-// adminExec 另开一个连接依次执行 sqls，执行完就关：建删 schema 不经仓储，装失败注入也不必拿仓储的连接池。
+// adminExec 另开一个连接依次执行 sqls，执行完就关：删 schema 不经仓储。
 func adminExec(ctx context.Context, dsn string, sqls ...string) error {
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -176,6 +217,13 @@ func adminExec(ctx context.Context, dsn string, sqls ...string) error {
 		}
 	}
 	return nil
+}
+
+// closeConn 关掉 conn。t.Context() 可能已经取消，另用一个。
+func closeConn(conn *pgx.Conn) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	conn.Close(ctx)
 }
 
 // withSearchPath 给 DSN 加上 search_path：URL 形式加在查询参数里，key=value 形式接在末尾。出错时不带 DSN 原文，
@@ -194,9 +242,9 @@ func withSearchPath(dsn, schema string) (string, error) {
 	return u.String(), nil
 }
 
-// installFault 在 dsn 的 schema 里给审计表装上失败注入：Actor 为 FaultActor 的插入一律抛错，抛在动作本身写完之后、
-// 同一个事务里。函数与触发器都建在这个 schema 里（DSN 的 search_path 只有它），随 schema 一起删掉。
-func installFault(t testing.TB, dsn string) {
+// installFault 经 newSchema 给的 admin 在它的 schema 里给审计表装上失败注入：Actor 为 FaultActor 的插入一律抛错，抛在
+// 动作本身写完之后、同一个事务里。函数与触发器都建在这个 schema 里（admin 的 search_path 只有它），随 schema 一起删掉。
+func installFault(t testing.TB, admin *pgx.Conn) {
 	t.Helper()
 	fn := `CREATE FUNCTION lober_test_fault() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -207,7 +255,9 @@ BEGIN
 END
 $$`
 	trigger := `CREATE TRIGGER lober_test_fault BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION lober_test_fault()`
-	if err := adminExec(t.Context(), dsn, fn, trigger); err != nil {
-		t.Fatalf("装失败注入：%v", err)
+	for _, sql := range []string{fn, trigger} {
+		if _, err := admin.Exec(t.Context(), sql); err != nil {
+			t.Fatalf("装失败注入：%v", err)
+		}
 	}
 }
