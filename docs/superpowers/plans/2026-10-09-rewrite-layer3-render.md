@@ -202,7 +202,7 @@ func ArtifactURL(base, rel string) string
 - [ ] **绿：** 实现。预期 PASS。
 - [ ] **重构 + commit：** `make check` 全绿后 commit（`feat(catalog): 补下发文件清单、机器面地址格式与制品目录布局`）。
 
-**风险：** 旧 SPEC.md 只给了 RHEL 系、Ubuntu、Debian、Windows、ESXi 的菜单形态，SUSE 两种（AutoYaST、Agama）没有。这两种的下发清单要自己定，并在计划外的 spec 里补记——本任务只按已知的写，SUSE 那两格标注依据不足，由任务 8 真写内置内容时定。
+**风险：** 旧 SPEC.md 给了 RHEL 系、Ubuntu、Debian、Windows、ESXi 和 AutoYaST（第 89 行的 `autoyast=`，文件名 `autoinst.xml` 出自旧 main 的 `render.go:111`）的菜单形态。**只有 Agama 两处都没有出处**，所以只有它的那一格标注依据不足、留给任务 8，其余六格按旧依据登记。不要凭想象编一份看起来合理的清单——装机系统里编出来的下发清单，错了要到真装机才发现。待定项要有会报红的机制盯着（见「覆盖清单」），否则任务 8 忘了改也没人知道。
 
 ### 任务 3：守卫改成全模块列包
 
@@ -369,6 +369,7 @@ func Fingerprint(v any) string // 序列化后的指纹，golden 用
 **文件：**
 - 修改：`internal/render/menu.go`、`aux.go`、`answer.go`
 - 创建：`internal/render/script.go` —— 执行插槽的运行脚本
+- 修改：`internal/core/catalog/delivery.go`、`delivery_test.go` —— 补 Agama 的下发清单（见下）
 - 测试：对应的 `_test.go`
 
 **做法：**
@@ -381,6 +382,7 @@ func Fingerprint(v any) string // 序列化后的指纹，golden 用
 - 运行脚本：执行插槽展开出的脚本，用目标环境的 shell 做语法检查（spec §7.2 第 3 条要求 busybox sh、bash）
 
 **覆盖清单：**
+- **补 Agama 的下发清单（任务 2 留下的待定项）**：在 `catalog/delivery.go` 登记它的应答文件名，定下要不要附属文件，每项都写上依据；再从 `delivery_test.go` 的 `pendingDeliveryNames` 与 `pendingDeliveryKinds` 删掉对应项。文件名只有 catalog 一份，不许在 render 里另写——这是本任务要改 catalog 的唯一原因。任务 2 查遍旧 SPEC.md 与旧系统都没有 Agama 的出处，所以这里定的东西必须指到 Agama 自己的文档，指不出来就标「待真机核实」并记进 spec §8
 - Agama 应答文件、AutoYaST 与 Agama 菜单、Windows 菜单、WinPE 启动脚本各一份 golden
 - 运行脚本：片段与脚本混排、多个执行插槽、脚本的环境变量按 `EnvName` 导出、列表以换行连接
 - 运行脚本过 shell 语法检查（busybox sh 与 bash 各一遍）
@@ -446,7 +448,6 @@ T6-3 选 B 之后，内置模板里的参数仍要按安全词的陷阱写：参
 
 ## 留给后续层的约定
 
-- 第 4 层：ISO 的获取来源加新表时，制品目录布局（任务 2）已经定下相对路径的写法，导入按它写文件。原始 ISO 要作为一个角色发布（Ubuntu 的 `url=` 要用，spec §2.2 第 64 行）。
 - 第 5 层：预览调 `render.Render`，与真实下发同一条路（C35）。没指定主机或 ISO 时用示例值并标明是示例；预览的 token 是示例值（spec §6.2 第 2 条）。装配点调 `store.EnsureBuiltin*` 装载 `builtin.Templates()` 与 `builtin.Hooks()`，报 ErrConflict 时重试。按 `builtin` 当前带的清单过滤向导里的旧身份（S5-1）。
 - 第 4 层：ISO 导入时按角色把相对路径写进 `ISO.Artifacts`，角色名由第 4 层定（`model/registry.go:146`）。其中「原始 ISO」这个角色必须有，Ubuntu 的 `url=` 要指向整张 ISO，缺了那条路径装不通（spec §2.2 第 64 行点名旧系统就是缺这个参数）。相对路径里的版本段已由 `ISO.Validate` 限成安全路径段，所以 `catalog.ArtifactURL` 拼接时不再查穿越。
 - 第 7 层：网关按 `catalog.DeliveryFiles` 与 `catalog.DeliveryFileName` 决定给不给某个文件，再看任务状态（spec §4.7、§5.4 第 3 步）；文件名只有 catalog 一份，网关不要另写。hook 脚本按快照里的摘要从仓储取出直接下发，不经渲染（spec §6.2 第 5 条）。改能力表时照 T8-8 补三条断言。真装后若把 windows-desktop 限为 uefi，回到第 1 层改固件要求表（T4-3）。
