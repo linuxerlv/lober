@@ -88,7 +88,8 @@ func Test目录地址加上文件名就是下发文件的地址(t *testing.T) {
 }
 
 func TestArtifactURL按相对路径拼出制品地址(t *testing.T) {
-	// rel 取自 ISO.Artifacts，是制品目录下的相对路径，由第 4 层导入时写入（model/registry.go 的 ISO.Artifacts）。
+	// rel 取自 ISO.Artifacts，是制品目录下的相对路径，由第 4 层导入时写入（internal/core/model/registry.go 的
+	// ISO.Artifacts）。
 	cases := []struct {
 		name, base, rel, want string
 	}{
@@ -108,6 +109,24 @@ func TestArtifactURL按相对路径拼出制品地址(t *testing.T) {
 	for _, c := range cases {
 		if got := ArtifactURL(c.base, c.rel); got != c.want {
 			t.Errorf("%s：ArtifactURL(%q, %q) = %q，想要 %q", c.name, c.base, c.rel, got, c.want)
+		}
+	}
+}
+
+func TestArtifactURL对边界上的相对路径照拼不误(t *testing.T) {
+	// ArtifactURL 不规范化、也不拒收 rel：rel 合不合规由第 4 层写 ISO.Artifacts 时保证（非空、不以 / 开头、
+	// 没有 . 或 .. 段）。这里把现在的行为钉住，要改成拒收或规范化，先改这条测试，调用方也要跟着处理。
+	cases := []struct {
+		name, rel, want string
+	}{
+		{"空的 rel 得到基地址加 /", "", "http://ng/artifacts/"},
+		{"以 / 开头多出一个空段", "/rocky/9.6/vmlinuz", "http://ng/artifacts//rocky/9.6/vmlinuz"},
+		// 转义挡不住 ..：%2E%2E 解开还是 ..，所以防目录穿越只能靠写 rel 的一方。
+		{"含 .. 段原样拼进去", "rocky/../../etc/passwd", "http://ng/artifacts/rocky/../../etc/passwd"},
+	}
+	for _, c := range cases {
+		if got := ArtifactURL("http://ng/artifacts", c.rel); got != c.want {
+			t.Errorf("%s：ArtifactURL(…, %q) = %q，想要 %q", c.name, c.rel, got, c.want)
 		}
 	}
 }

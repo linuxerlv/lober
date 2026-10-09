@@ -44,8 +44,9 @@ var planSystemParts = []struct {
 	{"cleanup", "凭据清理"},
 }
 
-// 后三个是第 3 层计划任务 2 补的，计划没给显示名：token 取 spec §6.2 第 2 条的叫法，另两个与「网关基地址」
-// 对称。它们只给系统部件与机器面地址用，不进任何格式的能力表，所以「能力表逐格与计划一致」里没有它们。
+// token、syslog-addr、artifacts 是第 3 层计划任务 2 补的，计划没给显示名：token 取 spec §6.2 第 2 条的叫法，
+// 另两个与「网关基地址」对称。它们只给系统部件与机器面地址用，不进任何格式的能力表，所以「能力表逐格与计划
+// 一致」里没有它们。
 // syslog 已经是系统部件的标识，系统值叫 syslog-addr，两者不混（见下面「未知或大小写不同」里的 syslog）。
 var planSystemValues = []struct {
 	id    SystemValue

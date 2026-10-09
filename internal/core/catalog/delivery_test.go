@@ -17,15 +17,17 @@ var planFileKinds = []struct {
 	{FileScript, "script"},
 }
 
-// planDeliveryRow 是下发清单的一行。kinds 按机器取用的先后写（引导菜单、应答文件、附属文件、运行脚本），
-// 也就是 DeliveryFiles 应有的输出；files 是经 /v1/answer 下发的文件名，没写的就是查不到。
+// planDeliveryRow 是下发清单的一行。kinds 按 FileKind 的固定次序写（引导菜单、应答文件、附属文件、运行
+// 脚本），也就是 DeliveryFiles 应有的输出；这不是机器取用的先后，ESXi 与 Windows 都是先取附属文件、再由它
+// 去取应答文件。files 是经 /v1/answer 下发的文件名，没写的就是查不到。
 type planDeliveryRow struct {
 	format Format
 	kinds  []FileKind
 	files  map[FileKind]string
 }
 
-// planDelivery 抄录各格式的下发清单，依据逐行注明。旧 SPEC.md 指 7355e6a 的 SPEC.md，旧系统指 main 分支。
+// planDelivery 抄录各格式的下发清单，依据逐行注明。旧 SPEC.md 指 7355e6a 的 SPEC.md，旧系统指 9c7c374，路径
+// 与行号按它，用 git show 9c7c374:<路径> 回查。
 // 七种格式都有引导菜单、应答文件和运行脚本（渲染的四类输出，spec §4.3；每种格式都支持首次开机，正文里
 // 就有执行插槽），差别只在附属文件。
 var planDelivery = []planDeliveryRow{
@@ -43,46 +45,58 @@ var planDelivery = []planDeliveryRow{
 	},
 	{
 		// 旧 SPEC.md §4.5：ds=nocloud-net;s=…/，这个目录下要有 user-data 与 meta-data；旧系统的网关
-		// 为 meta-data 单独放行（gateway/answer.go:173）。
+		// 为 meta-data 单独放行（internal/gateway/answer.go:173）。
 		format: "autoinstall",
 		kinds:  []FileKind{FileMenu, FileAnswer, FileAux, FileScript},
 		files:  map[FileKind]string{FileAnswer: "user-data", FileAux: "meta-data"},
 	},
 	{
-		// 旧 SPEC.md §0.3：linux + initrd + autoyast=；文件名取旧系统的 autoinst.xml（model/render.go:111）。
+		// 旧 SPEC.md §0.3：linux + initrd + autoyast=；文件名取旧系统的 autoinst.xml
+		// （internal/core/model/render.go:111）。
 		format: "autoyast",
 		kinds:  []FileKind{FileMenu, FileAnswer, FileScript},
 		files:  map[FileKind]string{FileAnswer: "autoinst.xml"},
 	},
 	{
 		// 依据不足：旧 SPEC.md 与旧系统都没有 Agama，应答文件叫什么、要不要附属文件都没有出处。只登记
-		// 推得出的三种，应答文件的文件名见 pendingDeliveryNames，由第 3 层任务 8 定。
+		// 推得出的三种；应答文件的文件名见 pendingDeliveryNames，要不要附属文件见 pendingDeliveryKinds，
+		// 都由第 3 层任务 8 定。
 		format: "agama",
 		kinds:  []FileKind{FileMenu, FileAnswer, FileScript},
 	},
 	{
 		// 旧 SPEC.md §4.5：unattend 由 WinPE 内的 startnet.cmd 去取，不烧进 WIM；应答文件名取旧系统的
-		// unattend.xml（model/render.go:112）。启动脚本由 wimboot 注入（spec §8），这条路待真机核实（spec §2.2）。
+		// unattend.xml（internal/core/model/render.go:112）。启动脚本由 wimboot 注入（spec §8），这条路待真机核实
+		// （spec §2.2）。
 		format: "unattend",
 		kinds:  []FileKind{FileMenu, FileAnswer, FileAux, FileScript},
 		files:  map[FileKind]string{FileAnswer: "unattend.xml", FileAux: "startnet.cmd"},
 	},
 	{
 		// 旧 SPEC.md §4.5：mboot.efi -c …/boot.cfg；boot.cfg 的 ks= 再指向应答文件，旧系统叫它 ks.cfg
-		// （gateway/answer.go:176、gateway/esxi_bootcfg.go:55）。
+		// （internal/gateway/answer.go:176、internal/gateway/esxi_bootcfg.go:55）。
 		format: "esxi-ks",
 		kinds:  []FileKind{FileMenu, FileAnswer, FileAux, FileScript},
 		files:  map[FileKind]string{FileAnswer: "ks.cfg", FileAux: "boot.cfg"},
 	},
 }
 
-// pendingDeliveryNames 是依据不足、还没登记文件名的格子。定下来以后从这里删掉：「待定的格子确实还没
-// 登记文件名」会先报红，提醒这一步。
-var pendingDeliveryNames = []struct {
+// deliveryCell 是下发清单的一格：一种格式的一类文件。
+type deliveryCell struct {
 	format Format
 	kind   FileKind
-}{
+}
+
+// pendingDeliveryNames 是下发了、却因依据不足还没登记文件名的格子。定下来以后从这里删掉：「待定的
+// 文件名确实还没登记」会先报红，提醒这一步。
+var pendingDeliveryNames = []deliveryCell{
 	{"agama", FileAnswer},
+}
+
+// pendingDeliveryKinds 是因依据不足、要不要下发还没定的格子，现在一律按不下发登记：没下发也是一个判断，
+// 同样要有依据。真加上的时候，「待定的种类确实还没下发」会先报红，逼着补依据、从这里删掉。
+var pendingDeliveryKinds = []deliveryCell{
+	{"agama", FileAux},
 }
 
 func Test文件种类就是渲染的四类输出(t *testing.T) {
@@ -167,38 +181,55 @@ func Test每种格式都下发引导菜单与应答文件且有执行时机就�
 	}
 }
 
-func Test应答文件与附属文件都登记了文件名(t *testing.T) {
-	pending := func(f Format, k FileKind) bool {
-		for _, p := range pendingDeliveryNames {
-			if p.format == f && p.kind == k {
-				return true
+func Test下发的种类按FileKind的固定次序(t *testing.T) {
+	// 对外的顺序是 fileKindTable 的次序，不是机器取用的先后（ESXi 与 Windows 都先取附属文件）。抄录与实现
+	// 一起写成取用先后时，「逐格与计划一致」照样绿，所以这里只拿 fileKindTable 比，不看抄录。
+	for _, f := range formatTableIDs() {
+		got := DeliveryFiles(f)
+		for i := 1; i < len(got); i++ {
+			if slices.Index(fileKindTable, got[i-1]) >= slices.Index(fileKindTable, got[i]) {
+				t.Errorf("DeliveryFiles(%s) = %q：%s 排在 %s 前面，与 fileKindTable 的次序 %q 不符",
+					f, got, got[i-1], got[i], fileKindTable)
 			}
 		}
-		return false
 	}
-	t.Run("除待定的格子外都有", func(t *testing.T) {
-		// 网关按文件名查它在不在下发清单里（spec §5.4 第 3 步），渲染按同一个名字写地址：下发了却没登记
-		// 文件名，两边就只能各写一份。
-		for _, f := range formatTableIDs() {
-			for _, k := range DeliveryFiles(f) {
-				if (k != FileAnswer && k != FileAux) || pending(f, k) {
-					continue
-				}
-				if _, ok := DeliveryFileName(f, k); !ok {
-					t.Errorf("%s 下发 %s，DeliveryFileName 却查不到文件名", f, k)
-				}
+}
+
+func Test应答文件与附属文件都登记了文件名(t *testing.T) {
+	// 网关按文件名查它在不在下发清单里（spec §5.4 第 3 步），渲染按同一个名字写地址：下发了却没登记
+	// 文件名，两边就只能各写一份。待定的格子另由「依据不足的格子」管。
+	for _, f := range formatTableIDs() {
+		for _, k := range DeliveryFiles(f) {
+			if (k != FileAnswer && k != FileAux) || slices.Contains(pendingDeliveryNames, deliveryCell{f, k}) {
+				continue
+			}
+			if _, ok := DeliveryFileName(f, k); !ok {
+				t.Errorf("%s 下发 %s，DeliveryFileName 却查不到文件名", f, k)
 			}
 		}
-	})
-	t.Run("待定的格子确实还没登记文件名", func(t *testing.T) {
+	}
+}
+
+func Test依据不足的格子保持待定(t *testing.T) {
+	// 待定的格子现在按「不登记」处理。补了依据、登记上了，就要从待定清单里删掉，并在抄录里写上依据：
+	// 这两个子测试在登记的那一刻报红，免得待定清单与实现各说各的。
+	t.Run("待定的文件名确实还没登记", func(t *testing.T) {
 		for _, p := range pendingDeliveryNames {
 			if !slices.Contains(DeliveryFiles(p.format), p.kind) {
-				t.Errorf("待定的格子 %s/%s：DeliveryFiles(%s) = %q 不含 %s，待定的应是下发了却没定名字的格子",
+				t.Errorf("待定的文件名 %s/%s：DeliveryFiles(%s) = %q 不含 %s，待定的应是下发了却没定名字的格子",
 					p.format, p.kind, p.format, DeliveryFiles(p.format), p.kind)
 			}
 			if name, ok := DeliveryFileName(p.format, p.kind); ok {
-				t.Errorf("待定的格子 %s/%s 已经登记了 %q：定下来了就从 pendingDeliveryNames 删掉，并在抄录里写上依据",
+				t.Errorf("待定的文件名 %s/%s 已经登记了 %q：定下来了就从 pendingDeliveryNames 删掉，并在抄录里写上依据",
 					p.format, p.kind, name)
+			}
+		}
+	})
+	t.Run("待定的种类确实还没下发", func(t *testing.T) {
+		for _, p := range pendingDeliveryKinds {
+			if got := DeliveryFiles(p.format); slices.Contains(got, p.kind) {
+				t.Errorf("待定的种类 %s/%s：DeliveryFiles(%s) = %q 已经含 %s：定下来了就从 pendingDeliveryKinds 删掉，并在抄录里写上依据",
+					p.format, p.kind, p.format, got, p.kind)
 			}
 		}
 	})

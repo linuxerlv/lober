@@ -64,8 +64,8 @@ var systemPartTable = []systemPartRow{
 	{"cleanup", "凭据清理"},
 }
 
-// 最后三个只给系统部件与机器面地址用（spec §6.2 第 2 条），不进任何格式的能力表：作者在正文里写
-// {{sys:token}}，激活判定报 sysvalue_not_allowed。
+// token、syslog-addr、artifacts 只给系统部件与机器面地址用（spec §6.2 第 2 条），不进任何格式的能力表：
+// 作者在正文里写 {{sys:token}}，激活判定报 sysvalue_not_allowed。
 var systemValueTable = []systemValueRow{
 	{"repo", "安装源地址"},
 	{"iso", "原始 ISO 地址"}, // Ubuntu 的 url=：安装器要经 HTTP 把整张 ISO 下进内存

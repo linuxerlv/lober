@@ -17,15 +17,19 @@ import (
 // 的 s= 要的那个。task、token 与 file 的每一段各自转义（url.PathEscape），网关按段解开就拿回原值；base 结尾
 // 的 / 去掉。
 //
-// 转义只保证按段解得回原值，不保证放进内核命令行、iPXE 或 cmd 里不出事，比如 % 在 cmd 里会被当成变量。
-// 任务 ID 合 model.ValidID，本来就不用转义；token 也要只用不用转义的字符。
+// 转义只保证按段解得回原值，不保证放进内核命令行、iPXE、cmd 或 sh 里不出事：转义出的 % 在 cmd 里会被当成
+// 变量，PathEscape 原样留下的 & $ + = : @ 也一样危险，比如 & 会把 cmd 的命令切开，$ 在 sh 里会被展开。所以
+// task 与 token 都只用 model.ValidID 的字符集（小写字母、数字与 -）：任务 ID 本来就合它，token 由签发方保证。
 func AnswerURL(base, task, token, file string) string {
 	return joinURL(base, append([]string{"v1", "answer", task, token}, strings.Split(file, "/")...))
 }
 
-// ArtifactURL 是制品的完整地址：{base}/{rel}。rel 取自 ISO.Artifacts，是制品目录下的相对路径；其中的版本段
-// 已由 ISO.Validate 限成安全的路径段（L-6），这里不再查。rel 是盘上的路径而不是转义过的地址，所以按 / 切开、
-// 逐段转义，结尾的 / 留着（仓库树是目录）；base 结尾的 / 去掉。
+// ArtifactURL 是制品的完整地址：{base}/{rel}。rel 取自 ISO.Artifacts，是制品目录下的相对路径。rel 是盘上的
+// 路径而不是转义过的地址，所以按 / 切开、逐段转义，结尾的 / 留着（仓库树是目录）；base 结尾的 / 去掉。
+//
+// rel 的合规（非空、不以 / 开头、没有 . 与 .. 段）由第 4 层写 ISO.Artifacts 时保证，ISO.Validate 不查 Artifacts，
+// 这里也不查：rel 为空、以 / 开头或含 . 与 .. 段时照拼不误，既不规范化也不拒收。转义挡不住 ..（%2E%2E 解开
+// 还是 ..），防目录穿越只能靠写 rel 的一方。
 func ArtifactURL(base, rel string) string {
 	return joinURL(base, strings.Split(rel, "/"))
 }
