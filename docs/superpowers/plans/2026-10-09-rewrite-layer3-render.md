@@ -256,6 +256,7 @@ func Render(r Request) ([]byte, []model.Problem, error)
 - `error` 只用于调用方用错接口（比如 `Kind` 不认识），内容问题一律走 `Problem`
 - 展开按「展开规则」一节的八条做
 - 占位符经 `scan.Scan` 的 Segments 取，不自己认词法（避免抄 `scan` 的第四份）
+- **本任务要定一件事**（任务 2 的实现者提出）：`repo` 与 `iso` 两个系统值现在有两条可能的来源——调用方直接填，或渲染用 `artifacts` 基地址加 `ISO.Artifacts[role]` 经 `catalog.ArtifactURL` 拼出。只留一条，并在 `Request.Values` 的注释里写明哪些键由调用方填、哪些由渲染拼。留两条就是同一个地址有两份出处
 
 **覆盖清单：**
 - 四类占位符各自的展开：系统值、参数引用、片段插槽、执行插槽、系统部件
@@ -325,7 +326,7 @@ func Fingerprint(v any) string // 序列化后的指纹，golden 用
 **覆盖清单：**
 - 五种格式 × （full、minimal） × （BIOS、UEFI）
 - 每种格式的必需系统部件都在（照 `catalog/timing.go:87-158` 的能力表）
-- 渲染出的每个地址符合机器面地址格式（spec §7.2 第 3 条点名要这条测试）
+- 渲染出的每个地址符合机器面地址格式（spec §7.2 第 3 条点名要这条测试）。catalog 只有拼接、没有解析，所以这条测试要有一个解析的一端：要么在测试里用 `net/url` 按段解开（任务 2 的 `address_test.go` 就是这么做的，照它），要么给 catalog 补一个 `AnswerURL` 的反函数。选后者的话要先确认网关（第 7 层）会不会用同一个反函数——会用就该放进 catalog，只给测试用就别加
 - 执行插槽展开后只有一行（同上）
 
 - [ ] **红：** 写 golden 测试，`testdata` 先留空。`go -C .tmp/wf/r6 test ./internal/render/ -count=1`，预期 FAIL（golden 不存在）。
@@ -447,7 +448,9 @@ T6-3 选 B 之后，内置模板里的参数仍要按安全词的陷阱写：参
 
 - 第 4 层：ISO 的获取来源加新表时，制品目录布局（任务 2）已经定下相对路径的写法，导入按它写文件。原始 ISO 要作为一个角色发布（Ubuntu 的 `url=` 要用，spec §2.2 第 64 行）。
 - 第 5 层：预览调 `render.Render`，与真实下发同一条路（C35）。没指定主机或 ISO 时用示例值并标明是示例；预览的 token 是示例值（spec §6.2 第 2 条）。装配点调 `store.EnsureBuiltin*` 装载 `builtin.Templates()` 与 `builtin.Hooks()`，报 ErrConflict 时重试。按 `builtin` 当前带的清单过滤向导里的旧身份（S5-1）。
-- 第 7 层：网关按 `catalog.DeliveryFiles` 与任务状态决定给不给某个文件（spec §4.7）。hook 脚本按快照里的摘要从仓储取出直接下发，不经渲染（spec §6.2 第 5 条）。改能力表时照 T8-8 补三条断言。真装后若把 windows-desktop 限为 uefi，回到第 1 层改固件要求表（T4-3）。
+- 第 4 层：ISO 导入时按角色把相对路径写进 `ISO.Artifacts`，角色名由第 4 层定（`model/registry.go:146`）。其中「原始 ISO」这个角色必须有，Ubuntu 的 `url=` 要指向整张 ISO，缺了那条路径装不通（spec §2.2 第 64 行点名旧系统就是缺这个参数）。相对路径里的版本段已由 `ISO.Validate` 限成安全路径段，所以 `catalog.ArtifactURL` 拼接时不再查穿越。
+- 第 7 层：网关按 `catalog.DeliveryFiles` 与 `catalog.DeliveryFileName` 决定给不给某个文件，再看任务状态（spec §4.7、§5.4 第 3 步）；文件名只有 catalog 一份，网关不要另写。hook 脚本按快照里的摘要从仓储取出直接下发，不经渲染（spec §6.2 第 5 条）。改能力表时照 T8-8 补三条断言。真装后若把 windows-desktop 限为 uefi，回到第 1 层改固件要求表（T4-3）。
+  **token 只能用不需要转义的字符**（任务 2 的实现者提出，小写 base32 或 hex 这类）。理由有两条：`url.PathEscape` 不转义 `& $ + = : @`，而转义出的 `%` 放进 unattend 首次开机的 `startnet.cmd` 会被当成变量展开；网关若按解码后的 Path 路由，含 `%2F` 的段会被切开。任务 ID 合 `model.ValidID`，本来就满足。
 - 任何一层要改渲染的展开规则，先回到第 1 层同步改判定——规则由第 1 层校验、第 3 层执行，两边必须一致（第 1 层计划第 746 行）。
 
 ## 整体验收
