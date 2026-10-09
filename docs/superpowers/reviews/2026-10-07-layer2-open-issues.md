@@ -88,11 +88,11 @@
 
 下面几件事以提交说明为准，这里只摘要。
 
-1. 测试夹具的规则现在有两份（U4，f7d05d8）。计划要 pgstore_test 改用 pgtest，做不到：pgtest 依赖 pgstore，pgstore 包内的测试再 import 它，会报 import cycle not allowed in test（执行者用 go vet -overlay 验证过）。所以 pgstore 包内的夹具留着，只改成经 WithMaxConns 限连接数；U6 加的信号量也是两份，pgtest.Open 一份，pgstore 包内的 newSchema 一份。两边靠注释互相提醒同步。要去掉这份重复，得新加一个不依赖 pgstore 的低层包，这和整体验收的「internal/store 下只剩三个包：契约、pgstore、pgtest」冲突，留待你拍板。另外，pgtest.Open 装失败注入改用另开的 pgx 连接，所以 pgstore 不必像计划设想的那样导出数据库句柄。
+1. 测试夹具的规则一度有两份，后来去掉了（U4，f7d05d8；收尾那一轮解决）。计划要 pgstore_test 改用 pgtest，当时做不到：pgtest 依赖 pgstore，pgstore 包内的测试再 import 它，会报 import cycle not allowed in test（执行者用 go vet -overlay 验证过）。所以 U4 先留着包内那一份，只改成经 WithMaxConns 限连接数，两边靠注释互相提醒同步。2026-10-09 你定了换个办法：把 12 个测试文件全部改成外部测试包 package pgstore_test。外部测试包是独立的包，pgstore_test → pgtest → pgstore 不成环，所以夹具只剩 pgtest 一份，信号量也只剩一个。包内要用的未导出标识符经 export_test.go 导出，名字都带 ForTest 后缀，不进生产 API；其中 16 个只给 schema_test.go 用，因为它测的 checkSchema、tables、models、translate 都在包内。顺带得到一层保证：契约测试现在只经公开接口加显式的 test-export 访问，等于证明契约从包外用得起来，而这正是第 4、5、7 层要做的事。另外，pgtest.Open 装失败注入复用建 schema 的那个连接（原来另开一个，每次多一次口令认证，约 120 毫秒，整包慢 8 到 28 秒），所以 pgstore 不必像计划设想的那样导出数据库句柄。
 2. S8-1 修了两轮（U7，5e58281）。第一轮照计划用 ON CONFLICT (id) DO NOTHING，只解决了「先到的已插入、还没提交」这一种交错。复查时用探针发现另一种：两条 INSERT 都在对方插入之前通过了预检查时，因为 id 是唯一的仲裁索引，后到的一路会在 idx_*_name_key 上撞车报 23505，而 nameHolder 查到的占用者正是自己那个 ID，于是返回 DuplicateError{name, 自己的 ID}，装配点只能拒绝启动。探针 300 轮里重现 53 轮（17.7%）。第二轮改成不带目标的 ON CONFLICT DO NOTHING，让所有唯一索引都当仲裁；锁不到身份时在事务内按 name_key 查占用者，查到报 DuplicateError{name, 对方 ID}，查不到报 ErrConflict。回归用例跑 200 轮，改回旧写法时「同一个 ID」那组报红（27%–31%）；另有「不同 ID 同名」一组，证明不带目标的 DO NOTHING 没把该报的名字冲突吞掉。独立验证另写探针跑了 3600 轮，0 失败。
-3. 分批循环没有全部覆盖（U8，7b9de91）。S7-3 列的不全，grep 出来一共 12 处分批循环，现在覆盖了 9 处。剩下 3 处与 hook 引用有关，要凑上千个 hook 版本，成本高，暂不覆盖。
+3. 分批循环 12 处全部覆盖（U8 覆盖 9 处，7b9de91；收尾那一轮补上剩下 3 处）。S7-3 列的不全，grep 出来一共 12 处。剩下 3 处都与模板引用的 hook 版本有关：保存模板时写引用（insertRefs）、审批模板时给引用的 hook 版本加读锁取出（ApproveTemplate）、建任务时同样取出（admit）。要走到第二批，模板得引用 1000 个以上不同的 hook 版本，所以 2026-10-09 你定了凑真实数据：建 1001 个最小的 hook（一份空片段实现、覆盖模板勾的两个系、没有参数），拼一个引用全部 1001 个的模板，三条路径共用这一份夹具，全走真实接口，没有直接往表里插数据。用例挂在 Test契约模板 的 runCases 里，和别的用例共用并发位，自身 3.8 秒。三次变异（每次让一处循环只跑第一批）各自只让对应的断言报红：insertRefs 漏批时第二批里的 hook 草稿被删掉而没报 ErrReferenced；ApproveTemplate 漏批时报 hook_ref_missing；admit 漏批时废弃的 hook 没被读到、本该拒绝的建任务通过了。
 4. pgstore 整包的耗时。U6 的提交说明记的是并行前 142 秒、并行后 90 秒，其中契约部分从 117 秒降到 53 秒，其余串行的测试约 37 秒；U8 在这期间还新增了一次导入 2001 台、建任务 1002 台、五个列表各 101 条数据这类用例。并发数定在 4 是按实测曲线：串行 117 秒、2 路 73、4 路 53、8 路 44、16 路 49，瓶颈在数据库这边的 DDL，过了 4 收益不大，最坏情况的连接数却要翻倍。U12 写这一节时，在含 U9–U11 改动的工作区里复测过一次整包：86 秒。
-5. 契约测试的叶子子测试，搬家时 250 个，与搬家前逐条对应，一个没少（8e7e9be）；现在是 261 个（U12 时用 go test -v 数的）。
+5. 契约测试的叶子子测试，搬家时 250 个，与搬家前逐条对应，一个没少（8e7e9be）；U12 时 261 个；收尾那一轮改成外部测试包后仍是 261 个（用 -overlay 排除新加的文件后与改前的名单逐条相同），加上新补的分批用例是 262 个。
 
 ## 你的决定（2026-10-08）
 
