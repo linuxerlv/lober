@@ -78,7 +78,7 @@
 
 ### 系统值
 
-系统值由调用方按本次请求填入，渲染不自己构造地址。现有词表在 `catalog/timing.go:67-75`：repo、iso、smb、gateway、task、sn、lbrace。本层要补 token 与 syslog 地址（任务 2）。
+系统值由调用方按本次请求填入。渲染不自己**构造**地址——它不知道网关的主机名与端口；但它要按机器面约定**拼接**地址（基地址加相对路径），所以基地址必须经系统值传进来。现有词表在 `catalog/timing.go:67-75`：repo、iso、smb、gateway、task、sn、lbrace。本层要补 token、syslog 地址与制品基地址（任务 2）。
 
 ### 展开规则
 
@@ -180,14 +180,17 @@ func (v SnapshotValue) EnvValue() string
 
 ```go
 func DeliveryFiles(f Format) []FileKind
+func DeliveryFileName(f Format, k FileKind) (string, bool)
 func AnswerURL(base, task, token, file string) string
-func ArtifactPath(isoID string, role string) string
+func ArtifactURL(base, rel string) string
 ```
 
 - `FileKind` 是带类型的常量（`FileMenu`、`FileAnswer`、`FileAux`、`FileScript`），不用字符串字面量（L-8）
-- 地址格式照 spec §8.1：`GET /v1/answer/{task}/{token}/{file}`，token 在路径段里，不用 query string（§4.4）
-- 制品目录布局：ISO 记录只存相对路径，渲染据此拼出完整地址；版本已由 `ISO.Validate` 限成 `^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`，所以不会目录穿越（L-6）
+- 地址格式照旧 SPEC.md §8.1：`GET /v1/answer/{task}/{token}/{file}`，token 在路径段里，不用 query string（旧 SPEC.md §4.4）。`file` 传空串时返回以 `/` 结尾的目录地址，Ubuntu 的 `ds=nocloud-net;s=` 要用
+- `DeliveryFileName` 只给 Answer 与 Aux 登记具体文件名（ks.cfg、preseed.cfg、user-data、meta-data、boot.cfg 这些）。spec §5.4 第 3 步要网关「查文件名在不在该格式的下发清单里」，只登记种类的话文件名会在渲染与网关各写一份。Menu 走 `/v1/boot`、Script 按插槽取，都不在 `/v1/answer` 下的固定名字之列
+- `ArtifactURL` 只做「相对路径 → 完整地址」这一步，`rel` 取自 `ISO.Artifacts[role]`。相对路径由第 4 层导入时写进 Artifacts（`model/registry.go:146` 写明「角色由第 4 层定」，catalog 不解释角色）；其中的版本段已由 `ISO.Validate` 限成 `^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`，不会目录穿越（L-6），catalog 不再查
 - 七种格式各自的下发清单照 spec §2.1 与旧 SPEC.md 的菜单形态（`git show 7355e6a:SPEC.md` §4.5）
+- 系统值补三个：token、syslog 地址、制品基地址。`syslog` 已经是系统部件，标识不能撞（`timing_test.go:286` 专门断言 `SystemValue("syslog")` 无效）。三个都只进词表、不进任何格式的能力表——进能力表要改 `codes.go` 里 `sysvalue_unknown` 的「七个」，而 `codes.go` 不在本任务的文件清单里
 
 **覆盖清单：**
 - 七种格式各自的下发清单，逐一列出
@@ -356,7 +359,7 @@ func Fingerprint(v any) string // 序列化后的指纹，golden 用
 - [ ] **绿：** 实现。预期 PASS。
 - [ ] **重构 + commit：** `make check` 全绿后 commit（`feat(render): 三种菜单与 ESXi、Ubuntu 的附属文件`）。
 
-**风险：** Ubuntu 的 `url=` 要指向整张 ISO，所以制品目录布局里必须有「原始 ISO」这个角色（任务 2 的 `ArtifactPath`）。如果任务 2 没定这个角色，这里会卡住——先核对。
+**风险：** Ubuntu 的 `url=` 要指向整张 ISO，所以 `ISO.Artifacts` 里必须有「原始 ISO」这个角色。但角色由第 4 层定（`model/registry.go:146`），本层拼地址时只拿 `Artifacts[role]` 的相对路径用。所以这里的 golden 要先约定一个角色名，并写进「留给后续层的约定」给第 4 层——导入时必须按这个名字写进 Artifacts，否则 Ubuntu 那条路径装不通（spec §2.2 第 64 行点名旧系统就是缺这个参数）。
 
 ### 任务 8：无旧版可对照的格式
 
