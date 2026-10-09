@@ -15,7 +15,7 @@
 
 ## 修补结果
 
-2026-10-02 按你的决定修补，计划见 `docs/superpowers/plans/2026-10-02-layer1-fixups.md`。第 1 节 10 条、第 2 节 19 条全部落实（T13-8 随 L-7 一起做）；第 3 节只并入了 T7-5（随 L-6 进 ISO.Validate），其余 14 条仍归后续层，没有动。每条的做法和测试名写在条目标题下的「结果」一行。各条「出处」里的行号指 d45fbf3，修补后已经变了。
+2026-10-02 按你的决定修补，计划见 `docs/superpowers/plans/2026-10-02-layer1-fixups.md`。第 1 节 10 条、第 2 节 19 条全部落实（T13-8 随 L-7 一起做）；第 3 节这一轮只并入了 T7-5（随 L-6 进 ISO.Validate），其余 14 条仍归后续层；后来 L-8 里字段键那一项随修补轮之后的 C-3 修掉了（036f397），见 L-8 下面的结果。每条的做法和测试名写在条目标题下的「结果」一行。各条「出处」里的行号指 d45fbf3，修补后已经变了。
 
 修补轮的提交，都在 `feat/core-model` 上：
 
@@ -72,6 +72,8 @@
 
 2026-10-03，修补轮的跨任务评审给出以下 12 条建议（评审结论是「通过」，没有必须修改项）。它们都不阻塞合入 dev。其中两条要你拍板，十条并进第 2 层计划开头的清理任务。出处里的行号指 41ab33f。
 
+结果：十条清理都已修，2026-10-03 在 `feat/store` 上一起做成 036f397（第 2 层计划任务 3）。每条的做法与测试名写在条目下的「结果」里，各条出处的行号修补后已经变了。P-1、P-2 不在第 2 层的范围里，仍待拍板，没有动。
+
 **要你拍板（各自写明了最晚什么时候定）：**
 
 - **P-1　锁定的 enum 取值不在 ISO 的集合里，审批和准入都查不到。** 模板把一个带 Offer 的 enum 锁定在写死的值或默认值上，而某个 ISO 的集合里没有这个值。这时激活判定和准入都放行，建任务时每台主机都报 param_not_offered，可它的下一步是「从 ISO 的选项里选一个」，锁定的格子又改不了。选项：A. 在 model 加一个共用判定，准入时把这种模板筛掉，问题报给模板作者；B. 保持现状，只把 admission 的包注释改准确。锁定且取自主机属性的格子遇到同样的情况，按 T11-8 的精神应改报 param_attr_unusable。最晚在第 5 层做向导之前定。（admission/admission.go:6-9、74-79；params/params.go:218-226）
@@ -80,15 +82,44 @@
 **并进第 2 层计划开头的清理任务：**
 
 - **C-1** ISO 的系没勾时，准入在 series_not_ticked 之外还会多报一条 iso_offer_missing，参数求值只报前一条，两边一宽一严。改为系不符时跳过集合检查，并改测试 TestTemplateUsable几个原因一起报。（admission/admission.go:74-79）
+
+  结果：已修（036f397）。准入判定在 ISO 的系没勾时只报 series_not_ticked，不再查 ISO 提供的集合，与参数求值、快照构建一致；TestTemplateUsable几个原因一起报 按「系没勾」与「系勾了、ISO 没提供集合」拆成两组，次序照旧固定。测试：TestTemplateUsableISO的系没勾时不查集合（同时核对 Batch 的 Common 与参数求值报的是同一条）。
+
 - **C-2** 「整理参数引用与子值」在 activation 与 params 各写了一份（activation/hook.go:357-368 的 addRefs 与 params/params.go:284-296 的 refSubs 逐行相同），「被引用即必填」「非脚本的正文才展开」也各写了几处。收进 scan 或 model，只留一份。
+
+  结果：已修（036f397），收进 scan 与 model。scan 的 Result.Refs 整理一份正文对参数的引用与子值，Refs.Merge 并起几份正文的引用，Refs.Required 判定「被引用即必填」；「非脚本的正文才展开」做成 model.Impl.Expanded。activation 的 addRefs、params 的 refSubs 删掉，激活判定、参数求值与快照构建都改调这几个。测试：TestResult的Refs整理参数引用、TestRefs的Merge、TestRefs的Required、TestImplExpanded。
+
 - **C-3** 取值来源的字段键（tpl/、插槽名/序号/参数名）在 activation、params、snapshot 各手写一份，没有跨包测试钉住它们一致。由 params 导出字段键的构造函数，三处共用，或者至少加一条跨包测试（L-8 的一部分）。
+
+  结果：已修（036f397），两样都做了。构造函数放在 model 而不是 params，因为依赖守卫不许 activation 依赖 params：TemplateFieldKey 给出 tpl/<参数名>，InstancePath 给出 <插槽名>/<序号>，InstanceFieldKey 给出 <插槽名>/<序号>/<参数名>，activation、params、snapshot 都改用它们。跨包测试钉住同一格在激活判定与参数求值里的 Subject.Path 相同。测试：Test字段键与实例位置的写法、Test同一格在激活判定与参数求值里标在同一处。
+
 - **C-4** model.Subject 的文档注释没跟上 T9-1：Path 的取值要列全（param/n、impl/n、tpl/参数名、插槽名/n/参数名，以及 ISO 与主机的字段），第 5、6 层要按它解析。（model/problem.go:25-33）
+
+  结果：已修（036f397），只改注释。model.Subject 的注释按修补计划 U6 的表列全了各处的写法：主机的 arch、firmware 与属性键；ISO 的 family、series、arch、version、name 与 offers/<集合名>；hook 的 param/<n> 与 impl/<n>；模板的 param/<n>、tpl/<参数名>、插槽名、<插槽名>/<n> 与 <插槽名>/<n>/<参数名>；参数求值的字段键；正文扫描只带行列。n 都从 1 起。
+
 - **C-5** codes.go 里几处注释没写新的产出方：iso_offer_missing 现在也由准入产出，Subject 不同；series_not_ticked、impl_kind_mismatch、impl_timing_mismatch 现在也由参数求值或快照构建产出。
+
+  结果：已修（036f397），只改注释。iso_offer_missing 补上准入判定，落在模板上，参数是第一个要这个集合的参数的显示名与集合名；series_not_ticked 补上参数求值与快照构建，三处的 Subject 都落在模板上；impl_kind_mismatch、impl_timing_mismatch 补上快照构建，Subject 与激活判定一样落在插槽里的实例上。
+
 - **C-6** 准入时主机登记的平台不合法（比如固件写成 UEFI），仍拿去比平台，报出误导的 firmware_mismatch；应先报 Host.Validate 给出的 host_platform_invalid。优先级低。（admission/admission.go:140-153）
+
+  结果：已修（036f397）。准入比平台之前先看 Host.Validate：登记的架构或固件不合法，这一项报它给出的 host_platform_invalid，不再拿去比；另一项合法的照常比，仍是架构在前、固件在后。原来「固件写成 iPXE 的上报值」期望 firmware_mismatch 的用例挪进了新测试，改为期望 host_platform_invalid。测试：TestISOUsable主机登记的平台不合法时报host_platform_invalid（含 Batch 的 ByHost）。
+
 - **C-7** 状态为空串时，说明显示成「现为「」」。在 codes.go 登记「未知状态」的称呼，或在注释里写明空状态只会来自坏数据。优先级低。（model/registry.go:212-216）
+
+  结果：已修（036f397），选了登记称呼。model 加 StateLabel：认识的状态给中文显示名，不认识的回落到标识，空状态回落到 codes.go 登记的 stateUnknown（「未知状态」）；iso_not_ready 与 template_not_approved 都改用它。测试：TestStateLabel、TestISOUnusable按状态给出原因、TestTemplateUsable不是已审批的版本不能用。
+
 - **C-8** 「选项值是互不重复的安全词，显示名过 ValidLabel」在 model 里写了两份（param.go:131-148 与 registry.go:186-197），抽成一个函数。
+
+  结果：已修（036f397）。抽成 model 的 validOptions，enum 的静态选项（ParamDecl.Validate）与 ISO 提供的集合（ISO.Validate）都调它，registry.go 里的 offeredOptionsOK 删掉。测试：Test选项的规则只有一份。
+
 - **C-9** host_platform_invalid、placeholder_unknown_kind、script_placeholder_not_expanded 的说明里抄了目录取值和占位符种类，补进 codes_align_test。
+
+  结果：已修（036f397），只加测试：逐项核对时说明与目录本来一致，codes.go 的说明没改。codes_align_test 加了三条：TestAlign主机平台的取值与目录一致（host_platform_invalid 列的架构、固件与 iPXE 的换算）、TestAlign脚本占位符说明里的变量名与EnvName一致、TestAlign说明里转义用的系统值每种格式都能用。placeholder_unknown_kind 列的占位符种类登记在 scan，model 的测试引用 scan 会成环，所以在 scan 里对齐：Test种类不认识的说明列出的种类与扫描认的一致。
+
 - **C-10** 修补计划第 34 行说 T13-8 从清单第 3 节并入，实际在第 2 节。只改文字。
+
+  结果：已修（036f397），只改文字：修补计划第 34 行改成第 2 节的 19 条都在本轮修，其中 T13-8 并进 L-7；第 3 节只并入 T7-5。
 
 ## 1. 需要你拍板
 
@@ -602,7 +633,7 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ## 3. 归后续层处理
 
-属于后续层的事，或要等后续层才有真实用途。写这一层的计划时纳入即可。修补轮只并入了 T7-5（随 L-6），其余 14 条没有动。
+属于后续层的事，或要等后续层才有真实用途。写这一层的计划时纳入即可。修补轮只并入了 T7-5（随 L-6）；之后 L-8 里字段键那一项随 C-3 修掉（036f397），L-8 的其余部分和另外 13 条仍归后续层。
 
 ### T4-2　网关须先检查 iPXE 换算结果，不能传空值
 
@@ -695,6 +726,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：T8 建议：给后续层的提醒，不算本任务的缺陷：列号按 rune 计是计划定的
 
 ### L-8　标识常量、字段键与 ID@版本在各包各写一遍
+
+结果：字段键一项已修，其余仍归第 3、5 层（2026-10-08 补记，出自第 2 层清单的 S10-5）。字段键随 C-3 修掉了（036f397）：TemplateFieldKey、InstancePath、InstanceFieldKey 放在 model（problem.go）而不是 params，因为依赖守卫不许 activation 依赖 params；activation、params、snapshot 共用这一份，Test同一格在激活判定与参数求值里标在同一处 钉住两边一致。所以下面建议里「第 5 层做接口时，params 导出字段键构造函数」不用再做。「ID@版本」仍是五处各拼一份：activation/hook.go、admission/admission.go、params/params.go、snapshot/build.go，以及第 2 层的 store.VersionID。要收成一份，可以在 model 给 HookKey、TemplateKey 加 String()，几处都改调它；不是改用 store.VersionID，因为第 1 层不许依赖 store，而 store 本来就依赖第 1 层，反过来引用还会成环。catalog 的常量、全局词表和 Subject.Kind 常量仍留给第 3、5 层。
 
 第 3、5 层。①catalog 没有为族、格式、系、时机、解释器、部件、系统值、架构、固件导出常量，后续层只能把 rocky 这类标识写成字面量，拼错要等 Valid() 或测试才发现；也没有导出全局词表，第 5、6 层列下拉框只能经 Families、SeriesOf 反推。②字段键（tpl/、插槽名/序号/）在 params 与 snapshot 里各拼一次，「ID@版本」在四个包里各拼一次，Subject.Kind 的八个取值和 ParamType 全是字面量。字段键目前有 TestBuild回归41b2fbe 兜底，一边改了测试会失败，不会静默丢值。model 已为 ISOState、VersionState、ImplKind、BindingSource 导出常量，两种做法并存。建议照计划「由第一个用到它的层加进来」的做法：第 3 层要按格式、类型分支时，导出对应的带类型常量（命名如 FormatKickstart、ParamCIDR），表也改用常量书写；第 5 层做接口时，params 导出字段键构造函数，model 提供 Subject.Kind 常量和 HookKey、TemplateKey 的 String()，catalog 导出全局词表。常量是纯追加，越早加，要迁移的字面量越少。
 

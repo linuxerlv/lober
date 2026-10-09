@@ -58,6 +58,12 @@ var extraCodes = map[Code]Category{
 	"param_attr_unusable":             CategoryIncompatible, // 锁定取自主机属性的格子取值用不了（T11-8）
 	"param_sub_unavailable":           CategoryInvalid,      // 填的值取不出模板要的子值（T11-8）
 	"iso_import_failed":               CategoryState,        // ISO 导入失败（T5-1）
+
+	// 第 2 层（plans/2026-10-03-rewrite-layer2-store.md 任务 1）。
+	"host_not_registered": CategoryState, // 建任务时批里的 SN 没有登记，由仓储在事务里重跑准入时报
+
+	// 第 2 层修补轮（plans/2026-10-08-layer2-fixups.md 任务 U5，S10-2）。
+	"name_reserved": CategoryInvalid, // 用户新建、派生或改名时用了保留前缀 lober:
 }
 
 func TestCode表与附录总表逐项一致(t *testing.T) {
@@ -79,9 +85,9 @@ func TestCode表与附录总表逐项一致(t *testing.T) {
 		}
 		want[c] = cat
 	}
-	// 附录 58 个、整层验收 1 个、修补轮 10 个。以后再追加代码，这个数要跟着改。
-	if len(want) != 69 {
-		t.Fatalf("附录加上追加的代码应共 69 个，测试里有 %d 个", len(want))
+	// 附录 58 个、整层验收 1 个、修补轮 10 个、第 2 层 1 个、第 2 层修补轮 1 个。以后再追加代码，这个数要跟着改。
+	if len(want) != 71 {
+		t.Fatalf("附录加上追加的代码应共 71 个，测试里有 %d 个", len(want))
 	}
 	for c, cat := range want {
 		if got := c.Category(); got != cat {
@@ -184,6 +190,18 @@ func TestCode修补轮登记的参数个数(t *testing.T) {
 	}
 }
 
+// 第 2 层登记的代码不带参数，SN 在 Subject 里（第 2 层计划任务 1）。仓储按这个个数调用 NewProblem，
+// 个数一变，建任务时就会 panic。
+func TestCode第2层登记的参数个数(t *testing.T) {
+	if spec, ok := codeTable["host_not_registered"]; !ok || spec.args != 0 {
+		t.Errorf("host_not_registered 应登记为不带参数：登记了 %v，参数 %d 个", ok, spec.args)
+	}
+	// name_reserved 带一个参数：规范化之后的名字（store.NormalizeName 按这个个数调用）。
+	if spec, ok := codeTable["name_reserved"]; !ok || spec.args != 1 {
+		t.Errorf("name_reserved 应登记为带一个参数：登记了 %v，参数 %d 个", ok, spec.args)
+	}
+}
+
 // int 声明了上下限时，Parse 把 intRange* 之一填好数字、接在 int 的格式后面（T5-4①），操作员
 // 看到的就是下面这几句。钉住拼法：措辞自己带着连接用的逗号，接上去不会多一个或少一个。
 func TestCode的int范围措辞接在格式后面(t *testing.T) {
@@ -253,6 +271,26 @@ func TestProblem的Error带代码与说明(t *testing.T) {
 		if !strings.Contains(msg, part) {
 			t.Errorf("Error() 缺少 %q：%s", part, msg)
 		}
+	}
+}
+
+// 字段键与实例的位置只由这三个函数构造（C-3），写法照修补计划 U6 的表：激活判定、参数求值与快照构建
+// 都调它们。插槽名不含 /，实例参数的键比模板参数的多一段，名叫 tpl 的插槽也撞不上模板参数。
+func Test字段键与实例位置的写法(t *testing.T) {
+	cases := []struct{ got, want string }{
+		{TemplateFieldKey("disk"), "tpl/disk"},
+		{InstancePath("分区", 1), "分区/1"},
+		{InstancePath("装后配置", 12), "装后配置/12"},
+		{InstanceFieldKey("分区", 2, "disk"), "分区/2/disk"},
+		{InstanceFieldKey("tpl", 1, "disk"), "tpl/1/disk"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("得到 %q，应为 %q", c.got, c.want)
+		}
+	}
+	if got, want := InstanceFieldKey("装后配置", 3, "mtu"), InstancePath("装后配置", 3)+"/mtu"; got != want {
+		t.Errorf("实例参数的键 %q 应以实例的位置 %q 开头", got, want)
 	}
 }
 

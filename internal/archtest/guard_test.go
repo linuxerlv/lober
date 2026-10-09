@@ -6,8 +6,12 @@ package archtest
 
 import (
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -23,14 +27,28 @@ type finding struct {
 	subject string
 }
 
-func checkSource(t *testing.T, pkg, src string) []violation {
+// parseSource 解析内存里的一段源码，位置里的文件名记作 x.go。
+func parseSource(t *testing.T, src string) (*token.FileSet, *ast.File) {
 	t.Helper()
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "x.go", src, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatalf("测试源码解析失败：%v\n%s", err, src)
 	}
+	return fset, f
+}
+
+func checkSource(t *testing.T, pkg, src string) []violation {
+	t.Helper()
+	fset, f := parseSource(t, src)
 	return checkFile(fset, pkg, f)
+}
+
+// checkStoreSource 同 checkSource，按存储层的规则查。
+func checkStoreSource(t *testing.T, pkg, src string) []violation {
+	t.Helper()
+	fset, f := parseSource(t, src)
+	return checkStoreFile(fset, pkg, f)
 }
 
 // importing 拼出只有导入声明的源文件：守卫只解析不编译，导入了不用也没关系。
@@ -100,6 +118,8 @@ func Test守卫逐个文件的检查(t *testing.T) {
 			[]finding{{ruleOutside, "golang.org/x/text/width"}}},
 		{"前缀相撞的 internal/coreutils 不算层 1", pkgModel, importing(coreutils),
 			[]finding{{ruleOutside, coreutils}}},
+		// 存储契约依赖层 1，反过来就成了环（spec §6.1）。
+		{"层 1 import 存储层要报", pkgModel, importing(pkgStore), []finding{{ruleOutside, pkgStore}}},
 
 		// time 现在不在白名单里，下面几例都先报 import 了 time；时钟检查留给以后放进 time 时用。
 		{"别名导入后的 t.Now 与 t.Since 要报", pkgModel,
@@ -192,7 +212,7 @@ func Test含源文件的目录都要出现在go_list里(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			assertFindings(t, unlistedDirs(c.dirs, c.listed), "", c.want)
+			assertFindings(t, unlistedDirs(layer1Dir, c.dirs, c.listed), "", c.want)
 		})
 	}
 }
@@ -247,5 +267,123 @@ func Test总检查接上了每一项(t *testing.T) {
 		{ruleModel, pkgScan},
 		{ruleCgo, "C"},
 		{ruleStd, "os"},
+	})
+}
+
+// 存储层的三条规则（第 2 层计划任务 2，以及修补计划任务 U4 的 pgtest）各有正反例。三条都是白名单，照计划「包与文件」
+// 表；第 1 层的标准库白名单不套用到这里。
+func Test存储层的依赖规则(t *testing.T) {
+	thirdParty := "github.com/google/btree"
+	storex := "github.com/lober/lober/internal/storex"
+	cases := []struct {
+		name string
+		pkg  string
+		src  string
+		want []finding
+	}{
+		// 一、契约只依赖标准库、层 1 和契约自己。
+		{"store 用层 1 白名单以外的标准库不报", pkgStore,
+			importing("context", "crypto/rand", "encoding/base32", "sync", pkgModel, pkgActivation, pkgAdmission), nil},
+		{"store import 实现要报", pkgStore, importing(pkgPgstore), []finding{{ruleContract, pkgPgstore}}},
+		{"store import gorm 要报", pkgStore, importing("gorm.io/gorm"), []finding{{ruleContract, "gorm.io/gorm"}}},
+		{"cgo 的 C 不算标准库", pkgStore, importing("C"), []finding{{ruleContract, "C"}}},
+		{"前缀相撞的 internal/storex 不算契约", pkgStore, importing(storex), []finding{{ruleContract, storex}}},
+		// 新加的包与契约放行的一样多：不依赖第三方模块，也不依赖 pgstore。
+		{"存储层新加的包按契约的规则查", pkgStore + "/cache",
+			importing("context", "sync", pkgStore, pkgModel, pkgAdmission, thirdParty, "gorm.io/gorm", pkgPgstore),
+			[]finding{{ruleContract, thirdParty}, {ruleContract, "gorm.io/gorm"}, {ruleContract, pkgPgstore}}},
+
+		// 二、只有 pgstore 能依赖 gorm 与 pgx v5；存储层别的包，除了契约，它也不依赖。
+		{"pgstore import gorm 与 pgx v5 不报", pkgPgstore, importing("database/sql",
+			"gorm.io/gorm", "gorm.io/gorm/logger", "gorm.io/driver/postgres",
+			"github.com/jackc/pgx/v5", "github.com/jackc/pgx/v5/pgconn", pkgStore, pkgModel), nil},
+		{"pgstore import 存储层新加的包要报", pkgPgstore, importing(pkgStore + "/cache"),
+			[]finding{{rulePgstore, pkgStore + "/cache"}}},
+		// pgx 按整段比对：别的大版本、前缀相撞的路径都不算。
+		{"pgstore import 别的第三方模块要报", pkgPgstore,
+			importing("github.com/lib/pq", "github.com/jackc/pgx/v4", "github.com/jackc/pgx/v5x", thirdParty),
+			[]finding{{rulePgstore, "github.com/lib/pq"}, {rulePgstore, "github.com/jackc/pgx/v4"},
+				{rulePgstore, "github.com/jackc/pgx/v5x"}, {rulePgstore, thirdParty}}},
+
+		// 三、pgtest 是测试夹具：标准库（含 testing）、pgx v5、契约与 pgstore 以外一律不许。按契约的规则查，
+		// pgx 与 pgstore 都会被报出来。
+		{"pgtest import pgx v5、契约与 pgstore 不报", pkgPgtest, importing("context", "os", "testing",
+			pgxV5, pgxV5+"/pgconn", pkgStore, pkgPgstore), nil},
+		// 它经 pgstore 起仓储，用不着 gorm；它也不做判定，用不着层 1。
+		{"pgtest import gorm 与层 1 要报", pkgPgtest, importing("gorm.io/gorm", "gorm.io/driver/postgres", pkgModel),
+			[]finding{{rulePgtest, "gorm.io/gorm"}, {rulePgtest, "gorm.io/driver/postgres"}, {rulePgtest, pkgModel}}},
+		{"pgtest import 别的第三方模块与存储层新加的包要报", pkgPgtest,
+			importing("C", "github.com/lib/pq", "github.com/jackc/pgx/v4", "github.com/jackc/pgx/v5x", pkgStore+"/cache"),
+			[]finding{{rulePgtest, "C"}, {rulePgtest, "github.com/lib/pq"}, {rulePgtest, "github.com/jackc/pgx/v4"},
+				{rulePgtest, "github.com/jackc/pgx/v5x"}, {rulePgtest, pkgStore + "/cache"}}},
+		// 包名按整条路径比对：pgtest 下面新加的包不沾它的放宽，按契约的规则查。
+		{"pgtest 下面新加的包按契约的规则查", pkgPgtest + "/seed", importing(pgxV5, pkgPgstore),
+			[]finding{{ruleContract, pgxV5}, {ruleContract, pkgPgstore}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assertFindings(t, checkStoreSource(t, c.pkg, c.src), c.pkg, c.want)
+		})
+	}
+}
+
+// 守卫按 go list ./... 列出的包查（goPackage）。pgstore 的测试都在外部测试包 pgstore_test 里，它不单列成包，被构建约束
+// 排除的文件要记在被测包的 IgnoredGoFiles 里，守卫才报得出 pgstore_test 里的 x_linux_test.go。这一条是 go 命令的行为，
+// 内存里的反例测不到，所以在临时模块里真跑一次 go list：一个包、一个包内测试、两个外部测试文件，其中一个被构建约束排除。
+// 哪天 go list 改了报告方式，这里先红。
+func Test外部测试包的文件记在被测包里(t *testing.T) {
+	root := t.TempDir()
+	const mod = "example.com/m"
+	for name, src := range map[string]string{
+		"go.mod":            "module " + mod + "\n\ngo 1.21\n",
+		"p/p.go":            "package p\n",
+		"p/in_test.go":      "package p\n",
+		"p/x_test.go":       "package p_test\n",
+		"p/x_never_test.go": "//go:build never\n\npackage p_test\n",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := packagesUnder(t, root, mod)
+	want := []goPackage{{ImportPath: mod + "/p", GoFiles: []string{"p.go"}, IgnoredGoFiles: []string{"x_never_test.go"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("go list 列出 %+v，应只有被测包、被排除的外部测试文件记在它的 IgnoredGoFiles 里：%+v", got, want)
+	}
+	assertFindings(t, ignoredFiles(got[0]), mod+"/p", []finding{{ruleIgnored, "x_never_test.go"}})
+}
+
+// 真实的树是干净的，存储层的总检查漏接了哪一项，Test存储层依赖守卫 照样通过，所以组合也要有反例。
+func Test存储层总检查接上了每一项(t *testing.T) {
+	fsys := fstest.MapFS{ // 以模块根为根
+		"internal/store/store.go": {Data: []byte(importing(pkgPgstore))},
+		// gorm 只有 pgstore 能用：pg.go 要是被当成别的包，gorm 也会报。
+		"internal/store/pgstore/pg.go":      {Data: []byte(importing("gorm.io/gorm", "github.com/lib/pq"))},
+		"internal/store/pgstore/cgo.go":     {Data: []byte(importing("C"))},
+		"internal/store/pgstore/x_linux.go": {Data: []byte(importing("github.com/jackc/pgx/v4"))},
+		// 测试文件不查：测试 import 的包，生产代码不许用的也不报。
+		"internal/store/pgstore/x_windows_test.go": {Data: []byte(importing("github.com/lib/pq"))},
+	}
+	pkgs := []goPackage{
+		{ImportPath: pkgStore, GoFiles: []string{"store.go"}},
+		{ImportPath: pkgPgstore, GoFiles: []string{"pg.go"}, CgoFiles: []string{"cgo.go"},
+			IgnoredGoFiles: []string{"x_linux.go", "x_windows_test.go"}},
+	}
+	got := checkStore(fsys, []string{".", "pgstore", "probeonly"}, pkgs)
+	// 依次是目录覆盖，再逐个包：先报被构建约束排除的文件（测试文件也算：*_linux_test.go 在 Windows 上静默不跑，契约测试
+	// 就零覆盖了），再是 import。store.go 按契约的规则报、pg.go 按 pgstore 的规则报，说明包名接对了；cgo 文件与被排除的
+	// 非测试文件也解析了，在本平台不编译的文件躲不过守卫。cgo 不另报：C 不算标准库，import 那一条已经挡住它。
+	assertFindings(t, got, "", []finding{
+		{ruleListed, "internal/store/probeonly"},
+		{ruleContract, pkgPgstore},
+		{ruleIgnored, "x_linux.go"},
+		{ruleIgnored, "x_windows_test.go"},
+		{rulePgstore, "github.com/lib/pq"},
+		{rulePgstore, "C"},
+		{rulePgstore, "github.com/jackc/pgx/v4"},
 	})
 }

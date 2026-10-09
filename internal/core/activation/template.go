@@ -3,7 +3,6 @@ package activation
 import (
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/lober/lober/internal/core/catalog"
@@ -24,8 +23,9 @@ import (
 // Subject 按位置指向（T9-1），ID 都是「模板 ID@版本」：模板整体与正文的问题 Kind 为 template，Path
 // 为空，正文的问题另带行列；第 n 个参数声明的 Path 为 param/<n>；模板参数取值来源的 Path 为
 // tpl/<参数名>。插槽的问题 Kind 为 slot，Path 为插槽名，出自正文的带上行列；插槽里第 n 个实例的问题
-// Path 为「插槽名/n」，实例参数取值来源的为「插槽名/n/参数名」。n 都从 1 起；tpl/ 与「插槽名/n/」两种
-// 写法与参数求值的字段键（params.FieldKey）相同，同一格在激活与建任务时标在同一处。
+// Path 为「插槽名/n」，实例参数取值来源的为「插槽名/n/参数名」。n 都从 1 起；后三种写法由 model 的
+// TemplateFieldKey、InstancePath、InstanceFieldKey 构造，与参数求值的字段键（params.FieldKey）是同一份，
+// 同一格在激活与建任务时标在同一处（C-3）。
 func Template(t model.Template, hooks map[model.HookKey]model.Hook) []model.Problem {
 	id := versionID(t.ID, t.Version)
 	whole := model.Subject{Kind: "template", ID: id}
@@ -39,11 +39,9 @@ func Template(t model.Template, hooks map[model.HookKey]model.Hook) []model.Prob
 	out = append(out, ps...)
 	// 正文先扫一遍：取值来源要按正文引用的参数与子值查，正文的检查也用这份结果。
 	res, scanned := scanBody(t.Body, whole)
-	refs := map[string][]string{}
-	addRefs(refs, res.Params)
-	out = append(out, checkBindings(t.Bindings, params, refs, func(name string) model.Subject {
+	out = append(out, checkBindings(t.Bindings, params, res.Refs(), func(name string) model.Subject {
 		s := whole
-		s.Path = "tpl/" + name
+		s.Path = model.TemplateFieldKey(name)
 		return s
 	})...)
 	out = append(out, checkTemplateBody(t.Body, res, scanned, format, params, whole)...)
@@ -176,17 +174,18 @@ func checkAssembly(assembly map[string][]model.Instance, slots []scan.Slot, body
 		// 作者给 hook 加一个该格式根本没有的时机（T9-6③）。
 		timingOK := !slot.Exec || slices.Contains(format.Timings(), slot.Timing)
 		for i, inst := range assembly[slot.Name] {
-			out = append(out, checkInstance(inst, slot, timingOK, series, hooks, id, slot.Name+"/"+strconv.Itoa(i+1))...)
+			out = append(out, checkInstance(inst, slot, i+1, timingOK, series, hooks, id)...)
 		}
 	}
 	return out
 }
 
-// checkInstance 查放进插槽 slot 的一个实例：引用的 hook 版本能被引用，覆盖的超时合法，对 series
+// checkInstance 查放进插槽 slot 的第 seq 个实例：引用的 hook 版本能被引用，覆盖的超时合法，对 series
 // 里的每个系都有种类、时机对得上的实现（timingOK 为假时不比时机），取值来源按该 hook 的参数声明
-// 合法。path 是「插槽名/序号」。引用的 hook 版本不在 hooks 里时只报这一条：别的检查都要看它。
-func checkInstance(inst model.Instance, slot scan.Slot, timingOK bool, series []catalog.Series, hooks map[model.HookKey]model.Hook, id, path string) []model.Problem {
-	s := model.Subject{Kind: "slot", ID: id, Path: path}
+// 合法。问题落在 model.InstancePath 给的位置上。引用的 hook 版本不在 hooks 里时只报这一条：别的检查
+// 都要看它。
+func checkInstance(inst model.Instance, slot scan.Slot, seq int, timingOK bool, series []catalog.Series, hooks map[model.HookKey]model.Hook, id string) []model.Problem {
+	s := model.Subject{Kind: "slot", ID: id, Path: model.InstancePath(slot.Name, seq)}
 	k := model.HookKey{ID: inst.HookID, Version: inst.HookVersion}
 	h, ok := hooks[k]
 	if !ok {
@@ -205,9 +204,9 @@ func checkInstance(inst model.Instance, slot scan.Slot, timingOK bool, series []
 		out = append(out, model.NewProblem("timeout_invalid", s, *sec))
 	}
 	// 渲染时每个 hook 取覆盖 ISO 的系的那份实现（C27），同一个 hook 在不同系可以是不同种类，
-	// 所以对所勾的每个系逐个查。refs 收集各个系选中的实现引用的参数，规则同参数求值：脚本的参数
-	// 经环境变量传入，不算引用；种类不认识的当片段读。
-	refs := map[string][]string{}
+	// 所以对所勾的每个系逐个查。refs 并起各个系选中的实现引用的参数，哪些实现算引用与参数求值是
+	// 同一条规则（model.Impl.Expanded）：脚本的参数经环境变量传入，不算；种类不认识的按片段算。
+	refs := scan.Refs{}
 	for _, sr := range series {
 		impl, ok := h.ImplFor(sr)
 		if !ok {
@@ -222,33 +221,33 @@ func checkInstance(inst model.Instance, slot scan.Slot, timingOK bool, series []
 				out = append(out, model.NewProblem("impl_timing_mismatch", s, k.ID, k.Version, sr, slot.Timing))
 			}
 		}
-		if impl.Kind != model.ImplScript {
+		if impl.Expanded() {
 			res, _ := scan.Scan(impl.Body)
-			addRefs(refs, res.Params)
+			refs.Merge(res.Refs())
 		}
 	}
 	// hook 的参数声明在它批准时已经查过，这里只要它们的类型，不再报声明的问题。
 	params, _ := checkDecls(h.Params, model.Subject{}, nil)
 	return append(out, checkBindings(inst.Bindings, params, refs, func(name string) model.Subject {
 		p := s
-		p.Path += "/" + name
+		p.Path = model.InstanceFieldKey(slot.Name, seq, name)
 		return p
 	})...)
 }
 
 // checkBindings 查一组参数的取值来源（C20），params 是这组参数的声明，refs 是正文或所选片段对它们的
-// 引用（写法见 addRefs）。按参数名的字典序报：Bindings 是 map，遍历顺序不固定。subject 给出每条问题
+// 引用（见 scan.Refs）。按参数名的字典序报：Bindings 是 map，遍历顺序不固定。subject 给出每条问题
 // 的指向。逐个参数查：
 //
 //   - Binding 指向的参数要声明过；来源要是 fixed、attr、default 之一，零值也不算（T7-2）。
 //   - attr 的键要是合法的主机属性键；取到的值要到求值时才知道，不在这里查。
 //   - fixed 的值，以及 default 来源（没有 Binding 的也是）取到的默认值，要通过类型校验，并取得出
 //     引用里对它取的每个子值（L-4）：它们与主机无关，查不过的话每台主机建任务都会报错。
-//   - 参数按参数求值的规则必填（被引用，或声明了 Required），Binding 却锁定在默认值上、声明里又
-//     没有默认值的，向导里这一格锁着填不了，报 param_locked_without_value（L-4）。
+//   - 参数按参数求值的规则必填（scan.Refs.Required：被引用，或声明了 Required），Binding 却锁定在默认
+//     值上、声明里又没有默认值的，向导里这一格锁着填不了，报 param_locked_without_value（L-4）。
 //
 // 写错的声明已经报过，不再按它查值。
-func checkBindings(bindings map[string]model.Binding, params map[string]paramInfo, refs map[string][]string, subject func(name string) model.Subject) []model.Problem {
+func checkBindings(bindings map[string]model.Binding, params map[string]paramInfo, refs scan.Refs, subject func(name string) model.Subject) []model.Problem {
 	names := slices.Collect(maps.Keys(bindings))
 	for name := range params {
 		if _, bound := bindings[name]; !bound {
@@ -261,7 +260,7 @@ func checkBindings(bindings map[string]model.Binding, params map[string]paramInf
 		b, bound := bindings[name]
 		info, declared := params[name]
 		s := subject(name)
-		subs, referenced := refs[name]
+		subs := refs[name]
 		switch {
 		case !declared:
 			out = append(out, model.NewProblem("binding_param_unknown", s, name))
@@ -277,7 +276,7 @@ func checkBindings(bindings map[string]model.Binding, params map[string]paramInf
 			out = append(out, valueProblems(info.decl, b.Value, subs, s)...)
 		case info.decl.Default != "":
 			out = append(out, valueProblems(info.decl, info.decl.Default, subs, s)...)
-		case bound && !b.Editable && (referenced || info.decl.Required):
+		case bound && !b.Editable && refs.Required(info.decl):
 			out = append(out, model.NewProblem("param_locked_without_value", s, name))
 		}
 	}

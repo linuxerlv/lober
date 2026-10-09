@@ -1,8 +1,10 @@
 package scan
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -645,4 +647,80 @@ func Test有问题时仍返回其余占位符(t *testing.T) {
 		t.Errorf("Parts = %q，想要 %q", res.Parts, want)
 	}
 	checkSegments(t, src, res.Segments)
+}
+
+// placeholder_unknown_kind 的下一步列出了 lober 占位符的全部种类，还写了个数（C-9）：kindOf 加了一种，
+// 说明得跟着补，否则作者照着说明找不到新种类。种类只登记在本包，model 的 codes_align_test 引不到 scan
+// （会成环），所以在这里对齐，与插槽名的上限是同一个做法。
+func Test种类不认识的说明列出的种类与扫描认的一致(t *testing.T) {
+	_, problems := Scan("{{foo:x}}")
+	if len(problems) != 1 || problems[0].Code != "placeholder_unknown_kind" {
+		t.Fatalf("应恰好报一条 placeholder_unknown_kind，得到 %v", problems)
+	}
+	text := problems[0].Message + "\n" + problems[0].Next
+	m := regexp.MustCompile(`占位符只有 (\S+) (\p{Han})种`).FindStringSubmatch(text)
+	if m == nil {
+		t.Fatalf("说明里按「占位符只有 … 几种」找不到种类清单；措辞改了的话，先改测试里的写法再核对：\n%s", text)
+	}
+	listed := strings.Split(m[1], "、")
+	if got, want := slices.Sorted(slices.Values(listed)), slices.Sorted(maps.Keys(kindOf)); !slices.Equal(got, want) {
+		t.Errorf("说明列出的种类是 %q，扫描认的是 %q", got, want)
+	}
+	counts := []string{"零", "一", "两", "三", "四", "五", "六", "七", "八", "九"}
+	if n := len(kindOf); n >= len(counts) || m[2] != counts[n] {
+		t.Errorf("说明写的是「%s种」，扫描认 %d 种", m[2], n)
+	}
+}
+
+// Refs 整理一份正文的参数引用（C-2）：每个参数一个键，子值按第一次出现的顺序、不重复；只按名字引用的
+// 也有键。写错的占位符不在 Params 里，不算引用。激活判定与参数求值都从这里取，规则只有这一份。
+func TestResult的Refs整理参数引用(t *testing.T) {
+	res, _ := Scan("{{param:addr.netmask}} {{param:disk}}\n" +
+		"{{param:addr.addr}} {{param:addr.netmask|join}} {{param:pkgs|join}} {{param:Bad}} {{slot:x}}\n")
+	want := Refs{"addr": {"netmask", "addr"}, "disk": nil, "pkgs": nil}
+	if got := res.Refs(); !maps.EqualFunc(got, want, slices.Equal) {
+		t.Errorf("Refs() = %q，想要 %q", got, want)
+	}
+	if got := (Result{}).Refs(); len(got) != 0 {
+		t.Errorf("没有引用时 Refs() 应为空，得到 %q", got)
+	}
+}
+
+// Merge 把几份正文的引用并起来（C-2）：一个 hook 的几份片段、一个实例在所勾各系里选中的片段，激活判定要
+// 并起来查。已有的子值在前，新来的按出现顺序接在后面，不重复；并进来的切片不与 more 共用。
+func TestRefs的Merge(t *testing.T) {
+	refs := Refs{"addr": {"netmask"}, "disk": nil}
+	more := Refs{"addr": {"addr", "netmask"}, "pkgs": nil, "disk": {"x"}, "dns": {"addr"}}
+	refs.Merge(more)
+	want := Refs{"addr": {"netmask", "addr"}, "disk": {"x"}, "pkgs": nil, "dns": {"addr"}}
+	if !maps.EqualFunc(refs, want, slices.Equal) {
+		t.Errorf("并起来是 %q，想要 %q", refs, want)
+	}
+	refs["dns"][0] = "prefix"
+	if more["dns"][0] != "addr" {
+		t.Error("改了并进来的子值，more 跟着变了：两者共用了切片")
+	}
+}
+
+// Required 就是「被引用即必填」（C20、C-2）：被正文或所选片段引用的一律必填，没被引用的看声明的
+// Required。没有引用（nil，比如实例只用到脚本）时只看声明。
+func TestRefs的Required(t *testing.T) {
+	refs := Refs{"disk": nil, "addr": {"netmask"}}
+	cases := []struct {
+		refs Refs
+		decl model.ParamDecl
+		want bool
+	}{
+		{refs, model.ParamDecl{Name: "disk"}, true},
+		{refs, model.ParamDecl{Name: "addr"}, true},
+		{refs, model.ParamDecl{Name: "note"}, false},
+		{refs, model.ParamDecl{Name: "note", Required: true}, true},
+		{nil, model.ParamDecl{Name: "disk"}, false},
+		{nil, model.ParamDecl{Name: "disk", Required: true}, true},
+	}
+	for _, c := range cases {
+		if got := c.refs.Required(c.decl); got != c.want {
+			t.Errorf("引用 %q、声明 %+v：Required = %v，想要 %v", c.refs, c.decl, got, c.want)
+		}
+	}
 }

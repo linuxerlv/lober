@@ -2,8 +2,14 @@ package model
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -16,14 +22,91 @@ func TestTaskState的字面量(t *testing.T) {
 	}
 }
 
-// 状态会进数据库：第 2 层建 CHECK 约束、第 7 层推进状态之前，都只调 Valid，不另抄取值表（T7-2）。
-func TestTaskStateValid只认八个状态(t *testing.T) {
-	for _, s := range []TaskState{TaskPending, TaskBooting, TaskInstalling, TaskRebooting, TaskInitializing, TaskDone, TaskFailed, TaskCancelled} {
+// 「哪些状态算已结束」只有这一份出处（S9-1）：第 2 层的结束状态、CHECK 的测试都从 TaskStates 出发，顺序与状态机一致。
+func TestTaskStates按状态机的顺序列出全部状态(t *testing.T) {
+	want := []TaskState{TaskPending, TaskBooting, TaskInstalling, TaskRebooting, TaskInitializing, TaskDone, TaskFailed, TaskCancelled}
+	if got := TaskStates(); !slices.Equal(got, want) {
+		t.Errorf("TaskStates() 是 %q，应为 %q", got, want)
+	}
+}
+
+// 清单漏了一个常量，那个状态 Valid 就不认、CHECK 的测试也不看它，所以要从源码里把 TaskState 的常量全找出来比对：
+// 加了常量、忘了进清单，这里报红。
+func TestTaskStates列出了全部TaskState常量(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("列出源文件：%v", err)
+	}
+	var declared []TaskState
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("解析 %s：%v", name, err)
+		}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				typed := isTaskState(vs.Type) // A TaskState = "a"
+				for i, n := range vs.Names {
+					var val ast.Expr
+					if i < len(vs.Values) {
+						val = vs.Values[i]
+					}
+					if call, ok := val.(*ast.CallExpr); ok && !typed && isTaskState(call.Fun) && len(call.Args) == 1 {
+						val = call.Args[0] // A = TaskState("a")
+					} else if !typed {
+						continue
+					}
+					lit, ok := val.(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						t.Fatalf("%s 的常量 %s 不是字符串字面量，这个测试认不出它的取值，要跟着改", name, n.Name)
+					}
+					v, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						t.Fatalf("%s 的常量 %s：%v", name, n.Name, err)
+					}
+					declared = append(declared, TaskState(v))
+				}
+			}
+		}
+	}
+	got := TaskStates()
+	if len(declared) == 0 || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(declared))) {
+		t.Errorf("TaskStates() 是 %q，源码里声明的 TaskState 常量是 %q：两边要一一对应", got, declared)
+	}
+}
+
+// isTaskState 报告 e 是不是标识符 TaskState。
+func isTaskState(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == "TaskState"
+}
+
+// 调用方拿到的是副本：改了它，下一次 TaskStates 照旧。
+func TestTaskStates每次给的是副本(t *testing.T) {
+	TaskStates()[0] = "changed"
+	if got := TaskStates()[0]; got != TaskPending {
+		t.Errorf("改了上一次的返回值之后，TaskStates()[0] 是 %q，应为 %q", got, TaskPending)
+	}
+}
+
+// 状态会进数据库：第 2 层建 CHECK 约束、第 7 层推进状态之前，都只调 Valid，不另抄取值表（T7-2）。Valid 按 TaskStates
+// 判断：清单里的都认，清单外的写法一概不认。
+func TestTaskStateValid只认清单里的状态(t *testing.T) {
+	for _, s := range TaskStates() {
 		if !s.Valid() {
 			t.Errorf("%q.Valid() 应为 true", s)
 		}
 	}
-	for _, s := range []TaskState{"", "Done", "canceled", "running", "pending "} {
+	for _, s := range []TaskState{"", "Done", "canceled", "running", "pending ", "changed"} {
 		if s.Valid() {
 			t.Errorf("%q.Valid() 应为 false：只认原样的写法", s)
 		}

@@ -8,6 +8,7 @@
 package scan
 
 import (
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -83,6 +84,49 @@ type Result struct {
 	Parts    []catalog.SystemPart
 	Sys      []catalog.SystemValue
 	Params   []ParamRef
+}
+
+// Refs 是一份或几份正文对参数的引用：键是引用到的参数名，值是对它取过的子值，按第一次出现的顺序、
+// 不重复；只按名字引用的参数也有键，值为空。
+//
+// 引用怎样整理只有这一份（C-2）：激活判定按它查取值来源取不取得出子值、锁着的格子有没有值，参数求值按它
+// 定每一格必不必填、要取哪些子值，批准了的模板求值时才不会因此报错。哪些实现的正文算引用，见
+// model.Impl.Expanded。
+type Refs map[string][]string
+
+// Refs 整理这份正文里的参数引用，见类型 Refs。写错的占位符不在 Params 里，不算引用。
+func (r Result) Refs() Refs {
+	refs := make(Refs, len(r.Params))
+	for _, p := range r.Params {
+		subs := refs[p.Name]
+		if p.Sub != "" && !slices.Contains(subs, p.Sub) {
+			subs = append(subs, p.Sub)
+		}
+		refs[p.Name] = subs
+	}
+	return refs
+}
+
+// Merge 把 more 并进 r：子值仍按第一次出现的顺序、不重复，r 里已有的在前。一个 hook 的几份片段、一个
+// 实例在所勾各系里选中的片段，激活判定要并起来查。并进来的子值另存一份，不与 more 共用切片。r 不能为 nil。
+func (r Refs) Merge(more Refs) {
+	for name, subs := range more {
+		have := r[name]
+		for _, s := range subs {
+			if !slices.Contains(have, s) {
+				have = append(have, s)
+			}
+		}
+		r[name] = have
+	}
+}
+
+// Required 报告参数 d 是否必填（C20）：被正文或所选片段引用的一律必填，正文与片段没有「留空」的写法，
+// 没有值就渲染不出来；没被引用的看声明的 Required，它只对脚本生效。r 为 nil 表示没有引用，比如实例
+// 选中的是脚本。激活判定查锁在默认值上的格子、参数求值定每一格必不必填，都按它。
+func (r Refs) Required(d model.ParamDecl) bool {
+	_, referenced := r[d.Name]
+	return referenced || d.Required
 }
 
 // Scan 扫描正文 src。占位符有四种：

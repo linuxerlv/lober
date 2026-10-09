@@ -719,6 +719,53 @@ func TestEnvName(t *testing.T) {
 	}
 }
 
+// 哪种实现的正文要展开只有 Impl.Expanded 一份（C-2）：片段写进应答文件，要展开；脚本原样下发，参数经
+// 环境变量传入。种类不认识的按片段算，多要几个必填，好过把空值渲染进应答文件。
+func TestImplExpanded(t *testing.T) {
+	cases := map[ImplKind]bool{ImplFragment: true, ImplScript: false, "": true, "macro": true, "Script": true}
+	for kind, want := range cases {
+		if got := (Impl{Kind: kind}).Expanded(); got != want {
+			t.Errorf("种类为 %q 的实现 Expanded() = %v，应为 %v", kind, got, want)
+		}
+	}
+}
+
+// 「选项值是互不重复的安全词，显示名过 ValidLabel」只有 validOptions 一份（C-8）：enum 的静态选项与 ISO
+// 提供的集合都按它查，同一组选项在两处的结论相同。空的一组本身算合格：enum 的静态选项不能为空，由声明
+// 另外查；ISO 提供的空集合等同于没提供。
+func Test选项的规则只有一份(t *testing.T) {
+	cases := []struct {
+		name string
+		opts []Option
+		ok   bool
+	}{
+		{"合法", []Option{{"server", "服务器"}, {"minimal", "最小化"}}, true},
+		{"空的一组", nil, true},
+		{"值不是安全词", []Option{{"server std", "服务器"}}, false},
+		{"值为空", []Option{{"", "空"}}, false},
+		{"值重复", []Option{{"server", "服务器"}, {"server", "又一个"}}, false},
+		{"显示名为空", []Option{{"server", ""}}, false},
+		{"显示名含零宽空格", []Option{{"server", "服务" + string(rune(0x200b)) + "器"}}, false},
+	}
+	for _, c := range cases {
+		if got := validOptions(c.opts); got != c.ok {
+			t.Errorf("%s：validOptions = %v，应为 %v", c.name, got, c.ok)
+		}
+		iso := completeISO()
+		iso.Offers = map[string][]Option{"editions": c.opts}
+		if got := len(iso.Validate()) == 0; got != c.ok {
+			t.Errorf("%s：作为 ISO 提供的集合，记录合法 = %v，应为 %v：%v", c.name, got, c.ok, iso.Validate())
+		}
+		if len(c.opts) == 0 {
+			continue
+		}
+		d := ParamDecl{Name: "profile", Type: "enum", Options: c.opts}
+		if got := len(d.Validate()) == 0; got != c.ok {
+			t.Errorf("%s：作为 enum 的静态选项，声明合法 = %v，应为 %v：%v", c.name, got, c.ok, d.Validate())
+		}
+	}
+}
+
 // —— 第 1 层修补轮（plans/2026-10-02-layer1-fixups.md 任务 U2），括号里是遗留问题清单的条目 ——
 
 // Valid 只认十种类型的原样写法（T7-2）：第 2 层建表的 CHECK 约束、第 5 层保存时的拒收都用它，

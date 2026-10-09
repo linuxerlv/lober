@@ -10,6 +10,7 @@ const (
 	snMaxLen      = 64 // 字节数；合法的 SN 只含 ASCII，等于字符数
 	nameMaxLen    = 64 // 字节数；合法的名称只含 ASCII，等于字符数
 	identMaxLen   = 32
+	idMaxLen      = 64 // 字节数；合法的 ID 只含 ASCII，等于字符数
 	labelMaxRunes = 64 // 按 rune 计，一个汉字算一个
 )
 
@@ -84,12 +85,27 @@ func repeatsOneByte(sn string) bool {
 //
 // 返回的 error 是 Problem，代码为 name_invalid。Subject 留空：名称属于哪个对象
 // 只有调用方知道，由调用方填上。
+//
+// 保留前缀不在这里拦：用户的名字和内置内容的名字都走这条规则，前缀对两边的要求正好相反（用户不能用，内置的必须带），
+// 由调用方拿 key 问 NameReserved。
 func NormalizeName(raw string) (display, key string, err error) {
 	display = strings.TrimSpace(raw)
 	if reason := nameInvalidReason(display); reason != "" {
 		return "", "", NewProblem("name_invalid", Subject{}, reason)
 	}
 	return display, strings.ToLower(display), nil // 走到这里只剩 ASCII，ToLower 只会动 ASCII 字母
+}
+
+// ReservedNamePrefix 是只给内置内容用的名字前缀（spec C12）：用户新建、派生和改名时用了它就拒绝（name_reserved），
+// 内置内容的名字反过来必须带它。它和正文里系统部件的命名空间 {{lober:…}} 是同一个词，用户一看就知道是系统给的。
+// 写成规范化之后的 key 的样子（小写），NameReserved 拿它直接与 key 比。
+const ReservedNamePrefix = "lober:"
+
+// NameReserved 判断规范化后的 key（NormalizeName 返回的第二个值）是不是用了保留前缀。比较按 key（小写）做，所以
+// LOBER:x 也算；lober-base、lober 这类只是长得像的不算。判定只有这一份（spec §4.2）：仓储的用户入口与内置装载、
+// 第 5 层的预检都问它。
+func NameReserved(key string) bool {
+	return strings.HasPrefix(key, ReservedNamePrefix)
 }
 
 // nameInvalidReason 返回名称不合法的原因，取 codes.go 登记的 nameReason* 之一；合法时返回空串。
@@ -136,6 +152,25 @@ func ValidLabel(s string) bool {
 
 func hiddenInLabel(r rune) bool {
 	return unicode.In(r, unicode.Cc, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point)
+}
+
+// ValidID 判断 ISO、hook、模板与任务的 ID：^[a-z0-9][a-z0-9-]{0,63}$。仓储用 store.NewID 生成的 26 个
+// 字符的小写 base32，和内置内容自带的 builtin-kickstart 这类固定 ID 都合它；仓储收到的 ID 先过它。
+//
+// 合它的都是安全词（IsSafeWord）：字符集是安全词的子集，长度也在安全词的上限之内，所以任务 ID 经
+// {{sys:task}} 原样代入正文，不会改变结构（L-13b）。只收小写，ID 就没有只差大小写的两种写法；不收 @，
+// 它是「ID@版本」里的分隔符；不收 . 与 /，放进路径时它们会改变层次；首字符不能是 -，否则放进命令行
+// 会被当成选项。
+func ValidID(s string) bool {
+	if s == "" || len(s) > idMaxLen || s[0] == '-' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidIdent 判断参数名、主机属性键这类标识符：^[a-z][a-z0-9_]{0,31}$。

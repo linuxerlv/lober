@@ -18,6 +18,9 @@ type Host struct {
 	// Attrs 是自定义属性，如 IP 与前缀、主机名、机架位。键是标识符；值原样存、系统不解释，
 	// 被参数引用时才按那个参数的类型校验。
 	Attrs map[string]string
+	// Rev 是仓储的乐观锁版本：每次写入加 1，由仓储维护；调用方改记录时原样带回，对不上就写不进去。
+	// CSV 批量导入例外：已登记的按 SN 整条替换，不比它。第 1 层的判定都不看它，快照里也不放它。
+	Rev int64
 }
 
 // hostReservedAttrs 不能当属性键：它们是主机自己的字段，CSV 导入按列名把这几列填进字段、
@@ -108,6 +111,23 @@ func isoStateRowOf(s ISOState) (isoStateRow, bool) {
 	return isoStateRow{}, false
 }
 
+// StateLabel 是状态在问题说明里的称呼，iso_not_ready、template_not_approved 的参数都用它（T5-1、C-7）：
+// 中文显示名；不认识的状态没有显示名，回落到标识；空状态连标识也没有，回落到 codes.go 登记的
+// stateUnknown，说明里才不会出现「现为「」」。ISO 的状态与版本的状态共用这一条规则，界面显示状态仍用
+// Label。
+func StateLabel[S interface {
+	~string
+	Label() string
+}](s S) string {
+	switch {
+	case s.Label() != "":
+		return s.Label()
+	case s != "":
+		return string(s)
+	}
+	return stateUnknown
+}
+
 // ISO 是一份登记过的安装介质。族和系在创建时就声明（C2），这时字节可能还没到齐，
 // 所以版本、架构、制品和提供的集合都要等导入之后才有。导入完成的 ISO 必须带合法的版本和
 // 架构（C5）：第 4 层置 ready 之前调用 Validate，不通过就不置 ready。
@@ -128,9 +148,13 @@ type ISO struct {
 	Artifacts map[string]string
 	// Offers 是 ISO 提供的取值集合，集合名到选项，如 Windows 的 editions。声明了 Offer 的
 	// enum 参数，取值必须在同名的集合里（C21）。集合名是标识符（ValidIdent），参数声明的 Offer 按它
-	// 引用；选项值原样进正文，必须是安全词（IsSafeWord），同一个集合里不重复；选项的显示名过
-	// ValidLabel（T7-5）。第 4 层导入 editions 时，Value 用 ServerDatacenter 这类安全词，全名放 Label。
+	// 引用；选项的规则与 enum 的静态选项相同（T7-5、C-8）：值原样进正文，必须是安全词（IsSafeWord），
+	// 同一个集合里不重复；显示名过 ValidLabel。第 4 层导入 editions 时，Value 用 ServerDatacenter 这类
+	// 安全词，全名放 Label。
 	Offers map[string][]Option
+	// Rev 是仓储的乐观锁版本：每次写入加 1，由仓储维护；调用方改记录时原样带回，对不上就写不进去。
+	// 第 1 层的判定都不看它，快照里也不放它。
+	Rev int64
 }
 
 // isoVersionMaxLen 是 ISO 版本的最大长度，见 ISO.Version。
@@ -163,7 +187,9 @@ func (iso ISO) Validate() []Problem {
 		out = append(out, NewProblem("text_not_storable", iso.at("name")))
 	}
 	for _, name := range slices.Sorted(maps.Keys(iso.Offers)) {
-		if !ValidIdent(name) || !offeredOptionsOK(iso.Offers[name]) {
+		// 选项的规则与 enum 的静态选项是同一份（validOptions）；空集合也算合格，它等同于没提供，要它的
+		// 参数在求值与准入时报 iso_offer_missing。
+		if !ValidIdent(name) || !validOptions(iso.Offers[name]) {
 			out = append(out, NewProblem("iso_incomplete", iso.at("offers/"+name), fieldLabels["offers"]))
 		}
 	}
@@ -183,23 +209,10 @@ func validISOVersion(v string) bool {
 	return true
 }
 
-// offeredOptionsOK 判断 ISO 提供的一个集合里的选项（T7-5）：值是互不重复的安全词，显示名过
-// ValidLabel。空集合也算合格：它等同于没提供，要它的参数在求值与准入时报 iso_offer_missing。
-func offeredOptionsOK(opts []Option) bool {
-	seen := make(map[string]bool, len(opts))
-	for _, o := range opts {
-		if !IsSafeWord(o.Value) || seen[o.Value] || !ValidLabel(o.Label) {
-			return false
-		}
-		seen[o.Value] = true
-	}
-	return true
-}
-
 // Unusable 给出 ISO 不能用来建任务的原因，能用时返回 nil（C5、C26）。导入失败报 iso_import_failed：
-// 它不用等，可以直接重新导入。其余不是 ready 的状态报 iso_not_ready，参数是状态的显示名，不认识的
-// 状态回落到标识（T5-1）。ready 却记录不合法的违反 C5，返回 Validate 的问题。Subject 的 Kind 为 iso，
-// ID 为 ISO 的 ID。
+// 它不用等，可以直接重新导入。其余不是 ready 的状态报 iso_not_ready，参数是 StateLabel 给的称呼：
+// 中文显示名，不认识的回落到标识，空状态回落到「未知状态」（T5-1、C-7）。ready 却记录不合法的违反 C5，
+// 返回 Validate 的问题。Subject 的 Kind 为 iso，ID 为 ISO 的 ID。
 //
 // 不是 ready 的 ISO 不拿记录去校验：获取中、导入中的本来就还没有版本和架构。
 func (iso ISO) Unusable() []Problem {
@@ -209,11 +222,7 @@ func (iso ISO) Unusable() []Problem {
 	case ISOFailed:
 		return []Problem{NewProblem("iso_import_failed", iso.at(""))}
 	}
-	label := iso.State.Label()
-	if label == "" {
-		label = string(iso.State)
-	}
-	return []Problem{NewProblem("iso_not_ready", iso.at(""), label)}
+	return []Problem{NewProblem("iso_not_ready", iso.at(""), StateLabel(iso.State))}
 }
 
 // Usable 报告 ISO 能不能用来建任务，就是 Unusable 为空（L-6）：只有 ready 且记录合法的算（C5），

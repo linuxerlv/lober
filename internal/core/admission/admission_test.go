@@ -8,6 +8,7 @@ import (
 
 	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/core/params" // 只在测试里用：核对准入与参数求值报的是同一条（C-1）
 )
 
 // 准入判定只看对象的身份与状态：正文、参数与实现在激活判定和参数求值里查。
@@ -249,14 +250,73 @@ func TestISOUsable平台冲突指向那台主机(t *testing.T) {
 			model.NewProblem("arch_mismatch", onHost("SN-OLD"), "x86_64", "aarch64"),
 			model.NewProblem("firmware_mismatch", onHost("SN-OLD"), "esxi", "bios"),
 		}},
-		// 登记了却不合法的值比不上任何 ISO（catalog.PlatformOK），报出来让人去核对登记。
-		{"登记的固件写成了 iPXE 的上报值", rockyISO(), hostOf("SN-PXE", "", "pcbios"), []model.Problem{
-			model.NewProblem("firmware_mismatch", onHost("SN-PXE"), "rocky", "pcbios"),
-		}},
 	}
 	for _, c := range cases {
 		sameProblems(t, c.name, ISOUsable(c.iso, []model.Host{c.host}), c.want)
 	}
+}
+
+// platformInvalid 是 Host.Validate 对主机 h 的 field（arch 或 firmware）报的 host_platform_invalid：准入
+// 原样报它，不另写说明。顺带钉住它落在哪：Kind 为 host，ID 为 SN，Path 为字段名。
+func platformInvalid(t *testing.T, h model.Host, field string) model.Problem {
+	t.Helper()
+	at := model.Subject{Kind: "host", ID: h.SN, Path: field}
+	for _, p := range h.Validate() {
+		if p.Code == "host_platform_invalid" && p.Subject == at {
+			return p
+		}
+	}
+	t.Fatalf("Host.Validate 应对 %s 的 %s 报 host_platform_invalid，得到 %v", h.SN, field, h.Validate())
+	return model.Problem{}
+}
+
+// 主机登记的架构或固件不合法（大小写不对、写成别名或 iPXE 的上报值）时，先报 Host.Validate 给出的
+// host_platform_invalid，这一项不再拿去比平台（C-6）：不合法的值比不上任何 ISO，比了只会报出「系不支持
+// 用 UEFI 固件引导」这类说法，真实原因却是登记写错了。另一项合法的照常比，仍是架构在前、固件在后。
+func TestISOUsable主机登记的平台不合法时报host_platform_invalid(t *testing.T) {
+	cases := []struct {
+		name string
+		iso  model.ISO
+		host model.Host
+		want func(h model.Host) []model.Problem
+	}{
+		{"固件大小写不对", rockyISO(), hostOf("SN-UP", "x86_64", "UEFI"), func(h model.Host) []model.Problem {
+			return []model.Problem{platformInvalid(t, h, "firmware")}
+		}},
+		{"固件写成了 iPXE 的上报值", rockyISO(), hostOf("SN-PXE", "", "pcbios"), func(h model.Host) []model.Problem {
+			return []model.Problem{platformInvalid(t, h, "firmware")}
+		}},
+		{"架构写成了别名", rockyISO(), hostOf("SN-AMD", "amd64", "uefi"), func(h model.Host) []model.Problem {
+			return []model.Problem{platformInvalid(t, h, "arch")}
+		}},
+		{"架构不合法、固件与系冲突", esxiISO(), hostOf("SN-A", "i386", "bios"), func(h model.Host) []model.Problem {
+			return []model.Problem{platformInvalid(t, h, "arch"), model.NewProblem("firmware_mismatch", onHost(h.SN), "esxi", "bios")}
+		}},
+		{"架构与 ISO 冲突、固件不合法", esxiISO(), hostOf("SN-B", "aarch64", "efi"), func(h model.Host) []model.Problem {
+			return []model.Problem{model.NewProblem("arch_mismatch", onHost(h.SN), "x86_64", "aarch64"), platformInvalid(t, h, "firmware")}
+		}},
+		{"两项都不合法", esxiISO(), hostOf("SN-C", "arm64", "BIOS"), func(h model.Host) []model.Problem {
+			return []model.Problem{platformInvalid(t, h, "arch"), platformInvalid(t, h, "firmware")}
+		}},
+	}
+	for _, c := range cases {
+		sameProblems(t, c.name, ISOUsable(c.iso, []model.Host{c.host}), c.want(c.host))
+	}
+
+	// 只报平台：属性键不合法与建任务配哪个 ISO 无关，归登记时的 Host.Validate。
+	attrBad := hostOf("SN-ATTR", "x86_64", "uefi")
+	attrBad.Attrs = map[string]string{"Rack": "A-07"}
+	sameProblems(t, "属性键不合法", ISOUsable(rockyISO(), []model.Host{attrBad}), nil)
+
+	upper := hostOf("SN-UP", "x86_64", "UEFI")
+	res := Batch(BatchInput{
+		Hosts:    []model.Host{upper, hostOf("SN-OK", "x86_64", "uefi")},
+		ISO:      rockyISO(),
+		Template: baselineTemplate(),
+		Hooks:    baselineHooks(),
+	})
+	sameProblems(t, "Batch 的 Common", res.Common, nil)
+	sameByHost(t, res.ByHost, map[string][]model.Problem{"SN-UP": {platformInvalid(t, upper, "firmware")}, "SN-OK": {}})
 }
 
 // C28：建任务时只校验主机登记了的项。限制了固件的 esxi、aarch64 的 ISO 也一样。
@@ -306,7 +366,8 @@ func TestISOUsable按主机的顺序报冲突(t *testing.T) {
 }
 
 // t 应当是 CurrentApproved 取出的版本；调用方传错了，草稿、待审批、已废弃的版本也不能
-// 建任务（C22、C23）。说明里的现状是中文显示名（T5-1）；不认识的状态没有显示名，回落到标识。
+// 建任务（C22、C23）。说明里的现状是中文显示名（T5-1）；不认识的状态没有显示名，回落到标识；
+// 空状态连标识都没有，回落到「未知状态」（C-7），说明里不会出现「现为「」」。
 func TestTemplateUsable不是已审批的版本不能用(t *testing.T) {
 	cases := []struct {
 		state model.VersionState
@@ -316,6 +377,7 @@ func TestTemplateUsable不是已审批的版本不能用(t *testing.T) {
 		{model.VersionReview, "待审批"},
 		{model.VersionDeprecated, "已废弃"},
 		{"Approved", "Approved"}, // 只认原样的写法，大小写不同就不认识
+		{"", "未知状态"},
 	}
 	for _, c := range cases {
 		tpl := baselineTemplate()
@@ -516,20 +578,41 @@ func TestTemplateUsable缺的集合各报一条且次序固定(t *testing.T) {
 	}
 }
 
-// 几个原因同时存在时都报出来，次序固定：先是版本状态，再是废弃的引用，然后是系，最后是 ISO 没提供
-// 的集合。
+// 几个原因同时存在时都报出来，次序固定：先是版本状态，再是废弃的引用，最后是系没勾或 ISO 没提供的
+// 集合。系没勾时不再查集合（C-1），后两样不会同时出现，所以分两组钉住次序。
 func TestTemplateUsable几个原因一起报(t *testing.T) {
 	tpl := baselineTemplate()
 	tpl.State = model.VersionDeprecated
 	tpl.Params = []model.ParamDecl{{Name: "edition", Label: "版本", Type: "enum", Offer: "editions"}}
 	hooks := hookMap(hookOf("lvm", 1, model.VersionApproved), hookOf("nic", 2, model.VersionDeprecated))
 	subject := onTemplate("baseline@4")
-	sameProblems(t, "四个原因", TemplateUsable(tpl, hooks, esxiISO()), []model.Problem{
+	sameProblems(t, "系没勾", TemplateUsable(tpl, hooks, esxiISO()), []model.Problem{
 		model.NewProblem("template_not_approved", subject, "已废弃"),
 		model.NewProblem("template_blocked_by_deprecated", subject, "nic", 2),
 		model.NewProblem("series_not_ticked", subject, "esxi"),
+	})
+	sameProblems(t, "系勾了、ISO 没提供集合", TemplateUsable(tpl, hooks, rockyISO()), []model.Problem{
+		model.NewProblem("template_not_approved", subject, "已废弃"),
+		model.NewProblem("template_blocked_by_deprecated", subject, "nic", 2),
 		model.NewProblem("iso_offer_missing", subject, "版本", "editions"),
 	})
+}
+
+// ISO 的系没勾时只报 series_not_ticked，不再查它提供的集合（C-1）：模板本不为这个系而写，集合缺不缺
+// 无从谈起。参数求值与快照构建遇到这种情况也只报这一条，准入多报一条 iso_offer_missing，就与它们一宽
+// 一严；提交时 Batch 的 Common 里也只有这一条。
+func TestTemplateUsableISO的系没勾时不查集合(t *testing.T) {
+	desktop := windowsISO(nil) // 一个集合都不提供，windowsTemplate 的 edition 要 editions
+	desktop.ID, desktop.Name, desktop.Series = "iso-win11", "Windows 11", "windows-desktop"
+	want := []model.Problem{model.NewProblem("series_not_ticked", onTemplate("win-base@2"), "windows-desktop")}
+	sameProblems(t, "TemplateUsable", TemplateUsable(windowsTemplate(), nil, desktop), want)
+
+	host := hostOf("SN-1", "x86_64", "uefi")
+	res := Batch(BatchInput{Hosts: []model.Host{host}, ISO: desktop, Template: windowsTemplate()})
+	sameProblems(t, "建任务时的 Common", res.Common, want)
+	// 与参数求值报的是同一条：代码、对象、说明都相同。
+	ev := params.Evaluate(params.Input{Template: windowsTemplate(), ISO: desktop, Host: host})
+	sameProblems(t, "参数求值", ev.Problems, want)
 }
 
 // 一批全部通过时 Common 为空，每台主机都有键且对应空切片。第 5 层把结果编码成 JSON

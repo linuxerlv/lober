@@ -52,7 +52,7 @@ func Hook(h model.Hook) []model.Problem {
 	if !model.StorableText(h.Description) {
 		out = append(out, model.NewProblem("text_not_storable", hookSubj))
 	}
-	params, ps := checkDecls(h.Params, hookSubj, fragmentSubs(h.Impls))
+	params, ps := checkDecls(h.Params, hookSubj, expandedRefs(h.Impls))
 	out = append(out, ps...)
 	if len(h.Impls) == 0 {
 		out = append(out, model.NewProblem("hook_no_impl", hookSubj))
@@ -78,25 +78,26 @@ type paramInfo struct {
 	ok   bool
 }
 
-// fragmentSubs 收集 hook 各份片段对参数取的子值（写法见 addRefs），参数的默认值要取得出它们（L-4）。
-// 脚本经环境变量拿整个值、不取子值；种类不认识的不知道该怎么读：都不算。
-func fragmentSubs(impls []model.Impl) map[string][]string {
-	subs := map[string][]string{}
+// expandedRefs 并起 hook 各份要展开的实现对参数的引用（见 scan.Refs），参数的默认值要取得出其中的子值
+// （L-4）。哪些实现的正文要展开，与模板的实例、参数求值是同一条规则（model.Impl.Expanded，C-2）：脚本
+// 经环境变量拿整个值、不取子值，不算；种类不认识的按片段算。
+func expandedRefs(impls []model.Impl) scan.Refs {
+	refs := scan.Refs{}
 	for _, impl := range impls {
-		if impl.Kind == model.ImplFragment {
+		if impl.Expanded() {
 			res, _ := scan.Scan(impl.Body)
-			addRefs(subs, res.Params)
+			refs.Merge(res.Refs())
 		}
 	}
-	return subs
+	return refs
 }
 
 // checkDecls 逐个校验参数声明，并查名字有没有重复。重名的取第一个作引用的对象，后面的
 // 报 param_decl_invalid。问题的 Path 为 param/<序号>，序号是声明的位置，从 1 起（T9-1）。
 //
-// subs 是对各参数取的子值，合法声明的默认值要取得出它们（L-4）。hook 传它自己的片段取的：默认值
+// refs 是对各参数的引用，合法声明的默认值要取得出其中的子值（L-4）。hook 传它自己的片段的：默认值
 // 不合用，错在声明上。模板与实例的默认值随取值来源查（checkBindings），传 nil。
-func checkDecls(decls []model.ParamDecl, subj model.Subject, subs map[string][]string) (map[string]paramInfo, []model.Problem) {
+func checkDecls(decls []model.ParamDecl, subj model.Subject, refs scan.Refs) (map[string]paramInfo, []model.Problem) {
 	params := make(map[string]paramInfo, len(decls))
 	var out []model.Problem
 	for i, d := range decls {
@@ -115,8 +116,8 @@ func checkDecls(decls []model.ParamDecl, subj model.Subject, subs map[string][]s
 			continue
 		}
 		params[d.Name] = paramInfo{decl: d, ok: len(ps) == 0}
-		if len(ps) == 0 && d.Default != "" && len(subs[d.Name]) > 0 {
-			out = append(out, valueProblems(d, d.Default, subs[d.Name], s)...)
+		if subs := refs[d.Name]; len(ps) == 0 && d.Default != "" && len(subs) > 0 {
+			out = append(out, valueProblems(d, d.Default, subs, s)...)
 		}
 	}
 	return params, out
@@ -203,7 +204,7 @@ func checkFragment(impl model.Impl, seriesOK bool, params map[string]paramInfo, 
 	return head, body
 }
 
-// 下面到 addRefs 为止是模板与 hook 共用的检查：正文与片段里的参数引用、列表规则、系统值，以及
+// 下面到 valueProblems 为止是模板与 hook 共用的检查：正文与片段里的参数引用、列表规则、系统值，以及
 // 取值取不取得出引用要的子值。正文与片段只在插槽和系统部件上不同，那部分由 checkFragment 与
 // checkTemplateBody 各自查。
 
@@ -352,19 +353,6 @@ func valueProblems(d model.ParamDecl, raw string, subs []string, s model.Subject
 		}
 	}
 	return nil
-}
-
-// addRefs 把一组参数引用记进 refs：键是引用到的参数名，值是对它取过的子值，按第一次出现的顺序、
-// 不重复；只按名字引用的也有键。与参数求值整理引用的规则相同：正文与所选片段引用到的参数必填，
-// 取的子值要取得出，激活判定按同一份引用去查，批准了的模板求值时才不会因此报错。
-func addRefs(refs map[string][]string, params []scan.ParamRef) {
-	for _, r := range params {
-		subs := refs[r.Name]
-		if r.Sub != "" && !slices.Contains(subs, r.Sub) {
-			subs = append(subs, r.Sub)
-		}
-		refs[r.Name] = subs
-	}
 }
 
 // checkScript 查脚本，分别返回不涉及正文位置的问题与正文的问题，后者由调用方按位置排：写完整了

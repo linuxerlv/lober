@@ -14,9 +14,10 @@ type codeSpec struct {
 //
 // 全层的中文说明只写在本文件里，参数只放数据：目录里的值（族、系、格式、时机、解释器、
 // 部件、系统值、架构、固件）传标识，作者在正文和占位符里写的就是它，对照报错好找；状态传
-// 中文显示名（ISOState、VersionState 的 Label；不认识的状态 Label 为空，回落到标识）；其余是
-// 名字或显示名、取值、数字、占位符原文。一个代码有几种原因时，说明把条件写全；只有产出它的函数在本包里、
-// 可选的措辞又是固定几种的，才把每种措辞登记在文件末尾，由那个函数选一条作参数。
+// StateLabel 给的称呼（ISOState、VersionState 的中文显示名；不认识的状态没有显示名，回落到标识；
+// 空状态回落到文件末尾的 stateUnknown）；其余是名字或显示名、取值、数字、占位符原文。一个代码有几种
+// 原因时，说明把条件写全；只有产出它的函数在本包里、可选的措辞又是固定几种的，才把每种措辞登记在文件
+// 末尾，由那个函数选一条作参数。
 // 之后的任务只产出这些代码，不在别处写中文说明；确需新代码时追加在本表末尾。
 var codeTable = map[Code]codeSpec{
 	// —— 任务 5：标识规范化 ——
@@ -212,11 +213,15 @@ var codeTable = map[Code]codeSpec{
 	"impl_missing_for_series": {CategoryIncomplete, 3,
 		"hook %[1]v@%[2]v 没有覆盖系「%[3]v」的实现",
 		"给这个 hook 补上覆盖该系的实现，或从模板里去掉这个系"},
-	// 实现种类与插槽类型不一致。参数：hook ID、版本、系、实现种类（fragment 或 script）。
+	// 实现种类与插槽类型不一致（Impl.FitsSlot）。激活判定按模板所勾的每个系查，快照构建按 ISO 的系
+	// 查（L-7）；两边的 Subject 都落在插槽里的实例上：Kind 为 slot，ID 为「模板 ID@版本」，Path 为
+	// <插槽名>/<n>。参数：hook ID、版本、系、实现的种类（原样传，不认识的种类也算不一致）。
 	"impl_kind_mismatch": {CategoryIncomplete, 4,
 		"hook %[1]v@%[2]v 覆盖系「%[3]v」的实现是 %[4]v，与插槽类型不一致",
 		"片段只能放进片段插槽，脚本只能放进执行插槽；换一个插槽，或换一个 hook"},
-	// 执行插槽的时机不在脚本声明的时机里。参数：hook ID、版本、系、插槽的时机。
+	// 执行插槽的时机不在脚本声明的时机里（Impl.FitsSlot）。产出方与 Subject 同 impl_kind_mismatch；
+	// 插槽的时机该格式不支持时，激活判定只报 slot_timing_unsupported、不报它（T9-6③）。
+	// 参数：hook ID、版本、系、插槽的时机。
 	"impl_timing_mismatch": {CategoryIncomplete, 4,
 		"hook %[1]v@%[2]v 覆盖系「%[3]v」的脚本没有声明时机「%[4]v」",
 		"放进时机与脚本声明一致的执行插槽，或给这个 hook 的脚本加上该时机"},
@@ -250,7 +255,10 @@ var codeTable = map[Code]codeSpec{
 	"param_attr_missing": {CategoryIncompatible, 2,
 		"参数「%[1]v」锁定取自主机属性「%[2]v」，但这台主机没登记这个属性",
 		"到主机登记里给这台主机补上属性「%[2]v」"},
-	// 参数要的选项集合 ISO 没有提供。参数：字段的显示名、集合名。
+	// 参数要的选项集合 ISO 没有提供，或给的是空集合（ParamDecl.OfferMissing）。参数求值报它时落在那一格
+	// 上，参数：字段的显示名、集合名。准入判定筛候选时也报它（admission.TemplateUsable，L-2），只看可用、
+	// 系也勾了的 ISO（C-1），落在模板上：Kind 为 template，ID 为「模板 ID@版本」，Path 为空；缺几个集合报
+	// 几条，参数：第一个要这个集合的参数的显示名（没写时用参数名）、集合名。
 	"iso_offer_missing": {CategoryIncompatible, 2,
 		"参数「%[1]v」的选项取自 ISO 的 %[2]v，但这个 ISO 没有提供",
 		"换一个提供了 %[2]v 的 ISO，或重新导入这个 ISO"},
@@ -262,12 +270,12 @@ var codeTable = map[Code]codeSpec{
 		"这台主机已有未结束的任务",
 		"等那个任务结束，或先取消它"},
 	// ISO 不可用：获取中、导入中、已废弃，或状态不认识；导入失败不归这里，另报 iso_import_failed
-	// （T5-1）。参数：状态的中文显示名（ISOState.Label，为空时回落到标识）。已废弃的 ISO 不能再
-	// 被新引用（C26），所以下一步要把它与「等它导入完成」分开说。
+	// （T5-1）。参数：状态的称呼（StateLabel：中文显示名，不认识的回落到标识，空状态回落到
+	// stateUnknown，C-7）。已废弃的 ISO 不能再被新引用（C26），所以下一步要把它与「等它导入完成」分开说。
 	"iso_not_ready": {CategoryState, 1,
 		"ISO 不可用：现为「%[1]v」",
 		"等它导入完成后再用，或换一个可用的 ISO；已废弃的 ISO 不能再用来建任务"},
-	// 模板版本不是已审批。参数：状态的中文显示名（VersionState.Label，为空时回落到标识，T5-1）。
+	// 模板版本不是已审批。参数：状态的称呼（StateLabel，规则同 iso_not_ready，T5-1、C-7）。
 	"template_not_approved": {CategoryState, 1,
 		"模板的这个版本不是已审批状态（现为「%[1]v」）",
 		"先审批这个版本；向导里每个模板只提供它当前的已审批版本"},
@@ -283,7 +291,10 @@ var codeTable = map[Code]codeSpec{
 	"template_blocked_by_deprecated": {CategoryIncompatible, 2,
 		"模板引用的 hook %[1]v@%[2]v 已废弃，不能再用来建任务",
 		"在模板里把 %[1]v 升级到它的已审批新版本，审批后再建任务"},
-	// ISO 的系不在模板所勾的系里。参数：ISO 的系。
+	// ISO 的系不在模板所勾的系里。准入判定、参数求值与快照构建都报它（L-7），Subject 都落在模板上：
+	// Kind 为 template，ID 为「模板 ID@版本」，Path 为空。三处报了它就不再查因系而起的问题：参数求值与
+	// 快照构建只报这一条（快照构建遇到不是目录里的系也报它），准入判定不再查 ISO 提供的集合（C-1）。
+	// 参数：ISO 的系。
 	"series_not_ticked": {CategoryIncompatible, 1,
 		"模板没有勾 ISO 的系「%[1]v」",
 		"换一个勾了这个系的模板，或换一个其他系的 ISO"},
@@ -362,6 +373,24 @@ var codeTable = map[Code]codeSpec{
 	"iso_import_failed": {CategoryState, 0,
 		"ISO 导入失败，不能用来建任务",
 		"重新导入这个 ISO，不用重新获取字节；仍然不行就删掉后重新创建，或换一个可用的 ISO"},
+
+	// —— 第 2 层追加（plans/2026-10-03-rewrite-layer2-store.md 任务 1） ——
+
+	// 建任务时批里的 SN 没有登记：从没登记过，或者在向导里选中之后被删了。准入判定的入参只有登记过的
+	// 主机，查不出这种情况，由仓储在事务里重跑准入时补报（store.BatchProblems）。Subject 的 Kind 为 host，
+	// ID 为 SN；SN 只在 Subject 里，所以不带参数。
+	"host_not_registered": {CategoryState, 0,
+		"这台主机还没登记，或者已经被删了",
+		"到主机列表里重新登记它，再建任务"},
+
+	// —— 第 2 层修补轮追加（plans/2026-10-08-layer2-fixups.md 任务 U5，S10-2） ——
+
+	// 用户新建、派生或改名时，名称用了只给内置内容用的前缀（NameReserved，spec C12），比较不分大小写。名称先要合
+	// name_invalid 的规则，不合的只报 name_invalid。由仓储的用户入口（store.NormalizeName）产出，Subject 同名称的其他
+	// 问题：新建与派生时为 {hook 或 template, 空}，改名时为 {hook 或 template, 身份 ID}。参数：规范化之后的名称。
+	"name_reserved": {CategoryInvalid, 1,
+		"名称「%[1]v」不能用：以 lober: 开头的名称只给 lober 自带的内置内容用",
+		"换一个不以 lober: 开头的名称，大写的写法也算在内；照着内置内容起名时，要把这个前缀去掉"},
 }
 
 // 下面是代码表的补充：产出代码的函数在本包里、可选的措辞（不合法的原因、各类型
@@ -410,6 +439,10 @@ const (
 	intRangeMax  = "，不大于 %[1]v"          // 只声明了上限
 	intRangeBoth = "，在 %[1]v 到 %[2]v 之间" // 两端都声明了，含两端
 )
+
+// stateUnknown 是空状态在说明里的称呼，由 StateLabel 选用（C-7）：空状态没有显示名，也没有标识可以
+// 回落，照写会显示成「现为「」」。它与不认识的状态一样，只会来自直接调接口或库里的坏数据。
+const stateUnknown = "未知状态"
 
 // fieldLabels 是 iso_incomplete、host_platform_invalid 里字段的中文称呼，键是 Subject.Path 里的
 // 字段名；ISO 提供的集合以 offers/<集合名> 定位，称呼查 offers。由 ISO.Validate 与 Host.Validate 选用。
