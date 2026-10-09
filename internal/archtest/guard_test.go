@@ -100,10 +100,10 @@ func Test守卫逐个文件的检查(t *testing.T) {
 		src  string
 		want []finding
 	}{
-		{"白名单里的十六个包都不报", pkgModel, importing(
+		{"白名单里的十七个包都不报", pkgModel, importing(
 			"cmp", "errors", "fmt", "maps", "slices", "strconv", "strings", "unicode", "unicode/utf8",
 			"crypto/sha256", "encoding/base64", "encoding/binary", "encoding/hex", "encoding/json",
-			"net/netip", "regexp"), nil},
+			"net/netip", "net/url", "regexp"), nil},
 		{"os 要报", pkgCatalog, importing("os"), []finding{{ruleStd, "os"}}},
 		{"io/ioutil 要报", pkgModel, importing("io/ioutil"), []finding{{ruleStd, "io/ioutil"}}},
 		{"math/rand 要报", pkgParams, importing("math/rand"), []finding{{ruleStd, "math/rand"}}},

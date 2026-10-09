@@ -57,11 +57,12 @@ const (
 // stdAllowed 是层 1 的非测试源文件可以 import 的标准库包（T1-1 选 C）。层 1 只做判定与
 // 变换，不碰文件、网络和时钟（spec §6.1），同样的输入还要得到同样的结果，所以白名单
 // 以外的包一律不许，cgo 的 C 与 unsafe 也一样。确实要加一个就改这里，评审时会被看到。
+// net/url 是第 3 层计划任务 2 为 catalog 拼机器面地址加的：只用它转义路径段，不发请求。
 var stdAllowed = map[string]bool{
 	"cmp": true, "errors": true, "fmt": true, "maps": true, "slices": true,
 	"strconv": true, "strings": true, "unicode": true, "unicode/utf8": true,
 	"crypto/sha256": true, "encoding/base64": true, "encoding/binary": true, "encoding/hex": true,
-	"encoding/json": true, "net/netip": true, "regexp": true,
+	"encoding/json": true, "net/netip": true, "net/url": true, "regexp": true,
 }
 
 // clockFuncs 是 time 包里读时钟或依赖时钟的函数。time 现在不在白名单里，import 它就已经
