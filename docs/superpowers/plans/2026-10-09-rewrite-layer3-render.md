@@ -449,9 +449,11 @@ T6-3 选 B 之后，内置模板里的参数仍要按安全词的陷阱写：参
 ## 留给后续层的约定
 
 - 第 5 层：预览调 `render.Render`，与真实下发同一条路（C35）。没指定主机或 ISO 时用示例值并标明是示例；预览的 token 是示例值（spec §6.2 第 2 条）。装配点调 `store.EnsureBuiltin*` 装载 `builtin.Templates()` 与 `builtin.Hooks()`，报 ErrConflict 时重试。按 `builtin` 当前带的清单过滤向导里的旧身份（S5-1）。
-- 第 4 层：ISO 导入时按角色把相对路径写进 `ISO.Artifacts`，角色名由第 4 层定（`model/registry.go:146`）。其中「原始 ISO」这个角色必须有，Ubuntu 的 `url=` 要指向整张 ISO，缺了那条路径装不通（spec §2.2 第 64 行点名旧系统就是缺这个参数）。相对路径里的版本段已由 `ISO.Validate` 限成安全路径段，所以 `catalog.ArtifactURL` 拼接时不再查穿越。
+- 第 4 层：ISO 导入时按角色把相对路径写进 `ISO.Artifacts`，角色名由第 4 层定（`model/registry.go:146`）。其中「原始 ISO」这个角色必须有，Ubuntu 的 `url=` 要指向整张 ISO，缺了那条路径装不通（spec §2.2 第 64 行点名旧系统就是缺这个参数）。
+  **写进 `Artifacts` 的相对路径合不合规，全由第 4 层保证**：非空、不以 `/` 开头、没有 `.` 与 `..` 段。`ISO.Validate` 根本不碰 `Artifacts`（`model/registry.go:163` 的字段清单里没有它），`catalog.ArtifactURL` 也只拼不查——转义挡不住穿越，因为按 RFC 3986 §2.3，`%2E%2E` 解开还是 `..`。所以这一层漏了查，渲染出的地址就能穿出制品目录。
 - 第 7 层：网关按 `catalog.DeliveryFiles` 与 `catalog.DeliveryFileName` 决定给不给某个文件，再看任务状态（spec §4.7、§5.4 第 3 步）；文件名只有 catalog 一份，网关不要另写。hook 脚本按快照里的摘要从仓储取出直接下发，不经渲染（spec §6.2 第 5 条）。改能力表时照 T8-8 补三条断言。真装后若把 windows-desktop 限为 uefi，回到第 1 层改固件要求表（T4-3）。
-  **token 只能用不需要转义的字符**（任务 2 的实现者提出，小写 base32 或 hex 这类）。理由有两条：`url.PathEscape` 不转义 `& $ + = : @`，而转义出的 `%` 放进 unattend 首次开机的 `startnet.cmd` 会被当成变量展开；网关若按解码后的 Path 路由，含 `%2F` 的段会被切开。任务 ID 合 `model.ValidID`，本来就满足。
+  **token 的字符集要正向定死**：合 `model.ValidID`，或更严地只用 `[0-9a-f]`。不要只说「用不需要转义的字符」——`url.PathEscape` 不转义的字符里就有 `& $ + = : @`，而 `&` 在 unattend 的 `startnet.cmd` 里会把命令切开，`$` 在 sh 的取脚本命令里会被展开。另外网关若按解码后的 Path 路由，含 `%2F` 的段会被切开。任务 ID 合 `model.ValidID`，本来就满足。
+  路由前缀（`/v1/answer`）到时从 catalog 导出，网关不要手写第二份——理由同 `DeliveryFileName`。
 - 任何一层要改渲染的展开规则，先回到第 1 层同步改判定——规则由第 1 层校验、第 3 层执行，两边必须一致（第 1 层计划第 746 行）。
 
 ## 整体验收
