@@ -15,7 +15,9 @@
 //     编成 null，与 OpenAPI 对不上。记录自己的字段不在此列：写进去什么就读出什么，nil 与空的 map、切片读回来不同。
 //   - 改记录按整条替换，把字段改成零值也要存下：清空属性、把固件改回空都是正当的写入。pgstore 为此显式列出
 //     要写的列，契约测试专门覆盖「改成零值」。
-//   - 仓储不读时钟。Audit.At、Task.CreatedAt、NewEvent.At 都由调用方给，必须大于 0，否则报 ErrInvalid。
+//   - 仓储不读时钟。Audit.At、Task.CreatedAt、NewEvent.At 都由调用方给，必须大于 0，否则报 ErrInvalid。架构守卫
+//     （internal/archtest）查存储层的非测试文件：time.Now、time.Since、time.Sleep 这类读时钟的函数一律不许用，
+//     time.Duration、time.Minute 照用。
 //   - ID 由仓储用 NewID 生成，内置的 hook 与模板用自己带的固定 ID；收到的 ID 先过 model.ValidID（CheckID、
 //     CheckVersionKey），不合规则报 ErrInvalid。
 //   - 存不下的查找键与过滤条件当作没有：含 NUL 或不是合法 UTF-8 的串（model.StorableText 为假）不可能登记过。
