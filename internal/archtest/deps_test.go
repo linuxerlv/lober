@@ -69,8 +69,14 @@ const (
 // layers 是 layer 的全部取值，按日志里的先后排。
 var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerGuard}
 
-// minChecked 是 Test全模块依赖守卫 每层至少要查到的包数。删了某层的包就改这里；渲染与内置内容的包加进来以后，补上它们的下限。
+// minChecked 是 Test全模块依赖守卫 每层至少要查到的包数。删了某层的包就改这里；渲染与内置内容的包加进来以后，
+// 补上它们的下限——忘了补会由「查到了包的层都登记了下限」那一条报出来。
 var minChecked = map[layer]int{layerCore: 7, layerStore: 3, layerGuard: 1}
+
+// minDirs 是 moduleSourceDirs 至少要遍历到的目录数。目录遍历没有别的防线：sourceRoots 少了一项、或者
+// checkModule 收到空的 dirs，ruleListed（整包被构建约束排除的目录）与 go test 的缓存跟踪都会静默失效，
+// 正是计划「风险」一节点名的「新增包后复用旧的 PASS」。
+const minDirs = 9
 
 // pgxV5 是 pgx v5 的模块路径：它和它下面的包算 pgx v5。
 const pgxV5 = "github.com/jackc/pgx/v5"
@@ -207,6 +213,23 @@ func Test全模块依赖守卫(t *testing.T) {
 			t.Errorf("%s 只查了 %d 个包，至少应有 %d 个，守卫的检查对象少了", l, checked[l], minChecked[l])
 		}
 		counts = append(counts, fmt.Sprintf("%s %d 个", l, checked[l]))
+	}
+	// 查到了包却没登记下限，这一层就没有防空跑的底线：渲染与内置内容的包加进来时，逼着补 minChecked。
+	for _, l := range layers {
+		if _, ok := minChecked[l]; !ok && checked[l] > 0 {
+			t.Errorf("%s 查到了 %d 个包，但 minChecked 里没有它的下限：补上，否则这一层的包被挪走也没人报", l, checked[l])
+		}
+	}
+	// layers 漏了一层，那一层的下限与日志计数都会悄悄消失，上面两条也就查不到它。checked 的键来自 layerOf，
+	// 所以拿它比对就能发现 layers 没跟上。
+	for l := range checked {
+		if !slices.Contains(layers, l) {
+			t.Errorf("layerOf 给出了 %q，但 layers 里没有它：新加一层要同时登记进 layers", l)
+		}
+	}
+	// 目录遍历没有别的防线，见 minDirs。
+	if len(dirs) < minDirs {
+		t.Errorf("只遍历到 %d 个含源文件的目录，至少应有 %d 个：sourceRoots 少了一项，或者 dirs 传空了", len(dirs), minDirs)
 	}
 	t.Logf("检查了 %d 个包（%s）、%d 个含源文件的目录", len(pkgs), strings.Join(counts, "，"), len(dirs))
 }
