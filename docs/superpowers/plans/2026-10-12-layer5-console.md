@@ -4769,6 +4769,8 @@ git commit -m "feat(console): 主机的登记、修改、删除与 CSV 两步导
   - `(*server).isoRoutes() []route`
   - `console.ParseContentRange(header string) (start, end, total int64, ok bool)`
 
+**上传分片不审计**（路由表的 `audit` 留空）：总 spec §6.2 第 8 条列的审计操作里没有它，一张 4 GB 的 ISO 按 8 MiB 分片是五百多片。`Upload` 仍然收 `store.Audit`，为的是签名与第 4 层的 `Sources` 一致；传进去的是零值，第 4 层对零值不写。
+
 **本任务的接缝**：`ISOSource` 的实现在第 4 层。这里换成一个记调用的内存 mock，测试因此能断言控制台真的把活儿交给了第 4 层、交下去的参数对，而不用等第 4 层存在（第 5 层设计 §1「不依赖第 4 层」）。`cmd/lober` 里的占位实现Task 14 补。
 
 - [ ] **Step 1: 写失败的测试——记调用的 mock**
@@ -5439,7 +5441,7 @@ func (s *server) isoRoutes() []route {
 		{"POST", "/console/v1/isos/{id}/cancel", PermISOWrite, "iso.cancel", "ISO", "取消获取", nil, nil, s.cancelISO},
 		{"POST", "/console/v1/isos/{id}/retry", PermISOWrite, "iso.retry", "ISO", "重试获取", nil, nil, s.retryISO},
 		{"POST", "/console/v1/isos/{id}/reimport", PermISOWrite, "iso.reimport", "ISO", "重新导入", nil, nil, s.reimportISO},
-		{"PUT", "/console/v1/isos/{id}/content", PermISOWrite, "iso.upload", "ISO", "上传一段字节", nil, nil, s.uploadChunk},
+		{"PUT", "/console/v1/isos/{id}/content", PermISOWrite, "", "ISO", "上传一段字节", nil, nil, s.uploadChunk},
 	}
 }
 
@@ -5616,6 +5618,9 @@ func (s *server) uploadChunk(c *gin.Context) {
 		return
 	}
 	role := c.Query("role")
+	// 上传一片不审计：总 spec §6.2 第 8 条列的是登记来源、取消、重试这些，没有它。一张 4 GB
+	// 的 ISO 按 8 MiB 分片是五百多片，一片一行审计会把审计表淹掉。路由表因此不声明动作，
+	// auditFrom 返回零值，第 4 层对零值不写。哪天上传要审计了，只改路由表那一格。
 	if err := s.deps.ISOSource.Upload(c.Request.Context(), c.Param("id"), role, start, c.Request.Body,
 		s.auditFrom(c, "")); err != nil {
 		sourceFailed(c, "上传分片", err)
