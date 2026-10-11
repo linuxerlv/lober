@@ -393,6 +393,31 @@ var codeTable = map[Code]codeSpec{
 	"name_reserved": {CategoryInvalid, 1,
 		"名称「%[1]v」不能用：以 lober: 开头的名称只给 lober 自带的内置内容用",
 		"换一个不以 lober: 开头的名称，大写的写法也算在内；照着内置内容起名时，要把这个前缀去掉"},
+
+	// 第 3 层渲染骨架：请求没给正文或拼装需要的系统值。参数：系统值标识。
+	"render_system_value_missing": {CategoryInvalid, 1,
+		"渲染请求缺少系统值「%[1]v」",
+		"由调用方补齐本次请求需要的「%[1]v」；制品地址要通过 artifacts 基地址提供"},
+	// repo、iso 只有制品基地址与快照里的同名角色这一份来源。参数：保留键。
+	"render_system_value_reserved": {CategoryInvalid, 1,
+		"系统值「%[1]v」由渲染根据制品记录拼出，不能由调用方另填",
+		"移除「%[1]v」，提供 artifacts 基地址，并在 ISO 制品记录里补齐同名角色"},
+	// 请求用到了 repo 或 iso，但快照没有对应的制品路径。参数：角色。
+	"render_artifact_missing": {CategoryInvalid, 1,
+		"快照缺少制品角色「%[1]v」的路径，无法拼出地址",
+		"检查 ISO 导入记录，补齐「%[1]v」制品后重新构建任务快照"},
+	// FileScript 没指定执行插槽，或片段展开找不到对应片段插槽。参数：插槽名。
+	"render_slot_invalid": {CategoryInvalid, 1,
+		"渲染请求指定的插槽「%[1]v」不存在或类型不符",
+		"运行脚本请求要指定快照中的执行插槽，片段占位符要对应片段插槽"},
+	// 拼装器未提供执行插槽或系统部件的单行替换。参数：占位符原文。
+	"render_replacement_missing": {CategoryInvalid, 1,
+		"渲染缺少「%[1]v」的单行内容",
+		"由该格式的拼装器提供执行插槽命令或系统部件内容"},
+	// 单行替换里出现格式不能容纳的字符。参数：占位符原文。
+	"render_line_invalid": {CategoryInvalid, 1,
+		"「%[1]v」的替换内容不是可内联的安全单行",
+		"替换内容不能含换行、引号、<>&、反斜杠、# 或冒号加空格；检查拼装器与本次请求的系统值"},
 }
 
 // 下面是代码表的补充：产出代码的函数在本包里、可选的措辞（不合法的原因、各类型

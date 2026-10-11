@@ -64,6 +64,14 @@ var extraCodes = map[Code]Category{
 
 	// 第 2 层修补轮（plans/2026-10-08-layer2-fixups.md 任务 U5，S10-2）。
 	"name_reserved": CategoryInvalid, // 用户新建、派生或改名时用了保留前缀 lober:
+
+	// 第 3 层渲染骨架（任务 4）：渲染入参和单行替换不满足前提。
+	"render_system_value_missing":  CategoryInvalid,
+	"render_system_value_reserved": CategoryInvalid,
+	"render_artifact_missing":      CategoryInvalid,
+	"render_slot_invalid":          CategoryInvalid,
+	"render_replacement_missing":   CategoryInvalid,
+	"render_line_invalid":          CategoryInvalid,
 }
 
 func TestCode表与附录总表逐项一致(t *testing.T) {
@@ -85,9 +93,9 @@ func TestCode表与附录总表逐项一致(t *testing.T) {
 		}
 		want[c] = cat
 	}
-	// 附录 58 个、整层验收 1 个、修补轮 10 个、第 2 层 1 个、第 2 层修补轮 1 个。以后再追加代码，这个数要跟着改。
-	if len(want) != 71 {
-		t.Fatalf("附录加上追加的代码应共 71 个，测试里有 %d 个", len(want))
+	// 附录 58 个、整层验收 1 个、修补轮 10 个、第 2 层 1 个、第 2 层修补轮 1 个、第 3 层 6 个。
+	if len(want) != 77 {
+		t.Fatalf("附录加上追加的代码应共 77 个，测试里有 %d 个", len(want))
 	}
 	for c, cat := range want {
 		if got := c.Category(); got != cat {
