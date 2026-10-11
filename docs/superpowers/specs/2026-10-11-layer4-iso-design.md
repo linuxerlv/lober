@@ -36,11 +36,13 @@
   进度写仓储                         → 解出制品 · 写清单
                                     → 置可用（C5）
 
-对外：iso.Sources（第 5 层调）、iso.Recover（装配点启动时调）、iso.FreeSpace
+对外：internal/iso 实现 console.ISOSource（接口由控制台声明），另给装配点 Recover 与 Import
 第 7 层不直接调本层——它只读仓储里的 ISO 记录
 ```
 
 **不依赖第 3 层。** 总 spec §6.1 的依赖方向是「ISO 依赖层 1、存储契约里自己用到的能力，以及自己声明的接口」。第 1、2 层已合入，本层从不调用渲染，因此没有需要 mock 的对象。唯一的前置是把第 1 层缺的静态事实补上。
+
+**与第 5 层的接缝按总 spec §6.1 定：接口在调用方一侧。** 早先本文写的「控制台经 `iso.Sources` 调本层」会让 console import iso，与「实现模块之间互不引用」冲突，已按第 5 层规格 `specs/2026-10-11-layer5-console-design.md` §6.1 改过来：`internal/iso` 导出一个具体类型 `Sources`，方法签名在结构上满足 `console.ISOSource`，由 `cmd/lober` 一行 `var _ console.ISOSource = (*iso.Sources)(nil)` 兜住。本层比那个接口多两处：`Register` 与 `Upload` 带 `role`（一个 ISO 可以有多条来源，Debian 的主介质加 netboot），四个写方法带 `a store.Audit`（登记来源要审计，总 spec §6.2 第 8 条）。
 
 ## 3. 前置：catalog 补四份数据（第 1 层）
 
@@ -107,12 +109,12 @@ ISO 记录状态（已有，model.ISOState）
 | 来源 | 落盘 | 续传 |
 |---|---|---|
 | 远程链接 | `{staging}/{isoID}.part`，边下边算 SHA256 | HTTP `Range: bytes=N-`；服务端回 200 或 416 就从头再来 |
-| 浏览器上传 | 固定大小分片按偏移写 | 库里记已确认的分片，只补缺的；同一片传两次按 digest 认定已收，不重写 |
+| 浏览器上传 | 按调用方给的偏移写 | 库里记已确认的字节区间，只补缺的；同一段传两次按区间覆盖，不重复计 |
 | 服务器本地路径 | 校验在允许目录内后原地读，复制进暂存区 | 无，一次性 |
 
 本地路径必须在装配点注入的允许目录内。文件原地读取，归运维管理，本层不删它（总 spec §5.1 第 2 步）。
 
-分片大小由调用方在开始时声明，之后不变——客户端按同一个大小补缺片，服务端才能由分片号算出偏移。
+分片大小由客户端自己定，服务端按「偏移加长度」记区间，不要求固定大小——客户端换一个分片大小续传也照样成立。`Register` 时只声明总大小。
 
 ### 4.3 SSRF 四条规则
 
@@ -134,7 +136,7 @@ ISO 记录状态（已有，model.ISOState）
 
 ### 4.5 磁盘余量
 
-总 spec §5.1 第 1 步「能事先知道大小的，先查磁盘余量，不够就拒绝，并说明还差多少」归第 5 层，但它要知道暂存区与制品目录的余量。本层导出 `FreeSpace()`，第 5 层调它。
+总 spec §5.1 第 1 步「能事先知道大小的，先查磁盘余量，不够就拒绝，并说明还差多少」归第 5 层，但它要知道暂存区与制品目录的余量。本层导出 `FreeSpace(ctx) (staging, artifacts int64, err error)`，第 5 层调它。
 
 ## 5. 子系统 B：导入
 
@@ -196,8 +198,8 @@ type ISOSources interface {
     SourcesOf(ctx, isoID string) ([]Source, error)
     ListUnfinishedSources(ctx) ([]Source, error)     // 装配点启动恢复用
     DeleteSource(ctx, isoID, role string) error
-    SaveChunk(ctx, isoID, role string, index int, size int64, digest string) error
-    ChunksOf(ctx, isoID, role string) ([]Chunk, error)
+    SaveRange(ctx, isoID, role string, start, length int64) error
+    RangesOf(ctx, isoID, role string) ([]Range, error)
 }
 ```
 
@@ -271,7 +273,7 @@ type ISOSources interface {
 |---|---|
 | `iso9660` | 合成 ISO 9660 镜像：Rock Ridge 与 Joliet、目录记录跨扇区、纯 ISO 9660 小写化（`41fe0ee`）。**真 ISO 用例由环境变量开关，未设则跳过** |
 | 识别 | 合成目录树七种格式各一套；真 Debian netinst 不被认成 Ubuntu（`131d659`）由真 ISO 用例钉 |
-| 来源获取 | SSRF 每条规则一个用例；续传两个用例（杀进程、库里比盘上多）；分片重复与补缺 |
+| 来源获取 | SSRF 每条规则一个用例；续传两个用例（杀进程、库里比盘上多）；同一段重复上传只算一次、只补缺的区间 |
 | 导入 | 七种格式各一套合成镜像，外加边界：缺特征文件、版本与声明系不符、附加来源版本不符、制品缺角色、摘要撞车（C4） |
 | 存储 | 契约测试连测试环境 PostgreSQL，找不到连接串就失败不跳过（总 spec §6.4） |
 | 真机 | 归第 7 层。本机 QEMU 在 WHPX 下只能 `-cpu qemu64`（总 spec §8） |
@@ -284,13 +286,14 @@ type ISOSources interface {
 |---|---|
 | Windows 固件分套与 render 角色不分固件冲突：旧 SPEC §2.1 要求「同一 Windows 版本导两个制品集（uefi/bios），boot.wim 位宽不同」，但新 render 的 Windows 角色没有固件分支，`model.ISO` 也没有 Firmware 字段。本层只能出一套 | 记「待真机核实」，第 7 层验证；真机确认需要两套时，回到第 1 层给 ISO 加固件维度 |
 | 识别规则的确切依据：七种格式的特征文件有旧系统与安装器文档可依，但 Rocky/Alma/openEuler/OpenCloudOS 之间靠 `.treeinfo` 的 `name=` 区分这一点，要真 ISO 才能坐实 | 标「待真机核实」，由 §10 的真 ISO 用例坐实 |
+| **ESXi 的版本在 ISO 里取不到**：`boot.cfg` 只有 `title=Loading ESXi installer` 这类字样，不带版本号；旧系统也从来没从内容里取到过它。而 `model.ISO.Validate` 要求 ready 的 ISO 必须带合法版本（C5） | **首版 ESXi 导不出 ready 的 ISO**：识别之后明确报 `iso_version_missing`，不猜取法——猜错的版本会成为制品目录里的一段路径，错了要到真装机才发现。候选的坐实路径：`imgpayld.tgz` 里的版本文件，或 `s.v00` 模块里的构建串，第 7 层真机时定 |
 | WIM XML 资源的 LZX 压缩不在首版支持内 | 遇 LZX 明确失败并说明，不引第三方库 |
 | Agama 的 `live-root` 与仓库取法依据 Agama 文档，未真装验证 | 记「待真机核实」，第 7 层验证 |
 | ESXi 的原生 firstboot 与 Secure Boot（总 spec §8 已有条目） | 沿用，第 7 层验证 |
 
 ## 12. 留给后续层的约定
 
-- **第 5 层**：控制台经 `iso.Sources` 登记来源、上传分片、查进度、取消、重试、重新导入，自己不碰字节。建 ISO 前调 `iso.FreeSpace()` 查余量（总 spec §5.1 第 1 步）。进度只读，不自己写。
-- **第 5 层装配点**：注入暂存目录、制品目录、SMB 目录、Windows 工具目录、允许登记的本地目录；启动时调 `iso.Recover()` 把没取完的来源和没导完的导入继续做完（总 spec §6.2 第 6 条）。
+- **第 5 层**：接口由控制台声明、本层实现（总 spec §6.1），`internal/iso` 不 import console。控制台经它登记来源、上传分片、查进度、取消、重试、重新导入，自己不碰字节；建 ISO 前调 `FreeSpace` 查余量（总 spec §5.1 第 1 步）。进度只读，不自己写。
+- **第 5 层装配点**：注入暂存目录、制品目录、SMB 目录、Windows 工具目录、允许登记的本地目录；启动时调 `Recover` 拿到要恢复的清单，把每件事分别放进看护协程（总 spec §6.2 第 6 条、§6.3）。`Recover` 只遍历并返回清单，不起协程——起协程归装配点。
 - **第 7 层**：网关只读仓储里的 ISO 记录与 `ISO.Artifacts`，不调本层。真装后确认 Windows 是否需要按固件分两套制品，需要就回到第 1 层。
 - **任何一层要改识别规则或仓库判据**：只改 catalog 一处。它们是随程序发布的静态事实（C1），改了要发新版本。
