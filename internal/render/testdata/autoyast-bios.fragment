@@ -1,0 +1,1 @@
+<drive><device>/dev/sda</device><use>all</use><disklabel>gpt</disklabel><partitions config:type="list"><partition><size>1M</size><partition_id config:type="integer">263</partition_id></partition><partition><mount>/</mount><size>max</size><filesystem config:type="symbol">btrfs</filesystem></partition></partitions></drive>

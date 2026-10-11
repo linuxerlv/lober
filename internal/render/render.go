@@ -14,7 +14,9 @@ import (
 type Request struct {
 	Snapshot model.Snapshot
 	// The caller supplies gateway, artifacts (base URLs), task, token, sn, smb,
-	// and syslog-addr when needed by the requested output. repo and iso are
+	// syslog-addr, and independent finalize-token when needed by the requested
+	// output. finalize-token is private, never an author placeholder, and is
+	// required by Linux firstboot staging (Windows FileAux stages it). repo and iso are
 	// reserved: rendering derives them with catalog.ArtifactURL from artifacts
 	// and Snapshot.ISO.Artifacts["repo"] / ["iso"], respectively. Supplying either
 	// reserved key is a content problem, even if its value matches the artifact.
@@ -83,7 +85,6 @@ func Render(r Request) ([]byte, []model.Problem, error) {
 }
 
 func renderMenu(Request) ([]byte, []model.Problem, error)   { return nil, nil, errNotImplemented }
-func renderAnswer(Request) ([]byte, []model.Problem, error) { return nil, nil, errNotImplemented }
 func renderAux(Request) ([]byte, []model.Problem, error)    { return nil, nil, errNotImplemented }
 func renderScript(Request) ([]byte, []model.Problem, error) { return nil, nil, errNotImplemented }
 

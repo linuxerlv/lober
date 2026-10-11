@@ -62,6 +62,7 @@ var planSystemValues = []struct {
 	{"token", "token"},
 	{"syslog-addr", "syslog 地址"},
 	{"artifacts", "制品基地址"},
+	{"finalize-token", "finalize token"},
 }
 
 // planTimingCap 是能力表里的一格：格式支持的一个时机，以及这个时机可用的解释器。

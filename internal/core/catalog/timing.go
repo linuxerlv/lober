@@ -77,6 +77,8 @@ var systemValueTable = []systemValueRow{
 	{"token", "token"},           // 网关签发的 token，放在 AnswerURL 的路径段里
 	{"syslog-addr", "syslog 地址"}, // host:port；syslog 是系统部件的标识，两者不混
 	{"artifacts", "制品基地址"},       // ArtifactURL 的 base
+	// Private caller-owned reboot credential. Never add to author capability tables.
+	{"finalize-token", "finalize token"},
 }
 
 // capabilityRow 是一种格式的能力。三个列表都按这里写的顺序对外返回。

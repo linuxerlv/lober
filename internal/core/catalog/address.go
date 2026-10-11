@@ -24,6 +24,12 @@ func AnswerURL(base, task, token, file string) string {
 	return joinURL(base, append([]string{"v1", "answer", task, token}, strings.Split(file, "/")...))
 }
 
+// SignalURL follows the inherited POST /v1/signal/{task}/{token}/{phase}
+// machine protocol. Transport parameters/log bodies belong to the runtime.
+func SignalURL(base, task, token, phase string) string {
+	return joinURL(base, []string{"v1", "signal", task, token, phase})
+}
+
 // ArtifactURL 是制品的完整地址：{base}/{rel}。rel 取自 ISO.Artifacts，是制品目录下的相对路径。rel 是盘上的
 // 路径而不是转义过的地址，所以按 / 切开、逐段转义，结尾的 / 留着（仓库树是目录）；base 结尾的 / 去掉。
 //

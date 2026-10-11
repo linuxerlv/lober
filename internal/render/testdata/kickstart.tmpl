@@ -1,0 +1,30 @@
+cmdline
+url --url={{sys:repo}}
+lang en_US.UTF-8
+keyboard us
+timezone UTC --utc
+bootloader --location=mbr
+network --bootproto=dhcp --activate --hostname={{param:hostname}}
+rootpw --lock
+{{lober:syslog}}
+%packages
+@core
+curl
+%end
+%pre --erroronfail
+set -eu
+{{slot:pre@pre}}
+cat > /tmp/lober-partition.ks <<'LOBER_PARTITION_EOF'
+{{slot:partition}}
+LOBER_PARTITION_EOF
+%end
+%include /tmp/lober-partition.ks
+%post --nochroot --erroronfail
+set -eu
+{{slot:post-installer@post-installer}}
+{{slot:post-target@post-target}}
+{{slot:firstboot@firstboot}}
+{{lober:firstboot}}
+{{lober:cleanup}}
+%end
+reboot

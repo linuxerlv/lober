@@ -134,6 +134,12 @@ func TestRenderDispatchAndPreconditions(t *testing.T) {
 		r.Kind, r.Slot = kind, "setup"
 		r.Snapshot.Slots = []model.SnapshotSlot{{Name: "setup", Exec: true, Timing: "pre"}}
 		got, problems, err := Render(r)
+		if kind == catalog.FileAnswer {
+			if string(got) != "plain" || len(problems) != 0 || err != nil {
+				t.Fatalf("answer: got %q, %v, %v", got, problems, err)
+			}
+			continue
+		}
 		if got != nil || len(problems) != 0 || !errors.Is(err, errNotImplemented) {
 			t.Fatalf("%s: got %q, %v, %v", kind, got, problems, err)
 		}
