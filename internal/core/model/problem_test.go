@@ -72,6 +72,11 @@ var extraCodes = map[Code]Category{
 	"render_slot_invalid":          CategoryInvalid,
 	"render_replacement_missing":   CategoryInvalid,
 	"render_line_invalid":          CategoryInvalid,
+
+	// Task 7: actual firmware, frozen boot snapshot compatibility, original ESXi media.
+	"render_firmware_invalid":      CategoryInvalid,
+	"render_boot_snapshot_invalid": CategoryIncompatible,
+	"render_esxi_bootcfg_invalid":  CategoryInvalid,
 }
 
 func TestCode表与附录总表逐项一致(t *testing.T) {
@@ -93,9 +98,9 @@ func TestCode表与附录总表逐项一致(t *testing.T) {
 		}
 		want[c] = cat
 	}
-	// 附录 58 个、整层验收 1 个、修补轮 10 个、第 2 层 1 个、第 2 层修补轮 1 个、第 3 层 6 个。
-	if len(want) != 77 {
-		t.Fatalf("附录加上追加的代码应共 77 个，测试里有 %d 个", len(want))
+	// 58 appendix + 1 acceptance + 10 fixups + 1 layer2 + 1 layer2 fixup + 9 layer3.
+	if len(want) != 80 {
+		t.Fatalf("附录加上追加的代码应共 80 个，测试里有 %d 个", len(want))
 	}
 	for c, cat := range want {
 		if got := c.Category(); got != cat {

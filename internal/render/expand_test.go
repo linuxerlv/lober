@@ -140,6 +140,12 @@ func TestRenderDispatchAndPreconditions(t *testing.T) {
 			}
 			continue
 		}
+		if kind == catalog.FileMenu {
+			if got != nil || err != nil || len(problems) != 1 || problems[0].Code != "render_firmware_invalid" {
+				t.Fatalf("menu without actual firmware: %q, %v, %v", got, problems, err)
+			}
+			continue
+		}
 		if got != nil || len(problems) != 0 || !errors.Is(err, errNotImplemented) {
 			t.Fatalf("%s: got %q, %v, %v", kind, got, problems, err)
 		}

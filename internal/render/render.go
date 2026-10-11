@@ -13,6 +13,12 @@ import (
 // Request supplies a frozen snapshot and the values for this rendering call.
 type Request struct {
 	Snapshot model.Snapshot
+	// Firmware is the actual boot firmware, mandatory for FileMenu. Registered
+	// Snapshot.Host.Firmware metadata does not select or override it.
+	Firmware catalog.Firmware
+	// ESXiBootConfig is the immutable original extracted ISO boot.cfg supplied
+	// by the caller for ESXi FileAux. Rendering never reads artifact files.
+	ESXiBootConfig string
 	// The caller supplies gateway, artifacts (base URLs), task, token, sn, smb,
 	// syslog-addr, and independent finalize-token when needed by the requested
 	// output. finalize-token is private, never an author placeholder, and is
@@ -84,8 +90,6 @@ func Render(r Request) ([]byte, []model.Problem, error) {
 	panic("unreachable file kind")
 }
 
-func renderMenu(Request) ([]byte, []model.Problem, error)   { return nil, nil, errNotImplemented }
-func renderAux(Request) ([]byte, []model.Problem, error)    { return nil, nil, errNotImplemented }
 func renderScript(Request) ([]byte, []model.Problem, error) { return nil, nil, errNotImplemented }
 
 func reservedValues(r Request) []model.Problem {

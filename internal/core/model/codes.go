@@ -418,6 +418,18 @@ var codeTable = map[Code]codeSpec{
 	"render_line_invalid": {CategoryInvalid, 1,
 		"「%[1]v」的替换内容不是可内联的安全单行",
 		"替换内容不能含换行、引号、<>&、反斜杠、# 或冒号加空格；检查拼装器与本次请求的系统值"},
+	// Actual firmware is required by menu rendering; registered metadata is optional.
+	"render_firmware_invalid": {CategoryInvalid, 1,
+		"引导渲染请求的实际固件「%[1]v」无效或缺失",
+		"由调用方将本次 iPXE 平台换算为 bios 或 uefi 后填写，不能使用登记值兜底"},
+	// Series determines both family and template format.
+	"render_boot_snapshot_invalid": {CategoryIncompatible, 0,
+		"引导快照的系、族或模板格式不一致",
+		"按 ISO 的系重新构建与模板格式和族一致的快照"},
+	// Original immutable media config must be supplied by the caller.
+	"render_esxi_bootcfg_invalid": {CategoryInvalid, 0,
+		"原始 ESXi boot.cfg 缺失、格式错误或文件路径不属于发布的制品树",
+		"由调用方提供该 ISO 不可变版本的原始 boot.cfg，保留内核、模块列表与选项，检查发布树中的完整路径"},
 }
 
 // 下面是代码表的补充：产出代码的函数在本包里、可选的措辞（不合法的原因、各类型
