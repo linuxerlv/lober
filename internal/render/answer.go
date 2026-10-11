@@ -27,9 +27,9 @@ func renderAnswer(r Request) ([]byte, []model.Problem, error) {
 func answerExpansion(r Request) (expansion, []model.Problem, error) {
 	e := expansion{request: r, slots: map[string]string{}, parts: map[catalog.SystemPart]string{}}
 	switch r.Snapshot.Format {
-	case "kickstart", "preseed", "autoinstall", "autoyast", "unattend":
+	case "kickstart", "preseed", "autoinstall", "autoyast", "unattend", "agama", "esxi-ks":
 	default:
-		return e, nil, errNotImplemented
+		return e, nil, errUnsupportedFormat
 	}
 	// Only prepare referenced parts/slots: a derived author body may need no
 	// network credentials. Required-part cardinality belongs to activation.
@@ -84,6 +84,9 @@ func hookFile(instance model.SnapshotInstance) string {
 }
 
 func answerSlot(e expansion, slot model.SnapshotSlot, subject model.Subject) (string, []model.Problem) {
+	if e.request.Snapshot.Format == "esxi-ks" && slot.Timing == "firstboot" {
+		return esxiFirstbootSlot(e, slot, subject)
+	}
 	if e.request.Snapshot.Format == "unattend" {
 		if slot.Timing == "firstboot" {
 			return "cmd /d /c %SystemDrive%/ProgramData/lober/" + slotFile("unattend", slot), nil
@@ -120,10 +123,16 @@ func answerSlot(e expansion, slot model.SnapshotSlot, subject model.Subject) (st
 	} else {
 		b.WriteString("sh " + shQuote(local) + "\n")
 	}
+	if e.request.Snapshot.Format == "esxi-ks" {
+		return "command -v base64||exit 127;" + encodedShell(b.String()), nil
+	}
 	return encodedShell(b.String()), nil
 }
 
 func answerPart(e expansion, part catalog.SystemPart, subject model.Subject) (string, []model.Problem) {
+	if e.request.Snapshot.Format == "esxi-ks" {
+		return esxiPart(e, part, subject)
+	}
 	if e.request.Snapshot.Format == "unattend" {
 		return windowsPart(e, part, subject)
 	}
@@ -242,7 +251,7 @@ func targetRoot(format catalog.Format) string {
 	switch format {
 	case "kickstart":
 		return "/mnt/sysroot"
-	case "autoyast":
+	case "autoyast", "agama":
 		return "/mnt"
 	default:
 		return "/target"
@@ -250,7 +259,7 @@ func targetRoot(format catalog.Format) string {
 }
 
 func download(format catalog.Format, address, path string) string {
-	if format == "preseed" {
+	if format == "preseed" || format == "esxi-ks" {
 		return "wget -O " + shQuote(path) + " " + shQuote(address) + "\n"
 	}
 	return "curl -fsS --retry 3 -o " + shQuote(path) + " " + shQuote(address) + "\n"
@@ -283,4 +292,68 @@ func writeHeredoc(path, marker, body string) string {
 }
 func encodedShell(body string) string {
 	return "echo " + base64.StdEncoding.EncodeToString([]byte(body)) + " | base64 -d | sh"
+}
+
+// ESXi persists native %firstboot sections itself, once and in file order. The
+// frozen payloads live IN those sections, not in a Linux installer staging path.
+// Secure Boot suppresses %firstboot: layer7 must reject that configuration when
+// the task requires firstboot. This code does not certify any real ESXi image.
+func esxiFirstbootSlot(e expansion, slot model.SnapshotSlot, subject model.Subject) (string, []model.Problem) {
+	wrapper, p := posixRuntime(e.request, slot, false)
+	if len(p) != 0 {
+		return "", p
+	}
+	var b strings.Builder
+	b.WriteString("set -eu\numask 077\nmkdir -p /tmp/lober\n")
+	b.WriteString(encodedFile("/tmp/lober/"+slotFile("esxi-ks", slot), []byte(wrapper)))
+	for _, instance := range slot.Instances {
+		b.WriteString(encodedFile("/tmp/lober/"+hookFile(instance), []byte(instance.Body)))
+	}
+	b.WriteString("sh " + shQuote("/tmp/lober/"+slotFile("esxi-ks", slot)) + "\n")
+	return "command -v base64||exit 127;" + encodedShell(b.String()), nil
+}
+
+func encodedFile(path string, body []byte) string {
+	return "printf '%s' " + shQuote(base64.StdEncoding.EncodeToString(body)) + " | base64 -d > " + shQuote(path) + "\n"
+}
+
+func esxiPart(e expansion, part catalog.SystemPart, subject model.Subject) (string, []model.Problem) {
+	keys := []catalog.SystemValue{"gateway", "task"}
+	if part == "firstboot" {
+		keys = append(keys, "finalize-token")
+	}
+	values, p := answerValues(e, subject, keys...)
+	if len(p) != 0 {
+		return "", p
+	}
+	body := "set -eu\numask 077\n" + esxiNativeOwnerCheck(values[1])
+	switch part {
+	case "firstboot":
+		body += "mkdir -p /tmp/lober\nprintf '%s' " + shQuote(values[2]) + " > /tmp/lober/finalize.token\n"
+		body += esxiFinalizeSignal(values[0], values[1], "booted") + esxiFinalizeSignal(values[0], values[1], "init-start")
+	case "cleanup":
+		body += "rm -f \"$LOBER_ESXI_NATIVE_SCRIPT\"\n"
+		body += esxiFinalizeSignal(values[0], values[1], "init-done") + esxiFinalizeSignal(values[0], values[1], "ready")
+		body += "rm -f /tmp/lober/finalize.token /tmp/lober/script-*.sh /tmp/lober/hook-*\n"
+	default:
+		return "", []model.Problem{model.NewProblem("render_replacement_missing", subject, part)}
+	}
+	prefix := "command -v base64||exit 127;"
+	if part == "firstboot" {
+		prefix += "LOBER_ESXI_NATIVE_SCRIPT=$0;LOBER_ESXI_OWNER=" + esxiNativeMarker(values[1]) + ";export LOBER_ESXI_NATIVE_SCRIPT LOBER_ESXI_OWNER;"
+	}
+	return prefix + encodedShell(body), nil
+}
+
+func esxiNativeMarker(task string) string { return "lober-esxi-firstboot-" + task }
+func esxiNativeOwnerCheck(task string) string {
+	marker := esxiNativeMarker(task)
+	return "command -v grep >/dev/null 2>&1 || exit 127\ncase ${LOBER_ESXI_NATIVE_SCRIPT:-} in /*) ;; *) exit 66;; esac\n" +
+		"[ \"${LOBER_ESXI_OWNER:-}\" = " + shQuote(marker) + " ] && [ -f \"$LOBER_ESXI_NATIVE_SCRIPT\" ] && [ ! -L \"$LOBER_ESXI_NATIVE_SCRIPT\" ] && grep -F -q " + shQuote("LOBER_ESXI_OWNER="+marker+";") + " \"$LOBER_ESXI_NATIVE_SCRIPT\" || exit 66\n"
+}
+
+func esxiFinalizeSignal(gateway, task, phase string) string {
+	address := catalog.SignalURL(gateway, task, "TOKEN", phase)
+	before, after := tokenURLParts(address)
+	return "TOKEN=$(cat /tmp/lober/finalize.token)\nwget -q -T 10 -O /dev/null --header='Content-Type: text/plain' --post-data='' " + shQuote(before) + "\"$TOKEN\"" + shQuote(after) + " >/dev/null 2>&1 || :\n"
 }

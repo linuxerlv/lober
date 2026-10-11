@@ -1,0 +1,4 @@
+#!ipxe
+kernel http://ng.internal/artifacts/as-rocky94/vmlinuz root=live:http://ng.internal/artifacts/agama/LiveOS/squashfs.img ip=dhcp rd.neednet=1 inst.install_url=http://ng.internal/artifacts/as-rocky94/repo/ inst.auto=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/autoinst.jsonnet console=tty0 console=ttyS0,115200n8
+initrd http://ng.internal/artifacts/as-rocky94/initrd.img
+boot

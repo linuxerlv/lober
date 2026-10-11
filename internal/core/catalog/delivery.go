@@ -53,10 +53,12 @@ var deliveryTable = map[Format]deliveryRow{
 		kinds: []FileKind{FileMenu, FileAnswer, FileScript},
 		names: map[FileKind]string{FileAnswer: "autoinst.xml"},
 	},
-	// 依据不足：旧 SPEC.md 与旧系统都没有 Agama，应答文件叫什么、要不要附属文件都没有出处。只登记推得出
-	// 的三种；应答文件不登记文件名，附属文件暂按不下发，都由第 3 层计划任务 8 写内置内容时定。
+	// Agama primary docs: https://agama-project.github.io/docs/overview/unattended
+	// inst.auto fetches/evaluates one JSON/Jsonnet profile. Lober chooses the documented
+	// autoinst.jsonnet convention; no companion file is required by this protocol.
 	"agama": {
 		kinds: []FileKind{FileMenu, FileAnswer, FileScript},
+		names: map[FileKind]string{FileAnswer: "autoinst.jsonnet"},
 	},
 	// 旧 SPEC.md §4.5：unattend 由 WinPE 内的 startnet.cmd 去取，不烧进 WIM；文件名取旧系统的 unattend.xml
 	// （internal/core/model/render.go:112）。启动脚本由 wimboot 注入（spec §8），这条路待真机核实（spec §2.2）。
@@ -93,7 +95,7 @@ func DeliveryFiles(f Format) []FileKind {
 }
 
 // DeliveryFileName 是格式 f 里种类 k 的文件在 /v1/answer 下的文件名，只有应答文件与附属文件有。引导菜单、
-// 运行脚本、f 不下发的种类、依据不足还没定名字的（Agama 的应答文件），以及未知的格式或种类都返回 false。
+// 运行脚本、f 不下发的种类、以及未知的格式或种类都返回 false。
 // 不拿空串表示没有：AnswerURL 收到空的文件名给出的是目录地址，调用方漏判就会悄悄拿错地址。
 func DeliveryFileName(f Format, k FileKind) (string, bool) {
 	name, ok := deliveryTable[f].names[k]

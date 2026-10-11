@@ -411,9 +411,10 @@ make check 全绿之外：
 
 | 风险 | 处置 |
 |---|---|
-| Windows：WinPE 直接用 ISO 里的 boot.wim、由 wimboot 注入启动脚本、再从 SMB 装系统本体，这条路没有真机验证过。这个 WinPE 没有 PowerShell，也没有自带的 HTTP 客户端，装前时机的脚本怎么取、信号怎么发还没有答案 | 第 7 层先做 Windows 的真机验证。候选做法：装前时机的脚本由 wimboot 注入；随制品附带一个 HTTP 客户端 |
+| Windows：wimboot 注入 startnet、winpeshl、真实 busybox/curl 制品，通过 Setup 本地 OEM 树 `/m` 复制 firstboot 载荷；此目标链仍未真机验证 | 第 4/7 层仅为 WinPE 与最终 OS 均满足运行 ABI 的工具构建登记角色；缺角色拒绝菜单、附属文件和脚本。UTF8-manifest busybox 路线不能承诺 Server 2016/2019 firstboot 支持。CMD/PowerShell 原生行为与 Setup 复制、登录条件留第 7 层验证，本文的 Linux 检查不证明 Windows 原生执行。见 [目标运行契约与逐行依据](../../../internal/render/testdata/runtime-contract.md) |
 | Windows：只有 2025 自带 OpenSSH，2016–2022 要额外安装，气隙环境装不了按需功能 | 内置的 SSH 公钥 hook 这一版只保证 2025，更早的版本需要另行提供 OpenSSH 安装包 |
-| SUSE 16：Agama 能不能从内网 HTTP 仓库装，还没验证 | 列入第 7 层真装验证。Agama 正文建议写成 Jsonnet，它允许尾逗号，几个片段拼进同一个数组时不用处理逗号 |
+| SUSE 16：Agama 内网安装尚未真装验证 | 按 [Agama 网络安装](https://agama-project.github.io/docs/user/guides/network) 使用提取 kernel/initrd、`live-root` squashfs、`root=live:`、`ip=dhcp`、`rd.neednet=1`、`inst.install_url`。按 [无人值守文档](https://agama-project.github.io/docs/overview/unattended) 选单一 `autoinst.jsonnet`，无附属文件；post `chroot:false` 的目标根为 `/mnt`，只安装一条 systemd 首次开机路径，不再添加原生 init 重复执行。产品 ID 必须匹配实际 ISO；profile/schema 与真实镜像安装留第 7 层验证 |
+| ESXi：原生 `%firstboot` 在 Secure Boot 下不执行，且不采用 Linux systemd/安装期目录持久化 | 在同一个原生 firstboot 脚本中持有编码后的不可变 wrapper/hook 与独立 finalize token；执行前摘要校验，`setsid` 进程组超时。捕获绝对 `$0`，校验本任务 marker/普通非 symlink 文件，成功后才能删除该原生凭据文件和发 ready。缺 ABI 或归属不符明确失败并保留凭据；实际 native `$0`、ABI、Secure Boot 兼容及真安装由第 7 层验证。见 [运行契约](../../../internal/render/testdata/runtime-contract.md) |
 | Ubuntu：安装器要把整张 ISO 下进内存 | 目标机内存要求写进内置模板的说明，验收虚拟机按此配内存 |
 | 本机 QEMU 在 WHPX 下只能用 `-cpu qemu64`，实测能跑 RHEL 9 系；Windows Server 2025、ESXi、RHEL 10 系能不能跑都没验证 | 跑不了的格式，验收换到 KVM 宿主机或真机上做 |
 | 前端工具链：Node 24 装在 `C:\Program Files\nodejs`，但不在 Bash 的默认 PATH 里；加进 PATH 后 pnpm 11.16 可用 | 第 6 层计划写明命令，构建和测试都走 pnpm |

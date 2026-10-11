@@ -1,8 +1,10 @@
 package render
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -12,6 +14,8 @@ import (
 
 func renderAux(r Request) ([]byte, []model.Problem, error) {
 	switch r.Snapshot.Format {
+	case "unattend":
+		return renderWindowsAux(r)
 	case "autoinstall":
 		values, problems := assemblerValues(r, "task")
 		hostname, ok := r.Snapshot.Template.Params["hostname"]
@@ -28,7 +32,7 @@ func renderAux(r Request) ([]byte, []model.Problem, error) {
 		}
 		return renderESXiBootConfig(r)
 	default:
-		return nil, nil, errNotImplemented
+		return nil, nil, errUnsupportedFormat
 	}
 }
 
@@ -206,4 +210,86 @@ func esxiKernelOptions(value, ks string) string {
 		text += "ks=" + ks
 	}
 	return text
+}
+
+// startnet is selected by the real injected winpeshl.ini. Stock WinPE HTTP/PS
+// availability is never assumed. setup /m copies the local $1 OEM tree only
+// after target partitioning; pre hooks run only from windowsPE answer commands.
+func renderWindowsAux(r Request) ([]byte, []model.Problem, error) {
+	values, p := assemblerValues(r, "gateway", "task", "token", "finalize-token", "smb", "artifacts")
+	tools := map[string]string{}
+	for _, role := range []string{"winpe-busybox", "winpe-curl"} {
+		value, problem := artifactURL(r, values["artifacts"], role)
+		tools[role] = value
+		if problem != nil {
+			p = append(p, *problem)
+		}
+	}
+	subject := model.Subject{Kind: "template", ID: templateRef(r.Snapshot.Template)}
+	parts := map[catalog.SystemPart][]byte{}
+	for _, part := range []catalog.SystemPart{"firstboot", "cleanup"} {
+		body, problems := windowsPartScript(expansion{request: r}, part, subject)
+		parts[part] = body
+		p = append(p, problems...)
+	}
+	if len(p) != 0 {
+		return nil, p, nil
+	}
+	var body strings.Builder
+	body.WriteString("#!/bin/sh\nset -eu\numask 077\nDIR=X:/lober\nOEM='X:/lober-oem/$1/ProgramData/lober'\nmkdir -p \"$DIR\" \"$OEM\"\n")
+
+	body.WriteString("curl() { \"$DIR/curl.exe\" \"$@\"; }\n")
+	for _, role := range []string{"winpe-busybox", "winpe-curl"} {
+		filename := "busybox.exe"
+		if role == "winpe-curl" {
+			filename = "curl.exe"
+		}
+		body.WriteString(download("unattend", tools[role], "$OEM/"+filename))
+	}
+	text := body.String()
+	text = strings.ReplaceAll(text, shQuote("$OEM/busybox.exe"), "\"$OEM/busybox.exe\"")
+	text = strings.ReplaceAll(text, shQuote("$OEM/curl.exe"), "\"$OEM/curl.exe\"")
+	body.Reset()
+	body.WriteString(text)
+	name, _ := catalog.DeliveryFileName("unattend", catalog.FileAnswer)
+	body.WriteString(download("unattend", catalog.AnswerURL(values["gateway"], values["task"], values["token"], name), "X:/lober/"+name))
+	body.WriteString("printf '%s' " + shQuote(values["finalize-token"]) + " > \"$OEM/finalize.token\"\n")
+	for _, part := range []catalog.SystemPart{"firstboot", "cleanup"} {
+		body.WriteString("printf '%s' " + shQuote(base64.StdEncoding.EncodeToString(parts[part])) + " | base64 -d > \"$OEM/" + windowsPartFile(part) + "\"\n")
+	}
+	for _, slot := range r.Snapshot.Slots {
+		if !slot.Exec {
+			continue
+		}
+		destination := "$DIR/" + slotFile("unattend", slot)
+		if slot.Timing == "firstboot" {
+			destination = "$OEM/" + slotFile("unattend", slot)
+		}
+		fetch := download("unattend", catalog.AnswerURL(values["gateway"], values["task"], values["token"], "scripts/"+strconv.Itoa(slot.Seq)+".cmd"), destination)
+		fetch = strings.ReplaceAll(fetch, shQuote(destination), "\""+destination+"\"")
+		body.WriteString(fetch)
+		if slot.Timing == "firstboot" {
+			for _, instance := range slot.Instances {
+				path := "$OEM/" + hookFile(instance)
+				fetch := download("unattend", catalog.AnswerURL(values["gateway"], values["task"], values["token"], "hooks/"+instance.Digest), path)
+				fetch = strings.ReplaceAll(fetch, shQuote(path), "\""+path+"\"")
+				if instance.Required {
+					body.WriteString(fetch)
+				} else {
+					body.WriteString("(\n" + fetch + ") || :\n")
+				}
+			}
+		}
+	}
+	// CMD arguments here are only paths and a safe smb value; free hook params
+	// remain in the encoded runtime and never participate in command parsing.
+	share := strings.ReplaceAll(values["smb"], "\\", "/")
+	body.WriteString("net.exe use " + shQuote(strings.ReplaceAll(share, "/", "\\")) + "\n")
+	setup := windowsNativeCommand("\"%LOBER_SETUP%\" /unattend:X:/lober/" + name + " /m:X:/lober-oem")
+	body.WriteString("printf '%s' " + shQuote(base64.StdEncoding.EncodeToString([]byte(setup))) + " | base64 -d > \"$DIR/setup-launch.cmd\"\n")
+	body.WriteString("LOBER_SETUP=" + shQuote(strings.ReplaceAll(share+"/setup.exe", "/", "\\")) + "\nLOBER_NATIVE_RC_FILE=\"$DIR/setup-result.rc\"\nexport LOBER_SETUP LOBER_NATIVE_RC_FILE\ncmd.exe /d /v:off /c \"$DIR/setup-launch.cmd\"\nRC=$(cat \"$LOBER_NATIVE_RC_FILE\") || exit 125\nprintf '%s' \"$RC\" > \"$DIR/startup.rc\"\nexit 0\n")
+	// Bootstrap has only ASCII target paths and invokes the injected interpreter.
+	bootstrap := windowsShellFile(body.String(), "X:/lober", "startup")
+	bootstrap = strings.Replace(bootstrap, "set \"LOBER_DIR=X:/lober\"\r\n", "wpeinit\r\nif errorlevel 1 exit /b %errorlevel%\r\nmkdir X:\\lober\r\ncopy /y \"%SystemRoot%\\System32\\busybox.exe\" X:\\lober\\busybox.exe >nul\r\nif errorlevel 1 exit /b %errorlevel%\r\ncopy /y \"%SystemRoot%\\System32\\curl.exe\" X:\\lober\\curl.exe >nul\r\nif errorlevel 1 exit /b %errorlevel%\r\nset \"LOBER_DIR=X:/lober\"\r\n", 1)
+	return []byte(bootstrap), nil, nil
 }

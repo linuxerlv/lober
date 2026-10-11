@@ -140,13 +140,19 @@ func TestRenderDispatchAndPreconditions(t *testing.T) {
 			}
 			continue
 		}
+		if kind == catalog.FileScript {
+			if got != nil || err != nil || len(problems) != 2 {
+				t.Fatalf("missing runtime credentials: %q %v %v", got, problems, err)
+			}
+			continue
+		}
 		if kind == catalog.FileMenu {
 			if got != nil || err != nil || len(problems) != 1 || problems[0].Code != "render_firmware_invalid" {
 				t.Fatalf("menu without actual firmware: %q, %v, %v", got, problems, err)
 			}
 			continue
 		}
-		if got != nil || len(problems) != 0 || !errors.Is(err, errNotImplemented) {
+		if got != nil || len(problems) != 0 || !errors.Is(err, errUnsupportedFormat) {
 			t.Fatalf("%s: got %q, %v, %v", kind, got, problems, err)
 		}
 	}
@@ -258,8 +264,9 @@ func TestRenderPreflightFragmentAndSkipScriptBody(t *testing.T) {
 		t.Fatalf("fragment preflight: %q, %v, %v", got, problems, err)
 	}
 	r.Kind, r.Slot = catalog.FileScript, "setup"
+	r.Values["gateway"], r.Values["token"] = "https://gateway", "boot-token"
 	got, problems, err = Render(r)
-	if got != nil || len(problems) != 0 || !errors.Is(err, errNotImplemented) {
+	if len(got) == 0 || len(problems) != 0 || err != nil {
 		t.Fatalf("script body must not be expanded: %q, %v, %v", got, problems, err)
 	}
 }

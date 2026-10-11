@@ -33,11 +33,11 @@ type Request struct {
 	Slot string
 }
 
-var errNotImplemented = errors.New("render: assembler not implemented")
+var errUnsupportedFormat = errors.New("render: file kind unsupported for format")
 
 // Render returns one complete file, or content Problems with no partial bytes.
-// Errors indicate an unsupported interface request. Concrete assemblers are
-// deliberately deferred; their temporary sentinel is errNotImplemented.
+// Errors indicate an unsupported interface request. Content Problems never
+// accompany partial output.
 func Render(r Request) ([]byte, []model.Problem, error) {
 	if !r.Kind.Valid() {
 		return nil, nil, fmt.Errorf("render: unknown file kind %q", r.Kind)
@@ -89,8 +89,6 @@ func Render(r Request) ([]byte, []model.Problem, error) {
 	}
 	panic("unreachable file kind")
 }
-
-func renderScript(Request) ([]byte, []model.Problem, error) { return nil, nil, errNotImplemented }
 
 func reservedValues(r Request) []model.Problem {
 	var out []model.Problem

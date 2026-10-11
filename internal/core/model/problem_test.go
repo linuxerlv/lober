@@ -77,6 +77,7 @@ var extraCodes = map[Code]Category{
 	"render_firmware_invalid":      CategoryInvalid,
 	"render_boot_snapshot_invalid": CategoryIncompatible,
 	"render_esxi_bootcfg_invalid":  CategoryInvalid,
+	"render_windows_env_limit":     CategoryInvalid,
 }
 
 func TestCode表与附录总表逐项一致(t *testing.T) {
@@ -99,8 +100,8 @@ func TestCode表与附录总表逐项一致(t *testing.T) {
 		want[c] = cat
 	}
 	// 58 appendix + 1 acceptance + 10 fixups + 1 layer2 + 1 layer2 fixup + 9 layer3.
-	if len(want) != 80 {
-		t.Fatalf("附录加上追加的代码应共 80 个，测试里有 %d 个", len(want))
+	if len(want) != 81 {
+		t.Fatalf("附录加上追加的代码应共 81 个，测试里有 %d 个", len(want))
 	}
 	for c, cat := range want {
 		if got := c.Category(); got != cat {

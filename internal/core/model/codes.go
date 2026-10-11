@@ -430,6 +430,9 @@ var codeTable = map[Code]codeSpec{
 	"render_esxi_bootcfg_invalid": {CategoryInvalid, 0,
 		"原始 ESXi boot.cfg 缺失、格式错误或文件路径不属于发布的制品树",
 		"由调用方提供该 ISO 不可变版本的原始 boot.cfg，保留内核、模块列表与选项，检查发布树中的完整路径"},
+	"render_windows_env_limit": {CategoryInvalid, 1,
+		"Windows 目标解释器无法完整保留参数「%[1]v」的环境变量值",
+		"缩短该参数取值，使环境变量完整长度不超过目标解释器的限制"},
 }
 
 // 下面是代码表的补充：产出代码的函数在本包里、可选的措辞（不合法的原因、各类型

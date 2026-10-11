@@ -58,11 +58,11 @@ var planDelivery = []planDeliveryRow{
 		files:  map[FileKind]string{FileAnswer: "autoinst.xml"},
 	},
 	{
-		// 依据不足：旧 SPEC.md 与旧系统都没有 Agama，应答文件叫什么、要不要附属文件都没有出处。只登记
-		// 推得出的三种；应答文件的文件名见 pendingDeliveryNames，要不要附属文件见 pendingDeliveryKinds，
-		// 都由第 3 层任务 8 定。
+		// Agama inst.auto consumes a single Jsonnet profile; no companion is needed.
+		// https://agama-project.github.io/docs/overview/unattended
 		format: "agama",
 		kinds:  []FileKind{FileMenu, FileAnswer, FileScript},
+		files:  map[FileKind]string{FileAnswer: "autoinst.jsonnet"},
 	},
 	{
 		// 旧 SPEC.md §4.5：unattend 由 WinPE 内的 startnet.cmd 去取，不烧进 WIM；应答文件名取旧系统的
@@ -89,15 +89,11 @@ type deliveryCell struct {
 
 // pendingDeliveryNames 是下发了、却因依据不足还没登记文件名的格子。定下来以后从这里删掉：「待定的
 // 文件名确实还没登记」会先报红，提醒这一步。
-var pendingDeliveryNames = []deliveryCell{
-	{"agama", FileAnswer},
-}
+var pendingDeliveryNames = []deliveryCell{}
 
 // pendingDeliveryKinds 是因依据不足、要不要下发还没定的格子，现在一律按不下发登记：没下发也是一个判断，
 // 同样要有依据。真加上的时候，「待定的种类确实还没下发」会先报红，逼着补依据、从这里删掉。
-var pendingDeliveryKinds = []deliveryCell{
-	{"agama", FileAux},
-}
+var pendingDeliveryKinds = []deliveryCell{}
 
 func Test文件种类就是渲染的四类输出(t *testing.T) {
 	// 四类输出见 spec §4.3。hook 脚本不在里面：它不经渲染，网关按快照里的摘要直接下发，与格式无关
