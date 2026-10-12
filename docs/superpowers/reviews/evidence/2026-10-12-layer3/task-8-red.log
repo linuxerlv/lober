@@ -1,0 +1,25 @@
+--- FAIL: TestRemainingMenuGolden (0.00s)
+    --- FAIL: TestRemainingMenuGolden/sles15 (0.00s)
+        remaining_test.go:21: [] render: assembler not implemented
+    --- FAIL: TestRemainingMenuGolden/sles16 (0.00s)
+        remaining_test.go:21: [] render: assembler not implemented
+    --- FAIL: TestRemainingMenuGolden/windows-server (0.00s)
+        remaining_test.go:21: [] render: assembler not implemented
+--- FAIL: TestAgamaAnswerDelivery (0.00s)
+    remaining_test.go:36: canonical Agama filename="",false
+--- FAIL: TestRuntimeExportsHostileValuesAndOrder (0.00s)
+    script_test.go:170: runtime render: [] render: assembler not implemented
+--- FAIL: TestRuntimeRequiredOptionalDigestAndTimeout (0.00s)
+    --- FAIL: TestRuntimeRequiredOptionalDigestAndTimeout/required (0.00s)
+        script_test.go:201: runtime render: [] render: assembler not implemented
+    --- FAIL: TestRuntimeRequiredOptionalDigestAndTimeout/optional (0.00s)
+        script_test.go:201: runtime render: [] render: assembler not implemented
+    --- FAIL: TestRuntimeRequiredOptionalDigestAndTimeout/digest (0.00s)
+        script_test.go:201: runtime render: [] render: assembler not implemented
+    --- FAIL: TestRuntimeRequiredOptionalDigestAndTimeout/timeout (0.00s)
+        script_test.go:201: runtime render: [] render: assembler not implemented
+--- FAIL: TestRuntimeOfflineFirstbootUsesIndependentToken (0.00s)
+    script_test.go:220: runtime render: [] render: assembler not implemented
+FAIL
+FAIL	github.com/lober/lober/internal/render	0.429s
+FAIL

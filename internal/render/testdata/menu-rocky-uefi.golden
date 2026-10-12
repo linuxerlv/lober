@@ -1,0 +1,8 @@
+#!ipxe
+kernel http://ng.internal/artifacts/as-rocky94/vmlinuz \
+  inst.stage2=http://ng.internal/artifacts/as-rocky94/install/ \
+  inst.repo=http://ng.internal/artifacts/as-rocky94/repo/ \
+  inst.ks=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/ks.cfg inst.cmdline inst.notmux ip=dhcp \
+  console=tty0 console=ttyS0,115200n8 inst.syslog=10.10.0.1:514
+initrd http://ng.internal/artifacts/as-rocky94/initrd.img
+boot

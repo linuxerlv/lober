@@ -1,0 +1,36 @@
+Verified revision: a4cc3b0d0e6982b330cf9d082119f5a14ff701de
+go version go1.27.2 linux/amd64
+Target: linux/amd64; mandatory bash=/usr/bin/bash busybox=/usr/bin/busybox
+gofmt -l $(go list -f {{.Dir}} ./...)
+go vet ./...
+go test ./...
+ok  	github.com/lober/lober/internal/archtest	4.341s
+ok  	github.com/lober/lober/internal/builtin	1.651s
+ok  	github.com/lober/lober/internal/core/activation	0.127s
+ok  	github.com/lober/lober/internal/core/admission	0.072s
+ok  	github.com/lober/lober/internal/core/catalog	0.035s
+ok  	github.com/lober/lober/internal/core/model	0.244s
+ok  	github.com/lober/lober/internal/core/params	0.042s
+ok  	github.com/lober/lober/internal/core/scan	0.141s
+ok  	github.com/lober/lober/internal/core/snapshot	0.083s
+ok  	github.com/lober/lober/internal/render	6.202s
+ok  	github.com/lober/lober/internal/store	0.026s
+ok  	github.com/lober/lober/internal/store/pgstore	35.360s
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	0.950s
+go test -race ./...
+ok  	github.com/lober/lober/internal/archtest	5.192s
+ok  	github.com/lober/lober/internal/builtin	2.782s
+ok  	github.com/lober/lober/internal/core/activation	1.235s
+ok  	github.com/lober/lober/internal/core/admission	1.061s
+ok  	github.com/lober/lober/internal/core/catalog	1.049s
+ok  	github.com/lober/lober/internal/core/model	1.340s
+ok  	github.com/lober/lober/internal/core/params	1.116s
+ok  	github.com/lober/lober/internal/core/scan	1.066s
+ok  	github.com/lober/lober/internal/core/snapshot	1.129s
+ok  	github.com/lober/lober/internal/render	5.904s
+ok  	github.com/lober/lober/internal/store	1.073s
+ok  	github.com/lober/lober/internal/store/pgstore	51.982s
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	2.255s
+GOOS=linux GOARCH=amd64 go build ./...
+
+exit_code=0

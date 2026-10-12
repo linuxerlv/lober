@@ -64,6 +64,8 @@ var systemPartTable = []systemPartRow{
 	{"cleanup", "凭据清理"},
 }
 
+// token、syslog-addr、artifacts 只给系统部件与机器面地址用（spec §6.2 第 2 条），不进任何格式的能力表：
+// 作者在正文里写 {{sys:token}}，激活判定报 sysvalue_not_allowed。
 var systemValueTable = []systemValueRow{
 	{"repo", "安装源地址"},
 	{"iso", "原始 ISO 地址"}, // Ubuntu 的 url=：安装器要经 HTTP 把整张 ISO 下进内存
@@ -71,7 +73,12 @@ var systemValueTable = []systemValueRow{
 	{"gateway", "网关基地址"},
 	{"task", "任务号"},
 	{"sn", "主机 SN"},
-	{"lbrace", "字面量 {{"}, // 正文里要写字面量 {{ 时用它转义
+	{"lbrace", "字面量 {{"},         // 正文里要写字面量 {{ 时用它转义
+	{"token", "token"},           // 网关签发的 token，放在 AnswerURL 的路径段里
+	{"syslog-addr", "syslog 地址"}, // host:port；syslog 是系统部件的标识，两者不混
+	{"artifacts", "制品基地址"},       // ArtifactURL 的 base
+	// Private caller-owned reboot credential. Never add to author capability tables.
+	{"finalize-token", "finalize token"},
 }
 
 // capabilityRow 是一种格式的能力。三个列表都按这里写的顺序对外返回。

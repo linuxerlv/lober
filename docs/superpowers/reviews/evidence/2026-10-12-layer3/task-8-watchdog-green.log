@@ -1,0 +1,17 @@
+=== RUN   TestRuntimeRequiredOptionalDigestAndTimeout
+=== RUN   TestRuntimeRequiredOptionalDigestAndTimeout/required
+    script_test.go:213: runtime status 41 output 
+=== RUN   TestRuntimeRequiredOptionalDigestAndTimeout/optional
+=== RUN   TestRuntimeRequiredOptionalDigestAndTimeout/digest
+    script_test.go:213: runtime status 65 output 
+=== RUN   TestRuntimeRequiredOptionalDigestAndTimeout/timeout
+    script_test.go:213: runtime status 124 output 
+--- PASS: TestRuntimeRequiredOptionalDigestAndTimeout (1.17s)
+    --- PASS: TestRuntimeRequiredOptionalDigestAndTimeout/required (0.04s)
+    --- PASS: TestRuntimeRequiredOptionalDigestAndTimeout/optional (0.06s)
+    --- PASS: TestRuntimeRequiredOptionalDigestAndTimeout/digest (0.03s)
+    --- PASS: TestRuntimeRequiredOptionalDigestAndTimeout/timeout (1.03s)
+=== RUN   TestRuntimeWatchdogCancellationPreservesOptionalContinuation
+--- PASS: TestRuntimeWatchdogCancellationPreservesOptionalContinuation (0.15s)
+PASS
+ok  	github.com/lober/lober/internal/render	1.324s

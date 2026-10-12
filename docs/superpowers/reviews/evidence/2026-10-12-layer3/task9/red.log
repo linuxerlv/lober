@@ -1,0 +1,16 @@
+--- FAIL: TestCompleteInstallerManifest (0.00s)
+    content_test.go:25: builtin-kickstart does not assemble partition
+    content_test.go:25: builtin-kickstart does not assemble network
+    content_test.go:25: builtin-kickstart does not assemble account
+    content_test.go:25: builtin-kickstart does not assemble sshkey
+    content_test.go:31: missing installer autoinstall
+    content_test.go:31: missing installer autoyast
+    content_test.go:31: missing installer agama
+    content_test.go:31: missing installer unattend
+    content_test.go:31: missing installer esxi-ks
+    content_test.go:31: missing installer preseed
+    content_test.go:35: manifest = 1 templates / 1 hooks; want 7 / 5
+FAIL
+FAIL	github.com/lober/lober/internal/builtin	0.201s
+ok  	github.com/lober/lober/internal/render	4.077s
+FAIL

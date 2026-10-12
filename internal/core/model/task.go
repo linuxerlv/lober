@@ -2,6 +2,7 @@ package model
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/lober/lober/internal/core/catalog"
 )
@@ -150,4 +151,26 @@ type SnapshotValue struct {
 	Type  ParamType
 	List  bool
 	Items []string // 规范形式，标量为单元素
+}
+
+// Sub 取子值（{{param:名字.子值}}），规则与 Value.Sub 是同一份：只有 cidr 有子值，列表逐项取、仍是列表，
+// 结果的类型是子值的类型。取不出时返回零值与 false：类型没有这个子值，或者有一项取不出（IPv6 取
+// netmask）。正文与所选片段引用的子值，参数求值在构建快照之前已查过取得出。
+func (v SnapshotValue) Sub(name string) (SnapshotValue, bool) {
+	sub, err := Value{typ: v.Type, items: v.Items}.Sub(name)
+	if err != nil {
+		return SnapshotValue{}, false
+	}
+	return SnapshotValue{Type: sub.typ, List: v.List, Items: sub.items}, true
+}
+
+// Join 以单个空格连接各项，是 {{param:名字|join}} 内联进正文的写法。规范形式里不会有空项，空项只会来自
+// 坏数据；这里照原样连接、不跳过，只是把坏数据的行为定下来，不是特意支持空项。EnvValue 同此。
+func (v SnapshotValue) Join() string {
+	return strings.Join(v.Items, " ")
+}
+
+// EnvValue 以换行连接各项，是脚本经 EnvName 的环境变量拿到的值，与 Value.Canonical 相同。
+func (v SnapshotValue) EnvValue() string {
+	return strings.Join(v.Items, "\n")
 }

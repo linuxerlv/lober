@@ -78,7 +78,7 @@
 
 ### 系统值
 
-系统值由调用方按本次请求填入，渲染不自己构造地址。现有词表在 `catalog/timing.go:67-75`：repo、iso、smb、gateway、task、sn、lbrace。本层要补 token 与 syslog 地址（任务 2）。
+系统值由调用方按本次请求填入。渲染不自己**构造**地址——它不知道网关的主机名与端口；但它要按机器面约定**拼接**地址（基地址加相对路径），所以基地址必须经系统值传进来。作者词表仍为 repo、iso、smb（仅 unattend）、gateway、task、sn、lbrace。已补 token、syslog-addr、artifacts 与 finalize-token 为私有调用输入，不加入作者能力表；repo/iso 只由 artifacts 基地址加冻结角色路径派生，拒绝调用方覆写。
 
 ### 展开规则
 
@@ -161,8 +161,8 @@ func (v SnapshotValue) EnvValue() string
 - ValidID 与 IsSafeWord 的子集关系（S1-6）：对每个字符拼「字符+a」与「a+字符」，凡 ValidID 判真的同时断言 IsSafeWord 为真。ValidID 本来就拒收首字符 `-`、也不收 `@`，所以只收紧首字符时这条保证仍成立；若将来对结尾字符另加限制，这条断言会先红
 
 - [ ] **红：** 为上述覆盖清单写失败测试。`go -C .tmp/wf/r1 test ./internal/core/... -count=1`，预期 FAIL（新方法未定义、`Build` 不报新代码）。
-- [ ] **绿：** 实现到上述测试通过。不要动渲染（还不存在）。预期 PASS。
-- [ ] **重构 + commit：** `params.subOK` 的旧实现删掉，确认 `make check` 全绿后 commit（`feat(core): 快照构建补两条不变式，model 提供子值与连接取值`）。
+- [x] **绿：** 实现到上述测试通过。不要动渲染（还不存在）。预期 PASS。
+- [x] **重构 + commit：** `params.subOK` 的旧实现删掉，确认 `make check` 全绿后 commit（`feat(core): 快照构建补两条不变式，model 提供子值与连接取值`）。
 
 **风险：** `build_test.go:845` 现有用例构造的正是重名插槽且 `Build` 成功，改成期望报错会让那一例反向。要确认没有别的测试依赖「重名插槽能过」。
 
@@ -180,14 +180,17 @@ func (v SnapshotValue) EnvValue() string
 
 ```go
 func DeliveryFiles(f Format) []FileKind
+func DeliveryFileName(f Format, k FileKind) (string, bool)
 func AnswerURL(base, task, token, file string) string
-func ArtifactPath(isoID string, role string) string
+func ArtifactURL(base, rel string) string
 ```
 
 - `FileKind` 是带类型的常量（`FileMenu`、`FileAnswer`、`FileAux`、`FileScript`），不用字符串字面量（L-8）
-- 地址格式照 spec §8.1：`GET /v1/answer/{task}/{token}/{file}`，token 在路径段里，不用 query string（§4.4）
-- 制品目录布局：ISO 记录只存相对路径，渲染据此拼出完整地址；版本已由 `ISO.Validate` 限成 `^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`，所以不会目录穿越（L-6）
+- 地址格式照旧 SPEC.md §8.1：`GET /v1/answer/{task}/{token}/{file}`，token 在路径段里，不用 query string（旧 SPEC.md §4.4）。`file` 传空串时返回以 `/` 结尾的目录地址，Ubuntu 的 `ds=nocloud-net;s=` 要用
+- `DeliveryFileName` 只给 Answer 与 Aux 登记具体文件名（ks.cfg、preseed.cfg、user-data、meta-data、boot.cfg 这些）。spec §5.4 第 3 步要网关「查文件名在不在该格式的下发清单里」，只登记种类的话文件名会在渲染与网关各写一份。Menu 走 `/v1/boot`、Script 按插槽取，都不在 `/v1/answer` 下的固定名字之列
+- `ArtifactURL` 只做「相对路径 → 完整地址」这一步，`rel` 取自 `ISO.Artifacts[role]`。相对路径由第 4 层导入时写进 Artifacts（`model/registry.go:146` 写明「角色由第 4 层定」，catalog 不解释角色）；其中的版本段已由 `ISO.Validate` 限成 `^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`，不会目录穿越（L-6），catalog 不再查
 - 七种格式各自的下发清单照 spec §2.1 与旧 SPEC.md 的菜单形态（`git show 7355e6a:SPEC.md` §4.5）
+- 系统值补三个：token、syslog 地址、制品基地址。`syslog` 已经是系统部件，标识不能撞（`timing_test.go:286` 专门断言 `SystemValue("syslog")` 无效）。三个都只进词表、不进任何格式的能力表——进能力表要改 `codes.go` 里 `sysvalue_unknown` 的「七个」，而 `codes.go` 不在本任务的文件清单里
 
 **覆盖清单：**
 - 七种格式各自的下发清单，逐一列出
@@ -196,10 +199,10 @@ func ArtifactPath(isoID string, role string) string
 - 能力表自检：`DeliveryFiles` 覆盖七种格式，没有遗漏也没有多余（照 `T8-8` 的做法）
 
 - [ ] **红：** 为覆盖清单写失败测试。`go -C .tmp/wf/r2 test ./internal/core/catalog/ -count=1`，预期 FAIL。
-- [ ] **绿：** 实现。预期 PASS。
-- [ ] **重构 + commit：** `make check` 全绿后 commit（`feat(catalog): 补下发文件清单、机器面地址格式与制品目录布局`）。
+- [x] **绿：** 实现。预期 PASS。
+- [x] **重构 + commit：** `make check` 全绿后 commit（`feat(catalog): 补下发文件清单、机器面地址格式与制品目录布局`）。
 
-**风险：** 旧 SPEC.md 只给了 RHEL 系、Ubuntu、Debian、Windows、ESXi 的菜单形态，SUSE 两种（AutoYaST、Agama）没有。这两种的下发清单要自己定，并在计划外的 spec 里补记——本任务只按已知的写，SUSE 那两格标注依据不足，由任务 8 真写内置内容时定。
+**风险：** 旧 SPEC.md 给了 RHEL 系、Ubuntu、Debian、Windows、ESXi 和 AutoYaST（第 89 行的 `autoyast=`，文件名 `autoinst.xml` 出自旧 main 的 `render.go:111`）的菜单形态。**只有 Agama 两处都没有出处**，所以只有它的那一格标注依据不足、留给任务 8，其余六格按旧依据登记。不要凭想象编一份看起来合理的清单——装机系统里编出来的下发清单，错了要到真装机才发现。待定项要有会报红的机制盯着（见「覆盖清单」），否则任务 8 忘了改也没人知道。
 
 ### 任务 3：守卫改成全模块列包
 
@@ -212,7 +215,7 @@ func ArtifactPath(isoID string, role string) string
 
 **做法：**
 
-- 遍历范围限在 `internal/` 和以后的 `cmd/`，不碰 `web/`（`node_modules` 很大）
+- 全模块发现以 `go list ./...` 的 eligible tree 为准（尊重 go.mod ignore、testdata、点/下划线目录、嵌套模块等 Go 规则）。`make archcheck` 用 `-count=1` 实际重跑发现，`make test` 与 `make race` 都依赖它；仅遍历 internal/cmd 不能保证其他已存在根目录新增包时缓存失效。原 internal/cmd 遍历继续用于这些已登记层的整包构建约束检查，不再充当全模块缓存保证。
 - 不属于任何已知层的包报违规，这样包放错目录查得出来
 - 第三方限制从 `storeRule` 提到全模块：只有 pgstore 能用 gorm 与 pgx，pgtest 能用 pgx
 - 第 3 层两个包的规则：只许标准库白名单与层 1，不许 store/pgstore，不许第三方；`internal/builtin` 另许 `embed`
@@ -220,10 +223,12 @@ func ArtifactPath(isoID string, role string) string
 - 标准库白名单按渲染实际要用的扩充（评审点：`bytes`、`strings`、`sort`、`path`、`embed`）
 
 - [ ] **红：** 先写新规则的用例（第 3 层包 import store 要报、import 第三方要报、import 层 1 不报；不属于任何层的包要报；存储层 import 时钟函数要报）。`go -C .tmp/wf/r3 test ./internal/archtest/ -count=1`，预期 FAIL。
-- [ ] **绿：** 实现。此时 `internal/render` 与 `internal/builtin` 还不存在，规则先靠合成的源码测。预期 PASS。
-- [ ] **重构 + commit：** `make check` 全绿后 commit（`test(archtest): 守卫改成全模块列包，时钟检查套到存储层与第 3 层`）。
+- [x] **绿：** 实现。此时 `internal/render` 与 `internal/builtin` 还不存在，规则先靠合成的源码测。预期 PASS。
+- [x] **重构 + commit：** `make check` 全绿后 commit（`test(archtest): 守卫改成全模块列包，时钟检查套到存储层与第 3 层`）。
 
-**风险：** `layerSourceDirs` 要覆盖新目录，否则新增包后 `go test` 会复用旧的 PASS。常量与引用它的用例必须在同一次改动里一起加，否则 archtest 编不过（第 2 层删 memstore 时踩过）。
+**风险（最终评审 I3 修正）：** 子进程 `go list` 的输入不由 Go 测试缓存自动追踪；直接 `go test` 可能复用新增包之前的 PASS。正式增量门禁必须通过 `make archcheck`（或依赖它的 test/race/check）无缓存重跑发现。集成回归先在既有 tools 根目录下建立普通/race 缓存 PASS，再新增未归层包并验证真实 Makefile 两条路径均拒绝。常量与引用它的用例必须在同一次改动里一起加，否则 archtest 编不过（第 2 层删 memstore 时踩过）。
+
+历史证据边界：任务 1–3 的实现/守卫用例已由控制器检查并纳入提交，最终检查再次覆盖；原逐任务 RED 输出未保存在本次 SDD，故 RED 复选框保留未勾，不把代码存在当作 RED 证据。
 
 ### 任务 4：渲染骨架与占位符展开
 
@@ -253,6 +258,7 @@ func Render(r Request) ([]byte, []model.Problem, error)
 - `error` 只用于调用方用错接口（比如 `Kind` 不认识），内容问题一律走 `Problem`
 - 展开按「展开规则」一节的八条做
 - 占位符经 `scan.Scan` 的 Segments 取，不自己认词法（避免抄 `scan` 的第四份）
+- **本任务要定一件事**（任务 2 的实现者提出）：`repo` 与 `iso` 两个系统值现在有两条可能的来源——调用方直接填，或渲染用 `artifacts` 基地址加 `ISO.Artifacts[role]` 经 `catalog.ArtifactURL` 拼出。只留一条，并在 `Request.Values` 的注释里写明哪些键由调用方填、哪些由渲染拼。留两条就是同一个地址有两份出处
 
 **覆盖清单：**
 - 四类占位符各自的展开：系统值、参数引用、片段插槽、执行插槽、系统部件
@@ -261,9 +267,9 @@ func Render(r Request) ([]byte, []model.Problem, error)
 - 原样保留：cloud-init 的 Jinja、lober 命名空间下写错的占位符
 - 确定性：同一个 `Request` 连渲染两次逐字节相同；含 map 的输入（Params、Artifacts）顺序稳定
 
-- [ ] **红：** 为覆盖清单写失败测试，用手写的小快照当输入（不依赖内置内容，它还不存在）。`go -C .tmp/wf/r4 test ./internal/render/ -count=1`，预期 FAIL。
-- [ ] **绿：** 实现展开与行处理；四类输出的具体拼装返回 `errNotImplemented`，留给任务 6、7、8。预期 PASS。
-- [ ] **重构 + commit：** `make check` 全绿后 commit（`feat(render): 渲染骨架与占位符展开`）。
+- [x] **红：** 为覆盖清单写失败测试，用手写的小快照当输入（不依赖内置内容，它还不存在）。`go -C .tmp/wf/r4 test ./internal/render/ -count=1`，预期 FAIL。
+- [x] **绿：** 实现展开与行处理；四类输出的具体拼装返回 `errNotImplemented`，留给任务 6、7、8。预期 PASS。
+- [x] **重构 + commit：** `make check` 全绿后 commit（`feat(render): 渲染骨架与占位符展开`）。
 
 **风险：** 列表逐行重复要知道行的边界，而 `scan` 的原文段会跨行（`flushText`，`scan.go:325-331`），Segment 只记开头的行列。按 `\n` 切行的规则要和 `scan.go:58-61` 一致（CRLF 的 `\r` 留在行尾）。如果这里要第二份切行逻辑，优先让 `scan` 导出按行的视图，别在渲染里另写。
 
@@ -296,9 +302,9 @@ func Fingerprint(v any) string // 序列化后的指纹，golden 用
 - 指纹 golden：七个模板与五个 hook 各一份
 - 升级路径：把发布过的每个内置版本依次装进同一个库，证明没被改名或改内容破坏（第 2 层计划第 514 行）。这一条连真实 PostgreSQL，经 `pgstore/pgtest`
 
-- [ ] **红：** 写上述测试，内置内容先只放 kickstart 一个模板和它用到的 hook。`go -C .tmp/wf/r5 test ./internal/builtin/ -count=1`，预期 FAIL。
-- [ ] **绿：** 实现取出入口与第一份内置内容。预期 PASS。
-- [ ] **重构 + commit：** `make check` 全绿后 commit（`feat(builtin): 内置内容的骨架、指纹 golden 与装载用例`）。
+- [x] **红：** 写上述测试，内置内容先只放 kickstart 一个模板和它用到的 hook。`go -C .tmp/wf/r5 test ./internal/builtin/ -count=1`，预期 FAIL。
+- [x] **绿：** 实现取出入口与第一份内置内容。预期 PASS。
+- [x] **重构 + commit：** `make check` 全绿后 commit（`feat(builtin): 内置内容的骨架、指纹 golden 与装载用例`）。
 
 **风险：** 升级路径用例要连库，所以 `internal/builtin` 的测试文件会 import `pgstore/pgtest`。测试文件不查 import，守卫不拦，但要在包说明里写明为什么只有测试碰库。另外「发布过的版本」现在只有一个，这条用例的价值要等真有第二个版本才显现——先把骨架搭好。
 
@@ -322,12 +328,12 @@ func Fingerprint(v any) string // 序列化后的指纹，golden 用
 **覆盖清单：**
 - 五种格式 × （full、minimal） × （BIOS、UEFI）
 - 每种格式的必需系统部件都在（照 `catalog/timing.go:87-158` 的能力表）
-- 渲染出的每个地址符合机器面地址格式（spec §7.2 第 3 条点名要这条测试）
+- 渲染出的每个地址符合机器面地址格式（spec §7.2 第 3 条点名要这条测试）。catalog 只有拼接、没有解析，所以这条测试要有一个解析的一端：要么在测试里用 `net/url` 按段解开（任务 2 的 `address_test.go` 就是这么做的，照它），要么给 catalog 补一个 `AnswerURL` 的反函数。选后者的话要先确认网关（第 7 层）会不会用同一个反函数——会用就该放进 catalog，只给测试用就别加
 - 执行插槽展开后只有一行（同上）
 
-- [ ] **红：** 写 golden 测试，`testdata` 先留空。`go -C .tmp/wf/r6 test ./internal/render/ -count=1`，预期 FAIL（golden 不存在）。
-- [ ] **绿：** 实现五种应答文件的拼装，生成 golden，逐行比对旧产出并写差异说明。预期 PASS。
-- [ ] **重构 + commit：** `make check` 全绿后 commit（`feat(render): 五种有旧版可对照的应答文件`）。
+- [x] **红：** 写 golden 测试，`testdata` 先留空。`go -C .tmp/wf/r6 test ./internal/render/ -count=1`，预期 FAIL（golden 不存在）。
+- [x] **绿：** 实现五种应答文件的拼装，生成 golden，逐行比对旧产出并写差异说明。预期 PASS。
+- [x] **重构 + commit：** `make check` 全绿后 commit（`feat(render): 五种有旧版可对照的应答文件`）。
 
 **风险：** 旧系统的 golden 是旧快照结构的产出，逐行对照时会有大量「结构变了」的差异，容易掩盖真正的回归。对照时先把差异分成三类：结构变化（预期）、修过的 bug（预期，指向附录 A 的提交）、无法解释（必须查清）。第三类一条都不能留。
 
@@ -352,11 +358,11 @@ func Fingerprint(v any) string // 序列化后的指纹，golden 用
 - meta-data 与 user-data 落在同一个目录下，地址与菜单里的 `s=` 一致
 - 地址都符合机器面地址格式
 
-- [ ] **红：** 写 golden 测试。`go -C .tmp/wf/r7 test ./internal/render/ -count=1`，预期 FAIL。
-- [ ] **绿：** 实现。预期 PASS。
-- [ ] **重构 + commit：** `make check` 全绿后 commit（`feat(render): 三种菜单与 ESXi、Ubuntu 的附属文件`）。
+- [x] **红：** 写 golden 测试。`go -C .tmp/wf/r7 test ./internal/render/ -count=1`，预期 FAIL。
+- [x] **绿：** 实现。预期 PASS。
+- [x] **重构 + commit：** `make check` 全绿后 commit（`feat(render): 三种菜单与 ESXi、Ubuntu 的附属文件`）。
 
-**风险：** Ubuntu 的 `url=` 要指向整张 ISO，所以制品目录布局里必须有「原始 ISO」这个角色（任务 2 的 `ArtifactPath`）。如果任务 2 没定这个角色，这里会卡住——先核对。
+**风险与结果：** Ubuntu 的 `url=` 必须指向完整原始 ISO；第 3 层已固定 `iso` 角色并覆盖缺角色拒绝，第 4 层按本计划交接验证真实字节与安全相对路径。角色命名不再由导入器独立另定。
 
 ### 任务 8：无旧版可对照的格式
 
@@ -365,6 +371,7 @@ func Fingerprint(v any) string // 序列化后的指纹，golden 用
 **文件：**
 - 修改：`internal/render/menu.go`、`aux.go`、`answer.go`
 - 创建：`internal/render/script.go` —— 执行插槽的运行脚本
+- 修改：`internal/core/catalog/delivery.go`、`delivery_test.go` —— 补 Agama 的下发清单（见下）
 - 测试：对应的 `_test.go`
 
 **做法：**
@@ -377,16 +384,17 @@ func Fingerprint(v any) string // 序列化后的指纹，golden 用
 - 运行脚本：执行插槽展开出的脚本，用目标环境的 shell 做语法检查（spec §7.2 第 3 条要求 busybox sh、bash）
 
 **覆盖清单：**
+- **补 Agama 的下发清单（任务 2 留下的待定项）**：在 `catalog/delivery.go` 登记它的应答文件名，定下要不要附属文件，每项都写上依据；再从 `delivery_test.go` 的 `pendingDeliveryNames` 与 `pendingDeliveryKinds` 删掉对应项。文件名只有 catalog 一份，不许在 render 里另写——这是本任务要改 catalog 的唯一原因。任务 2 查遍旧 SPEC.md 与旧系统都没有 Agama 的出处，所以这里定的东西必须指到 Agama 自己的文档，指不出来就标「待真机核实」并记进 spec §8
 - Agama 应答文件、AutoYaST 与 Agama 菜单、Windows 菜单、WinPE 启动脚本各一份 golden
 - 运行脚本：片段与脚本混排、多个执行插槽、脚本的环境变量按 `EnvName` 导出、列表以换行连接
 - 运行脚本过 shell 语法检查（busybox sh 与 bash 各一遍）
 - Windows 的 SSH 公钥 hook 只保证 2025（spec §8），其余版本标注未验证
 
-- [ ] **红：** 写 golden 与语法检查测试。`go -C .tmp/wf/r8 test ./internal/render/ -count=1`，预期 FAIL。
-- [ ] **绿：** 实现。预期 PASS。
-- [ ] **重构 + commit：** `make check` 全绿后 commit（`feat(render): 补齐无旧版可对照的格式与运行脚本`）。
+- [x] **红：** 写 golden 与语法检查测试。`go -C .tmp/wf/r8 test ./internal/render/ -count=1`，预期 FAIL。
+- [x] **绿：** 实现。预期 PASS。
+- [x] **重构 + commit：** `make check` 全绿后 commit（`feat(render): 补齐无旧版可对照的格式与运行脚本`）。
 
-**风险：** 这一批没有旧产出做参照，错了只有真装机能发现。所以 golden 的每一行都要能指到 spec 或安装器文档的依据，指不出来的标注「待真机核实」并记进 spec §8 的风险表。Windows 与 Agama 尤其如此。shell 语法检查需要本机有 busybox 与 bash——`make check` 跑在 Windows 上，这一项要能在没有它们时明确失败而不是跳过（照 PostgreSQL 的 DSN 那条规矩）。
+**风险：** 这一批没有旧产出做参照，错了只有真装机能发现。所以 golden 的每一行都要能指到 spec 或安装器文档的依据，指不出来的标注「待真机核实」并记进 spec §8 的风险表。Windows 与 Agama 尤其如此。shell 语法检查在 WSL Ubuntu 原生 Go 1.27.2 下运行，busybox 与 bash 缺失时明确失败而不是跳过；Windows 目标数据只表示静态/传输验证，不做 Windows 主机适配或原生执行（照 PostgreSQL 的 DSN 那条规矩）。
 
 ### 任务 9：剩下六个内置模板与五个内置 hook
 
@@ -410,14 +418,14 @@ T6-3 选 B 之后，内置模板里的参数仍要按安全词的陷阱写：参
 - 七个模板 × （BIOS、UEFI）的 golden，加五个 hook 各自的指纹 golden
 - 每个模板过 `activation.Template`，每个 hook 过 `activation.Hook`
 - 分区 hook 的 BIOS 分支加 GPT 时要有 biosboot（`83584d7`）
-- Ubuntu 的内存要求写进内置模板的说明（spec §8）——`model.Template` 现在没有 Description 字段，要加的话连带 pgstore 五处同步，见风险
+- Ubuntu 的内存要求已写进内置模板正文注释（spec §8），不新增 Description 或存储字段
 - 每个模板的插槽都在正文里出现过，装配表没有多余的键
 
-- [ ] **红：** 写 golden 与激活判定测试。`go -C .tmp/wf/r9 test ./internal/builtin/ ./internal/render/ -count=1`，预期 FAIL。
-- [ ] **绿：** 实现六个模板与五个 hook。预期 PASS。
-- [ ] **重构 + commit：** `make check` 全绿后 commit（`feat(builtin): 七个内置模板与五个内置 hook`）。
+- [x] **红：** 写 golden 与激活判定测试。`go -C .tmp/wf/r9 test ./internal/builtin/ ./internal/render/ -count=1`，预期 FAIL。
+- [x] **绿：** 实现六个模板与五个 hook。预期 PASS。
+- [x] **重构 + commit：** `make check` 全绿后 commit（`feat(builtin): 七个内置模板与五个内置 hook`）。
 
-**风险：** spec §8 要求「目标机内存要求写进内置模板的说明」，但 `model.Template` 没有 Description 字段（`authoring.go:121-144`，Hook 有）。加这个字段要同步五处：model 字段、行类型字段、`toTemplateVersionRow`、行转回 model、`templateContentColumns`，还要改 `TemplateTextProblems`、clone 与 golden，而且列清单没有测试兜底（第 2 层清单记过这件事）。两条路：加字段并顺手补一条「列清单覆盖行类型全部可写字段」的测试；或者把内存要求写在模板正文的注释里，不加字段。选哪条在本任务开工时定，写进提交说明。
+**决定与结果：** Ubuntu 内存要求已选模板正文注释，不新增 Description/model/store 字段；实际 ISO 的内存 sizing 仍留真装验证。历史 v1 保持逐字节不变，Kickstart/packages 升 v2，新身份从 v1 起；真实 PostgreSQL 升级重放已验证。
 
 ### 任务 10：同步文档
 
@@ -432,31 +440,36 @@ T6-3 选 B 之后，内置模板里的参数仍要按安全词的陷阱写：参
 
 - spec：§2.1 的能力表补 token 与 syslog 地址；§2.2 第 65 行 Windows 那条按真写出来的内容更新，仍待真机核实的标注清楚；§8 风险表补 Agama 与 AutoYaST 菜单形态依据不足、Windows wimboot 待核实；SUSE 两种的下发清单补进 §2.1
 - 第 1 层计划交接一节：补 T8-4 的三条（清单当初就建议补，至今没补）
-- 第 1 层清单：P-2 标「选 A，已修」；T6-3 的 B 标「选 B，已修」；S1-6 随 T6-3 B 标已修；T6-6、T8-4 标已修；T4-3 记下 unattend 内置内容的决定；T8-8 标已修
+- 第 1 层清单：P-2 标「选 A，已修」；T6-3 的 B 标「选 B，已修」；S1-6 在第 2 层清单原条目随 T6-3 B 标已修；T6-6、T8-4 标已修；T4-3 记下 unattend 内置内容的决定；T8-8 标已修
 - 第 2 层清单：S2-12、S2-13、S2-22 标已修；S5-1 的两件标已修；S3-10 说明仍归第 5 层
 
-- [ ] **红/绿：** 文档任务没有测试。改完用 Grep 核对：清单里归第 3 层的条目都有「结果」行；spec 里没有与本层实现矛盾的说法。
-- [ ] **commit：** `docs: 第 3 层落地后同步 spec、计划与两份清单`
+- [x] **红/绿：** 文档任务没有测试。改完用 Grep 核对：清单里归第 3 层的条目都有「结果」行；spec 里没有与本层实现矛盾的说法。
+- [x] **commit：** `docs: 第 3 层落地后同步 spec、计划与两份清单`
 
 ---
 
 ## 留给后续层的约定
 
-- 第 4 层：ISO 的获取来源加新表时，制品目录布局（任务 2）已经定下相对路径的写法，导入按它写文件。原始 ISO 要作为一个角色发布（Ubuntu 的 `url=` 要用，spec §2.2 第 64 行）。
-- 第 5 层：预览调 `render.Render`，与真实下发同一条路（C35）。没指定主机或 ISO 时用示例值并标明是示例；预览的 token 是示例值（spec §6.2 第 2 条）。装配点调 `store.EnsureBuiltin*` 装载 `builtin.Templates()` 与 `builtin.Hooks()`，报 ErrConflict 时重试。按 `builtin` 当前带的清单过滤向导里的旧身份（S5-1）。
-- 第 7 层：网关按 `catalog.DeliveryFiles` 与任务状态决定给不给某个文件（spec §4.7）。hook 脚本按快照里的摘要从仓储取出直接下发，不经渲染（spec §6.2 第 5 条）。改能力表时照 T8-8 补三条断言。真装后若把 windows-desktop 限为 uefi，回到第 1 层改固件要求表（T4-3）。
+- 第 5 层：预览调 `render.Render`，与真实下发同一条路（C35）。没指定主机或 ISO 时用示例值并标明是示例；预览的 token/finalize-token 都是注明的示例值（spec §6.2 第 2 条）。装配点调 `store.EnsureBuiltin*` 装载 `builtin.Templates()` 与 `builtin.Hooks()`，报 ErrConflict 时重试。先 hooks 后 templates，并按 `builtin` 当前 7/5 清单与 CurrentApproved 过滤旧身份（S5-1）。L-8 全局词表、Subject.Kind、S3-10 全集对齐仍归第 5 层。
+- 第 4 层：ISO.Artifacts 角色固定为 kernel/initrd/stage2/repo/iso/mboot/esxi-tree、Agama live-root、Windows wimboot/bcd/boot-sdi/boot-wim/winpeshl/winpe-busybox/winpe-curl。导入器证明安全相对路径、存在性、架构/版本/媒体完整性及目标 ABI（Windows helper 同时覆盖 PE 和最终 OS）。Debian 同版本 netboot、Agama 实际 product/schema、原始 ESXi boot.cfg 与包仓库均须真实媒体资格确认。渲染无 IO，仅信任冻结输入。详情见 [菜单/附属文件](../../../internal/render/testdata/menu-aux-contract.md)、[运行契约](../../../internal/render/testdata/runtime-contract.md)、[内置 native 内容](../../../internal/builtin/testdata/native-content.md)。
+- 第 7 层：网关按 `catalog.DeliveryFiles` 与 `catalog.DeliveryFileName` 决定给不给某个文件，再看任务状态（spec §4.7、§5.4 第 3 步）；文件名只有 catalog 一份，网关不要另写。hook 脚本按快照里的摘要从仓储取出直接下发，不经渲染（spec §6.2 第 5 条）。T8-8 三条断言已补，后续改能力表仍须同步。真装后若把 windows-desktop 限为 uefi，回到第 1 层改固件要求表（T4-3）。
+  **token 的字符集要正向定死**：合 `model.ValidID`，或更严地只用 `[0-9a-f]`。不要只说「用不需要转义的字符」——`url.PathEscape` 不转义的字符里就有 `& $ + = : @`，而 `&` 在 unattend 的 `startnet.cmd` 里会把命令切开，`$` 在 sh 的取脚本命令里会被展开。另外网关若按解码后的 Path 路由，含 `%2F` 的段会被切开。任务 ID 合 `model.ValidID`，本来就满足。
+  路由前缀和 SignalURL 均复用 catalog，不写第二份。信号 POST/text/plain 带 slot/timing/rc，hook 另带 instance/digest 与最多 4096 字节尾部；解析/鉴权/服务端去重归网关。首次开机为独立 24 小时 finalize-token，不能退回 90 分钟 boot token。FileMenu 必须传实际 Request.Firmware，ESXi aux 必须传原始不可变 ESXiBootConfig。第 7 层验证 systemd 根路径、Agama 单一路径、Windows OEM/单条 FirstLogonCommand/AutoLogon 与原生 ABI、ESXi 拥有 marker 的 native 文件及 Secure Boot 限制；Ubuntu 测试不认证真机安装。
 - 任何一层要改渲染的展开规则，先回到第 1 层同步改判定——规则由第 1 层校验、第 3 层执行，两边必须一致（第 1 层计划第 746 行）。
+- **新加的包必须同时给守卫加一条规则**（任务 3 定下的，适用于第 4、5、7 层）。守卫现在全模块列包，不属于任何已知层的包一律报违规，所以：第 5 层加 `cmd/lober`（装配点）时会立刻被报出来，要在同一次改动里补装配点的规则（它依赖全部模块，是唯一这样的包）；第 4、5、7 层在 `internal/` 下新加的包同理。常量与引用它的用例必须在同一次改动里一起加，否则 archtest 编不过。
 
 ## 整体验收
 
-- [ ] 在主目录跑 `make check`，五步全部通过，退出码为 0。PostgreSQL 的测试真的跑了（内置内容的升级路径用例），没有因为找不到 DSN 而跳过。
-- [ ] `go list ./...` 列出的包里有 `internal/render` 与 `internal/builtin`，且守卫覆盖到它们：构造一个 import store 的反例，`go test ./internal/archtest/` 报违规。
-- [ ] 七个内置模板各有 golden，BIOS 与 UEFI 分开（spec §7.2 第 3 条）。
-- [ ] 新 golden 与旧系统产出的差异逐条写明理由，没有「无法解释」那一类。
-- [ ] 渲染出的每个地址都符合机器面地址格式——有一条测试逐个检查（spec §7.2 第 3 条）。
-- [ ] 执行插槽展开后只有一行——有一条测试断言（同上）。
-- [ ] 运行脚本过 busybox sh 与 bash 的语法检查（同上）。本机没有这两个 shell 时测试明确失败，不跳过。
-- [ ] 同一个 `Request` 连渲染两次逐字节相同（C35）。
-- [ ] 六条决定每条都能指到一个测试或一处文档。
-- [ ] 第 1 层清单的 P-2、T6-3 B、T6-6、T8-4、T8-8、S1-6 都标了结果；第 2 层清单的 S2-12、S2-13、S2-22、S5-1 都标了结果。
-- [ ] 既有行为没变：`go test ./internal/core/... ./internal/store/...` 全绿，契约叶子数不少于 262。
+- [x] 在隔离 r10 克隆（保留共享主目录中其他代理工作）跑 `make check`，五步全部通过，退出码为 0。PostgreSQL 的测试真的跑了（内置内容的升级路径用例），没有因为找不到 DSN 而跳过。
+- [x] `go list ./...` 列出的包里有 `internal/render` 与 `internal/builtin`，且守卫覆盖到它们：构造一个 import store 的反例，`go test ./internal/archtest/` 报违规。
+- [x] 七个内置模板各有 golden，BIOS 与 UEFI 分开（spec §7.2 第 3 条）。
+- [x] 新 golden 与旧系统产出的差异逐条写明理由，没有「无法解释」那一类。
+- [x] 渲染出的每个地址都符合机器面地址格式——有一条测试逐个检查（spec §7.2 第 3 条）。
+- [x] 执行插槽展开后只有一行——有一条测试断言（同上）。
+- [x] 运行脚本过 busybox sh 与 bash 的语法检查（同上）。本机没有这两个 shell 时测试明确失败，不跳过。
+- [x] 同一个 `Request` 连渲染两次逐字节相同（C35）。
+- [x] 六条决定每条都能指到一个测试或一处文档。
+- [x] 第 1 层清单的 P-2、T6-3 B、T6-6、T8-4、T8-8、T4-3、L-8 都标了结果；第 2 层清单原条目的 S1-6、S2-12、S2-13、S2-22、S5-1、S3-10 都标了结果。
+- [x] 既有行为没变：`go test ./internal/core/... ./internal/store/...` 全绿，契约叶子数不少于 262。
+
+本层检查与任务 4–9 评审证据见 [2026-10-12 验收归档](../reviews/2026-10-12-layer3-acceptance.md)。任务 10 独立评审、最终整分支评审与本地 dev 集成仍由控制器继续完成；此文档提交不提前声明它们通过，闭环记录由控制器写入本地 dev 集成提交后再清理 SDD。

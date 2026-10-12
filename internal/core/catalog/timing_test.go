@@ -44,6 +44,10 @@ var planSystemParts = []struct {
 	{"cleanup", "凭据清理"},
 }
 
+// token、syslog-addr、artifacts 是第 3 层计划任务 2 补的，计划没给显示名：token 取 spec §6.2 第 2 条的叫法，
+// 另两个与「网关基地址」对称。它们只给系统部件与机器面地址用，不进任何格式的能力表，所以「能力表逐格与计划
+// 一致」里没有它们。
+// syslog 已经是系统部件的标识，系统值叫 syslog-addr，两者不混（见下面「未知或大小写不同」里的 syslog）。
 var planSystemValues = []struct {
 	id    SystemValue
 	label string
@@ -55,6 +59,10 @@ var planSystemValues = []struct {
 	{"task", "任务号"},
 	{"sn", "主机 SN"},
 	{"lbrace", "字面量 {{"},
+	{"token", "token"},
+	{"syslog-addr", "syslog 地址"},
+	{"artifacts", "制品基地址"},
+	{"finalize-token", "finalize token"},
 }
 
 // planTimingCap 是能力表里的一格：格式支持的一个时机，以及这个时机可用的解释器。
@@ -283,7 +291,8 @@ func Test未知或大小写不同的时机解释器部件与系统值无效(t *t
 			t.Errorf("系统部件 %q：Valid() = %v、Label() = %q，想要 false、空", v, v.Valid(), v.Label())
 		}
 	}
-	for _, v := range []SystemValue{"", "Repo", "REPO", " repo", "lbrace ", "rbrace", "{{", "url", "gw", "syslog", "安装源地址"} {
+	for _, v := range []SystemValue{"", "Repo", "REPO", " repo", "lbrace ", "rbrace", "{{", "url", "gw", "syslog", "安装源地址",
+		"Token", "syslog_addr", "artifact"} {
 		if v.Valid() || v.Label() != "" {
 			t.Errorf("系统值 %q：Valid() = %v、Label() = %q，想要 false、空", v, v.Valid(), v.Label())
 		}

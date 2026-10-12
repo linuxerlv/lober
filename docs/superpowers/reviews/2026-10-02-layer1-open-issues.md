@@ -15,7 +15,9 @@
 
 ## 修补结果
 
-2026-10-02 按你的决定修补，计划见 `docs/superpowers/plans/2026-10-02-layer1-fixups.md`。第 1 节 10 条、第 2 节 19 条全部落实（T13-8 随 L-7 一起做）；第 3 节这一轮只并入了 T7-5（随 L-6 进 ISO.Validate），其余 14 条仍归后续层；后来 L-8 里字段键那一项随修补轮之后的 C-3 修掉了（036f397），见 L-8 下面的结果。每条的做法和测试名写在条目标题下的「结果」一行。各条「出处」里的行号指 d45fbf3，修补后已经变了。
+2026-10-12 第 3 层补记：P-2 选 A、T6-3 选 B、T6-6、T8-4、T8-8 已修；T4-3 已记内置内容决定，桌面固件限制仍归第 7 层。S1-6 更新在第 2 层清单原条目。L-8 的全局词表/Subject.Kind 仍归第 5 层。历史条目正文保留原发现情形，以最新「结果」为准；详细验证见 [第 3 层验收](2026-10-12-layer3-acceptance.md)。
+
+2026-10-02 按你的决定修补，计划见 `docs/superpowers/plans/2026-10-02-layer1-fixups.md`。第 1 节 10 条、第 2 节 19 条全部落实（T13-8 随 L-7 一起做）；第 3 节这一轮只并入了 T7-5（随 L-6 进 ISO.Validate），其余 14 条当时仍归后续层（第 3 层最新结果见上段）；后来 L-8 里字段键那一项随修补轮之后的 C-3 修掉了（036f397），见 L-8 下面的结果。每条的做法和测试名写在条目标题下的「结果」一行。各条「出处」里的行号指 d45fbf3，修补后已经变了。
 
 修补轮的提交，都在 `feat/core-model` 上：
 
@@ -40,7 +42,7 @@
 | T13-10 | 选 A | 822eec6、03e0fec、5416531、43aca7b |
 | T5-3 | 按你的决定：名称只收可打印 ASCII | 822eec6 |
 | L-6 | 选 A，不做 C | 5416531、cc4c636 |
-| T6-3 | 只做 A；B 待第 3 层写内置模板之前定 | 03e0fec，文档随 U11 |
+| T6-3 | A 已修；选 B，已修（第 3 层） | 03e0fec、28a55e6 |
 | T1-1 | 标准库选 C，层内方向选 b | 091d3af |
 | L-7 | 选 A | 5416531、43aca7b、c7fe6db、a3dc308 |
 | T9-1 | 选 B | 43aca7b |
@@ -72,12 +74,14 @@
 
 2026-10-03，修补轮的跨任务评审给出以下 12 条建议（评审结论是「通过」，没有必须修改项）。它们都不阻塞合入 dev。其中两条要你拍板，十条并进第 2 层计划开头的清理任务。出处里的行号指 41ab33f。
 
-结果：十条清理都已修，2026-10-03 在 `feat/store` 上一起做成 036f397（第 2 层计划任务 3）。每条的做法与测试名写在条目下的「结果」里，各条出处的行号修补后已经变了。P-1、P-2 不在第 2 层的范围里，仍待拍板，没有动。
+结果：十条清理都已修，2026-10-03 在 `feat/store` 上一起做成 036f397（第 2 层计划任务 3）。每条的做法与测试名写在条目下的「结果」里，各条出处的行号修补后已经变了。P-1 当时未动；P-2 已在第 3 层选 A 并落实（28a55e6）。
 
 **要你拍板（各自写明了最晚什么时候定）：**
 
 - **P-1　锁定的 enum 取值不在 ISO 的集合里，审批和准入都查不到。** 模板把一个带 Offer 的 enum 锁定在写死的值或默认值上，而某个 ISO 的集合里没有这个值。这时激活判定和准入都放行，建任务时每台主机都报 param_not_offered，可它的下一步是「从 ISO 的选项里选一个」，锁定的格子又改不了。选项：A. 在 model 加一个共用判定，准入时把这种模板筛掉，问题报给模板作者；B. 保持现状，只把 admission 的包注释改准确。锁定且取自主机属性的格子遇到同样的情况，按 T11-8 的精神应改报 param_attr_unusable。最晚在第 5 层做向导之前定。（admission/admission.go:6-9、74-79；params/params.go:218-226）
 - **P-2　快照构建不查执行插槽的时机该格式支不支持。** 草稿的 unattend 正文写了 `{{slot:x@post-target}}`（unattend 只支持 pre 与 firstboot），草稿脚本也声明了 post-target 时，Build 照样产出快照。选项：A. Build 补报 slot_timing_unsupported，作为渲染可以依赖的第四条不变式；B. 在 Build 的文档里写明这一条由渲染自己查。最晚在第 3 层开工前定。（snapshot/build.go:191-196）
+
+  结果：选 A，已修（28a55e6）。Build 补报 slot_timing_unsupported；执行时机支持成为渲染可依赖的不变式，并拒绝重名插槽。
 
 **并进第 2 层计划开头的清理任务：**
 
@@ -193,7 +197,7 @@ C. 在 A 或 B 之外，由第 2 层加约束：state 为 ready 时 version、ar
 
 ### T6-3　安全词可作 shell 选项，Windows 命令行另有陷阱
 
-结果：只做了 A；B（拒收以 - 或 @ 开头的取值）留到第 3 层写内置模板之前再定，C 不做。IsSafeWord 的文档写明了 shell 选项、cmd 的 ^ 与 =、PowerShell 的 @ 与 - 这几处陷阱，字符集不变（03e0fec）；原计划任务 6 的「安全词」与「留给后续层的约定」随本清单一起补上。lober 只部署在 Linux 上（spec §4.8 已写明）；这些陷阱出在被装的 Windows 目标机上，与部署平台无关。
+结果：A 已修（03e0fec）；选 B，已修（28a55e6，2026-10-09）。IsSafeWord 拒收以 - 或 @ 开头的 word/enum 值，int 负数不受影响；sn_unsafe_in_body 与说明对齐。S1-6 实际在第 2 层清单，同步以逐字符断言核实 ValidID ⇒ IsSafeWord。Windows 参数经环境变量与编码载荷传入，目标原生 ABI 仍归第 7 层。
 
 问题：IsSafeWord 允许以 - 开头（--setopt=sslverify=0 能收下），int 也可以是负数；放进 shell 命令的参数位置（如 dnf install -y {{param:pkg}}）会被当成选项。Windows 侧：cmd.exe 里 ^ 是转义符、= 是批处理参数的分隔符；PowerShell 里 @ 开头会被当成展开，- 开头会被当成参数名。IsSafeWord 的文档（param.go:247-248）只提了 YAML 的陷阱。计划说安全词放进 shell 参数「不会改变结构」，这句对结构成立，对语义不成立；计划「风险」要求改字符集前逐格式确认，但没考虑 cmd 与 PowerShell，「留给后续层的约定」里也没写。
 
@@ -633,7 +637,7 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ## 3. 归后续层处理
 
-属于后续层的事，或要等后续层才有真实用途。写这一层的计划时纳入即可。修补轮只并入了 T7-5（随 L-6）；之后 L-8 里字段键那一项随 C-3 修掉（036f397），L-8 的其余部分和另外 13 条仍归后续层。
+属于后续层的事，或要等后续层才有真实用途。写这一层的计划时纳入即可。修补轮只并入了 T7-5（随 L-6）；之后 L-8 里字段键那一项随 C-3 修掉（036f397），L-8 的全局约定仍归第 5 层；另外 13 条中的第 3 层结果已在本节各条补记。
 
 ### T4-2　网关须先检查 iPXE 换算结果，不能传空值
 
@@ -645,6 +649,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### T6-6　子值缺少按类型与按快照的取法，第 3 层要补
 
+结果：已修（28a55e6）。ParamType.SubType 与 SnapshotValue.Sub/Join/EnvValue 共用 cidrAccessors；激活用 SubType，渲染从冻结值取子值、空格连接与换行环境变量。TestParamTypeSubType只有cidr有子值、TestSnapshotValueSub取子值、TestSnapshotValue的Join与EnvValue 覆盖。
+
 第 3 层。①activation 的 subOK 拿 192.0.2.1/24 按声明类型 Parse 再调 Sub（hook.go:269-279），哪些类型有哪些子值仍只在 model 登记一处，今天结果正确：其余受限类型解析不了这个样例，word 能解析但 Sub 只认 cidr。以后给 ip、hostname 这类加子值时样例解析不了，激活会拒掉合法引用（报错是显式的，加子值的人自测能发现）。②SnapshotValue 只有 Type、List、Items（task.go:121-127），Value.Sub 只能在 Parse 得到的 Value 上调用，而 Value 的字段不导出；第 3 层展开 {{param:ip.netmask}}、|join 和环境变量值时，要么借 ParamDecl{Type, List}.Parse 重建 Value（enum 没有 Options、Offer 时 Parse 会失败），要么自己再写一份 netmask 计算，C35 依赖的取值规则就成了两份。建议第 3 层开工时由 model 提供：从 cidrAccessors 派生的 ParamType.SubType(name) (ParamType, bool)，subOK 改用它；从 SnapshotValue 取子值、取 |join 与取环境变量值（换行连接）的函数，复用 cidrAccessors。fixed 值与默认值在激活时当场取子值的部分已归入 L-4。
 
 出处：internal/core/activation/hook.go:269-279（subOK）；model/param.go:186-230（cidrAccessors、Sub）；model/task.go:121-127（SnapshotValue）
@@ -652,6 +658,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：T6 concern「netmask 在激活时判断不了…」；T6 should「没有按类型静态查子值的导出接口（实现者已提出）…」；【T9-7】T9 顾虑：The sub-value check (subOK) parses the IPv4 sample 192.0.2.1/24；【T9-7】T9 建议：subOK（hook.go:210-217）把「只有 cidr 有子值」这条知识藏进了 IPv4 cidr 样例；【L-13】layerReview_should 第13条「快照只存子值的原料，没给取法」（前半：SnapshotValue 取子值）
 
 ### T8-4　渲染要照做的列表与子值约定还没写进交接
+
+结果：已修。第 1 层计划交接补齐三条；第 3 层 expand 测试与真实 snapshot 渲染覆盖 子值|join、同行同列表一次重复和执行/系统行不重复。
 
 第 3 层。层 1 已按下面三条校验，但计划的交接一节只写了「列表默认逐行重复，|join 以单个空格连接」：①接受 名字.子值|join，即列表逐项取子值后再以空格连接（scan 解析、activation 放行，与任务 6「Sub 对列表逐项取」一致）；②同一个列表参数在一行里出现几次、或取它的几个子值，只算一次逐行重复，每份抄本里各处代入同一项，不嵌套展开；③带执行插槽或系统部件的行一定不会逐行重复（激活已拦）。建议并入时先补进计划「留给后续层的约定」，第 3 层照做并加测试。
 
@@ -727,7 +735,7 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### L-8　标识常量、字段键与 ID@版本在各包各写一遍
 
-结果：字段键一项已修，其余仍归第 3、5 层（2026-10-08 补记，出自第 2 层清单的 S10-5）。字段键随 C-3 修掉了（036f397）：TemplateFieldKey、InstancePath、InstanceFieldKey 放在 model（problem.go）而不是 params，因为依赖守卫不许 activation 依赖 params；activation、params、snapshot 共用这一份，Test同一格在激活判定与参数求值里标在同一处 钉住两边一致。所以下面建议里「第 5 层做接口时，params 导出字段键构造函数」不用再做。「ID@版本」仍是五处各拼一份：activation/hook.go、admission/admission.go、params/params.go、snapshot/build.go，以及第 2 层的 store.VersionID。要收成一份，可以在 model 给 HookKey、TemplateKey 加 String()，几处都改调它；不是改用 store.VersionID，因为第 1 层不许依赖 store，而 store 本来就依赖第 1 层，反过来引用还会成环。catalog 的常量、全局词表和 Subject.Kind 常量仍留给第 3、5 层。
+结果：字段键一项已修；第 3 层所需机器面标识已有，剩余全局词表、Subject.Kind 与 ID@版本仍归第 5 层（2026-10-08 补记，出自第 2 层清单的 S10-5）。字段键随 C-3 修掉了（036f397）：TemplateFieldKey、InstancePath、InstanceFieldKey 放在 model（problem.go）而不是 params，因为依赖守卫不许 activation 依赖 params；activation、params、snapshot 共用这一份，Test同一格在激活判定与参数求值里标在同一处 钉住两边一致。所以下面建议里「第 5 层做接口时，params 导出字段键构造函数」不用再做。「ID@版本」仍是五处各拼一份：activation/hook.go、admission/admission.go、params/params.go、snapshot/build.go，以及第 2 层的 store.VersionID。要收成一份，可以在 model 给 HookKey、TemplateKey 加 String()，几处都改调它；不是改用 store.VersionID，因为第 1 层不许依赖 store，而 store 本来就依赖第 1 层，反过来引用还会成环。第 3 层新增所需 FileKind 等机器面常量，未把全局词表与 Subject.Kind 常量扩进本层；这两项及 ID@版本合并仍归第 5 层（S3-10 同步）。
 
 第 3、5 层。①catalog 没有为族、格式、系、时机、解释器、部件、系统值、架构、固件导出常量，后续层只能把 rocky 这类标识写成字面量，拼错要等 Valid() 或测试才发现；也没有导出全局词表，第 5、6 层列下拉框只能经 Families、SeriesOf 反推。②字段键（tpl/、插槽名/序号/）在 params 与 snapshot 里各拼一次，「ID@版本」在四个包里各拼一次，Subject.Kind 的八个取值和 ParamType 全是字面量。字段键目前有 TestBuild回归41b2fbe 兜底，一边改了测试会失败，不会静默丢值。model 已为 ISOState、VersionState、ImplKind、BindingSource 导出常量，两种做法并存。建议照计划「由第一个用到它的层加进来」的做法：第 3 层要按格式、类型分支时，导出对应的带类型常量（命名如 FormatKickstart、ParamCIDR），表也改用常量书写；第 5 层做接口时，params 导出字段键构造函数，model 提供 Subject.Kind 常量和 HookKey、TemplateKey 的 String()，catalog 导出全局词表。常量是纯追加，越早加，要迁移的字面量越少。
 
@@ -737,6 +745,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### T4-3　windows-desktop 允许 BIOS，与 Win11 要求不符
 
+结果：第 3 层内置 unattend 只覆盖 Windows Server，不带 Windows 11 绕过设置；桌面版是否限 UEFI 仍归第 7 层真装后决定，届时同步固件表。
+
 第 3 或第 7 层。windows-desktop 照计划登记成 bios、uefi 都支持，固件要求表里只有 esxi（platform.go:41-48）。Windows 11 官方要求 UEFI 与 Secure Boot（另有 TPM 2.0），BIOS 机器要靠安装时的绕过设置才装得上；固件要求按系登记，分不出 Windows 10 和 11。spec §2.8 的内置 unattend 模板只针对 Windows Server，眼下碰不到。第 3 层写 unattend 内置内容时决定要不要带绕过设置，或第 7 层真装验证后决定是否把 windows-desktop 限为 uefi；改这一格要回到计划任务 4 和固件要求表。
 
 出处：internal/core/catalog/platform.go:41-48；计划任务 4（第 227 行）；spec §2.8
@@ -744,6 +754,8 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 合并自：T4 concern：windows-desktop 照计划登记成两种固件都支持
 
 ### T8-8　扫描样例与能力表相符这一点没有断言
+
+结果：已修（第 3 层 Task10 自审补漏，非原 Task2）。Test七种格式的样例扫出预期的占位符 现在同时核对排序后的 Parts == RequiredParts、Sys 属于 SystemValues、执行 Slot.Timing 属于 Timings。三种受控违规在旧测试通过，补断言后各自报红；恢复真实样例后 scan 全包通过。之后改能力表仍须同步断言。
 
 第 3、7 层改能力表时。scan_test.go:25-28 的注释说七份样例都按各格式的能力表写，目前逐份相符，但没有测试检查；能力表改了以后样例可能悄悄不合规，注释不再属实（扫描本身的正确性不受影响）。改能力表时在 Test七种格式的样例扫出预期的占位符 里加三条断言：排序后的 parts 等于排序后的 RequiredParts()；sys 都在 SystemValues() 里；执行插槽的 Timing 都在 Timings() 里。现在顺手加也可以。
 

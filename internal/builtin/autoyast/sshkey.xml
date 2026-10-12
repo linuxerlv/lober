@@ -1,0 +1,3 @@
+<authorized_keys config:type="list">
+  <listentry>{{param:key}}</listentry>
+</authorized_keys>

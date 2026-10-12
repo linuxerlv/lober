@@ -165,11 +165,13 @@ var codeTable = map[Code]codeSpec{
 	"template_mixed_formats": {CategoryIncomplete, 1,
 		"模板勾的系不是同一种格式：%[1]v",
 		"一个模板只能勾同一种格式的系，正文按这种格式写；其他格式的系另建模板"},
-	// 插槽名重复。参数：插槽名。
+	// 插槽名重复，不论类型；每多出现一次报一条，落在后出现的那一处。快照构建也报它（第 3 层任务 1）：
+	// 草稿照样能预览，渲染却要依赖正文里的插槽名与快照一一对应。两处的 Subject 相同：Kind 为 slot，
+	// ID 为「模板 ID@版本」，Path 为插槽名，带行列。参数：插槽名。
 	"slot_duplicate": {CategoryIncomplete, 1,
 		"插槽「%[1]v」在正文里出现了不止一次",
 		"插槽名在一个模板里要唯一；给其中一个改名"},
-	// 执行插槽的时机该格式不支持。参数：时机、格式。
+	// 执行插槽的时机该格式不支持。快照构建也报它，理由与 Subject 同 slot_duplicate。参数：时机、格式。
 	"slot_timing_unsupported": {CategoryIncomplete, 2,
 		"%[2]v 格式不支持执行时机「%[1]v」",
 		"把这个执行插槽改成 %[2]v 格式支持的时机"},
@@ -310,7 +312,7 @@ var codeTable = map[Code]codeSpec{
 	// 产出，Subject 的 Kind 为 host，ID 为 SN。参数：SN。
 	"sn_unsafe_in_body": {CategoryIncompatible, 1,
 		"主机 SN「%[1]v」不是安全词，原样代入模板正文或所选片段里的 {{sys:sn}} 可能改变应答文件的结构",
-		"能代入 {{sys:sn}} 的 SN 只能由字母、数字和 ._:/@^+=- 组成，不能有空格；给这台主机换一个不引用 {{sys:sn}} 的模板，" +
+		"能代入 {{sys:sn}} 的 SN 只能由字母、数字和 ._:/@^+=- 组成，不能有空格，也不能以 - 或 @ 开头；给这台主机换一个不引用 {{sys:sn}} 的模板，" +
 			"或在模板正文与片段里去掉 {{sys:sn}}、改用取自主机属性的 word 参数，审批后再建任务"},
 
 	// —— 第 1 层修补轮追加（plans/2026-10-02-layer1-fixups.md「新增代码」，括号里是遗留问题清单的条目） ——
@@ -391,6 +393,46 @@ var codeTable = map[Code]codeSpec{
 	"name_reserved": {CategoryInvalid, 1,
 		"名称「%[1]v」不能用：以 lober: 开头的名称只给 lober 自带的内置内容用",
 		"换一个不以 lober: 开头的名称，大写的写法也算在内；照着内置内容起名时，要把这个前缀去掉"},
+
+	// 第 3 层渲染骨架：请求没给正文或拼装需要的系统值。参数：系统值标识。
+	"render_system_value_missing": {CategoryInvalid, 1,
+		"渲染请求缺少系统值「%[1]v」",
+		"由调用方补齐本次请求需要的「%[1]v」；制品地址要通过 artifacts 基地址提供"},
+	// repo、iso 只有制品基地址与快照里的同名角色这一份来源。参数：保留键。
+	"render_system_value_reserved": {CategoryInvalid, 1,
+		"系统值「%[1]v」由渲染根据制品记录拼出，不能由调用方另填",
+		"移除「%[1]v」，提供 artifacts 基地址，并在 ISO 制品记录里补齐同名角色"},
+	// 请求用到了 repo 或 iso，但快照没有对应的制品路径。参数：角色。
+	"render_artifact_missing": {CategoryInvalid, 1,
+		"快照缺少制品角色「%[1]v」的路径，无法拼出地址",
+		"检查 ISO 导入记录，补齐「%[1]v」制品后重新构建任务快照"},
+	// FileScript 没指定执行插槽，或片段展开找不到对应片段插槽。参数：插槽名。
+	"render_slot_invalid": {CategoryInvalid, 1,
+		"渲染请求指定的插槽「%[1]v」不存在或类型不符",
+		"运行脚本请求要指定快照中的执行插槽，片段占位符要对应片段插槽"},
+	// 拼装器未提供执行插槽或系统部件的单行替换。参数：占位符原文。
+	"render_replacement_missing": {CategoryInvalid, 1,
+		"渲染缺少「%[1]v」的单行内容",
+		"由该格式的拼装器提供执行插槽命令或系统部件内容"},
+	// 单行替换里出现格式不能容纳的字符。参数：占位符原文。
+	"render_line_invalid": {CategoryInvalid, 1,
+		"「%[1]v」的替换内容不是可内联的安全单行",
+		"替换内容不能含换行、引号、<>&、反斜杠、# 或冒号加空格；检查拼装器与本次请求的系统值"},
+	// Actual firmware is required by menu rendering; registered metadata is optional.
+	"render_firmware_invalid": {CategoryInvalid, 1,
+		"引导渲染请求的实际固件「%[1]v」无效或缺失",
+		"由调用方将本次 iPXE 平台换算为 bios 或 uefi 后填写，不能使用登记值兜底"},
+	// Series determines both family and template format.
+	"render_boot_snapshot_invalid": {CategoryIncompatible, 0,
+		"引导快照的系、族或模板格式不一致",
+		"按 ISO 的系重新构建与模板格式和族一致的快照"},
+	// Original immutable media config must be supplied by the caller.
+	"render_esxi_bootcfg_invalid": {CategoryInvalid, 0,
+		"原始 ESXi boot.cfg 缺失、格式错误或文件路径不属于发布的制品树",
+		"由调用方提供该 ISO 不可变版本的原始 boot.cfg，保留内核、模块列表与选项，检查发布树中的完整路径"},
+	"render_windows_env_limit": {CategoryInvalid, 1,
+		"Windows 目标解释器无法完整保留参数「%[1]v」的环境变量值",
+		"缩短该参数取值，使环境变量完整长度不超过目标解释器的限制"},
 }
 
 // 下面是代码表的补充：产出代码的函数在本包里、可选的措辞（不合法的原因、各类型
@@ -417,7 +459,7 @@ const (
 // 内容照计划任务 6 的类型表，由参数取值的 Parse 按声明的类型选用。列表的项数与总长
 // 规则写在该代码的下一步里；int 的具体范围见下面的 intRange*。
 var paramValueFormats = map[string]string{
-	"word":     "由 1–128 个字母、数字或 ._:/@^+=- 字符组成的串",
+	"word":     "由 1–128 个字母、数字或 ._:/@^+=- 字符组成的串，不能以 - 或 @ 开头",
 	"int":      "十进制整数",
 	"enum":     "列出的选项之一",
 	"ip":       "不带 zone 的 IPv4 或 IPv6 地址，IPv4 的各段不带前导零",

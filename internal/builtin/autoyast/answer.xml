@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<profile xmlns="http://www.suse.com/1.0/yast2ns" xmlns:config="http://www.suse.com/1.0/configns">
+  <general><mode><confirm config:type="boolean">false</confirm></mode></general>
+  <language><language>en_US</language></language>
+  <keyboard><keymap>english-us</keymap></keyboard>
+  <timezone><hwclock>UTC</hwclock><timezone>Etc/UTC</timezone></timezone>
+  {{slot:partition}}
+  {{slot:network}}
+  <users config:type="list">
+    <user><username>root</username><user_password>!</user_password><encrypted config:type="boolean">true</encrypted></user>
+    <user>
+      {{slot:account}}
+      {{slot:sshkey}}
+    </user>
+  </users>
+  <software>
+    <packages config:type="list">
+      <package>curl</package>
+      <package>systemd</package>
+      <package>openssh</package>
+      {{slot:packages}}
+    </packages>
+  </software>
+  <services-manager><services><enable config:type="list"><service>sshd</service></enable></services></services-manager>
+  <scripts>
+    <chroot-scripts config:type="list">
+      <script>
+        <filename>lober-stage.sh</filename>
+        <interpreter>shell</interpreter>
+        <chrooted config:type="boolean">false</chrooted>
+        <source><![CDATA[
+#!/bin/sh
+set -eu
+{{lober:firstboot}}
+{{lober:cleanup}}
+]]></source>
+      </script>
+    </chroot-scripts>
+  </scripts>
+</profile>

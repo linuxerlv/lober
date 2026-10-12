@@ -1,0 +1,7 @@
+<networking>
+  <keep_install_network config:type="boolean">false</keep_install_network>
+  <dns><hostname>{{param:hostname}}</hostname><dhcp_hostname config:type="boolean">false</dhcp_hostname></dns>
+  <interfaces config:type="list">
+    <interface><device>{{param:interface}}</device><bootproto>dhcp</bootproto><startmode>auto</startmode></interface>
+  </interfaces>
+</networking>

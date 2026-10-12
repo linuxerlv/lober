@@ -1,0 +1,17 @@
+{
+  {{slot:product}}
+  scripts: {
+    pre: [{ name: 'lober-pre', content: |||
+      #!/bin/sh
+      set -eu
+      {{slot:pre@pre}}
+    ||| }],
+    post: [{ name: 'lober-stage', chroot: false, content: |||
+      #!/bin/sh
+      set -eu
+      {{slot:firstboot@firstboot}}
+      {{lober:firstboot}}
+      {{lober:cleanup}}
+    ||| }],
+  },
+}

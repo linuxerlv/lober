@@ -161,3 +161,82 @@ func TestTask连同快照经JSON存取后不变(t *testing.T) {
 		t.Errorf("经 JSON 存取后变了：\n%+v\n应为\n%+v", back, task)
 	}
 }
+
+// 渲染只从快照取值，连接的写法只有这两份：Join 以单个空格连接，给 {{param:名字|join}} 内联用；EnvValue 以换行
+// 连接，是脚本经 EnvName 的环境变量拿到的值。
+func TestSnapshotValue的Join与EnvValue(t *testing.T) {
+	cases := []struct {
+		name      string
+		v         SnapshotValue
+		join, env string
+	}{
+		{"单值", SnapshotValue{Type: "word", Items: []string{"vim"}}, "vim", "vim"},
+		{"列表", SnapshotValue{Type: "word", List: true, Items: []string{"vim", "curl", "git"}}, "vim curl git", "vim\ncurl\ngit"},
+		{"空列表", SnapshotValue{Type: "word", List: true, Items: []string{}}, "", ""},
+		{"列表为 nil", SnapshotValue{Type: "word", List: true}, "", ""},
+		// 规范形式里没有空项，有就是坏数据：照原样连接，不替它删项，与 Value.Canonical 的做法一致。
+		{"列表里含空串", SnapshotValue{Type: "word", List: true, Items: []string{"vim", "", "git"}}, "vim  git", "vim\n\ngit"},
+	}
+	for _, c := range cases {
+		if got := c.v.Join(); got != c.join {
+			t.Errorf("%s：Join() = %q，应为 %q", c.name, got, c.join)
+		}
+		if got := c.v.EnvValue(); got != c.env {
+			t.Errorf("%s：EnvValue() = %q，应为 %q", c.name, got, c.env)
+		}
+	}
+	// 脚本拿到的就是取值的规范形式：快照记下 Items，EnvValue 拼回来与 Value.Canonical 逐字节相同。
+	v, err := ParamDecl{Name: "pkgs", Type: "word", List: true}.Parse("vim\n curl \n\ngit")
+	if err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	if got := (SnapshotValue{Type: "word", List: true, Items: v.Items()}).EnvValue(); got != v.Canonical() {
+		t.Errorf("EnvValue() = %q，Value.Canonical() 是 %q", got, v.Canonical())
+	}
+}
+
+// SnapshotValue.Sub 与 Value.Sub 是同一份规则：只有 cidr 有子值，列表逐项取、仍是列表，结果的类型是子值的
+// 类型（addr 与 netmask 是 ip，prefix 是 int）；有一项取不出就整个取不出。
+func TestSnapshotValueSub取子值(t *testing.T) {
+	one := SnapshotValue{Type: "cidr", Items: []string{"10.0.0.11/24"}}
+	list := SnapshotValue{Type: "cidr", List: true, Items: []string{"10.0.0.11/24", "192.168.10.11/16"}}
+	ok := []struct {
+		name string
+		v    SnapshotValue
+		sub  string
+		want SnapshotValue
+	}{
+		{"单值取 addr", one, "addr", SnapshotValue{Type: "ip", Items: []string{"10.0.0.11"}}},
+		{"单值取 prefix", one, "prefix", SnapshotValue{Type: "int", Items: []string{"24"}}},
+		{"单值取 netmask", one, "netmask", SnapshotValue{Type: "ip", Items: []string{"255.255.255.0"}}},
+		{"列表取 netmask", list, "netmask", SnapshotValue{Type: "ip", List: true, Items: []string{"255.255.255.0", "255.255.0.0"}}},
+		{"空列表", SnapshotValue{Type: "cidr", List: true, Items: []string{}}, "addr", SnapshotValue{Type: "ip", List: true, Items: []string{}}},
+	}
+	for _, c := range ok {
+		got, found := c.v.Sub(c.sub)
+		if !found || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s：得到 %+v、%v，应为 %+v", c.name, got, found, c.want)
+		}
+	}
+	bad := []struct {
+		name string
+		v    SnapshotValue
+		sub  string
+	}{
+		{"IPv6 取 netmask", SnapshotValue{Type: "cidr", Items: []string{"2001:db8::1/64"}}, "netmask"},
+		{"列表里混了 IPv6", SnapshotValue{Type: "cidr", List: true, Items: []string{"10.0.0.11/24", "2001:db8::1/64"}}, "netmask"},
+		{"列表里含空串", SnapshotValue{Type: "cidr", List: true, Items: []string{"10.0.0.11/24", ""}}, "addr"},
+		{"不是 cidr", SnapshotValue{Type: "ip", Items: []string{"10.0.0.11"}}, "addr"},
+		{"子值名写错", one, "mask"},
+		{"零值", SnapshotValue{}, "addr"},
+	}
+	for _, c := range bad {
+		if got, found := c.v.Sub(c.sub); found || !reflect.DeepEqual(got, SnapshotValue{}) {
+			t.Errorf("%s：应取不出，得到 %+v、%v", c.name, got, found)
+		}
+	}
+	// 取子值不改动原值。
+	if want := []string{"10.0.0.11/24", "192.168.10.11/16"}; !reflect.DeepEqual(list.Items, want) {
+		t.Errorf("取子值改动了原值：%q", list.Items)
+	}
+}

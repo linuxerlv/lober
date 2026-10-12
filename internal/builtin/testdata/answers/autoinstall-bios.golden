@@ -1,0 +1,40 @@
+#cloud-config
+# RAM must exceed the full ISO size plus installer working memory: url= downloads the ISO into RAM.
+# Layer7 qualification must size the VM from the actual ISO, not a fixed universal minimum.
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  timezone: UTC
+  storage:
+    layout:
+      name: direct
+      match:
+        path: '/dev/sda'
+      ptable: gpt
+  network:
+    version: 2
+    ethernets:
+      lober:
+        match:
+          name: 'eth0'
+        dhcp4: true
+  identity:
+    hostname: 'lober-node'
+    username: 'lober'
+    password: '$6$fixture$notARealPasswordHash'
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA fixture'
+  packages:
+    - curl
+    - systemd
+    - openssh-server
+    - 'curl'
+    - 'vim'
+  late-commands:
+    - echo c2V0IC1ldQp1bWFzayAwNzcKbWtkaXIgLXAgJy90YXJnZXQvdmFyL2xpYi9sb2JlcicgJy90YXJnZXQvZXRjL3N5c3RlbWQvc3lzdGVtL211bHRpLXVzZXIudGFyZ2V0LndhbnRzJwpwcmludGYgJyVzJyAnZmluYWxpemUtZml4dHVyZScgPiAnL3RhcmdldC92YXIvbGliL2xvYmVyL2ZpbmFsaXplLnRva2VuJwpjYXQgPiAnL3RhcmdldC92YXIvbGliL2xvYmVyL2ZpcnN0Ym9vdC5zaCcgPDwnTE9CRVJfRklSU1RCT09UX0VPRicKIyEvYmluL3NoCnNldCAtZXUKVE9LRU49JChjYXQgL3Zhci9saWIvbG9iZXIvZmluYWxpemUudG9rZW4pCmN1cmwgLWZzUyAtbSAxMCAtWCBQT1NUICdodHRwOi8vZ3cuZXhhbXBsZS50ZXN0L3YxL3NpZ25hbC90YXNrLTkvJyIkVE9LRU4iJy9ib290ZWQnIC0tZGF0YS1iaW5hcnkgJycgPi9kZXYvbnVsbCAyPiYxIHx8IDoKVE9LRU49JChjYXQgL3Zhci9saWIvbG9iZXIvZmluYWxpemUudG9rZW4pCmN1cmwgLWZzUyAtbSAxMCAtWCBQT1NUICdodHRwOi8vZ3cuZXhhbXBsZS50ZXN0L3YxL3NpZ25hbC90YXNrLTkvJyIkVE9LRU4iJy9pbml0LXN0YXJ0JyAtLWRhdGEtYmluYXJ5ICcnID4vZGV2L251bGwgMj4mMSB8fCA6CnNoIC92YXIvbGliL2xvYmVyL2NsZWFudXAuc2gKTE9CRVJfRklSU1RCT09UX0VPRgpjYXQgPiAnL3RhcmdldC9ldGMvc3lzdGVtZC9zeXN0ZW0vbG9iZXItZmlyc3Rib290LnNlcnZpY2UnIDw8J0xPQkVSX1VOSVRfRU9GJwpbVW5pdF0KRGVzY3JpcHRpb249TG9iZXIgZmlyc3QgYm9vdApBZnRlcj1uZXR3b3JrLW9ubGluZS50YXJnZXQKV2FudHM9bmV0d29yay1vbmxpbmUudGFyZ2V0CkNvbmRpdGlvblBhdGhFeGlzdHM9L3Zhci9saWIvbG9iZXIvZmlyc3Rib290LnBlbmRpbmcKW1NlcnZpY2VdClR5cGU9b25lc2hvdApFeGVjU3RhcnQ9L2Jpbi9zaCAvdmFyL2xpYi9sb2Jlci9maXJzdGJvb3Quc2gKW0luc3RhbGxdCldhbnRlZEJ5PW11bHRpLXVzZXIudGFyZ2V0CkxPQkVSX1VOSVRfRU9GCmxuIC1zZiAuLi9sb2Jlci1maXJzdGJvb3Quc2VydmljZSAnL3RhcmdldC9ldGMvc3lzdGVtZC9zeXN0ZW0vbXVsdGktdXNlci50YXJnZXQud2FudHMvbG9iZXItZmlyc3Rib290LnNlcnZpY2UnCnRvdWNoICcvdGFyZ2V0L3Zhci9saWIvbG9iZXIvZmlyc3Rib290LnBlbmRpbmcnCg== | base64 -d | sh
+    - echo c2V0IC1ldQp1bWFzayAwNzcKbWtkaXIgLXAgJy90YXJnZXQvdmFyL2xpYi9sb2JlcicKY2F0ID4gJy90YXJnZXQvdmFyL2xpYi9sb2Jlci9jbGVhbnVwLnNoJyA8PCdMT0JFUl9DTEVBTlVQX0VPRicKIyEvYmluL3NoCnNldCAtZXUKVE9LRU49JChjYXQgL3Zhci9saWIvbG9iZXIvZmluYWxpemUudG9rZW4pCmN1cmwgLWZzUyAtbSAxMCAtWCBQT1NUICdodHRwOi8vZ3cuZXhhbXBsZS50ZXN0L3YxL3NpZ25hbC90YXNrLTkvJyIkVE9LRU4iJy9pbml0LWRvbmUnIC0tZGF0YS1iaW5hcnkgJycgPi9kZXYvbnVsbCAyPiYxIHx8IDoKVE9LRU49JChjYXQgL3Zhci9saWIvbG9iZXIvZmluYWxpemUudG9rZW4pCmN1cmwgLWZzUyAtbSAxMCAtWCBQT1NUICdodHRwOi8vZ3cuZXhhbXBsZS50ZXN0L3YxL3NpZ25hbC90YXNrLTkvJyIkVE9LRU4iJy9yZWFkeScgLS1kYXRhLWJpbmFyeSAnJyA+L2Rldi9udWxsIDI+JjEgfHwgOgpybSAtZiAvdmFyL2xpYi9sb2Jlci9maW5hbGl6ZS50b2tlbiAvdmFyL2xpYi9sb2Jlci9maXJzdGJvb3QucGVuZGluZyAvdmFyL2xpYi9sb2Jlci9zY3JpcHQtKi5zaCAvdmFyL2xpYi9sb2Jlci9ob29rLSogL3Zhci9saWIvbG9iZXIvZmlyc3Rib290LnNoIC92YXIvbGliL2xvYmVyL2NsZWFudXAuc2gKcm0gLWYgL3Jvb3QvYW5hY29uZGEta3MuY2ZnIC9yb290L29yaWdpbmFsLWtzLmNmZyAvdmFyL2xvZy9pbnN0YWxsZXIvYXV0b2luc3RhbGwtdXNlci1kYXRhIC92YXIvbG9nL2luc3RhbGxlci9hdXRvaW5zdGFsbC11c2VyLWRhdGEudHh0IC92YXIvbG9nL2luc3RhbGxlci9jZGViY29uZi9xdWVzdGlvbnMuZGF0IC92YXIvYWRtL2F1dG9pbnN0YWxsL2NhY2hlL2luc3RhbGxlZFN5c3RlbS54bWwKTE9CRVJfQ0xFQU5VUF9FT0YK | base64 -d | sh

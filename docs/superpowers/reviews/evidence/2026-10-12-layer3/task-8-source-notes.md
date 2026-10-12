@@ -1,0 +1,9 @@
+# Additional runtime sources (controller, 2026-10-11)
+
+- Agama scripts: https://agama-project.github.io/docs/user/reference/profile/scripts — post chroot=false runs in installation media with target at /mnt; init uses the installed agama-scripts service, disables it after execution. URL scripts are fetched when loading profile, not necessarily at execution time. Do not double-execute firstboot slots through both native init and custom service.
+- Agama profile conversion: https://agama-project.github.io/docs/user/profile/working_with_profiles — inst.auto handles fetch/Jsonnet evaluation/load; config load alone does not start install. Current CLI local validation supported for plain JSON, Jsonnet first needs generate.
+- ESXi vendor KB: https://knowledge.broadcom.com/external/article/440457/esxi-scripted-installation-fails-to-dyna.html — 7.x/8.x native %pre interpreter=busybox and wget example. This establishes wget, not curl, availability. Original script docs linked there need checking for firstboot lifecycle, file preservation across installation and Secure Boot restrictions; no systemd assumption on ESXi.
+
+All target environment claims beyond these sources need a source or explicit layer7 real-install pending entry. User prohibits further Windows host adaptation/native Windows testing; Linux test execution only.
+
+- VMware-authored ESXi8 Installation Setup PDF: https://d3bql97l1ytoxn.cloudfront.net/app_resources/447311/documentation/1439997_1721785831666_en-US.pdf — PDF index92/printed93: native %firstboot runs once and multiple sections follow file order, does not run with Secure Boot enabled. %pre/%post accept busybox. Installer %post supports --timeout and --ignorefailure. Caller layer7 must make Secure Boot compatibility explicit for firstboot obligations; do not claim UEFI alone guarantees firstboot. Runtime fallback/file persistence still needs exact documented method and real-install validation.

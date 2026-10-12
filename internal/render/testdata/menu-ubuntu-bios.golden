@@ -1,0 +1,4 @@
+#!ipxe
+kernel http://ng.internal/artifacts/as-ubuntu2404/vmlinuz autoinstall ip=dhcp url=http://ng.internal/artifacts/as-ubuntu2404/original.iso ds=nocloud-net;s=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/ console=tty0 console=ttyS0,115200n8 ---
+initrd http://ng.internal/artifacts/as-ubuntu2404/initrd
+boot
