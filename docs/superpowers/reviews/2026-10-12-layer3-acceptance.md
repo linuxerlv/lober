@@ -2,7 +2,7 @@
 
 日期：2026-10-12。下列完整检查的实际受测代码：`a4cc3b0d0e6982b330cf9d082119f5a14ff701de`（Task10 测试断言补漏之前，仍是当前生产代码验证依据）。检查地点：隔离克隆 `/mnt/e/src/lober/.tmp/wf/r10`，保留共享主目录中另一代理的工作。开发/检查使用 WSL Ubuntu、`go1.27.2 linux/amd64`；服务程序只部署 Linux。用户已安装的 nginx、Kea、TFTP 配置未改动。
 
-控制器在 Task9 最终修正集成后执行实际代码检查；Task10 自审发现 T8-8 的扫描能力对齐断言实际漏做，控制器追加授权，仅在 scan_test.go 补三条断言；除此只同步文档与归档证据，无生产代码改动。该测试修正只跑 scan focused 与受控负例，没有重复全套产品检查。下列检查已通过，但 **Task10 独立评审、最终整分支评审与本地 dev 集成仍是待完成的闭环门禁**。控制器将在 Task10 提交后刷新 make check，并在本地 dev 集成提交中保存这些后续报告、最终验证和完整更新台账，再清理本次 SDD；本记录不提前声明最终评审通过。
+控制器在 Task9 最终修正集成后执行实际代码检查；Task10 自审发现 T8-8 的扫描能力对齐断言实际漏做，控制器追加授权，仅在 scan_test.go 补三条断言；除此只同步文档与归档证据，无生产代码改动。该测试修正只跑 scan focused 与受控负例，没有重复全套产品检查。下列历史检查已通过；Task10 独立评审随后通过，818fb667 整分支评审提出 I1–I3 和 M1–M2。五项在 2026-10-13 单次修正中处理，见下方追加记录；**修正后控制器完整检查、一次定域复审与本地 dev 集成仍待完成**。控制器将在 Task10 提交后刷新 make check，并在本地 dev 集成提交中保存这些后续报告、最终验证和完整更新台账，再清理本次 SDD；本记录不提前声明最终评审通过。
 
 ## 最终实际代码检查
 
@@ -68,6 +68,13 @@ Task10 的负例使用 Go overlay 只改测试内真实扫描文本及其手写�
 - 第 5 层：先 EnsureBuiltin hooks 后 templates；预览与下发同一 Render，明确 token/finalize 示例；按当前 7/5 清单和 CurrentApproved 过滤旧身份。L-8 全局词表/Subject.Kind、S3-10 全集对齐仍属第 5 层。
 - 第 7 层：SignalURL POST/text/plain 的 slot/instance/timing/digest/rc 与 4096 字节 hook tail 的解析、鉴权与幂等；独立 24 小时 finalize 凭据的签发/权限，不复用 90 分钟 boot token；实际固件/Secure Boot 校验与真正 BIOS/UEFI 安装。
 - 目标安装：Linux systemd 和阶段根路径；Agama 单一 post/systemd 路径；Windows OEM/Setup/单条 FirstLogonCommand/AutoLogon、CMD/PowerShell 字节/原生全宽状态/后代终止；ESXi encoded native firstboot、绝对 owned-$0 文件及 applet/进程组 ABI。Secure Boot 不支持 ESXi 此生命周期。Server2016/2019 静态 edition 数据不是当前 UTF8 helper 的 firstboot 支持；Windows SSH 仅保证 2025。T4-3 桌面版是否限 UEFI 留第 7 层。
-- Task8 两个延期 Minor：ESXi fixture root-password placeholder 与 supplied fixture-hash 不一致；ESXi watchdog cancellation 可能留下 sleep 子进程至 deadline。完整台账保留二者，最终整分支评审须明确裁定，Task10 不擅自改产品代码。
+- Task8 两个延期 Minor 最终确认为 M1/M2，已纳入 2026-10-13 单次修正：有效 root_password 与显式加密 fixture，ESXi watchdog 取消时终止并回收 sleep。历史 Task8/Task10 文档原字节保留，不能据其旧延期状态认定当前仍未修正。
 
 Ubuntu 的 shell/进程/字节检查、Jsonnet/schema、XML/YAML 和 golden 只证明其各自边界；本层没有声称真实 Agama/AutoYaST/Windows/ESXi 或任何安装介质已完成真机验收。
+
+
+## 2026-10-13 最终评审单次修正
+
+基线 `818fb667f9d746cdce30e7b0cb5cfafb35b522aa`。全部五项：I1 通用 NoCloud metadata 不再要求作者参数名 hostname，真实 activation/Build 验证字面量、改名参数与 builtin identity.hostname；I2 Debian installer-time POST 使用已确认路径的真实 GNU wget-udeb，受限 PATH 的真实 HTTP 验证空请求及含 NUL 的4096字节日志，target curl 保留；I3 Makefile 正式门禁显式无缓存发现模块包，并回归既有根目录新增未知包；M1 修正 ESXi 参数/加密密码 fixture；M2 ESXi watchdog 明确取消并回收 sleep，保留超时/必选可选与进程组策略。
+
+修正作者只执行覆盖包与针对性回归，证据见 [命令与来源](evidence/2026-10-13-layer3-final-fix/provenance.md)、[GREEN](evidence/2026-10-13-layer3-final-fix/covering-green.log)、[增量门禁](evidence/2026-10-13-layer3-final-fix/green-i3.log)、[真实 HTTP/runtime](evidence/2026-10-13-layer3-final-fix/green-runtime.log)。控制器提交后完整 make check、一次定域复审和 dev merge/清理闭环仍待执行；不以历史绿色结果冒充修正后的验证。没有重写 builtin 模型/发行快照/指纹；没有 Windows host adaptation/native checks 或实际媒体安装声明。

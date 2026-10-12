@@ -325,8 +325,8 @@ func TestBuiltinDeliveryLifecycle(t *testing.T) {
 				r.Kind = catalog.FileAux
 				r.ESXiBootConfig = "kernel=/b.b00\nmodules=/jumpstrt.gz --- /useropts.gz\nkernelopt=runweasel cdromBoot\n"
 				out := renderFixture(t, r)
-				if r.Snapshot.Format == "autoinstall" && !strings.Contains(out, "local-hostname: lober-node") {
-					t.Fatal("metadata hostname mismatch")
+				if r.Snapshot.Format == "autoinstall" && out != "instance-id: lober-task-task-9\n" {
+					t.Fatal("metadata instance-id mismatch")
 				}
 			}
 		})

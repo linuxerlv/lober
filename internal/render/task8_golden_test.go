@@ -42,8 +42,8 @@ func esxiAnswerFixture() Request {
 	r.Snapshot.Series = "esxi"
 	r.Kind = catalog.FileAnswer
 	r.Values["finalize-token"] = "finalize-independent"
-	r.Snapshot.Template.Body = "vmaccepteula\nrootpw --iscrypted {{param:root-password}}\ninstall --firstdisk --overwritevmfs\nnetwork --bootproto=dhcp\nreboot\n%pre --interpreter=busybox\nset -eu\n{{slot:pre@pre}}\n%firstboot --interpreter=busybox\nset -eu\n{{lober:firstboot}}\n{{slot:运行@firstboot}}\n{{lober:cleanup}}\n"
-	r.Snapshot.Template.Params["root-password"] = model.SnapshotValue{Type: "word", Items: []string{"fixture-hash"}}
+	r.Snapshot.Template.Body = "vmaccepteula\nrootpw --iscrypted {{param:root_password}}\ninstall --firstdisk --overwritevmfs\nnetwork --bootproto=dhcp\nreboot\n%pre --interpreter=busybox\nset -eu\n{{slot:pre@pre}}\n%firstboot --interpreter=busybox\nset -eu\n{{lober:firstboot}}\n{{slot:运行@firstboot}}\n{{lober:cleanup}}\n"
+	r.Snapshot.Template.Params["root_password"] = model.SnapshotValue{Type: "word", Items: []string{"$6$loberfixture$s48HMcReZuTl/hNjsbSzMJwS02PdRGxg.c4S/fcvnK13iqHyU.awFlFtXuNgMr03IcKPWRhuoIqMge0LZ.KGX0"}}
 	r.Snapshot.Slots = append([]model.SnapshotSlot{{Name: "pre", Seq: 1, Exec: true, Timing: "pre", Instances: []model.SnapshotInstance{runtimeInstance("printf 'pre'\n", true, "sh", 3)}}}, r.Snapshot.Slots...)
 	return r
 }

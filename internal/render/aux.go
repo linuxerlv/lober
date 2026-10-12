@@ -18,14 +18,10 @@ func renderAux(r Request) ([]byte, []model.Problem, error) {
 		return renderWindowsAux(r)
 	case "autoinstall":
 		values, problems := assemblerValues(r, "task")
-		hostname, ok := r.Snapshot.Template.Params["hostname"]
-		if !ok || len(hostname.Items) != 1 || hostname.Items[0] == "" {
-			problems = append(problems, model.NewProblem("param_required", model.Subject{Kind: "template", ID: templateRef(r.Snapshot.Template), Path: "hostname"}, "hostname"))
-		}
 		if len(problems) != 0 {
 			return nil, problems, nil
 		}
-		return []byte(fmt.Sprintf("instance-id: lober-task-%s\nlocal-hostname: %s\n", values["task"], hostname.Items[0])), nil, nil
+		return []byte(fmt.Sprintf("instance-id: lober-task-%s\n", values["task"])), nil, nil
 	case "esxi-ks":
 		if p := bootSnapshotProblems(r); len(p) != 0 {
 			return nil, p, nil

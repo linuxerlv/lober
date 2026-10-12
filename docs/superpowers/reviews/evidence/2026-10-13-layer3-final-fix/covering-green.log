@@ -1,0 +1,4 @@
+ok  	github.com/lober/lober/internal/render	8.126s
+ok  	github.com/lober/lober/internal/builtin	0.765s
+ok  	github.com/lober/lober/internal/archtest	18.007s
+exit_code=0

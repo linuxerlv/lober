@@ -1,0 +1,22 @@
+=== RUN   TestESXiWatchdogReapsSleepOnQuickCompletion
+=== RUN   TestESXiWatchdogReapsSleepOnQuickCompletion/success
+=== RUN   TestESXiWatchdogReapsSleepOnQuickCompletion/required-failure
+    final_fix_test.go:174: runtime status 41 output 
+=== RUN   TestESXiWatchdogReapsSleepOnQuickCompletion/optional-failure
+--- PASS: TestESXiWatchdogReapsSleepOnQuickCompletion (0.14s)
+    --- PASS: TestESXiWatchdogReapsSleepOnQuickCompletion/success (0.05s)
+    --- PASS: TestESXiWatchdogReapsSleepOnQuickCompletion/required-failure (0.04s)
+    --- PASS: TestESXiWatchdogReapsSleepOnQuickCompletion/optional-failure (0.04s)
+=== RUN   TestESXiWatchdogStartupCancellationAndFailure
+=== RUN   TestESXiWatchdogStartupCancellationAndFailure/initialization-failure=false
+=== RUN   TestESXiWatchdogStartupCancellationAndFailure/initialization-failure=true
+    final_fix_test.go:222: runtime status 125 output 
+--- PASS: TestESXiWatchdogStartupCancellationAndFailure (0.18s)
+    --- PASS: TestESXiWatchdogStartupCancellationAndFailure/initialization-failure=false (0.09s)
+    --- PASS: TestESXiWatchdogStartupCancellationAndFailure/initialization-failure=true (0.09s)
+=== RUN   TestESXiProcessGroupTimeout
+    runtime_lifecycle_test.go:36: runtime status 124 output 
+--- PASS: TestESXiProcessGroupTimeout (1.05s)
+PASS
+ok  	github.com/lober/lober/internal/render	1.372s
+exit_code=0

@@ -215,7 +215,7 @@ func ArtifactURL(base, rel string) string
 
 **做法：**
 
-- 遍历范围限在 `internal/` 和以后的 `cmd/`，不碰 `web/`（`node_modules` 很大）
+- 全模块发现以 `go list ./...` 的 eligible tree 为准（尊重 go.mod ignore、testdata、点/下划线目录、嵌套模块等 Go 规则）。`make archcheck` 用 `-count=1` 实际重跑发现，`make test` 与 `make race` 都依赖它；仅遍历 internal/cmd 不能保证其他已存在根目录新增包时缓存失效。原 internal/cmd 遍历继续用于这些已登记层的整包构建约束检查，不再充当全模块缓存保证。
 - 不属于任何已知层的包报违规，这样包放错目录查得出来
 - 第三方限制从 `storeRule` 提到全模块：只有 pgstore 能用 gorm 与 pgx，pgtest 能用 pgx
 - 第 3 层两个包的规则：只许标准库白名单与层 1，不许 store/pgstore，不许第三方；`internal/builtin` 另许 `embed`
@@ -226,7 +226,7 @@ func ArtifactURL(base, rel string) string
 - [x] **绿：** 实现。此时 `internal/render` 与 `internal/builtin` 还不存在，规则先靠合成的源码测。预期 PASS。
 - [x] **重构 + commit：** `make check` 全绿后 commit（`test(archtest): 守卫改成全模块列包，时钟检查套到存储层与第 3 层`）。
 
-**风险：** `layerSourceDirs` 要覆盖新目录，否则新增包后 `go test` 会复用旧的 PASS。常量与引用它的用例必须在同一次改动里一起加，否则 archtest 编不过（第 2 层删 memstore 时踩过）。
+**风险（最终评审 I3 修正）：** 子进程 `go list` 的输入不由 Go 测试缓存自动追踪；直接 `go test` 可能复用新增包之前的 PASS。正式增量门禁必须通过 `make archcheck`（或依赖它的 test/race/check）无缓存重跑发现。集成回归先在既有 tools 根目录下建立普通/race 缓存 PASS，再新增未归层包并验证真实 Makefile 两条路径均拒绝。常量与引用它的用例必须在同一次改动里一起加，否则 archtest 编不过（第 2 层删 memstore 时踩过）。
 
 历史证据边界：任务 1–3 的实现/守卫用例已由控制器检查并纳入提交，最终检查再次覆盖；原逐任务 RED 输出未保存在本次 SDD，故 RED 复选框保留未勾，不把代码存在当作 RED 证据。
 

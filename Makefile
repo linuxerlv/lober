@@ -1,7 +1,7 @@
 # make check 依次跑格式、vet、测试、竞态检测和交叉编译，五步全过才算绿。
 # 各目标只用 go、gofmt 和 shell 内建命令，Git Bash 与 Linux 上都能跑。
 
-.PHONY: check fmt vet test race cross
+.PHONY: check fmt vet archcheck test race cross
 
 check: fmt vet test race cross
 
@@ -18,10 +18,15 @@ fmt:
 vet:
 	go vet ./...
 
-test:
+# Whole-module package discovery cannot rely on Go's test-result cache: a
+# subprocess go list can see new packages outside the tracked source roots.
+archcheck:
+	go test -count=1 -run '^Test全模块依赖守卫$$' ./internal/archtest
+
+test: archcheck
 	go test ./...
 
-race:
+race: archcheck
 	go test -race ./...
 
 # 旧系统出过在 Windows 上能编译、却编不出 Linux 版的问题（spec §7.1）。
