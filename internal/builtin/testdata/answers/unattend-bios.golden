@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+  <!-- Edition is the actual media image index. AutoLogon is required for the ordered firstboot chain. -->
+  <!-- Server 2016/2019 static profiles require a separately qualified runtime; current UTF8 helper ABI does not qualify them. -->
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage><InputLocale>en-US</InputLocale><SystemLocale>en-US</SystemLocale><UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <UserData><AcceptEula>true</AcceptEula></UserData>
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>cmd /d /c X:/lober/script-1.cmd</Path></RunSynchronousCommand>
+      </RunSynchronous>
+      <ImageInstall><OSImage>
+        <InstallFrom><MetaData wcm:action="add"><Key>/IMAGE/INDEX</Key><Value>4</Value></MetaData></InstallFrom>
+        <InstallTo><DiskID>0</DiskID><PartitionID>3</PartitionID></InstallTo>
+        <WillShowUI>OnError</WillShowUI>
+      </OSImage></ImageInstall>
+    </component>
+  </settings>
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <ComputerName>lober-node</ComputerName>
+      <TimeZone>UTC</TimeZone>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <UserAccounts><LocalAccounts>
+        <LocalAccount wcm:action="add">
+          <Name>lober</Name><DisplayName>lober</DisplayName><Group>Administrators</Group>
+          <Password><Value>Fixture_Pass9</Value><PlainText>true</PlainText></Password>
+        </LocalAccount>
+      </LocalAccounts></UserAccounts>
+      <AutoLogon>
+        <Username>lober</Username><Enabled>true</Enabled><LogonCount>1</LogonCount>
+        <Password><Value>Fixture_Pass9</Value><PlainText>true</PlainText></Password>
+      </AutoLogon>
+      <OOBE><HideEULAPage>true</HideEULAPage><HideOnlineAccountScreens>true</HideOnlineAccountScreens><ProtectYourPC>3</ProtectYourPC></OOBE>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <CommandLine>cmd /d /c powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File %SystemDrive%/ProgramData/lober/firstboot.ps1 &amp;&amp; cmd /d /c %SystemDrive%/ProgramData/lober/script-4.cmd &amp;&amp; powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File %SystemDrive%/ProgramData/lober/cleanup.ps1</CommandLine>
+          <Description>Lober ordered first boot</Description>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>

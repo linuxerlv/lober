@@ -1,0 +1,23 @@
+#cloud-config
+# RAM must exceed the full ISO size plus installer working memory: url= downloads the ISO into RAM.
+# Layer7 qualification must size the VM from the actual ISO, not a fixed universal minimum.
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  timezone: UTC
+  {{slot:partition}}
+  {{slot:network}}
+  identity:
+    hostname: '{{param:hostname}}'
+    {{slot:account}}
+  {{slot:sshkey}}
+  packages:
+    - curl
+    - systemd
+    - openssh-server
+    {{slot:packages}}
+  late-commands:
+    - {{lober:firstboot}}
+    - {{lober:cleanup}}

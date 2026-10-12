@@ -160,6 +160,9 @@ func TestReleasedVersionsLoadAndUpgradeIdempotently(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if got.Rev != hookRevs[h.Key()] {
+					t.Fatalf("upgrade changed old hook revision: %s@%d", h.ID, h.Version)
+				}
 				got.Rev = 0
 				if !reflect.DeepEqual(got, h) {
 					t.Fatalf("stored hook %s@%d changed", h.ID, h.Version)
@@ -169,6 +172,9 @@ func TestReleasedVersionsLoadAndUpgradeIdempotently(t *testing.T) {
 				got, err := s.GetTemplate(ctx, model.TemplateKey{ID: tpl.ID, Version: tpl.Version})
 				if err != nil {
 					t.Fatal(err)
+				}
+				if got.Rev != templateRevs[model.TemplateKey{ID: tpl.ID, Version: tpl.Version}] {
+					t.Fatalf("upgrade changed old template revision: %s@%d", tpl.ID, tpl.Version)
 				}
 				got.Rev = 0
 				if !reflect.DeepEqual(got, tpl) {
