@@ -1,0 +1,8 @@
+--- FAIL: TestESXiCleanupRejectsUnownedNativeSection (0.03s)
+    --- FAIL: TestESXiCleanupRejectsUnownedNativeSection/#!/bin/sh_#_supervisor_ (0.01s)
+        runtime_lifecycle_test.go:290: unowned native accepted: <nil> 
+    --- FAIL: TestESXiCleanupRejectsUnownedNativeSection/#!/bin/sh_LOBER_ESXI_OWNER=lober-esxi-firstboot-other;_ (0.01s)
+        runtime_lifecycle_test.go:290: unowned native accepted: <nil> 
+FAIL
+FAIL	github.com/lober/lober/internal/render	0.032s
+FAIL

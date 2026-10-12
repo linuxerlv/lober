@@ -53,6 +53,27 @@
 
 格式决定四件事：支持哪些执行时机、必需哪些系统部件、要给机器下发哪些文件、每个时机里能用哪些解释器。每个系另外登记：怎样按内容识别它、仓库树怎样算完整、固件要求（ESXi 只走 UEFI）、要求哪些附加来源。附加来源目前只有一项：Debian 要同版本的官方 netboot 包，因为 netinst ISO 里的 initrd 是光驱版，不能网络装机（ce9cd56 实测）。
 
+作者能力仍由 catalog 的格式能力表决定：正文/片段可引用 repo、iso、gateway、task、sn、lbrace，unattend 另外可引用 smb；repo 与 iso 由渲染根据冻结制品角色派生，调用方覆写即拒绝。下表是渲染的私有调用输入，不属于作者能力，不能用来扩大模板/片段的 SystemValues：
+
+| 私有系统值 | 含义与归属 |
+|---|---|
+| token | 网关签发的安装期凭据，90 分钟；用于 AnswerURL/SignalURL |
+| syslog-addr | 调用方配置的 syslog host:port，供系统部件与支持它的菜单使用 |
+| artifacts | 调用方配置的制品基地址；repo/iso 等地址只由此基地址加冻结 ISO.Artifacts 相对角色路径得出 |
+| finalize-token | 独立的首次开机凭据，24 小时；不可退回使用 token。签发、权限、预览示例标注分别归第 7/5 层 |
+
+七种格式都下发引导菜单、主应答文件与执行插槽运行脚本；固定文件名和有无附属文件只由 catalog.DeliveryFiles/DeliveryFileName 定义：
+
+| 格式 | 主应答文件 | 附属文件 |
+|---|---|---|
+| kickstart | ks.cfg | 无 |
+| preseed | preseed.cfg | 无 |
+| autoinstall | user-data | meta-data |
+| AutoYaST | autoinst.xml | 无 |
+| Agama | autoinst.jsonnet | 无 |
+| unattend | unattend.xml | startnet.cmd |
+| ESXi ks | ks.cfg | boot.cfg |
+
 执行时机是一张全局词表，按先后排：装前、装后（在安装环境）、装后（在目标系统内）、首次开机。每种格式支持其中一部分。两个时机的先后如果由正文书写位置决定、而不是由安装器决定，它们在次序上同级。例如 kickstart 的 `%post --nochroot` 与 `%post` 按出现顺序执行，两者同级。
 
 ### 2.2 ISO
@@ -62,7 +83,9 @@ ISO 属于一个族、一个系，创建时就要声明，这时字节可能还�
 导入把内核、initrd 和仓库树解到 nginx 发布的目录。Ubuntu 和 Windows 有额外要求：
 
 - Ubuntu：安装器启动后要经 HTTP 把整张 ISO 下进内存（内核参数 `url=`），所以原始 ISO 也要发布到制品目录，目标机内存要比 ISO 大出一截。旧系统的 Ubuntu 菜单缺这个参数，那条路径不可能装通。
-- Windows：安装源放进 SMB 共享；WinPE 直接用 ISO 里的 `boot/bcd`、`boot/boot.sdi`、`sources/boot.wim`，经 wimboot 引导（待真机核实）。
+- Windows：安装源放进 SMB 共享；wimboot 使用冻结的 bcd、boot-sdi、boot-wim，并注入 startnet.cmd、真实 winpeshl.ini 与经过 PE/最终系统双重 ABI 资格确认的 busybox/curl。wpeinit 后将 wrapper、不可变 hook、独立 finalize token 和带 UTF8 BOM 的 PowerShell 辅助文件预先放到本地 OEM 树，Setup `/m` 复制到新系统；单条 FirstLogonCommand 依次运行 firstboot、插槽与 cleanup，内置内容提供 AutoLogon 前提。菜单/附属文件/脚本缺必需角色明确拒绝。wimboot、OEM 复制、原生 CMD/PowerShell 与登录链仍待第 7 层真机核实；当前 UTF8-manifest helper 不保证 Server 2016/2019 firstboot，静态 edition 输出不等于运行支持。
+
+第 3 层固定角色为 kernel、initrd、stage2（完整 RHEL 安装树）、repo（包仓库）、iso（原始 Ubuntu ISO）、mboot（ESXi UEFI loader）、esxi-tree（完整原样 ESXi 树），另有 Agama 的 live-root（真实 LiveOS/squashfs.img）以及 Windows 的 wimboot、bcd、boot-sdi、boot-wim、winpeshl、winpe-busybox、winpe-curl。第 4 层导入器负责相对安全路径、存在性、版本/架构、仓库/媒体完整性与目标 ABI；目录角色保留末尾斜杠，路径不能含前导斜杠或点/点点段。渲染信任这些冻结输入，不做 IO。FileMenu 的 Request.Firmware 必须是实际上报的固件，不从可选 Host 登记值回退。ESXiBootConfig 是调用方提供的不可变原始介质正文，渲染只做必要 HTTP 重定位，保留完整模块顺序与路径，不自行读介质或合成模块表。详见 [菜单/附属文件契约](../../../internal/render/testdata/menu-aux-contract.md) 与 [目标运行契约](../../../internal/render/testdata/runtime-contract.md)。
 
 ISO 不知道任何模板。
 
@@ -320,8 +343,9 @@ hook 的流程不同：不能派生（§2.8），也没有正文、装配和预�
 ### 6.2 接缝
 
 1. 判定：控制台凑入参，层 1 返回结构化结果。准入判定、激活判定和参数求值要用的对象（主机、ISO、模板及其引用的 hook 版本），由控制台从仓储取齐后传入。结果包含原因类别、涉及的对象（哪台主机、哪个插槽、哪个参数），以及一句中文说明和下一步。控制台按原因类别映射 HTTP 状态码，前端按涉及的对象把错误标到具体的行或单元格。说明文字只在层 1 写一次，所以向导里灰显的原因和建任务被拒的原因完全相同。
-2. 快照：控制台构建，仓储保存，网关读取。网关只读任务上固化的那份，从不现算（C29）。预览现算，但与建任务调用同一个快照构建和同一个渲染（C35）。渲染还要系统值：token，以及网关、制品、syslog、SMB 的地址。这组地址由装配点从配置构造一次，同一份交给网关和控制台，所以预览里的地址与真实下发一致；预览里的 token 是示例值。旧系统的预览自己拼渲染输入，新增 SSH 公钥字段时只改了网关那条路径（ab81d37）。
-3. 机器面的两份约定（地址格式、制品目录布局）放在层 1 的族系目录里。另有一个测试：渲染出来的每个地址，网关都必须能路由到。
+2. 快照：控制台构建，仓储保存，网关读取。网关只读任务上固化的那份，从不现算（C29）。预览现算，但与建任务调用同一个快照构建和同一个渲染（C35）。渲染还要系统值：token，以及网关、制品、syslog、SMB 的地址。这组地址由装配点从配置构造一次，同一份交给网关和控制台，所以预览里的地址与真实下发一致；预览里的 token 与 finalize-token 均是注明的示例值；首次开机使用独立 24 小时 finalize-token，不复用 90 分钟安装期 token。旧系统的预览自己拼渲染输入，新增 SSH 公钥字段时只改了网关那条路径（ab81d37）。
+3. 机器面的两份约定（地址格式、制品目录布局）放在层 1 的族系目录里。另有一个测试：渲染出来的每个地址，网关都必须能路由到。运行脚本通过 canonical catalog.SignalURL 发 POST，Content-Type 为 text/plain；query 包含 slot（Seq）、timing、rc（原生状态），hook-start/hook-report 另含 1 起算的 instance 与冻结 digest，slot-start/slot-end 不带 hook 字段。hook-report 正文为日志尾部最多 4096 字节。渲染不增加客户端序号；解析、鉴权、冻结身份检查、失败归属和服务端去重仍归第 7 层，传输失败不直接改变安装结果。
+
 4. 网关、状态机、仓储的分工：网关决定给不给（SN 能否匹配、架构和固件是否通过、文件是否在下发清单里、任务状态是否允许）；状态机决定能不能转（C33、C34）；仓储保证并发下只转一次——状态推进是条件更新，当前状态和版本都与预期一致才写入，冲突时由状态机重读后再判断。token 由网关生成，和「进入引导中」一起写入，所以两台机器报同一个 SN 同时来引导时，只有一台能拿到 token。超时扫描归状态机，由装配点启停并注入时钟。控制台的取消和重试也经过状态机，所以 C34 只在状态机里实现一次。
 5. hook 脚本只对快照里钉住的摘要放行：网关收到取 hook 脚本的请求，先确认这个摘要在该任务的快照里，再从仓储取出正文。一个任务的 token 取不到别的任务的脚本；草稿不会进入快照，所以任何 token 都取不到草稿。旧系统把 hook 正文写进 nginx 目录，出过正文根本没落盘的问题（d9d744a），改由网关从库里发，这类故障就不会再有。
 6. ISO 模块：控制台声明它需要的来源操作（登记、上传分片、取消、重试获取、重新导入），由 ISO 模块实现、装配点注入。进度和状态由 ISO 模块经存储契约写回 ISO 记录，控制台只读这条记录。启动时装配点调用 ISO 模块的恢复操作，把没取完的来源和没导完的导入继续做完。各个目录（nginx 目录、SMB 目录、暂存目录、允许登记的本地目录）由装配点注入。
@@ -413,15 +437,20 @@ make check 全绿之外：
 |---|---|
 | Windows：wimboot 注入 startnet、winpeshl、真实 busybox/curl 制品，通过 Setup 本地 OEM 树 `/m` 复制 firstboot 载荷；此目标链仍未真机验证 | 第 4/7 层仅为 WinPE 与最终 OS 均满足运行 ABI 的工具构建登记角色；缺角色拒绝菜单、附属文件和脚本。UTF8-manifest busybox 路线不能承诺 Server 2016/2019 firstboot 支持。CMD/PowerShell 原生行为与 Setup 复制、登录条件留第 7 层验证，本文的 Linux 检查不证明 Windows 原生执行。见 [目标运行契约与逐行依据](../../../internal/render/testdata/runtime-contract.md) |
 | Windows：只有 2025 自带 OpenSSH，2016–2022 要额外安装，气隙环境装不了按需功能 | 内置的 SSH 公钥 hook 这一版只保证 2025，更早的版本需要另行提供 OpenSSH 安装包 |
-| SUSE 16：Agama 内网安装尚未真装验证 | 按 [Agama 网络安装](https://agama-project.github.io/docs/user/guides/network) 使用提取 kernel/initrd、`live-root` squashfs、`root=live:`、`ip=dhcp`、`rd.neednet=1`、`inst.install_url`。按 [无人值守文档](https://agama-project.github.io/docs/overview/unattended) 选单一 `autoinst.jsonnet`，无附属文件；post `chroot:false` 的目标根为 `/mnt`，只安装一条 systemd 首次开机路径，不再添加原生 init 重复执行。产品 ID 必须匹配实际 ISO；profile/schema 与真实镜像安装留第 7 层验证 |
+| SUSE 16：最初缺少 Agama 菜单形态依据；现已按官方网络/无人值守文档实现，实际介质仍未真装验证 | 按 [Agama 网络安装](https://agama-project.github.io/docs/user/guides/network) 使用提取 kernel/initrd、`live-root` squashfs、`root=live:`、`ip=dhcp`、`rd.neednet=1`、`inst.install_url`。按 [无人值守文档](https://agama-project.github.io/docs/overview/unattended) 选单一 `autoinst.jsonnet`，无附属文件；post `chroot:false` 的目标根为 `/mnt`，只安装一条 systemd 首次开机路径，不再添加原生 init 重复执行。产品 ID 必须匹配实际 ISO；profile/schema 与真实镜像安装留第 7 层验证 |
+| SUSE 15：原清单的 AutoYaST 菜单依据不足以证明实际介质安装可行 | 已按 linuxrc/SUSE 文档使用 install= 与 autoyast=、catalog 原生 autoinst.xml/无附属文件；真实 SLES15/Leap15 的内核参数、启动/安装阶段与目标 systemd 服务留第 7 层验证。第 3 层 XML 与 Ubuntu shell 测试不证明真装 |
 | ESXi：原生 `%firstboot` 在 Secure Boot 下不执行，且不采用 Linux systemd/安装期目录持久化 | 在同一个原生 firstboot 脚本中持有编码后的不可变 wrapper/hook 与独立 finalize token；执行前摘要校验，`setsid` 进程组超时。捕获绝对 `$0`，校验本任务 marker/普通非 symlink 文件，成功后才能删除该原生凭据文件和发 ready。缺 ABI 或归属不符明确失败并保留凭据；实际 native `$0`、ABI、Secure Boot 兼容及真安装由第 7 层验证。见 [运行契约](../../../internal/render/testdata/runtime-contract.md) |
-| Ubuntu：安装器要把整张 ISO 下进内存 | 目标机内存要求写进内置模板的说明，验收虚拟机按此配内存 |
+| Ubuntu：安装器要把整张 ISO 下进内存 | 目标机内存要求写进内置模板正文注释（不新增 Description 或存储字段），验收虚拟机按实际 ISO 大小配置额外安装工作内存 |
 | 本机 QEMU 在 WHPX 下只能用 `-cpu qemu64`，实测能跑 RHEL 9 系；Windows Server 2025、ESXi、RHEL 10 系能不能跑都没验证 | 跑不了的格式，验收换到 KVM 宿主机或真机上做 |
 | 前端工具链：Node 24 装在 `C:\Program Files\nodejs`，但不在 Bash 的默认 PATH 里；加进 PATH 后 pnpm 11.16 可用 | 第 6 层计划写明命令，构建和测试都走 pnpm |
 | gowrap 的维护状态没核实 | 写第 1 层计划前核实，不合格就手写装饰器 |
 | 系的清单由系统内置，清单外的发行版（比如某个内部重编译版）要等 lober 发新版才能导入 | 接受。这是族、系、格式由系统保证正确的代价 |
 | 主机没有废弃状态，被任务引用过就删不掉（C26）。退役、报废、换过主板的机器会一直留在主机列表和向导的候选里 | 接受（2026-10-08）。一台主机先后的任务就是它的装机历史（§2.7），不加废弃状态；不再用的主机只能靠界面过滤筛掉 |
 | 被任务引用过的 ISO 删不掉（C26），下载或上传得到的原始字节也就一直占着磁盘（§5.1 第 5 步） | 接受（2026-10-08）。第 4 层设计导入与清理时处理 |
+
+Linux 首次开机使用一个 systemd 路径：安装器在目标根之外阶段预存 wrapper、原始摘要 hook 与 finalize.token，目标根为 Kickstart /mnt/sysroot、Debian/Ubuntu /target、AutoYaST/Agama /mnt。Agama 仅走 post chroot:false 加该服务，不同时走 scripts.init。Windows 使用同一条受 1024 字符限制的 FirstLogonCommand 与本地 OEM 载荷；ESXi 使用单个编码 native %firstboot 段，拥有本任务 marker 的绝对普通非 symlink 文件才能成功清理，缺 ABI/归属失败保留凭据，Secure Boot 下不支持该生命周期。这些目标安装约束详见 [运行契约](../../../internal/render/testdata/runtime-contract.md)。
+
+第 3 层开发/检查现运行在 WSL Ubuntu、原生 Go 1.27.2，程序只部署 Linux；先前 Go 1.27.1 与 Windows 目标数据证据为历史记录。用户安装的 nginx/Kea/TFTP 配置未改动。第 3 层已验证完整 7 模板/5 hook、不可变历史 v1 与真实 PostgreSQL 升级重放；详见 [验收及证据](../reviews/2026-10-12-layer3-acceptance.md)。Ubuntu 运行、Jsonnet/schema、XML/YAML 与 golden 验证均不等于真机安装认证，第 4/5/7 层义务仍保留。
 
 ## 9. 与此前设计的关系
 

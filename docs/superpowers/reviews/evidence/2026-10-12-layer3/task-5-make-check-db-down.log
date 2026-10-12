@@ -1,0 +1,672 @@
+gofmt -l $(go list -f {{.Dir}} ./...)
+go vet ./...
+go test ./...
+ok  	github.com/lober/lober/internal/archtest	4.622s
+--- FAIL: TestReleasedVersionsLoadAndUpgradeIdempotently (0.02s)
+    fingerprint_test.go:121: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+FAIL
+FAIL	github.com/lober/lober/internal/builtin	2.699s
+ok  	github.com/lober/lober/internal/core/activation	0.528s
+ok  	github.com/lober/lober/internal/core/admission	0.408s
+ok  	github.com/lober/lober/internal/core/catalog	0.417s
+ok  	github.com/lober/lober/internal/core/model	1.316s
+ok  	github.com/lober/lober/internal/core/params	0.488s
+ok  	github.com/lober/lober/internal/core/scan	0.540s
+ok  	github.com/lober/lober/internal/core/snapshot	1.046s
+ok  	github.com/lober/lober/internal/render	0.818s
+ok  	github.com/lober/lober/internal/store	1.058s
+--- FAIL: Test契约审计 (0.00s)
+    --- FAIL: Test契约审计/ListAudit_的查询不合规则报_ErrInvalid (0.01s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约审计/ListAudit_新的在前，各种过滤都对 (0.01s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约审计/ListAudit_的_Limit_为_0_时每页_100_条 (0.01s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约审计/ListAudit_翻页与一次全取相同，翻页中途写的不插进后面的页 (0.01s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约审计/零值审计报_ErrAuditRequired，什么都不写 (0.00s)
+        --- FAIL: Test契约审计/零值审计报_ErrAuditRequired，什么都不写/DeprecateISO (0.01s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/零值审计报_ErrAuditRequired，什么都不写/CreateHost (0.01s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/零值审计报_ErrAuditRequired，什么都不写/CreateISO (0.01s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/零值审计报_ErrAuditRequired，什么都不写/DeleteHost (0.01s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/零值审计报_ErrAuditRequired，什么都不写/DeleteISO (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/零值审计报_ErrAuditRequired，什么都不写/UpdateHost (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/零值审计报_ErrAuditRequired，什么都不写/ImportHosts (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约审计/审计写失败时动作也不落库 (0.00s)
+        --- FAIL: Test契约审计/审计写失败时动作也不落库/CreateHost (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/审计写失败时动作也不落库/CreateISO (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/审计写失败时动作也不落库/ImportHosts (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/审计写失败时动作也不落库/DeleteISO (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/审计写失败时动作也不落库/DeprecateISO (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/审计写失败时动作也不落库/DeleteHost (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/审计写失败时动作也不落库/UpdateHost (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约审计/审计不合法报_ErrInvalid，什么都不写 (0.00s)
+        --- FAIL: Test契约审计/审计不合法报_ErrInvalid，什么都不写/DeleteISO (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/审计不合法报_ErrInvalid，什么都不写/CreateHost (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/审计不合法报_ErrInvalid，什么都不写/DeprecateISO (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/审计不合法报_ErrInvalid，什么都不写/DeleteHost (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/审计不合法报_ErrInvalid，什么都不写/CreateISO (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/审计不合法报_ErrInvalid，什么都不写/ImportHosts (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/审计不合法报_ErrInvalid，什么都不写/UpdateHost (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约审计/成功时每个对象写一条审计，对象由仓储填 (0.00s)
+        --- FAIL: Test契约审计/成功时每个对象写一条审计，对象由仓储填/DeprecateISO (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/成功时每个对象写一条审计，对象由仓储填/CreateHost (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/成功时每个对象写一条审计，对象由仓储填/DeleteISO (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/成功时每个对象写一条审计，对象由仓储填/DeleteHost (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/成功时每个对象写一条审计，对象由仓储填/UpdateHost (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/成功时每个对象写一条审计，对象由仓储填/CreateISO (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约审计/成功时每个对象写一条审计，对象由仓储填/ImportHosts (0.00s)
+            contract_audit_test.go:161: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test契约并发 (0.00s)
+    --- FAIL: Test契约并发/同一个任务同时追加事件，Seq_连续、不重、不缺，一批的几条相邻 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约并发/同一个任务用同一个期望值同时推进，恰好一次成功，只有它带的事件落库 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约并发/同一个_Key_同时追加，只落一条 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约并发/同一台主机的几批任务同时提交，恰好一批成功，其余报_host_has_open_task (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约并发/不同主机的几批任务同时提交，全都成功 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test写事务不随连接默认的隔离级别变 (0.00s)
+    contract_concurrency_test.go:239: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test同时装载同一份内置内容后到的等先到的提交之后什么都不做 (0.00s)
+    --- FAIL: Test同时装载同一份内置内容后到的等先到的提交之后什么都不做/新身份：hook (0.00s)
+        contract_concurrency_test.go:360: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test同时装载同一份内置内容后到的等先到的提交之后什么都不做/新身份：模板 (0.00s)
+        contract_concurrency_test.go:360: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test同时装载同一份内置内容后到的等先到的提交之后什么都不做/已有身份的新版本：hook (0.00s)
+        contract_concurrency_test.go:360: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test同时装载同一份内置内容后到的等先到的提交之后什么都不做/已有身份的新版本：模板 (0.00s)
+        contract_concurrency_test.go:360: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test同时首次装载同一个新身份两路都没看到对方 (0.00s)
+    --- FAIL: Test同时首次装载同一个新身份两路都没看到对方/同一个_ID：hook (0.00s)
+        contract_concurrency_test.go:437: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test同时首次装载同一个新身份两路都没看到对方/不同_ID_同名：hook (0.00s)
+        contract_concurrency_test.go:457: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test同时首次装载同一个新身份两路都没看到对方/同一个_ID：模板 (0.00s)
+        contract_concurrency_test.go:437: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test同时首次装载同一个新身份两路都没看到对方/不同_ID_同名：模板 (0.00s)
+        contract_concurrency_test.go:457: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test契约事件 (0.00s)
+    --- FAIL: Test契约事件/一次追加多于一批（batchSize）：分批写入与分批查已有的_Key，第二批的照样写上，原样重发照样认出 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约事件/Seq_每个任务从_1_起连续，不同任务互不影响，读回来与写进去的相同，不写审计 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约事件/同一个_Key_在不同任务里可以各用一次 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约事件/事件不合法报_ErrInvalid，整批不写 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约事件/Fields_原样存下：nil_与空_map_读回来不变，返回值与入参都是拷贝 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约事件/推进时带的事件与_AppendEvents_共用_Seq_与_Key；结束了的任务照样能追加 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约事件/ListEvents_只给_Seq_大于_afterSeq_的，limit_的规则同分页 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约事件/同一个_Key_再追加报告_Duplicate，Seq_是原来那条的，不新增；同一批里重复的也一样 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约事件/任务不存在报_ErrNotFound，ID_不合格式报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约事件/空的一批什么都不写，结果是长度为_0_的切片 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test契约hook (0.00s)
+    --- FAIL: Test契约hook/内置：不存在时写入，再装一次什么都不做，内容不同报_ErrBuiltinMismatch (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/GetHooks_的键多于一批（batchSize）：分批查，第二批里的照样取到 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/新建：身份加版本_1_的草稿，名字按_NormalizeName_规范化 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/列表：Limit_为_0_时每页_100_条 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/列表：每个身份一项，默认给最新的版本，ApprovedOnly_给当前的已审批版本 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/ID_或版本号不合格式报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/删除草稿：不是草稿报_ErrImmutable，Rev_对不上报_ErrConflict，没有的报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/内置：入参不是规范的内置已审批版本，或名字不带保留前缀，报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/删除草稿：带着删掉的草稿的键与_Rev_写报_ErrNotFound，写不到新开的版本上 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/状态转换：不合规矩的转换报_ErrConflict，什么都不改 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/内置：身份与版本都不能改，报_ErrImmutable (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/内置：名字被别的身份占了报_DuplicateError，用户用内置的名字报_name_reserved (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/开新版本：来源不存在报_ErrNotFound，作者为空或存不下报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/改名：不合法或用了保留前缀报_ProblemsError，撞上别的身份报_DuplicateError，没有的报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/改名：按_NormalizeName_规范化，每个版本都换成新名字，Rev_不变，旧名字空出来 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/删除草稿：删掉最后一个版本时身份一起删掉、名字空出来；删掉的版本号不再发 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/审批：审批人是作者或为空报_ProblemsError(ErrRejected)，存不下报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/开新版本：已有草稿或待审批的版本报_ErrConflict (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/状态转换：提交、驳回、保存、再提交、审批、废弃，每步_Rev_加_1 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/开新版本：复制来源的内容，版本号是下一个，作者是给的那一个 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/列表：查询不合规则报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/状态转换：Rev_对不上报_ErrConflict，没有的报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/保存草稿：Rev_对不上报_ErrConflict，没有的报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/保存草稿：状态、作者、审批人、内置标记与库里的不同报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/列表：按状态过滤，看的是给出的那一项 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/列表：按名字的_key、再按_ID_排，翻页与一次全取相同 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/列表：按名字前缀过滤，只有_ASCII_字母不分大小写，_、%_与反斜杠按原样比 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/返回值与入参都是拷贝：Params、Impls_是深拷贝 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/审批：激活判定不通过报_ProblemsError(ErrRejected)，问题与直接调用_activation_的相同，状态不变 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/说明、正文与别的文本存不下报_text_not_storable，问题落在那一处 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/GetHooks_只放存在的，一个都没取到时是空_map (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/保存草稿：整条替换内容，Rev_加_1；改成零值、空集合都原样存下 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/保存草稿：Name_与身份现在的名字不同报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/新建：带了由仓储填的字段，或作者为空、存不下，报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/保存草稿：不是草稿的版本报_ErrImmutable (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/新建：名字大小写不同也算同名，报_DuplicateError，Existing_是已有的身份 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/新建：名字不合法报_ProblemsError，问题与_NormalizeName_的相同；用了保留前缀报_name_reserved (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/成功时写一条审计，对象由仓储填 (0.00s)
+        --- FAIL: Test契约hook/成功时写一条审计，对象由仓储填/改名 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/成功时写一条审计，对象由仓储填/提交 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/成功时写一条审计，对象由仓储填/废弃 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/成功时写一条审计，对象由仓储填/驳回 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/成功时写一条审计，对象由仓储填/审批 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/审计写失败时动作也不落库 (0.00s)
+        --- FAIL: Test契约hook/审计写失败时动作也不落库/提交 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/审计写失败时动作也不落库/驳回 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/审计写失败时动作也不落库/审批 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/审计写失败时动作也不落库/废弃 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/审计写失败时动作也不落库/改名 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/零值审计报_ErrAuditRequired，什么都不写 (0.00s)
+        --- FAIL: Test契约hook/零值审计报_ErrAuditRequired，什么都不写/提交 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/零值审计报_ErrAuditRequired，什么都不写/驳回 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/零值审计报_ErrAuditRequired，什么都不写/废弃 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/零值审计报_ErrAuditRequired，什么都不写/审批 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/零值审计报_ErrAuditRequired，什么都不写/改名 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约hook/审计不合法报_ErrInvalid，什么都不写 (0.00s)
+        --- FAIL: Test契约hook/审计不合法报_ErrInvalid，什么都不写/提交 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/审计不合法报_ErrInvalid，什么都不写/废弃 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/审计不合法报_ErrInvalid，什么都不写/驳回 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/审计不合法报_ErrInvalid，什么都不写/改名 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约hook/审计不合法报_ErrInvalid，什么都不写/审批 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test契约主机 (0.00s)
+    --- FAIL: Test契约主机/修改时_Rev_对不上报_ErrConflict，没登记的报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/导入时已登记的整条替换、不比_Rev，没登记的新建 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/登记后读回来与写进去的相同，Rev_为_1 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/导入时批内_SN_重复报_host_duplicate_in_batch (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/导入时有一台的_SN_合法却没规范化，整批报_ErrInvalid、不写 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/把架构、固件、属性改成空值能存下 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/修改是整条替换，Rev_加_1 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/返回值与入参都是拷贝 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/登记时_SN_合法却没规范化报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/登记的记录不合法报_ProblemsError，问题与_model_的校验相同 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/SN_已登记报_DuplicateError，Existing_是那个_SN (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/导入时一条不合法整批不写，逐条列出问题 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/ListHosts_按_SN_的字节序，翻三页以上与一次全取相同 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/GetHosts_只放存在的，一台都没取到时是空_map (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/存不下的_SN_与过滤条件当作没有：取、删报_ErrNotFound，列表为空，不报数据库的编码错误 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/ListHosts_的查询不合规则报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/ListHosts_按属性过滤，值要完全相等 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/删除之后读不到；Rev_对不上报_ErrConflict，没登记的报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/一次导入多于一批的主机：分批写入、读回与审计，每一台都对 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/ListHosts_的_Limit_为_0_时每页_100_条 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/修改时_SN_合法却没规范化报_ErrInvalid，不当成没登记的主机 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/导入空的一批报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/ListHosts_按_SN_前缀过滤，_、%_与反斜杠按原样比 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约主机/修改成不合法的记录报_ProblemsError (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test契约ISO (0.00s)
+    --- FAIL: Test契约ISO/系统更新：已是_ready_的改成不合法的记录，同样带出_ISO.Validate_的问题 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/新建：生成的_ID_合规，State_为_acquiring，Rev_为_1 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/系统更新：不能置为_deprecated，状态不认识的报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/系统更新：改_Family、Series、Name_报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/系统更新：不写审计，Rev_加_1，读回来与写进去的相同 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/新建：只填_Name、Family、Series，多填了报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/系统更新：把字段改回零值能存下 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/系统更新：置为_ready_时_ISO.Validate_的问题原样带出 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/只有_ready_的能废弃 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/系统更新：Rev_对不上报_ErrConflict，没有的报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/删除之后读不到；Rev_对不上报_ErrConflict，没有的报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/ID_不合格式报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/系统更新：已废弃的不能再改，报_ErrImmutable (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/新建：族与系对不上报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/新建：名称存不下报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/SHA256_撞上未失败的_ISO_报_DuplicateError，对方导入失败之后就能写 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/Artifacts、Offers_是深拷贝 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/ListISOs_的查询不合规则报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/ListISOs_的_Limit_为_0_时每页_100_条 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/ListISOs_按族、系、状态过滤 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/系统更新：SHA256_不是空串也不是_64_位小写十六进制，报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/系统更新：文本存不下报_ErrInvalid，不论置为什么状态 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约ISO/ListISOs_按名称的字节序、再按_ID，翻页与一次全取相同 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test契约任务 (0.00s)
+    --- FAIL: Test契约任务/建任务：重跑准入：模板版本是草稿 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/引用：主机被任务引用之后删除报_ErrReferenced，任务结束了也一样 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：ID_合规且是安全词，State_为_pending，Rev_为_1，读回来与写进去的相同 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/查询：FindOpenTask_在有、没有、任务刚结束时都对 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/成功时写一条审计，对象由仓储填 (0.00s)
+        --- FAIL: Test契约任务/成功时写一条审计，对象由仓储填/TransitionTaskByUser (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约任务/成功时写一条审计，对象由仓储填/CreateTasks (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/审计写失败时动作也不落库 (0.00s)
+        --- FAIL: Test契约任务/审计写失败时动作也不落库/CreateTasks (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约任务/审计写失败时动作也不落库/TransitionTaskByUser (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/查询：GetTask_找不到报_ErrNotFound，ID_不合格式报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/推进：目标状态或事件不合法报_ErrInvalid，整个推进不生效 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/推进：回到未结束的状态时，这台主机已有别的未结束任务，报_host_has_open_task (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/推进：任务不存在报_ErrNotFound，ID_不合格式报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/推进：Rev_加_1，状态与事件一起提交；仓储不判断推进合不合规矩；不写审计 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：重跑准入：ISO_导入失败 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：ISO_或模板版本不存在报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/推进：Rev_或期望的状态对不上报_ErrConflict，什么都不改 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：一批的主机多于一批（batchSize）：分批加锁与查未结束的任务，第二批的照样逐台报出、照样建上 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/查询：ListTasks_按主机、状态、时间范围过滤 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：重跑准入：ISO_已废弃 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/返回值与入参都是拷贝：快照是深拷贝 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/查询：ListTasks_的_Limit_为_0_时每页_100_条 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/查询：ListTasks_的查询不合规则报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/查询：ListTasks_按_CreatedAt_倒序、再按_ID，翻页与一次全取相同 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：重跑准入：主机登记的架构改了，与_ISO_的不符 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：重跑准入：ISO_与主机都有问题时一起报出 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：重跑准入：主机已有未结束的任务 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：重跑准入：两台主机都有未结束的任务时逐台报出 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：重跑准入：模板版本已废弃 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：重跑准入：模板引用的_hook_版本已废弃 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/引用：ISO_被任务引用之后删除报_ErrReferenced，废弃了、任务结束了也一样 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：重跑准入：主机没登记，或者已经被删了 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：仓储不解释快照，nil_与空的_map、切片都原样存下 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：批里_SN_重复报_host_duplicate_in_batch (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：入参的每条前提各一个反例，都报_ErrInvalid，什么都不写 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/审计不合法报_ErrInvalid，什么都不写 (0.00s)
+        --- FAIL: Test契约任务/审计不合法报_ErrInvalid，什么都不写/CreateTasks (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约任务/审计不合法报_ErrInvalid，什么都不写/TransitionTaskByUser (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/建任务：主机的任务结束之后，可以再给它建 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约任务/零值审计报_ErrAuditRequired，什么都不写 (0.00s)
+        --- FAIL: Test契约任务/零值审计报_ErrAuditRequired，什么都不写/CreateTasks (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约任务/零值审计报_ErrAuditRequired，什么都不写/TransitionTaskByUser (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test契约模板 (0.00s)
+    --- FAIL: Test契约模板/内置：名字被别的身份占了报_DuplicateError，用户用内置的名字报_name_reserved (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/新建：身份加版本_1_的草稿，名字按_NormalizeName_规范化 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/DerivedFrom_只由派生写：新建时带了、保存时改了都报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/状态转换：Rev_对不上报_ErrConflict，没有的报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/引用：模板的任一版本引用了_hook_草稿，草稿就删不掉；不再引用之后就能删 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/改名：不合法或用了保留前缀报_ProblemsError，撞上别的身份报_DuplicateError，没有的报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/成功时写一条审计，对象由仓储填 (0.00s)
+        --- FAIL: Test契约模板/成功时写一条审计，对象由仓储填/改名 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/成功时写一条审计，对象由仓储填/提交 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/成功时写一条审计，对象由仓储填/废弃 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/成功时写一条审计，对象由仓储填/审批 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/成功时写一条审计，对象由仓储填/驳回 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/hook_与模板的名字各管各的 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/返回值与入参都是拷贝：Series、Params、Bindings、Assembly、DerivedFrom_是深拷贝 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/引用的_hook_版本多于一批：保存时第二批的引用照样记下，审批与建任务时第二批的照样取得出来 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/内置：不存在时写入，再装一次什么都不做，内容不同报_ErrBuiltinMismatch (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/删除草稿：不是草稿报_ErrImmutable，Rev_对不上报_ErrConflict，没有的报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/删除草稿：带着删掉的草稿的键与_Rev_写报_ErrNotFound，写不到新开的版本上 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/删除草稿：删掉最后一个版本时身份一起删掉、名字空出来；删掉的版本号不再发 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/零值审计报_ErrAuditRequired，什么都不写 (0.00s)
+        --- FAIL: Test契约模板/零值审计报_ErrAuditRequired，什么都不写/提交 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/零值审计报_ErrAuditRequired，什么都不写/废弃 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/零值审计报_ErrAuditRequired，什么都不写/审批 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/零值审计报_ErrAuditRequired，什么都不写/改名 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/零值审计报_ErrAuditRequired，什么都不写/驳回 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/派生：名字照样要唯一、合规则、不用保留前缀，来源不存在报_ErrNotFound，作者不合法报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/审批：激活判定不通过报_ProblemsError(ErrRejected)，问题与直接调用_activation_的相同，状态不变 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/ListTemplates_按系过滤，看的是给出的那一项 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/开新版本：已有草稿或待审批的版本报_ErrConflict (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/派生：复制来源的全部内容，记下来源；来源什么状态都可以；不审计 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/改名：按_NormalizeName_规范化，每个版本都换成新名字，Rev_不变，旧名字空出来 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/开新版本：来源不存在报_ErrNotFound，作者为空或存不下报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/保存草稿：Name_与身份现在的名字不同报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/审批：对引用的_hook_版本重跑判定，刚被废弃的报_hook_ref_deprecated (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/状态转换：提交、驳回、保存、再提交、审批、废弃，每步_Rev_加_1 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/保存草稿：Rev_对不上报_ErrConflict，没有的报_ErrNotFound (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/保存草稿：不是草稿的版本报_ErrImmutable (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/新建：带了由仓储填的字段，或作者为空、存不下，报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/保存草稿：整条替换内容，Rev_加_1；改成零值、空集合都原样存下 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/新建：名字大小写不同也算同名，报_DuplicateError，Existing_是已有的身份 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/列表：按名字前缀过滤，只有_ASCII_字母不分大小写，_、%_与反斜杠按原样比 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/开新版本：复制来源的内容，版本号是下一个，作者是给的那一个 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/列表：Limit_为_0_时每页_100_条 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/正文与别的文本存不下报_text_not_storable，问题落在那一处 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/列表：按状态过滤，看的是给出的那一项 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/列表：查询不合规则报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/审批：审批人是作者或为空报_ProblemsError(ErrRejected)，存不下报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/审计不合法报_ErrInvalid，什么都不写 (0.00s)
+        --- FAIL: Test契约模板/审计不合法报_ErrInvalid，什么都不写/提交 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/审计不合法报_ErrInvalid，什么都不写/废弃 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/审计不合法报_ErrInvalid，什么都不写/改名 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/审计不合法报_ErrInvalid，什么都不写/驳回 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/审计不合法报_ErrInvalid，什么都不写/审批 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/ID_或版本号不合格式报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/新建：名字不合法报_ProblemsError，问题与_NormalizeName_的相同；用了保留前缀报_name_reserved (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/列表：按名字的_key、再按_ID_排，翻页与一次全取相同 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/列表：每个身份一项，默认给最新的版本，ApprovedOnly_给当前的已审批版本 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/保存草稿：状态、作者、审批人、内置标记与库里的不同报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/内置：入参不是规范的内置已审批版本，或名字不带保留前缀，报_ErrInvalid (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/内置：身份与版本都不能改，报_ErrImmutable (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/状态转换：不合规矩的转换报_ErrConflict，什么都不改 (0.00s)
+        contract_helpers_test.go:43: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test契约模板/审计写失败时动作也不落库 (0.00s)
+        --- FAIL: Test契约模板/审计写失败时动作也不落库/提交 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/审计写失败时动作也不落库/驳回 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/审计写失败时动作也不落库/审批 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/审计写失败时动作也不落库/改名 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+        --- FAIL: Test契约模板/审计写失败时动作也不落库/废弃 (0.00s)
+            contract_hooks_test.go:592: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test同时导入主机与建任务不会互相等死 (0.00s)
+    hostlock_test.go:24: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: TestOpen不注入失败 (0.00s)
+    pgstore_test.go:35: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: TestOpen按选项设连接池上限 (0.00s)
+    pgstore_test.go:52: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test游标里藏着存不下的串报ErrInvalid (0.00s)
+    pgstore_test.go:84: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test同时写同一份内容由索引兜底报出对方 (0.00s)
+    pgstore_test.go:122: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test同时导入同一组主机不会互相等死 (0.00s)
+    pgstore_test.go:176: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test带着旧Rev的写入等对方提交之后报冲突 (0.00s)
+    pgstore_test.go:257: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test带着旧Rev写hook与模板版本的等对方提交之后报冲突 (0.00s)
+    pgstore_test.go:339: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test同时开新版本等对方提交之后报冲突 (0.00s)
+    pgstore_test.go:451: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test审批模板等引用的hook版本提交之后再判定 (0.00s)
+    pgstore_test.go:485: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test同时占用同一个名字由唯一索引兜底报出对方 (0.00s)
+    pgstore_test.go:532: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test模板草稿引用很长的hookID照样存得下 (0.00s)
+    pgstore_test.go:559: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test建任务撞上没提交的重试由部分唯一索引兜底 (0.00s)
+    pgstore_test.go:606: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test推进撞上没提交的新任务由部分唯一索引兜底 (0.00s)
+    pgstore_test.go:639: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test建任务等锁住的记录提交之后再重跑准入 (0.00s)
+    --- FAIL: Test建任务等锁住的记录提交之后再重跑准入/主机改了架构 (0.00s)
+        pgstore_test.go:691: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test建任务等锁住的记录提交之后再重跑准入/ISO_废弃了 (0.00s)
+        pgstore_test.go:691: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test建任务等锁住的记录提交之后再重跑准入/模板版本废弃了 (0.00s)
+        pgstore_test.go:691: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test建任务等锁住的记录提交之后再重跑准入/引用的_hook_版本废弃了 (0.00s)
+        pgstore_test.go:691: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test建任务等主机上没提交的新任务提交之后逐台报出 (0.00s)
+    pgstore_test.go:725: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test推进与追加事件等对方提交之后再比对与分配 (0.00s)
+    --- FAIL: Test推进与追加事件等对方提交之后再比对与分配/带着旧期望值推进 (0.00s)
+        pgstore_test.go:790: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    --- FAIL: Test推进与追加事件等对方提交之后再比对与分配/追加事件 (0.00s)
+        pgstore_test.go:790: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test全新的schema断言通过 (0.00s)
+    schema_test.go:74: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test再次Open同一个schema照样通过 (0.00s)
+    schema_test.go:80: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test删掉一个索引被查出来 (0.00s)
+    schema_test.go:87: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test复合索引改建成单列被查出来并拒绝启动 (0.00s)
+    schema_test.go:97: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test复合索引的列换了顺序被查出来并拒绝启动 (0.00s)
+    schema_test.go:107: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test改掉WHERE被查出来并拒绝启动 (0.00s)
+    schema_test.go:116: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test唯一索引变成不唯一被查出来 (0.00s)
+    schema_test.go:124: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test主键的列变了被查出来 (0.00s)
+    schema_test.go:131: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test主键的列换了顺序被查出来并拒绝启动 (0.00s)
+    schema_test.go:139: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test主键改了名被查出来并拒绝启动 (0.00s)
+    schema_test.go:151: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test改掉CHECK被查出来并拒绝启动 (0.00s)
+    schema_test.go:182: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test少了CHECK被查出来 (0.00s)
+    schema_test.go:190: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test多出来的索引与约束也算不一致 (0.00s)
+    schema_test.go:199: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test外键缺了或者变了被查出来 (0.00s)
+    schema_test.go:210: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test只看当前schema (0.00s)
+    schema_test.go:247: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test部分唯一索引改成全表唯一被查出来并拒绝启动 (0.00s)
+    schema_test.go:261: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test模板引用的外键改了删除动作被查出来并拒绝启动 (0.00s)
+    schema_test.go:272: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: TestC31的部分唯一索引不见了被查出来 (0.00s)
+    schema_test.go:285: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test事件Key的唯一索引变成单列被查出来并拒绝启动 (0.00s)
+    schema_test.go:295: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test版本状态的CHECK与model一致 (0.00s)
+    schema_test.go:304: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: TestISO状态的CHECK与model一致 (0.00s)
+    schema_test.go:336: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test任务状态的CHECK与C31的索引都与model一致 (0.00s)
+    schema_test.go:357: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+FAIL
+FAIL	github.com/lober/lober/internal/store/pgstore	1.329s
+--- FAIL: TestOpen给一个装好失败注入的仓储 (0.01s)
+    pgtest_test.go:116: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: TestOpen的仓储互不干扰 (0.00s)
+    pgtest_test.go:131: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: TestOpen占的位在测试结束时让出 (0.00s)
+    --- FAIL: TestOpen占的位在测试结束时让出/打开 (0.00s)
+        pgtest_test.go:145: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+--- FAIL: Test临时schema用完就删 (0.00s)
+    --- FAIL: Test临时schema用完就删/建 (0.00s)
+        pgtest_test.go:159: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+    pgtest_test.go:173: 连接测试库：failed to connect to `user=lober_test database=lober_test`: 127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connectex: No connection could be made because the target machine actively refused it.
+FAIL
+FAIL	github.com/lober/lober/internal/store/pgstore/pgtest	0.650s
+FAIL
+make: *** [Makefile:22: test] Error 1

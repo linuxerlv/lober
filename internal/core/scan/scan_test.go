@@ -140,6 +140,21 @@ func Test七种格式的样例扫出预期的占位符(t *testing.T) {
 			if !slices.Equal(res.Params, s.params) {
 				t.Errorf("Params = %+v，想要 %+v", res.Params, s.params)
 			}
+			// T8-8：手写期望也可能随样例一起偏离能力表，另按格式核对真实扫描结果。
+			parts := slices.Sorted(slices.Values(res.Parts))
+			if want := slices.Sorted(slices.Values(s.format.RequiredParts())); !slices.Equal(parts, want) {
+				t.Errorf("Parts = %q，格式 RequiredParts = %q，想要一致", parts, want)
+			}
+			for _, value := range res.Sys {
+				if !slices.Contains(s.format.SystemValues(), value) {
+					t.Errorf("系统值 %q 不在格式 %q 的 SystemValues 中", value, s.format)
+				}
+			}
+			for _, slot := range res.Slots {
+				if slot.Exec && !slices.Contains(s.format.Timings(), slot.Timing) {
+					t.Errorf("执行插槽 %q 的时机 %q 不在格式 %q 的 Timings 中", slot.Name, slot.Timing, s.format)
+				}
+			}
 			checkSegments(t, src, res.Segments)
 		})
 	}

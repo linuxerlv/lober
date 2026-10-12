@@ -1,0 +1,5 @@
+--- FAIL: TestAutoYaSTNativeUserAndKey (0.00s)
+    native_behavior_test.go:327: want locked root and native user, got 1
+FAIL
+FAIL	github.com/lober/lober/internal/builtin	0.009s
+FAIL

@@ -1,0 +1,6 @@
+--- FAIL: TestBuiltinDeliveryLifecycle (0.00s)
+    --- FAIL: TestBuiltinDeliveryLifecycle/builtin-autoinstall (0.00s)
+        render_test.go:322: render: <nil> [param_required（template builtin-autoinstall@1 hostname）：参数「hostname」必填，但没有值]
+FAIL
+FAIL	github.com/lober/lober/internal/builtin	0.011s
+FAIL
