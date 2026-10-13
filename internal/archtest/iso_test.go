@@ -20,7 +20,15 @@ const (
 // 层 3 尚未合并，沿用当前守卫的入口结构，避免改写其他层的规则。
 func TestISO依赖守卫(t *testing.T) {
 	root := filepath.Dir(goModPath(t))
-	for _, p := range packagesUnder(t, root, pkgISO) {
+	pkgs := packagesUnder(t, root, pkgISO)
+	if len(pkgs) == 0 {
+		t.Fatal("ISO layer is missing from go list")
+	}
+	dirs := layerSourceDirs(t, filepath.Join(root, "go.mod"), root, "internal/iso")
+	for _, v := range unlistedDirs("internal/iso", dirs, pkgs) {
+		t.Error(v)
+	}
+	for _, p := range pkgs {
 		for _, v := range append(ignoredFiles(p), checkSources(os.DirFS(root), p, checkISOFile)...) {
 			t.Error(v)
 		}
