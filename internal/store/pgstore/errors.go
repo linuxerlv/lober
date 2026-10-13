@@ -11,9 +11,10 @@ import (
 
 // PostgreSQL 的错误代码，见 PostgreSQL 手册的附录 A。
 const (
-	codeUnique  = "23505" // unique_violation
-	codeForeign = "23503" // foreign_key_violation
-	codeCheck   = "23514" // check_violation
+	codeUnique   = "23505" // unique_violation
+	codeForeign  = "23503" // foreign_key_violation
+	codeRestrict = "23001" // restrict_violation (PostgreSQL 18)
+	codeCheck    = "23514" // check_violation
 )
 
 // duplicateFields 是撞上时翻成 DuplicateError 的唯一约束（主键或唯一索引），值是 DuplicateError.Field。名字要与
@@ -51,7 +52,10 @@ func translate(err error, del bool, holder func(field string) string) error {
 			return &store.DuplicateError{Field: field, Existing: existing}
 		}
 		return errorf(store.ErrConflict, "撞上了 %s，再查时占着这个 %s 的那一方已经变了：重读之后再判断", pe.ConstraintName, field)
-	case codeForeign:
+	case codeForeign, codeRestrict:
+		if pe.Code == codeRestrict && !del {
+			return err
+		}
 		if !knownConstraint(pe.ConstraintName, true) {
 			return err
 		}
