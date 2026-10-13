@@ -51,7 +51,7 @@
 | windows | Windows Server、Windows 桌面版 | unattend |
 | esxi | ESXi | ESXi ks |
 
-格式决定四件事：支持哪些执行时机、必需哪些系统部件、要给机器下发哪些文件、每个时机里能用哪些解释器。每个系另外登记：怎样按内容识别它、仓库树怎样算完整、固件要求（ESXi 只走 UEFI）、要求哪些附加来源。附加来源目前只有一项：Debian 要同版本的官方 netboot 包，因为 netinst ISO 里的 initrd 是光驱版，不能网络装机（ce9cd56 实测）。
+格式决定四件事：支持哪些执行时机、必需哪些系统部件、要给机器下发哪些文件、每个时机里能用哪些解释器。每个系另外登记：怎样按内容识别它、仓库树怎样算完整、固件要求（ESXi 只走 UEFI）、要求哪些附加来源。识别线索、仓库判据、附加来源和必需制品角色已在 `internal/core/catalog/media.go` 登记，由 ISO 模块共用。附加来源目前只有一项：Debian 要同版本的官方 netboot 包，因为 netinst ISO 里的 initrd 是光驱版，不能网络装机（ce9cd56 实测）。
 
 执行时机是一张全局词表，按先后排：装前、装后（在安装环境）、装后（在目标系统内）、首次开机。每种格式支持其中一部分。两个时机的先后如果由正文书写位置决定、而不是由安装器决定，它们在次序上同级。例如 kickstart 的 `%post --nochroot` 与 `%post` 按出现顺序执行，两者同级。
 
@@ -396,7 +396,7 @@ make check 全绿之外：
 | AutoYaST | openSUSE Leap 15.6 | 无 | 能下载 |
 | Agama | openSUSE Leap 16.0 | 无 | 能下载 |
 | unattend | Windows Server 2025 | 无 | 评估版要在微软评估中心填表下载，或由用户提供；另需 SMB 共享 |
-| ESXi ks | ESXi 8 或 9 | 无 | 要 Broadcom 账号才能下载，需用户提供 |
+| ESXi ks | ESXi 8 或 9 | 无 | 要 Broadcom 账号才能下载；另缺经过验证的版本识别依据，首版不能导入为 ready，见 §8 |
 
 ### 7.4 建造顺序与旧代码退场
 
@@ -408,6 +408,20 @@ make check 全绿之外：
 - 系统验收在 test 分支上全部通过后，dev 并入 main，旧系统退场。还没合并的旧分支和对应的工作树（`feat/four-layer` 等）到时作废，删之前逐个确认。
 
 ## 8. 风险
+
+第 4 层的代码与合成介质测试已落地；实际发行版识别、真装和渲染集成仍按下列归属验收。
+
+| 第 4 层风险 | 归谁验证 |
+|---|---|
+| Windows 目前只产一套制品，没有按 BIOS/UEFI 分套 | 第 7 层真装核实；若需要分套，先扩核心模型和渲染契约 |
+| `.disk/info`、SUSE products、发行版 `.treeinfo` 样例尚未全部用真实安装 ISO 坐实 | 第 4 层真实介质资格验证；第 7 层安装验收复核 |
+| WIM XML 支持未压缩与标准 XPRESS；XML 使用 LZX/LZMS 时明确失败，整体 LZX 而 XML 未压缩可读 | 第 4 层解析扩展；第 7 层实际 Windows ISO 验证 |
+| Agama 的 live-root 取 LiveOS/squashfs.img，实际安装器是否接受仍待真装 | 第 7 层 SLES/Leap 16 安装验收 |
+| ESXi 缺经过验证的版本字段，首版返回 iso_version_missing，不能 ready | 第 7 层核实版本出处，再补第 4 层探针 |
+| Debian 辅助来源支持带版本、同架构和 netboot 标记的 ISO，如 mini.iso；暂不接收无可验证元信息的 tar.gz | 第 4 层补官方 tar.gz 元信息核验；第 7 层网络安装验收 |
+| 固定 series/version/arch 发布目录不能容纳不同内容，导入明确拒绝覆盖其他 ISO | 后续目录协议扩展前保持冲突，第 5 层展示已有 ISO |
+| 第 3 层尚未进入当前分支，render 的三处 RequiredRoles 改造和 golden 验收未执行 | 第 3 层合入后补集成提交 |
+| 数据库删除后若进程崩溃或文件清理失败，原件和发布目录需要继续清理 | 第 4 层提供幂等 CleanupDeleted；第 5 层在审计删除前持久化 DeletionSnapshot 并恢复清理重试 |
 
 | 风险 | 处置 |
 |---|---|

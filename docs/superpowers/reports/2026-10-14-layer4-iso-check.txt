@@ -1,0 +1,33 @@
+gofmt -l $(go list -f {{.Dir}} ./...)
+go vet ./...
+go test ./...
+ok  	github.com/lober/lober/internal/archtest	4.929s
+ok  	github.com/lober/lober/internal/core/activation	(cached)
+ok  	github.com/lober/lober/internal/core/admission	(cached)
+ok  	github.com/lober/lober/internal/core/catalog	(cached)
+ok  	github.com/lober/lober/internal/core/model	(cached)
+ok  	github.com/lober/lober/internal/core/params	(cached)
+ok  	github.com/lober/lober/internal/core/scan	(cached)
+ok  	github.com/lober/lober/internal/core/snapshot	(cached)
+ok  	github.com/lober/lober/internal/iso	8.387s
+ok  	github.com/lober/lober/internal/iso/iso9660	(cached)
+ok  	github.com/lober/lober/internal/iso/isotest	(cached)
+ok  	github.com/lober/lober/internal/store	(cached)
+ok  	github.com/lober/lober/internal/store/pgstore	(cached)
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	(cached)
+go test -race ./...
+ok  	github.com/lober/lober/internal/archtest	6.187s
+ok  	github.com/lober/lober/internal/core/activation	(cached)
+ok  	github.com/lober/lober/internal/core/admission	(cached)
+ok  	github.com/lober/lober/internal/core/catalog	(cached)
+ok  	github.com/lober/lober/internal/core/model	(cached)
+ok  	github.com/lober/lober/internal/core/params	(cached)
+ok  	github.com/lober/lober/internal/core/scan	(cached)
+ok  	github.com/lober/lober/internal/core/snapshot	(cached)
+ok  	github.com/lober/lober/internal/iso	12.673s
+ok  	github.com/lober/lober/internal/iso/iso9660	1.315s
+ok  	github.com/lober/lober/internal/iso/isotest	3.086s
+ok  	github.com/lober/lober/internal/store	(cached)
+ok  	github.com/lober/lober/internal/store/pgstore	(cached)
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	(cached)
+GOOS=linux GOARCH=amd64 go build ./...

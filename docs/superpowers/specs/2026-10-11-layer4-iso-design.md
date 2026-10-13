@@ -2,6 +2,23 @@
 
 日期：2026-10-11
 状态：已确认
+
+**2026-10-14 实现现状：** 来源登记、下载/上传、本地原地读取、取消重试、恢复清单、识别、提取、Windows SMB 发布与删除后的文件清理接口已落地。**ESXi 首版明确不能导入为 ready**，因为没有经过验证的版本出处。第 3 层尚未合入此分支，render 的角色表改造留到合入之后；本次不把那部分记作完成。
+
+合成介质覆盖 kickstart、preseed、autoinstall、AutoYaST、Agama、unattend 的导入流程。真实 ISO9660 读取已验证 Kali 安装镜像（6580 个条目）与 VMware Tools 镜像（30 个条目）；它们不是六种受支持发行版的安装验收证据。Debian/OpenCloudOS/Windows 等实际识别，以及第 7 层真装仍待验证。
+
+已落实的边界：
+
+- 一个暂存目录由一个装配点创建的 `Sources` 实例管理；并发进程不得共享它。服务自身不启动后台协程，`Register` 只登记，装配点调用阻塞的 `FetchOne`/`Import`。
+- 本地来源遵循总规格：原地读取，运维管理，lober 不复制、不删除原文件。路径通过允许根和 `os.OpenInRoot` 校验；导入前后校验打开的文件。
+- Windows WIM 的架构码 0 是 32 位 x86，当前目录不支持，因此明确拒绝；9 是 x86_64，12 是 aarch64。[微软平台说明](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/windows-setup-supported-platforms-and-cross-platform-deployments?view=windows-10)。
+- Debian 附加 ISO 必须带可验证的版本、同架构和 netboot 标记；辅助 mini.iso 不要求 dists，不把光驱 NETINST 镜像用作 netboot。tar.gz 尚未支持，因为不能跳过同版本校验。[Debian 网络安装文件](https://www.debian.org/releases/stable/amd64/ch04s04.en.html)。
+- 制品与 SMB 各在目标文件系统的临时兄弟目录内构建后 rename；只有读回确认数据库未提交 ready 时才撤回本次发布，提交结果不确定时保留目录待恢复。现有其他 ISO 的正式目录不覆盖；同一 ISO 重启时仅复用内容一致的完整目录。所有来源在包括 SMB 的最后一次复制后复核；符号链接按实际文件系统语义检查完整链，不能越过发布根目录。
+- SHA256 去重保留仓储的 `DuplicateError` 和已有 ISO ID。导入失败说明保存在已取齐主来源的 `Error` 中，成功重导时清空。缺少必需辅助来源的 failed ISO 允许补登记该来源、获取并重导；主来源不能因此被替换。辅助获取期间 ISO 保持 failed，进度按来源状态显示，取消/重试也可作用于这些来源。
+- HTTP 续传仅在给定期望 SHA256 时复用旧字节，发布前必须匹配；没有内容摘要或持久化实体验证器时重新完整下载，不能拼接不同远程实体。
+- 删除由第 5 层审计编排：删除前保留 `DeletionSnapshot{ISO, Sources}`（Sources 必须来自 SourcesOf，空集合也非 nil），成功执行 Store.DeleteISO 后调用 `Sources.CleanupDeleted(ctx,snapshot)`。本层拒绝清理仍存在的数据库记录，协调在途获取/导入，仅清理所属制品、SMB、上传/下载原件及本 ISO 的残留临时文件，本地原件保留。装配点须持久化快照直至幂等清理成功；删除后的崩溃重试队列属于第 5 层，Recover 不承担该队列。
+
+存储接口以代码和实现计划的完整签名为准：`SaveSource(ctx, Source, Audit) (Source,error)`、`DeleteSource(ctx,isoID,role,Audit) error`，Rev 防止取消与旧进度相互覆盖；`SaveRange` 原子更新合并进度并递增 Rev。
 依据：`specs/2026-09-30-lober-rewrite-design.md`（下称总 spec）§2.1–§2.2、§4.4、§5.1、§6.1、§6.2 第 6 条、§7.2 第 4 条、§8、附录 A
 第 3 层交接：`internal/render/testdata/menu-aux-contract.md`、`internal/render/testdata/runtime-contract.md`
 
@@ -193,13 +210,13 @@ ISO 记录状态（已有，model.ISOState）
 ```go
 // internal/store，新增
 type ISOSources interface {
-    SaveSource(ctx, Source) error                    // 登记/更新来源
-    GetSource(ctx, isoID, role string) (Source, bool, error)
-    SourcesOf(ctx, isoID string) ([]Source, error)
-    ListUnfinishedSources(ctx) ([]Source, error)     // 装配点启动恢复用
-    DeleteSource(ctx, isoID, role string) error
-    SaveRange(ctx, isoID, role string, start, length int64) error
-    RangesOf(ctx, isoID, role string) ([]Range, error)
+    SaveSource(context.Context, Source, Audit) (Source, error)
+    GetSource(context.Context, string, string) (Source, bool, error)
+    SourcesOf(context.Context, string) ([]Source, error)
+    ListUnfinishedSources(context.Context) ([]Source, error) // pending/fetching
+    DeleteSource(context.Context, string, string, Audit) error
+    SaveRange(context.Context, string, string, int64, int64) error
+    RangesOf(context.Context, string, string) ([]Range, error)
 }
 ```
 
