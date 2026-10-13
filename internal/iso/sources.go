@@ -33,13 +33,22 @@ func (s *Sources) Register(ctx context.Context, item model.ISO, kind, addr, role
 	if err != nil {
 		return err
 	}
-	if current.State != model.ISOAcquiring {
+	if current.State != model.ISOAcquiring && !(current.State == model.ISOFailed && role != "") {
 		return store.ErrConflict
 	}
 	if role != "" {
 		extra, ok := catalog.ExtraSourceOf(current.Series)
 		if !ok || role != extra.Role {
 			return sourceRejected(item.ID, role, isoSourceReasonChunk)
+		}
+		if current.State == model.ISOFailed {
+			main, err := s.getSource(ctx, item.ID, "")
+			if err != nil {
+				return err
+			}
+			if main.State != store.SourceFetched {
+				return store.ErrConflict
+			}
 		}
 	}
 	src := store.Source{ISOID: item.ID, Role: role, State: store.SourcePending, TotalSize: size, ExpectedSHA256: digest}
@@ -99,7 +108,7 @@ func (s *Sources) Cancel(ctx context.Context, id string, a store.Audit) error {
 	if err != nil {
 		return err
 	}
-	if item.State != model.ISOAcquiring {
+	if item.State != model.ISOAcquiring && item.State != model.ISOFailed {
 		return store.ErrConflict
 	}
 	sources, err := s.store.SourcesOf(ctx, id)
@@ -142,7 +151,7 @@ func (s *Sources) Retry(ctx context.Context, id string, a store.Audit) error {
 	if err != nil {
 		return err
 	}
-	if item.State != model.ISOAcquiring {
+	if item.State != model.ISOAcquiring && item.State != model.ISOFailed {
 		return store.ErrConflict
 	}
 	sources, err := s.store.SourcesOf(ctx, id)

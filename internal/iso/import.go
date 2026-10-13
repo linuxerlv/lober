@@ -12,9 +12,11 @@ import (
 	"github.com/lober/lober/internal/store"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func importProblem(id string, code model.Code, p string, args ...any) error {
@@ -95,6 +97,7 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 	if main.ExpectedSHA256 != "" && main.ExpectedSHA256 != digest {
 		return importProblem(id, "iso_content_mismatch", "source", main.ExpectedSHA256, digest)
 	}
+	snapshots := []importMediaSnapshot{{file: media, before: before, digest: digest, role: main.Role}}
 	found, err := identifyForISO(ctx, id, tree)
 	if err != nil {
 		return err
@@ -108,7 +111,7 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 		if !exists {
 			return importProblem(id, "iso_extra_source_invalid", "source."+need.Role, need.Role)
 		}
-		ef, et, _, e := s.openMedia(ctx, extra)
+		ef, et, eb, e := s.openMedia(ctx, extra)
 		if e != nil {
 			return importProblem(id, "iso_extra_source_invalid", "source."+need.Role, need.Role)
 		}
@@ -120,6 +123,7 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 		if extra.ExpectedSHA256 != "" && extra.ExpectedSHA256 != ed {
 			return importProblem(id, "iso_content_mismatch", "source."+need.Role, extra.ExpectedSHA256, ed)
 		}
+		snapshots = append(snapshots, importMediaSnapshot{file: ef, before: eb, digest: ed, role: extra.Role})
 		ei, e := identifyNetboot(ctx, et)
 		if e != nil || ei.Series != found.Series || ei.Arch != found.Arch || need.SameVersion && ei.Version != found.Version {
 			return importProblem(id, "iso_extra_source_invalid", "source."+need.Role, need.Role)
@@ -159,25 +163,22 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 			return importProblem(id, "iso_artifact_missing", "artifacts."+role, role)
 		}
 	}
-	// Local sources are operator owned and can change while being read. Verify the
-	// exact open file again after extraction, never deleting the operator's file.
-	after, e := media.Stat()
-	if e != nil {
-		return e
-	}
-	again, e := importDigest(ctx, media)
-	if e != nil {
-		return e
-	}
-	if after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()) || again != digest {
-		return importProblem(id, "iso_content_mismatch", "source", digest, again)
-	}
 	owner := id + "\n" + digest + "\n"
 	if err = os.WriteFile(filepath.Join(tmp, ".lober-owner"), []byte(owner), 0644); err != nil {
 		return err
 	}
 	var smb, smbTmp string
-	var madeSMB bool
+	var madeSMB, made bool
+	defer func() {
+		if err != nil && (made || madeSMB) && s.rollbackImportAllowed(ctx, id, digest) {
+			if made {
+				os.RemoveAll(root)
+			}
+			if madeSMB {
+				os.RemoveAll(smb)
+			}
+		}
+	}()
 	if iso.Family == "windows" {
 		smb = filepath.Join(s.dirs.SMB, string(iso.Series), iso.Version, string(iso.Arch))
 		smbTmp = smb + ".tmp-" + id
@@ -191,27 +192,26 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 		if err = os.WriteFile(filepath.Join(smbTmp, ".lober-owner"), []byte(owner), 0644); err != nil {
 			return err
 		}
+	}
+	// Recheck every open source only after all consumers, including SMB copying,
+	// have finished. Auxiliary and local media have the same integrity gate.
+	for _, snapshot := range snapshots {
+		if err = snapshot.verify(ctx, id); err != nil {
+			return err
+		}
+	}
+	if smbTmp != "" {
 		madeSMB, err = publishImportTree(smbTmp, smb, owner)
 		if err != nil {
 			publicationConflict = errors.Is(err, store.ErrConflict)
 			return err
 		}
-		defer func() {
-			if err != nil && madeSMB {
-				os.RemoveAll(smb)
-			}
-		}()
 	}
-	made, err := publishImportTree(tmp, root, owner)
+	made, err = publishImportTree(tmp, root, owner)
 	if err != nil {
 		publicationConflict = errors.Is(err, store.ErrConflict)
 		return err
 	}
-	defer func() {
-		if err != nil && made {
-			os.RemoveAll(root)
-		}
-	}()
 	relRoot, e := filepath.Rel(s.dirs.Artifacts, root)
 	if e != nil {
 		return e
@@ -224,9 +224,62 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 	if found.Editions != nil {
 		iso.Offers = map[string][]model.Option{"editions": found.Editions}
 	}
+	// A successful reimport must not report the previous import error.
+	main, err = s.getSource(ctx, id, "")
+	if err != nil {
+		return err
+	}
+	if main.Error != "" {
+		main.Error = ""
+		if _, err = s.store.SaveSource(ctx, main, store.Audit{}); err != nil {
+			return err
+		}
+	}
 	iso.State = model.ISOReady
 	_, err = s.store.UpdateISO(ctx, iso)
+	if err != nil {
+		// A failed COMMIT acknowledgment does not prove rollback. Reconcile using
+		// an uncancelled bounded read, and preserve files when the result is unknown.
+		current, readErr := s.readImportOutcome(ctx, id)
+		if readErr == nil && current.State == model.ISOReady && current.SHA256 == digest && maps.Equal(current.Artifacts, iso.Artifacts) {
+			err = nil
+		}
+	}
 	return err
+}
+
+type importMediaSnapshot struct {
+	file         *os.File
+	before       fs.FileInfo
+	digest, role string
+}
+
+func (m importMediaSnapshot) verify(ctx context.Context, id string) error {
+	again, err := importDigest(ctx, m.file)
+	if err != nil {
+		return err
+	}
+	after, err := m.file.Stat()
+	if err != nil {
+		return err
+	}
+	if after.Size() != m.before.Size() || !after.ModTime().Equal(m.before.ModTime()) || again != m.digest {
+		p := "source"
+		if m.role != "" {
+			p += "." + m.role
+		}
+		return importProblem(id, "iso_content_mismatch", p, m.digest, again)
+	}
+	return nil
+}
+func (s *Sources) readImportOutcome(ctx context.Context, id string) (model.ISO, error) {
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return s.store.GetISO(readCtx, id)
+}
+func (s *Sources) rollbackImportAllowed(ctx context.Context, id, digest string) bool {
+	current, err := s.readImportOutcome(ctx, id)
+	return err == nil && current.SHA256 == digest && current.State != model.ISOReady && current.State != model.ISODeprecated
 }
 
 func (s *Sources) openMedia(ctx context.Context, src store.Source) (*os.File, fs.FS, fs.FileInfo, error) {
@@ -254,7 +307,11 @@ func (s *Sources) openMedia(ctx context.Context, src store.Source) (*os.File, fs
 	}
 	if src.TotalSize > 0 && st.Size() != src.TotalSize {
 		f.Close()
-		return nil, nil, nil, store.ErrConflict
+		p := "source"
+		if src.Role != "" {
+			p += "." + src.Role
+		}
+		return nil, nil, nil, importProblem(src.ISOID, "iso_content_mismatch", p, fmt.Sprintf("size %d", src.TotalSize), fmt.Sprintf("size %d", st.Size()))
 	}
 	tree, err := iso9660.Open(iso9660.FileReader{ReaderAt: f, Length: st.Size()})
 	if err != nil {

@@ -1,6 +1,7 @@
 package iso
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"github.com/lober/lober/internal/core/model"
@@ -10,6 +11,29 @@ import (
 	"testing"
 	"unicode/utf16"
 )
+
+func TestWindowsExtractionPreservesCancellation(t *testing.T) {
+	s, _ := importSetup(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	// A present source exercises cancellation during output, not missing input.
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "boot"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "sources"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"boot/bcd", "boot/boot.sdi", "sources/boot.wim"} {
+		if err := os.WriteFile(filepath.Join(root, p), []byte("artifact"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := s.extractWindows(ctx, "test", os.DirFS(root), t.TempDir())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation replaced: %v", err)
+	}
+}
 
 func importWIM() []byte {
 	xml := `<WIM><IMAGE INDEX="1"><NAME>Windows Server 2025 Standard</NAME><FLAGS>ServerStandard</FLAGS><WINDOWS><ARCH>9</ARCH><VERSION><MAJOR>10</MAJOR><MINOR>0</MINOR><BUILD>26100</BUILD></VERSION></WINDOWS></IMAGE></WIM>`

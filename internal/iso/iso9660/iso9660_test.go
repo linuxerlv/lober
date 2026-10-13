@@ -157,6 +157,16 @@ func TestPrimaryNamesAndNestedFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestRockRidgeSymlinkParentAfterExpansion(t *testing.T) {
+	f := mount(t, image(entries(rrRoot(),
+		record([]byte("A.;1"), 600, 0, 0, sl(".")...),
+		record([]byte("ESCAPE.;1"), 600, 0, 0, sl("a/../secret")...),
+		record([]byte("SECRET.;1"), 601, 6, 0)), nil))
+	if _, err := f.Open("escape"); err == nil {
+		t.Fatal("resolved .. lexically before expanding the preceding symlink")
+	}
+}
 func TestJolietPreferredAndCasePreserved(t *testing.T) {
 	p := entries(rrRoot(), record([]byte("PRIMARY.;1"), 600, 7, 0, nm("RockRidge")...))
 	j := entries(record([]byte{0}, 400, testSector, 2), record(ucs("Mixed安装.TXT;1"), 601, 6, 0))

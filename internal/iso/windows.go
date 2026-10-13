@@ -2,6 +2,7 @@ package iso
 
 import (
 	"context"
+	"errors"
 	"github.com/lober/lober/internal/store"
 	"io/fs"
 	"os"
@@ -16,7 +17,10 @@ func (s *Sources) extractWindows(ctx context.Context, id string, tree fs.FS, tmp
 	roles := map[string]string{}
 	for role, name := range map[string]string{"bcd": "boot/bcd", "boot-sdi": "boot/boot.sdi", "boot-wim": "sources/boot.wim"} {
 		if err := copyImportFile(ctx, tree, name, filepath.Join(tmp, filepath.FromSlash(name))); err != nil {
-			return nil, importProblem(id, "iso_artifact_missing", "artifacts."+role, role)
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, importProblem(id, "iso_artifact_missing", "artifacts."+role, role)
+			}
+			return nil, err
 		}
 		roles[role] = name
 	}

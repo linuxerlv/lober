@@ -61,6 +61,12 @@ func (s *Sources) fetchRemote(ctx context.Context, src store.Source) error {
 	if err != nil {
 		return err
 	}
+	// A byte range alone does not identify the remote entity. Without a supplied
+	// content digest, restart rather than combine a stale prefix with a new tail.
+	// Digest-bound resumes are verified again before publication.
+	if offset > 0 && src.ExpectedSHA256 == "" {
+		offset, src.Fetched = 0, 0
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.URL, nil)
 	if err != nil {
 		return err

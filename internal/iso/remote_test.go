@@ -133,6 +133,35 @@ func TestRemoteResumeUsesActualFileLength(t *testing.T) {
 	}
 }
 
+func TestRemoteWithoutDigestRestartsChangedEntity(t *testing.T) {
+	s, item := sourceFixture(t, "rocky")
+	addr := sourceHTTP(t, s, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") != "" {
+			w.Header().Set("Content-Range", "bytes 3-5/6")
+			w.WriteHeader(http.StatusPartialContent)
+			w.Write([]byte("new"))
+			return
+		}
+		w.Write([]byte("NEWnew"))
+	})
+	if err := s.Register(t.Context(), item, "url", addr, "", 6, "", sourceAudit()); err != nil {
+		t.Fatal(err)
+	}
+	src := mustSource(t, s, item.ID, "")
+	src.State = store.SourceFetching
+	mustSourceSave(t, s, src)
+	if err := os.WriteFile(s.stagingPath(item.ID, ""), []byte("OLD"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FetchOne(t.Context(), item.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(s.sourcePath(mustSource(t, s, item.ID, "")))
+	if err != nil || string(got) != "NEWnew" {
+		t.Fatalf("mixed resource published: %q, %v", got, err)
+	}
+}
+
 func TestRemoteServerWithoutRangeTruncatesPartial(t *testing.T) {
 	s, item := sourceFixture(t, "rocky")
 	addr := sourceHTTP(t, s, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("new")) })
@@ -169,7 +198,7 @@ func TestRemoteRejectsInconsistentContentRangeAnd416(t *testing.T) {
 					w.Write([]byte("xx"))
 				}
 			})
-			if err := s.Register(t.Context(), item, "url", addr, "", 0, "", sourceAudit()); err != nil {
+			if err := s.Register(t.Context(), item, "url", addr, "", 0, sourceDigest([]byte("abc")), sourceAudit()); err != nil {
 				t.Fatal(err)
 			}
 			src := mustSource(t, s, item.ID, "")

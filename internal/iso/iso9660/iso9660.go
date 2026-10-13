@@ -359,40 +359,47 @@ func (f *filesystem) resolve(name string, follow bool) (*node, error) {
 	if !fs.ValidPath(name) {
 		return nil, fs.ErrInvalid
 	}
-	for links := 0; links <= 40; links++ {
-		n := f.root
-		if name == "." {
-			return n, nil
+	n := f.root
+	parts := strings.Split(name, "/")
+	links := 0
+	for len(parts) > 0 {
+		part := parts[0]
+		parts = parts[1:]
+		if !n.mode.IsDir() {
+			return nil, fs.ErrInvalid
 		}
-		parts := strings.Split(name, "/")
-		restart := false
-		for i, part := range parts {
-			entries, err := f.children(n)
-			if err != nil {
-				return nil, err
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			if n == f.root {
+				return nil, fs.ErrInvalid
 			}
-			at := sort.Search(len(entries), func(j int) bool { return entries[j].name >= part })
-			if at == len(entries) || entries[at].name != part {
-				return nil, fs.ErrNotExist
-			}
-			n = entries[at]
-			if n.mode&fs.ModeSymlink != 0 && (follow || i < len(parts)-1) {
-				if n.target == "" || path.IsAbs(n.target) {
-					return nil, fs.ErrInvalid
-				}
-				name = path.Join(strings.Join(parts[:i], "/"), n.target, strings.Join(parts[i+1:], "/"))
-				if !fs.ValidPath(name) {
-					return nil, fs.ErrInvalid
-				}
-				restart = true
-				break
-			}
+			n = n.parent
+			continue
 		}
-		if !restart {
-			return n, nil
+		entries, err := f.children(n)
+		if err != nil {
+			return nil, err
+		}
+		at := sort.Search(len(entries), func(j int) bool { return entries[j].name >= part })
+		if at == len(entries) || entries[at].name != part {
+			return nil, fs.ErrNotExist
+		}
+		n = entries[at]
+		if n.mode&fs.ModeSymlink != 0 && (follow || len(parts) > 0) {
+			if n.target == "" || path.IsAbs(n.target) {
+				return nil, fs.ErrInvalid
+			}
+			links++
+			if links > 40 {
+				return nil, fmt.Errorf("too many ISO symbolic links: %w", fs.ErrInvalid)
+			}
+			parts = append(strings.Split(n.target, "/"), parts...)
+			n = n.parent
 		}
 	}
-	return nil, fmt.Errorf("too many ISO symbolic links: %w", fs.ErrInvalid)
+	return n, nil
 }
 func pathError(op, name string, err error) error { return &fs.PathError{Op: op, Path: name, Err: err} }
 func (f *filesystem) Open(name string) (fs.File, error) {

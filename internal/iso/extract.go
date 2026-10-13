@@ -216,7 +216,8 @@ func copyImportTree(ctx context.Context, tree fs.FS, dest string) error {
 	if err := os.MkdirAll(dest, 0755); err != nil {
 		return err
 	}
-	return fs.WalkDir(tree, ".", func(p string, d fs.DirEntry, err error) error {
+	var links []string
+	err := fs.WalkDir(tree, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -248,7 +249,11 @@ func copyImportTree(ctx context.Context, tree fs.FS, dest string) error {
 			if err = os.MkdirAll(filepath.Dir(out), 0755); err != nil {
 				return err
 			}
-			return os.Symlink(filepath.FromSlash(target), out)
+			if err := os.Symlink(filepath.FromSlash(target), out); err != nil {
+				return err
+			}
+			links = append(links, p)
+			return nil
 		}
 		// Empty ordinary files are valid in an installation tree (only artifacts require nonempty).
 		in, err := tree.Open(p)
@@ -265,4 +270,23 @@ func copyImportTree(ctx context.Context, tree fs.FS, dest string) error {
 		}
 		return writeImportFile(ctx, in, out, st.Mode().Perm())
 	})
+	if err != nil {
+		return err
+	}
+	// Validate after every node exists: lexical cleaning cannot model a link
+	// followed by "..". Root.Stat uses confined OS resolution for the full chain.
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	for _, link := range links {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := root.Stat(filepath.FromSlash(link)); err != nil {
+			return fmt.Errorf("unsafe or unresolved media symlink %q: %w", link, err)
+		}
+	}
+	return nil
 }
