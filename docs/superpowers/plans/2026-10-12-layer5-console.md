@@ -9531,7 +9531,7 @@ git commit -m "feat(console): 任务的列表、详情、事件、SSE 与预览�
 
 **本任务收尾两件事**：① 权限码的反方向——每个码都有路由用到；② 审计的反方向——路由表里声明了动作的每一条，打一次都真的留下审计记录。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 Create `internal/console/audit_test.go`：
 
@@ -9752,7 +9752,7 @@ func tokenFor(path, author, approver string) string {
 Run: `go test ./internal/console/ -run 'Test查审计|Test导出审计|Test每个权限码|Test每条审计路由' -v`
 Expected: FAIL，`undefined: s.auditRoutes`。
 
-- [ ] **Step 2: 实现审计端点**
+- [x] **Step 2: 实现审计端点**
 
 Create `internal/console/audit.go`：
 
@@ -9872,12 +9872,12 @@ func (s *server) allRoutes() []route {
 }
 ```
 
-- [ ] **Step 3: 跑测试**
+- [x] **Step 3: 跑测试**
 
 Run: `go test ./internal/console/ -v`
 Expected: 全部 PASS。`Test每个权限码都有路由用到` 此时才真绿——前面十二个任务里它一直是红的或空转的。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add internal/console
