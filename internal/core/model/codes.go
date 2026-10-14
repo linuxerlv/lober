@@ -465,19 +465,22 @@ const (
 
 // 控制台非业务错误的展示文字，不把底层错误直接回给客户端。
 const (
-	ConsoleBadRequest   = "请求的内容不合法"
-	ConsoleUnauthorized = "未登录或会话已失效"
-	ConsoleForbidden    = "没有执行这项操作的权限"
-	ConsoleNotFound     = "找不到这条记录"
-	ConsoleConflict     = "记录已经被改过，重读之后再试"
-	ConsoleDuplicate    = "已经有同键的记录了"
-	ConsoleImmutable    = "这个版本已经定稿，不能改"
-	ConsoleReferenced   = "还有别的记录引用着它，不能删"
-	ConsoleInternal     = "服务端内部错误"
-	ConsoleRejected     = "这批请求没有通过"
-	UserLabelUsername   = "用户名"
-	UserLabelRole       = "角色"
-	UserLabelPassword   = "口令散列"
+	ConsoleBadRequest             = "请求的内容不合法"
+	ConsoleUnauthorized           = "未登录或会话已失效"
+	ConsoleForbidden              = "没有执行这项操作的权限"
+	ConsoleNotFound               = "找不到这条记录"
+	ConsoleConflict               = "记录已经被改过，重读之后再试"
+	ConsoleDuplicate              = "已经有同键的记录了"
+	ConsoleImmutable              = "这个版本已经定稿，不能改"
+	ConsoleReferenced             = "还有别的记录引用着它，不能删"
+	ConsoleInternal               = "服务端内部错误"
+	ConsoleRejected               = "这批请求没有通过"
+	ConsoleLoginFailed            = "用户名或口令不对"
+	ConsolePasswordChangeRequired = "请先为当前账号设置与种子口令不同的新口令，再继续操作"
+	ConsoleSelfDisable            = "不能禁用自己的账号"
+	UserLabelUsername             = "用户名"
+	UserLabelRole                 = "角色"
+	UserLabelPassword             = "口令散列"
 )
 
 // sn_invalid 的原因，NormalizeSN 选用。

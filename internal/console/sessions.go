@@ -62,3 +62,18 @@ func (s *sessions) lookup(token string) (string, bool) {
 	return item.username, true
 }
 func (s *sessions) drop(token string) { s.mu.Lock(); defer s.mu.Unlock(); delete(s.byToken, token) }
+
+func (s *sessions) expiresAt(token string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.byToken[token].expires
+}
+func (s *sessions) dropUser(username string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for token, item := range s.byToken {
+		if item.username == username {
+			delete(s.byToken, token)
+		}
+	}
+}

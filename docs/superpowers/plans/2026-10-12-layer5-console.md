@@ -2878,7 +2878,7 @@ git commit -m "feat(console): 服务骨架、路由表、权限表、OpenAPI 生
   - `userResponse`、`sessionResponse`、`userRequest`、`userPage`（OpenAPI 的 schema 名）
   - 测试夹具 `newStoreServer(t) (*console.Server, store.Store)`、`seedUser(t, st, name, role) *store.User`
 
-- [ ] **Step 1: 写失败的测试——口令散列**
+- [x] **Step 1: 写失败的测试——口令散列**
 
 Create `internal/console/auth_test.go`：
 
@@ -2965,7 +2965,7 @@ func Test比对一个改坏的散列(t *testing.T) {
 Run: `go test ./internal/console/ -run 'Test口令|Test同一个|Test比对' -v`
 Expected: FAIL，`undefined: console.HashPassword`、`undefined: console.CheckPassword`。
 
-- [ ] **Step 2: 写失败的测试——登录与会话**
+- [x] **Step 2: 写失败的测试——登录与会话**
 
 接着写在 `internal/console/auth_test.go`：
 
@@ -3104,7 +3104,7 @@ func Test用户信息不带口令(t *testing.T) {
 Run: `go test ./internal/console/ -run 'Test登录|Test禁用的账号|Test会话过期|Test退出登录|Test用户信息' -v`
 Expected: FAIL，`undefined: newStoreServer`、`undefined: seedUser`。
 
-- [ ] **Step 3: 写失败的测试——用户管理与夹具**
+- [x] **Step 3: 写失败的测试——用户管理与夹具**
 
 Create `internal/console/store_test.go`（连真实 PostgreSQL 的夹具，总 spec §6.4）：
 
@@ -3480,7 +3480,7 @@ func Test列用户分页(t *testing.T) {
 Run: `go test ./internal/console/ -run 'Test用户管理|Test建用户|Test用户管理写审计|Test不能禁用|Test禁用不删行|Test改用户|Test恢复禁用|Test列用户' -v`
 Expected: FAIL，`undefined: console.HashPassword`、`undefined: (*console.Server).AdvanceClock`、`undefined: s.login`。
 
-- [ ] **Step 4: 实现口令散列与三个认证端点**
+- [x] **Step 4: 实现口令散列与三个认证端点**
 
 Create `internal/console/auth.go`：
 
@@ -3633,7 +3633,7 @@ func (s *server) userInfo(c *gin.Context) {
 }
 ```
 
-- [ ] **Step 5: 补认证与权限中间件**
+- [x] **Step 5: 补认证与权限中间件**
 
 Modify `internal/console/server.go`。`authenticate` 改成查仓储，`authorize` 改成查角色：
 
@@ -3707,7 +3707,7 @@ func userOf(c *gin.Context) *store.User {
 func (s *Server) TestLogin(u *store.User) string { return s.server.sessions.put(u.Username) }
 ```
 
-- [ ] **Step 6: 实现用户管理端点**
+- [x] **Step 6: 实现用户管理端点**
 
 Create `internal/console/users.go`：
 
@@ -3901,12 +3901,12 @@ func validUsername(name string) bool {
 }
 ```
 
-- [ ] **Step 7: 跑测试**
+- [x] **Step 7: 跑测试**
 
 Run: `go test ./internal/console/ -v`
 Expected: 全部 PASS。日志里能看到连上了 PostgreSQL（`pgtest` 找不到连接串会直接失败，不跳过）。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add internal/console

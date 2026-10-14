@@ -144,6 +144,14 @@ func (s *server) authenticate() gin.HandlerFunc {
 func (s *server) authorize(perm string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		u := userOf(c)
+		if u != nil && u.MustChangePassword {
+			path := c.FullPath()
+			allowed := c.Request.Method == "GET" && path == "/console/v1/user/info" || c.Request.Method == "POST" && path == "/console/v1/auth/logout" || c.Request.Method == "PUT" && path == "/console/v1/users/:username" && c.Param("username") == u.Username
+			if !allowed {
+				Fail(c, 403, nil, model.ConsolePasswordChangeRequired)
+				return
+			}
+		}
 		if u == nil || perm != PermAnyUser && !slices.Contains(PermsOf(u.Role), perm) {
 			Fail(c, 403, nil, model.ConsoleForbidden)
 			return

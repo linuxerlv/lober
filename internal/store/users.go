@@ -16,13 +16,14 @@ type Users interface {
 	ListUsers(context.Context, UserQuery) (Page[User], error)
 }
 type User struct {
-	Username    string `json:"username"`
-	DisplayName string `json:"displayName"`
-	Role        Role   `json:"role"`
-	Password    string `json:"-"`
-	Disabled    bool   `json:"disabled"`
-	CreatedAt   int64  `json:"createdAt"`
-	Rev         int64  `json:"rev"`
+	Username           string `json:"username"`
+	DisplayName        string `json:"displayName"`
+	Role               Role   `json:"role"`
+	Password           string `json:"-"`
+	Disabled           bool   `json:"disabled"`
+	MustChangePassword bool   `json:"passwordChangeRequired"`
+	CreatedAt          int64  `json:"createdAt"`
+	Rev                int64  `json:"rev"`
 }
 type Role string
 
