@@ -116,6 +116,11 @@ fi
 		t.Fatal(e)
 	}
 	script := renderRuntime(t, r)
+	// Real HTTP/client qualification lives in TestDebianInstallerLifecycleHTTP.
+	// This policy harness intentionally substitutes its failure-capable transport.
+	if r.Snapshot.Format == "preseed" {
+		script = strings.ReplaceAll(script, "/usr/bin/wget", shQuote(filepath.Join(bin, "wget")))
+	}
 	for _, transform := range schedule {
 		script = transform(script)
 	}

@@ -1,0 +1,46 @@
+=== RUN   TestDebianInstallerLifecycleHTTP
+=== RUN   TestDebianInstallerLifecycleHTTP/pre
+=== RUN   TestDebianInstallerLifecycleHTTP/post-installer
+=== RUN   TestDebianInstallerLifecycleHTTP/post-target
+=== RUN   TestDebianInstallerLifecycleHTTP/firstboot
+--- PASS: TestDebianInstallerLifecycleHTTP (0.20s)
+    --- PASS: TestDebianInstallerLifecycleHTTP/pre (0.07s)
+    --- PASS: TestDebianInstallerLifecycleHTTP/post-installer (0.06s)
+    --- PASS: TestDebianInstallerLifecycleHTTP/post-target (0.04s)
+    --- PASS: TestDebianInstallerLifecycleHTTP/firstboot (0.04s)
+=== RUN   TestESXiWatchdogReapsSleepOnQuickCompletion
+=== RUN   TestESXiWatchdogReapsSleepOnQuickCompletion/success
+=== RUN   TestESXiWatchdogReapsSleepOnQuickCompletion/required-failure
+    final_fix_test.go:191: runtime status 41 output 
+=== RUN   TestESXiWatchdogReapsSleepOnQuickCompletion/optional-failure
+--- PASS: TestESXiWatchdogReapsSleepOnQuickCompletion (0.15s)
+    --- PASS: TestESXiWatchdogReapsSleepOnQuickCompletion/success (0.06s)
+    --- PASS: TestESXiWatchdogReapsSleepOnQuickCompletion/required-failure (0.05s)
+    --- PASS: TestESXiWatchdogReapsSleepOnQuickCompletion/optional-failure (0.05s)
+=== RUN   TestESXiAnswerPasswordFixtureExpanded
+--- PASS: TestESXiAnswerPasswordFixtureExpanded (0.00s)
+=== RUN   TestESXiWatchdogStartupCancellationAndFailure
+=== RUN   TestESXiWatchdogStartupCancellationAndFailure/initialization-failure=false
+=== RUN   TestESXiWatchdogStartupCancellationAndFailure/initialization-failure=true
+    final_fix_test.go:239: runtime status 125 output 
+--- PASS: TestESXiWatchdogStartupCancellationAndFailure (0.18s)
+    --- PASS: TestESXiWatchdogStartupCancellationAndFailure/initialization-failure=false (0.09s)
+    --- PASS: TestESXiWatchdogStartupCancellationAndFailure/initialization-failure=true (0.09s)
+=== RUN   TestESXiProcessGroupTimeout
+    runtime_lifecycle_test.go:36: runtime status 124 output 
+--- PASS: TestESXiProcessGroupTimeout (1.04s)
+=== RUN   TestRuntimeWatchdogCancellationPreservesOptionalContinuation
+--- PASS: TestRuntimeWatchdogCancellationPreservesOptionalContinuation (0.15s)
+PASS
+ok  	github.com/lober/lober/internal/render	1.728s
+=== RUN   TestNoCloudCustomHostnameBuildAndRender
+=== RUN   TestNoCloudCustomHostnameBuildAndRender/literal
+=== RUN   TestNoCloudCustomHostnameBuildAndRender/renamed
+=== RUN   TestNoCloudCustomHostnameBuildAndRender/builtin
+--- PASS: TestNoCloudCustomHostnameBuildAndRender (0.01s)
+    --- PASS: TestNoCloudCustomHostnameBuildAndRender/literal (0.00s)
+    --- PASS: TestNoCloudCustomHostnameBuildAndRender/renamed (0.00s)
+    --- PASS: TestNoCloudCustomHostnameBuildAndRender/builtin (0.00s)
+PASS
+ok  	github.com/lober/lober/internal/builtin	0.018s
+exit_code=0

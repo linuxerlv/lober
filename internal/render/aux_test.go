@@ -56,11 +56,13 @@ func TestUbuntuNoCloudDirectoryAndMetadata(t *testing.T) {
 	delete(r.Values, "token")
 	delete(r.Values, "artifacts")
 	got, p, err := Render(r)
-	if err != nil || len(p) != 0 || string(got) != "instance-id: lober-task-42\nlocal-hostname: web-01\n" {
-		t.Fatalf("metadata should need only task and hostname: %q %v %v", got, p, err)
+	if err != nil || len(p) != 0 || string(got) != "instance-id: lober-task-42\n" {
+		t.Fatalf("metadata should need only task: %q %v %v", got, p, err)
 	}
 	delete(r.Snapshot.Template.Params, "hostname")
-	assertRenderProblem(t, r, "param_required")
+	if got, p, err := Render(r); err != nil || len(p) != 0 || string(got) != "instance-id: lober-task-42\n" {
+		t.Fatalf("metadata without hostname: %q %v %v", got, p, err)
+	}
 	r = menuFixture("ubuntu", "bios")
 	r.Kind = catalog.FileAux
 	delete(r.Values, "task")

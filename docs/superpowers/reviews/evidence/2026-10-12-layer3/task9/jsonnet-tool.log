@@ -1,0 +1,46 @@
+Collecting jsonnet==0.21.0
+  Downloading jsonnet-0.21.0.tar.gz (461 kB)
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: jsonnet
+  Building wheel for jsonnet (pyproject.toml): started
+  Building wheel for jsonnet (pyproject.toml): finished with status 'error'
+  error: subprocess-exited-with-error
+  
+  × Building wheel for jsonnet (pyproject.toml) did not run successfully.
+  │ exit code: 1
+  ╰─> [24 lines of output]
+      /tmp/pip-build-env-3r1wouv3/overlay/local/lib/python3.14/dist-packages/setuptools/_distutils/dist.py:318: UserWarning: Unknown distribution option: 'test_suite'
+        warnings.warn(msg)
+      running bdist_wheel
+      running build
+      running build_ext
+      generating core/std.jsonnet.h from stdlib/std.jsonnet
+      Adjusting compiler for compiler type unix
+      building '_jsonnet' extension
+      x86_64-linux-gnu-g++ -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -fPIC -std=c++17 -Iinclude -Ithird_party/md5 -Ithird_party/json -Ithird_party/rapidyaml -I/usr/include/python3.14 -c core/desugarer.cpp -o build/temp.linux-x86_64-cpython-314/core/desugarer.o
+      x86_64-linux-gnu-g++ -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -fPIC -std=c++17 -Iinclude -Ithird_party/md5 -Ithird_party/json -Ithird_party/rapidyaml -I/usr/include/python3.14 -c core/formatter.cpp -o build/temp.linux-x86_64-cpython-314/core/formatter.o
+      x86_64-linux-gnu-g++ -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -fPIC -std=c++17 -Iinclude -Ithird_party/md5 -Ithird_party/json -Ithird_party/rapidyaml -I/usr/include/python3.14 -c core/lexer.cpp -o build/temp.linux-x86_64-cpython-314/core/lexer.o
+      x86_64-linux-gnu-g++ -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -fPIC -std=c++17 -Iinclude -Ithird_party/md5 -Ithird_party/json -Ithird_party/rapidyaml -I/usr/include/python3.14 -c core/libjsonnet.cpp -o build/temp.linux-x86_64-cpython-314/core/libjsonnet.o
+      x86_64-linux-gnu-g++ -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -fPIC -std=c++17 -Iinclude -Ithird_party/md5 -Ithird_party/json -Ithird_party/rapidyaml -I/usr/include/python3.14 -c core/parser.cpp -o build/temp.linux-x86_64-cpython-314/core/parser.o
+      x86_64-linux-gnu-g++ -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -fPIC -std=c++17 -Iinclude -Ithird_party/md5 -Ithird_party/json -Ithird_party/rapidyaml -I/usr/include/python3.14 -c core/pass.cpp -o build/temp.linux-x86_64-cpython-314/core/pass.o
+      x86_64-linux-gnu-g++ -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -fPIC -std=c++17 -Iinclude -Ithird_party/md5 -Ithird_party/json -Ithird_party/rapidyaml -I/usr/include/python3.14 -c core/path_utils.cpp -o build/temp.linux-x86_64-cpython-314/core/path_utils.o
+      x86_64-linux-gnu-g++ -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -fPIC -std=c++17 -Iinclude -Ithird_party/md5 -Ithird_party/json -Ithird_party/rapidyaml -I/usr/include/python3.14 -c core/static_analysis.cpp -o build/temp.linux-x86_64-cpython-314/core/static_analysis.o
+      x86_64-linux-gnu-g++ -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -fPIC -std=c++17 -Iinclude -Ithird_party/md5 -Ithird_party/json -Ithird_party/rapidyaml -I/usr/include/python3.14 -c core/string_utils.cpp -o build/temp.linux-x86_64-cpython-314/core/string_utils.o
+      x86_64-linux-gnu-g++ -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -fPIC -std=c++17 -Iinclude -Ithird_party/md5 -Ithird_party/json -Ithird_party/rapidyaml -I/usr/include/python3.14 -c core/vm.cpp -o build/temp.linux-x86_64-cpython-314/core/vm.o
+      x86_64-linux-gnu-gcc -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -fPIC -Iinclude -Ithird_party/md5 -Ithird_party/json -Ithird_party/rapidyaml -I/usr/include/python3.14 -c python/_jsonnet.c -o build/temp.linux-x86_64-cpython-314/python/_jsonnet.o
+      python/_jsonnet.c:20:10: fatal error: Python.h: No such file or directory
+         20 | #include <Python.h>
+            |          ^~~~~~~~~~
+      compilation terminated.
+      error: Command '['x86_64-linux-gnu-gcc', '-fno-strict-overflow', '-Wsign-compare', '-DNDEBUG', '-g', '-O2', '-Wall', '-fPIC', '-Iinclude', '-Ithird_party/md5', '-Ithird_party/json', '-Ithird_party/rapidyaml', '-I/usr/include/python3.14', '-c', 'python/_jsonnet.c', '-o', 'build/temp.linux-x86_64-cpython-314/python/_jsonnet.o']' returned non-zero exit status 1.
+      [end of output]
+  
+  note: This error originates from a subprocess, and is likely not a problem with pip.
+  ERROR: Failed building wheel for jsonnet
+Failed to build jsonnet
+ERROR: Failed to build installable wheels for some pyproject.toml based projects (jsonnet)

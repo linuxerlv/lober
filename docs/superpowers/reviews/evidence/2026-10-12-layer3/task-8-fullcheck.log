@@ -1,0 +1,32 @@
+go version go1.27.2 linux/amd64
+gofmt -l $(go list -f {{.Dir}} ./...)
+go vet ./...
+go test ./...
+ok  	github.com/lober/lober/internal/archtest	1.646s
+ok  	github.com/lober/lober/internal/builtin	(cached)
+ok  	github.com/lober/lober/internal/core/activation	(cached)
+ok  	github.com/lober/lober/internal/core/admission	(cached)
+ok  	github.com/lober/lober/internal/core/catalog	(cached)
+ok  	github.com/lober/lober/internal/core/model	(cached)
+ok  	github.com/lober/lober/internal/core/params	(cached)
+ok  	github.com/lober/lober/internal/core/scan	(cached)
+ok  	github.com/lober/lober/internal/core/snapshot	(cached)
+ok  	github.com/lober/lober/internal/render	4.062s
+ok  	github.com/lober/lober/internal/store	(cached)
+ok  	github.com/lober/lober/internal/store/pgstore	(cached)
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	(cached)
+go test -race ./...
+ok  	github.com/lober/lober/internal/archtest	4.604s
+ok  	github.com/lober/lober/internal/builtin	1.367s
+ok  	github.com/lober/lober/internal/core/activation	1.149s
+ok  	github.com/lober/lober/internal/core/admission	1.048s
+ok  	github.com/lober/lober/internal/core/catalog	1.056s
+ok  	github.com/lober/lober/internal/core/model	1.256s
+ok  	github.com/lober/lober/internal/core/params	1.069s
+ok  	github.com/lober/lober/internal/core/scan	1.072s
+ok  	github.com/lober/lober/internal/core/snapshot	1.119s
+ok  	github.com/lober/lober/internal/render	5.827s
+ok  	github.com/lober/lober/internal/store	1.047s
+ok  	github.com/lober/lober/internal/store/pgstore	49.591s
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	2.212s
+GOOS=linux GOARCH=amd64 go build ./...

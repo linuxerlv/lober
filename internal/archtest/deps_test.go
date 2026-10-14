@@ -352,11 +352,9 @@ func isStd(path string) bool {
 // 会静默跳过整包被构建约束排除的目录：只有 x_linux.go 的包在 Windows 上就不算包，
 // 所以检查对象不能只信 go list。
 //
-// 这次遍历还让 go test 的结果缓存跟着源码走。go test 只按测试进程自己经 os 包
-// 打开过、Stat 过的文件和目录判断缓存是否失效，子进程 go list 读过什么它不知道；不走这一遍，
-// 新增一个包或源文件、改了 go.mod 之后，go test 会直接复用上一次的 PASS。还没有的目录（现在的 cmd/）
-// 也 Stat 一次，它一出现缓存就失效。跳过的目录 go list 也不进，不用跟踪。sourceRoots 以外新出现的包，
-// go list 照样列出、照样报 ruleLayer，只是缓存不知道它出现了，要等别的输入变了才重跑。
+// 这次遍历也跟踪 internal/cmd 的缓存输入，但无法覆盖其他已存在根目录新增包。
+// 全模块发现由 make archcheck 的 -count=1 保证；test/race 都依赖该门禁。
+// go list 决定 eligible tree（含 go.mod ignore、嵌套模块等），不另造排除清单。
 func moduleSourceDirs(t *testing.T, gomod, root string) []string {
 	t.Helper()
 	if _, err := os.Stat(gomod); err != nil {

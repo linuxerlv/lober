@@ -1,0 +1,12 @@
+--- FAIL: TestAnswerWindowsNativeCommandLineLimit (0.00s)
+    --- FAIL: TestAnswerWindowsNativeCommandLineLimit/bios-minimal (0.00s)
+        answer_test.go:418: XML-decoded CommandLine 3916 characters exceeds native maximum 1024
+    --- FAIL: TestAnswerWindowsNativeCommandLineLimit/bios-full (0.00s)
+        answer_test.go:418: XML-decoded CommandLine 3916 characters exceeds native maximum 1024
+    --- FAIL: TestAnswerWindowsNativeCommandLineLimit/uefi-minimal (0.00s)
+        answer_test.go:418: XML-decoded CommandLine 3916 characters exceeds native maximum 1024
+    --- FAIL: TestAnswerWindowsNativeCommandLineLimit/uefi-full (0.00s)
+        answer_test.go:418: XML-decoded CommandLine 3916 characters exceeds native maximum 1024
+FAIL
+FAIL	github.com/lober/lober/internal/render	0.390s
+FAIL

@@ -89,17 +89,42 @@ func posixRuntime(r Request, slot model.SnapshotSlot, windows bool) (string, []m
 	}
 	b.WriteString(`"$@" &
  process=$!
- (sleep "$seconds" || exit 0; : > "$WORK/timed-out"; kill_tree "$process") >/dev/null 2>&1 &
- watchdog=$!
- if wait "$process"; then status=0; else status=$?; fi
 `)
 	if esxi {
-		b.WriteString(" kill -KILL \"$watchdog\" 2>/dev/null || :\n")
+		// Publish readiness only after the watchdog owns its child and TERM trap.
+		// Cancellation reaps the sleeper without touching the hook's process group.
+		b.WriteString(` (
+ sleep "$seconds" &
+ sleeper=$!
+ trap 'kill "$sleeper" 2>/dev/null || :; wait "$sleeper" 2>/dev/null || :; exit 0' TERM
+ : > "$WORK/watchdog-ready" || { kill "$sleeper" 2>/dev/null || :; wait "$sleeper" 2>/dev/null || :; exit 125; }
+ wait "$sleeper" || exit 0
+ : > "$WORK/timed-out"
+ kill_tree "$process"
+ ) >/dev/null 2>&1 &
+ watchdog=$!
+ while [ ! -f "$WORK/watchdog-ready" ]; do
+  if ! kill -0 "$watchdog" 2>/dev/null; then
+   kill_tree "$process"; wait "$process" 2>/dev/null || :
+   wait "$watchdog" 2>/dev/null || :
+   return 125
+  fi
+ done
+ if wait "$process"; then status=0; else status=$?; fi
+ kill -TERM "$watchdog" 2>/dev/null || :
+`)
 	} else {
-		b.WriteString(" kill_tree \"$watchdog\"\n")
+		b.WriteString(` (sleep "$seconds" || exit 0; : > "$WORK/timed-out"; kill_tree "$process") >/dev/null 2>&1 &
+ watchdog=$!
+ if wait "$process"; then status=0; else status=$?; fi
+ kill_tree "$watchdog"
+`)
 	}
-	b.WriteString(` wait "$watchdog" 2>/dev/null || :
- if [ -f "$WORK/timed-out" ]; then status=124; fi
+	b.WriteString(" wait \"$watchdog\" 2>/dev/null || :\n")
+	if esxi {
+		b.WriteString(" rm -f \"$WORK/watchdog-ready\"\n")
+	}
+	b.WriteString(` if [ -f "$WORK/timed-out" ]; then status=124; fi
  rm -f "$WORK/timed-out"
  return "$status"
 }
@@ -176,11 +201,17 @@ func runtimeSignalFunction(r Request, slot model.SnapshotSlot, values map[catalo
 	before, after := tokenURLParts(address)
 	after = strings.TrimSuffix(after, "PHASE")
 	transport := "curl -fsS -m 10 -X POST -H 'Content-Type: text/plain' \"$address\" --data-binary \"$body\""
-	if r.Snapshot.Format == "esxi-ks" {
+	wgetSignal := r.Snapshot.Format == "esxi-ks" || (r.Snapshot.Format == "preseed" && (slot.Timing == "pre" || slot.Timing == "post-installer"))
+	if wgetSignal {
 		transport = "wget -q -T 10 -O /dev/null --header='Content-Type: text/plain' --post-file=\"$body\" \"$address\""
 	}
+	// Debian's packaged GNU wget must bypass standalone ash's wget applet;
+	// that applet truncates --post-file bodies containing NUL bytes.
+	if r.Snapshot.Format == "preseed" && wgetSignal {
+		transport = "/usr/bin/" + transport
+	}
 	body := "if [ -n \"$body\" ]; then body=\"@$body\"; fi"
-	if r.Snapshot.Format == "esxi-ks" {
+	if wgetSignal {
 		body = "if [ -z \"$body\" ]; then body=\"$WORK/empty\"; : > \"$body\"; fi"
 	}
 	return fmt.Sprintf(`signal() {

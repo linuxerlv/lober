@@ -1,0 +1,163 @@
+Command: go test ./internal/core/scan -count=1 -v
+=== RUN   TestLinesPreserveBytesAndSegmentLocations
+--- PASS: TestLinesPreserveBytesAndSegmentLocations (0.00s)
+=== RUN   Test七种格式的样例扫出预期的占位符
+=== RUN   Test七种格式的样例扫出预期的占位符/kickstart
+=== RUN   Test七种格式的样例扫出预期的占位符/preseed
+=== RUN   Test七种格式的样例扫出预期的占位符/autoinstall
+=== RUN   Test七种格式的样例扫出预期的占位符/autoyast
+=== RUN   Test七种格式的样例扫出预期的占位符/agama
+=== RUN   Test七种格式的样例扫出预期的占位符/unattend
+=== RUN   Test七种格式的样例扫出预期的占位符/esxi-ks
+--- PASS: Test七种格式的样例扫出预期的占位符 (0.01s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/kickstart (0.00s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/preseed (0.00s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/autoinstall (0.00s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/autoyast (0.00s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/agama (0.00s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/unattend (0.00s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/esxi-ks (0.00s)
+=== RUN   Test各段原文拼回输入逐字节相同
+=== RUN   Test各段原文拼回输入逐字节相同/占位符紧挨着
+=== RUN   Test各段原文拼回输入逐字节相同/写错的混在中间
+=== RUN   Test各段原文拼回输入逐字节相同/连续的花括号
+=== RUN   Test各段原文拼回输入逐字节相同/首尾带空格
+=== RUN   Test各段原文拼回输入逐字节相同/Jinja
+=== RUN   Test各段原文拼回输入逐字节相同/非法_UTF-8
+=== RUN   Test各段原文拼回输入逐字节相同/末尾不换行
+=== RUN   Test各段原文拼回输入逐字节相同/空正文
+=== RUN   Test各段原文拼回输入逐字节相同/只有原文
+=== RUN   Test各段原文拼回输入逐字节相同/只有换行
+=== RUN   Test各段原文拼回输入逐字节相同/CRLF
+=== RUN   Test各段原文拼回输入逐字节相同/制表符缩进
+--- PASS: Test各段原文拼回输入逐字节相同 (0.00s)
+    --- PASS: Test各段原文拼回输入逐字节相同/占位符紧挨着 (0.00s)
+    --- PASS: Test各段原文拼回输入逐字节相同/写错的混在中间 (0.00s)
+    --- PASS: Test各段原文拼回输入逐字节相同/连续的花括号 (0.00s)
+    --- PASS: Test各段原文拼回输入逐字节相同/首尾带空格 (0.00s)
+    --- PASS: Test各段原文拼回输入逐字节相同/Jinja (0.00s)
+    --- PASS: Test各段原文拼回输入逐字节相同/非法_UTF-8 (0.00s)
+    --- PASS: Test各段原文拼回输入逐字节相同/末尾不换行 (0.00s)
+    --- PASS: Test各段原文拼回输入逐字节相同/空正文 (0.00s)
+    --- PASS: Test各段原文拼回输入逐字节相同/只有原文 (0.00s)
+    --- PASS: Test各段原文拼回输入逐字节相同/只有换行 (0.00s)
+    --- PASS: Test各段原文拼回输入逐字节相同/CRLF (0.00s)
+    --- PASS: Test各段原文拼回输入逐字节相同/制表符缩进 (0.00s)
+=== RUN   Test片段带种类原文行列缩进与解析结果
+--- PASS: Test片段带种类原文行列缩进与解析结果 (0.00s)
+=== RUN   Test写错的占位符报对代码与行列
+=== RUN   Test写错的占位符报对代码与行列/种类不认识
+=== RUN   Test写错的占位符报对代码与行列/把网址写进了双花括号
+=== RUN   Test写错的占位符报对代码与行列/种类不认识也没闭合
+=== RUN   Test写错的占位符报对代码与行列/插槽名为空
+=== RUN   Test写错的占位符报对代码与行列/插槽名含空格
+=== RUN   Test写错的占位符报对代码与行列/插槽名含中文标点
+=== RUN   Test写错的占位符报对代码与行列/插槽名含冒号
+=== RUN   Test写错的占位符报对代码与行列/插槽名超过_32_个字
+=== RUN   Test写错的占位符报对代码与行列/时机为空
+=== RUN   Test写错的占位符报对代码与行列/写了两个时机
+=== RUN   Test写错的占位符报对代码与行列/冒号后有空格
+=== RUN   Test写错的占位符报对代码与行列/部件为空
+=== RUN   Test写错的占位符报对代码与行列/系统值带子值
+=== RUN   Test写错的占位符报对代码与行列/系统值带_join
+=== RUN   Test写错的占位符报对代码与行列/参数名有大写
+=== RUN   Test写错的占位符报对代码与行列/参数名是中文
+=== RUN   Test写错的占位符报对代码与行列/子值为空
+=== RUN   Test写错的占位符报对代码与行列/子值有大写
+=== RUN   Test写错的占位符报对代码与行列/两级子值
+=== RUN   Test写错的占位符报对代码与行列/join_大写
+=== RUN   Test写错的占位符报对代码与行列/join_写在子值前
+=== RUN   Test写错的占位符报对代码与行列/两个_join
+=== RUN   Test写错的占位符报对代码与行列/竖线后为空
+=== RUN   Test写错的占位符报对代码与行列/竖线两边有空格
+=== RUN   Test写错的占位符报对代码与行列/未闭合
+=== RUN   Test写错的占位符报对代码与行列/时机不认识
+=== RUN   Test写错的占位符报对代码与行列/时机大小写不对
+=== RUN   Test写错的占位符报对代码与行列/时机写成显示名
+=== RUN   Test写错的占位符报对代码与行列/部件不认识
+=== RUN   Test写错的占位符报对代码与行列/部件大小写不对
+=== RUN   Test写错的占位符报对代码与行列/系统值不认识
+=== RUN   Test写错的占位符报对代码与行列/把部件写成系统值
+--- PASS: Test写错的占位符报对代码与行列 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/种类不认识 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/把网址写进了双花括号 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/种类不认识也没闭合 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/插槽名为空 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/插槽名含空格 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/插槽名含中文标点 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/插槽名含冒号 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/插槽名超过_32_个字 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/时机为空 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/写了两个时机 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/冒号后有空格 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/部件为空 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/系统值带子值 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/系统值带_join (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/参数名有大写 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/参数名是中文 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/子值为空 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/子值有大写 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/两级子值 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/join_大写 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/join_写在子值前 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/两个_join (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/竖线后为空 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/竖线两边有空格 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/未闭合 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/时机不认识 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/时机大小写不对 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/时机写成显示名 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/部件不认识 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/部件大小写不对 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/系统值不认识 (0.00s)
+    --- PASS: Test写错的占位符报对代码与行列/把部件写成系统值 (0.00s)
+=== RUN   Test首尾带空格的占位符
+--- PASS: Test首尾带空格的占位符 (0.00s)
+=== RUN   Test未闭合的占位符不跨行
+--- PASS: Test未闭合的占位符不跨行 (0.00s)
+=== RUN   Test内容里遇到双左花括号就截断外层
+=== RUN   Test内容里遇到双左花括号就截断外层/种类不认识之后接着扫
+=== RUN   Test内容里遇到双左花括号就截断外层/插槽里套插槽
+=== RUN   Test内容里遇到双左花括号就截断外层/种类不认识的套插槽
+=== RUN   Test内容里遇到双左花括号就截断外层/内层是_Jinja
+=== RUN   Test内容里遇到双左花括号就截断外层/一行套了几层
+--- PASS: Test内容里遇到双左花括号就截断外层 (0.00s)
+    --- PASS: Test内容里遇到双左花括号就截断外层/种类不认识之后接着扫 (0.00s)
+    --- PASS: Test内容里遇到双左花括号就截断外层/插槽里套插槽 (0.00s)
+    --- PASS: Test内容里遇到双左花括号就截断外层/种类不认识的套插槽 (0.00s)
+    --- PASS: Test内容里遇到双左花括号就截断外层/内层是_Jinja (0.00s)
+    --- PASS: Test内容里遇到双左花括号就截断外层/一行套了几层 (0.00s)
+=== RUN   Test用lbrace转义左花括号对
+--- PASS: Test用lbrace转义左花括号对 (0.00s)
+=== RUN   Test中文插槽名
+--- PASS: Test中文插槽名 (0.00s)
+=== RUN   Test插槽名超长时说明里的上限与常量一致
+--- PASS: Test插槽名超长时说明里的上限与常量一致 (0.00s)
+=== RUN   Test独占一行的判定
+--- PASS: Test独占一行的判定 (0.00s)
+=== RUN   TestJinja与其他双花括号写法原样保留
+=== RUN   TestJinja与其他双花括号写法原样保留/Jinja
+=== RUN   TestJinja与其他双花括号写法原样保留/不是小写字母加冒号
+--- PASS: TestJinja与其他双花括号写法原样保留 (0.00s)
+    --- PASS: TestJinja与其他双花括号写法原样保留/Jinja (0.00s)
+    --- PASS: TestJinja与其他双花括号写法原样保留/不是小写字母加冒号 (0.00s)
+=== RUN   Test多出来的花括号留在原文里
+--- PASS: Test多出来的花括号留在原文里 (0.00s)
+=== RUN   Test参数引用的子值与join
+--- PASS: Test参数引用的子值与join (0.00s)
+=== RUN   Test重复的插槽部件与引用如实列出
+--- PASS: Test重复的插槽部件与引用如实列出 (0.00s)
+=== RUN   Test有问题时仍返回其余占位符
+--- PASS: Test有问题时仍返回其余占位符 (0.00s)
+=== RUN   Test种类不认识的说明列出的种类与扫描认的一致
+--- PASS: Test种类不认识的说明列出的种类与扫描认的一致 (0.00s)
+=== RUN   TestResult的Refs整理参数引用
+--- PASS: TestResult的Refs整理参数引用 (0.00s)
+=== RUN   TestRefs的Merge
+--- PASS: TestRefs的Merge (0.00s)
+=== RUN   TestRefs的Required
+--- PASS: TestRefs的Required (0.00s)
+PASS
+ok  	github.com/lober/lober/internal/core/scan	0.023s
+
+exit_code=0

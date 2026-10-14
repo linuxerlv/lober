@@ -1,0 +1,66 @@
+#!/usr/bin/make -f
+
+#export DH_VERBOSE=1
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export DEB_CFLAGS_MAINT_APPEND = -DNO_SSLv2
+
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/buildflags.mk
+
+DEB_BUILD_DIR=build
+UDEB_BUILD_DIR=build-udeb
+
+ifeq ($(filter noudeb,$(DEB_BUILD_PROFILES)),)
+BUILD_UDEB=1
+else
+BUILD_UDEB=0
+endif
+
+# autoreconf reports some error, so disabled
+%:
+	dh $@ --without autoreconf --builddir=$(DEB_BUILD_DIR)
+
+override_dh_auto_clean:
+	-dh_auto_clean
+	-dh_auto_clean -B$(UDEB_BUILD_DIR)
+	rm -f po/*.gmo po/wget.pot po/en@boldquot.po po/en@quot.po \
+	    doc/wget.inf* doc/version.texi
+	rm -rf config.sub config.guess $(UDEB_BUILD_DIR) $(DEB_BUILD_DIR)
+
+override_dh_auto_configure:
+	@echo "d/rules: running configure for wget"
+	dh_auto_configure -- \
+		--enable-ipv6 \
+		--with-ssl \
+		--with-libidn
+ifeq ($(BUILD_UDEB),1)
+	@echo "d/rules: will configure and build binary package wget-udeb"
+	@echo "d/rules: running configure for wget-udeb"
+	DEB_CFLAGS_MAINT_APPEND="${DEB_CFLAGS_MAINT_APPEND} -Os" dh_auto_configure -B$(UDEB_BUILD_DIR) --reload-all-buildenv-variables -- \
+		--enable-ipv6 \
+		--with-ssl=openssl \
+		--without-libpsl \
+		--disable-debug \
+		--disable-nls \
+		--disable-iri
+endif
+
+override_dh_auto_build:
+	@echo "d/rules: building for wget"
+	dh_auto_build
+	cd build/po; make wget.pot
+ifeq ($(BUILD_UDEB),1)
+	@echo "d/rules: building for wget-udeb"
+	dh_auto_build -B$(UDEB_BUILD_DIR)
+endif
+
+override_dh_auto_test:
+ifeq ($(filter nocheck,$(DEB_BUILD_PROFILES)),)
+	@echo "d/rules: running tests for wget"
+	dh_auto_test
+ifeq ($(BUILD_UDEB),1)
+	@echo "d/rules: running tests for wget-udeb"
+	dh_auto_test -B$(UDEB_BUILD_DIR)
+endif
+endif
