@@ -1828,7 +1828,7 @@ git commit -m "feat(store): 加 Users 聚合与 users 表，用户与角色落�
   - `console.Notifier`、`console.NewHub() Notifier`
   - `console.userOf(c) *store.User`
 
-- [ ] **Step 1: 写失败的测试——权限表**
+- [x] **Step 1: 写失败的测试——权限表**
 
 Create `internal/console/perm_test.go`：
 
@@ -1915,7 +1915,7 @@ func TestPermsOf返回副本(t *testing.T) {
 Run: `go test ./internal/console/ -run 'Test每个角色|TestAdmin|Test未知角色|Test路由的权限码|TestPermsOf' -v`
 Expected: FAIL，`undefined: console.PermsOf`、`undefined: console.AllPerms`、`undefined: newTestServer`。
 
-- [ ] **Step 2: 写失败的测试——OpenAPI**
+- [x] **Step 2: 写失败的测试——OpenAPI**
 
 Create `internal/console/openapi_test.go`：
 
@@ -2030,7 +2030,7 @@ func firstUpper(s string) string {
 Run: `go test ./internal/console/ -run 'Test每条路由|TestOpenAPI' -v`
 Expected: FAIL，`undefined: newTestServer`。
 
-- [ ] **Step 3: 写失败的测试——中间件与夹具**
+- [x] **Step 3: 写失败的测试——中间件与夹具**
 
 Create `internal/console/server_test.go`：
 
@@ -2202,7 +2202,7 @@ func (s *Server) TestLogin(u *store.User) string { return s.server.sessions.put(
 Run: `go test ./internal/console/ -run 'Test没有令牌|TestPanic|Test没注册' -v`
 Expected: FAIL，`undefined: console.New`、`undefined: console.Server`、`undefined: console.NewHub`、`undefined: (*console.Server).TestLogin`。
 
-- [ ] **Step 4: 实现权限表**
+- [x] **Step 4: 实现权限表**
 
 Create `internal/console/perm.go`：
 
@@ -2279,7 +2279,7 @@ func PermsOf(r store.Role) []string {
 }
 ```
 
-- [ ] **Step 5: 实现服务骨架与路由表**
+- [x] **Step 5: 实现服务骨架与路由表**
 
 Create `internal/console/server.go`：
 
@@ -2588,7 +2588,7 @@ func refOf(v any) string {
 }
 ```
 
-- [ ] **Step 6: 两个接缝、通知中心与会话桩**
+- [x] **Step 6: 两个接缝、通知中心与会话桩**
 
 Create `internal/console/isosource.go`：
 
@@ -2845,12 +2845,12 @@ func (s *Server) TestLogin(u *store.User) string { return s.server.sessions.put(
 
 `ctxUser` 的注释改成「当前登录的用户名」。`userOf` 与 `authorize` 在本任务因此拿不到角色，`authorize` 改成：用户名不在上下文里就 403（Task 5 再补角色）。
 
-- [ ] **Step 7: 跑测试**
+- [x] **Step 7: 跑测试**
 
 Run: `go test ./internal/console/ -v`
 Expected: `Test每个角色的权限码`、`TestAdmin拿全部权限码`、`Test未知角色没有权限`、`TestPermsOf返回副本`、`Test路由的权限码都登记过`、OpenAPI 四条、`TestPanic兜底回500`、`Test没注册的路径是gin的404` PASS；`Test没有令牌一律401` 空转通过（还没有要权限的路由）。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add internal/console

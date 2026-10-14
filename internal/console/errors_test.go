@@ -36,6 +36,17 @@ func Test类别未登记按422(t *testing.T) {
 	}
 }
 
+func Test单条领域错误保留原因类别(t *testing.T) {
+	p := model.NewProblem("template_not_approved", model.Subject{Kind: model.KindTemplate}, "draft")
+	for _, err := range []error{p, &p} {
+		c, w := testContext(t)
+		RespondError(c, err)
+		if w.Code != 409 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+	}
+}
+
 func Test仓储错误映射到状态码(t *testing.T) {
 	ps := []model.Problem{model.NewProblem("sn_invalid", model.Subject{Kind: "host"}, "为空")}
 	for _, tt := range []struct {

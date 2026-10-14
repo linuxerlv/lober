@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"unicode/utf8"
 )
 
 type subjectJSON struct {
@@ -57,6 +58,16 @@ func RespondError(c *gin.Context, err error) {
 		return
 	}
 	status, message := 500, model.ConsoleInternal
+	var p model.Problem
+	if errors.As(err, &p) {
+		Judge(c, []model.Problem{p})
+		return
+	}
+	var pp *model.Problem
+	if errors.As(err, &pp) && pp != nil {
+		Judge(c, []model.Problem{*pp})
+		return
+	}
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		status, message = 404, model.ConsoleNotFound
@@ -95,13 +106,22 @@ func Judge(c *gin.Context, ps []model.Problem) bool {
 
 // Bind accepts exactly one JSON value and checks declared required fields.
 func Bind(c *gin.Context, v any) bool {
+	if c.Request.Body == nil {
+		Fail(c, 400, nil, model.ConsoleBadRequest)
+		return false
+	}
 	d := json.NewDecoder(c.Request.Body)
-	if err := d.Decode(v); err != nil {
+	var raw json.RawMessage
+	if err := d.Decode(&raw); err != nil || !utf8.Valid(raw) {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return false
 	}
 	var extra any
 	if err := d.Decode(&extra); !errors.Is(err, io.EOF) {
+		Fail(c, 400, nil, model.ConsoleBadRequest)
+		return false
+	}
+	if err := json.Unmarshal(raw, v); err != nil {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return false
 	}
