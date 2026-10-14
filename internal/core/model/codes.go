@@ -467,6 +467,7 @@ const (
 // 控制台非业务错误的展示文字，不把底层错误直接回给客户端。
 const (
 	ConsoleBadRequest             = "请求的内容不合法"
+	ConsoleRejectReason           = "驳回必须提供非空、可存为 UTF-8 文本的理由"
 	ConsoleContentRange           = "Content-Range 必须给出与实际分片及已登记总长一致的范围，如 bytes 0-1048575/5242880"
 	ConsoleCSVRead                = "CSV 读不成：%v"
 	ConsoleCSVHeader              = "CSV 表头重复或属性键不合法：%q"

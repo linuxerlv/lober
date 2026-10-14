@@ -6768,7 +6768,7 @@ git commit -m "feat(console): hook 与模板的读取、保存、开新版本、
   - `(*server).hookLifecycleRoutes() []route`、`(*server).templateLifecycleRoutes() []route`
   - `console.HookProblems(h model.Hook) []model.Problem`、`console.TemplateProblems(t model.Template) []model.Problem`（后者自己查齐引用的 hook）
 
-- [ ] **Step 1: 写失败的测试——提交、审批、驳回、废弃**
+- [x] **Step 1: 写失败的测试——提交、审批、驳回、废弃**
 
 Create `internal/console/lifecycle_test.go`：
 
@@ -7076,7 +7076,7 @@ func Test审批模板引用已废弃的hook(t *testing.T) {
 Run: `go test ./internal/console/ -run 'Test提交|Test审批|Test驳回|Test废弃hook|Test不合法|Test校验|Test审批模板' -v`
 Expected: FAIL，`undefined: s.submitHook`（路由还没接）。
 
-- [ ] **Step 2: 实现生命周期端点**
+- [x] **Step 2: 实现生命周期端点**
 
 Create `internal/console/lifecycle.go`：
 
@@ -7308,12 +7308,12 @@ func (s *server) templateProblems(c *gin.Context, t model.Template) []model.Prob
 
 包级的 `TemplateProblems(st store.Hooks, t model.Template)` 因此不需要，`validateTemplate` 改调 `s.templateProblems(c, t)`。**Interfaces 一节的 `TemplateProblems` 相应改成这个方法。**
 
-- [ ] **Step 3: 跑测试**
+- [x] **Step 3: 跑测试**
 
 Run: `go test ./internal/console/ -v`
 Expected: 全部 PASS。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add internal/console

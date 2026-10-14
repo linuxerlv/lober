@@ -1,6 +1,7 @@
 package console
 
 import (
+	"slices"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -70,6 +71,9 @@ func hookResponses(hs []model.Hook) []hookResponse {
 	return out
 }
 func (s *server) hookRoutes() []route {
+	return slices.Concat(s.hookBaseRoutes(), s.hookLifecycleRoutes())
+}
+func (s *server) hookBaseRoutes() []route {
 	return []route{
 		{method: "GET", path: "/console/v1/hooks", perm: PermHookRead, tag: "hooks", summary: "List hook identities", query: hookListQuery{}, resp: hookPage{}, handle: s.listHooks},
 		{method: "POST", path: "/console/v1/hooks", perm: PermHookWrite, tag: "hooks", summary: "Create hook draft", req: hookRequest{}, resp: hookResponse{}, handle: s.createHook},

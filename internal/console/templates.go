@@ -112,6 +112,9 @@ func (s *server) respondTemplate(c *gin.Context, t model.Template) {
 	}
 }
 func (s *server) templateRoutes() []route {
+	return slices.Concat(s.templateBaseRoutes(), s.templateLifecycleRoutes())
+}
+func (s *server) templateBaseRoutes() []route {
 	return []route{
 		{method: "GET", path: "/console/v1/templates", perm: PermTemplateRead, tag: "templates", summary: "List template identities", query: templateListQuery{}, resp: templatePage{}, handle: s.listTemplates},
 		{method: "POST", path: "/console/v1/templates", perm: PermTemplateWrite, tag: "templates", summary: "Create template draft", req: templateRequest{}, resp: templateResponse{}, handle: s.createTemplate},
