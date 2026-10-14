@@ -2,7 +2,7 @@
 
 分支 `feat/console`，实现基线 `7bdbcc5`。确认设计与实现计划分别为 `2026-10-11-layer5-console-design.md` 和 `2026-10-12-layer5-console.md`。开发、真实 PostgreSQL 和 Linux 构建均在 WSL Ubuntu 中运行。
 
-本文当前是验收候选；最终六步检查和独立整层审查完成后更新结论。
+2026-10-15 验收完成：15 项实现已落地，一次独立整层审查的 7 项 Important 及两项契约/验证问题均已修复。最终源代码提交 `8904ce5`；修复后 WSL 六步 `make check` 退出 0，18 个包的普通及竞态测试全部通过，控制台普通 110.434 秒、race 524.538 秒，装配点 race 80.034 秒。Linux amd64 编译与 Wire 漂移检查通过，未发现未解决的阻断问题。未进行第二次评审；每项修复经失败回归、专项通过和全量检查验证。命令输出见[最终检查证据](2026-10-15-layer5-check.txt)。
 
 | 要求 | 当前实现与验证证据 |
 |---|---|
@@ -34,6 +34,8 @@
 测试使用实际 PostgreSQL 和实际解析/抽取的微型 ISO 文件，不模拟仓储、判定、渲染或内置内容；ISO 字节 IO 的单纯控制台审计测试允许使用替身，装配测试则使用真实 IO。相关测试在 `internal/console/*_test.go`、`cmd/lober/*_test.go`、`internal/iso/reimport_request_test.go`、`internal/store/pgstore/task_indexes_test.go` 和 `internal/archtest`。
 
 实施记录见[执行报告](2026-10-14-layer5-console.md)，完整判断与取舍见[决策台账](2026-10-14-layer5-decisions.md)。
+
+独立审查的原始发现及逐项修复对账见[整层审查记录](2026-10-15-layer5-final-review.md)。无延期 Minor；保留的资格和层间边界均在决策台账中说明其代价。
 
 启动：先复制 `cmd/lober/lober.example.yaml` 并配置生产连接、目录和初始口令，运行 `go build -o lober ./cmd/lober`，然后 `./lober -config /etc/lober/lober.yaml`。程序不读取测试夹具 DSN；已有用户时不再次播种。
 

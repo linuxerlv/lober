@@ -10553,39 +10553,39 @@ git commit -m "feat(lober): 装配点首次出现，能起控制台；ISO 来源
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-30-lober-rewrite-design.md`
-- Modify: `docs/superpowers/plans/2026-10-11-layer5-console.md`（若本计划与实现有出入，改计划）
+- Modify: `docs/superpowers/plans/2026-10-12-layer5-console.md`（若本计划与实现有出入，改计划）
 - Modify: `docs/superpowers/reviews/2026-10-02-layer1-open-issues.md`（L-8、S3-10 标结果）
 - Modify: `docs/superpowers/reviews/2026-10-07-layer2-open-issues.md`（归第 5 层的条目标结果）
 
-- [ ] **Step 1: 总 spec 要改的三处**
+- [x] **Step 1: 总 spec 要改的三处**
 
 1. §4.2「范围」：用户、角色与会话不再「推迟到第 5 层」，改成「第 5 层已加：`Users` 聚合与 `users` 表，会话在控制台的内存里」。
 2. §6.4「生产环境」：配置从哪来已经定了——YAML 一份，路径由命令行参数给，DSN 可被 `LOBER_PG_DSN` 覆盖。
 3. §7.1：make check 从五步变六步，补 `gen`（比对 wire 生成结果）。
 
-- [ ] **Step 2: 两份清单归第 5 层的条目标结果**
+- [x] **Step 2: 两份清单归第 5 层的条目标结果**
 
 - L-8：catalog 的全局词表（`AllFormats` 等八张表）、`Subject.Kind` 常量、`HookKey`/`TemplateKey` 的 `String()` 都已加；「ID@版本」收成一份，activation、admission、params、snapshot 四处改调 `String()`。
 - S3-10：`host_platform_invalid` 的架构清单改成与 `catalog.AllArchs()` 比对全集，漏列也报得出。
 - 第 2 层清单里归第 5 层的条目（RejectHook/RejectTemplate 的理由必填、`hostReservedAttrs` 的导出等）逐条标结果；没做的写明归谁。
 
-- [ ] **Step 3: 整体验收**
+- [x] **Step 3: 整体验收**
 
 逐条跑，每条都要有输出佐证，不许「应该过了」：
 
-- [ ] `make check` 六步全过，退出码 0。PostgreSQL 的测试真的跑了，没有因为找不到 DSN 而跳过。
-- [ ] `go list ./...` 列出 `internal/console` 与 `cmd/lober`，守卫覆盖到它们：构造一个 console import `cmd/lober` 的反例，`go test ./internal/archtest/` 报 `ruleConsole`；构造一个 console import `github.com/lib/pq` 的反例，同样报。
-- [ ] 每条路由都有 HTTP 测试（`Test每条路由都有OpenAPI描述` 与 `go test ./internal/console/ -v` 的用例数对得上），权限矩阵覆盖五个角色。
-- [ ] 每条声明了审计动作的路由都留下审计记录（`Test每条审计路由都留下记录` 全绿）。
-- [ ] 批量建任务一台不过就一台都不建（`Test向导提交一台不过全不建` 全绿，`ListTasks` 与审计都为空）。
-- [ ] 同一个预览请求两次逐字节相同（`Test预览两次逐字节相同`，C35）。
-- [ ] `go test -race ./...` 全过：会话表与通知中心都有锁，竞态检测说得清。
-- [ ] `GOOS=linux GOARCH=amd64 go build ./...` 过。
-- [ ] 二进制能起来、能登录、能打一个要权限的接口（Step 7 手工验过一次，这里记录输出）。
-- [ ] 第 1 层清单的 L-8、S3-10 标了结果；第 2 层清单归第 5 层的条目标了结果。
-- [ ] 既有行为没变：`go test ./internal/core/... ./internal/store/... ./internal/render/... ./internal/builtin/...` 全绿。
+- [x] `make check` 六步全过，退出码 0。PostgreSQL 的测试真的跑了，没有因为找不到 DSN 而跳过。
+- [x] `go list ./...` 列出 `internal/console` 与 `cmd/lober`，守卫覆盖到它们：构造一个 console import `cmd/lober` 的反例，`go test ./internal/archtest/` 报 `ruleConsole`；构造一个 console import `github.com/lib/pq` 的反例，同样报。
+- [x] 每条路由都有 HTTP 测试（`Test每条路由都有OpenAPI描述` 与 `go test ./internal/console/ -v` 的用例数对得上），权限矩阵覆盖五个角色。
+- [x] 每条声明了审计动作的路由都留下审计记录（`Test每条审计路由都留下记录` 全绿）。
+- [x] 批量建任务一台不过就一台都不建（`Test向导提交一台不过全不建` 全绿，`ListTasks` 与审计都为空）。
+- [x] 同一个预览请求两次逐字节相同（`Test预览两次逐字节相同`，C35）。
+- [x] `go test -race ./...` 全过：会话表与通知中心都有锁，竞态检测说得清。
+- [x] `GOOS=linux GOARCH=amd64 go build ./...` 过。
+- [x] 二进制能起来、能登录、能打一个要权限的接口（Step 7 手工验过一次，这里记录输出）。
+- [x] 第 1 层清单的 L-8、S3-10 标了结果；第 2 层清单归第 5 层的条目标了结果。
+- [x] 既有行为没变：`go test ./internal/core/... ./internal/store/... ./internal/render/... ./internal/builtin/...` 全绿。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add docs

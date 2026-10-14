@@ -1,6 +1,6 @@
 # 第 5 层实施决策台账
 
-按执行顺序保留全部决策、理由和代价；最终审查结果另见验收报告。
+全部决策按执行顺序保留，包含理由及代价。审查原始发现和修复证据另见 2026-10-15-layer5-final-review.md；无延期 Minor。
 
 - Ruling: use existing feat/console in main checkout, as total specification §7.4 requires; no new worktree. Cost: one active checkout; other sessions must coordinate.
 
@@ -55,3 +55,25 @@
 - Task15 actual full race RED: socket login client3s expired under concurrent PBKDF load; isolated3x race passed14.683s. Expanded client budget30s (production KDF600000 unchanged), GREEN3x16.936s. Added actual protected socket GET info with no token401/token200. Full console race hit default10m at runnable PBKDF in late wizardfixture; no data-race warning/deadlock. Ruling: race target timeout20m; CPU-heavy real passwords and growing route matrices must finish, cost if wrong: a hung race test takes longer to fail. Preserve failurelog task15-before-http-fix-check.log. Interrupted only verified own make PID/cwd after it had read old10m recipe, restarted fullcheck with new budget; no service/process outside this workload touched. Goal still pending15/fullreview.
 
 - Task15 Ruling: commit the fully implemented acceptance candidate and start the single read-only final branch review while the final race run remains live. Ordinary full suite is green; independent review and verification can proceed without shared mutations. Task15 and the whole goal remain incomplete until six-step check and review/fixes pass. Cost if wrong: reviewer may see a verification failure subsequently fixed; any source correction is covered by RED/GREEN and a fresh whole suite, without a second reviewer.
+
+- Final: Ruling: real-machine qualification remains later physical acceptance; current actual ISO/render tests prove the pipeline only — cost if wrong: an unqualified platform can fail installation, so no qualification claim is made.
+
+- Final: Ruling: task cancel/retry retains the confirmed layer7-unavailable422 contract — cost: actual execution control remains absent until layer7.
+
+- Final: Ruling: frontend, generated TypeScript and C24 source-update presentation remain layer6 handoff — cost: backend completion does not deliver the frontend.
+
+- Final: Ruling: single-process sessions/approval/deletion gates stand; active-active/distributed invalidation is outside the confirmed deployment model — cost: deploying multiple active console instances would require additional coordination.
+
+- Final: Ruling: CSV formula mitigation remains explicitly Excel-targeted — cost: other spreadsheet applications are not qualified; JSON preserves machine data.
+
+- Final: Ruling: hostile privileged database/filesystem mutation is outside the application boundary; ordinary concurrency/failures/restarts and symlink boundaries are included — cost: privileged actors can still corrupt state outside the APIs.
+
+- Final: Ruling: use a short global credential publication RW gate with current-hash reread rather than changing persisted credential schema; KDF stays outside it — cost: account commits and session publication serialize during their short database section, and the guarantee remains single-process.
+
+- Final: Ruling: use the additive native RegisterQueued and store SaveSourceAndAcquire capability to keep historical Register/Reimport callers working while atomic queueing is exposed to assembly — cost: future store implementations must implement the additional atomic operation; partial adapters are not accepted.
+
+- Final: Ruling: preserve last-enabled-admin within an ordered users table write lock before row locks — cost: user mutations serialize; administrative volume is small and read-only account authorization remains available.
+
+- Final: Ruling: remove historical example's known bootstrap default, require explicit seedAdmin only for empty databases — cost: old empty-database configs that omit the field fail startup until configured, populated databases still start without the field.
+
+- Final: Ruling: per-file sample flags are a user-facing contract, regrade the original Minor to Important and fix; replacing the canned store-error test is a required verification constraint, also fix it — cost if wrongly graded: a small additional test/implementation change in this same pass. No deferred minors remain.
