@@ -849,7 +849,7 @@ git commit -m "feat(console): 响应信封、错误到状态码的映射与守�
 
 第 1 层清单 L-8 归第 5 层的部分：catalog 没有导出全局词表，第 5、6 层列下拉框只能经 `Families`、`SeriesOf` 反推；`Subject.Kind` 的八个取值是字面量；「ID@版本」在四个包各拼一份。S3-10 挂在词表上：`host_platform_invalid` 的说明列出的架构只能查到「列出的都合法」，目录新加了架构而说明没补，查不出来。
 
-- [ ] **Step 1: 写失败的测试——词表**
+- [x] **Step 1: 写失败的测试——词表**
 
 Create `internal/core/catalog/vocab_test.go`：
 
@@ -916,7 +916,7 @@ func Test全局词表返回副本(t *testing.T) {
 Run: `go test ./internal/core/catalog/ -run 'Test全局词表' -v`
 Expected: FAIL，`undefined: AllFormats`。
 
-- [ ] **Step 2: 写失败的测试——Subject.Kind 常量**
+- [x] **Step 2: 写失败的测试——Subject.Kind 常量**
 
 Create `internal/core/model/subject_test.go`：
 
@@ -962,7 +962,7 @@ func Test版本键的字符串形式(t *testing.T) {
 Run: `go test ./internal/core/model/ -run 'TestSubject的Kind|Test版本键' -v`
 Expected: FAIL，`undefined: KindHost`、`undefined: Kinds`。
 
-- [ ] **Step 3: 写失败的测试——S3-10 架构全集**
+- [x] **Step 3: 写失败的测试——S3-10 架构全集**
 
 Modify `internal/core/model/codes_align_test.go`，在 `alignFirmwares` 之后加：
 
@@ -994,7 +994,7 @@ func alignArchs() []string {
 Run: `go test ./internal/core/model/ -run 'TestAlign主机平台' -v`
 Expected: FAIL，`undefined: catalog.AllArchs`。
 
-- [ ] **Step 4: 实现词表与常量**
+- [x] **Step 4: 实现词表与常量**
 
 Create `internal/core/catalog/vocab.go`：
 
@@ -1208,16 +1208,16 @@ func (k TemplateKey) String() string { return k.ID + "@" + strconv.Itoa(k.Versio
 
 （`authoring.go` 已 import `strconv`；没有就补。）
 
-- [ ] **Step 5: 四处判定改调 String()**
+- [x] **Step 5: 四处判定改调 String()**
 
 `internal/core/activation/hook.go`、`internal/core/admission/admission.go`、`internal/core/params/params.go`、`internal/core/snapshot/build.go` 里各有一处 `t.ID + "@" + strconv.Itoa(t.Version)`（或 k 的等价写法），改成调 `String()`。改完 `go build ./...`，确认 `strconv` 仍有别的用处，没有就删掉 import。
 
-- [ ] **Step 6: 跑测试**
+- [x] **Step 6: 跑测试**
 
 Run: `go test ./internal/core/... -v`
 Expected: PASS。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add internal/core

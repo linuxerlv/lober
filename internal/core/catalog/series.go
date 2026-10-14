@@ -33,39 +33,39 @@ type seriesRow struct {
 
 // familyTable 的顺序就是 Families 返回的顺序。
 var familyTable = []familyRow{
-	{"linux", "Linux"},
-	{"windows", "Windows"},
-	{"esxi", "ESXi"},
+	{FamilyLinux, "Linux"},
+	{FamilyWindows, "Windows"},
+	{FamilyESXi, "ESXi"},
 }
 
 // formatTable 里格式的显示名照 spec §2.1 与 C1 的写法，界面与文档才对得上：kickstart、
 // preseed、autoinstall、unattend 就是标识本身，另三种是 AutoYaST、Agama、ESXi ks。
 var formatTable = []formatRow{
-	{"kickstart", "linux", "kickstart"},
-	{"preseed", "linux", "preseed"},
-	{"autoinstall", "linux", "autoinstall"},
-	{"autoyast", "linux", "AutoYaST"},
-	{"agama", "linux", "Agama"},
-	{"unattend", "windows", "unattend"},
-	{"esxi-ks", "esxi", "ESXi ks"},
+	{FormatKickstart, FamilyLinux, "kickstart"},
+	{FormatPreseed, FamilyLinux, "preseed"},
+	{FormatAutoinstall, FamilyLinux, "autoinstall"},
+	{FormatAutoyast, FamilyLinux, "AutoYaST"},
+	{FormatAgama, FamilyLinux, "Agama"},
+	{FormatUnattend, FamilyWindows, "unattend"},
+	{FormatESXiKS, FamilyESXi, "ESXi ks"},
 }
 
 // seriesTable 的顺序就是 SeriesOf 与 SeriesOfFormat 返回的顺序。
 var seriesTable = []seriesRow{
-	{"rhel", "kickstart", "RHEL"},
-	{"rocky", "kickstart", "Rocky Linux"},
-	{"almalinux", "kickstart", "AlmaLinux"},
-	{"openeuler", "kickstart", "openEuler"},
-	{"opencloudos", "kickstart", "OpenCloudOS"},
-	{"debian", "preseed", "Debian"},
-	{"ubuntu", "autoinstall", "Ubuntu"},
-	{"sles15", "autoyast", "SLES 15"},
-	{"leap15", "autoyast", "openSUSE Leap 15"},
-	{"sles16", "agama", "SLES 16"},
-	{"leap16", "agama", "openSUSE Leap 16"},
-	{"windows-server", "unattend", "Windows Server"},
-	{"windows-desktop", "unattend", "Windows 桌面版"},
-	{"esxi", "esxi-ks", "ESXi"},
+	{SeriesRHEL, FormatKickstart, "RHEL"},
+	{SeriesRocky, FormatKickstart, "Rocky Linux"},
+	{SeriesAlmalinux, FormatKickstart, "AlmaLinux"},
+	{SeriesOpeneuler, FormatKickstart, "openEuler"},
+	{SeriesOpencloudos, FormatKickstart, "OpenCloudOS"},
+	{SeriesDebian, FormatPreseed, "Debian"},
+	{SeriesUbuntu, FormatAutoinstall, "Ubuntu"},
+	{SeriesSLES15, FormatAutoyast, "SLES 15"},
+	{SeriesLeap15, FormatAutoyast, "openSUSE Leap 15"},
+	{SeriesSLES16, FormatAgama, "SLES 16"},
+	{SeriesLeap16, FormatAgama, "openSUSE Leap 16"},
+	{SeriesWinServer, FormatUnattend, "Windows Server"},
+	{SeriesWinDesktop, FormatUnattend, "Windows 桌面版"},
+	{SeriesESXi, FormatESXiKS, "ESXi"},
 }
 
 // Valid 报告 f 是不是内置的族。族、格式、系都只认表里的原样写法，区分大小写、

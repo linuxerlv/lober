@@ -6,7 +6,6 @@ package snapshot
 import (
 	"maps"
 	"slices"
-	"strconv"
 
 	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
@@ -44,7 +43,7 @@ func Build(in params.Input) (model.Snapshot, []model.Problem) {
 	// 目录里的系都推得出族与格式，catalog 的测试守着这一点。不认识的系，模板也不可能合法地勾上，
 	// 所以与没勾同报。
 	if !slices.Contains(t.Series, series) || !series.Valid() {
-		subject := model.Subject{Kind: "template", ID: templateRef(t)}
+		subject := model.Subject{Kind: model.KindTemplate, ID: templateRef(t)}
 		return model.Snapshot{}, []model.Problem{model.NewProblem("series_not_ticked", subject, string(series))}
 	}
 	if ps := slotProblems(t, series.Format()); len(ps) > 0 {
@@ -72,7 +71,7 @@ func slotProblems(t model.Template, format catalog.Format) []model.Problem {
 			continue
 		}
 		slot := seg.Slot
-		at := model.Subject{Kind: "slot", ID: templateRef(t), Path: slot.Name, Line: seg.Line, Col: seg.Col}
+		at := model.Subject{Kind: model.KindSlot, ID: templateRef(t), Path: slot.Name, Line: seg.Line, Col: seg.Col}
 		if seen[slot.Name] {
 			out = append(out, model.NewProblem("slot_duplicate", at, slot.Name))
 		}
@@ -138,7 +137,7 @@ func unsafeSN(snap model.Snapshot) []model.Problem {
 	if model.IsSafeWord(snap.Host.SN) || !refersSN(snap) {
 		return nil
 	}
-	subject := model.Subject{Kind: "host", ID: snap.Host.SN}
+	subject := model.Subject{Kind: model.KindHost, ID: snap.Host.SN}
 	return []model.Problem{model.NewProblem("sn_unsafe_in_body", subject, snap.Host.SN)}
 }
 
@@ -202,7 +201,7 @@ func (b builder) slots() ([]model.SnapshotSlot, []model.Problem) {
 // Build 文档里插槽的那两条不变式靠的就是这一步。有问题时返回一条落在这个实例上的问题，Subject
 // 与参数求值的一致，不给实例。
 func (b builder) instance(slot scan.Slot, seq int, inst model.Instance) (model.SnapshotInstance, []model.Problem) {
-	where := model.Subject{Kind: "slot", ID: templateRef(b.in.Template), Path: model.InstancePath(slot.Name, seq)}
+	where := model.Subject{Kind: model.KindSlot, ID: templateRef(b.in.Template), Path: model.InstancePath(slot.Name, seq)}
 	fail := func(code model.Code, args ...any) (model.SnapshotInstance, []model.Problem) {
 		return model.SnapshotInstance{}, []model.Problem{model.NewProblem(code, where, args...)}
 	}
@@ -259,7 +258,7 @@ func (b builder) valuesOf(fieldKey func(param string) string, decls []model.Para
 
 // templateRef 是落在模板与实例上的问题的 Subject.ID，写成「模板 ID@版本」，与参数求值的一致。
 func templateRef(t model.Template) string {
-	return t.ID + "@" + strconv.Itoa(t.Version)
+	return (model.TemplateKey{ID: t.ID, Version: t.Version}).String()
 }
 
 // cloneStrings 复制一份映射；nil 也给出空映射。

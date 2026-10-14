@@ -30,7 +30,7 @@ func timeoutOK(sec int) bool {
 
 // versionID 是 hook 或模板的一个版本在 Subject 里的 ID：「ID@版本」。
 func versionID(id string, version int) string {
-	return id + "@" + strconv.Itoa(version)
+	return (model.HookKey{ID: id, Version: version}).String()
 }
 
 // Hook 判断 hook 版本 h 能不能批准（C8–C11，以及 C19 在片段上的部分）。
@@ -43,7 +43,7 @@ func versionID(id string, version int) string {
 // 另带行列。n 都从 1 起，重名的声明、勾了同一组系的两份实现因此分得开；系与参数名只出现在说明里。
 func Hook(h model.Hook) []model.Problem {
 	id := versionID(h.ID, h.Version)
-	hookSubj := model.Subject{Kind: "hook", ID: id}
+	hookSubj := model.Subject{Kind: model.KindHook, ID: id}
 	var out []model.Problem
 	if _, _, err := model.NormalizeName(h.Name); err != nil {
 		out = append(out, withSubject(err, hookSubj))
@@ -60,7 +60,7 @@ func Hook(h model.Hook) []model.Problem {
 	covered := map[catalog.Series]bool{} // 前面的实现已经覆盖的系
 	hasScript := false
 	for i, impl := range h.Impls {
-		subj := model.Subject{Kind: "impl", ID: id, Path: "impl/" + strconv.Itoa(i+1)}
+		subj := model.Subject{Kind: model.KindImpl, ID: id, Path: "impl/" + strconv.Itoa(i+1)}
 		out = append(out, checkImpl(impl, params, subj, covered)...)
 		hasScript = hasScript || impl.Kind == model.ImplScript
 	}

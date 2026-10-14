@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/lober/lober/internal/core/activation"
@@ -215,7 +214,7 @@ func CheckVersionKey(id string, version int) error {
 
 // VersionID 是 hook 或模板的一个版本在审计对象、Subject 与报错里的写法：「ID@版本」，与第 1 层判定里的相同。
 func VersionID(id string, version int) string {
-	return id + "@" + strconv.Itoa(version)
+	return (model.HookKey{ID: id, Version: version}).String()
 }
 
 // CheckSN 查按 SN 找任务时收到的 SN（FindOpenTask）：要是规范化之后的写法，与 model.NormalizeSN 的结果相同，否则报

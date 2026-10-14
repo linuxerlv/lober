@@ -13,7 +13,6 @@ import (
 	"cmp"
 	"maps"
 	"slices"
-	"strconv"
 
 	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
@@ -68,7 +67,7 @@ func ISOUsable(iso model.ISO, hosts []model.Host) []model.Problem {
 // 引用了已废弃的 hook 版本时挡住的就是这个版本，不回落到更早的已审批版本：回落会让操作员
 // 选的是当前版本、装出来的却是旧内容。下一步是作者升级引用，审批出新版本。
 func TemplateUsable(t model.Template, hooks map[model.HookKey]model.Hook, iso model.ISO) []model.Problem {
-	subject := model.Subject{Kind: "template", ID: t.ID + "@" + strconv.Itoa(t.Version)}
+	subject := model.Subject{Kind: model.KindTemplate, ID: (model.TemplateKey{ID: t.ID, Version: t.Version}).String()}
 	var out []model.Problem
 	if t.State != model.VersionApproved {
 		// 说明里给状态的称呼：中文显示名，不认识的回落到标识，空状态回落到「未知状态」（T5-1、C-7）。
@@ -142,7 +141,7 @@ func Batch(in BatchInput) BatchResult {
 }
 
 func hostSubject(h model.Host) model.Subject {
-	return model.Subject{Kind: "host", ID: h.SN}
+	return model.Subject{Kind: model.KindHost, ID: h.SN}
 }
 
 // platformConflicts 报 ISO 与一台主机的平台问题，架构在前、固件在后。iso 必须可用（调用方先查
