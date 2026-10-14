@@ -10,6 +10,7 @@ import (
 type route struct {
 	method, path, perm, audit, tag, summary string
 	req, resp, query                        any
+	headers                                 any
 	respVariants                            []any
 	errorData                               any
 	handle                                  gin.HandlerFunc
@@ -20,7 +21,7 @@ type RouteInfo struct{ Method, Path, Perm, Audit, Tag string }
 
 func (s *Server) Routes() []RouteInfo { return slices.Clone(s.routes) }
 func (s *server) allRoutes() []route {
-	return slices.Concat(s.authRoutes(), s.userRoutes(), s.hostRoutes(), []route{
+	return slices.Concat(s.authRoutes(), s.userRoutes(), s.hostRoutes(), s.isoRoutes(), []route{
 		{method: "GET", path: "/openapi.json", perm: PermAnyUser, tag: "schema", summary: "OpenAPI contract", resp: map[string]any{}, raw: true, handle: func(c *gin.Context) { c.JSON(200, s.owner.OpenAPI()) }},
 	})
 }

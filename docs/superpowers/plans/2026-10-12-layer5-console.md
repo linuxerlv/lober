@@ -4785,7 +4785,7 @@ git commit -m "feat(console): 主机的登记、修改、删除与 CSV 两步导
 
 **本任务的接缝**：`ISOSource` 的实现在第 4 层。这里换成一个记调用的内存 mock，测试因此能断言控制台真的把活儿交给了第 4 层、交下去的参数对，而不用等第 4 层存在（第 5 层设计 §1「不依赖第 4 层」）。`cmd/lober` 里的占位实现Task 14 补。
 
-- [ ] **Step 1: 写失败的测试——记调用的 mock**
+- [x] **Step 1: 写失败的测试——记调用的 mock**
 
 Modify `internal/console/server_test.go`，把 `stubISOSource` 换成：
 
@@ -4896,7 +4896,7 @@ func newStoreServer(t *testing.T) (*console.Server, store.Store, *mockISOSource,
 Run: `go test ./internal/console/ -v`
 Expected: FAIL，`undefined: newStoreServer` 的返回值个数不对付（Task 5、6 的用例还没改）。
 
-- [ ] **Step 2: 写失败的测试——ISO 端点**
+- [x] **Step 2: 写失败的测试——ISO 端点**
 
 Create `internal/console/isos_test.go`：
 
@@ -5317,7 +5317,7 @@ func (e errString) Error() string { return string(e) }
 Run: `go test ./internal/console/ -run 'Test登记ISO|Test列ISO|Test取ISO|Test废弃ISO|Test取消重试|Test分片上传|Test删ISO' -v`
 Expected: FAIL，`undefined: s.isoRoutes`、`undefined: mockISOSource`。
 
-- [ ] **Step 3: 写失败的测试——Content-Range 解析**
+- [x] **Step 3: 写失败的测试——Content-Range 解析**
 
 接着写在 `internal/console/isos_test.go`：
 
@@ -5359,7 +5359,7 @@ func Test解析ContentRange(t *testing.T) {
 Run: `go test ./internal/console/ -run 'Test解析ContentRange' -v`
 Expected: FAIL，`undefined: console.ParseContentRange`。
 
-- [ ] **Step 4: 实现 ISO 端点**
+- [x] **Step 4: 实现 ISO 端点**
 
 Create `internal/console/isos.go`：
 
@@ -5692,12 +5692,12 @@ func (s *server) allRoutes() []route {
 }
 ```
 
-- [ ] **Step 5: 跑测试**
+- [x] **Step 5: 跑测试**
 
 Run: `go test ./internal/console/ -v`
 Expected: 全部 PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add internal/console

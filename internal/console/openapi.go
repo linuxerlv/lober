@@ -81,8 +81,14 @@ func (s *Server) OpenAPI() map[string]any {
 				parameters = append(parameters, map[string]any{"name": p[1:], "in": "path", "required": true, "schema": map[string]any{"type": "string"}})
 			}
 		}
-		if r.query != nil {
-			t := reflect.TypeOf(r.query)
+		for _, input := range []struct {
+			value    any
+			location string
+		}{{r.query, "query"}, {r.headers, "header"}} {
+			if input.value == nil {
+				continue
+			}
+			t := reflect.TypeOf(input.value)
 			for t.Kind() == reflect.Pointer {
 				t = t.Elem()
 			}
@@ -99,7 +105,7 @@ func (s *Server) OpenAPI() map[string]any {
 					if name == "" {
 						name = f.Name
 					}
-					parameters = append(parameters, map[string]any{"name": name, "in": "query", "required": hasTag(f.Tag.Get("binding"), "required"), "schema": b.value(f.Type)})
+					parameters = append(parameters, map[string]any{"name": name, "in": input.location, "required": hasTag(f.Tag.Get("binding"), "required"), "schema": b.value(f.Type)})
 				}
 			}
 		}

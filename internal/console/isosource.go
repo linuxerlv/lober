@@ -19,6 +19,19 @@ type ISOSource interface {
 }
 type SourceKind string
 
+// ISOSourceState is the read-only source/range contract consumed by HTTP.
+type ISOSourceState interface {
+	SourcesOf(context.Context, string) ([]store.Source, error)
+	GetSource(context.Context, string, string) (store.Source, bool, error)
+	RangesOf(context.Context, string, string) ([]store.Range, error)
+}
+
+// ISODeletion belongs to assembly: persist a snapshot before audited deletion,
+// then keep retrying byte cleanup durably. It must not delete if preparation fails.
+type ISODeletion interface {
+	Delete(context.Context, string, int64, store.Audit) error
+}
+
 const (
 	SourceURL    SourceKind = "url"
 	SourceUpload SourceKind = "upload"
