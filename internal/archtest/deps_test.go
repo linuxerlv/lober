@@ -63,15 +63,16 @@ const (
 	layerStore   layer = "存储层"
 	layerRender  layer = "渲染"
 	layerBuiltin layer = "内置内容"
+	layerISO     layer = "ISO"
 	layerGuard   layer = "守卫"
 )
 
 // layers 是 layer 的全部取值，按日志里的先后排。
-var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerGuard}
+var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerGuard}
 
 // minChecked 是 Test全模块依赖守卫 每层至少要查到的包数。删了某层的包就改这里；渲染与内置内容的包加进来以后，
 // 补上它们的下限——忘了补会由「查到了包的层都登记了下限」那一条报出来。
-var minChecked = map[layer]int{layerCore: 7, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerGuard: 1}
+var minChecked = map[layer]int{layerCore: 7, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerGuard: 1}
 
 // minDirs 是 moduleSourceDirs 至少要遍历到的目录数。目录遍历没有别的防线：sourceRoots 少了一项、或者
 // checkModule 收到空的 dirs，ruleListed（整包被构建约束排除的目录）与 go test 的缓存跟踪都会静默失效，
@@ -258,6 +259,9 @@ func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[
 			found = append(found, checkSources(fsys, p, checkStoreFile)...)
 		case layerRender, layerBuiltin:
 			found = append(found, checkPackage(fsys, p, checkLayer3File)...)
+		case layerISO:
+			found = append(found, ignoredFiles(p)...)
+			found = append(found, checkSources(fsys, p, checkISOFile)...)
 		case layerGuard:
 			found = append(found, checkGuardFiles(p)...)
 		default:
@@ -280,6 +284,8 @@ func layerOf(pkg string) layer {
 		return layerRender
 	case under(pkg, pkgBuiltin):
 		return layerBuiltin
+	case under(pkg, pkgISO):
+		return layerISO
 	case pkg == pkgGuard:
 		return layerGuard
 	}

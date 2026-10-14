@@ -44,6 +44,17 @@ var appendixCodes = map[Category][]Code{
 
 // extraCodes 是附录之外、按计划「并行执行」一节追加在代码表末尾的代码，各写明来由。
 var extraCodes = map[Code]Category{
+	"iso_media_unrecognized":   CategoryIncompatible,
+	"iso_series_unrecognized":  CategoryIncompatible,
+	"iso_series_mismatch":      CategoryIncompatible,
+	"iso_content_mismatch":     CategoryIncompatible,
+	"iso_version_missing":      CategoryIncompatible,
+	"iso_extra_source_invalid": CategoryIncompatible,
+	"iso_repo_incomplete":      CategoryIncompatible,
+	"iso_artifact_missing":     CategoryIncompatible,
+	"iso_tool_missing":         CategoryIncompatible,
+	"iso_wim_compressed":       CategoryIncompatible,
+	"iso_source_rejected":      CategoryInvalid,
 	// 整层验收：{{sys:sn}} 要代入的主机 SN 不是安全词，由 snapshot.Build 报。
 	"sn_unsafe_in_body": CategoryIncompatible,
 
@@ -99,9 +110,9 @@ func TestCode表与附录总表逐项一致(t *testing.T) {
 		}
 		want[c] = cat
 	}
-	// 58 appendix + 1 acceptance + 10 fixups + 1 layer2 + 1 layer2 fixup + 9 layer3.
-	if len(want) != 81 {
-		t.Fatalf("附录加上追加的代码应共 81 个，测试里有 %d 个", len(want))
+	// 58 appendix + 1 acceptance + 10 fixups + 1 layer2 + 1 layer2 fixup + 10 layer3 + 11 layer4.
+	if len(want) != 92 {
+		t.Fatalf("附录加上追加的代码应共 92 个，测试里有 %d 个", len(want))
 	}
 	for c, cat := range want {
 		if got := c.Category(); got != cat {

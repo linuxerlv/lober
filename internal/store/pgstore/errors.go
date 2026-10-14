@@ -53,7 +53,10 @@ func translate(err error, del bool, holder func(field string) string) error {
 			return &store.DuplicateError{Field: field, Existing: existing}
 		}
 		return errorf(store.ErrConflict, "撞上了 %s，再查时占着这个 %s 的那一方已经变了：重读之后再判断", pe.ConstraintName, field)
-	case codeForeign:
+	case codeForeign, codeRestrict:
+		if pe.Code == codeRestrict && !del {
+			return err
+		}
 		if !knownConstraint(pe.ConstraintName, true) {
 			return err
 		}
@@ -61,10 +64,6 @@ func translate(err error, del bool, holder func(field string) string) error {
 			return errorf(store.ErrReferenced, "还有别的记录经外键 %s 引用它", pe.ConstraintName)
 		}
 		return errorf(store.ErrNotFound, "外键 %s 要引用的记录不存在", pe.ConstraintName)
-	case codeRestrict:
-		if del && knownConstraint(pe.ConstraintName, true) {
-			return errorf(store.ErrReferenced, "还有别的记录经外键 %s 引用它", pe.ConstraintName)
-		}
 	case codeCheck:
 		if knownConstraint(pe.ConstraintName, false) {
 			return errorf(store.ErrInvalid, "写入的值违反了 %s 表的 CHECK %s", pe.TableName, pe.ConstraintName)

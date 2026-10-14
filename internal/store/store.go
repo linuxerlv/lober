@@ -10,6 +10,7 @@ import (
 type Store interface {
 	Hosts
 	ISOs
+	ISOSources
 	Hooks
 	Templates
 	Tasks

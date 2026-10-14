@@ -433,7 +433,29 @@ var codeTable = map[Code]codeSpec{
 	"render_windows_env_limit": {CategoryInvalid, 1,
 		"Windows 目标解释器无法完整保留参数「%[1]v」的环境变量值",
 		"缩短该参数取值，使环境变量完整长度不超过目标解释器的限制"},
+	// 第 4 层：Subject.Kind=iso，ID=ISO.ID。识别问题 Path=media/series/version/arch，
+	// 来源问题 Path=source.<role>（主介质为 source）；制品问题 Path=artifacts.<role>，工具问题 Path=tools.<name>。
+	"iso_media_unrecognized":   {CategoryIncompatible, 0, "认不出安装介质的格式", "换一个支持的完整安装 ISO"},
+	"iso_series_unrecognized":  {CategoryIncompatible, 1, "认出了 %[1]v 格式，但认不出内置系", "换一个支持的安装 ISO，或核实介质内的产品信息"},
+	"iso_series_mismatch":      {CategoryIncompatible, 2, "声明的系 %[1]v 与介质的系 %[2]v 不一致", "按介质实际的系重新创建 ISO"},
+	"iso_content_mismatch":     {CategoryIncompatible, 2, "介质摘要不符：期望 %[1]v，实际 %[2]v", "核对下载链接或上传文件，再重试获取"},
+	"iso_version_missing":      {CategoryIncompatible, 1, "介质内取不出有效的%[1]v", "换一个带完整产品信息的安装 ISO；不能按文件名猜版本"},
+	"iso_extra_source_invalid": {CategoryIncompatible, 1, "附加来源 %[1]v 缺失、不完整或与主介质的平台和版本不符", "登记同版本、同架构的附加来源，获取完成后重新导入"},
+	"iso_repo_incomplete":      {CategoryIncompatible, 1, "安装仓库缺少 %[1]v", "换一个带完整仓库的安装 ISO，再重新导入"},
+	"iso_artifact_missing":     {CategoryIncompatible, 1, "安装制品缺少 %[1]v", "换一个完整安装 ISO，再重新导入"},
+	"iso_tool_missing":         {CategoryIncompatible, 1, "Windows 工具目录缺少 %[1]v", "把对应工具放入配置的工具目录，再重新导入"},
+	"iso_wim_compressed":       {CategoryIncompatible, 0, "WIM 的 XML 资源使用不支持的压缩方式", "换一个 XML 资源未压缩或使用 XPRESS 的 install.wim，再重新导入"},
+	"iso_source_rejected":      {CategoryInvalid, 1, "来源不合法：%[1]v", "核对链接或上传范围；本地目录受限时请运维调整允许的目录"},
 }
+
+// ISO 层选用的固定措辞集中在代码表文件；跨包调用需要导出。
+const (
+	ISOReasonURL    = "链接只支持 http 与 https，不能指向回环、链路本地或无效地址"
+	ISOReasonPath   = "本地路径不在允许登记的目录里"
+	ISOReasonChunk  = "分片越界、大小或内容与已登记的字节不符"
+	ISOVersionLabel = "版本"
+	ISOArchLabel    = "架构"
+)
 
 // 下面是代码表的补充：产出代码的函数在本包里、可选的措辞（不合法的原因、各类型
 // 期望的格式、字段的称呼）又是固定几种的，每种措辞登记在这里，由那个函数选一条作为
