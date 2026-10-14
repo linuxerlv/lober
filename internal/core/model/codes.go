@@ -466,6 +466,10 @@ const (
 // 控制台非业务错误的展示文字，不把底层错误直接回给客户端。
 const (
 	ConsoleBadRequest             = "请求的内容不合法"
+	ConsoleCSVRead                = "CSV 读不成：%v"
+	ConsoleCSVHeader              = "CSV 表头重复或属性键不合法：%q"
+	ConsoleCSVNoSN                = "CSV 表头必须有 sn 一列"
+	ConsoleCSVEmpty               = "CSV 至少需要一行主机记录"
 	ConsoleUnauthorized           = "未登录或会话已失效"
 	ConsoleForbidden              = "没有执行这项操作的权限"
 	ConsoleNotFound               = "找不到这条记录"

@@ -3932,7 +3932,7 @@ git commit -m "feat(console): 登录、会话与用户管理，权限矩阵与�
   - `(*server).hostRoutes() []route`
   - `parseHostCSV(data []byte, known func(string) bool) (csvPlan, []model.Host)`
 
-- [ ] **Step 1: 写失败的测试——CSV 解析**
+- [x] **Step 1: 写失败的测试——CSV 解析**
 
 Create `internal/console/csv_test.go`：
 
@@ -4063,7 +4063,7 @@ func TestCSV列数对不上(t *testing.T) {
 Run: `go test ./internal/console/ -run 'Test解析主机CSV|TestCSV' -v`
 Expected: FAIL，`undefined: console.ParseHostCSV`、`undefined: console.ParseHostCSVErr`。
 
-- [ ] **Step 2: 写失败的测试——主机端点**
+- [x] **Step 2: 写失败的测试——主机端点**
 
 Create `internal/console/hosts_test.go`：
 
@@ -4387,7 +4387,7 @@ func TestCSV导入写审计(t *testing.T) {
 Run: `go test ./internal/console/ -run 'Test登记主机|Test列主机|Test改主机|Test删主机|TestCSV导入' -v`
 Expected: FAIL，`undefined: hostRequest`、`undefined: s.hostRoutes`。
 
-- [ ] **Step 3: 实现 CSV 解析**
+- [x] **Step 3: 实现 CSV 解析**
 
 Create `internal/console/csv.go`：
 
@@ -4546,7 +4546,7 @@ func atoiOr(s string, def int) int {
 
 `csv.go` 里 `_ = first` 那行删掉，`first` 改成 `_`：`if _, ok := seen[normalized]; ok {`。
 
-- [ ] **Step 4: 实现主机端点**
+- [x] **Step 4: 实现主机端点**
 
 Create `internal/console/hosts.go`：
 
@@ -4750,12 +4750,12 @@ func (s *server) allRoutes() []route {
 }
 ```
 
-- [ ] **Step 5: 跑测试**
+- [x] **Step 5: 跑测试**
 
 Run: `go test ./internal/console/ -v`
 Expected: 全部 PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add internal/console

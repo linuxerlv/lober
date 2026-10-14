@@ -43,6 +43,13 @@ func (s *Server) OpenAPI() map[string]any {
 		if r.resp != nil {
 			success = b.value(reflect.TypeOf(r.resp))
 		}
+		if len(r.respVariants) > 0 {
+			variants := []any{success}
+			for _, variant := range r.respVariants {
+				variants = append(variants, b.value(reflect.TypeOf(variant)))
+			}
+			success = map[string]any{"oneOf": variants}
+		}
 		if r.stream {
 			success = map[string]any{"type": "string"}
 		} else if !r.raw {
@@ -53,6 +60,9 @@ func (s *Server) OpenAPI() map[string]any {
 			data := any(map[string]any{"type": "object", "nullable": true, "enum": []any{nil}})
 			if status == 409 || status == 422 {
 				data = map[string]any{"oneOf": []any{problem, batch, map[string]any{"type": "object", "nullable": true, "enum": []any{nil}}}}
+			}
+			if status == 422 && r.errorData != nil {
+				data.(map[string]any)["oneOf"] = append(data.(map[string]any)["oneOf"].([]any), b.value(reflect.TypeOf(r.errorData)))
 			}
 			responses[fmt.Sprint(status)] = map[string]any{"description": "Request failed", "content": map[string]any{"application/json": map[string]any{"schema": responseEnvelope(data, status)}}}
 		}
