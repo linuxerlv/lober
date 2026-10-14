@@ -10,6 +10,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 )
 
 type Clock func() int64
@@ -39,13 +40,14 @@ type Server struct {
 	routes []RouteInfo
 }
 type server struct {
-	deps     Deps
-	sessions *sessions
-	hub      Notifier
-	logger   *slog.Logger
-	index    map[string]route
-	routes   []route
-	owner    *Server
+	deps              Deps
+	sessions          *sessions
+	hub               Notifier
+	logger            *slog.Logger
+	index             map[string]route
+	routes            []route
+	owner             *Server
+	templateSelection sync.RWMutex
 }
 
 func New(d Deps) *Server {

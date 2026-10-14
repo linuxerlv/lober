@@ -7984,7 +7984,7 @@ git commit -m "feat(console): 模板预览调 render.Render，与真实下发同
 
 向导五步严格照总 spec §5.3。第三步起服务端**不信任前端**的筛选结果：提交时整批重跑准入判定、逐台重跑参数求值、逐台构建快照，一次 `CreateTasks`（C30）。
 
-- [ ] **Step 1: 写失败的测试——选主机**
+- [x] **Step 1: 写失败的测试——选主机**
 
 Create `internal/console/wizard_test.go`：
 
@@ -8363,7 +8363,7 @@ func Test向导提交旧版本(t *testing.T) {
 Run: `go test ./internal/console/ -run 'Test向导' -v`
 Expected: FAIL，`undefined: s.wizardRoutes`。
 
-- [ ] **Step 2: 实现向导**
+- [x] **Step 2: 实现向导**
 
 Create `internal/console/wizard.go`：
 
@@ -8770,12 +8770,12 @@ func enteredMap(in map[string]string) map[params.FieldKey]string {
 
 **`wizardSubmitResult.Tasks` 直接给 `[]model.Task`**：任务带整份快照，向导第 5 步要列出每台的 SN 与登记属性（总 spec §5.3 第 5 步），快照里都有。第 6 层若要更瘦的形状，在这里加一个 `taskItem` 就行。
 
-- [ ] **Step 3: 跑测试**
+- [x] **Step 3: 跑测试**
 
 Run: `go test ./internal/console/ -v`
 Expected: 全部 PASS。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add internal/console

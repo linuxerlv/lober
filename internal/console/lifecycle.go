@@ -127,6 +127,8 @@ func (s *server) submitTemplate(c *gin.Context) {
 	s.stepTemplate(c, s.deps.Templates.SubmitTemplate, "")
 }
 func (s *server) approveTemplate(c *gin.Context) {
+	s.templateSelection.Lock()
+	defer s.templateSelection.Unlock()
 	s.stepTemplate(c, func(ctx context.Context, k model.TemplateKey, rev int64, a store.Audit) error {
 		return s.deps.Templates.ApproveTemplate(ctx, k, rev, userOf(c).Username, a)
 	}, "")
@@ -138,6 +140,8 @@ func (s *server) rejectTemplate(c *gin.Context) {
 	}
 }
 func (s *server) deprecateTemplate(c *gin.Context) {
+	s.templateSelection.Lock()
+	defer s.templateSelection.Unlock()
 	s.stepTemplate(c, s.deps.Templates.DeprecateTemplate, "")
 }
 func (s *server) validateTemplate(c *gin.Context) {

@@ -21,7 +21,7 @@ type RouteInfo struct{ Method, Path, Perm, Audit, Tag string }
 
 func (s *Server) Routes() []RouteInfo { return slices.Clone(s.routes) }
 func (s *server) allRoutes() []route {
-	return slices.Concat(s.authRoutes(), s.userRoutes(), s.hostRoutes(), s.isoRoutes(), s.hookRoutes(), s.templateRoutes(), []route{
+	return slices.Concat(s.authRoutes(), s.userRoutes(), s.hostRoutes(), s.isoRoutes(), s.hookRoutes(), s.templateRoutes(), s.wizardRoutes(), []route{
 		{method: "GET", path: "/openapi.json", perm: PermAnyUser, tag: "schema", summary: "OpenAPI contract", resp: map[string]any{}, raw: true, handle: func(c *gin.Context) { c.JSON(200, s.owner.OpenAPI()) }},
 	})
 }
