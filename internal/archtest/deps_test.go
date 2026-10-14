@@ -78,7 +78,7 @@ var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerISO,
 
 // minChecked 是 Test全模块依赖守卫 每层至少要查到的包数。删了某层的包就改这里；渲染与内置内容的包加进来以后，
 // 补上它们的下限——忘了补会由「查到了包的层都登记了下限」那一条报出来。
-var minChecked = map[layer]int{layerCore: 7, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 0, layerGuard: 1}
+var minChecked = map[layer]int{layerCore: 7, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1}
 
 // minDirs 是 moduleSourceDirs 至少要遍历到的目录数。目录遍历没有别的防线：sourceRoots 少了一项、或者
 // checkModule 收到空的 dirs，ruleListed（整包被构建约束排除的目录）与 go test 的缓存跟踪都会静默失效，
@@ -274,7 +274,7 @@ func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[
 			found = append(found, ignoredFiles(p)...)
 			found = append(found, checkSources(fsys, p, checkConsoleFile)...)
 		case layerAssembly:
-			found = append(found, ignoredFiles(p)...)
+			found = append(found, assemblyIgnoredFiles(fsys, p)...)
 			found = append(found, checkSources(fsys, p, checkAssemblyFile)...)
 		case layerGuard:
 			found = append(found, checkGuardFiles(p)...)

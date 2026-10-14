@@ -1,9 +1,9 @@
 # make check 依次跑格式、vet、测试、竞态检测和交叉编译，五步全过才算绿。
 # 各目标只用 go、gofmt 和 shell 内建命令，Git Bash 与 Linux 上都能跑。
 
-.PHONY: check fmt vet archcheck test race cross
+.PHONY: check fmt vet archcheck test race cross gen
 
-check: fmt vet test race cross
+check: fmt vet test race cross gen
 
 # 只查 go list 列出的包目录：主目录的 web/node_modules 里混有第三方 .go 文件，
 # gofmt -l . 会把它们也算进来。go list 一个包都没列出时，不带参数的 gofmt
@@ -32,3 +32,8 @@ race: archcheck
 # 旧系统出过在 Windows 上能编译、却编不出 Linux 版的问题（spec §7.1）。
 cross:
 	GOOS=linux GOARCH=amd64 go build ./...
+
+# Wire's diff command regenerates in memory, returns nonzero on drift, and
+# never changes the worktree or requires a clean staging area.
+gen:
+	WIRE_LOADER_MODE=fallback WIRE_LOADER_ARTIFACTS=0 go tool wire diff ./cmd/lober

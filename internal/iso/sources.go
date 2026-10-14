@@ -243,6 +243,16 @@ func (s *Sources) retrySource(ctx context.Context, src store.Source, a store.Aud
 }
 
 func (s *Sources) Reimport(ctx context.Context, id string, a store.Audit) error {
+	if err := s.RequestReimport(ctx, id, a); err != nil {
+		return err
+	}
+	return s.Import(ctx, id)
+}
+
+// RequestReimport persists accepted work before returning. Recover can resume
+// it after a restart; the assembly point invokes Import in its own worker.
+// Reimport retains the synchronous API for existing callers.
+func (s *Sources) RequestReimport(ctx context.Context, id string, a store.Audit) error {
 	if err := store.CheckAudit(a); err != nil {
 		return err
 	}
@@ -265,7 +275,9 @@ func (s *Sources) Reimport(ctx context.Context, id string, a store.Audit) error 
 	if _, err = s.store.SaveSource(ctx, sources[0], a); err != nil {
 		return err
 	}
-	return s.Import(ctx, id)
+	item.State = model.ISOAcquiring
+	_, err = s.store.UpdateISO(ctx, item)
+	return err
 }
 
 type Progress struct {

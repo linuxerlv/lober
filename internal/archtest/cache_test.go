@@ -14,7 +14,8 @@ import (
 func TestIncrementalGateRejectsPackageInExistingRoot(t *testing.T) {
 	root := filepath.Dir(goModPath(t))
 	tmp := t.TempDir()
-	cmd := exec.Command("git", "ls-files", "-z", "--", "go.mod", "go.sum", "Makefile", "internal")
+	tracked := append([]string{"ls-files", "-z", "--", "go.mod", "go.sum", "Makefile"}, sourceRoots...)
+	cmd := exec.Command("git", tracked...)
 	cmd.Dir = root
 	files, e := cmd.Output()
 	if e != nil {

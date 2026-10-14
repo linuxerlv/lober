@@ -9905,7 +9905,7 @@ git commit -m "feat(console): 审计查询与 CSV 导出，权限码与审计的
 
 **本任务是唯一知道每个接口由谁实现的包**（总 spec §6.1）。两个占位实现都明确标注归谁替换，且一律拒绝而不是写临时规则（第 5 层设计 §6.1、§6.2）。
 
-- [ ] **Step 1: 加依赖与 tool 指令**
+- [x] **Step 1: 加依赖与 tool 指令**
 
 Run:
 ```bash
@@ -9918,7 +9918,7 @@ Expected: `go.mod` 的 require 里有 gin 与 yaml.v3，并有一行 `tool githu
 
 若 `go get -tool` 报 `no such tool`，说明 goforj/wire v1.2.0 的主包不在 `cmd/wire`。用 `go list -m -json github.com/goforj/wire@v1.2.0` 看它的 Go 文件布局，把 tool 路径改成真实的那一个；改不动就照总 spec §8 的退路把 wire 也改成手写构造（`newApp` 一个函数，顺序写在注释里），并在设计文档 §8 记一笔。
 
-- [ ] **Step 2: 写失败的测试——配置**
+- [x] **Step 2: 写失败的测试——配置**
 
 Create `cmd/lober/config_test.go`：
 
@@ -10011,7 +10011,7 @@ func Test配置读不出来(t *testing.T) {
 Run: `go test ./cmd/lober/ -run 'Test读配置|Test环境变量|Test配置' -v`
 Expected: FAIL，`undefined: loadConfig`。
 
-- [ ] **Step 3: 实现配置**
+- [x] **Step 3: 实现配置**
 
 Create `cmd/lober/config.go`：
 
@@ -10079,7 +10079,7 @@ func loadConfig(path string) (config, error) {
 }
 ```
 
-- [ ] **Step 4: 实现内置内容装载、两个占位实现与装饰器**
+- [x] **Step 4: 实现内置内容装载、两个占位实现与装饰器**
 
 Create `cmd/lober/builtin.go`：
 
@@ -10292,7 +10292,7 @@ var _ = errors.Is // 透传约定写在类型注释里，这里只为 import 不
 
 **装饰器只包三个方法是个刻意的起点**：它证明切面的形状（透明、错误原样透传），其余方法经嵌入的 `store.Store` 直接走。第 7 层给状态机套日志时照这个样子加；要包全部方法，就把 `loggingStore` 改成手写全部十七个接口方法，或者换回 gowrap。
 
-- [ ] **Step 5: 写 wire 与 main**
+- [x] **Step 5: 写 wire 与 main**
 
 Create `cmd/lober/wire.go`：
 
@@ -10459,7 +10459,7 @@ func consoleDepsOf(st store.Store, src console.ISOSource, ctl console.TaskContro
 
 `wire.go` 的 `wire.Build` 里把 `pgstore.Open` 换成 `openStore`。
 
-- [ ] **Step 6: 生成 wire 并加 Makefile 的一步**
+- [x] **Step 6: 生成 wire 并加 Makefile 的一步**
 
 Run:
 ```bash
@@ -10518,7 +10518,7 @@ gen:
 
 `go tool wire` 的路径以 Step 1 定下的 tool 指令为准；若 tool 名不是 `wire`，这里跟着改。
 
-- [ ] **Step 7: 起一次，确认真的能跑**
+- [x] **Step 7: 起一次，确认真的能跑**
 
 Run: `go build -o /tmp/lober ./cmd/lober && /tmp/lober --help`
 Expected: 打印用法或直接起不来（缺配置），但不该是 panic。
@@ -10533,12 +10533,12 @@ kill %1
 ```
 Expected: 登录返回 401（初始管理员的口令还没设）或 200；接口通了就说明装配点成了。这一**不在 make check 里**：它要一个真的 PostgreSQL，测试库的连接串由 `pgtest` 管，装配点不读它（总 spec §6.4）。
 
-- [ ] **Step 8: 跑 make check**
+- [x] **Step 8: 跑 make check**
 
 Run: `make check`
 Expected: 六步全过。`gen` 一步没有 diff。
 
-- [ ] **Step 9: 提交**
+- [x] **Step 9: 提交**
 
 ```bash
 git add cmd/lober go.mod go.sum Makefile
