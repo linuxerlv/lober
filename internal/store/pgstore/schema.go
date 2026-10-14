@@ -59,6 +59,14 @@ const openTaskIndex = "idx_tasks_open"
 // 列的十张表都在这里。
 var tables = []table{
 	{
+		name: "users", primary: []string{"username"},
+		checks: []check{
+			{"chk_users_role", "CHECK (role = ANY (ARRAY['viewer'::text, 'operator'::text, 'hook-author'::text, 'hook-approver'::text, 'admin'::text]))"},
+			{"chk_users_created_at", "CHECK (created_at > 0)"},
+			{"chk_users_rev", "CHECK (rev >= 1)"},
+		},
+	},
+	{
 		name: "iso_sources", primary: []string{"iso_id", "role"},
 		foreign: []foreign{{name: "fk_iso_sources_iso", columns: []string{"iso_id"}, refTable: "isos", refColumns: []string{"id"}, onDelete: "CASCADE"}},
 		checks: []check{

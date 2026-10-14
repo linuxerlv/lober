@@ -446,6 +446,8 @@ var codeTable = map[Code]codeSpec{
 	"iso_tool_missing":         {CategoryIncompatible, 1, "Windows 工具目录缺少 %[1]v", "把对应工具放入配置的工具目录，再重新导入"},
 	"iso_wim_compressed":       {CategoryIncompatible, 0, "WIM 的 XML 资源使用不支持的压缩方式", "换一个 XML 资源未压缩或使用 XPRESS 的 install.wim，再重新导入"},
 	"iso_source_rejected":      {CategoryInvalid, 1, "来源不合法：%[1]v", "核对链接或上传范围；本地目录受限时请运维调整允许的目录"},
+	// 用户由存储契约定义，Subject.Kind 不属于核心的八个领域对象。
+	"user_field_invalid": {CategoryInvalid, 1, "用户字段「%[1]v」不合法", "用户名用 1–32 个小写字母、数字或下划线并以字母开头；角色从内置五种中选择；新建时必须提供口令"},
 }
 
 // ISO 层选用的固定措辞集中在代码表文件；跨包调用需要导出。
@@ -473,6 +475,9 @@ const (
 	ConsoleReferenced   = "还有别的记录引用着它，不能删"
 	ConsoleInternal     = "服务端内部错误"
 	ConsoleRejected     = "这批请求没有通过"
+	UserLabelUsername   = "用户名"
+	UserLabelRole       = "角色"
+	UserLabelPassword   = "口令散列"
 )
 
 // sn_invalid 的原因，NormalizeSN 选用。

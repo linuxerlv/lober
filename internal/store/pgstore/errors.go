@@ -21,6 +21,7 @@ const (
 // schema.go 的期望值一致，由 Test唯一约束的翻译表与期望值一致 守着。
 var duplicateFields = map[string]string{
 	"hosts_pkey":             "sn",
+	"users_pkey":             "username",
 	"idx_isos_sha256":        "sha256",
 	"idx_hooks_name_key":     "name",
 	"idx_templates_name_key": "name",

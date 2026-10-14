@@ -1249,7 +1249,7 @@ git commit -m "feat(core): 导出全局词表与 Subject.Kind 常量，「ID@版
 
 用户与角色落库，会话不放库（第 5 层设计 §5）：会话不是业务数据，单进程放内存就够，放进库里要额外处理过期清理，而 AutoMigrate 表达不了。
 
-- [ ] **Step 1: 写失败的测试——CheckUser 与 Role**
+- [x] **Step 1: 写失败的测试——CheckUser 与 Role**
 
 Create `internal/store/users_test.go`：
 
@@ -1349,7 +1349,7 @@ func TestRoles返回副本(t *testing.T) {
 Run: `go test ./internal/store/ -run 'TestCheckUser|TestRole|TestRoles' -v`
 Expected: FAIL，`undefined: CheckUser`、`undefined: User`、`undefined: RoleOperator`。
 
-- [ ] **Step 2: 写失败的测试——契约用例**
+- [x] **Step 2: 写失败的测试——契约用例**
 
 Create `internal/store/pgstore/contract_users_test.go`。先看一眼 `contract_hosts_test.go` 的用例写法（`runCases`、`must`、`wantIs`、`wantDuplicate`、`wantEqual`、`anAudit`、`wantUnchanged`、`pagesFrom`），照它写：
 
@@ -1502,7 +1502,7 @@ Expected: FAIL，`undefined: s.CreateUser`、`undefined: store.RoleOperator`。
 
 Step 2 里 `userCreateInvalid`、`userUpdateToZero`、`userListDefaultLimit`、`userDisabledReadBack` 四个用例照 `contract_hosts_test.go` 的同名用例改写：`userCreateInvalid` 逐条传 `TestCheckUser每条前提各一个反例` 里的坏记录，断言 `wantProblems(t, err, store.ErrInvalid, ...)`；`userUpdateToZero` 把显示名清空、角色置 viewer、禁用置 true，断言读回来就是这些零值；`userListDefaultLimit` 建 101 个用户，断言第一页 100 条、第二页 1 条；`userDisabledReadBack` 建一个禁用的，断言读得回来且 `Disabled` 为 true、`Password` 原样。
 
-- [ ] **Step 3: 实现契约与纯函数**
+- [x] **Step 3: 实现契约与纯函数**
 
 Create `internal/store/users.go`：
 
@@ -1622,7 +1622,7 @@ type Store interface {
 
 并在 `doc.go` 的能力清单里补一句「用户与角色（第 5 层加，会话不在库里）」。
 
-- [ ] **Step 4: 实现 pgstore**
+- [x] **Step 4: 实现 pgstore**
 
 Create `internal/store/pgstore/users.go`：
 
@@ -1765,7 +1765,7 @@ var _ = errors.Is
 
 `s.read`、`s.write`、`translate`、`addAudits`、`page`、`storable` 都是 `pgstore` 既有的辅助，签名照 `hosts.go`、`open.go` 的用法。`errors` 只为 `var _ = errors.Is` 占一行，实现完删掉该行与 import。
 
-- [ ] **Step 5: 加表**
+- [x] **Step 5: 加表**
 
 Modify `internal/store/pgstore/schema.go`，在 `tables` 末尾加：
 
@@ -1784,12 +1784,12 @@ Modify `internal/store/pgstore/schema.go`，在 `tables` 末尾加：
 	},
 ```
 
-- [ ] **Step 6: 跑测试**
+- [x] **Step 6: 跑测试**
 
 Run: `go test ./internal/store/... -v`
 Expected: PASS。`Test表结构` 认得出新表；`Test契约用户` 全绿。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add internal/store

@@ -1,5 +1,5 @@
 // Package store 是仓储的契约（spec §4.2）：每个聚合一个接口（Hosts、ISOs、Hooks、Templates、Tasks、Events、
-// AuditLog），合成 Store；外加错误、审计、事件、分页这些共用类型，以及与存储无关的纯函数。
+// AuditLog、Users），合成 Store；外加错误、审计、事件、分页这些共用类型，以及与存储无关的纯函数。
 //
 // 实现只有 PostgreSQL 一份（pgstore），测试也连 PostgreSQL。调用方（第 4、5、7 层与内置内容的装载）只依赖本包，
 // 不依赖 pgstore。不用查库就能定下的规则（入参与版本状态的检查、生成 ID、游标的编解码、提取模板的 hook 引用、
