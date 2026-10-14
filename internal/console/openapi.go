@@ -189,7 +189,13 @@ func (b *schemaBuilder) definition(t reflect.Type) map[string]any {
 		required := make([]string, 0)
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
-			if f.PkgPath != "" {
+			fieldType := f.Type
+			for fieldType.Kind() == reflect.Pointer {
+				fieldType = fieldType.Elem()
+			}
+			// encoding/json exposes exported fields of an anonymous private
+			// struct; the struct's own unexported name does not hide its content.
+			if f.PkgPath != "" && !(f.Anonymous && fieldType.Kind() == reflect.Struct) {
 				continue
 			}
 			tag := f.Tag.Get("json")

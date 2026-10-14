@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/gin-gonic/gin"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -100,5 +101,21 @@ func TestOpenAPI编码两次相同且返回独立文档(t *testing.T) {
 	a["paths"].(map[string]any)["changed"] = true
 	if reflect.DeepEqual(s.OpenAPI(), a) {
 		t.Fatal("shared doc")
+	}
+}
+
+func TestOpenAPI草稿嵌入内容与Rev都在请求schema(t *testing.T) {
+	s, _, _ := newHTTPServer(t)
+	defs := s.OpenAPI()["components"].(map[string]any)["schemas"].(map[string]any)
+	for _, name := range []string{"HookDraftRequest", "TemplateDraftRequest"} {
+		def := defs[name].(map[string]any)
+		fields := def["properties"].(map[string]any)
+		if fields["rev"] == nil || fields["params"] == nil || fields["name"] == nil {
+			t.Fatal(name, fields)
+		}
+		required := def["required"].([]string)
+		if !slices.Contains(required, "rev") {
+			t.Fatal(required)
+		}
 	}
 }

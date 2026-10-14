@@ -5725,7 +5725,7 @@ git commit -m "feat(console): ISO 的登记、列表、废弃、删除与来源�
 
 **保存与激活的分工**：草稿存得下的都能存（总 spec §3 总则），完备性只在激活时要求。所以 `PUT .../versions/{version}` 只查仓储的前提（能不能改这份草稿、文本存不存得下），不跑激活判定；激活判定在提交、审批和 `POST .../validate` 三处跑，问题原样带给编辑器。
 
-- [ ] **Step 1: 写失败的测试——hook 的读取与保存**
+- [x] **Step 1: 写失败的测试——hook 的读取与保存**
 
 Create `internal/console/hooks_test.go`：
 
@@ -6050,7 +6050,7 @@ func hookBodyRev(name, desc string, rev int64) string {
 Run: `go test ./internal/console/ -run 'Test建hook|Test列hook|Test取hook|Test保存hook|Test开hook|Test改hook名|Test内置hook|Test删hook' -v`
 Expected: FAIL，`undefined: hookRequest`、`undefined: s.hookRoutes`。
 
-- [ ] **Step 2: 写失败的测试——模板的读取、保存与派生**
+- [x] **Step 2: 写失败的测试——模板的读取、保存与派生**
 
 Create `internal/console/templates_test.go`：
 
@@ -6249,7 +6249,7 @@ func templateBodyRev(name, hookID string, rev int64) string {
 Run: `go test ./internal/console/ -run 'Test建模板|Test派生模板|Test保存模板|Test列模板|Test内置模板' -v`
 Expected: FAIL，`undefined: templateRequest`、`undefined: s.templateRoutes`。
 
-- [ ] **Step 3: 实现 hook 端点**
+- [x] **Step 3: 实现 hook 端点**
 
 Create `internal/console/hooks.go`：
 
@@ -6477,7 +6477,7 @@ type nameRequest struct {
 
 `CreateHook` 与 `NewHookVersion` 不要 `Audit`（仓储的签名里没有），所以这两个处理器不调 `auditFrom`——新建与开新版本不写审计（总 spec §6.2 第 8 条：「编辑草稿（新建、保存、开新版本、派生、删除草稿）不写审计」）。
 
-- [ ] **Step 4: 实现模板端点**
+- [x] **Step 4: 实现模板端点**
 
 Create `internal/console/templates.go`：
 
@@ -6737,12 +6737,12 @@ func (s *server) allRoutes() []route {
 }
 ```
 
-- [ ] **Step 5: 跑测试**
+- [x] **Step 5: 跑测试**
 
 Run: `go test ./internal/console/ -v`
 Expected: 全部 PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add internal/console
