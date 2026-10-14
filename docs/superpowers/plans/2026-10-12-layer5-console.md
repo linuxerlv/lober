@@ -7342,7 +7342,7 @@ git commit -m "feat(console): hook 与模板的提交、审批、驳回、废弃
 
 **预览与真实下发走同一条路**（C35）：预览调 `render.Render`，与网关下发时用的是同一个函数、同一份快照构建。没指定主机或 ISO 时用示例值，并在响应里标出哪些是示例；预览的 token 是示例值（第 3 层交接、spec §6.2 第 2 条）。
 
-- [ ] **Step 1: 写失败的测试——插槽清单**
+- [x] **Step 1: 写失败的测试——插槽清单**
 
 Create `internal/console/slots_test.go`：
 
@@ -7437,7 +7437,7 @@ func Test插槽清单带扫描错误(t *testing.T) {
 Run: `go test ./internal/console/ -run 'Test插槽清单' -v`
 Expected: FAIL，`undefined: s.slotsOf`。
 
-- [ ] **Step 2: 写失败的测试——预览**
+- [x] **Step 2: 写失败的测试——预览**
 
 Create `internal/console/preview_test.go`：
 
@@ -7638,7 +7638,7 @@ func Test草稿也能预览(t *testing.T) {
 Run: `go test ./internal/console/ -run 'Test预览' -v`
 Expected: FAIL，`undefined: s.previewTemplate`。
 
-- [ ] **Step 3: 实现插槽清单**
+- [x] **Step 3: 实现插槽清单**
 
 Create `internal/console/slots.go`：
 
@@ -7692,7 +7692,7 @@ func (s *server) slotsOf(c *gin.Context) {
 
 `slots.go` 的 import 加 `"github.com/gin-gonic/gin"`。
 
-- [ ] **Step 4: 实现预览**
+- [x] **Step 4: 实现预览**
 
 Create `internal/console/preview.go`：
 
@@ -7930,7 +7930,7 @@ func (s *server) previewHost(c *gin.Context, sn string) (model.Host, *[]string) 
 
 `sampleLabels` 因此收 `[]string` 而不是 `*[]string`。
 
-- [ ] **Step 5: 接路由**
+- [x] **Step 5: 接路由**
 
 Modify `internal/console/templates.go` 的 `templateBaseRoutes`，末尾加两条：
 
@@ -7953,12 +7953,12 @@ func (s *server) allRoutes() []route {
 }
 ```
 
-- [ ] **Step 6: 跑测试**
+- [x] **Step 6: 跑测试**
 
 Run: `go test ./internal/console/ -v`
 Expected: 全部 PASS。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add internal/console

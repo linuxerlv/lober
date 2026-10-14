@@ -125,6 +125,8 @@ func (s *server) templateBaseRoutes() []route {
 		{method: "PUT", path: "/console/v1/templates/:id/versions/:version", perm: PermTemplateWrite, tag: "templates", summary: "Replace template draft content", req: templateDraftRequest{}, resp: templateResponse{}, handle: s.saveTemplateDraft},
 		{method: "DELETE", path: "/console/v1/templates/:id/versions/:version", perm: PermTemplateWrite, tag: "templates", summary: "Delete template draft", query: revisionQuery{}, handle: s.deleteTemplateDraft},
 		{method: "PUT", path: "/console/v1/templates/:id/name", perm: PermTemplateWrite, audit: "template.rename", tag: "templates", summary: "Rename template identity", req: nameRequest{}, handle: s.renameTemplate},
+		{method: "POST", path: "/console/v1/templates/:id/versions/:version/preview", perm: PermTemplateRead, tag: "templates", summary: "Render complete machine files from a frozen preview snapshot", req: previewRequest{}, resp: previewResponse{}, handle: s.previewTemplate},
+		{method: "GET", path: "/console/v1/templates/:id/versions/:version/slots", perm: PermTemplateRead, tag: "templates", summary: "Scan editor slots and diagnostic positions", resp: slotList{}, handle: s.slotsOf},
 	}
 }
 func (s *server) listTemplates(c *gin.Context) {

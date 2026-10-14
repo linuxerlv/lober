@@ -14,22 +14,24 @@ import (
 
 type Clock func() int64
 type Deps struct {
-	Hosts       store.Hosts
-	ISOs        store.ISOs
-	Hooks       store.Hooks
-	Templates   store.Templates
-	Tasks       store.Tasks
-	Events      store.Events
-	Audit       store.AuditLog
-	Users       store.Users
-	ISOSource   ISOSource
-	Sources     ISOSourceState
-	ISODeletion ISODeletion
-	TaskCtl     TaskControl
-	Notifier    Notifier
-	Clock       Clock
-	SessionTTL  int64
-	Logger      *slog.Logger
+	Hosts            store.Hosts
+	ISOs             store.ISOs
+	Hooks            store.Hooks
+	Templates        store.Templates
+	Tasks            store.Tasks
+	Events           store.Events
+	Audit            store.AuditLog
+	Users            store.Users
+	ISOSource        ISOSource
+	Sources          ISOSourceState
+	ISODeletion      ISODeletion
+	BootConfig       BootConfig
+	PreviewEndpoints PreviewEndpoints
+	TaskCtl          TaskControl
+	Notifier         Notifier
+	Clock            Clock
+	SessionTTL       int64
+	Logger           *slog.Logger
 }
 type Server struct {
 	Engine *gin.Engine
