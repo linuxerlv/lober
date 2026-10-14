@@ -225,8 +225,7 @@ func (s *Store) DeleteHookDraft(ctx context.Context, k model.HookKey, rev int64)
 		case err != nil:
 			return err
 		case len(by) > 0: // 报按键排在最前的那一个，说法每次都一样
-			return errorf(store.ErrReferenced, "%s 被模板 %s 引用：先改掉那个模板的装配表，或删掉那个模板草稿", what,
-				store.VersionID(by[0].TemplateID, by[0].TemplateVersion))
+			return &store.ReferencedError{References: []model.Subject{{Kind: model.KindTemplate, ID: store.VersionID(by[0].TemplateID, by[0].TemplateVersion)}}}
 		}
 		if err := tx.Delete(&hookVersionRow{HookID: k.ID, Version: k.Version}).Error; err != nil {
 			return err

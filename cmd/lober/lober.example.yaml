@@ -1,0 +1,23 @@
+listen: "127.0.0.1:8080"
+pg:
+  dsn: "postgres://lober@localhost/lober?sslmode=require"
+  maxConns: 16
+log:
+  level: "info"
+sessionTTLHours: 12
+# Initial password for username admin; operational APIs require changing it.
+seedAdmin: "replace-with-an-initial-password"
+iso:
+  staging: "/var/lib/lober/staging"
+  artifacts: "/var/lib/lober/artifacts"
+  smb: "/var/lib/lober/smb"
+  tools: "/usr/lib/lober/tools"
+  localRoots: ["/srv/lober/media"]
+  workers: 2
+  pollMS: 1000
+# Configure these to the real gateway/artifact/SMB services when available.
+# Omitted endpoints remain explicitly labelled samples in preview responses.
+preview: {}
+# tls:
+#   cert: "/etc/lober/server.crt"
+#   key: "/etc/lober/server.key"

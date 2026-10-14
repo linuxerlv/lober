@@ -43,6 +43,26 @@ var (
 )
 
 // DuplicateError 是唯一键撞了。Field 是撞上的键：sn、name 或 sha256；Existing 是已有的那一个，主机给 SN，
+const (
+	DuplicateFieldSN       = "sn"
+	DuplicateFieldName     = "name"
+	DuplicateFieldSHA256   = "sha256"
+	DuplicateFieldUsername = "username"
+	TargetHost             = model.KindHost
+	TargetISO              = model.KindISO
+	TargetHook             = model.KindHook
+	TargetTemplate         = model.KindTemplate
+	TargetTask             = "task"
+	TargetUser             = UserSubjectKind
+)
+
+// ReferencedError identifies deterministic blockers while preserving ErrReferenced.
+type ReferencedError struct{ References []model.Subject }
+
+func (e *ReferencedError) Error() string { return fmt.Sprintf("%v：%v", ErrReferenced, e.References) }
+func (e *ReferencedError) Unwrap() error { return ErrReferenced }
+
+// DuplicateError identifies the conflicting unique field and existing record.
 // 其余给 ID。Unwrap 返回 ErrDuplicate。
 type DuplicateError struct {
 	Field    string

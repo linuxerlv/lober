@@ -144,6 +144,9 @@ func (s *Store) DeleteHost(ctx context.Context, sn string, rev int64, a store.Au
 		if _, err := lockHost(tx, sn, rev); err != nil {
 			return err
 		}
+		if err := taskReference(tx, "host_sn = ?", sn); err != nil {
+			return err
+		}
 		if err := tx.Delete(&hostRow{SN: sn}).Error; err != nil {
 			return err
 		}

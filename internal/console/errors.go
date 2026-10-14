@@ -34,6 +34,9 @@ type batchDetail struct {
 	Common []problemJSON            `json:"common"`
 	ByHost map[string][]problemJSON `json:"byHost"`
 }
+type referenceDetail struct {
+	References []subjectJSON `json:"references"`
+}
 
 func jsonProblems(ps []model.Problem) []problemJSON {
 	out := make([]problemJSON, len(ps))
@@ -43,6 +46,15 @@ func jsonProblems(ps []model.Problem) []problemJSON {
 	return out
 }
 func RespondError(c *gin.Context, err error) {
+	var referenced *store.ReferencedError
+	if errors.As(err, &referenced) {
+		refs := make([]subjectJSON, len(referenced.References))
+		for i, s := range referenced.References {
+			refs[i] = subjectJSON{s.Kind, s.ID, s.Path, s.Line, s.Col}
+		}
+		Fail(c, 409, referenceDetail{refs}, model.ConsoleReferenced)
+		return
+	}
 	var batch *store.BatchError
 	if errors.As(err, &batch) {
 		byHost := make(map[string][]problemJSON, len(batch.Result.ByHost))

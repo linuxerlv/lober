@@ -27,6 +27,9 @@ type Host struct {
 // 其余列才成为属性。属性键再用这几个名字，同一列就有了两种去处。
 var hostReservedAttrs = []string{"sn", "arch", "firmware"}
 
+// HostReservedAttrs returns an independent copy for CSV/schema consumers.
+func HostReservedAttrs() []string { return slices.Clone(hostReservedAttrs) }
+
 // ValidAttrKey 判断主机属性键：是标识符（ValidIdent），且不是保留键 sn、arch、firmware。
 // Host.Validate 与激活判定查 attr 取值来源都用它，保留键表只在本包一处（T4-1）。
 func ValidAttrKey(key string) bool {

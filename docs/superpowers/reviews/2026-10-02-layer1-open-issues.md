@@ -735,7 +735,7 @@ aarch64 配 bios 这类组合，计划和 spec 都没有规则，不加。大小
 
 ### L-8　标识常量、字段键与 ID@版本在各包各写一遍
 
-结果：字段键一项已修；第 3 层所需机器面标识已有，剩余全局词表、Subject.Kind 与 ID@版本仍归第 5 层（2026-10-08 补记，出自第 2 层清单的 S10-5）。字段键随 C-3 修掉了（036f397）：TemplateFieldKey、InstancePath、InstanceFieldKey 放在 model（problem.go）而不是 params，因为依赖守卫不许 activation 依赖 params；activation、params、snapshot 共用这一份，Test同一格在激活判定与参数求值里标在同一处 钉住两边一致。所以下面建议里「第 5 层做接口时，params 导出字段键构造函数」不用再做。「ID@版本」仍是五处各拼一份：activation/hook.go、admission/admission.go、params/params.go、snapshot/build.go，以及第 2 层的 store.VersionID。要收成一份，可以在 model 给 HookKey、TemplateKey 加 String()，几处都改调它；不是改用 store.VersionID，因为第 1 层不许依赖 store，而 store 本来就依赖第 1 层，反过来引用还会成环。第 3 层新增所需 FileKind 等机器面常量，未把全局词表与 Subject.Kind 常量扩进本层；这两项及 ID@版本合并仍归第 5 层（S3-10 同步）。
+结果：第 5 层已落实：全局词表、机器标识和 Subject.Kind 常量已提供；HookKey/TemplateKey.String 共用版本标识。字段键沿用已修的 model 共用构造函数。词表独立副本、全集对齐与既有 core/golden 测试通过；见第 5 层执行报告。
 
 第 3、5 层。①catalog 没有为族、格式、系、时机、解释器、部件、系统值、架构、固件导出常量，后续层只能把 rocky 这类标识写成字面量，拼错要等 Valid() 或测试才发现；也没有导出全局词表，第 5、6 层列下拉框只能经 Families、SeriesOf 反推。②字段键（tpl/、插槽名/序号/）在 params 与 snapshot 里各拼一次，「ID@版本」在四个包里各拼一次，Subject.Kind 的八个取值和 ParamType 全是字面量。字段键目前有 TestBuild回归41b2fbe 兜底，一边改了测试会失败，不会静默丢值。model 已为 ISOState、VersionState、ImplKind、BindingSource 导出常量，两种做法并存。建议照计划「由第一个用到它的层加进来」的做法：第 3 层要按格式、类型分支时，导出对应的带类型常量（命名如 FormatKickstart、ParamCIDR），表也改用常量书写；第 5 层做接口时，params 导出字段键构造函数，model 提供 Subject.Kind 常量和 HookKey、TemplateKey 的 String()，catalog 导出全局词表。常量是纯追加，越早加，要迁移的字面量越少。
 

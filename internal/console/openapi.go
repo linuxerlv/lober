@@ -61,6 +61,9 @@ func (s *Server) OpenAPI() map[string]any {
 			if status == 409 || status == 422 {
 				data = map[string]any{"oneOf": []any{problem, batch, map[string]any{"type": "object", "nullable": true, "enum": []any{nil}}}}
 			}
+			if status == 409 {
+				data.(map[string]any)["oneOf"] = append(data.(map[string]any)["oneOf"].([]any), b.value(reflect.TypeOf(referenceDetail{})))
+			}
 			if status == 422 && r.errorData != nil {
 				data.(map[string]any)["oneOf"] = append(data.(map[string]any)["oneOf"].([]any), b.value(reflect.TypeOf(r.errorData)))
 			}

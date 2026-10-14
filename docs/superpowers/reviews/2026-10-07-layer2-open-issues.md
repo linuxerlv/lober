@@ -15,7 +15,7 @@
 
 ## 修补结果
 
-2026-10-12 第 3 层补记：S1-6、S2-12、S2-13、S2-22 已修；S5-1 的历史重放和当前清单交接已修，过滤旧身份的接口实现仍归第 5 层。S3-10 全局词表仍归第 5 层。历史统计/问题正文保留当时情形，最新结果与 [第 3 层验收](2026-10-12-layer3-acceptance.md) 为准。
+2026-10-14 第 5 层补记：S1-6、S2-12、S2-13、S2-22 已在第 3 层修；S5-1 的历史重放交接已修，第 5 层向导已按当前内置模板/hook 的 ID+版本过滤旧内容。S3-10 全集词表和对齐已落实，HostReservedAttrs 已导出并用于 CSV 保留列校验。历史统计/问题正文保留当时情形，最新结果以各条结果及第 3/5 层验收报告为准。
 
 2026-10-08 按你的决定修补，计划见 `docs/superpowers/plans/2026-10-08-layer2-fixups.md`。第 1 节 4 条都已落实。第 2 节 28 条在「删掉 memstore」的新前提下逐条重判过：25 条已修；S6-3、S5-6、S6-4 的理由随 memstore 删除而消失，不修。第 3 节顺带做了几条：S7-7 与 S5-8 已修，L-7 的注释部分已改，S5-2、S5-3、S5-7 写进了原计划「留给后续层的约定」的第 5 层；S6-5 讲的是 memstore 的 cloneTask，整条作废；其余仍归后续层。每条的做法和测试名写在条目标题下的「结果」一行。
 
@@ -519,7 +519,7 @@ S4 做过一次变异验证，也就是故意改坏代码，看测试能不能�
 
 ### S5-1　内置内容的名字一旦装进库里就再也改不了，但 spec 和注释都没写这一点
 
-结果：已修，只改文档与注释。spec §6.2 第 11 条补上「名字随身份定下，以后的版本不能换名，换了名同样拒绝启动；要改名，只能换一个新 ID」（73ac12c）；ErrBuiltinMismatch、EnsureBuiltinHook、ensureBuiltinIdent 的注释同样写明（dbea587）；原计划「留给后续层的约定」的第 3 层那条随 U9 补上这一句。第 3 层两件交接已修：不可变历史指纹和真实 PG 历次发布顺序/幂等升级用例已落地（09de4da、a4cc3b0）；当前清单完整为 7 模板/5 hook，旧身份向导过滤已明确交给第 5 层装配点（按 builtin 当前清单与 CurrentApproved），不是删除历史版本。
+结果：已修，只改文档与注释。spec §6.2 第 11 条补上「名字随身份定下，以后的版本不能换名，换了名同样拒绝启动；要改名，只能换一个新 ID」（73ac12c）；ErrBuiltinMismatch、EnsureBuiltinHook、ensureBuiltinIdent 的注释同样写明（dbea587）；原计划「留给后续层的约定」的第 3 层那条随 U9 补上这一句。第 3 层两件交接已修：不可变历史指纹和真实 PG 历次发布顺序/幂等升级用例已落地（09de4da、a4cc3b0）；当前清单完整为 7 模板/5 hook。第 5 层已按 builtin 当前 ID+版本清单和 CurrentApproved 过滤向导候选及提交，真实 PostgreSQL 回归覆盖旧身份与旧版本；历史记录保留给既有快照。
 
 问题：内置内容的名字记在身份上。这里的「身份」指一个 hook 或模板本身，它的各个版本都挂在身份下面。内置身份不能改名，改了会报 ErrImmutable。内置版本则更严，连废弃都不允许。
 
@@ -799,7 +799,7 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S3-10　架构清单的对齐测试只能确认「列出的都合法」，漏列的架构查不出来
 
-结果：仍归第 5 层，与 L-8 的 catalog 全局词表一起做；第 3 层未把架构全集接口或 Subject.Kind 常量引入本层。
+结果：第 5 层已修：host_platform_invalid 按 catalog.AllArchs 全集比对，遗漏架构也会失败，既有平台说明对齐测试已按全集断言。
 
 问题：第 1 层清单的 C-9 给 host_platform_invalid 说明里列出的架构加了一个对齐测试，可它只能查到「列出的都合法、区分大小写」。换句话说，这个测试只确认说明里列出的每种架构都合法，并且比对时区分大小写，大写的写法不算合法。至于说明有没有漏列架构，它查不了，因为 catalog 没有导出全部架构的词表。
 
@@ -813,7 +813,7 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### L-7　建任务时重跑准入，用的是任务里钉住的模板版本，和 admission 的注释说的不一样
 
-结果：注释部分已改（U9），比对仍归第 5 层。admission 的 TemplateUsable 与 BatchInput.Template、store.go 里 CreateTasks 的第 3 步都写明：重跑准入用的是任务里钉住的版本，不另取当前版本，已被新版本取代、但仍是已审批的旧版本照样通过；它是不是当前版本，由第 5 层在提交时用 model.CurrentApproved 比对。仓储没有加锁，行为不变。
+结果：第 5 层已落实：向导参数/提交复查 CurrentApproved，新草稿不取代最高 approved；批准/废弃与批量提交由控制台读写锁串行化，仓储仍重跑钉住版本准入。真实 PostgreSQL 行锁和并发批次测试通过。
 
 问题：两份实现（memstore 和 pgstore）在建任务时，都会重跑一遍准入。重跑时，它们按任务里钉住的 TemplateID/TemplateVersion 取出模板版本，交给准入检查。「钉住」指的是任务上记下了具体用哪个模板、哪个版本。但是 BatchInput.Template 和 TemplateUsable 的注释要求，交给准入的应该是调用方用 model.CurrentApproved 取出的版本。这样一来，如果操作员还停在控制台的建任务向导里，期间有新版本获批，他提交上来的仍是旧版本。旧版本此时还处于已审批状态，所以任务照样建得成。在这一点上，两份实现是一致的。
 
@@ -829,7 +829,7 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S5-3　GetHooks 只要碰到一个格式不对的键，就整批报 ErrInvalid
 
-结果：仍归第 5 层，GetHooks 保持严格。建议里要写进约定的那一条已随 U9 写进原计划「留给后续层的约定」的第 5 层：取草稿引用的 hook 之前，先滤掉不合 model.ValidID 的引用，缺的 hook 交给激活判定报 hook_ref_missing；两处以上要这样做时，再在 store 里加辅助函数。
+结果：第 5 层已落实：templateHooks 批量读取合法钉住键，非法草稿键留给激活判定报告 hook_ref_missing；数据库读失败保持 500，不伪造缺失引用。
 
 问题：模板草稿里的 Instance.HookID 可以是任何存得下的字符串。HookRefs 负责列出草稿引用了哪些 hook，这样的 ID 它也照样列出来。可是两份实现的 GetHooks 只要遇到一个不符合 ValidID 的键，就整批报 ErrInvalid。storetest 里的 hookGetHooks 专门测了这个行为，把它固定了下来。仓储自己的审批和建任务倒不受影响：在探针克隆里，拿同一份引用了 Bad ID 的草稿去审批，两份实现报的都是 hook_ref_missing。
 
@@ -845,7 +845,7 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S5-2　一份草稿被别的模板当作派生来源，删掉它以后，那些模板的 DerivedFrom 就悬空了
 
-结果：按建议保持现状，仍归第 5 层。要写进约定的那一条已随 U9 写进原计划「留给后续层的约定」的第 5 层：派生来源可能已被删除，「来源出了新版本」的提示（C24）这时按同一来源身份下剩下的版本算，连来源的身份也没了就不提示。
+结果：保持独立派生语义；后端返回 DerivedFrom 和同身份版本查询，来源删除不阻止独立副本读取。来源更新提示由第 6 层根据版本查询计算，来源身份不存在（404）时不提示，不伪造来源版本。
 
 问题：DeriveTemplate 可以拿任何状态的版本当来源，草稿也可以。DeleteTemplateDraft 删草稿时，不会去看别的模板的 DerivedFrom。探针实测过，两份实现都会放行这样的删除。于是，派生模板的 DerivedFrom 就指向了一个已经不存在的版本。如果删的是来源模板的最后一个版本，连来源模板的身份都不在了。不过 DerivedFrom 不会因此错指到别的内容上，因为用过的版本号不会再发，NewID 又是随机的。内存实现在 DeleteTemplateDraft 的注释里写明，这样做是有意的。另一方面，spec C26 规定，被模板或任务引用的对象只能废弃，不能删除；可草稿又不能废弃，计划里的 ErrReferenced 也只列了主机、ISO 和 hook 草稿。所以 spec 和计划这两处说法之间有缺口。
 
@@ -861,7 +861,7 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### L-8　ErrReferenced 只带一段文字，两份实现写的文字还不一样
 
-结果：前提随 memstore 删除而消失，建议仍成立，仍归第 5 层；标题末尾的「（两份实现不一致）」也一并去掉了。现在只有 pgstore 一份实现，删被任务引用的主机或 ISO 时，报的文字都是从外键报错翻译来的，谈不上「两份实现写的文字不一样」。但第 5 层仍拿不到结构化的「被谁引用」，hook 草稿被模板挡着删不掉时指不出是哪个模板，所以带类型的 ReferencedError（Unwrap 之后是 ErrReferenced，带上引用方的类别和 ID）照旧在第 5 层做删除接口时加，由 pgstore 来填。
+结果：第 5 层已落实：ReferencedError 保留 ErrReferenced，并提供确定的引用方种类/ID。主机/ISO 在父记录加锁后查询任务；hook 草稿提供模板版本。HTTP 409 返回小写 references，外键继续兜底。
 
 问题：删除一台被任务引用的主机，或者一个被任务引用的 ISO 时，两份实现都会返回 ErrReferenced，但附带的文字不同。内存实现写的是「主机 SN-1 被任务 xxx 引用」。pgstore 的这个错误是从数据库的外键报错翻译过来的，所以写的是「还有别的记录经外键 fk_tasks_host 引用它」。DeleteHookDraft 这一处两边是一致的：两份实现都会写出引用它的模板 ID@版本。
 
@@ -877,6 +877,8 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S9-2　tasks 表没有按 host_sn、iso_id、模板版本建的全表索引
 
+结果：第 5 层已加 tasks 的 host_sn、iso_id、template_id/template_version 三个普通全表索引，既有部分唯一索引不改；AutoMigrate 新增，schema 期望与真实 PostgreSQL 测试对齐。
+
 问题：计划把索引的集合定死了。按这个集合，tasks 表只有 created_at 和 state 两个普通索引，外加一个 idx_tasks_open。idx_tasks_open 只收未结束的任务，不是覆盖全表的索引。删主机、删 ISO、删模板草稿时，PostgreSQL 要做 RESTRICT 外键检查。这个检查会按 host_sn、iso_id 和 (template_id, template_version) 去查 tasks 表。ListTasks 按 HostSN 过滤时也要这样查，而且查的范围包括已结束的任务。这些查询都会走顺序扫描，偏偏 tasks 表只增不删。
 
 影响：数据量小的时候感觉不到。任务多了以后，删主机和按主机看任务都会越来越慢。
@@ -891,6 +893,8 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S2-24　DuplicateError.Field 和 TargetKind 的取值都没有导出成常量
 
+结果：第 5 层已提供 store 的 DuplicateField 与 TargetKind 常量，唯一约束翻译表使用共用字段常量；用户种类与 username 字段一并覆盖。
+
 问题：DuplicateError.Field 的取值是 sn、name、sha256，AuditEntry.TargetKind 的取值是 host、iso、hook、template、task。这些值现在还是直接写的字面量，散落在 memstore、pgstore 和 storetest 里。不过契约测试用 wantDuplicate 和对审计对象的断言钉住了两份实现的取值，所以两边不会走偏。
 
 影响：第 5 层要按这些值映射出对应的说明，还要用它们拼审计查询的参数。到那时第 5 层只能把这些字面量再写一遍。
@@ -903,7 +907,7 @@ EnsureBuiltin 装载内置内容时，可能会遇到同一个 ID 的新版本�
 
 ### S5-7　驳回审批时不强制写理由，这件事留给第 5 层来管
 
-结果：仍归第 5 层，仓储照旧不查 Detail。建议里要写进约定的那一条已随 U9 写进原计划「留给后续层的约定」的第 5 层：驳回接口要求非空的理由，并放进 Audit.Detail。
+结果：第 5 层已落实：hook/模板驳回理由非空、非纯空白且可存为 UTF-8 文本，原文进入 Audit.Detail；失败不写审计，生命周期 HTTP 测试通过。
 
 问题：两份实现在驳回时只检查审计记录是否合规，并不要求 Detail 有内容。也就是说，驳回时 Detail 可以是空的。但是 spec §5.2 第 5 步写的是「驳回要写理由」。
 

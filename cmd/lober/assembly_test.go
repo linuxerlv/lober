@@ -242,14 +242,46 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	client := http.Client{Timeout: 3 * time.Second}
+	// Real PBKDF2 runs under the race detector while other packages are also
+	// consuming CPU. The socket test must allow that work to finish.
+	client := http.Client{Timeout: 30 * time.Second}
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var signedIn struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	decodeErr := json.NewDecoder(response.Body).Decode(&signedIn)
 	response.Body.Close()
 	if response.StatusCode != 200 {
 		t.Fatal("real listener login failed", response.StatusCode)
+	}
+	if decodeErr != nil || signedIn.Data.Token == "" {
+		t.Fatal("login response did not contain a session", decodeErr)
+	}
+	for _, token := range []string{"", signedIn.Data.Token} {
+		info, err := http.NewRequestWithContext(t.Context(), "GET", "http://"+listener.Addr().String()+"/console/v1/user/info", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if token != "" {
+			info.Header.Set("Authorization", "Bearer "+token)
+		}
+		got, err := client.Do(info)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got.Body.Close()
+		want := http.StatusUnauthorized
+		if token != "" {
+			want = http.StatusOK
+		}
+		if got.StatusCode != want {
+			t.Fatalf("protected socket request returned %d, want %d", got.StatusCode, want)
+		}
 	}
 	cancel()
 	select {

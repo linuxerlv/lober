@@ -154,6 +154,9 @@ var tables = []table{
 		primary: []string{"id"},
 		indexes: []index{
 			{name: "idx_tasks_created_at", columns: []string{"created_at"}},
+			{name: "idx_tasks_host_sn", columns: []string{"host_sn"}},
+			{name: "idx_tasks_iso_id", columns: []string{"iso_id"}},
+			{name: "idx_tasks_template_version", columns: []string{"template_id", "template_version"}},
 			// C31。建任务时先在事务里对锁住的主机重跑准入，它是最后一道防线；推进回未结束的状态时靠它挡住
 			{name: openTaskIndex, unique: true, columns: []string{"host_sn"},
 				where: "state <> ALL (ARRAY['done'::text, 'failed'::text, 'cancelled'::text])"},

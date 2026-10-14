@@ -13,10 +13,10 @@ import (
 // 靠它们，不必解开快照。部分唯一索引 idx_tasks_open 守着 C31：每台主机最多一个未结束的任务，结束了的不占位。
 type taskRow struct {
 	ID              string `gorm:"primaryKey"`
-	HostSN          string `gorm:"not null;uniqueIndex:idx_tasks_open,where:state NOT IN ('done'\\, 'failed'\\, 'cancelled')"`
-	ISOID           string `gorm:"not null"`
-	TemplateID      string `gorm:"not null"`
-	TemplateVersion int    `gorm:"not null"`
+	HostSN          string `gorm:"not null;index:idx_tasks_host_sn;uniqueIndex:idx_tasks_open,where:state NOT IN ('done'\\, 'failed'\\, 'cancelled')"`
+	ISOID           string `gorm:"not null;index:idx_tasks_iso_id"`
+	TemplateID      string `gorm:"not null;index:idx_tasks_template_version,priority:1"`
+	TemplateVersion int    `gorm:"not null;index:idx_tasks_template_version,priority:2"`
 	State           string `gorm:"not null;index:idx_tasks_state;check:state IN ('pending', 'booting', 'installing', 'rebooting', 'initializing', 'done', 'failed', 'cancelled')"`
 	Snapshot        string `gorm:"type:jsonb;not null"` // model.Snapshot 的 JSON
 	CreatedBy       string `gorm:"not null"`

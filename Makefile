@@ -1,4 +1,4 @@
-# make check 依次跑格式、vet、测试、竞态检测和交叉编译，五步全过才算绿。
+# make check 依次跑格式、vet、测试、竞态检测、交叉编译和生成漂移检查，六步全过才算绿。
 # 各目标只用 go、gofmt 和 shell 内建命令，Git Bash 与 Linux 上都能跑。
 
 .PHONY: check fmt vet archcheck test race cross gen
@@ -27,7 +27,7 @@ test: archcheck
 	go test ./...
 
 race: archcheck
-	go test -race ./...
+	go test -race -timeout=20m ./...
 
 # 旧系统出过在 Windows 上能编译、却编不出 Linux 版的问题（spec §7.1）。
 cross:

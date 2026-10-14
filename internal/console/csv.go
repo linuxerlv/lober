@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/lober/lober/internal/core/catalog"
@@ -36,7 +37,7 @@ func parseHostCSV(data []byte, known func(string) bool) (csvPlan, []model.Host, 
 	for i, name := range header {
 		name = strings.TrimSpace(name)
 		header[i] = name
-		if seenHeaders[name] || (name != "sn" && name != "arch" && name != "firmware" && !model.ValidAttrKey(name)) {
+		if seenHeaders[name] || (!slices.Contains(model.HostReservedAttrs(), name) && !model.ValidAttrKey(name)) {
 			return csvPlan{}, nil, fmt.Errorf(model.ConsoleCSVHeader, name)
 		}
 		seenHeaders[name] = true
