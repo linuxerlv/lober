@@ -2,9 +2,14 @@ package console
 
 import (
 	"context"
+	"errors"
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
 )
+
+// ErrTaskControlUnavailable is the explicit layer-7 assembly placeholder.
+// Other errors retain their normal mapping and are never echoed to clients.
+var ErrTaskControlUnavailable = errors.New("task control is not implemented")
 
 // TaskControl delegates lifecycle decisions to the future execution layer.
 type TaskControl interface {

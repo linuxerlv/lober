@@ -81,7 +81,7 @@ func TestPanic兜底回500且不泄露令牌(t *testing.T) {
 func Test查询令牌只允许SSE且Authorization优先(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	token, _ := seedHTTPUser(t, s, st, "alice", store.RoleViewer)
-	s.server.installRoutes(s, []route{{method: "GET", path: "/console/v1/tasks/:id/stream", perm: PermTaskRead, tag: "probe", summary: "Stream probe", stream: true, handle: func(c *gin.Context) { Ok(c, true) }}})
+	s.server.installRoutes(s, []route{{method: "GET", path: "/console/v1/probe/sse/:id", perm: PermTaskRead, tag: "probe", summary: "Stream probe", stream: true, handle: func(c *gin.Context) { Ok(c, true) }}})
 	s.server.installRoutes(s, []route{{method: "GET", path: "/console/v1/probe/stream", perm: PermAnyUser, tag: "probe", summary: "Not an SSE route", handle: func(c *gin.Context) { Ok(c, true) }}})
 	if w := httpCall(s, "GET", "/console/v1/user/info?access_token="+token, "", ""); w.Code != 401 {
 		t.Fatal("query credential accepted outside stream")
@@ -89,10 +89,10 @@ func Test查询令牌只允许SSE且Authorization优先(t *testing.T) {
 	if w := httpCall(s, "GET", "/console/v1/probe/stream?access_token="+token, "", ""); w.Code != 401 {
 		t.Fatal("path suffix bypassed descriptor")
 	}
-	if w := httpCall(s, "GET", "/console/v1/tasks/id/stream?access_token="+token, "", ""); w.Code != 200 {
+	if w := httpCall(s, "GET", "/console/v1/probe/sse/id?access_token="+token, "", ""); w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
-	if w := httpCall(s, "GET", "/console/v1/tasks/id/stream?access_token="+token, "", "wrong"); w.Code != 401 {
+	if w := httpCall(s, "GET", "/console/v1/probe/sse/id?access_token="+token, "", "wrong"); w.Code != 401 {
 		t.Fatal("header bypassed")
 	}
 }

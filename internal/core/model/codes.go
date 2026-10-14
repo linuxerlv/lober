@@ -468,6 +468,7 @@ const (
 const (
 	ConsoleBadRequest             = "请求的内容不合法"
 	ConsoleTemplateCurrent        = "所选模板不是当前已审批版本，请重新选择模板"
+	ConsoleTaskControlUnavailable = "第 7 层（状态机）尚未实现，暂不能取消或重试任务"
 	ConsoleSampleISO              = "示例 ISO"
 	ConsoleRejectReason           = "驳回必须提供非空、可存为 UTF-8 文本的理由"
 	ConsoleContentRange           = "Content-Range 必须给出与实际分片及已登记总长一致的范围，如 bytes 0-1048575/5242880"

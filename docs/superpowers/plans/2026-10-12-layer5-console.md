@@ -8802,7 +8802,7 @@ git commit -m "feat(console): 向导五步，提交时整批重跑准入与参�
 
 **取消与重试经过状态机**（总 spec §6.2 第 4 条）：`TaskControl` 由第 7 层实现。本任务的 mock 记下调了它，测试断言控制台把活儿交了过去了；`cmd/lober` 里的占位实现一律返回「第 7 层未实现」，不写临时规则（第 5 层设计 §6.2）。
 
-- [ ] **Step 0: 接上任务路由**
+- [x] **Step 0: 接上任务路由**
 
 Modify `internal/console/routes.go` 的 `allRoutes`，接上 `s.taskRoutes()`：
 
@@ -8821,7 +8821,7 @@ func (s *server) allRoutes() []route {
 }
 ```
 
-- [ ] **Step 1: 写失败的测试——任务的列表、详情、事件**
+- [x] **Step 1: 写失败的测试——任务的列表、详情、事件**
 
 Create `internal/console/tasks_test.go`：
 
@@ -9164,7 +9164,7 @@ func (s *Server) Notify(taskID string) { s.server.hub.Publish(taskID) }
 Run: `go test ./internal/console/ -run 'Test列任务|Test取任务|Test取消与重试|Test任务事件流' -v`
 Expected: FAIL，`undefined: s.taskRoutes`、`undefined: (*console.Server).SetTaskControl`。
 
-- [ ] **Step 2: 实现任务端点与 SSE**
+- [x] **Step 2: 实现任务端点与 SSE**
 
 Create `internal/console/tasks.go`：
 
@@ -9500,12 +9500,12 @@ func Problems(ps []model.Problem) error { return problemError{problems: ps} }
 
 **`CanCancel`/`CanRetry` 为什么也让占位实现返回 nil**：它们要返回 `[]model.Problem`，而代码表里没有「这个状态不许取消/重试」这一条——第 7 层实现 C34 时要先往 `codes.go` 追加，同步改附录总表与 `TestCode表与附录总表逐项一致`。本层不能替它加，所以占位实现返回 nil：界面上按钮是亮的，点下去得到 422 和一句「第 7 层未实现」。这比灰着一个其实能用的按钮诚实。
 
-- [ ] **Step 3: 跑测试**
+- [x] **Step 3: 跑测试**
 
 Run: `go test ./internal/console/ -v`
 Expected: 全部 PASS。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add internal/console

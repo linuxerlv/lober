@@ -459,7 +459,7 @@ func (s *server) wizardSubmit(c *gin.Context) {
 	}
 	items := make([]taskItem, len(created))
 	for i, task := range created {
-		items[i] = toTaskItem(task)
+		items[i] = s.taskResponse(task)
 		s.hub.Publish(task.ID)
 	}
 	Ok(c, wizardSubmitResult{items})

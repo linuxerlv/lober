@@ -71,6 +71,8 @@ type taskItem struct {
 	CreatedBy       string          `json:"createdBy"`
 	CreatedAt       int64           `json:"createdAt"`
 	Rev             int64           `json:"rev"`
+	CanCancel       []problemJSON   `json:"canCancel"`
+	CanRetry        []problemJSON   `json:"canRetry"`
 }
 
 func snapshotValues(in map[string]model.SnapshotValue) map[string]snapshotValueDTO {
@@ -99,5 +101,5 @@ func snapshotToDTO(s model.Snapshot) snapshotDTO {
 	return snapshotDTO{Schema: s.Schema, Family: s.Family, Series: s.Series, Format: s.Format, Host: snapshotHostDTO{s.Host.SN, s.Host.Arch, s.Host.Firmware, stringMap(s.Host.Attrs)}, ISO: snapshotISODTO{s.ISO.ID, s.ISO.Name, s.ISO.Version, s.ISO.Arch, stringMap(s.ISO.Artifacts)}, Template: snapshotTemplateDTO{s.Template.ID, s.Template.Version, s.Template.Name, s.Template.Body, snapshotValues(s.Template.Params)}, Slots: slots}
 }
 func toTaskItem(t model.Task) taskItem {
-	return taskItem{t.ID, t.HostSN, t.ISOID, t.TemplateID, t.TemplateVersion, t.State, snapshotToDTO(t.Snapshot), t.CreatedBy, t.CreatedAt, t.Rev}
+	return taskItem{t.ID, t.HostSN, t.ISOID, t.TemplateID, t.TemplateVersion, t.State, snapshotToDTO(t.Snapshot), t.CreatedBy, t.CreatedAt, t.Rev, []problemJSON{}, []problemJSON{}}
 }
