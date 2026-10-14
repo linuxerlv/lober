@@ -91,9 +91,6 @@ func loadConfig(path string) (config, error) {
 	if c.PG.MaxConns < 1 {
 		return config{}, errors.New("pg.maxConns 必须为正数")
 	}
-	if c.SeedAdmin == "" {
-		c.SeedAdmin = "admin"
-	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
 	}

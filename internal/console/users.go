@@ -125,6 +125,8 @@ func (s *server) updateUser(c *gin.Context) {
 		u.Password = password
 		u.MustChangePassword = false
 	}
+	s.credentials.Lock()
+	defer s.credentials.Unlock()
 	u, ok = Write(c, func() (store.User, error) { return s.deps.Users.UpdateUser(c.Request.Context(), u, s.auditFrom(c, "")) })
 	if !ok {
 		return
@@ -145,6 +147,8 @@ func (s *server) disableUser(c *gin.Context) {
 		return
 	}
 	u.Disabled = true
+	s.credentials.Lock()
+	defer s.credentials.Unlock()
 	_, ok = Write(c, func() (store.User, error) { return s.deps.Users.UpdateUser(c.Request.Context(), u, s.auditFrom(c, "")) })
 	if ok {
 		s.sessions.dropUser(username)

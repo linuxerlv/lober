@@ -169,6 +169,11 @@ func Test任务预览只使用固化快照及引用删除保护(t *testing.T) {
 	s, st, token, task, _ := taskFixture(t)
 	path := "/console/v1/tasks/" + task.ID + "/preview"
 	first := responseData[previewResponse](t, httpCall(s, "POST", path, `{"firmware":"uefi"}`, token))
+	for _, file := range first.Files {
+		if !file.Sample {
+			t.Fatal("preview file omitted sample-credential marker", file.Name)
+		}
+	}
 	host, err := st.GetHost(t.Context(), "SN-1")
 	if err != nil {
 		t.Fatal(err)
@@ -362,6 +367,7 @@ func Test任务接口五角色权限(t *testing.T) {
 
 func Test任务SSE连接期间复查禁用改密及会话过期(t *testing.T) {
 	s, st, token, task, clock := taskFixture(t)
+	seedHTTPUser(t, s, st, "backup", store.RoleAdmin)
 	srv := httptest.NewServer(s.Engine)
 	defer srv.Close()
 	for _, reason := range []string{"disabled", "password", "expired"} {

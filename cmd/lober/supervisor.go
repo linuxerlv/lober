@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -25,13 +26,15 @@ type sourceSupervisor struct {
 	slots           chan struct{}
 	mu              sync.Mutex
 	running         map[string]bool
+	retryAt         map[string]time.Time
+	failures        map[string]int
 	started, closed bool
 	wg              sync.WaitGroup
 }
 
 func newSourceSupervisor(ctx context.Context, src *iso.Sources, st store.Store, j *deletionJournal, gate *registrationGate, cfg isoConfig, logger *slog.Logger) *sourceSupervisor {
 	child, cancel := context.WithCancel(ctx)
-	return &sourceSupervisor{source: src, store: st, journal: j, gate: gate, cfg: cfg, logger: logger, ctx: child, cancel: cancel, wake: make(chan struct{}, 1), slots: make(chan struct{}, cfg.Workers), running: map[string]bool{}}
+	return &sourceSupervisor{source: src, store: st, journal: j, gate: gate, cfg: cfg, logger: logger, ctx: child, cancel: cancel, wake: make(chan struct{}, 1), slots: make(chan struct{}, cfg.Workers), running: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{}}
 }
 func (s *sourceSupervisor) Wake() {
 	select {
@@ -56,22 +59,60 @@ func (s *sourceSupervisor) Start() error {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		ticker := time.NewTicker(time.Duration(s.cfg.PollMS) * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			if s.ctx.Err() != nil {
-				return
-			}
-			s.reconcile()
-			select {
-			case <-s.ctx.Done():
-				return
-			case <-s.wake:
-			case <-ticker.C:
-			}
-		}
+		s.runLoop(s.reconcile)
 	}()
 	return nil
+}
+
+func (s *sourceSupervisor) guarded(work func() error) (err error) {
+	defer func() {
+		if recover() != nil {
+			// Panic values can contain credentials or user content.
+			s.logger.Error("ISO 后台任务异常，将按退避恢复")
+			err = errors.New("background worker panic")
+		}
+	}()
+	return work()
+}
+
+func supervisorBackoff(attempt int) time.Duration {
+	if attempt > 9 {
+		attempt = 9
+	}
+	return min(100*time.Millisecond*time.Duration(1<<max(attempt-1, 0)), 30*time.Second)
+}
+
+func (s *sourceSupervisor) waitRetry(delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-s.ctx.Done():
+		return false
+	case <-timer.C:
+		return s.ctx.Err() == nil
+	}
+}
+
+func (s *sourceSupervisor) runLoop(reconcile func()) {
+	ticker := time.NewTicker(time.Duration(s.cfg.PollMS) * time.Millisecond)
+	defer ticker.Stop()
+	failures := 0
+	for s.ctx.Err() == nil {
+		if err := s.guarded(func() error { reconcile(); return nil }); err != nil {
+			failures++
+			if !s.waitRetry(supervisorBackoff(failures)) {
+				return
+			}
+			continue
+		}
+		failures = 0
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-s.wake:
+		case <-ticker.C:
+		}
+	}
 }
 func (s *sourceSupervisor) Close() {
 	s.mu.Lock()
@@ -101,52 +142,57 @@ func (s *sourceSupervisor) reconcile() {
 				continue
 			}
 		}
-		key := w.ISOID + "/" + w.Role + "/" + string(w.Kind)
-		s.mu.Lock()
-		if s.closed || s.running[key] {
-			s.mu.Unlock()
-			continue
-		}
-		select {
-		case s.slots <- struct{}{}:
-		default:
-			s.mu.Unlock()
-			continue
-		}
-		s.running[key] = true
-		s.wg.Add(1)
-		s.mu.Unlock()
-		go func(w iso.ToResume, key string) {
-			defer s.wg.Done()
-			defer func() { <-s.slots; s.mu.Lock(); delete(s.running, key); s.mu.Unlock(); s.Wake() }()
-			var err error
+		s.launch(w, func() error {
 			if w.Kind == iso.ResumeFetch {
-				err = s.source.FetchOne(s.ctx, w.ISOID, w.Role)
-			} else {
-				err = s.source.Import(s.ctx, w.ISOID)
+				return s.source.FetchOne(s.ctx, w.ISOID, w.Role)
 			}
-			if err != nil && s.ctx.Err() == nil {
-				s.logger.Warn("ISO 后台工作结束", "iso", w.ISOID, "operation", string(w.Kind))
-			}
-		}(w, key)
+			return s.source.Import(s.ctx, w.ISOID)
+		})
 	}
+}
+
+func (s *sourceSupervisor) launch(w iso.ToResume, work func() error) bool {
+	key := w.ISOID + "/" + w.Role + "/" + string(w.Kind)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.ctx.Err() != nil || s.running[key] || time.Now().Before(s.retryAt[key]) {
+		return false
+	}
+	select {
+	case s.slots <- struct{}{}:
+	default:
+		return false
+	}
+	s.running[key] = true
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		err := s.guarded(work)
+		if err != nil && s.ctx.Err() == nil {
+			s.logger.Warn("ISO 后台工作结束", "iso", w.ISOID, "operation", string(w.Kind))
+		}
+		<-s.slots
+		s.mu.Lock()
+		if err != nil && s.ctx.Err() == nil {
+			s.failures[key]++
+			s.retryAt[key] = time.Now().Add(supervisorBackoff(s.failures[key]))
+		} else {
+			delete(s.failures, key)
+			delete(s.retryAt, key)
+		}
+		delete(s.running, key)
+		s.mu.Unlock()
+		if err == nil {
+			s.Wake()
+		}
+	}()
+	return true
 }
 func (s *sourceSupervisor) Register(ctx context.Context, item model.ISO, kind, addr, role string, size int64, digest string, a store.Audit) error {
 	s.gate.RLock()
 	defer s.gate.RUnlock()
-	if err := s.source.Register(ctx, item, kind, addr, role, size, digest, a); err != nil {
+	if err := s.source.RegisterQueued(ctx, item, kind, addr, role, size, digest, a); err != nil {
 		return err
-	}
-	// A newly supplied extra source must also be fetchable after a restart.
-	current, err := s.store.GetISO(ctx, item.ID)
-	if err != nil {
-		return err
-	}
-	if current.State == model.ISOFailed {
-		current.State = model.ISOAcquiring
-		if _, err = s.store.UpdateISO(ctx, current); err != nil {
-			return err
-		}
 	}
 	s.Wake()
 	return nil

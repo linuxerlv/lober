@@ -50,7 +50,7 @@ preview:
 		t.Fatal("environment override failed")
 	}
 	cfg, err = loadConfig(configFile(t, "listen: ':8080'\n"))
-	if err != nil || cfg.SessionTTLHours != 12 || cfg.SeedAdmin != "admin" || !filepath.IsAbs(cfg.ISO.Staging) {
+	if err != nil || cfg.SessionTTLHours != 12 || cfg.SeedAdmin != "" || !filepath.IsAbs(cfg.ISO.Staging) {
 		t.Fatal("defaults failed", err)
 	}
 }

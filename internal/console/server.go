@@ -48,6 +48,7 @@ type server struct {
 	routes            []route
 	owner             *Server
 	templateSelection sync.RWMutex
+	credentials       sync.RWMutex
 }
 
 func New(d Deps) *Server {

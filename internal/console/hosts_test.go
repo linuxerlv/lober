@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
 func responseData[T any](t *testing.T, w *httptest.ResponseRecorder) T {
@@ -230,15 +229,14 @@ func Test主机OpenAPI导入媒体与两种结果(t *testing.T) {
 	}
 }
 
-type failingHostLookup struct{ store.Hosts }
-
-func (failingHostLookup) GetHosts(context.Context, []string) (map[string]model.Host, error) {
-	return nil, errors.New("backend unavailable")
-}
 func TestCSV预演数据库失败不伪装新建(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	token := adminHTTP(t, s, st)
-	s.server.deps.Hosts = failingHostLookup{st}
+	closed := pgtest.OpenStore(t)
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.server.deps.Hosts = closed
 	w := csvHTTP(s, "/console/v1/hosts/import?dryRun=true", "sn\nSN-1\n", token)
 	if w.Code != 500 || strings.Contains(w.Body.String(), "backend unavailable") || strings.Contains(w.Body.String(), `"create"`) {
 		t.Fatal(w.Code, w.Body.String())

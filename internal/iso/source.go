@@ -211,6 +211,12 @@ func (s *Sources) finishFetch(ctx context.Context, src store.Source) error {
 // failFetch reads current state instead of reusing the acquisition's stale Rev.
 // Cancellation wins over progress and must never become a download failure.
 func (s *Sources) failFetch(ctx context.Context, src store.Source, cause error) {
+	// Explicit Cancel has already persisted SourceCancelled. A worker context
+	// ending (shutdown/deadline) carries no user intent: keep its checkpoint
+	// fetching so a replacement worker can resume it.
+	if ctx.Err() != nil {
+		return
+	}
 	cleanupCtx := context.WithoutCancel(ctx)
 	current, err := s.getSource(cleanupCtx, src.ISOID, src.Role)
 	if err != nil || current.State != store.SourceFetching {
@@ -218,9 +224,6 @@ func (s *Sources) failFetch(ctx context.Context, src store.Source, cause error) 
 	}
 	current.State = store.SourceFailed
 	current.Error = cause.Error()
-	if ctx.Err() != nil {
-		current.State = store.SourceCancelled
-	}
 	_, _ = s.store.SaveSource(cleanupCtx, current, store.Audit{})
 }
 

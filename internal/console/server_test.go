@@ -29,6 +29,7 @@ func Test没有令牌一律401且未知路径404(t *testing.T) {
 func Test权限使用仓储里的当前角色与禁用状态(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	token, u := seedHTTPUser(t, s, st, "alice", store.RoleAdmin)
+	seedHTTPUser(t, s, st, "backup", store.RoleAdmin)
 	s.server.installRoutes(s, []route{{method: "GET", path: "/console/v1/probe", perm: PermUserManage, tag: "probe", summary: "Protected probe", handle: func(c *gin.Context) { Ok(c, "allowed") }}})
 	if w := httpCall(s, "GET", "/console/v1/probe", "", token); w.Code != 200 {
 		t.Fatal(w.Body.String())

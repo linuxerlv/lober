@@ -43,6 +43,9 @@ type Range struct{ Start, Length int64 }
 // ISOSources 存获取状态；所有带 Audit 的写入与审计一起提交，零值不审计。
 type ISOSources interface {
 	SaveSource(context.Context, Source, Audit) (Source, error)
+	// SaveSourceAndAcquire atomically records a failed ISO's source request,
+	// acquiring state and audit. isoRev is the caller's expected ISO revision.
+	SaveSourceAndAcquire(context.Context, Source, int64, Audit) (Source, error)
 	GetSource(context.Context, string, string) (Source, bool, error)
 	SourcesOf(context.Context, string) ([]Source, error)
 	ListUnfinishedSources(context.Context) ([]Source, error)

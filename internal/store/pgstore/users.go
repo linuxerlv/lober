@@ -61,6 +61,11 @@ func (s *Store) UpdateUser(ctx context.Context, u store.User, a store.Audit) (st
 	row := toUserRow(u)
 	err := s.write(ctx, func(tx *gorm.DB) error {
 		var current userRow
+		// Acquire before row locks. This also serializes concurrent removals
+		// of distinct administrators and conflicts with account creation.
+		if err := tx.Exec("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE").Error; err != nil {
+			return err
+		}
 		if err := tx.Clauses(forUpdate).First(&current, "username = ?", u.Username).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return store.ErrNotFound
@@ -69,6 +74,15 @@ func (s *Store) UpdateUser(ctx context.Context, u store.User, a store.Audit) (st
 		}
 		if current.Rev != u.Rev {
 			return staleRev("user", current.Rev, u.Rev)
+		}
+		if current.Role == string(store.RoleAdmin) && !current.Disabled && (u.Role != store.RoleAdmin || u.Disabled) {
+			var enabled int64
+			if err := tx.Model(&userRow{}).Where("role = ? AND disabled = false", string(store.RoleAdmin)).Count(&enabled).Error; err != nil {
+				return err
+			}
+			if enabled <= 1 {
+				return store.ErrLastAdmin
+			}
 		}
 		row.CreatedAt = current.CreatedAt
 		row.Rev = current.Rev + 1

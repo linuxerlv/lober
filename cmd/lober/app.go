@@ -42,6 +42,9 @@ func (a *app) Initialise() error {
 		return err
 	}
 	if len(users.Items) == 0 {
+		if a.Config.SeedAdmin == "" {
+			return errors.New("空库初始化必须显式配置 seedAdmin")
+		}
 		hash, err := console.HashPassword(a.Config.SeedAdmin)
 		if err != nil {
 			return err

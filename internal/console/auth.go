@@ -87,6 +87,20 @@ func (s *server) login(c *gin.Context) {
 		Fail(c, 401, nil, model.ConsoleLoginFailed)
 		return
 	}
+	// Serialize final credential validation and publication against reset
+	// commit/invalidation. Password derivation stays outside the gate.
+	s.credentials.RLock()
+	defer s.credentials.RUnlock()
+	current, err := s.deps.Users.GetUser(c.Request.Context(), u.Username)
+	if errors.Is(err, store.ErrNotFound) || err == nil && (current.Password != u.Password || current.Disabled || !current.Role.Valid()) {
+		Fail(c, 401, nil, model.ConsoleLoginFailed)
+		return
+	}
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	u = current
 	token := s.sessions.put(u.Username)
 	Ok(c, sessionResponse{Token: token, ExpiresAt: s.sessions.expiresAt(token), User: toUserResponse(u)})
 }

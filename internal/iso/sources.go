@@ -20,6 +20,16 @@ import (
 // Register records pending work. The assembly point starts remote/local work
 // with FetchOne, or awaits Upload calls; this package owns no background workers.
 func (s *Sources) Register(ctx context.Context, item model.ISO, kind, addr, role string, size int64, digest string, a store.Audit) error {
+	return s.register(ctx, item, kind, addr, role, size, digest, a, false)
+}
+
+// RegisterQueued also persists acquisition scheduling for a failed ISO.
+// Register preserves the existing synchronous caller's reimport workflow.
+func (s *Sources) RegisterQueued(ctx context.Context, item model.ISO, kind, addr, role string, size int64, digest string, a store.Audit) error {
+	return s.register(ctx, item, kind, addr, role, size, digest, a, true)
+}
+
+func (s *Sources) register(ctx context.Context, item model.ISO, kind, addr, role string, size int64, digest string, a store.Audit, queue bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -94,7 +104,11 @@ func (s *Sources) Register(ctx context.Context, item model.ISO, kind, addr, role
 	} else if exists {
 		return store.ErrConflict
 	}
-	_, err = s.store.SaveSource(ctx, src, a)
+	if queue && current.State == model.ISOFailed {
+		_, err = s.store.SaveSourceAndAcquire(ctx, src, current.Rev, a)
+	} else {
+		_, err = s.store.SaveSource(ctx, src, a)
+	}
 	return err
 }
 
@@ -270,13 +284,14 @@ func (s *Sources) RequestReimport(ctx context.Context, id string, a store.Audit)
 	if !allFetched(item, sources) {
 		return store.ErrConflict
 	}
-	// SaveSource's same-state audited update supplies the required atomic audit
-	// without adding a separate audit writer to the storage contract.
-	if _, err = s.store.SaveSource(ctx, sources[0], a); err != nil {
-		return err
+	// Main media is the stable request carrier; queue and audit commit together.
+	for _, src := range sources {
+		if src.Role == "" {
+			_, err = s.store.SaveSourceAndAcquire(ctx, src, item.Rev, a)
+			return err
+		}
 	}
-	item.State = model.ISOAcquiring
-	_, err = s.store.UpdateISO(ctx, item)
+	err = store.ErrConflict
 	return err
 }
 

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"github.com/lober/lober/internal/core/catalog"
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/store"
 	"gorm.io/gorm"
@@ -65,6 +66,20 @@ func lockedSource(tx *gorm.DB, id, role string) (sourceRow, error) {
 }
 
 func (s *Store) SaveSource(ctx context.Context, src store.Source, a store.Audit) (store.Source, error) {
+	return s.saveSource(ctx, src, a, 0)
+}
+
+func (s *Store) SaveSourceAndAcquire(ctx context.Context, src store.Source, isoRev int64, a store.Audit) (store.Source, error) {
+	if isoRev < 1 {
+		return store.Source{}, store.ErrInvalid
+	}
+	if err := store.CheckAudit(a); err != nil {
+		return store.Source{}, err
+	}
+	return s.saveSource(ctx, src, a, isoRev)
+}
+
+func (s *Store) saveSource(ctx context.Context, src store.Source, a store.Audit, acquireRev int64) (store.Source, error) {
 	if err := store.CheckSource(src); err != nil {
 		return store.Source{}, err
 	}
@@ -83,6 +98,38 @@ func (s *Store) SaveSource(ctx context.Context, src store.Source, a store.Audit)
 		}
 		if model.ISOState(parent.State) == model.ISODeprecated {
 			return store.ErrImmutable
+		}
+		if acquireRev != 0 {
+			if parent.Rev != acquireRev || model.ISOState(parent.State) != model.ISOFailed {
+				return store.ErrConflict
+			}
+			sources, err := listSources(tx.Where("iso_id = ?", src.ISOID))
+			if err != nil {
+				return err
+			}
+			mainFetched, extraFetched := false, false
+			extra, needsExtra := catalog.ExtraSourceOf(catalog.Series(parent.Series))
+			for _, other := range sources {
+				if other.Role == "" && other.State == store.SourceFetched {
+					mainFetched = true
+				}
+				if needsExtra && other.Role == extra.Role && other.State == store.SourceFetched {
+					extraFetched = true
+				}
+				if src.Rev != 0 && other.State != store.SourceFetched {
+					return store.ErrConflict
+				}
+			}
+			if !mainFetched {
+				return store.ErrConflict
+			}
+			if src.Rev == 0 {
+				if !needsExtra || src.Role != extra.Role {
+					return store.ErrInvalid
+				}
+			} else if src.Role != "" || src.State != store.SourceFetched || needsExtra && !extraFetched {
+				return store.ErrConflict
+			}
 		}
 		old, err := lockedSource(tx, src.ISOID, src.Role)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -123,6 +170,11 @@ func (s *Store) SaveSource(ctx context.Context, src store.Source, a store.Audit)
 			src.Rev = cur.Rev + 1
 			next = sourceToRow(src)
 			if err := sourceQuery(tx.Model(&sourceRow{}), src.ISOID, src.Role).Select("kind", "url", "path", "total_size", "expected_sha256", "fetched", "state", "error", "rev").Updates(&next).Error; err != nil {
+				return err
+			}
+		}
+		if acquireRev != 0 {
+			if err := tx.Model(&isoRow{}).Where("id = ?", src.ISOID).Updates(map[string]any{"state": string(model.ISOAcquiring), "rev": parent.Rev + 1}).Error; err != nil {
 				return err
 			}
 		}

@@ -488,6 +488,7 @@ const (
 	ConsoleLoginFailed            = "用户名或口令不对"
 	ConsolePasswordChangeRequired = "请先为当前账号设置与种子口令不同的新口令，再继续操作"
 	ConsoleSelfDisable            = "不能禁用自己的账号"
+	ConsoleLastAdmin              = "必须保留至少一位启用的管理员"
 	UserLabelUsername             = "用户名"
 	UserLabelRole                 = "角色"
 	UserLabelPassword             = "口令散列"

@@ -298,5 +298,9 @@ func (s *server) previewTask(c *gin.Context) {
 	if !Judge(c, ps) {
 		return
 	}
-	Ok(c, previewResponse{Files: files, Problems: jsonProblems(ps), Sample: append(sample, labels...)})
+	sample = append(sample, labels...)
+	for i := range files {
+		files[i].Sample = len(sample) > 0
+	}
+	Ok(c, previewResponse{Files: files, Problems: jsonProblems(ps), Sample: sample})
 }
