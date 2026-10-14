@@ -67,7 +67,7 @@ func Test新模块不能漏出守卫(t *testing.T) {
 	for _, d := range dirs {
 		first := strings.Split(d, "/")[0]
 		switch first {
-		case "core", "store", "iso", "archtest", "render", "builtin":
+		case "core", "store", "iso", "archtest", "render", "builtin", "console":
 		default:
 			t.Errorf("未登记层: internal/%s", d)
 		}

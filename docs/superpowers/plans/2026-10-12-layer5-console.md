@@ -140,7 +140,7 @@
   - `console.statusOfProblems(ps []model.Problem) int`（纯函数，供测试）
   - 守卫的 `layerConsole`、`layerAssembly`、`ruleConsole`、`ruleAssembly`
 
-- [ ] **Step 1: 加依赖，确认能编**
+- [x] **Step 1: 加依赖，确认能编**
 
 Run:
 ```bash
@@ -149,7 +149,7 @@ go mod tidy
 ```
 Expected: `go.mod` 的 require 里出现 gin；`go build ./...` 通过。
 
-- [ ] **Step 2: 写失败的测试——信封**
+- [x] **Step 2: 写失败的测试——信封**
 
 Create `internal/console/envelope_test.go`:
 
@@ -218,7 +218,7 @@ func Test没有数据时成功响应的data是null(t *testing.T) {
 Run: `go test ./internal/console/ -run 'Test成功|Test没有数据' -v`
 Expected: FAIL，`undefined: console.Ok`。
 
-- [ ] **Step 3: 写失败的测试——错误映射**
+- [x] **Step 3: 写失败的测试——错误映射**
 
 Create `internal/console/errors_test.go`：
 
@@ -398,7 +398,7 @@ var _ = catalog.FileMenu
 Run: `go test ./internal/console/ -v`
 Expected: FAIL，`undefined: console.StatusOfProblems`、`undefined: console.RespondError`、`undefined: console.Ok`。
 
-- [ ] **Step 4: 写失败的测试——守卫两条新规则**
+- [x] **Step 4: 写失败的测试——守卫两条新规则**
 
 Modify `internal/archtest/guard_test.go`，在 `Test存储层的依赖规则` 之后加：
 
@@ -483,7 +483,7 @@ func Test总检查接上了控制台与装配点(t *testing.T) {
 Run: `go test ./internal/archtest/ -run 'Test控制台与装配点|Test总检查接上了控制台' -v`
 Expected: FAIL，`undefined: pkgConsole`、`undefined: ruleConsole`、`undefined: checkConsoleFile`。
 
-- [ ] **Step 5: 实现信封与错误映射**
+- [x] **Step 5: 实现信封与错误映射**
 
 Create `internal/console/doc.go`：
 
@@ -688,7 +688,7 @@ func firstMessage(common []model.Problem, byHost map[string][]model.Problem) str
 
 `errors.go` 的 import 里补 `"slices"`。
 
-- [ ] **Step 6: 加守卫的两条规则**
+- [x] **Step 6: 加守卫的两条规则**
 
 Modify `internal/archtest/deps_test.go`：
 
@@ -808,18 +808,18 @@ func assemblyRule(pkg, imp string) rule {
 }
 ```
 
-- [ ] **Step 7: 跑测试，确认绿**
+- [x] **Step 7: 跑测试，确认绿**
 
 Run: `go test ./internal/console/ ./internal/archtest/ -v`
 Expected: PASS。`internal/archtest` 的日志里出现「控制台」与「装配点」两层各查到的包数。
 
-- [ ] **Step 8: 守卫的反例**
+- [x] **Step 8: 守卫的反例**
 
 先确认守卫真的在查这两层：临时在 `internal/console/errors.go` 里加一行 `import _ "github.com/lib/pq"`，跑
 `go test ./internal/archtest/ -run Test总检查`，应报 `ruleConsole`；删掉该行再跑一次，恢复绿。
 （这是计划「防空跑」的例行步骤：守卫没有反例就等于没查。）
 
-- [ ] **Step 9: 提交**
+- [x] **Step 9: 提交**
 
 ```bash
 git add internal/console go.mod go.sum internal/archtest

@@ -461,6 +461,20 @@ const (
 // 期望的格式、字段的称呼）又是固定几种的，每种措辞登记在这里，由那个函数选一条作为
 // 参数传给 NewProblem，自己不写中文。
 
+// 控制台非业务错误的展示文字，不把底层错误直接回给客户端。
+const (
+	ConsoleBadRequest   = "请求的内容不合法"
+	ConsoleUnauthorized = "未登录或会话已失效"
+	ConsoleForbidden    = "没有执行这项操作的权限"
+	ConsoleNotFound     = "找不到这条记录"
+	ConsoleConflict     = "记录已经被改过，重读之后再试"
+	ConsoleDuplicate    = "已经有同键的记录了"
+	ConsoleImmutable    = "这个版本已经定稿，不能改"
+	ConsoleReferenced   = "还有别的记录引用着它，不能删"
+	ConsoleInternal     = "服务端内部错误"
+	ConsoleRejected     = "这批请求没有通过"
+)
+
 // sn_invalid 的原因，NormalizeSN 选用。
 const (
 	snReasonEmpty   = "为空"

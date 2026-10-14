@@ -535,7 +535,7 @@ func Test每个包都要归到一层(t *testing.T) {
 	var pkgs []goPackage
 	var want []finding
 	for _, p := range []string{
-		modulePath, modulePath + "/internal", modulePath + "/cmd/lober", modulePath + "/tools/gen",
+		modulePath, modulePath + "/internal", modulePath + "/cmd/loberx", modulePath + "/tools/gen",
 		modulePath + "/internal/coreutils", modulePath + "/internal/storex", modulePath + "/internal/renderer",
 		modulePath + "/internal/builtins", pkgGuard + "/fixture",
 	} {
@@ -559,7 +559,7 @@ func Test总检查按层计数(t *testing.T) {
 		pkgs = append(pkgs, goPackage{ImportPath: p})
 	}
 	_, got := checkModule(fstest.MapFS{}, nil, pkgs)
-	want := map[layer]int{layerCore: 2, layerStore: 2, layerRender: 1, layerBuiltin: 2, layerGuard: 1}
+	want := map[layer]int{layerCore: 2, layerStore: 2, layerRender: 1, layerBuiltin: 2, layerGuard: 1, layerAssembly: 1}
 	if !maps.Equal(got, want) {
 		t.Errorf("每层查的包数 = %v，期望 %v", got, want)
 	}
@@ -584,7 +584,7 @@ func Test第三方模块只有pgstore与pgtest能用(t *testing.T) {
 		{pkgBuiltin + "/kickstart", []finding{{ruleLayer3, gorm}, {ruleLayer3, pgxV5}, {ruleLayer3, btree}}},
 		// 守卫有非测试文件就违规，归不到一层的包整个违规，都不再看 import。
 		{pkgGuard, []finding{{ruleGuard, "x.go"}}},
-		{cmdLober, []finding{{ruleLayer, cmdLober}}},
+		{cmdLober, []finding{{ruleAssembly, gorm}, {ruleAssembly, pgxV5}, {ruleAssembly, btree}}},
 	}
 	for _, c := range cases {
 		t.Run(strings.TrimPrefix(c.pkg, modulePath+"/"), func(t *testing.T) {
