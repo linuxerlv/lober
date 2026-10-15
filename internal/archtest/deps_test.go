@@ -44,8 +44,12 @@ const (
 // pkgRender 与 pkgBuiltin 是第 3 层的两个包：它们自己和它们下面的包分别算渲染、内置内容。内置内容按格式分子目录放正文，
 // 子目录里有 .go 文件时就是内置内容的子包，按内置内容的规则查；只放正文的子目录不是包。
 const (
-	pkgRender  = modulePath + "/internal/render"
-	pkgBuiltin = modulePath + "/internal/builtin"
+	pkgRender   = modulePath + "/internal/render"
+	pkgBuiltin  = modulePath + "/internal/builtin"
+	pkgConsole  = modulePath + "/internal/console"
+	pkgAssembly = modulePath + "/cmd/lober"
+	gin         = "github.com/gin-gonic/gin"
+	yamlV3      = "gopkg.in/yaml.v3"
 )
 
 // pkgGuard 是守卫自己，也就是本包。只有它自己算守卫，它下面的包不算。
@@ -59,19 +63,22 @@ var sourceRoots = []string{"internal", "cmd"}
 type layer string
 
 const (
-	layerCore    layer = "层 1"
-	layerStore   layer = "存储层"
-	layerRender  layer = "渲染"
-	layerBuiltin layer = "内置内容"
-	layerGuard   layer = "守卫"
+	layerCore     layer = "层 1"
+	layerStore    layer = "存储层"
+	layerRender   layer = "渲染"
+	layerBuiltin  layer = "内置内容"
+	layerISO      layer = "ISO"
+	layerConsole  layer = "控制台"
+	layerAssembly layer = "装配点"
+	layerGuard    layer = "守卫"
 )
 
 // layers 是 layer 的全部取值，按日志里的先后排。
-var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerGuard}
+var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerAssembly, layerGuard}
 
 // minChecked 是 Test全模块依赖守卫 每层至少要查到的包数。删了某层的包就改这里；渲染与内置内容的包加进来以后，
 // 补上它们的下限——忘了补会由「查到了包的层都登记了下限」那一条报出来。
-var minChecked = map[layer]int{layerCore: 7, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerGuard: 1}
+var minChecked = map[layer]int{layerCore: 7, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1}
 
 // minDirs 是 moduleSourceDirs 至少要遍历到的目录数。目录遍历没有别的防线：sourceRoots 少了一项、或者
 // checkModule 收到空的 dirs，ruleListed（整包被构建约束排除的目录）与 go test 的缓存跟踪都会静默失效，
@@ -146,7 +153,9 @@ const (
 
 	ruleLayer rule = "每个包都要归到一层：internal/core、internal/store、internal/render、internal/builtin，" +
 		"以及守卫自己 internal/archtest。归不到的，要么是包放错了目录，要么是新的一层（比如 cmd/lober）还没在守卫里登记规则"
-	ruleGuard rule = "守卫 internal/archtest 只放测试文件：有了非测试文件，它就成了能被 import、会进 go build 的包"
+	ruleGuard    rule = "守卫 internal/archtest 只放测试文件：有了非测试文件，它就成了能被 import、会进 go build 的包"
+	ruleConsole  rule = "控制台只依赖标准库、gin、core、存储契约、渲染与内置内容"
+	ruleAssembly rule = "装配点只依赖标准库、本模块、gin、yaml 与 wire"
 )
 
 // violation 是守卫查出的一处违规。
@@ -258,6 +267,15 @@ func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[
 			found = append(found, checkSources(fsys, p, checkStoreFile)...)
 		case layerRender, layerBuiltin:
 			found = append(found, checkPackage(fsys, p, checkLayer3File)...)
+		case layerISO:
+			found = append(found, ignoredFiles(p)...)
+			found = append(found, checkSources(fsys, p, checkISOFile)...)
+		case layerConsole:
+			found = append(found, ignoredFiles(p)...)
+			found = append(found, checkSources(fsys, p, checkConsoleFile)...)
+		case layerAssembly:
+			found = append(found, assemblyIgnoredFiles(fsys, p)...)
+			found = append(found, checkSources(fsys, p, checkAssemblyFile)...)
 		case layerGuard:
 			found = append(found, checkGuardFiles(p)...)
 		default:
@@ -280,6 +298,12 @@ func layerOf(pkg string) layer {
 		return layerRender
 	case under(pkg, pkgBuiltin):
 		return layerBuiltin
+	case under(pkg, pkgISO):
+		return layerISO
+	case under(pkg, pkgConsole):
+		return layerConsole
+	case pkg == pkgAssembly:
+		return layerAssembly
 	case pkg == pkgGuard:
 		return layerGuard
 	}

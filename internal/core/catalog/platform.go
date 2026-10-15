@@ -28,14 +28,14 @@ type platformFirmwareRow struct {
 // i386 也换算成 x86_64 是刻意的：BIOS 下的 iPXE 是 32 位构建，在 x86_64 机器上也报 i386。
 // 代价是认不出真正的 32 位机器，系统本来就不支持它们。
 var platformArchTable = []platformArchRow{
-	{"x86_64", "x86_64", []string{"x86_64", "i386"}},
-	{"aarch64", "aarch64", []string{"arm64"}},
+	{ArchX8664, "x86_64", []string{"x86_64", "i386"}},
+	{ArchAarch64, "aarch64", []string{"arm64"}},
 }
 
 // platformFirmwareTable 的顺序就是 Series.Firmwares 返回的顺序。
 var platformFirmwareTable = []platformFirmwareRow{
-	{"bios", "BIOS", "pcbios"},
-	{"uefi", "UEFI", "efi"},
+	{FirmwareBIOS, "BIOS", "pcbios"},
+	{FirmwareUEFI, "UEFI", "efi"},
 }
 
 // platformFirmwareLimitTable 只登记对固件有要求的系，没登记的系两种固件都能装。

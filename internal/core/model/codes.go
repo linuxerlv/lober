@@ -433,11 +433,66 @@ var codeTable = map[Code]codeSpec{
 	"render_windows_env_limit": {CategoryInvalid, 1,
 		"Windows 目标解释器无法完整保留参数「%[1]v」的环境变量值",
 		"缩短该参数取值，使环境变量完整长度不超过目标解释器的限制"},
+	// 第 4 层：Subject.Kind=iso，ID=ISO.ID。识别问题 Path=media/series/version/arch，
+	// 来源问题 Path=source.<role>（主介质为 source）；制品问题 Path=artifacts.<role>，工具问题 Path=tools.<name>。
+	"iso_media_unrecognized":   {CategoryIncompatible, 0, "认不出安装介质的格式", "换一个支持的完整安装 ISO"},
+	"iso_series_unrecognized":  {CategoryIncompatible, 1, "认出了 %[1]v 格式，但认不出内置系", "换一个支持的安装 ISO，或核实介质内的产品信息"},
+	"iso_series_mismatch":      {CategoryIncompatible, 2, "声明的系 %[1]v 与介质的系 %[2]v 不一致", "按介质实际的系重新创建 ISO"},
+	"iso_content_mismatch":     {CategoryIncompatible, 2, "介质摘要不符：期望 %[1]v，实际 %[2]v", "核对下载链接或上传文件，再重试获取"},
+	"iso_version_missing":      {CategoryIncompatible, 1, "介质内取不出有效的%[1]v", "换一个带完整产品信息的安装 ISO；不能按文件名猜版本"},
+	"iso_extra_source_invalid": {CategoryIncompatible, 1, "附加来源 %[1]v 缺失、不完整或与主介质的平台和版本不符", "登记同版本、同架构的附加来源，获取完成后重新导入"},
+	"iso_repo_incomplete":      {CategoryIncompatible, 1, "安装仓库缺少 %[1]v", "换一个带完整仓库的安装 ISO，再重新导入"},
+	"iso_artifact_missing":     {CategoryIncompatible, 1, "安装制品缺少 %[1]v", "换一个完整安装 ISO，再重新导入"},
+	"iso_tool_missing":         {CategoryIncompatible, 1, "Windows 工具目录缺少 %[1]v", "把对应工具放入配置的工具目录，再重新导入"},
+	"iso_wim_compressed":       {CategoryIncompatible, 0, "WIM 的 XML 资源使用不支持的压缩方式", "换一个 XML 资源未压缩或使用 XPRESS 的 install.wim，再重新导入"},
+	"iso_source_rejected":      {CategoryInvalid, 1, "来源不合法：%[1]v", "核对链接或上传范围；本地目录受限时请运维调整允许的目录"},
+	"iso_space_insufficient":   {CategoryIncomplete, 2, "暂存区只剩 %[1]v 字节，还差 %[2]v 字节", "清理暂存区，或改用允许目录内的服务器本地路径，再登记来源"},
+	// 用户由存储契约定义，Subject.Kind 不属于核心的八个领域对象。
+	"user_field_invalid": {CategoryInvalid, 1, "用户字段「%[1]v」不合法", "用户名用 1–32 个小写字母、数字或下划线并以字母开头；角色从内置五种中选择；新建时必须提供口令"},
 }
+
+// ISO 层选用的固定措辞集中在代码表文件；跨包调用需要导出。
+const (
+	ISOReasonURL    = "链接只支持 http 与 https，不能指向回环、链路本地或无效地址"
+	ISOReasonPath   = "本地路径不在允许登记的目录里"
+	ISOReasonChunk  = "分片越界、大小或内容与已登记的字节不符"
+	ISOVersionLabel = "版本"
+	ISOArchLabel    = "架构"
+)
 
 // 下面是代码表的补充：产出代码的函数在本包里、可选的措辞（不合法的原因、各类型
 // 期望的格式、字段的称呼）又是固定几种的，每种措辞登记在这里，由那个函数选一条作为
 // 参数传给 NewProblem，自己不写中文。
+
+// 控制台非业务错误的展示文字，不把底层错误直接回给客户端。
+const (
+	ConsoleBadRequest             = "请求的内容不合法"
+	ConsoleTemplateCurrent        = "所选模板不是当前已审批版本，请重新选择模板"
+	ConsoleTaskControlUnavailable = "第 7 层（状态机）尚未实现，暂不能取消或重试任务"
+	ConsoleSampleISO              = "示例 ISO"
+	ConsoleRejectReason           = "驳回必须提供非空、可存为 UTF-8 文本的理由"
+	ConsoleContentRange           = "Content-Range 必须给出与实际分片及已登记总长一致的范围，如 bytes 0-1048575/5242880"
+	ConsoleCSVRead                = "CSV 读不成：%v"
+	ConsoleCSVHeader              = "CSV 表头重复或属性键不合法：%q"
+	ConsoleCSVNoSN                = "CSV 表头必须有 sn 一列"
+	ConsoleCSVEmpty               = "CSV 至少需要一行主机记录"
+	ConsoleUnauthorized           = "未登录或会话已失效"
+	ConsoleForbidden              = "没有执行这项操作的权限"
+	ConsoleNotFound               = "找不到这条记录"
+	ConsoleConflict               = "记录已经被改过，重读之后再试"
+	ConsoleDuplicate              = "已经有同键的记录了"
+	ConsoleImmutable              = "这个版本已经定稿，不能改"
+	ConsoleReferenced             = "还有别的记录引用着它，不能删"
+	ConsoleInternal               = "服务端内部错误"
+	ConsoleRejected               = "这批请求没有通过"
+	ConsoleLoginFailed            = "用户名或口令不对"
+	ConsolePasswordChangeRequired = "请先为当前账号设置与种子口令不同的新口令，再继续操作"
+	ConsoleSelfDisable            = "不能禁用自己的账号"
+	ConsoleLastAdmin              = "必须保留至少一位启用的管理员"
+	UserLabelUsername             = "用户名"
+	UserLabelRole                 = "角色"
+	UserLabelPassword             = "口令散列"
+)
 
 // sn_invalid 的原因，NormalizeSN 选用。
 const (

@@ -193,6 +193,7 @@ func wantDefaultLimit[T any](t *testing.T, want []T, list func(cursor string) (s
 type contents struct {
 	Hosts []model.Host
 	ISOs  []model.ISO
+	Users []store.User
 	Audit []store.AuditEntry
 }
 
@@ -201,6 +202,7 @@ func snapshot(t *testing.T, s *pgstore.Store) contents {
 	return contents{
 		Hosts: slices.Concat(hostPages(t, s, store.HostQuery{Limit: 500})...),
 		ISOs:  slices.Concat(isoPages(t, s, store.ISOQuery{Limit: 500})...),
+		Users: slices.Concat(userPages(t, s, store.UserQuery{Limit: 500})...),
 		Audit: auditEntries(t, s),
 	}
 }

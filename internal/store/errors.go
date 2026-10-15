@@ -20,7 +20,8 @@ var (
 	// ErrConflict：Rev 或期望的状态对不上，或者已有一个未审批的版本又要新开一个。调用方重读之后再判断
 	// （spec §6.2 第 4 条）。还有一种：写入撞上了名字或 SHA256 的唯一约束，再查时占着它的那一方刚好变了（导入失败、
 	// 删掉、改了名），报不出是谁；重读之后再写，得到的必然是成功或 DuplicateError。
-	ErrConflict = errors.New("store：Rev 或状态对不上，重读之后再判断")
+	ErrConflict  = errors.New("store：Rev 或状态对不上，重读之后再判断")
+	ErrLastAdmin = fmt.Errorf("%w: at least one enabled administrator is required", ErrConflict)
 	// ErrDuplicate：唯一键撞了，总是包在 DuplicateError 里。
 	ErrDuplicate = errors.New("store：唯一键重复")
 	// ErrImmutable：改已审批、已废弃或内置的版本，或者改内置的身份（C23、C25）。系统更新（UpdateISO）碰到已废弃的
@@ -43,6 +44,26 @@ var (
 )
 
 // DuplicateError 是唯一键撞了。Field 是撞上的键：sn、name 或 sha256；Existing 是已有的那一个，主机给 SN，
+const (
+	DuplicateFieldSN       = "sn"
+	DuplicateFieldName     = "name"
+	DuplicateFieldSHA256   = "sha256"
+	DuplicateFieldUsername = "username"
+	TargetHost             = model.KindHost
+	TargetISO              = model.KindISO
+	TargetHook             = model.KindHook
+	TargetTemplate         = model.KindTemplate
+	TargetTask             = "task"
+	TargetUser             = UserSubjectKind
+)
+
+// ReferencedError identifies deterministic blockers while preserving ErrReferenced.
+type ReferencedError struct{ References []model.Subject }
+
+func (e *ReferencedError) Error() string { return fmt.Sprintf("%v：%v", ErrReferenced, e.References) }
+func (e *ReferencedError) Unwrap() error { return ErrReferenced }
+
+// DuplicateError identifies the conflicting unique field and existing record.
 // 其余给 ID。Unwrap 返回 ErrDuplicate。
 type DuplicateError struct {
 	Field    string

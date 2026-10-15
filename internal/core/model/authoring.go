@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"maps"
 	"slices"
+	"strconv"
 
 	"github.com/lober/lober/internal/core/catalog"
 )
@@ -63,6 +64,8 @@ type HookKey struct {
 	Version int
 }
 
+func (k HookKey) String() string { return k.ID + "@" + strconv.Itoa(k.Version) }
+
 // ImplKind 是实现的种类。字面量会存进数据库，发布后不能改名。
 type ImplKind string
 
@@ -115,6 +118,8 @@ type TemplateKey struct {
 	ID      string
 	Version int
 }
+
+func (k TemplateKey) String() string { return k.ID + "@" + strconv.Itoa(k.Version) }
 
 // Template 是一个模板版本：一份正文，可以勾同一种格式的多个系（C13），另带一张装配表。
 // 第 2 层原样存它，字段名就是最终的名字。

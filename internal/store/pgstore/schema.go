@@ -59,6 +59,29 @@ const openTaskIndex = "idx_tasks_open"
 // 列的十张表都在这里。
 var tables = []table{
 	{
+		name: "users", primary: []string{"username"},
+		checks: []check{
+			{"chk_users_role", "CHECK (role = ANY (ARRAY['viewer'::text, 'operator'::text, 'hook-author'::text, 'hook-approver'::text, 'admin'::text]))"},
+			{"chk_users_created_at", "CHECK (created_at > 0)"},
+			{"chk_users_rev", "CHECK (rev >= 1)"},
+		},
+	},
+	{
+		name: "iso_sources", primary: []string{"iso_id", "role"},
+		foreign: []foreign{{name: "fk_iso_sources_iso", columns: []string{"iso_id"}, refTable: "isos", refColumns: []string{"id"}, onDelete: "CASCADE"}},
+		checks: []check{
+			{"chk_iso_sources_rev", "CHECK (rev >= 1)"},
+			{"chk_iso_sources_state", "CHECK (state = ANY (ARRAY['pending'::text, 'fetching'::text, 'fetched'::text, 'failed'::text, 'cancelled'::text]))"},
+			{"chk_iso_sources_kind", "CHECK (kind = ANY (ARRAY['remote'::text, 'upload'::text, 'local'::text]))"},
+			{"chk_iso_sources_fetched", "CHECK (fetched >= 0)"},
+		},
+	},
+	{
+		name: "iso_upload_ranges", primary: []string{"iso_id", "role", "start"},
+		foreign: []foreign{{name: "fk_iso_upload_ranges_source", columns: []string{"iso_id", "role"}, refTable: "iso_sources", refColumns: []string{"iso_id", "role"}, onDelete: "CASCADE"}},
+		checks:  []check{{"chk_iso_upload_ranges_start", "CHECK (start >= 0)"}, {"chk_iso_upload_ranges_length", "CHECK (length > 0)"}},
+	},
+	{
 		name:    "hosts",
 		primary: []string{"sn"},
 		checks:  []check{{"chk_hosts_rev", "CHECK (rev >= 1)"}},
@@ -131,6 +154,9 @@ var tables = []table{
 		primary: []string{"id"},
 		indexes: []index{
 			{name: "idx_tasks_created_at", columns: []string{"created_at"}},
+			{name: "idx_tasks_host_sn", columns: []string{"host_sn"}},
+			{name: "idx_tasks_iso_id", columns: []string{"iso_id"}},
+			{name: "idx_tasks_template_version", columns: []string{"template_id", "template_version"}},
 			// C31。建任务时先在事务里对锁住的主机重跑准入，它是最后一道防线；推进回未结束的状态时靠它挡住
 			{name: openTaskIndex, unique: true, columns: []string{"host_sn"},
 				where: "state <> ALL (ARRAY['done'::text, 'failed'::text, 'cancelled'::text])"},

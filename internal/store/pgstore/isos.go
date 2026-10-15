@@ -121,6 +121,9 @@ func (s *Store) DeleteISO(ctx context.Context, id string, rev int64, a store.Aud
 		if _, err := lockISO(tx, id, rev); err != nil {
 			return err
 		}
+		if err := taskReference(tx, "iso_id = ?", id); err != nil {
+			return err
+		}
 		if err := tx.Delete(&isoRow{ID: id}).Error; err != nil {
 			return err
 		}

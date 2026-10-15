@@ -45,40 +45,40 @@ type systemValueRow struct {
 // timingTable 按 Rank 排列，同级的两个 post 先安装环境、后目标系统。Format.Timings
 // 照这张表的顺序输出，所以它的顺序就是对外的顺序。
 var timingTable = []timingRow{
-	{"pre", 1, "装前"},
-	{"post-installer", 2, "装后（安装环境）"},
-	{"post-target", 2, "装后（目标系统内）"},
-	{"firstboot", 3, "首次开机"},
+	{TimingPre, 1, "装前"},
+	{TimingPostInstaller, 2, "装后（安装环境）"},
+	{TimingPostTarget, 2, "装后（目标系统内）"},
+	{TimingFirstboot, 3, "首次开机"},
 }
 
 var interpreterTable = []interpreterRow{
-	{"sh", "sh"},
-	{"bash", "bash"},
-	{"cmd", "cmd"},
-	{"powershell", "PowerShell"},
+	{InterpSH, "sh"},
+	{InterpBash, "bash"},
+	{InterpCmd, "cmd"},
+	{InterpPowershell, "PowerShell"},
 }
 
 var systemPartTable = []systemPartRow{
-	{"syslog", "syslog 指向"},
-	{"firstboot", "首次开机脚手架"},
-	{"cleanup", "凭据清理"},
+	{PartSyslog, "syslog 指向"},
+	{PartFirstboot, "首次开机脚手架"},
+	{PartCleanup, "凭据清理"},
 }
 
 // token、syslog-addr、artifacts 只给系统部件与机器面地址用（spec §6.2 第 2 条），不进任何格式的能力表：
 // 作者在正文里写 {{sys:token}}，激活判定报 sysvalue_not_allowed。
 var systemValueTable = []systemValueRow{
-	{"repo", "安装源地址"},
-	{"iso", "原始 ISO 地址"}, // Ubuntu 的 url=：安装器要经 HTTP 把整张 ISO 下进内存
-	{"smb", "Windows 安装源共享"},
-	{"gateway", "网关基地址"},
-	{"task", "任务号"},
-	{"sn", "主机 SN"},
-	{"lbrace", "字面量 {{"},         // 正文里要写字面量 {{ 时用它转义
-	{"token", "token"},           // 网关签发的 token，放在 AnswerURL 的路径段里
-	{"syslog-addr", "syslog 地址"}, // host:port；syslog 是系统部件的标识，两者不混
-	{"artifacts", "制品基地址"},       // ArtifactURL 的 base
+	{SysRepo, "安装源地址"},
+	{SysISO, "原始 ISO 地址"}, // Ubuntu 的 url=：安装器要经 HTTP 把整张 ISO 下进内存
+	{SysSMB, "Windows 安装源共享"},
+	{SysGateway, "网关基地址"},
+	{SysTask, "任务号"},
+	{SysSN, "主机 SN"},
+	{SysLBrace, "字面量 {{"},        // 正文里要写字面量 {{ 时用它转义
+	{SysToken, "token"},          // 网关签发的 token，放在 AnswerURL 的路径段里
+	{SysSyslogAddr, "syslog 地址"}, // host:port；syslog 是系统部件的标识，两者不混
+	{SysArtifacts, "制品基地址"},      // ArtifactURL 的 base
 	// Private caller-owned reboot credential. Never add to author capability tables.
-	{"finalize-token", "finalize token"},
+	{SysFinalizeToken, "finalize token"},
 }
 
 // capabilityRow 是一种格式的能力。三个列表都按这里写的顺序对外返回。

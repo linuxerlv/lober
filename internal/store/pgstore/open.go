@@ -24,9 +24,11 @@ var _ store.Store = (*Store)(nil)
 // models 是本层的全部行类型，AutoMigrate 按它们建表；它们的表与 schema.go 的 tables 一一对应。
 var models = []any{
 	&hostRow{}, &isoRow{},
+	&sourceRow{}, &rangeRow{},
 	&hookRow{}, &hookVersionRow{}, &templateRow{}, &templateVersionRow{}, &templateHookRefRow{},
 	&taskRow{}, &taskEventRow{},
 	&auditRow{},
+	&userRow{},
 }
 
 // batchSize 是一条语句最多写或查的行数：PostgreSQL 一条语句最多 65535 个参数，CSV 导入一次可能有几千台主机。

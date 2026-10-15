@@ -10,7 +10,6 @@ import (
 	"errors"
 	"maps"
 	"slices"
-	"strconv"
 
 	"github.com/lober/lober/internal/core/model"
 	"github.com/lober/lober/internal/core/scan"
@@ -74,7 +73,7 @@ type Result struct {
 // 里、或实例没有覆盖 ISO 的系的实现时，报 hook_ref_missing 或 impl_missing_for_series，跳过那个实例。
 func Evaluate(in Input) Result {
 	if t := in.Template; !slices.Contains(t.Series, in.ISO.Series) {
-		subject := model.Subject{Kind: "template", ID: templateRef(t)}
+		subject := model.Subject{Kind: model.KindTemplate, ID: templateRef(t)}
 		return Result{Problems: []model.Problem{model.NewProblem("series_not_ticked", subject, string(in.ISO.Series))}}
 	}
 	ev := evaluator{in: in, inForm: map[FieldKey]bool{}, values: Values{}}
@@ -112,7 +111,7 @@ type evaluator struct {
 // addInstance 取插槽 slot 里第 seq 个实例所用 hook 在 ISO 的系上的实现，再把 hook 的参数列进表单。
 // 结构性缺失的问题落在这个实例上（model.InstancePath）。
 func (ev *evaluator) addInstance(slot string, seq int, inst model.Instance) {
-	where := model.Subject{Kind: "slot", ID: templateRef(ev.in.Template), Path: model.InstancePath(slot, seq)}
+	where := model.Subject{Kind: model.KindSlot, ID: templateRef(ev.in.Template), Path: model.InstancePath(slot, seq)}
 	h, ok := ev.in.Hooks[model.HookKey{ID: inst.HookID, Version: inst.HookVersion}]
 	if !ok {
 		ev.report(model.NewProblem("hook_ref_missing", where, inst.HookID, inst.HookVersion))
@@ -268,13 +267,13 @@ func (ev *evaluator) checkEntered() {
 
 // at 是落在字段上的问题的 Subject：Kind 为 param，ID 为主机 SN，Path 为字段键。
 func (ev *evaluator) at(key FieldKey) model.Subject {
-	return model.Subject{Kind: "param", ID: ev.in.Host.SN, Path: string(key)}
+	return model.Subject{Kind: model.KindParam, ID: ev.in.Host.SN, Path: string(key)}
 }
 
 // templateRef 是落在模板与实例上的问题的 Subject.ID，写成「模板 ID@版本」，与激活判定、准入判定、
 // 快照构建一致。
 func templateRef(t model.Template) string {
-	return t.ID + "@" + strconv.Itoa(t.Version)
+	return (model.TemplateKey{ID: t.ID, Version: t.Version}).String()
 }
 
 func (ev *evaluator) report(p model.Problem) {

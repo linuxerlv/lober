@@ -28,7 +28,7 @@ import (
 // 同一格在激活与建任务时标在同一处（C-3）。
 func Template(t model.Template, hooks map[model.HookKey]model.Hook) []model.Problem {
 	id := versionID(t.ID, t.Version)
-	whole := model.Subject{Kind: "template", ID: id}
+	whole := model.Subject{Kind: model.KindTemplate, ID: id}
 	var out []model.Problem
 	if _, _, err := model.NormalizeName(t.Name); err != nil {
 		out = append(out, withSubject(err, whole))
@@ -92,7 +92,7 @@ func checkTemplateBody(body string, res scan.Result, scanned []model.Problem, fo
 		s := at(whole, seg.Line, seg.Col)
 		switch seg.Kind {
 		case scan.KindSlot:
-			slotSubj := model.Subject{Kind: "slot", ID: whole.ID, Path: seg.Slot.Name, Line: seg.Line, Col: seg.Col}
+			slotSubj := model.Subject{Kind: model.KindSlot, ID: whole.ID, Path: seg.Slot.Name, Line: seg.Line, Col: seg.Col}
 			out = append(out, checkSlot(seg, format, seen, slotSubj)...)
 			out = append(out, rules.placeholder(seg, s)...)
 		case scan.KindPart:
@@ -165,7 +165,7 @@ func checkAssembly(assembly map[string][]model.Instance, slots []scan.Slot, body
 	if bodyOK {
 		for _, name := range slices.Sorted(maps.Keys(assembly)) {
 			if !known[name] {
-				out = append(out, model.NewProblem("assembly_slot_unknown", model.Subject{Kind: "slot", ID: id, Path: name}, name))
+				out = append(out, model.NewProblem("assembly_slot_unknown", model.Subject{Kind: model.KindSlot, ID: id, Path: name}, name))
 			}
 		}
 	}
@@ -185,7 +185,7 @@ func checkAssembly(assembly map[string][]model.Instance, slots []scan.Slot, body
 // 合法。问题落在 model.InstancePath 给的位置上。引用的 hook 版本不在 hooks 里时只报这一条：别的检查
 // 都要看它。
 func checkInstance(inst model.Instance, slot scan.Slot, seq int, timingOK bool, series []catalog.Series, hooks map[model.HookKey]model.Hook, id string) []model.Problem {
-	s := model.Subject{Kind: "slot", ID: id, Path: model.InstancePath(slot.Name, seq)}
+	s := model.Subject{Kind: model.KindSlot, ID: id, Path: model.InstancePath(slot.Name, seq)}
 	k := model.HookKey{ID: inst.HookID, Version: inst.HookVersion}
 	h, ok := hooks[k]
 	if !ok {

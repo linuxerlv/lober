@@ -304,12 +304,17 @@ func alignFirmwares() []string {
 }
 
 // host_platform_invalid 的下一步列出了架构与固件的合法取值，以及 iPXE 上报值怎样对应（C-9）：目录改了
-// 取值或换算，说明得跟着改，被拒的人照着说明才填得对。固件查得到全集；目录没有列出全部架构的公开查询，
-// 架构只能查列出的都合法，目录新加了架构而说明没补，这里查不出。每一对 iPXE 换算都按目录核对。
+// 取值或换算，说明得跟着改，被拒的人照着说明才填得对。架构与固件都比对全集，漏列新取值也会失败。
+// 每一对 iPXE 换算都按目录核对。
 func TestAlign主机平台的取值与目录一致(t *testing.T) {
 	text := alignText(t, "host_platform_invalid")
 	arches := alignSplit(alignFind(t, "host_platform_invalid", text, `架构只能填 ([^，；。]+)，`)[0][1])
 	firmwares := alignSplit(alignFind(t, "host_platform_invalid", text, `固件只能填 ([^，；。]+)，`)[0][1])
+	var allArchs []string
+	for _, a := range catalog.AllArchs() {
+		allArchs = append(allArchs, string(a))
+	}
+	alignSame(t, "host_platform_invalid 列出的架构", arches, allArchs)
 	for _, a := range arches {
 		// 说明还写了「区分大小写」：大写的写法不能也算合法。
 		if !catalog.Arch(a).Valid() || catalog.Arch(strings.ToUpper(a)).Valid() {

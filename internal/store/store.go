@@ -10,11 +10,13 @@ import (
 type Store interface {
 	Hosts
 	ISOs
+	ISOSources
 	Hooks
 	Templates
 	Tasks
 	Events
 	AuditLog
+	Users
 	// Close 释放连接这类资源，之后不能再调用别的方法。
 	Close() error
 }
