@@ -1,7 +1,7 @@
 # make check 依次跑格式、vet、测试、竞态检测、交叉编译和生成漂移检查，六步全过才算绿。
 # 各目标只用 go、gofmt 和 shell 内建命令，Git Bash 与 Linux 上都能跑。
 
-.PHONY: check fmt vet archcheck test race cross gen
+.PHONY: check fmt vet archcheck test race cross gen webcheck
 
 check: fmt vet test race cross gen
 
@@ -37,3 +37,7 @@ cross:
 # never changes the worktree or requires a clean staging area.
 gen:
 	WIRE_LOADER_MODE=fallback WIRE_LOADER_ARTIFACTS=0 go tool wire diff ./cmd/lober
+
+# Frontend checks reuse the existing Vben workspace. Run after pnpm install.
+webcheck:
+	pnpm --dir web check:console

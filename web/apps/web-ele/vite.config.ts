@@ -1,3 +1,5 @@
+import process from 'node:process';
+
 import { defineConfig, viteCssLayerPlugin } from '@vben/vite-config';
 
 import ElementPlus from 'unplugin-element-plus/vite';
@@ -25,12 +27,12 @@ export default defineConfig(async () => {
       ],
       server: {
         proxy: {
-          '/api': {
+          '/console/v1': {
             changeOrigin: true,
-            rewrite: (path) => path.replace(/^\/api/, ''),
-            // mock代理目标地址
-            target: 'http://localhost:5320/api',
-            ws: true,
+            target: process.env.LOBER_API_TARGET || 'http://127.0.0.1:58080',
+          },
+          '/openapi.json': {
+            target: process.env.LOBER_API_TARGET || 'http://127.0.0.1:58080',
           },
         },
       },

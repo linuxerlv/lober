@@ -268,7 +268,7 @@ url --url={{iso:repo}}
 
 ### 4.6 层 6 前端
 
-- 技术栈：沿用 `web/` 里的 vue-vben-admin 5.x Element Plus 版（`apps/web-ele`，上游版本记在 `web/UPSTREAM_PIN.md`），即 Vue 3 全家桶：Vue 3 + TypeScript + Vite + Vue Router + Pinia + vue-i18n，组件用 Element Plus，表单与表格走 vben 的表单和 VxeTable 适配层，请求走 `@vben/request`，单测用 vitest。页面一律写成 `.vue` 单文件组件，不手写 HTML 页面，也不引入别的 UI 框架。重写的是 `apps/web-ele` 里的业务页面、路由、接口封装和状态；vben 的上游包（`web/packages/`）和应用骨架保留不改。
+- 技术栈：沿用 `web/` 里的 vue-vben-admin 5.x Element Plus 版（`apps/web-ele`，上游版本记在 `web/UPSTREAM_PIN.md`），即 Vue 3 全家桶：Vue 3 + TypeScript + Vite + Vue Router + Pinia + vue-i18n，组件用 Element Plus，表单与表格走 vben 的表单和 VxeTable 适配层，请求走 `@vben/request`，单测用 vitest。页面一律写成 `.vue` 单文件组件，不手写 HTML 页面，也不引入别的 UI 框架。第 6 层基于现有 `apps/web-ele` 的前端代码改造：复用适用的业务页面、组件和交互，按新版控制台 API 调整路由、接口封装与状态，补齐新增流程，移除新版范围外的旧入口；vben 的上游包（`web/packages/`）和应用骨架保留不改。（用户确认，2026-10-15）
 - 向导与编辑器：只调用控制台 API。插槽列表、候选筛选、参数表单都由服务端给出，前端不解析正文，也不判断兼容性，否则规则会分裂成两份。
 
 ### 4.7 层 7 执行链
@@ -428,7 +428,7 @@ make check 全绿之外：
 
 - 开工前：主目录里原有的未提交改动已丢弃；不打标签，也不参照旧代码；main 不动，继续是旧产品。
 - 七层依次做：核心模型、存储、渲染与内置内容、ISO、控制台、前端、执行链。每层一个 `feat/<层名>` 分支，直接在主目录上开，不用 git worktree；层内并行的任务各在 `.tmp/wf/` 下的本地克隆里做，逐个并回该分支。只写代码和单测；make check 全绿、评审通过后合入 dev。
-- 第 1 层的第一个提交把旧系统从 dev 上删掉，从空树开始写；`web/` 暂不动，留到第 6 层重写其中的业务页面。旧提交留在 git 历史里，但实现不读取、不照搬旧代码。
+- 第 1 层的第一个提交把旧系统从 dev 上删掉，从空树开始写；`web/` 暂不动，留到第 6 层基于现有前端代码改造（§4.6）。后端实现不读取、不照搬旧代码；第 6 层直接复用并修改现有 `web/`。前端改造完成，且 §7.2 第 6 条的类型检查、ESLint、单测、构建与四条浏览器流程验收通过、评审通过后，再合入 dev。（用户确认，2026-10-15）
 - 一份总 spec（本文）加每层一份实现计划。每层的计划等上一层合入 dev 后再写，依据已经写出来的真实接口。
 - 装配点在第 5 层第一次出现，这时能起控制台；第 7 层再补上网关和状态机。
 - 系统验收在 test 分支上全部通过后，dev 并入 main，旧系统退场。还没合并的旧分支和对应的工作树（`feat/four-layer` 等）到时作废，删之前逐个确认。

@@ -34,6 +34,11 @@
       "dependsOn": ["^build"],
       "outputs": [".nitro/**", ".output/**"]
     },
+    "@vben/web-ele#build": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "cache": false
+    },
     "test:e2e": {},
     "dev": {
       "dependsOn": [],

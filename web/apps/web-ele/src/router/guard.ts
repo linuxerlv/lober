@@ -50,6 +50,15 @@ function setupAccessGuard(router: Router) {
     const userStore = useUserStore();
     const authStore = useAuthStore();
 
+    if (
+      accessStore.accessToken &&
+      userStore.userInfo?.passwordChangeRequired &&
+      to.path !== '/account/password' &&
+      to.path !== LOGIN_PATH
+    ) {
+      return { path: '/account/password', replace: true };
+    }
+
     // 基本路由，这些路由不需要进入权限拦截
     if (coreRouteNames.includes(to.name as string)) {
       if (to.path === LOGIN_PATH && accessStore.accessToken) {
@@ -107,10 +116,14 @@ function setupAccessGuard(router: Router) {
     accessStore.setAccessMenus(accessibleMenus);
     accessStore.setAccessRoutes(accessibleRoutes);
     accessStore.setIsAccessChecked(true);
-    const redirectPath = (from.query.redirect ??
-      (to.path === preferences.app.defaultHomePath
-        ? userInfo.homePath || preferences.app.defaultHomePath
-        : to.fullPath)) as string;
+    const redirectPath = (
+      userInfo.passwordChangeRequired
+        ? '/account/password'
+        : (from.query.redirect ??
+          (to.path === preferences.app.defaultHomePath
+            ? userInfo.homePath || preferences.app.defaultHomePath
+            : to.fullPath))
+    ) as string;
 
     return {
       ...router.resolve(decodeURIComponent(redirectPath)),

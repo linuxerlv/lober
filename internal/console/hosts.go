@@ -12,15 +12,15 @@ import (
 
 type hostRequest struct {
 	SN       string            `json:"sn"`
-	Arch     catalog.Arch      `json:"arch"`
-	Firmware catalog.Firmware  `json:"firmware"`
+	Arch     catalog.Arch      `json:"arch,omitempty"`
+	Firmware catalog.Firmware  `json:"firmware,omitempty"`
 	Attrs    map[string]string `json:"attrs"`
 	Rev      int64             `json:"rev"`
 }
 type hostResponse struct {
 	SN       string            `json:"sn"`
-	Arch     catalog.Arch      `json:"arch"`
-	Firmware catalog.Firmware  `json:"firmware"`
+	Arch     catalog.Arch      `json:"arch" openapi:"allowEmpty"`
+	Firmware catalog.Firmware  `json:"firmware" openapi:"allowEmpty"`
 	Attrs    map[string]string `json:"attrs"`
 	Rev      int64             `json:"rev"`
 }
