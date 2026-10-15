@@ -244,7 +244,8 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	// Real PBKDF2 runs under the race detector while other packages are also
 	// consuming CPU. The socket test must allow that work to finish.
-	client := http.Client{Timeout: 30 * time.Second}
+	client := http.Client{Timeout: 30 * time.Second, Transport: http.DefaultTransport.(*http.Transport).Clone()}
+	defer client.CloseIdleConnections()
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -255,6 +256,9 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 		} `json:"data"`
 	}
 	decodeErr := json.NewDecoder(response.Body).Decode(&signedIn)
+	if decodeErr == nil {
+		_, decodeErr = io.Copy(io.Discard, response.Body)
+	}
 	response.Body.Close()
 	if response.StatusCode != 200 {
 		t.Fatal("real listener login failed", response.StatusCode)
@@ -274,6 +278,10 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if _, err := io.Copy(io.Discard, got.Body); err != nil {
+			got.Body.Close()
+			t.Fatal(err)
+		}
 		got.Body.Close()
 		want := http.StatusUnauthorized
 		if token != "" {
@@ -283,6 +291,10 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 			t.Fatalf("protected socket request returned %d, want %d", got.StatusCode, want)
 		}
 	}
+	// Release this client's keep-alive connections before testing server shutdown.
+	// Otherwise a speculative replacement connection can still be StateNew;
+	// net/http deliberately waits five seconds before treating it as idle.
+	client.CloseIdleConnections()
 	cancel()
 	select {
 	case err := <-done:

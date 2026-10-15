@@ -126,7 +126,10 @@ func (s *server) templateBaseRoutes() []route {
 		{method: "DELETE", path: "/console/v1/templates/:id/versions/:version", perm: PermTemplateWrite, tag: "templates", summary: "Delete template draft", query: revisionQuery{}, handle: s.deleteTemplateDraft},
 		{method: "PUT", path: "/console/v1/templates/:id/name", perm: PermTemplateWrite, audit: "template.rename", tag: "templates", summary: "Rename template identity", req: nameRequest{}, handle: s.renameTemplate},
 		{method: "POST", path: "/console/v1/templates/:id/versions/:version/preview", perm: PermTemplateRead, tag: "templates", summary: "Render complete machine files from a frozen preview snapshot", req: previewRequest{}, resp: previewResponse{}, handle: s.previewTemplate},
+		{method: "POST", path: "/console/v1/templates/:id/versions/:version/preview-params", perm: PermTemplateRead, tag: "templates", summary: "Evaluate preview parameter fields for draft or approved template context", req: previewRequest{}, resp: previewParamsResponse{}, handle: s.previewParams},
 		{method: "GET", path: "/console/v1/templates/:id/versions/:version/slots", perm: PermTemplateRead, tag: "templates", summary: "Scan editor slots and diagnostic positions", resp: slotList{}, handle: s.slotsOf},
+		{method: "GET", path: "/console/v1/templates/:id/versions/:version/hook-candidates", perm: PermTemplateRead, tag: "templates", summary: "Check hook candidates with core activation", query: hookCandidateQuery{}, resp: hookCandidatePage{}, handle: s.hookCandidates},
+		{method: "GET", path: "/console/v1/templates/:id/versions/:version/source-diff", perm: PermTemplateRead, tag: "templates", summary: "Compare pinned and newest source template versions", resp: sourceDiffResponse{}, handle: s.sourceDiff},
 	}
 }
 func (s *server) listTemplates(c *gin.Context) {

@@ -23,7 +23,13 @@ const routes: RouteRecordRaw[] = [
       icon: List,
       order: 10,
       title: '任务',
-      authority: ['viewer', 'operator', 'admin'],
+      authority: [
+        'viewer',
+        'operator',
+        'hook-author',
+        'hook-approver',
+        'admin',
+      ],
     },
     name: 'Tasks',
     path: '/tasks',
@@ -34,7 +40,13 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/tasks/index.vue'),
         meta: {
           title: '任务列表',
-          authority: ['viewer', 'operator', 'admin'],
+          authority: [
+            'viewer',
+            'operator',
+            'hook-author',
+            'hook-approver',
+            'admin',
+          ],
         },
       },
       {
@@ -60,7 +72,13 @@ const routes: RouteRecordRaw[] = [
         meta: {
           hideInMenu: true,
           title: '任务详情',
-          authority: ['viewer', 'operator', 'admin'],
+          authority: [
+            'viewer',
+            'operator',
+            'hook-author',
+            'hook-approver',
+            'admin',
+          ],
         },
       },
     ],

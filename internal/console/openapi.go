@@ -225,6 +225,12 @@ func (b *schemaBuilder) definition(t reflect.Type) map[string]any {
 				name = f.Name
 			}
 			property := b.value(f.Type)
+			// Optional inventory facts serialize as an empty string when not
+			// registered. Describe that wire value without weakening the catalog
+			// enum at required uses such as ready ISO architecture.
+			if f.Tag.Get("openapi") == "allowEmpty" {
+				property = map[string]any{"anyOf": []any{property, map[string]any{"type": "string", "enum": []string{""}}}}
+			}
 			if hasTag(f.Tag.Get("binding"), "required") {
 				if f.Type.Kind() == reflect.Pointer {
 					property = b.value(f.Type.Elem())

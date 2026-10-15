@@ -14,19 +14,31 @@ const routes: RouteRecordRaw[] = [
     meta: {
       icon: Inbox,
       order: 50,
-      title: '制品集',
-      authority: ['viewer', 'admin'],
+      title: 'ISO',
+      authority: [
+        'viewer',
+        'operator',
+        'hook-author',
+        'hook-approver',
+        'admin',
+      ],
     },
     name: 'ArtifactSets',
-    path: '/artifact-sets',
+    path: '/isos',
     children: [
       {
         name: 'ArtifactSetsIndex',
         path: '',
         component: () => import('#/views/artifact-sets/index.vue'),
         meta: {
-          title: '制品集导入',
-          authority: ['viewer', 'admin'],
+          title: 'ISO 来源与导入',
+          authority: [
+            'viewer',
+            'operator',
+            'hook-author',
+            'hook-approver',
+            'admin',
+          ],
         },
       },
     ],

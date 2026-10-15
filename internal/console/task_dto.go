@@ -13,8 +13,8 @@ type snapshotValueDTO struct {
 }
 type snapshotHostDTO struct {
 	SN       string            `json:"sn"`
-	Arch     catalog.Arch      `json:"arch"`
-	Firmware catalog.Firmware  `json:"firmware"`
+	Arch     catalog.Arch      `json:"arch" openapi:"allowEmpty"`
+	Firmware catalog.Firmware  `json:"firmware" openapi:"allowEmpty"`
 	Attrs    map[string]string `json:"attrs"`
 }
 type snapshotISODTO struct {

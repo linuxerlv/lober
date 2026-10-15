@@ -1,10 +1,20 @@
 import type { UserInfo } from '@vben/types';
 
-import { requestClient } from '#/api/request';
+import type { Schemas } from '#/api/console/generated';
 
-/**
- * 获取用户信息
- */
-export async function getUserInfoApi() {
-  return requestClient.get<UserInfo>('/user/info');
+import { requestClient } from '#/api/request';
+export function getUserInfoApi() {
+  return requestClient.get<Schemas['UserResponse']>('/user/info');
+}
+export function toUserInfo(user: Schemas['UserResponse']): UserInfo {
+  return {
+    ...user,
+    avatar: '/avatar.svg',
+    desc: '',
+    token: '',
+    userId: user.username,
+    realName: user.displayName || user.username,
+    roles: [user.role],
+    homePath: user.passwordChangeRequired ? '/account/password' : '/tasks',
+  };
 }

@@ -48,6 +48,9 @@
     "vue-router": "catalog:"
   },
   "devDependencies": {
+    "@vitejs/plugin-vue": "catalog:",
+    "happy-dom": "catalog:",
+    "vitest": "catalog:",
     "unplugin-element-plus": "catalog:"
   }
 }

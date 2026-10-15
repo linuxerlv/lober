@@ -48,6 +48,7 @@ const (
 	pkgBuiltin  = modulePath + "/internal/builtin"
 	pkgConsole  = modulePath + "/internal/console"
 	pkgAssembly = modulePath + "/cmd/lober"
+	pkgOpenAPI  = modulePath + "/cmd/console-openapi"
 	gin         = "github.com/gin-gonic/gin"
 	yamlV3      = "gopkg.in/yaml.v3"
 )
@@ -70,15 +71,16 @@ const (
 	layerISO      layer = "ISO"
 	layerConsole  layer = "控制台"
 	layerAssembly layer = "装配点"
+	layerOpenAPI  layer = "契约导出"
 	layerGuard    layer = "守卫"
 )
 
 // layers 是 layer 的全部取值，按日志里的先后排。
-var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerAssembly, layerGuard}
+var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerAssembly, layerOpenAPI, layerGuard}
 
 // minChecked 是 Test全模块依赖守卫 每层至少要查到的包数。删了某层的包就改这里；渲染与内置内容的包加进来以后，
 // 补上它们的下限——忘了补会由「查到了包的层都登记了下限」那一条报出来。
-var minChecked = map[layer]int{layerCore: 7, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1}
+var minChecked = map[layer]int{layerCore: 7, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerOpenAPI: 1, layerGuard: 1}
 
 // minDirs 是 moduleSourceDirs 至少要遍历到的目录数。目录遍历没有别的防线：sourceRoots 少了一项、或者
 // checkModule 收到空的 dirs，ruleListed（整包被构建约束排除的目录）与 go test 的缓存跟踪都会静默失效，
@@ -156,6 +158,7 @@ const (
 	ruleGuard    rule = "守卫 internal/archtest 只放测试文件：有了非测试文件，它就成了能被 import、会进 go build 的包"
 	ruleConsole  rule = "控制台只依赖标准库、gin、core、存储契约、渲染与内置内容"
 	ruleAssembly rule = "装配点只依赖标准库、本模块、gin、yaml 与 wire"
+	ruleOpenAPI  rule = "OpenAPI 导出工具只依赖 encoding/json、os、gin 与控制台包"
 )
 
 // violation 是守卫查出的一处违规。
@@ -276,6 +279,9 @@ func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[
 		case layerAssembly:
 			found = append(found, assemblyIgnoredFiles(fsys, p)...)
 			found = append(found, checkSources(fsys, p, checkAssemblyFile)...)
+		case layerOpenAPI:
+			found = append(found, ignoredFiles(p)...)
+			found = append(found, checkSources(fsys, p, checkOpenAPIFile)...)
 		case layerGuard:
 			found = append(found, checkGuardFiles(p)...)
 		default:
@@ -304,6 +310,8 @@ func layerOf(pkg string) layer {
 		return layerConsole
 	case pkg == pkgAssembly:
 		return layerAssembly
+	case pkg == pkgOpenAPI:
+		return layerOpenAPI
 	case pkg == pkgGuard:
 		return layerGuard
 	}

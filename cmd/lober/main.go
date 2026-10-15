@@ -73,7 +73,7 @@ func serve(ctx context.Context, a *app) error {
 }
 func serveListener(ctx context.Context, a *app, listener net.Listener) error {
 	defer listener.Close()
-	srv := &http.Server{Addr: a.Config.Listen, Handler: a.Console.Engine, ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
+	srv := &http.Server{Addr: a.Config.Listen, Handler: console.WithFrontend(a.Console.Engine), ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
 	result := make(chan error, 1)
 	go func() {
 		a.Logger.Info("控制台开始监听", "address", a.Config.Listen)

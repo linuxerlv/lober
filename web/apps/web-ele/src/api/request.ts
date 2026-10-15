@@ -16,7 +16,7 @@ import { ElMessage } from 'element-plus';
 
 import { useAuthStore } from '#/store';
 
-import { refreshTokenApi } from './core';
+import { errorMessage } from './console/problem';
 import {
   normalizeErrorResponseInterceptor,
   statusCodeResponseInterceptor,
@@ -46,17 +46,6 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
     } else {
       await authStore.logout();
     }
-  }
-
-  /**
-   * 刷新token逻辑
-   */
-  async function doRefreshToken() {
-    const accessStore = useAccessStore();
-    const resp = await refreshTokenApi();
-    const newToken = resp.data;
-    accessStore.setAccessToken(newToken);
-    return newToken;
   }
 
   function formatToken(token: null | string) {
@@ -90,8 +79,8 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
     authenticateResponseInterceptor({
       client,
       doReAuthenticate,
-      doRefreshToken,
-      enableRefreshToken: preferences.app.enableRefreshToken,
+      doRefreshToken: async () => '',
+      enableRefreshToken: false,
       formatToken,
     }),
   );
@@ -101,10 +90,7 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
     errorMessageResponseInterceptor((msg: string, error) => {
       // 这里可以根据业务进行定制,你可以拿到 error 内的信息进行定制化处理，根据不同的 code 做不同的提示，而不是直接使用 message.error 提示 msg
       // 当前mock接口返回的错误字段是 error 或者 message
-      const responseData = error?.response?.data ?? {};
-      const errorMessage = responseData?.error ?? responseData?.message ?? '';
-      // 如果没有错误信息，则会根据状态码进行提示
-      ElMessage.error(errorMessage || msg);
+      ElMessage.error(errorMessage(error) || msg);
     }),
   );
 
