@@ -1,0 +1,7 @@
+import type { RouteRecordRaw } from 'vue-router';
+import { Settings } from '@vben/icons';
+const routes:RouteRecordRaw[]=[{
+ name:'Access',path:'/access',meta:{title:'权限管理',menuId:'role-menus',permission:'user:manage',icon:Settings,order:80},
+ children:[{name:'RoleMenus',path:'role-menus',component:()=>import('#/views/access/role-menus.vue'),meta:{title:'角色与菜单',menuId:'role-menus',permission:'user:manage'}}],
+}];
+export default routes;
