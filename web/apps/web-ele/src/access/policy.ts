@@ -6,7 +6,7 @@ export const consoleMenus: Record<string,{path:string;permission:string}>={
  reports:{path:'/reports',permission:'audit:read'},'role-menus':{path:'/access/role-menus',permission:'user:manage'},
 };
 export function canOperate(user:ConsoleSessionUser|null,permission:string):boolean{
- return !!user&&!user.passwordChangeRequired&&user.permissions.includes(permission);
+ return !!user&&!user.disabled&&!user.passwordChangeRequired&&user.permissions.includes(permission);
 }
 export function sessionHome(user:ConsoleSessionUser):string{
  if(user.passwordChangeRequired)return '/account/password';

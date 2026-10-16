@@ -6,7 +6,7 @@ import type { RequestClientOptions } from '@vben/request';
 import { useAppConfig } from '@vben/hooks';
 import { preferences } from '@vben/preferences';
 import {
-  authenticateResponseInterceptor,
+
   errorMessageResponseInterceptor,
   RequestClient,
 } from '@vben/request';
@@ -15,6 +15,7 @@ import { useAccessStore } from '@vben/stores';
 import { ElMessage } from 'element-plus';
 
 import { useAuthStore } from '#/store';
+import { sessionResponseInterceptor } from './session-interceptor';
 
 
 import {
@@ -29,16 +30,6 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
     ...options,
     baseURL,
   });
-
-  /**
-   * 重新认证逻辑
-   */
-  async function doReAuthenticate() { await useAuthStore().clearSession(); }
-
-  /**
-   * 刷新token逻辑
-   */
-  async function doRefreshToken(): Promise<string> { throw new Error("当前控制台不使用 refresh token"); }
 
   function formatToken(token: null | string) {
     return token ? `Bearer ${token}` : null;
@@ -58,6 +49,7 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
   // 处理返回的响应数据格式：HTTP 2xx 判成功并解包 data，非 2xx 按状态码
   // 判失败（替代 vben 上游只读 body.code 的 defaultResponseInterceptor，
   // 原因见 ./response-interceptor.ts 文件头注释）。
+  client.addResponseInterceptor(sessionResponseInterceptor(() => useAccessStore().accessToken, () => useAuthStore().clearSession()));
   client.addResponseInterceptor(statusCodeResponseInterceptor());
 
   // 非 2xx 的失败响应在此补一份 friendlyMessage/bizCode，供
@@ -65,17 +57,6 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
   // 必须紧跟在 statusCodeResponseInterceptor 之后注册，保证后面的拦截器
   // 与调用方看到的都是补齐后的 error。
   client.addResponseInterceptor(normalizeErrorResponseInterceptor());
-
-  // token过期的处理
-  client.addResponseInterceptor(
-    authenticateResponseInterceptor({
-      client,
-      doReAuthenticate,
-      doRefreshToken,
-      enableRefreshToken: false,
-      formatToken,
-    }),
-  );
 
   // 通用的错误处理,如果没有进入上面的错误处理逻辑，就会进入这里
   client.addResponseInterceptor(

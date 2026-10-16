@@ -22,6 +22,7 @@ const fallbackNotFoundRoute: RouteRecordRaw = {
 
 /** 基本路由，这些路由是必须存在的 */
 const coreRoutes: RouteRecordRaw[] = [
+  { name: 'NoAccess', path: '/no-access', component: () => import('#/views/_core/fallback/no-access.vue'), meta: { title: '暂无可访问菜单', hideInMenu: true, hideInTab: true } },
   {
     name: 'ChangePassword', path: '/account/password',
     component: () => import('#/views/_core/authentication/change-password.vue'),
