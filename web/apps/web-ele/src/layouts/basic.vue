@@ -3,6 +3,7 @@ import type { NotificationItem } from '@vben/layouts';
 
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
 
 import { AuthenticationLoginExpiredModal } from '@vben/common-ui';
 import { VBEN_DOC_URL, VBEN_GITHUB_URL } from '@vben/constants';
@@ -88,10 +89,10 @@ const showDot = computed(() =>
 const menus = computed(() => [
   {
     handler: () => {
-      router.push({ name: 'Profile' });
+      router.push('/account/password');
     },
-    icon: 'lucide:user',
-    text: $t('page.auth.profile'),
+    icon: BookOpenText,
+    text: '修改密码',
   },
   {
     handler: () => {
@@ -127,7 +128,8 @@ const avatar = computed(() => {
 });
 
 async function handleLogout() {
-  await authStore.logout(false);
+  try { await authStore.logout(false); }
+  catch { ElMessage.error('退出失败，请检查网络后重试'); }
 }
 
 function handleNoticeClear() {

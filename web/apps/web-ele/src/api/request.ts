@@ -16,7 +16,7 @@ import { ElMessage } from 'element-plus';
 
 import { useAuthStore } from '#/store';
 
-import { refreshTokenApi } from './core';
+
 import {
   normalizeErrorResponseInterceptor,
   statusCodeResponseInterceptor,
@@ -33,31 +33,12 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
   /**
    * 重新认证逻辑
    */
-  async function doReAuthenticate() {
-    console.warn('Access token or refresh token is invalid or expired. ');
-    const accessStore = useAccessStore();
-    const authStore = useAuthStore();
-    accessStore.setAccessToken(null);
-    if (
-      preferences.app.loginExpiredMode === 'modal' &&
-      accessStore.isAccessChecked
-    ) {
-      accessStore.setLoginExpired(true);
-    } else {
-      await authStore.logout();
-    }
-  }
+  async function doReAuthenticate() { await useAuthStore().clearSession(); }
 
   /**
    * 刷新token逻辑
    */
-  async function doRefreshToken() {
-    const accessStore = useAccessStore();
-    const resp = await refreshTokenApi();
-    const newToken = resp.data;
-    accessStore.setAccessToken(newToken);
-    return newToken;
-  }
+  async function doRefreshToken(): Promise<string> { throw new Error("当前控制台不使用 refresh token"); }
 
   function formatToken(token: null | string) {
     return token ? `Bearer ${token}` : null;
@@ -91,7 +72,7 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
       client,
       doReAuthenticate,
       doRefreshToken,
-      enableRefreshToken: preferences.app.enableRefreshToken,
+      enableRefreshToken: false,
       formatToken,
     }),
   );

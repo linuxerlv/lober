@@ -22,6 +22,11 @@ const fallbackNotFoundRoute: RouteRecordRaw = {
 
 /** 基本路由，这些路由是必须存在的 */
 const coreRoutes: RouteRecordRaw[] = [
+  {
+    name: 'ChangePassword', path: '/account/password',
+    component: () => import('#/views/_core/authentication/change-password.vue'),
+    meta: { title: '修改密码', hideInMenu: true, hideInTab: true },
+  },
   /**
    * 根路由
    * 使用基础布局，作为所有页面的父级容器，子级就不必配置BasicLayout。
