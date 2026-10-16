@@ -59,6 +59,13 @@ const openTaskIndex = "idx_tasks_open"
 // 列的十张表都在这里。
 var tables = []table{
 	{
+		name: "role_menu_settings", primary: []string{"role"},
+		checks: []check{
+			{"chk_role_menu_settings_role", "CHECK (role = ANY (ARRAY['viewer'::text, 'operator'::text, 'hook-author'::text, 'hook-approver'::text, 'admin'::text]))"},
+			{"chk_role_menu_settings_rev", "CHECK (rev >= 1)"},
+		},
+	},
+	{
 		name: "users", primary: []string{"username"},
 		checks: []check{
 			{"chk_users_role", "CHECK (role = ANY (ARRAY['viewer'::text, 'operator'::text, 'hook-author'::text, 'hook-approver'::text, 'admin'::text]))"},
