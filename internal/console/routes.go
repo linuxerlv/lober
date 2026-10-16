@@ -21,7 +21,7 @@ type RouteInfo struct{ Method, Path, Perm, Audit, Tag string }
 
 func (s *Server) Routes() []RouteInfo { return slices.Clone(s.routes) }
 func (s *server) allRoutes() []route {
-	return slices.Concat(s.authRoutes(), s.userRoutes(), s.hostRoutes(), s.isoRoutes(), s.hookRoutes(), s.templateRoutes(), s.wizardRoutes(), s.taskRoutes(), s.auditRoutes(), []route{
+	return slices.Concat(s.authRoutes(), s.userRoutes(), s.menuRoutes(), s.hostRoutes(), s.isoRoutes(), s.hookRoutes(), s.templateRoutes(), s.wizardRoutes(), s.taskRoutes(), s.auditRoutes(), []route{
 		{method: "GET", path: "/openapi.json", perm: PermAnyUser, tag: "schema", summary: "OpenAPI contract", resp: map[string]any{}, raw: true, handle: func(c *gin.Context) { c.JSON(200, s.owner.OpenAPI()) }},
 	})
 }
@@ -61,9 +61,16 @@ type userResponse struct {
 	CreatedAt          int64      `json:"createdAt"`
 	Rev                int64      `json:"rev"`
 	MustChangePassword bool       `json:"passwordChangeRequired"`
+	MenuIDs            []string   `json:"menuIds"`
+	MenuRev            int64      `json:"menuRev"`
 }
 
 func toUserResponse(u store.User) userResponse {
 	return userResponse{Username: u.Username, DisplayName: u.DisplayName, Role: u.Role, Permissions: PermsOf(u.Role), Disabled: u.Disabled, CreatedAt: u.CreatedAt, Rev: u.Rev, MustChangePassword: u.MustChangePassword}
 }
-func (s *server) userInfo(c *gin.Context) { Ok(c, toUserResponse(*userOf(c))) }
+func (s *server) userInfo(c *gin.Context) {
+	u, ok := Get(c, func() (userResponse, error) { return s.currentUserResponse(c.Request.Context(), *userOf(c)) })
+	if ok {
+		Ok(c, u)
+	}
+}

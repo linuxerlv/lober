@@ -101,7 +101,12 @@ func (s *server) login(c *gin.Context) {
 		return
 	}
 	u = current
+	user, err := s.currentUserResponse(c.Request.Context(), u)
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
 	token := s.sessions.put(u.Username)
-	Ok(c, sessionResponse{Token: token, ExpiresAt: s.sessions.expiresAt(token), User: toUserResponse(u)})
+	Ok(c, sessionResponse{Token: token, ExpiresAt: s.sessions.expiresAt(token), User: user})
 }
 func (s *server) logout(c *gin.Context) { s.sessions.drop(bearerToken(c)); Ok(c, nil) }

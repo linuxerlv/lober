@@ -23,6 +23,7 @@ type Deps struct {
 	Events           store.Events
 	Audit            store.AuditLog
 	Users            store.Users
+	RoleMenus        store.RoleMenus
 	ISOSource        ISOSource
 	Sources          ISOSourceState
 	ISODeletion      ISODeletion
