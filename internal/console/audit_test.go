@@ -205,6 +205,7 @@ func Test每条正式审计路由都写入正确操作者和目标(t *testing.T)
 		run("task."+op, "POST", "/console/v1/tasks/"+taskID+"/"+op, "", admin, "task", taskID)
 	}
 	run("template.deprecate", "POST", lifecyclePath("templates", approvedTemplate, "deprecate", 5), "", reviewer, "template", approvedTemplate+"@1")
+	run("user.password.change", "POST", "/console/v1/auth/password", `{"currentPassword":"admin password","newPassword":"replacement admin password"}`, admin, "user", "admin")
 	for _, r := range s.Routes() {
 		if r.Audit != "" && !seen[r.Method+" "+r.Path] {
 			t.Error("audited route not exercised", r)
