@@ -1,309 +1,277 @@
-<script lang="ts" setup>
-/**
- * 制品集导入页（P2-05 任务 4）。
- *
- * 导入是异步 job（§2.1）：POST /artifact-sets 立即返回 importing 状态，
- * 真实进度体现在轮询 GET /artifact-sets 的 state 字段变化上——这里没有
- * SSE（MVP 未定义制品集专属事件流，契约文档「3. 制品集」小节已注明）。
- *
- * 气隙环境下 ISO 以「登记服务器本地路径」为主（scp 到指定目录再登记），
- * WebUI 上传是 Phase 2 才补的辅助能力、且契约本身没冻结上传的入参形态——
- * 本页把本地路径登记做成唯一入口，并在界面上解释原因，不做上传按钮
- * （做了会让运维以为这是主路径，产生「几 GB 走浏览器」的糟糕体验）。
- */
-import { onBeforeUnmount, ref } from 'vue';
-
-import { Page, useVbenModal } from '@vben/common-ui';
-
+<script setup lang="ts">
+import type { ISO } from '#/api/console/operations';
+import { reactive, ref } from 'vue';
 import {
   ElAlert,
   ElButton,
+  ElCard,
+  ElDialog,
   ElInput,
-  ElMessage,
   ElMessageBox,
-  ElTag,
-  ElTooltip,
+  ElTable,
+  ElTableColumn,
 } from 'element-plus';
-
-import { useVbenVxeGrid } from '#/adapter/vxe-table';
+import { operations } from '#/api/console/operations';
 import { requestClient } from '#/api/request';
-
-defineOptions({ name: 'ArtifactSetsIndex' });
-
-/** 对应 model.ArtifactSetState */
-type ArtifactSetState = 'deprecated' | 'failed' | 'importing' | 'ready';
-
-interface ArtifactSetPaths {
-  kernel: string;
-  initrd: string[];
-  repo: string;
-  extra: Record<string, string>;
-}
-
-interface ArtifactSetItem {
-  id: string;
-  name: string;
-  osFamily: string;
-  osVersion: string;
-  arch: string;
-  firmware: string;
-  sourceIsoSha256: string;
-  state: ArtifactSetState;
-  manifestSha256: string;
-  paths: ArtifactSetPaths;
-  /** 导入失败原因。契约的 ArtifactSetItem 结构未列出专门的错误字段名，
-   * 但 M7 任务 9 的说明是"失败原因要原样展示"——若服务端字段名与此不同，
-   * 以 fallback 到 paths.extra.reason 兜底展示，避免运维看到空白。 */
-  importError?: string;
-}
-
-const STATE_TAG_TYPE: Record<
-  ArtifactSetState,
-  'danger' | 'info' | 'success' | 'warning'
-> = {
-  importing: 'warning',
-  ready: 'success',
-  failed: 'danger',
-  deprecated: 'info',
-};
-
-const STATE_LABEL: Record<ArtifactSetState, string> = {
-  importing: '导入中',
-  ready: '就绪',
-  failed: '失败',
-  deprecated: '已停用',
-};
-
-/** MVP 不支持的家族识别出来后也会置 failed（M7 任务 9）——
- * 用错误文案里的关键词把"限制"和"真出错"区分开，避免运维误以为自己的 ISO 坏了。 */
-const UNSUPPORTED_FAMILY_HINTS = [
-  'windows',
-  'esxi',
-  'vmware esxi',
-  'mvp 不支持',
-  'mvp限制',
-];
-
-function isUnsupportedFamilyFailure(reason: string) {
-  const lower = reason.toLowerCase();
-  return UNSUPPORTED_FAMILY_HINTS.some((hint) => lower.includes(hint));
-}
-
-function failureReasonOf(row: ArtifactSetItem): string {
-  return row.importError || row.paths?.extra?.reason || '';
-}
-
-async function queryArtifactSets() {
-  const items = await requestClient.get<ArtifactSetItem[]>('/artifact-sets');
-  return { items };
-}
-
-const [Grid, gridApi] = useVbenVxeGrid<ArtifactSetItem>({
-  gridOptions: {
-    columns: [
-      { field: 'name', title: '名字', minWidth: 160 },
-      { field: 'osFamily', title: 'OS 家族', width: 100 },
-      { field: 'osVersion', title: '版本', width: 100 },
-      { field: 'arch', title: '架构', width: 90 },
-      {
-        field: 'firmware',
-        title: '固件',
-        width: 110,
-        slots: { default: 'firmware' },
-      },
-      {
-        field: 'state',
-        title: '状态',
-        width: 100,
-        slots: { default: 'state' },
-      },
-      {
-        field: 'importError',
-        title: '导入错误',
-        minWidth: 220,
-        slots: { default: 'importError' },
-      },
-      {
-        field: 'action',
-        title: '操作',
-        width: 180,
-        fixed: 'right',
-        slots: { default: 'action' },
-      },
-    ],
-    height: 'auto',
-    keepSource: true,
-    proxyConfig: {
-      ajax: { query: async () => queryArtifactSets() },
-    },
-    rowConfig: { keyField: 'id' },
-    toolbarConfig: { refresh: true },
-  },
+import AccessButton from '#/components/access-button.vue';
+import { useConsoleAccess } from '#/composables/use-console-access';
+import { errorMessage, useConsoleList } from '#/composables/use-console-list';
+const { can, run } = useConsoleAccess();
+const { items, next, loading, error, load } = useConsoleList((cursor) =>
+  operations.isos({ cursor, limit: 100 }),
+);
+const editor = ref(false),
+  saving = ref(false),
+  progress = ref('');
+const form = reactive({
+  name: '',
+  family: 'linux',
+  series: 'rocky',
+  kind: 'path',
+  addr: '',
+  sha256: '',
 });
-
-/** 导入是分钟级异步 job，不需要 SSE，轮询刷新即可（契约「3. 制品集」小节）。 */
-const POLL_INTERVAL_MS = 5000;
-let pollTimer: null | ReturnType<typeof setInterval> = null;
-
-function hasImportingRows() {
-  const fullData = gridApi.grid?.getTableData?.()?.fullData as
-    | ArtifactSetItem[]
-    | undefined;
-  return fullData?.some((row) => row.state === 'importing') ?? false;
-}
-
-function startPollingIfNeeded() {
-  if (pollTimer) return;
-  pollTimer = setInterval(() => {
-    if (hasImportingRows()) {
-      gridApi.reload();
-    } else if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
+const file = ref<File | null>(null);
+async function save() {
+  if (saving.value || !can('iso:write')) return;
+  saving.value = true;
+  try {
+    if (form.kind === 'upload' && !file.value)
+      throw new Error('请选择 ISO 文件');
+    const result = await run('iso:write', () =>
+      operations.createISO({
+        name: form.name,
+        family: form.family,
+        series: form.series,
+        sources: [
+          {
+            kind: form.kind,
+            addr: form.kind === 'upload' ? undefined : form.addr,
+            size: file.value?.size,
+            sha256: form.sha256 || undefined,
+          },
+        ],
+      }),
+    );
+    if (result) {
+      if (form.kind === 'upload' && file.value) {
+        const selected = file.value;
+        const size = 4 * 1024 * 1024;
+        for (let start = 0; start < selected.size; start += size) {
+          if (!can('iso:write')) throw new Error('当前已没有上传权限');
+          const end = Math.min(start + size, selected.size);
+          await run('iso:write', () =>
+            requestClient.put(
+              `/isos/${result.id}/content`,
+              selected.slice(start, end),
+              {
+                headers: {
+                  'Content-Type': 'application/octet-stream',
+                  'Content-Range': `bytes ${start}-${end - 1}/${selected.size}`,
+                },
+              },
+            ),
+          );
+          progress.value = `上传 ${Math.round((end / selected.size) * 100)}%`;
+        }
+      }
+      editor.value = false;
+      await load();
     }
-  }, POLL_INTERVAL_MS);
+  } catch (e) {
+    error.value = errorMessage(e);
+  } finally {
+    saving.value = false;
+  }
 }
-
-onBeforeUnmount(() => {
-  if (pollTimer) clearInterval(pollTimer);
-});
-
-/** 登记表单：入参是服务器本地路径，不是文件上传（契约 POST /artifact-sets）。 */
-const registerForm = ref({ sourcePath: '', name: '' });
-const [RegisterModal, registerModalApi] = useVbenModal({
-  async onConfirm() {
-    if (
-      !registerForm.value.sourcePath.trim() ||
-      !registerForm.value.name.trim()
-    ) {
-      ElMessage.error('名字与服务器本地路径均为必填');
-      return;
-    }
-    await requestClient.post<ArtifactSetItem>('/artifact-sets', {
-      sourcePath: registerForm.value.sourcePath.trim(),
-      name: registerForm.value.name.trim(),
-    });
-    ElMessage.success('已登记，进入导入中状态，稍后自动刷新进度');
-    registerModalApi.close();
-    gridApi.reload();
-    startPollingIfNeeded();
-  },
-  onCancel() {
-    registerModalApi.close();
-  },
-});
-
-function openRegister() {
-  registerForm.value = { sourcePath: '', name: '' };
-  registerModalApi.open();
-}
-
-async function verifyIntegrity(row: ArtifactSetItem) {
-  await requestClient.post(`/artifact-sets/${row.id}/verify`);
-  ElMessage.success('已提交完整性校验，结果体现在下次刷新的状态列');
-  startPollingIfNeeded();
-}
-
-async function removeArtifactSet(row: ArtifactSetItem) {
+async function action(
+  item: ISO,
+  op: 'cancel' | 'retry' | 'reimport' | 'deprecate' | 'delete',
+) {
   try {
     await ElMessageBox.confirm(
-      `确认删除制品集「${row.name}」？只有 deprecated 且未被任何模板引用时才能删除。`,
-      '删除确认',
+      `确认${({ cancel: '取消获取', retry: '重试获取', reimport: '重新导入', deprecate: '废弃', delete: '删除' } as const)[op]}「${item.name}」？`,
+      '确认操作',
       { type: 'warning' },
     );
   } catch {
     return;
   }
   try {
-    await requestClient.delete(`/artifact-sets/${row.id}`);
-    ElMessage.success('已删除');
-    gridApi.reload();
-  } catch (error: any) {
-    // 服务端拒绝时的两种情形（state != deprecated / 仍被引用）——
-    // 契约要求 UI 提示原因，这里把拦截器已解析出的 message 原样展示。
-    const message =
-      error?.response?.data?.message || error?.message || '删除被拒绝';
-    ElMessage.error(message);
+    if (
+      (await run('iso:write', () =>
+        op === 'delete'
+          ? operations.deleteISO(item)
+          : operations.isoAction(item, op),
+      )) !== undefined
+    )
+      await load();
+  } catch (e) {
+    error.value = errorMessage(e);
   }
 }
-
-const firmwareTooltip =
-  'Linux 四家（rhel/debian/ubuntu/suse）固件填 any 即通用；Windows 同一版本 UEFI 与 BIOS 引导方式不同，需要分别登记两个制品集（§2.1）。看到两个名字相似的 Windows 制品集是正常的，不是重复登记。';
+async function showProgress(item: ISO) {
+  try {
+    const result = await operations.isoProgress(item.id);
+    progress.value = JSON.stringify(result, null, 2);
+  } catch (e) {
+    error.value = errorMessage(e);
+  }
+}
+async function addSource(item: ISO) {
+  try {
+    const role = await ElMessageBox.prompt(
+      '附加来源角色，例如 netboot；主介质留空',
+      '补充来源',
+    );
+    const addr = await ElMessageBox.prompt(
+      '服务器可读取的本地路径',
+      '补充本地来源',
+    );
+    if (
+      (await run('iso:write', () =>
+        operations.registerSource(item.id, {
+          kind: 'path',
+          role: role.value,
+          addr: addr.value,
+        }),
+      )) !== undefined
+    )
+      await load();
+  } catch (e: any) {
+    if (e !== 'cancel' && e !== 'close') error.value = errorMessage(e);
+  }
+}
 </script>
-
 <template>
-  <Page
-    description="导入是异步 job，登记后进入导入中状态，进度靠轮询刷新观察。"
-    title="制品集导入"
-  >
-    <template #extra>
-      <ElButton type="primary" @click="openRegister">登记制品集</ElButton>
-    </template>
-
+  <main class="p-6">
+    <header class="mb-5 flex items-center gap-3">
+      <h1 class="mr-auto text-2xl font-semibold">制品集</h1>
+      <ElButton :loading="loading" @click="load()">刷新状态</ElButton
+      ><AccessButton
+        permission="iso:write"
+        type="primary"
+        @click="editor = true"
+        >登记制品集</AccessButton
+      >
+    </header>
     <ElAlert
+      v-if="error"
+      class="mb-4"
+      :title="error"
+      type="error"
       :closable="false"
-      class="mb-3"
-      title="为什么没有文件上传入口"
-      type="info"
-    >
-      气隙环境下 ISO 通常几 GB 起步，走浏览器上传体验很差；运维 scp
-      到登记服务器指定目录后，
-      在这里填入该本地路径即可，这是本系统设计上唯一的登记方式（§2.1）。
-    </ElAlert>
-
-    <Grid>
-      <template #firmware="{ row }">
-        <ElTooltip :content="firmwareTooltip" placement="top">
-          <span>{{ row.firmware }}</span>
-        </ElTooltip>
-      </template>
-      <template #state="{ row }">
-        <ElTag :type="STATE_TAG_TYPE[row.state as ArtifactSetState]">
-          {{ STATE_LABEL[row.state as ArtifactSetState] }}
-        </ElTag>
-      </template>
-      <template #importError="{ row }">
-        <template v-if="row.state === 'failed'">
-          <ElTag
-            v-if="isUnsupportedFamilyFailure(failureReasonOf(row))"
-            size="small"
-            type="info"
+    /><ElCard
+      ><ElTable :data="items" row-key="id"
+        ><ElTableColumn
+          prop="name"
+          label="名称"
+          min-width="160"
+        /><ElTableColumn prop="series" label="系列" /><ElTableColumn
+          prop="version"
+          label="版本"
+        /><ElTableColumn prop="arch" label="架构" /><ElTableColumn
+          prop="state"
+          label="状态"
+        /><ElTableColumn label="操作" min-width="300"
+          ><template #default="{ row }"
+            ><ElButton link @click="showProgress(row as ISO)"
+              >来源与进度</ElButton
+            ><AccessButton
+              v-if="row.state === 'acquiring'"
+              permission="iso:write"
+              link
+              @click="action(row as ISO, 'cancel')"
+              >取消获取</AccessButton
+            ><AccessButton
+              v-if="row.state === 'failed'"
+              permission="iso:write"
+              link
+              @click="action(row as ISO, 'retry')"
+              >重试获取</AccessButton
+            ><AccessButton
+              v-if="row.state === 'failed'"
+              permission="iso:write"
+              link
+              @click="addSource(row as ISO)"
+              >补充来源</AccessButton
+            ><AccessButton
+              v-if="row.state === 'failed'"
+              permission="iso:write"
+              link
+              @click="action(row as ISO, 'reimport')"
+              >重新导入</AccessButton
+            ><AccessButton
+              v-if="row.state === 'ready'"
+              permission="iso:write"
+              link
+              @click="action(row as ISO, 'deprecate')"
+              >废弃</AccessButton
+            ><AccessButton
+              v-if="row.state === 'deprecated' || row.state === 'failed'"
+              permission="iso:write"
+              link
+              type="danger"
+              @click="action(row as ISO, 'delete')"
+              >删除</AccessButton
+            ></template
+          ></ElTableColumn
+        ></ElTable
+      ><ElButton v-if="next" class="mt-4" @click="load(true)"
+        >加载更多</ElButton
+      ></ElCard
+    ><ElCard v-if="progress" class="mt-5">
+      <pre class="whitespace-pre-wrap text-xs">{{ progress }}</pre></ElCard
+    ><ElDialog
+      v-model="editor"
+      title="登记制品集"
+      width="min(600px,95vw)"
+      :close-on-click-modal="!saving"
+      ><form @submit.prevent="save" class="grid gap-4">
+        <label>名称<ElInput v-model="form.name" /></label
+        ><label
+          >系统族<select
+            v-model="form.family"
+            class="ml-3 rounded border bg-transparent p-2"
           >
-            MVP 限制
-          </ElTag>
-          <ElTag v-else size="small" type="danger">导入失败</ElTag>
-          <span class="ml-1">{{
-            failureReasonOf(row) || '（服务端未提供具体原因）'
-          }}</span>
-        </template>
-        <span v-else class="text-gray-400">—</span>
-      </template>
-      <template #action="{ row }">
-        <ElButton link size="small" @click="verifyIntegrity(row)">
-          校验完整性
-        </ElButton>
-        <ElButton
-          :disabled="row.state !== 'deprecated'"
-          link
-          size="small"
-          type="danger"
-          @click="removeArtifactSet(row)"
-        >
-          删除
-        </ElButton>
-      </template>
-    </Grid>
-
-    <RegisterModal class="w-[520px]" title="登记制品集">
-      <label class="mb-1 block text-sm">名字</label>
-      <ElInput v-model="registerForm.name" class="mb-3" />
-      <label class="mb-1 block text-sm">
-        服务器本地路径（运维已 scp 到指定目录后的绝对路径）
-      </label>
-      <ElInput
-        v-model="registerForm.sourcePath"
-        placeholder="/data/lober/iso/xxx.iso"
-      />
-    </RegisterModal>
-  </Page>
+            <option>linux</option>
+            <option>windows</option>
+            <option>esxi</option>
+          </select></label
+        ><label
+          >系统系列<ElInput
+            v-model="form.series"
+            placeholder="例如 rocky、debian、ubuntu" /></label
+        ><label
+          >来源<select
+            v-model="form.kind"
+            class="ml-3 rounded border bg-transparent p-2"
+          >
+            <option value="path">服务器本地文件</option>
+            <option value="url">下载地址</option>
+            <option value="upload">浏览器上传</option>
+          </select></label
+        ><label v-if="form.kind !== 'upload'"
+          >{{ form.kind === 'path' ? '服务器本地路径' : '下载地址'
+          }}<ElInput v-model="form.addr" /></label
+        ><label v-else
+          >ISO 文件<input
+            type="file"
+            accept=".iso"
+            @change="
+              file = ($event.target as HTMLInputElement).files?.[0] || null
+            " /></label
+        ><label>SHA256（可选）<ElInput v-model="form.sha256" /></label>
+        <div>
+          <AccessButton
+            permission="iso:write"
+            native-type="submit"
+            type="primary"
+            :loading="saving"
+            >登记并导入</AccessButton
+          ><ElButton :disabled="saving" @click="editor = false">取消</ElButton>
+        </div>
+      </form></ElDialog
+    >
+  </main>
 </template>

@@ -1,240 +1,184 @@
-<script lang="ts" setup>
-import type { VbenFormSchema } from '@vben/common-ui';
-
-/**
- * 主机清单页（SPEC §12.6、契约「2. 主机清单」端点 5-6）。
- *
- * 这是 SN 的唯一来源（§4.3、契约「约定 1」）：建任务页的 host-select 组件
- * 从 GET /hosts 取值，不接受自由文本；本页是运维核对与维护这份清单的地方。
- *
- * q 文本搜索不是便利功能——主机数超过一页而运维找不到目标机器时，若没有
- * 搜索手段就会想办法绕过这个约束（比如去改前端传参直接拼 SN 自由文本）。
- * 这是删掉 armed 状态后唯一的人工确认点在主机规模超过一页时仍然可用的
- * 必要条件（SPEC §9.1、§10 失败模式 2b），因此这里的搜索走服务端 q 参数，
- * 不是纯客户端过滤。
- *
- * POST /hosts 是手工录入兜底（SPEC §7.4：discovery 尚未覆盖到的机器），
- * arch/firmware/sn/mac 必填，uuid 可选；MAC 入库前服务端会做 NormalizeMAC
- * 归一化，格式不合法返回 CodeMACInvalid（前端不重复实现这份校验，只原样
- * 展示服务端的错误信息）。
- *
- * 列表页统一用 useVbenVxeGrid（§12.6 末句），沿用 hooks/artifact-sets 页
- * 已确立的写法：本地类型 + requestClient 直连 + proxyConfig.ajax.query
- * 把裸数组包成 { items }（契约约定 2）。
- */
-import { ref } from 'vue';
-
-import { Page, useVbenModal } from '@vben/common-ui';
-
+<script setup lang="ts">
+import type { Host } from '#/api/console/operations';
+import { reactive, ref } from 'vue';
 import {
+  ElAlert,
   ElButton,
+  ElCard,
+  ElDialog,
   ElInput,
-  ElMessage,
-  ElOption,
-  ElSelect,
-  ElTag,
+  ElMessageBox,
+  ElTable,
+  ElTableColumn,
 } from 'element-plus';
-
-import { useVbenVxeGrid } from '#/adapter/vxe-table';
-import { requestClient } from '#/api/request';
-
-defineOptions({ name: 'HostsIndex' });
-
-/** 对应 model.Arch（inventory.go） */
-type Arch = 'arm64' | 'x86_64';
-/** 机器可上报的固件子集，不含 model.FirmwareMode 的 any（那只在 ArtifactSet 上出现） */
-type Firmware = 'bios' | 'uefi';
-
-/** 主机清单条目，字段名与 model.Host 逐一对应，不另起名字（契约「2. 主机清单」节）。 */
-interface HostListItem {
-  arch: Arch;
-  firmware: Firmware;
-  id: string;
-  lastSeenAt: number;
-  mac: string;
-  rack: string;
-  sn: string;
-  uuid: string;
-}
-
-const ARCH_OPTIONS: Arch[] = ['x86_64', 'arm64'];
-const FIRMWARE_OPTIONS: Firmware[] = ['uefi', 'bios'];
-
-/** 搜索表单：q 走服务端 GET /hosts?q= 子串搜索（匹配 sn/mac/rack，不区分大小写）。 */
-const filterFormSchema: VbenFormSchema[] = [
-  {
-    component: 'Input',
-    componentProps: {
-      clearable: true,
-      placeholder: '按 SN / MAC / 机架位子串搜索',
-    },
-    fieldName: 'q',
-    label: '搜索',
-  },
-];
-
-async function queryHosts(formValues: Record<string, any>) {
-  const params: Record<string, string> = {};
-  if (formValues.q) params.q = formValues.q;
-  const items = await requestClient.get<HostListItem[]>('/hosts', { params });
-  return { items };
-}
-
-const [Grid, gridApi] = useVbenVxeGrid<HostListItem>({
-  formOptions: {
-    schema: filterFormSchema,
-  },
-  gridOptions: {
-    columns: [
-      { field: 'sn', title: 'SN', width: 180 },
-      { field: 'mac', title: 'MAC', width: 160 },
-      { field: 'uuid', title: 'UUID', minWidth: 220 },
-      { field: 'arch', title: '架构', width: 100, slots: { default: 'arch' } },
-      {
-        field: 'firmware',
-        title: '固件',
-        width: 100,
-        slots: { default: 'firmware' },
-      },
-      { field: 'rack', title: '机架位', width: 140 },
-      {
-        field: 'lastSeenAt',
-        title: '上次被发现时间',
-        width: 180,
-        formatter: ({ cellValue }: { cellValue: number }) =>
-          cellValue ? new Date(cellValue * 1000).toLocaleString() : '从未',
-      },
-    ],
-    height: 'auto',
-    keepSource: true,
-    proxyConfig: {
-      ajax: {
-        query: async (_params: any, formValues: Record<string, any>) =>
-          queryHosts(formValues),
-      },
-    },
-    rowConfig: { keyField: 'id' },
-    toolbarConfig: { refresh: true, search: true },
-  },
-});
-
-/** 手工录入表单（SPEC §7.4 兜底），提交前不做 MAC 归一化——那是服务端职责。 */
-const createForm = ref({
+import { operations } from '#/api/console/operations';
+import AccessButton from '#/components/access-button.vue';
+import { useConsoleAccess } from '#/composables/use-console-access';
+import { errorMessage, useConsoleList } from '#/composables/use-console-list';
+const { can, run } = useConsoleAccess();
+const prefix = ref('');
+const { items, next, loading, error, load } = useConsoleList((cursor) =>
+  operations.hosts({ prefix: prefix.value, cursor, limit: 100 }),
+);
+const editor = ref(false),
+  editing = ref<Host | null>(null),
+  saving = ref(false);
+const form = reactive({
   sn: '',
-  mac: '',
-  uuid: '',
-  arch: 'x86_64' as Arch,
-  firmware: 'uefi' as Firmware,
-  rack: '',
+  arch: 'x86_64',
+  firmware: 'uefi',
+  attrs: '{}',
 });
-
-function resetCreateForm() {
-  createForm.value = {
-    sn: '',
-    mac: '',
-    uuid: '',
-    arch: 'x86_64',
-    firmware: 'uefi',
-    rack: '',
-  };
+function edit(item?: Host) {
+  if (!can('host:write')) return;
+  editing.value = item || null;
+  Object.assign(form, {
+    sn: item?.sn || '',
+    arch: item?.arch || 'x86_64',
+    firmware: item?.firmware || 'uefi',
+    attrs: JSON.stringify(item?.attrs || {}, null, 2),
+  });
+  editor.value = true;
 }
-
-const [CreateModal, createModalApi] = useVbenModal({
-  async onConfirm() {
-    if (!createForm.value.sn.trim() || !createForm.value.mac.trim()) {
-      ElMessage.error('SN 与 MAC 均为必填');
-      return;
+async function save() {
+  if (saving.value || !can('host:write')) return;
+  saving.value = true;
+  try {
+    const attrs = JSON.parse(form.attrs);
+    if (
+      !attrs ||
+      Array.isArray(attrs) ||
+      Object.values(attrs).some((v) => typeof v !== 'string')
+    )
+      throw new Error('主机属性必须为键值都是字符串的 JSON 对象');
+    const data = {
+      sn: form.sn.trim(),
+      arch: form.arch,
+      firmware: form.firmware,
+      attrs,
+    };
+    const result = await run('host:write', () =>
+      editing.value
+        ? operations.updateHost({ ...data, rev: editing.value.rev })
+        : operations.createHost(data),
+    );
+    if (result) {
+      editor.value = false;
+      await load();
     }
-    try {
-      await requestClient.post<HostListItem>('/hosts', {
-        sn: createForm.value.sn.trim(),
-        mac: createForm.value.mac.trim(),
-        uuid: createForm.value.uuid.trim() || undefined,
-        arch: createForm.value.arch,
-        firmware: createForm.value.firmware,
-        rack: createForm.value.rack.trim() || undefined,
-      });
-      ElMessage.success('已录入');
-      createModalApi.close();
-      gridApi.reload();
-    } catch (error: any) {
-      // MAC 格式不合法时服务端返回 CodeMACInvalid，message 直接展示，
-      // 不在前端重新实现归一化校验逻辑。
-      const message =
-        error?.response?.data?.message || error?.message || '录入失败';
-      ElMessage.error(message);
-    }
-  },
-  onCancel() {
-    createModalApi.close();
-  },
-});
-
-function openCreate() {
-  resetCreateForm();
-  createModalApi.open();
+  } catch (e) {
+    error.value = errorMessage(e);
+  } finally {
+    saving.value = false;
+  }
+}
+async function remove(item: Host) {
+  try {
+    await ElMessageBox.confirm(`确认删除主机 ${item.sn}？`, '删除主机');
+  } catch {
+    return;
+  }
+  try {
+    if (
+      (await run('host:write', () => operations.deleteHost(item))) !== undefined
+    )
+      await load();
+  } catch (e) {
+    error.value = errorMessage(e);
+  }
 }
 </script>
-
 <template>
-  <Page
-    description="已发现主机清单，是建任务页 SN 字段的唯一数据源；discovery 未覆盖到的机器可在此手工录入兜底（§7.4）。"
-    title="主机清单"
-  >
-    <template #extra>
-      <ElButton type="primary" @click="openCreate">手工录入主机</ElButton>
-    </template>
-
-    <Grid>
-      <template #arch="{ row }">
-        <ElTag size="small">{{ row.arch }}</ElTag>
-      </template>
-      <template #firmware="{ row }">
-        <ElTag size="small" type="info">{{ row.firmware }}</ElTag>
-      </template>
-    </Grid>
-
-    <CreateModal class="w-[480px]" title="手工录入主机">
-      <div class="grid grid-cols-2 gap-4">
-        <div class="col-span-2">
-          <label class="mb-1 block text-sm">SN（必填）</label>
-          <ElInput v-model="createForm.sn" />
-        </div>
-        <div class="col-span-2">
-          <label class="mb-1 block text-sm">MAC（必填，入库前会归一化）</label>
-          <ElInput v-model="createForm.mac" placeholder="AA:BB:CC:DD:EE:FF" />
-        </div>
-        <div class="col-span-2">
-          <label class="mb-1 block text-sm">UUID（可选）</label>
-          <ElInput v-model="createForm.uuid" />
-        </div>
+  <main class="p-6">
+    <header class="mb-5 flex flex-wrap items-center gap-3">
+      <h1 class="mr-auto text-2xl font-semibold">主机清单</h1>
+      <ElInput
+        v-model="prefix"
+        class="!w-56"
+        placeholder="SN 前缀"
+        @keyup.enter="load()"
+      /><ElButton :loading="loading" @click="load()">查询</ElButton
+      ><AccessButton permission="host:write" type="primary" @click="edit()"
+        >手工录入主机</AccessButton
+      >
+    </header>
+    <ElAlert
+      v-if="error"
+      class="mb-4"
+      :title="error"
+      type="error"
+      :closable="false"
+    /><ElCard
+      ><ElTable :data="items" row-key="sn"
+        ><ElTableColumn prop="sn" label="SN" min-width="180" /><ElTableColumn
+          prop="arch"
+          label="架构"
+        /><ElTableColumn prop="firmware" label="固件" /><ElTableColumn
+          label="主机属性"
+          min-width="240"
+          ><template #default="{ row }"
+            ><span v-for="(value, key) in row.attrs" :key="key" class="mr-3"
+              >{{ key }}：{{ value }}</span
+            ></template
+          ></ElTableColumn
+        ><ElTableColumn v-if="can('host:write')" label="操作" width="160"
+          ><template #default="{ row }"
+            ><AccessButton
+              permission="host:write"
+              link
+              @click="edit(row as Host)"
+              >编辑</AccessButton
+            ><AccessButton
+              permission="host:write"
+              link
+              type="danger"
+              @click="remove(row as Host)"
+              >删除</AccessButton
+            ></template
+          ></ElTableColumn
+        ></ElTable
+      ><ElButton v-if="next" class="mt-4" :loading="loading" @click="load(true)"
+        >加载更多</ElButton
+      ></ElCard
+    ><ElDialog
+      v-model="editor"
+      :title="editing ? '编辑主机' : '手工录入主机'"
+      width="min(580px,95vw)"
+      ><form @submit.prevent="save" class="grid gap-4">
+        <label>SN<ElInput v-model="form.sn" :disabled="!!editing" /></label
+        ><label
+          >架构<select
+            v-model="form.arch"
+            class="ml-3 rounded border bg-transparent p-2"
+          >
+            <option>x86_64</option>
+            <option>arm64</option>
+          </select></label
+        ><label
+          >固件<select
+            v-model="form.firmware"
+            class="ml-3 rounded border bg-transparent p-2"
+          >
+            <option>uefi</option>
+            <option>bios</option>
+          </select></label
+        ><label
+          >主机属性（JSON 字符串对象）<ElInput
+            v-model="form.attrs"
+            type="textarea"
+            :rows="6"
+            placeholder='{"rack":"A-1","mac":"00:11:22:33:44:55"}'
+        /></label>
         <div>
-          <label class="mb-1 block text-sm">架构（必填）</label>
-          <ElSelect v-model="createForm.arch" class="w-full">
-            <ElOption
-              v-for="opt in ARCH_OPTIONS"
-              :key="opt"
-              :label="opt"
-              :value="opt"
-            />
-          </ElSelect>
+          <AccessButton
+            permission="host:write"
+            native-type="submit"
+            type="primary"
+            :loading="saving"
+            >保存</AccessButton
+          ><ElButton @click="editor = false">取消</ElButton>
         </div>
-        <div>
-          <label class="mb-1 block text-sm">固件（必填）</label>
-          <ElSelect v-model="createForm.firmware" class="w-full">
-            <ElOption
-              v-for="opt in FIRMWARE_OPTIONS"
-              :key="opt"
-              :label="opt"
-              :value="opt"
-            />
-          </ElSelect>
-        </div>
-        <div class="col-span-2">
-          <label class="mb-1 block text-sm">机架位（可选）</label>
-          <ElInput v-model="createForm.rack" />
-        </div>
-      </div>
-    </CreateModal>
-  </Page>
+      </form></ElDialog
+    >
+  </main>
 </template>
