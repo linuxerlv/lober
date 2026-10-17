@@ -19,6 +19,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from db_env import postgres_env
+
 
 ROLES = ("admin", "operator", "hook-author", "hook-approver", "viewer")
 
@@ -75,8 +77,7 @@ class ControlTests(unittest.TestCase):
     @classmethod
     def db(cls, sql):
         # Credentials remain in the child environment, never command-line logs.
-        env = os.environ.copy()
-        env["PGDATABASE"] = cls.base_dsn
+        env = postgres_env(cls.base_dsn)
         done = subprocess.run(["psql", "-X", "-v", "ON_ERROR_STOP=1", "-At", "-c", sql],
             env=env, capture_output=True, text=True, timeout=30)
         if done.returncode:
@@ -354,8 +355,7 @@ class ControlTests(unittest.TestCase):
         expected_profile = self.assert_status(self.request("GET", "/user/info", self.tokens["viewer"]), 200)
         self.proc.terminate()
         self.proc.wait(timeout=25)
-        env = os.environ.copy()
-        env["PGDATABASE"] = self.base_dsn
+        env = postgres_env(self.base_dsn)
         dump = self.work / "database.sql"
         backup = self.work / "files-backup"
         backup.mkdir()
