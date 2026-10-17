@@ -2,19 +2,14 @@ import type { RouteRecordRaw } from 'vue-router';
 
 import { LayoutGrid } from '@vben/icons';
 
-/**
- * 主机清单路由（SPEC §12.6）。已发现主机清单，SN 的唯一来源（§4.3）。
- *
- * 角色可见性（SPEC §12.5 角色表）：viewer / operator / admin 三个角色可见，
- * 与 /tasks 相同（operator 的可见路由表里 /hosts 与 /tasks 成对出现）。
- */
+/** 菜单可见性由后端角色配置决定，操作权限由当前会话权限码决定。 */
 const routes: RouteRecordRaw[] = [
   {
     meta: {
       icon: LayoutGrid,
       order: 20,
       title: '主机清单',
-      authority: ['viewer', 'operator', 'admin'],
+      menuId: 'hosts',
     },
     name: 'Hosts',
     path: '/hosts',
@@ -25,7 +20,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/hosts/index.vue'),
         meta: {
           title: '主机清单',
-          authority: ['viewer', 'operator', 'admin'],
+          menuId: 'hosts',
         },
       },
     ],

@@ -1,0 +1,195 @@
+RBAC final verification evidence — 2026-10-17
+
+
+vm-final-check.log
+
+format passed
+vet passed
+tests passed
+race passed
+Linux binary passed
+wire passed
+
+
+vm-go-test.log
+
+?   	github.com/lober/lober/cmd/console-openapi	[no test files]
+ok  	github.com/lober/lober/cmd/lober	4.627s
+ok  	github.com/lober/lober/internal/archtest	37.886s
+ok  	github.com/lober/lober/internal/builtin	0.378s
+ok  	github.com/lober/lober/internal/console	74.888s
+ok  	github.com/lober/lober/internal/core/activation	0.018s
+ok  	github.com/lober/lober/internal/core/admission	0.003s
+ok  	github.com/lober/lober/internal/core/catalog	0.004s
+ok  	github.com/lober/lober/internal/core/model	0.020s
+ok  	github.com/lober/lober/internal/core/params	0.006s
+ok  	github.com/lober/lober/internal/core/scan	0.004s
+ok  	github.com/lober/lober/internal/core/snapshot	0.014s
+ok  	github.com/lober/lober/internal/iso	10.898s
+ok  	github.com/lober/lober/internal/iso/iso9660	0.042s
+ok  	github.com/lober/lober/internal/iso/isotest	0.009s
+ok  	github.com/lober/lober/internal/render	4.998s
+ok  	github.com/lober/lober/internal/store	0.008s
+ok  	github.com/lober/lober/internal/store/pgstore	42.464s
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	0.766s
+
+
+vm-go-race.log
+
+?   	github.com/lober/lober/cmd/console-openapi	[no test files]
+ok  	github.com/lober/lober/cmd/lober	40.018s
+ok  	github.com/lober/lober/internal/archtest	46.252s
+ok  	github.com/lober/lober/internal/builtin	1.994s
+ok  	github.com/lober/lober/internal/console	401.567s
+ok  	github.com/lober/lober/internal/core/activation	1.052s
+ok  	github.com/lober/lober/internal/core/admission	1.014s
+ok  	github.com/lober/lober/internal/core/catalog	1.023s
+ok  	github.com/lober/lober/internal/core/model	1.097s
+ok  	github.com/lober/lober/internal/core/params	1.041s
+ok  	github.com/lober/lober/internal/core/scan	1.018s
+ok  	github.com/lober/lober/internal/core/snapshot	1.053s
+ok  	github.com/lober/lober/internal/iso	15.716s
+ok  	github.com/lober/lober/internal/iso/iso9660	1.155s
+ok  	github.com/lober/lober/internal/iso/isotest	3.038s
+ok  	github.com/lober/lober/internal/render	6.033s
+ok  	github.com/lober/lober/internal/store	1.032s
+ok  	github.com/lober/lober/internal/store/pgstore	74.238s
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	1.825s
+
+
+tests-review-final.log
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - import "../../vitest.config" without a file extension (apps/web-ele/vitest.config.ts:5:20). Add the file extension
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+
+ RUN  v4.1.11 E:/src/lober/.worktree/rbac-menu/web
+
+
+ Test Files  25 passed (25)
+      Tests  88 passed (88)
+   Start at  15:41:19
+   Duration  28.62s (transform 6.26s, setup 0ms, import 36.18s, tests 2.72s, environment 12.14s)
+
+
+
+types-review-final.log
+
+$ vue-tsc --noEmit --skipLibCheck
+
+
+lint-review-final.log
+
+$ eslint apps/web-ele/src apps/web-ele/vite.config.ts apps/web-ele/vitest.config.ts scripts/generate-console-types.mjs
+
+
+console-types-check.log
+
+$ node scripts/generate-console-types.mjs --check
+
+
+build-review-final.log
+
+../../../internal/console/ui/dist/js/use-vben-form-DYWvvJtA.js              281.08 kB
+../../../internal/console/ui/dist/js/basic-DlJlZ7EN.js                      371.18 kB
+../../../internal/console/ui/dist/js/vxe-table-DGHzCHEM.js                  787.01 kB
+
+✓ built in 7.13s
+[PLUGIN_TIMINGS] Plugin hooks ran for 6.3s of this 7.1s build (89%).
+The slowest hooks, timed inside each callback (the wait before a callback starts is excluded, the time it awaits is included):
+  - vite:vue transform (24%, 1.7s, 732 calls)
+Additional hook time came from the hooks below and from hooks under 1s.
+3 hooks are listed without a time. Their calls overlapped, so the time inside one call includes work from other calls. To find their cost, profile the build with `node --cpu-prof`:
+  - vite:css transform (122 calls)
+  - vite:asset load (16 calls)
+  - @tailwindcss/vite:generate:build transform (110 calls)
+See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+
+profile-race-red.log
+
+--- FAIL: Test慢资料请求不能用猜测新修订号恢复旧权限或凭据 (4.24s)
+    --- FAIL: Test慢资料请求不能用猜测新修订号恢复旧权限或凭据/reset (1.72s)
+        profile_concurrency_test.go:58: stale profile update accepted 200
+    --- FAIL: Test慢资料请求不能用猜测新修订号恢复旧权限或凭据/disable (1.26s)
+        profile_concurrency_test.go:58: stale profile update accepted 200
+    --- FAIL: Test慢资料请求不能用猜测新修订号恢复旧权限或凭据/demote (1.26s)
+        profile_concurrency_test.go:58: stale profile update accepted 200
+FAIL
+FAIL	github.com/lober/lober/internal/console	4.247s
+FAIL
+
+
+profile-race-green.log
+
+ok  	github.com/lober/lober/internal/console	8.444s
+
+
+refresh-review-red.log
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - import "../../vitest.config" without a file extension (apps/web-ele/vitest.config.ts:5:20). Add the file extension
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+
+ RUN  v4.1.11 E:/src/lober/.worktree/rbac-menu/web
+
+ ❯ apps/web-ele/src/router/guard.test.ts (6 tests | 2 failed) 22ms
+     × returns to a business page when an empty menu is restored 15ms
+     × retries leaving a revoked page after a redirect refresh failed 2ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  apps/web-ele/src/router/guard.test.ts > console navigation > returns to a business page when an empty menu is restored
+AssertionError: expected '/no-access' to be '/hosts' // Object.is equality
+
+Expected: "/hosts"
+Received: "/no-access"
+
+ ❯ apps/web-ele/src/router/guard.test.ts:85:46
+     83|     expect(s.router.currentRoute.value.path).toBe('/no-access');
+     84|     s.setUser({menuIds:['hosts'],menuRev:3});await s.controller.refres…
+     85|     expect(s.router.currentRoute.value.path).toBe('/hosts');
+       |                                              ^
+     86|   });
+     87|   it('retries leaving a revoked page after a redirect refresh failed',…
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  apps/web-ele/src/router/guard.test.ts > console navigation > retries leaving a revoked page after a redirect refresh failed
+AssertionError: expected '/hosts' to be '/templates' // Object.is equality
+
+Expected: "/templates"
+Received: "/hosts"
+ Test Files  1 failed (1)
+      Tests  2 failed | 4 passed (6)
+
+ ❯ apps/web-ele/src/router/guard.test.ts:94:46
+   Start at  15:38:50
+     92|     expect(s.router.hasRoute('Hosts')).toBe(false);
+   Duration  966ms (transform 47ms, setup 0ms, import 175ms, tests 22ms, environment 559ms)
+     93|     await s.controller.refresh();
+
+     94|     expect(s.router.currentRoute.value.path).toBe('/templates');
+       |                                              ^
+     95|     expect(s.router.currentRoute.value.matched.some(route=>route.name=…
+     96|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+
+refresh-review-green.log
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - import "../../vitest.config" without a file extension (apps/web-ele/vitest.config.ts:5:20). Add the file extension
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+
+ RUN  v4.1.11 E:/src/lober/.worktree/rbac-menu/web
+
+
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+   Start at  15:39:19
+   Duration  1.33s (transform 70ms, setup 0ms, import 265ms, tests 29ms, environment 803ms)
+

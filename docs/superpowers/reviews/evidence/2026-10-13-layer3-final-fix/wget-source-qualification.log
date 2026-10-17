@@ -1,0 +1,301 @@
+go version go1.27.2 linux/amd64
+GNU Wget 1.25.0 built on linux-gnu.
+
+-cares +digest -gpgme +https +ipv6 -iri +large-file -metalink -nls 
++ntlm +opie -psl +ssl/openssl 
+
+Wgetrc: 
+    /etc/wgetrc (system)
+Compile: 
+    gcc -DHAVE_CONFIG_H -DSYSTEM_WGETRC="/etc/wgetrc" 
+    -DLOCALEDIR="/usr/share/locale" -I. -I../../src -I../lib 
+    -I../../lib -Wdate-time -D_FORTIFY_SOURCE=2 -DHAVE_LIBSSL -DNDEBUG 
+    -g -O2 -Werror=implicit-function-declaration 
+    -ffile-prefix-map=/build/reproducible-path/wget-1.25.0=. 
+    -fstack-protector-strong -fstack-clash-protection -Wformat 
+    -Werror=format-security -fcf-protection -DNO_SSLv2 -Os 
+Link: 
+    gcc -DHAVE_LIBSSL -DNDEBUG -g -O2 
+    -Werror=implicit-function-declaration 
+    -ffile-prefix-map=/build/reproducible-path/wget-1.25.0=. 
+    -fstack-protector-strong -fstack-clash-protection -Wformat 
+    -Werror=format-security -fcf-protection -DNO_SSLv2 -Os -Wl,-z,relro 
+    -Wl,-z,now -lpcre2-8 -luuid -lssl -lcrypto -lz ../lib/libgnu.a 
+
+Copyright (C) 2015 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later
+<http://www.gnu.org/licenses/gpl.html>.
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+
+Originally written by Hrvoje Niksic <hniksic@xemacs.org>.
+Please send bug reports and questions to <bug-wget@gnu.org>.
+BusyBox v1.37.0 (Ubuntu 1:1.37.0-7ubuntu1) multi-call binary.
+drwxr-xr-x root/root         0 2025-03-08 14:23 ./
+drwxr-xr-x root/root         0 2025-03-08 14:23 ./usr/
+drwxr-xr-x root/root         0 2025-03-08 14:23 ./usr/bin/
+-rwxr-xr-x root/root    380144 2025-03-08 14:23 ./usr/bin/wget
+45d4411e892d12af710ddff536d2daf430031387e336153f5f996cf536487b90  /mnt/e/src/lober/.tmp/l3-wget-source/debian.tar.xz
+766e48423e79359ea31e41db9e5c289675947a7fcf2efdcedb726ac9d0da3784  /mnt/e/src/lober/.tmp/l3-wget-source/upstream.tar.gz
+5b2a49803999a26000960cd946665da71c5eab46a28e2f0c299b8f1e01ce2398  /mnt/e/src/lober/.tmp/l3-wget-source/wget.udeb
+74bdd1bb46525f9abed88ab201ff8a54de9e136407f2f965e1f6dd6992f0e7bd  /mnt/e/src/lober/.tmp/l3-wget-source/wget-udeb/usr/bin/wget
+291-    { "compression", 0, OPT_VALUE, "compression", -1 },
+292-#endif
+293-    { "config", 0, OPT_VALUE, "chooseconfig", -1 },
+294:    { "connect-timeout", 0, OPT_VALUE, "connecttimeout", -1 },
+295-    { "continue", 'c', OPT_BOOLEAN, "continue", -1 },
+296-    { "convert-file-only", 0, OPT_BOOLEAN, "convertfileonly", -1 },
+297-    { "convert-links", 'k', OPT_BOOLEAN, "convertlinks", -1 },
+--
+309-#ifdef HAVE_LIBCARES
+310-    { "dns-servers", 0, OPT_VALUE, "dnsservers", -1 },
+311-#endif
+312:    { "dns-timeout", 0, OPT_VALUE, "dnstimeout", -1 },
+313-    { "domains", 'D', OPT_VALUE, "domains", -1 },
+314-    { "dont-remove-listing", 0, OPT__DONT_REMOVE_LISTING, NULL, no_argument },
+315-    { "dot-style", 0, OPT_VALUE, "dotstyle", -1 }, /* deprecated */
+--
+331-    IF_SSL ( "ftps-implicit", 0, OPT_BOOLEAN, "ftpsimplicit", -1 )
+332-    IF_SSL ( "ftps-resume-ssl", 0, OPT_BOOLEAN, "ftpsresumessl", -1 )
+333-    { "glob", 0, OPT_BOOLEAN, "glob", -1 },
+334:    { "header", 0, OPT_VALUE, "header", -1 },
+335-    { "help", 'h', OPT_FUNCALL, (void *)print_help, no_argument },
+336-    { "host-directories", 0, OPT_BOOLEAN, "addhostdir", -1 },
+337-#ifdef HAVE_HSTS
+--
+384-    { "passive-ftp", 0, OPT_BOOLEAN, "passiveftp", -1 },
+385-    { "password", 0, OPT_VALUE, "password", -1 },
+386-    IF_SSL ( "pinnedpubkey", 0, OPT_VALUE, "pinnedpubkey", -1 )
+387:    { "post-data", 0, OPT_VALUE, "postdata", -1 },
+388:    { "post-file", 0, OPT_VALUE, "postfile", -1 },
+389-    { "prefer-family", 0, OPT_VALUE, "preferfamily", -1 },
+390-#ifdef HAVE_METALINK
+391-    { "preferred-location", 0, OPT_VALUE, "preferredlocation", -1 },
+--
+406-    { "quota", 'Q', OPT_VALUE, "quota", -1 },
+407-    { "random-file", 0, OPT_VALUE, "randomfile", -1 },
+408-    { "random-wait", 0, OPT_BOOLEAN, "randomwait", -1 },
+409:    { "read-timeout", 0, OPT_VALUE, "readtimeout", -1 },
+410-    { "recursive", 'r', OPT_BOOLEAN, "recursive", -1 },
+411-    { "referer", 0, OPT_VALUE, "referer", -1 },
+412-    { "regex-type", 0, OPT_VALUE, "regextype", -1 },
+--
+422-    { "retry-on-host-error", 0, OPT_BOOLEAN, "retryonhosterror", -1 },
+423-    { "retry-on-http-error", 0, OPT_VALUE, "retryonhttperror", -1 },
+424-    { "save-cookies", 0, OPT_VALUE, "savecookies", -1 },
+425:    { "save-headers", 0, OPT_BOOLEAN, "saveheaders", -1 },
+426-    IF_SSL ( "secure-protocol", 0, OPT_VALUE, "secureprotocol", -1 )
+427-    { "server-response", 'S', OPT_BOOLEAN, "serverresponse", -1 },
+428-    { "span-hosts", 'H', OPT_BOOLEAN, "spanhosts", -1 },
+429-    { "spider", 0, OPT_BOOLEAN, "spider", -1 },
+430-    { "start-pos", 0, OPT_VALUE, "startpos", -1 },
+431-    { "strict-comments", 0, OPT_BOOLEAN, "strictcomments", -1 },
+432:    { "timeout", 'T', OPT_VALUE, "timeout", -1 },
+433-    { "timestamping", 'N', OPT_BOOLEAN, "timestamping", -1 },
+434-    { "if-modified-since", 0, OPT_BOOLEAN, "ifmodifiedsince", -1 },
+435-    { "tries", 't', OPT_VALUE, "tries", -1 },
+--
+452-    { "warc-dedup", 0, OPT_VALUE, "warccdxdedup", -1 },
+453-    { "warc-digests", 0, OPT_BOOLEAN, "warcdigests", -1 },
+454-    { "warc-file", 0, OPT_VALUE, "warcfile", -1 },
+455:    { "warc-header", 0, OPT_VALUE, "warcheader", -1 },
+456-    { "warc-keep-log", 0, OPT_BOOLEAN, "warckeeplog", -1 },
+457-    { "warc-max-size", 0, OPT_VALUE, "warcmaxsize", -1 },
+458-    { "warc-tempdir", 0, OPT_VALUE, "warctempdir", -1 },
+--
+681-    N_("\
+682-       --spider                    don't download anything\n"),
+683-    N_("\
+684:  -T,  --timeout=SECONDS           set all timeout values to SECONDS\n"),
+685-#ifdef HAVE_LIBCARES
+686-    N_("\
+687-       --dns-servers=ADDRESSES     list of DNS servers to query (comma separated)\n"),
+--
+689-       --bind-dns-address=ADDRESS  bind DNS resolver to ADDRESS (hostname or IP) on local host\n"),
+690-#endif
+691-    N_("\
+692:       --dns-timeout=SECS          set the DNS lookup timeout to SECS\n"),
+693-    N_("\
+694:       --connect-timeout=SECS      set the connect timeout to SECS\n"),
+695-    N_("\
+696:       --read-timeout=SECS         set the read timeout to SECS\n"),
+697-    N_("\
+698-  -w,  --wait=SECONDS              wait SECONDS between retrievals\n\
+699-                                     (applies if more then 1 URL is to be retrieved)\n"),
+--
+753-    N_("\
+754-       --metalink-index=NUMBER     Metalink application/metalink4+xml metaurl ordinal NUMBER\n"),
+755-    N_("\
+756:       --metalink-over-http        use Metalink metadata from HTTP response headers\n"),
+757-    N_("\
+758-       --preferred-location        preferred location for Metalink resources\n"),
+759-#endif
+--
+793-    N_("\
+794-  -E,  --adjust-extension          save HTML/CSS documents with proper extensions\n"),
+795-    N_("\
+796:       --ignore-length             ignore 'Content-Length' header field\n"),
+797-    N_("\
+798:       --header=STRING             insert STRING among the headers\n"),
+799-#ifdef HAVE_LIBZ
+800-    N_("\
+801-       --compression=TYPE          choose compression, one of auto, gzip and none. (default: none)\n"),
+--
+807-    N_("\
+808-       --proxy-password=PASS       set PASS as proxy password\n"),
+809-    N_("\
+810:       --referer=URL               include 'Referer: URL' header in HTTP request\n"),
+811-    N_("\
+812:       --save-headers              save the HTTP headers to file\n"),
+813-    N_("\
+814-  -U,  --user-agent=AGENT          identify as AGENT instead of Wget/VERSION\n"),
+815-    N_("\
+--
+823-    N_("\
+824-       --keep-session-cookies      load and save session (non-permanent) cookies\n"),
+825-    N_("\
+826:       --post-data=STRING          use the POST method; send STRING as the data\n"),
+827-    N_("\
+828:       --post-file=FILE            use the POST method; send contents of FILE\n"),
+829-    N_("\
+830-       --method=HTTPMethod         use method \"HTTPMethod\" in the request\n"),
+831-    N_("\
+--
+833-    N_("\
+834-       --body-file=FILE            send contents of FILE. --method MUST be set\n"),
+835-    N_("\
+836:       --content-disposition       honor the Content-Disposition header when\n\
+837-                                     choosing local file names (EXPERIMENTAL)\n"),
+838-    N_("\
+839-       --content-on-error          output the received content on server errors\n"),
+--
+938-    N_("\
+939-       --warc-file=FILENAME        save request/response data to a .warc.gz file\n"),
+940-    N_("\
+941:       --warc-header=STRING        insert STRING into the warcinfo record\n"),
+942-    N_("\
+943-       --warc-max-size=NUMBER      set maximum size of WARC files to NUMBER\n"),
+944-    N_("\
+--
+1834-    {
+1835-      if (opt.post_data && opt.post_file_name)
+1836-        {
+1837:          fprintf (stderr, _("You cannot specify both --post-data and --post-file.\n"));
+1838-          exit (WGET_EXIT_GENERIC_ERROR);
+1839-        }
+1840-      else if (opt.method)
+1841-        {
+1842:          fprintf (stderr, _("You cannot use --post-data or --post-file along with --method. "
+1843-                             "--method expects data through --body-data and --body-file options\n"));
+1844-          exit (WGET_EXIT_GENERIC_ERROR);
+1845-        }
+--
+1868-
+1869-  /* Convert post_data to body-data and post_file_name to body-file options.
+1870-     This is required so as to remove redundant code later on in gethttp().
+1871:     The --post-data and --post-file options may also be removed in
+1872-     the future hence it makes sense to convert them to aliases for
+1873-     the more generic --method options.
+1874-     This MUST occur only after the sanity checks so as to prevent the
+468-   If warc_tmp is set to a file pointer, the post data will
+469-   also be written to that file.  */
+470-
+471-static int
+472:body_file_send (int sock, const char *file_name, wgint promised_size, FILE *warc_tmp)
+473-{
+474-  static char chunk[8192];
+475-  wgint written = 0;
+476-  int write_error;
+--
+1847-
+1848-static struct request *
+1849-initialize_request (const struct url *u, struct http_stat *hs, int *dt, struct url *proxy,
+1850-                    bool inhibit_keep_alive, bool *basic_auth_finished,
+1851:                    wgint *body_data_size, char **user, char **passwd, uerr_t *ret)
+1852-{
+1853-  bool head_only = !!(*dt & HEAD_ONLY);
+1854-  struct request *req;
+1855-
+--
+1985-
+1986-  if (opt.method)
+1987-    {
+1988-
+1989:      if (opt.body_data || opt.body_file)
+1990-        {
+1991-          request_set_header (req, "Content-Type",
+1992-                              "application/x-www-form-urlencoded", rel_none);
+1993-
+1994:          if (opt.body_data)
+1995:            *body_data_size = strlen (opt.body_data);
+1996-          else
+1997-            {
+1998:              *body_data_size = file_size (opt.body_file);
+1999:              if (*body_data_size == -1)
+2000-                {
+2001-                  logprintf (LOG_NOTQUIET, _("BODY data file %s missing: %s\n"),
+2002:                             quote (opt.body_file), strerror (errno));
+2003-                  request_free (&req);
+2004-                  *ret = FILEBADFILE;
+2005-                  return NULL;
+2006-                }
+2007-            }
+2008-          request_set_header (req, "Content-Length",
+2009:                              xstrdup (number_to_static_string (*body_data_size)),
+2010-                              rel_value);
+2011-        }
+2012-      else if (c_strcasecmp (opt.method, "post") == 0
+2013-               || c_strcasecmp (opt.method, "put") == 0
+--
+3237-  bool inhibit_keep_alive =
+3238-    !opt.http_keep_alive || opt.ignore_length;
+3239-
+3240-  /* Headers sent when using POST. */
+3241:  wgint body_data_size = 0;
+3242-
+3243-#ifdef HAVE_SSL
+3244-  if (u->scheme == SCHEME_HTTPS)
+3245-    {
+--
+3274-
+3275-  {
+3276-    uerr_t ret;
+3277-    req = initialize_request (u, hs, dt, proxy, inhibit_keep_alive,
+3278:                              &basic_auth_finished, &body_data_size,
+3279-                              &user, &passwd, &ret);
+3280-    if (req == NULL)
+3281-      {
+3282-        retval = ret;
+--
+3352-  write_error = request_send (req, sock, warc_tmp);
+3353-
+3354-  if (write_error >= 0)
+3355-    {
+3356:      if (opt.body_data)
+3357-        {
+3358:          DEBUGP (("[BODY data: %s]\n", opt.body_data));
+3359:          write_error = fd_write (sock, opt.body_data, body_data_size, -1);
+3360-          if (write_error >= 0 && warc_tmp != NULL)
+3361-            {
+3362-              int warc_tmp_written;
+3363-
+3364-              /* Remember end of headers / start of payload. */
+3365-              warc_payload_offset = ftello (warc_tmp);
+3366-
+3367-              /* Write a copy of the data to the WARC record. */
+3368:              warc_tmp_written = fwrite (opt.body_data, 1, body_data_size, warc_tmp);
+3369:              if (warc_tmp_written != body_data_size)
+3370-                write_error = -2;
+3371-            }
+3372-         }
+3373:      else if (opt.body_file && body_data_size != 0)
+3374-        {
+3375-          if (warc_tmp != NULL)
+3376-            /* Remember end of headers / start of payload */
+3377-            warc_payload_offset = ftello (warc_tmp);
+3378-
+3379:          write_error = body_file_send (sock, opt.body_file, body_data_size, warc_tmp);
+3380-        }
+3381-    }
+3382-
+3383-  if (write_error < 0)

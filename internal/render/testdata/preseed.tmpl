@@ -1,0 +1,19 @@
+d-i localechooser/languagelist select en_US.UTF-8
+d-i keyboard-configuration/xkb-keymap select us
+d-i clock-setup/utc boolean true
+d-i time/zone string UTC
+d-i netcfg/choose_interface select auto
+d-i netcfg/get_hostname string {{param:hostname}}
+d-i mirror/country string manual
+d-i mirror/http/hostname string ng.internal
+d-i mirror/http/directory string /artifacts/fixture/repo/
+d-i mirror/http/proxy string
+{{slot:partition}}
+d-i passwd/root-login boolean false
+d-i passwd/make-user boolean false
+tasksel tasksel/first multiselect standard
+d-i pkgsel/include string curl
+popularity-contest popularity-contest/participate boolean false
+d-i preseed/early_command string {{slot:pre@pre}}
+d-i preseed/late_command string {{slot:post-installer@post-installer}} && {{slot:post-target@post-target}} && {{slot:firstboot@firstboot}} && {{lober:firstboot}} && {{lober:cleanup}}
+d-i finish-install/reboot_in_progress note

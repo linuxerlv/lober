@@ -1,0 +1,44 @@
+--- FAIL: TestAnswerGolden (0.00s)
+    --- FAIL: TestAnswerGolden/kickstart-full-bios (0.00s)
+        answer_test.go:66: open testdata\kickstart-full-bios.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/kickstart-minimal-bios (0.00s)
+        answer_test.go:66: open testdata\kickstart-minimal-bios.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/kickstart-full-uefi (0.00s)
+        answer_test.go:66: open testdata\kickstart-full-uefi.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/kickstart-minimal-uefi (0.00s)
+        answer_test.go:66: open testdata\kickstart-minimal-uefi.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/preseed-full-bios (0.00s)
+        answer_test.go:66: open testdata\preseed-full-bios.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/preseed-minimal-bios (0.00s)
+        answer_test.go:66: open testdata\preseed-minimal-bios.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/preseed-full-uefi (0.00s)
+        answer_test.go:66: open testdata\preseed-full-uefi.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/preseed-minimal-uefi (0.00s)
+        answer_test.go:66: open testdata\preseed-minimal-uefi.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/autoinstall-full-bios (0.00s)
+        answer_test.go:66: open testdata\autoinstall-full-bios.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/autoinstall-minimal-bios (0.00s)
+        answer_test.go:66: open testdata\autoinstall-minimal-bios.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/autoinstall-full-uefi (0.00s)
+        answer_test.go:66: open testdata\autoinstall-full-uefi.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/autoinstall-minimal-uefi (0.00s)
+        answer_test.go:66: open testdata\autoinstall-minimal-uefi.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/autoyast-full-bios (0.00s)
+        answer_test.go:66: open testdata\autoyast-full-bios.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/autoyast-minimal-bios (0.00s)
+        answer_test.go:66: open testdata\autoyast-minimal-bios.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/autoyast-full-uefi (0.00s)
+        answer_test.go:66: open testdata\autoyast-full-uefi.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/autoyast-minimal-uefi (0.00s)
+        answer_test.go:66: open testdata\autoyast-minimal-uefi.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/unattend-full-bios (0.00s)
+        answer_test.go:66: open testdata\unattend-full-bios.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/unattend-minimal-bios (0.00s)
+        answer_test.go:66: open testdata\unattend-minimal-bios.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/unattend-full-uefi (0.00s)
+        answer_test.go:66: open testdata\unattend-full-uefi.golden: The system cannot find the path specified.
+    --- FAIL: TestAnswerGolden/unattend-minimal-uefi (0.00s)
+        answer_test.go:66: open testdata\unattend-minimal-uefi.golden: The system cannot find the path specified.
+FAIL
+FAIL	github.com/lober/lober/internal/render	0.341s
+FAIL

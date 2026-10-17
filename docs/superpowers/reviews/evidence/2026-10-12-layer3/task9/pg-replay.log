@@ -1,0 +1,4 @@
+=== RUN   TestReleasedVersionsLoadAndUpgradeIdempotently
+--- PASS: TestReleasedVersionsLoadAndUpgradeIdempotently (0.32s)
+PASS
+ok  	github.com/lober/lober/internal/builtin	0.327s

@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!DOCTYPE profile>
+<profile xmlns="http://www.suse.com/1.0/yast2ns" xmlns:config="http://www.suse.com/1.0/configns">
+  <general><mode><confirm config:type="boolean">false</confirm></mode></general>
+  <partitioning config:type="list">
+    {{slot:partition}}
+  </partitioning>
+  <networking><dns><hostname>{{param:hostname}}</hostname></dns></networking>
+  <software><packages config:type="list"><package>curl</package></packages></software>
+  <scripts>
+    <pre-scripts config:type="list">
+      <script><interpreter>shell</interpreter><source><![CDATA[
+set -eu
+{{slot:pre@pre}}
+]]></source></script>
+    </pre-scripts>
+    <chroot-scripts config:type="list">
+      <script><chrooted config:type="boolean">false</chrooted><interpreter>shell</interpreter><source><![CDATA[
+set -eu
+{{slot:post-installer@post-installer}}
+{{slot:post-target@post-target}}
+{{slot:firstboot@firstboot}}
+{{lober:firstboot}}
+{{lober:cleanup}}
+]]></source></script>
+    </chroot-scripts>
+  </scripts>
+</profile>

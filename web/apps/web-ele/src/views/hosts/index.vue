@@ -1,240 +1,453 @@
 <script lang="ts" setup>
-import type { VbenFormSchema } from '@vben/common-ui';
+import type { AttributeRow } from './inventory-state';
 
-/**
- * 主机清单页（SPEC §12.6、契约「2. 主机清单」端点 5-6）。
- *
- * 这是 SN 的唯一来源（§4.3、契约「约定 1」）：建任务页的 host-select 组件
- * 从 GET /hosts 取值，不接受自由文本；本页是运维核对与维护这份清单的地方。
- *
- * q 文本搜索不是便利功能——主机数超过一页而运维找不到目标机器时，若没有
- * 搜索手段就会想办法绕过这个约束（比如去改前端传参直接拼 SN 自由文本）。
- * 这是删掉 armed 状态后唯一的人工确认点在主机规模超过一页时仍然可用的
- * 必要条件（SPEC §9.1、§10 失败模式 2b），因此这里的搜索走服务端 q 参数，
- * 不是纯客户端过滤。
- *
- * POST /hosts 是手工录入兜底（SPEC §7.4：discovery 尚未覆盖到的机器），
- * arch/firmware/sn/mac 必填，uuid 可选；MAC 入库前服务端会做 NormalizeMAC
- * 归一化，格式不合法返回 CodeMACInvalid（前端不重复实现这份校验，只原样
- * 展示服务端的错误信息）。
- *
- * 列表页统一用 useVbenVxeGrid（§12.6 末句），沿用 hooks/artifact-sets 页
- * 已确立的写法：本地类型 + requestClient 直连 + proxyConfig.ajax.query
- * 把裸数组包成 { items }（契约约定 2）。
- */
-import { ref } from 'vue';
+import type { HostListItem } from '#/api/console/host';
 
-import { Page, useVbenModal } from '@vben/common-ui';
+import { computed, reactive, ref } from 'vue';
+
+import { Page } from '@vben/common-ui';
+import { useAccessStore } from '@vben/stores';
 
 import {
+  ElAlert,
   ElButton,
+  ElCheckbox,
+  ElDialog,
   ElInput,
   ElMessage,
+  ElMessageBox,
   ElOption,
   ElSelect,
-  ElTag,
+  ElTable,
+  ElTableColumn,
 } from 'element-plus';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
-import { requestClient } from '#/api/request';
+import {
+  commitHostCSVApi,
+  createHostApi,
+  deleteHostApi,
+  getHostListApi,
+  previewHostCSVApi,
+  updateHostApi,
+} from '#/api/console/host';
+import { errorMessage, problemsOf, referencesOf } from '#/api/console/problem';
+import ProblemList from '#/components/console/ProblemList.vue';
+
+import { attributesOf, CsvImportSession, CursorPage } from './inventory-state';
 
 defineOptions({ name: 'HostsIndex' });
-
-/** 对应 model.Arch（inventory.go） */
-type Arch = 'arm64' | 'x86_64';
-/** 机器可上报的固件子集，不含 model.FirmwareMode 的 any（那只在 ArtifactSet 上出现） */
-type Firmware = 'bios' | 'uefi';
-
-/** 主机清单条目，字段名与 model.Host 逐一对应，不另起名字（契约「2. 主机清单」节）。 */
-interface HostListItem {
-  arch: Arch;
-  firmware: Firmware;
-  id: string;
-  lastSeenAt: number;
-  mac: string;
-  rack: string;
-  sn: string;
-  uuid: string;
-}
-
-const ARCH_OPTIONS: Arch[] = ['x86_64', 'arm64'];
-const FIRMWARE_OPTIONS: Firmware[] = ['uefi', 'bios'];
-
-/** 搜索表单：q 走服务端 GET /hosts?q= 子串搜索（匹配 sn/mac/rack，不区分大小写）。 */
-const filterFormSchema: VbenFormSchema[] = [
-  {
-    component: 'Input',
-    componentProps: {
-      clearable: true,
-      placeholder: '按 SN / MAC / 机架位子串搜索',
-    },
-    fieldName: 'q',
-    label: '搜索',
-  },
-];
-
-async function queryHosts(formValues: Record<string, any>) {
-  const params: Record<string, string> = {};
-  if (formValues.q) params.q = formValues.q;
-  const items = await requestClient.get<HostListItem[]>('/hosts', { params });
-  return { items };
-}
-
+const access = useAccessStore();
+const canWrite = computed(() => access.accessCodes.includes('host:write'));
+const failure = ref<unknown>();
+const problems = computed(() => problemsOf(failure.value));
+const references = computed(() => referencesOf(failure.value));
+const filters = reactive({ prefix: '', attr_key: '', attr_value: '' });
+const page = reactive(new CursorPage<HostListItem>());
 const [Grid, gridApi] = useVbenVxeGrid<HostListItem>({
-  formOptions: {
-    schema: filterFormSchema,
-  },
   gridOptions: {
     columns: [
-      { field: 'sn', title: 'SN', width: 180 },
-      { field: 'mac', title: 'MAC', width: 160 },
-      { field: 'uuid', title: 'UUID', minWidth: 220 },
-      { field: 'arch', title: '架构', width: 100, slots: { default: 'arch' } },
+      { field: 'sn', title: 'SN', minWidth: 180 },
+      { field: 'arch', title: '架构', width: 100 },
+      { field: 'firmware', title: '固件', width: 100 },
       {
-        field: 'firmware',
-        title: '固件',
-        width: 100,
-        slots: { default: 'firmware' },
+        field: 'attrs',
+        title: '登记属性',
+        minWidth: 280,
+        slots: { default: 'attrs' },
       },
-      { field: 'rack', title: '机架位', width: 140 },
-      {
-        field: 'lastSeenAt',
-        title: '上次被发现时间',
-        width: 180,
-        formatter: ({ cellValue }: { cellValue: number }) =>
-          cellValue ? new Date(cellValue * 1000).toLocaleString() : '从未',
-      },
+      { field: 'rev', title: '修订', width: 80 },
+      { title: '操作', width: 160, slots: { default: 'action' } },
     ],
     height: 'auto',
-    keepSource: true,
+    pagerConfig: { enabled: false },
+    rowConfig: { keyField: 'sn' },
     proxyConfig: {
       ajax: {
-        query: async (_params: any, formValues: Record<string, any>) =>
-          queryHosts(formValues),
+        query: async () => {
+          try {
+            return await page.load((cursor) =>
+              getHostListApi({ ...filters, cursor, limit: 50 }),
+            );
+          } catch (error) {
+            failure.value = error;
+            return { items: page.items };
+          }
+        },
       },
     },
-    rowConfig: { keyField: 'id' },
-    toolbarConfig: { refresh: true, search: true },
+    toolbarConfig: { refresh: true },
   },
 });
-
-/** 手工录入表单（SPEC §7.4 兜底），提交前不做 MAC 归一化——那是服务端职责。 */
-const createForm = ref({
-  sn: '',
-  mac: '',
-  uuid: '',
-  arch: 'x86_64' as Arch,
-  firmware: 'uefi' as Firmware,
-  rack: '',
-});
-
-function resetCreateForm() {
-  createForm.value = {
-    sn: '',
-    mac: '',
-    uuid: '',
-    arch: 'x86_64',
-    firmware: 'uefi',
-    rack: '',
-  };
+function search() {
+  failure.value = undefined;
+  page.reset();
+  void gridApi.reload();
 }
-
-const [CreateModal, createModalApi] = useVbenModal({
-  async onConfirm() {
-    if (!createForm.value.sn.trim() || !createForm.value.mac.trim()) {
-      ElMessage.error('SN 与 MAC 均为必填');
-      return;
-    }
-    try {
-      await requestClient.post<HostListItem>('/hosts', {
-        sn: createForm.value.sn.trim(),
-        mac: createForm.value.mac.trim(),
-        uuid: createForm.value.uuid.trim() || undefined,
-        arch: createForm.value.arch,
-        firmware: createForm.value.firmware,
-        rack: createForm.value.rack.trim() || undefined,
-      });
-      ElMessage.success('已录入');
-      createModalApi.close();
-      gridApi.reload();
-    } catch (error: any) {
-      // MAC 格式不合法时服务端返回 CodeMACInvalid，message 直接展示，
-      // 不在前端重新实现归一化校验逻辑。
-      const message =
-        error?.response?.data?.message || error?.message || '录入失败';
-      ElMessage.error(message);
-    }
-  },
-  onCancel() {
-    createModalApi.close();
-  },
-});
-
-function openCreate() {
-  resetCreateForm();
-  createModalApi.open();
+function nextPage() {
+  page.advance();
+  void gridApi.reload();
+}
+function previousPage() {
+  page.back();
+  void gridApi.reload();
+}
+const editorOpen = ref(false);
+const saving = ref(false);
+const editingSN = ref<string>();
+const form = reactive<{
+  sn: string;
+  arch: '' | HostListItem['arch'];
+  firmware: '' | HostListItem['firmware'];
+  attrs: Record<string, string>;
+  rev: number;
+}>({ sn: '', arch: '', firmware: '', attrs: {}, rev: 0 });
+const attrs = ref<AttributeRow[]>([]);
+function openHost(host?: HostListItem) {
+  failure.value = undefined;
+  editingSN.value = host?.sn;
+  Object.assign(form, {
+    sn: host?.sn ?? '',
+    arch: host?.arch ?? '',
+    firmware: host?.firmware ?? '',
+    attrs: {},
+    rev: host?.rev ?? 0,
+  });
+  attrs.value = Object.entries(host?.attrs ?? {}).map(([key, value]) => ({
+    key,
+    value,
+  }));
+  editorOpen.value = true;
+}
+async function saveHost() {
+  if (!canWrite.value || saving.value) return;
+  failure.value = undefined;
+  saving.value = true;
+  try {
+    const data = {
+      sn: form.sn,
+      rev: form.rev,
+      ...(form.arch ? { arch: form.arch } : {}),
+      ...(form.firmware ? { firmware: form.firmware } : {}),
+      attrs: attributesOf(attrs.value),
+    };
+    if (editingSN.value) await updateHostApi(editingSN.value, data);
+    else await createHostApi(data);
+    editorOpen.value = false;
+    ElMessage.success('主机已保存');
+    search();
+  } catch (error) {
+    failure.value = error;
+  } finally {
+    saving.value = false;
+  }
+}
+async function removeHost(host: HostListItem) {
+  try {
+    await ElMessageBox.confirm(`确认删除主机 ${host.sn}？`, '删除主机', {
+      type: 'warning',
+    });
+  } catch {
+    return;
+  }
+  if (!canWrite.value) return;
+  try {
+    await deleteHostApi(host.sn, host.rev);
+    search();
+  } catch (error) {
+    failure.value = error;
+  }
+}
+const csvOpen = ref(false);
+const csvText = ref('');
+const csvName = ref('');
+const csvBusy = ref(false);
+const confirmed = ref(false);
+const csv = reactive(new CsvImportSession());
+function openCSV() {
+  csvText.value = '';
+  csvName.value = '';
+  csv.select(new Uint8Array());
+  confirmed.value = false;
+  failure.value = undefined;
+  csvOpen.value = true;
+}
+function changeCSVText(value: string) {
+  csvName.value = '';
+  csv.select(new TextEncoder().encode(value));
+  confirmed.value = false;
+}
+async function selectCSV(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  csvText.value = '';
+  csvName.value = file.name;
+  csv.select(new Uint8Array(await file.arrayBuffer()));
+  confirmed.value = false;
+}
+async function previewCSV() {
+  csvBusy.value = true;
+  failure.value = undefined;
+  confirmed.value = false;
+  try {
+    await csv.preview(previewHostCSVApi);
+  } catch (error) {
+    failure.value = error;
+  } finally {
+    csvBusy.value = false;
+  }
+}
+async function commitCSV() {
+  if (!canWrite.value || csvBusy.value) return;
+  csvBusy.value = true;
+  failure.value = undefined;
+  try {
+    await csv.commit(commitHostCSVApi, confirmed.value);
+    csvOpen.value = false;
+    ElMessage.success('CSV 已整体导入');
+    search();
+  } catch (error) {
+    failure.value = error;
+  } finally {
+    csvBusy.value = false;
+  }
 }
 </script>
 
 <template>
   <Page
-    description="已发现主机清单，是建任务页 SN 字段的唯一数据源；discovery 未覆盖到的机器可在此手工录入兜底（§7.4）。"
     title="主机清单"
+    description="登记主机 SN、可选架构固件和任意属性；建任务时从这里选择主机。"
   >
     <template #extra>
-      <ElButton type="primary" @click="openCreate">手工录入主机</ElButton>
+      <ElButton v-if="canWrite" @click="openCSV">CSV 导入</ElButton>
+      <ElButton v-if="canWrite" type="primary" @click="openHost()">
+        登记主机
+      </ElButton>
     </template>
-
+    <ElAlert
+      v-if="failure && !editorOpen && !csvOpen"
+      :title="errorMessage(failure)"
+      type="error"
+      :closable="false"
+      class="mb-3"
+    />
+    <ProblemList
+      v-if="!editorOpen && !csvOpen"
+      :problems="problems"
+      :references="references"
+    />
+    <form
+      class="mb-4 flex flex-wrap items-center gap-3"
+      @submit.prevent="search"
+    >
+      <ElInput
+        v-model="filters.prefix"
+        aria-label="SN 前缀"
+        placeholder="SN 前缀"
+        class="!w-52"
+        clearable
+      />
+      <ElInput
+        v-model="filters.attr_key"
+        aria-label="属性名"
+        placeholder="属性名，例如 rack"
+        class="!w-44"
+        clearable
+      />
+      <ElInput
+        v-model="filters.attr_value"
+        aria-label="属性值"
+        placeholder="属性值"
+        class="!w-52"
+        clearable
+      />
+      <ElButton native-type="submit" type="primary">查询</ElButton>
+    </form>
     <Grid>
-      <template #arch="{ row }">
-        <ElTag size="small">{{ row.arch }}</ElTag>
+      <template #attrs="{ row }">
+        <span
+          v-for="(value, key) in row.attrs"
+          :key="key"
+          class="mr-4 inline-block"
+        >
+          {{ key }}：{{ value }}
+        </span>
       </template>
-      <template #firmware="{ row }">
-        <ElTag size="small" type="info">{{ row.firmware }}</ElTag>
+      <template #action="{ row }">
+        <ElButton v-if="canWrite" link @click="openHost(row)">编辑</ElButton>
+        <ElButton v-if="canWrite" link type="danger" @click="removeHost(row)">
+          删除
+        </ElButton>
       </template>
     </Grid>
-
-    <CreateModal class="w-[480px]" title="手工录入主机">
-      <div class="grid grid-cols-2 gap-4">
-        <div class="col-span-2">
-          <label class="mb-1 block text-sm">SN（必填）</label>
-          <ElInput v-model="createForm.sn" />
-        </div>
-        <div class="col-span-2">
-          <label class="mb-1 block text-sm">MAC（必填，入库前会归一化）</label>
-          <ElInput v-model="createForm.mac" placeholder="AA:BB:CC:DD:EE:FF" />
-        </div>
-        <div class="col-span-2">
-          <label class="mb-1 block text-sm">UUID（可选）</label>
-          <ElInput v-model="createForm.uuid" />
+    <div class="mt-3 flex justify-end gap-3">
+      <ElButton :disabled="!page.history.length" @click="previousPage">
+        上一页
+      </ElButton>
+      <ElButton :disabled="!page.next" @click="nextPage">下一页</ElButton>
+    </div>
+    <ElDialog
+      v-model="editorOpen"
+      :title="editingSN ? '编辑主机' : '登记主机'"
+      width="640px"
+      :close-on-click-modal="false"
+    >
+      <ElAlert
+        v-if="failure"
+        :title="errorMessage(failure)"
+        type="error"
+        :closable="false"
+        class="mb-3"
+      />
+      <ProblemList :problems="problems" :references="references" />
+      <form class="grid gap-4" @submit.prevent="saveHost">
+        <label>
+          SN（必填）
+          <ElInput
+            v-model="form.sn"
+            aria-label="主机 SN"
+            :disabled="!!editingSN || saving"
+          />
+        </label>
+        <div class="grid grid-cols-2 gap-4">
+          <label>
+            架构（可选）
+            <ElSelect
+              v-model="form.arch"
+              aria-label="主机架构"
+              clearable
+              class="w-full"
+            >
+              <ElOption label="x86_64" value="x86_64" />
+              <ElOption label="aarch64" value="aarch64" />
+            </ElSelect>
+          </label>
+          <label>
+            固件（可选）
+            <ElSelect
+              v-model="form.firmware"
+              aria-label="主机固件"
+              clearable
+              class="w-full"
+            >
+              <ElOption label="UEFI" value="uefi" />
+              <ElOption label="BIOS" value="bios" />
+            </ElSelect>
+          </label>
         </div>
         <div>
-          <label class="mb-1 block text-sm">架构（必填）</label>
-          <ElSelect v-model="createForm.arch" class="w-full">
-            <ElOption
-              v-for="opt in ARCH_OPTIONS"
-              :key="opt"
-              :label="opt"
-              :value="opt"
+          <div class="mb-2 flex items-center justify-between">
+            <span>登记属性（例如 ip、mac、rack）</span>
+            <ElButton
+              :disabled="saving"
+              @click="attrs.push({ key: '', value: '' })"
+            >
+              添加属性
+            </ElButton>
+          </div>
+          <div
+            v-for="(attr, index) in attrs"
+            :key="index"
+            class="mb-2 flex gap-2"
+          >
+            <ElInput
+              v-model="attr.key"
+              :aria-label="`属性名 ${index + 1}`"
+              placeholder="属性名"
+              :disabled="saving"
             />
-          </ElSelect>
-        </div>
-        <div>
-          <label class="mb-1 block text-sm">固件（必填）</label>
-          <ElSelect v-model="createForm.firmware" class="w-full">
-            <ElOption
-              v-for="opt in FIRMWARE_OPTIONS"
-              :key="opt"
-              :label="opt"
-              :value="opt"
+            <ElInput
+              v-model="attr.value"
+              :aria-label="`属性值 ${index + 1}`"
+              placeholder="属性值"
+              :disabled="saving"
             />
-          </ElSelect>
+            <ElButton :disabled="saving" @click="attrs.splice(index, 1)">
+              移除
+            </ElButton>
+          </div>
         </div>
-        <div class="col-span-2">
-          <label class="mb-1 block text-sm">机架位（可选）</label>
-          <ElInput v-model="createForm.rack" />
-        </div>
-      </div>
-    </CreateModal>
+      </form>
+      <template #footer>
+        <ElButton :disabled="saving" @click="editorOpen = false">取消</ElButton>
+        <ElButton type="primary" :loading="saving" @click="saveHost">
+          保存主机
+        </ElButton>
+      </template>
+    </ElDialog>
+    <ElDialog
+      v-model="csvOpen"
+      title="CSV 导入：预览后确认"
+      width="800px"
+      :close-on-click-modal="false"
+    >
+      <ElAlert
+        v-if="failure"
+        :title="errorMessage(failure)"
+        type="error"
+        :closable="false"
+        class="mb-3"
+      />
+      <ProblemList :problems="problems" :references="references" />
+      <p class="mb-3">
+        首行使用 sn、arch、firmware 或属性名。已登记 SN
+        将更新，任何错误都会阻止整批提交。
+      </p>
+      <label class="mb-3 block">
+        选择 CSV 文件
+        <input
+          type="file"
+          accept=".csv,text/csv"
+          :disabled="csvBusy"
+          aria-label="CSV 文件"
+          @change="selectCSV"
+        />
+      </label>
+      <p v-if="csvName" class="mb-2">当前文件：{{ csvName }}</p>
+      <ElInput
+        v-model="csvText"
+        type="textarea"
+        :rows="5"
+        :disabled="csvBusy"
+        aria-label="CSV 文本"
+        placeholder="sn,arch,firmware,rack&#10;SN001,,,R1"
+        @input="changeCSVText"
+      />
+      <ElButton class="my-3" :loading="csvBusy" @click="previewCSV">
+        预览 CSV（不写入）
+      </ElButton>
+      <ElTable v-if="csv.plan" :data="csv.plan.rows ?? []" max-height="320">
+        <ElTableColumn prop="row" label="行号" width="70" />
+        <ElTableColumn prop="sn" label="SN" />
+        <ElTableColumn prop="action" label="处理" width="100" />
+        <ElTableColumn label="逐行诊断" min-width="260">
+          <template #default="{ row }">
+            <ProblemList :problems="row.problems ?? []" />
+          </template>
+        </ElTableColumn>
+      </ElTable>
+      <ElCheckbox
+        v-if="csv.plan"
+        v-model="confirmed"
+        class="mt-3"
+        :disabled="
+          csvBusy || (csv.plan.rows ?? []).some((row) => row.action === 'error')
+        "
+      >
+        已核对 {{ csv.plan.total }} 行，确认整体导入本次预览的 CSV
+      </ElCheckbox>
+      <template #footer>
+        <ElButton :disabled="csvBusy" @click="csvOpen = false">关闭</ElButton>
+        <ElButton
+          type="primary"
+          :disabled="!confirmed || !csv.plan"
+          :loading="csvBusy"
+          @click="commitCSV"
+        >
+          确认导入
+        </ElButton>
+      </template>
+    </ElDialog>
   </Page>
 </template>

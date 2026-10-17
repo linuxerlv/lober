@@ -1,0 +1,59 @@
+Source: wget
+Maintainer: Noël Köthe <noel@debian.org>
+Section: web
+Priority: standard
+Build-Depends: debhelper-compat (= 13),
+               pkgconf,
+               gettext,
+               texinfo,
+               libidn2-dev,
+               uuid-dev,
+               libpsl-dev,
+               libpcre2-dev,
+               libgnutls28-dev,
+               libssl-dev,
+               zlib1g-dev,
+               libhttp-daemon-perl <!nocheck>
+Standards-Version: 4.7.2
+Vcs-Browser: https://salsa.debian.org/debian/wget
+Vcs-Git: https://salsa.debian.org/debian/wget.git
+Homepage: https://www.gnu.org/software/wget/
+Rules-Requires-Root: no
+
+Package: wget
+Architecture: any
+Multi-Arch: foreign
+Depends: ${shlibs:Depends},
+         ${misc:Depends}
+Recommends: ca-certificates
+Conflicts: wget-ssl
+Description: retrieves files from the web
+ Wget is a network utility to retrieve files from the web
+ using HTTP(S) and FTP, the two most widely used internet
+ protocols. It works non-interactively, so it will work in
+ the background, after having logged off. The program supports
+ recursive retrieval of web-authoring pages as well as FTP
+ sites -- you can use Wget to make mirrors of archives and
+ home pages or to travel the web like a WWW robot.
+ .
+ Wget works particularly well with slow or unstable connections
+ by continuing to retrieve a document until the document is fully
+ downloaded. Re-getting files from where it left off works on
+ servers (both HTTP and FTP) that support it. Both HTTP and FTP
+ retrievals can be time stamped, so Wget can see if the remote
+ file has changed since the last retrieval and automatically
+ retrieve the new version if it has.
+ .
+ Wget supports proxy servers; this can lighten the network load,
+ speed up retrieval, and provide access behind firewalls.
+
+Package: wget-udeb
+Architecture: any
+Section: debian-installer
+Priority: optional
+Build-Profiles: <!noudeb>
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Package-Type: udeb
+Description: retrieves files from the web
+ This package provides wget.gnu binary as alternative to the limited
+ implementation in busybox (see for example ssl support).

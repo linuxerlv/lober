@@ -1,9 +1,0 @@
-bootstate=0
-title=Loading ESXi installer
-timeout=5
-prefix=http://ng.internal/artifacts/esxi8
-kernel=/b.b00
-kernelopt=runweasel ks=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/boot.cfg
-modules=jumpstrt.gz --- useropts.gz --- k.b00 --- chain.b00
-build=8.0.0-2000000
-updated=0

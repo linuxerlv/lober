@@ -25,15 +25,20 @@ export default defineConfig(async () => {
       ],
       server: {
         proxy: {
-          '/api': {
+          '/console': {
+            target:
+              process.env.VITE_CONSOLE_PROXY_TARGET || 'http://127.0.0.1:8080',
             changeOrigin: true,
-            rewrite: (path) => path.replace(/^\/api/, ''),
-            // mock代理目标地址
-            target: 'http://localhost:5320/api',
-            ws: true,
+          },
+          '/openapi.json': {
+            target:
+              process.env.VITE_CONSOLE_PROXY_TARGET || 'http://127.0.0.1:8080',
+            changeOrigin: true,
           },
         },
       },
     },
   };
 });
+import process from 'node:process';
+

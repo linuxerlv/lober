@@ -1,0 +1,5 @@
+- {id: disk0, type: disk, path: /dev/sda, ptable: gpt, wipe: superblock-recursive, grub_device: true}
+- {id: bios, type: partition, device: disk0, size: 1M, flag: bios_grub}
+- {id: root, type: partition, device: disk0, size: -1}
+- {id: root-fs, type: format, volume: root, fstype: ext4}
+- {id: root-mount, type: mount, device: root-fs, path: /}

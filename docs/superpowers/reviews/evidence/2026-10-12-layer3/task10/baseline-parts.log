@@ -1,0 +1,21 @@
+Command: go test -overlay /mnt/e/src/lober/.tmp/wf/r10/.tmp/task10-baseline-parts.json ./internal/core/scan -run ^Test七种格式的样例扫出预期的占位符$ -count=1 -v
+=== RUN   Test七种格式的样例扫出预期的占位符
+=== RUN   Test七种格式的样例扫出预期的占位符/kickstart
+=== RUN   Test七种格式的样例扫出预期的占位符/preseed
+=== RUN   Test七种格式的样例扫出预期的占位符/autoinstall
+=== RUN   Test七种格式的样例扫出预期的占位符/autoyast
+=== RUN   Test七种格式的样例扫出预期的占位符/agama
+=== RUN   Test七种格式的样例扫出预期的占位符/unattend
+=== RUN   Test七种格式的样例扫出预期的占位符/esxi-ks
+--- PASS: Test七种格式的样例扫出预期的占位符 (0.01s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/kickstart (0.00s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/preseed (0.00s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/autoinstall (0.00s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/autoyast (0.00s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/agama (0.00s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/unattend (0.00s)
+    --- PASS: Test七种格式的样例扫出预期的占位符/esxi-ks (0.00s)
+PASS
+ok  	github.com/lober/lober/internal/core/scan	0.019s
+
+exit_code=0

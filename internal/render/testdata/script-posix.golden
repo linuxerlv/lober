@@ -1,0 +1,56 @@
+#!/bin/sh
+set -u
+umask 077
+DIR=/var/lib/lober
+for tool in sha256sum sleep mktemp tail cat base64; do command -v "$tool" >/dev/null 2>&1 || exit 127; done
+mkdir -p "$DIR" || exit $?
+TOKEN='install-tok-fixed-0000000000000000'
+WORK=$(mktemp -d "$DIR/run-3.XXXXXX") || exit $?
+trap 'rm -rf "$WORK"' EXIT
+signal() {
+ phase=$1; instance=$2; rc=$3; digest=$4; body=$5
+ address='http://gw.internal/v1/signal/42/'"$TOKEN"'/'"$phase"'?slot=3&timing=pre&rc='"$rc"
+ if [ "$instance" -ne 0 ]; then address="$address&instance=$instance&digest=$digest"; fi
+ if [ -n "$body" ]; then body="@$body"; fi
+ curl -fsS -m 10 -X POST -H 'Content-Type: text/plain' "$address" --data-binary "$body" >/dev/null 2>&1 || :
+}
+kill_tree() {
+ children=$(cat "/proc/$1/task/$1/children" 2>/dev/null) || children=
+ for child in $children; do kill_tree "$child"; done
+ kill -KILL "$1" 2>/dev/null || :
+}
+run_bounded() {
+ seconds=$1; shift
+ "$@" &
+ process=$!
+ (sleep "$seconds" || exit 0; : > "$WORK/timed-out"; kill_tree "$process") >/dev/null 2>&1 &
+ watchdog=$!
+ if wait "$process"; then status=0; else status=$?; fi
+ kill_tree "$watchdog"
+ wait "$watchdog" 2>/dev/null || :
+ if [ -f "$WORK/timed-out" ]; then status=124; fi
+ rm -f "$WORK/timed-out"
+ return "$status"
+}
+signal slot-start 0 0 '' ''
+HOOK="$DIR/hook-9d08d2a923b2a2b13e00ba206fafa9a912a68f0c7478302bded683ae9992656f.sh"
+LOG="$WORK/hook-1.log"
+: > "$LOG"
+RC=0
+signal hook-start 1 0 '9d08d2a923b2a2b13e00ba206fafa9a912a68f0c7478302bded683ae9992656f' ''
+if curl -fsS --retry 3 -o "$HOOK" 'http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/hooks/9d08d2a923b2a2b13e00ba206fafa9a912a68f0c7478302bded683ae9992656f' >"$LOG" 2>&1; then :; else RC=$?; fi
+if [ "$RC" -eq 0 ]; then
+ HASH=$(sha256sum "$HOOK" 2>>"$LOG") || HASH=
+ HASH=${HASH%% *}
+ if [ "$HASH" != '9d08d2a923b2a2b13e00ba206fafa9a912a68f0c7478302bded683ae9992656f' ]; then RC=65; printf '%s\n' 'hook digest mismatch' >>"$LOG"; fi
+fi
+printf '%s' 'IyEvYmluL3NoCmV4ZWMgc2ggIiRIT09LIgo=' | base64 -d > "$WORK/launch-1.sh" || exit $?
+export HOOK
+if [ "$RC" -eq 0 ]; then
+ if run_bounded 3 sh "$WORK/launch-1.sh" >>"$LOG" 2>&1; then RC=0; else RC=$?; fi
+fi
+tail -c 4096 "$LOG" > "$WORK/tail"
+signal hook-report 1 "$RC" '9d08d2a923b2a2b13e00ba206fafa9a912a68f0c7478302bded683ae9992656f' "$WORK/tail"
+if [ "$RC" -ne 0 ]; then signal slot-end 0 "$RC" '' ''; exit "$RC"; fi
+signal slot-end 0 0 '' ''
+exit 0

@@ -1,0 +1,17 @@
+=== RUN   TestAnswerWindowsNativeCMDInvocation
+=== RUN   TestAnswerWindowsNativeCMDInvocation/pre
+=== RUN   TestAnswerWindowsNativeCMDInvocation/firstboot
+--- PASS: TestAnswerWindowsNativeCMDInvocation (0.11s)
+    --- PASS: TestAnswerWindowsNativeCMDInvocation/pre (0.05s)
+    --- PASS: TestAnswerWindowsNativeCMDInvocation/firstboot (0.06s)
+=== RUN   TestAnswerWindowsNativeCMDFailureChain
+=== RUN   TestAnswerWindowsNativeCMDFailureChain/wrapper-exit-71
+    answer_cmd_windows_test.go:89: chain exit=1 want=71 err=exit status 1 output='firstboot.cmd' 不是内部或外部命令，也不是可运行的程序
+        或批处理文件。
+=== RUN   TestAnswerWindowsNativeCMDFailureChain/wrapper-exit-0
+    answer_cmd_windows_test.go:89: chain exit=1 want=0 err=exit status 1 output='firstboot.cmd' 不是内部或外部命令，也不是可运行的程序
+        或批处理文件。
+--- FAIL: TestAnswerWindowsNativeCMDFailureChain (0.11s)
+    --- FAIL: TestAnswerWindowsNativeCMDFailureChain/wrapper-exit-71 (0.06s)
+    --- FAIL: TestAnswerWindowsNativeCMDFailureChain/wrapper-exit-0 (0.05s)
+FAIL

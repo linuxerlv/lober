@@ -1,0 +1,10 @@
+--- FAIL: TestWindowsPowerShellRawUTF8ExecutionCopy (0.00s)
+    --- FAIL: TestWindowsPowerShellRawUTF8ExecutionCopy/false (0.00s)
+        remaining_test.go:226: PowerShell UTF8 execution copy absent
+    --- FAIL: TestWindowsPowerShellRawUTF8ExecutionCopy/true (0.00s)
+        remaining_test.go:226: PowerShell UTF8 execution copy absent
+--- FAIL: TestWindowsRuntimePreservesNativeStatusThroughCMDFile (0.00s)
+    remaining_test.go:271: native DWORD exit status can be truncated by POSIX shell
+FAIL
+FAIL	github.com/lober/lober/internal/render	0.006s
+FAIL

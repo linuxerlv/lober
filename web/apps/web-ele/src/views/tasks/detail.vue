@@ -1,447 +1,263 @@
-<script lang="ts" setup>
-import type { ConsoleTaskApi } from '#/api/console/task';
-/**
- * 任务详情页（SPEC §12.6）：状态机时间线、事件表、SSE 实时日志、
- * 失败详情（§3.5 的六个字段）。
- *
- * state=failed 本身无用，失败详情的六项才是运维要看的；last_signal_at
- * 区分度最高——刚收到信号说明机器活着、是脚本或 installer 逻辑错误，
- * 很久没信号说明机器层面出事，两个排查方向完全不同（§3.5）。
- *
- * SSE 用 fetch 流，不用 EventSource（§12.8，实现见
- * src/composables/use-task-stream.ts）：
- * - 断线指数退避重连，重连带 Last-Event-ID，服务端按 seq 续传，不从头重放
- * - 组件卸载必须 abort，否则列表与详情来回切会攒住一堆连接
- * - 任务进终态由服务端主动关流，前端收到终态即停止重连
- */
-import type { TaskStreamEvent } from '#/composables/use-task-stream';
+<script setup lang="ts">
+import type { Schemas } from '#/api/console/generated';
+import type { Task, TaskEvent } from '#/api/console/task';
 
-import {
-  computed,
-  onBeforeUnmount,
-  onMounted,
-  ref,
-  shallowRef,
-  watch,
-} from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { useRoute } from 'vue-router';
 
+import { Page } from '@vben/common-ui';
 import { useAppConfig } from '@vben/hooks';
-import { useAccessStore, useUserStore } from '@vben/stores';
+import { useAccessStore } from '@vben/stores';
 
 import {
   ElAlert,
   ElButton,
   ElCard,
-  ElDescriptions,
-  ElDescriptionsItem,
-  ElMessage,
+  ElDialog,
   ElMessageBox,
-  ElTable,
-  ElTableColumn,
+  ElTabPane,
+  ElTabs,
   ElTag,
-  ElTimeline,
-  ElTimelineItem,
 } from 'element-plus';
 
-import {
-  cancelTaskApi,
-  getTaskEventsApi,
-  getTasksApi,
-  retryTaskApi,
-  taskStreamUrl,
-} from '#/api/console/task';
-import { useTaskStream } from '#/composables/use-task-stream';
+import { useVbenVxeGrid } from '#/adapter/vxe-table';
+import { errorMessage, problemsOf } from '#/api/console/problem';
+import { taskAPI, taskStreamURL } from '#/api/console/task';
+import ProblemList from '#/components/console/ProblemList.vue';
 
-defineOptions({ name: 'TaskDetail' });
+import { taskStateLabels } from './task-state';
+import { mergeEvents } from './wizard-state';
 
+defineOptions({ name: 'TasksDetail' });
 const route = useRoute();
-const router = useRouter();
-const accessStore = useAccessStore();
-const userStore = useUserStore();
+const access = useAccessStore();
 const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
-
-const taskId = computed(() => String(route.params.id));
-
-// ---------------------------------------------------------------------------
-// 任务本体与事件历史
-// ---------------------------------------------------------------------------
-
-/**
- * 契约缺口（如实记录，供 contractGaps 汇报）：
- *
- * docs/contracts/http-console.md 的任务分组没有 `GET /tasks/{id}`（取单条）
- * 端点，只有 `GET /tasks?state=&sn=`（列表）与 `GET /tasks/{id}/events`。
- * src/api/console/task.ts（另一位 agent 的产出）同样没有导出任何按 id 取
- * 单条任务的函数，与「模板」分组缺 GET /templates 是同一类缺口——按 id 查
- * 详情理论上比列表更基础，任务列表页、任务详情页两处都要用到，但契约冻结
- * 时只顾了列表和事件两个端点。
- *
- * 本页面的应对：调用 getTasksApi() 拉全量任务列表后按 id 客户端过滤取出
- * 目标任务。付出的代价是每次刷新详情页都要拉一次全量任务列表（对约定 2
- * 里“百级规模”的任务表可接受），换来不用等待端点补齐就能先把页面跑起来。
- * retry/cancel 成功后用返回的 TaskItem 直接替换本地状态，不用重新拉列表。
- */
-const task = shallowRef<ConsoleTaskApi.TaskItem>();
-const events = ref<ConsoleTaskApi.TaskEventItem[]>([]);
-const loading = ref(false);
-const taskLoadError = ref<string>();
-
-async function loadTaskAndEvents() {
-  loading.value = true;
-  taskLoadError.value = undefined;
+const id = String(route.params.id);
+const task = ref<Task>();
+const error = ref('');
+const problems = ref<Schemas['ProblemJSON'][]>([]);
+const events = ref<TaskEvent[]>([]);
+const connected = ref(false);
+const preview = ref<Schemas['PreviewResponse']>();
+const showPreview = ref(false);
+const busy = ref(false);
+let source: EventSource | undefined;
+let poll: ReturnType<typeof setInterval> | undefined;
+let active = true;
+const [EventGrid, eventGrid] = useVbenVxeGrid<TaskEvent>({
+  gridOptions: {
+    columns: [
+      { field: 'seq', title: '序号', width: 80 },
+      {
+        field: 'at',
+        title: '时间',
+        width: 180,
+        formatter: ({ cellValue }: { cellValue: number }) =>
+          new Date(cellValue * 1000).toLocaleString(),
+      },
+      { field: 'kind', title: '事件', minWidth: 140 },
+      {
+        title: '详情',
+        minWidth: 300,
+        formatter: ({ row }: { row: TaskEvent }) =>
+          Object.entries(row.fields ?? {})
+            .map(([key, value]) => `${key}=${value}`)
+            .join('；'),
+      },
+    ],
+    rowConfig: { keyField: 'seq' },
+    pagerConfig: { enabled: false },
+    height: 330,
+  },
+});
+function failed(reason: unknown) {
+  error.value = errorMessage(reason);
+  problems.value = problemsOf(reason);
+}
+async function reload() {
   try {
-    const [tasks, eventList] = await Promise.all([
-      getTasksApi(),
-      getTaskEventsApi(taskId.value),
-    ]);
-    const found = tasks.find(
-      (t: ConsoleTaskApi.TaskItem) => t.id === taskId.value,
-    );
-    if (!found) {
-      taskLoadError.value = '任务不存在或已被删除';
-    }
-    task.value = found;
-    events.value = eventList;
-  } catch (error) {
-    taskLoadError.value =
-      error instanceof Error ? error.message : String(error);
-  } finally {
-    loading.value = false;
+    const result = await taskAPI.get(id);
+    if (active) task.value = result;
+  } catch (reason) {
+    if (active) failed(reason);
   }
 }
-
-// ---------------------------------------------------------------------------
-// SSE 实时事件流
-// ---------------------------------------------------------------------------
-
-const streamState = ref<'closed' | 'connecting' | 'error' | 'open'>(
-  'connecting',
-);
-let stopStream: (() => void) | undefined;
-
-/** 按 seq 去重合并 SSE 推来的事件——历史事件（events 接口）与实时事件可能重叠。 */
-function appendStreamEvent(event: TaskStreamEvent) {
-  const exists = events.value.some(
-    (e: ConsoleTaskApi.TaskEventItem) => e.seq === event.seq,
+function append(incoming: TaskEvent[]) {
+  if (!active) return;
+  events.value = mergeEvents(events.value, incoming);
+  eventGrid.setGridOptions({ data: events.value });
+}
+async function loadEvents() {
+  try {
+    const page = await taskAPI.events(id, events.value.at(-1)?.seq ?? 0);
+    append(page.items ?? []);
+  } catch (reason) {
+    if (active) failed(reason);
+  }
+}
+function connect() {
+  source?.close();
+  if (!access.accessToken) return;
+  source = new EventSource(
+    taskStreamURL(apiURL, id, access.accessToken, events.value.at(-1)?.seq ?? 0),
   );
-  if (!exists) {
-    events.value = [
-      ...events.value,
-      event as ConsoleTaskApi.TaskEventItem,
-    ].toSorted((a, b) => a.seq - b.seq);
-  }
-  if (task.value) {
-    // 实时更新任务当前阶段，时间线随日志推进而不必整页刷新。
-    task.value = {
-      ...task.value,
-      currentPhase: event.phase as ConsoleTaskApi.Phase,
-    };
-  }
-}
-
-function startStream() {
-  stopStream?.();
-  // apiURL 与 taskStreamUrl 的拼接方式与 requestClient 内其它调用一致
-  // （baseURL + 相对路径），不额外拼 /console/v1——该前缀由部署环境的代理层
-  // 负责（与 requestClient 的其它请求同一套代理规则），本页面不重复假设
-  // 一个可能与之不一致的绝对路径。
-  const { state, stop } = useTaskStream({
-    url: `${apiURL}${taskStreamUrl(taskId.value)}`,
-    authorizationHeader: () =>
-      accessStore.accessToken ? `Bearer ${accessStore.accessToken}` : undefined,
-    onEvent: appendStreamEvent,
-    onTerminal: () => {
-      // 终态已到，刷新一次事件列表兜底（防止 SSE 期间漏收的事件），
-      // 不再重连——由 composable 内部保证。
-      void loadTaskAndEvents();
-    },
-  });
-  streamState.value = state.value;
-  const unwatch = watch(state, (value) => {
-    streamState.value = value;
-  });
-  stopStream = () => {
-    unwatch();
-    stop();
+  source.onopen = () => {
+    connected.value = true;
   };
-}
-
-// ---------------------------------------------------------------------------
-// 失败详情（SPEC §3.5 六个字段）
-// ---------------------------------------------------------------------------
-
-const isFailed = computed(() => task.value?.state === 'failed');
-const isTerminal = computed(
-  () => task.value?.state === 'done' || task.value?.state === 'failed',
-);
-
-/** 距上次信号多久——区分度最高的一项，直接算差值而不是原样显示时间戳。 */
-const sinceLastSignalText = computed(() => {
-  const t = task.value;
-  if (!t?.lastSignalAt) {
-    return '从未收到信号';
-  }
-  const seconds = Math.max(0, Math.floor(Date.now() / 1000) - t.lastSignalAt);
-  if (seconds < 60) return `${seconds} 秒前`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)} 小时前`;
-  return `${Math.floor(seconds / 86_400)} 天前`;
-});
-
-// ---------------------------------------------------------------------------
-// 操作：retry / cancel
-// ---------------------------------------------------------------------------
-
-const actionLoading = ref(false);
-
-async function onRetry() {
-  try {
-    await ElMessageBox.confirm(
-      '重试会重置尝试次数并签发新的装机凭据，旧凭据立即失效。若该任务此前因超时失败且机器可能已经装好、盘上已有数据，服务端会拒绝重试。',
-      '确认重试',
-      { type: 'warning' },
-    );
-  } catch {
-    return;
-  }
-  actionLoading.value = true;
-  try {
-    task.value = await retryTaskApi(taskId.value);
-    ElMessage.success('已重试，等待机器重新引导');
-    startStream();
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '重试失败');
-  } finally {
-    actionLoading.value = false;
-  }
-}
-
-async function onCancel() {
-  try {
-    await ElMessageBox.confirm(
-      '取消后该主机的后续引导请求将不再被响应，此任务进入终态且不可恢复。',
-      '确认取消任务',
-      { type: 'warning' },
-    );
-  } catch {
-    return;
-  }
-  actionLoading.value = true;
-  try {
-    task.value = await cancelTaskApi(taskId.value);
-    ElMessage.success('任务已取消');
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '取消失败');
-  } finally {
-    actionLoading.value = false;
-  }
-}
-
-function backToList() {
-  router.push('/tasks');
-}
-
-/**
- * 溯源视图（端点 34）只对 admin 开放。这里据此决定按钮是否渲染——渲染一个
- * 点下去必然 403 的按钮只会制造困惑，而不是"更方便发现功能"。
- */
-const canViewProvenance = computed(() =>
-  userStore.userRoles.includes('admin'),
-);
-
-/**
- * 跳到报表页的溯源标签并带上当前任务 id。
- *
- * 用 query 传 id 而不是新建一个 /tasks/:id/provenance 路由：溯源的四块内容与
- * 报表页的其它三个标签共用同一套时间范围控件与导出逻辑，拆成独立页面要把那些
- * 复制一遍。
- */
-function goProvenance() {
-  router.push({
-    name: 'ReportsIndex',
-    query: { tab: 'provenance', taskId: taskId.value },
+  source.onerror = () => {
+    connected.value = false;
+  };
+  source.addEventListener('task', (message) => {
+    try {
+      const event: TaskEvent = JSON.parse((message as MessageEvent<string>).data);
+      if (event.taskID === id && Number.isSafeInteger(event.seq)) {
+        append([event]);
+        void reload();
+      }
+    } catch {
+      connected.value = false;
+    }
   });
 }
-
-// ---------------------------------------------------------------------------
-// 生命周期
-// ---------------------------------------------------------------------------
-
+async function control(retry: boolean) {
+  const permission=retry?'task:retry':'task:cancel';
+  if (!access.accessCodes.includes(permission) || busy.value || !task.value) return;
+  try {
+    await ElMessageBox.confirm(
+      retry ? '重试会沿用原任务快照，目标机下次引导可能重新安装。确认重试？' : '确认取消该任务？',
+      retry ? '重试任务' : '取消任务',
+      { type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  if (!access.accessCodes.includes(permission)) return;
+  busy.value = true;
+  error.value = '';
+  problems.value = [];
+  try {
+    task.value = await (retry ? taskAPI.retry(id) : taskAPI.cancel(id));
+    await loadEvents();
+  } catch (reason) {
+    failed(reason);
+  } finally {
+    busy.value = false;
+  }
+}
+async function renderPreview() {
+  busy.value = true;
+  try {
+    preview.value = await taskAPI.preview(id);
+    showPreview.value = true;
+  } catch (reason) {
+    failed(reason);
+  } finally {
+    busy.value = false;
+  }
+}
 onMounted(async () => {
-  await loadTaskAndEvents();
-  startStream();
+  await reload();
+  await loadEvents();
+  if (!active) return;
+  connect();
+  poll = setInterval(() => {
+    void reload();
+    if (!connected.value) void loadEvents();
+  }, 5000);
 });
-
-watch(taskId, async () => {
-  // 路由内 id 变化（例如从事件里跳到另一个任务）时，必须先停旧连接再开新
-  // 连接——否则会同时存在两条指向不同任务的 SSE 连接。
-  stopStream?.();
-  events.value = [];
-  await loadTaskAndEvents();
-  startStream();
-});
-
 onBeforeUnmount(() => {
-  stopStream?.();
+  active = false;
+  source?.close();
+  if (poll) clearInterval(poll);
 });
 </script>
 
 <template>
-  <div class="p-4">
-    <div class="mb-4 flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <ElButton @click="backToList">返回列表</ElButton>
-        <!-- 溯源直达入口（P4-04 任务 5）：事故排查时运维是从任务详情页开始
-             的，所以主入口挂在这里，不只在报表页。报表页那一栏是给「只记得
-             大概时间、要先在审计里找到任务 id」那条路径用的。
-             只对 admin 显示——端点 34 要求 roleAdmin，对其他角色显示一个点
-             下去必然 403 的按钮只会制造困惑。 -->
-        <ElButton v-if="canViewProvenance" @click="goProvenance">
-          查看溯源
-        </ElButton>
-      </div>
-      <ElTag
-        :type="
-          streamState === 'open'
-            ? 'success'
-            : streamState === 'error'
-              ? 'danger'
-              : 'info'
-        "
-      >
-        实时日志：{{
-          isTerminal
-            ? '任务已结束，连接已关闭'
-            : streamState === 'open'
-              ? '已连接'
-              : streamState === 'connecting'
-                ? '连接中'
-                : streamState === 'error'
-                  ? '断线重连中'
-                  : '已关闭'
-        }}
-      </ElTag>
-    </div>
-
-    <ElAlert
-      v-if="taskLoadError"
-      type="error"
-      :closable="false"
-      title="加载任务详情失败（疑似契约缺口：契约未定义 GET /tasks/{id} 单条端点，详见本文件顶部注释）"
-      :description="taskLoadError"
-      class="mb-4"
-    />
-
-    <ElCard class="mb-4">
-      <template #header>任务状态</template>
-      <ElDescriptions :column="3" border v-loading="loading">
-        <ElDescriptionsItem label="任务 id">{{ taskId }}</ElDescriptionsItem>
-        <ElDescriptionsItem label="状态">
-          {{
-            task?.state === 'pending'
-              ? '等待机器引导，随时可能开始装机'
-              : task?.state
-          }}
-        </ElDescriptionsItem>
-        <ElDescriptionsItem label="当前阶段">
-          {{ task?.currentPhase }}
-        </ElDescriptionsItem>
-        <ElDescriptionsItem label="SN">{{ task?.hostSn }}</ElDescriptionsItem>
-        <ElDescriptionsItem label="模板版本">
-          {{ task?.templateVersion }}
-        </ElDescriptionsItem>
-        <ElDescriptionsItem label="尝试次数">
-          {{ task?.attemptCount }}
-        </ElDescriptionsItem>
-      </ElDescriptions>
-
-      <div class="mt-4 flex gap-2">
+  <Page :title="`任务 ${id}`" description="查看固化快照、服务端事件与操作限制。">
+    <ElAlert v-if="error" :title="error" type="error" :closable="false" class="mb-3" />
+    <ProblemList :problems="problems" />
+    <ElCard v-if="task" class="mb-4">
+      <div class="mb-3 flex flex-wrap items-center gap-4">
+        <strong>{{ task.hostSN }}</strong>
+        <ElTag>{{ taskStateLabels[task.state] }}</ElTag>
+        <ElTag :type="connected ? 'success' : 'info'">
+          {{ connected ? '实时连接已建立' : '正在重连，定时补读事件' }}
+        </ElTag>
+        <ElButton @click="reload">刷新</ElButton>
+        <ElButton :loading="busy" @click="renderPreview">查看下发文件</ElButton>
         <ElButton
-          type="primary"
-          :loading="actionLoading"
-          :disabled="isTerminal"
-          @click="onRetry"
-        >
-          重试
-        </ElButton>
-        <ElButton
-          type="danger"
-          :loading="actionLoading"
-          :disabled="isTerminal"
-          @click="onCancel"
+          v-if="access.accessCodes.includes('task:cancel')"
+          :disabled="!!task.canCancel?.length"
+          :loading="busy"
+          @click="control(false)"
         >
           取消任务
         </ElButton>
+        <ElButton
+          v-if="access.accessCodes.includes('task:retry')"
+          :disabled="!!task.canRetry?.length"
+          :loading="busy"
+          @click="control(true)"
+        >
+          重试任务
+        </ElButton>
+      </div>
+      <ProblemList :problems="task.canCancel ?? []" />
+      <ProblemList :problems="task.canRetry ?? []" />
+      <div class="grid gap-3 md:grid-cols-2">
+        <div>ISO：{{ task.snapshot.iso.name }} · {{ task.snapshot.iso.version }}</div>
+        <div>模板：{{ task.snapshot.template.name }} · v{{ task.templateVersion }}</div>
+        <div>创建人：{{ task.createdBy }}</div>
+        <div>创建时间：{{ new Date(task.createdAt * 1000).toLocaleString() }}</div>
+        <div>
+          登记属性：{{
+            Object.entries(task.snapshot.host.attrs ?? {})
+              .map(([key, value]) => `${key}=${value}`)
+              .join('；')
+          }}
+        </div>
       </div>
     </ElCard>
-
-    <!-- 失败详情：SPEC §3.5 的六个字段全部展示，last_signal_at 单独换算成
-         “距今多久”而不是原样显示时间戳——这是区分度最高的一项。 -->
-    <ElCard v-if="isFailed" class="mb-4">
-      <template #header>
-        <span class="text-red-600">失败详情</span>
-      </template>
+    <ElCard header="任务事件">
+      <EventGrid />
+      <ElButton @click="loadEvents">补读后续事件</ElButton>
+    </ElCard>
+    <ElCard v-if="task" class="mt-4" header="固化参数与 hook">
+      <div v-for="slot in task.snapshot.slots" :key="slot.seq" class="mb-3">
+        <strong>{{ slot.name }} · {{ slot.timing || '片段' }}</strong>
+        <div v-for="(instance, index) in slot.instances" :key="index" class="ml-3 mt-2">
+          <span>
+            {{ index + 1 }}. {{ instance.hookName }} v{{ instance.hookVersion }} ·
+            {{ instance.required ? '必需' : '可选' }}
+          </span>
+          <div class="text-sm">
+            {{
+              Object.entries(instance.params ?? {})
+                .map(([key, value]) => `${key}=${(value.items ?? []).join(', ')}`)
+                .join('；')
+            }}
+          </div>
+        </div>
+      </div>
+    </ElCard>
+    <ElDialog v-model="showPreview" title="固化快照渲染预览" width="85%">
       <ElAlert
-        type="error"
+        v-if="preview?.sample?.length"
+        :title="`含示例值：${preview.sample.join('、')}`"
+        type="info"
         :closable="false"
-        :title="`失败原因：${task?.failureReason || '未分类'}`"
-        class="mb-4"
       />
-      <ElDescriptions :column="2" border>
-        <ElDescriptionsItem label="阶段">
-          {{ task?.failureDetail?.phase }}
-        </ElDescriptionsItem>
-        <ElDescriptionsItem label="退出码">
-          {{ task?.failureDetail?.exitCode }}
-        </ElDescriptionsItem>
-        <ElDescriptionsItem label="hook digest">
-          {{ task?.failureDetail?.hookDigest || '（非 hook 失败）' }}
-        </ElDescriptionsItem>
-        <ElDescriptionsItem label="距上次信号多久">
-          {{ sinceLastSignalText }}
-        </ElDescriptionsItem>
-        <ElDescriptionsItem label="日志尾部" :span="2">
-          <pre class="max-h-40 overflow-auto whitespace-pre-wrap">{{
-            task?.failureDetail?.logTail
-          }}</pre>
-        </ElDescriptionsItem>
-        <ElDescriptionsItem label="syslog 尾部" :span="2">
-          <pre class="max-h-40 overflow-auto whitespace-pre-wrap">{{
-            task?.failureDetail?.syslogTail
-          }}</pre>
-        </ElDescriptionsItem>
-      </ElDescriptions>
-    </ElCard>
-
-    <ElCard class="mb-4">
-      <template #header>状态机时间线</template>
-      <ElTimeline>
-        <ElTimelineItem
-          v-for="event in events"
-          :key="event.seq"
-          :timestamp="new Date(event.ts * 1000).toLocaleString()"
-          :type="event.level === 'error' ? 'danger' : 'primary'"
+      <ElTabs>
+        <ElTabPane
+          v-for="file in preview?.files"
+          :key="`${file.kind}/${file.name}/${file.slot}`"
+          :label="file.name || file.kind"
         >
-          [{{ event.phase }}] {{ event.message }}
-        </ElTimelineItem>
-      </ElTimeline>
-    </ElCard>
-
-    <ElCard>
-      <template #header>事件表 / 实时日志</template>
-      <ElTable :data="events" size="small" height="360" v-loading="loading">
-        <ElTableColumn prop="seq" label="序号" width="80" />
-        <ElTableColumn prop="ts" label="时间" width="180">
-          <template #default="{ row }">
-            {{ new Date(row.ts * 1000).toLocaleString() }}
-          </template>
-        </ElTableColumn>
-        <ElTableColumn prop="phase" label="阶段" width="120" />
-        <ElTableColumn prop="level" label="级别" width="80" />
-        <ElTableColumn prop="message" label="消息" />
-        <ElTableColumn prop="source" label="来源" width="100" />
-      </ElTable>
-    </ElCard>
-  </div>
+          <pre
+            class="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded bg-gray-100 p-4 text-sm dark:bg-gray-900"
+            >{{ file.body }}</pre>
+        </ElTabPane>
+      </ElTabs>
+    </ElDialog>
+  </Page>
 </template>

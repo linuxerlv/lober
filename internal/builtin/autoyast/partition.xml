@@ -1,0 +1,11 @@
+<partitioning config:type="list">
+  <drive>
+    <device>/dev/{{param:disk}}</device>
+    <disklabel>gpt</disklabel>
+    <initialize config:type="boolean">true</initialize>
+    <use>all</use>
+    <partitions config:type="list">
+      <partition><mount>/</mount><filesystem config:type="symbol">btrfs</filesystem><size>max</size></partition>
+    </partitions>
+  </drive>
+</partitioning>

@@ -1,0 +1,4 @@
+zerombr
+clearpart --all --initlabel --disklabel=gpt --drives=sda
+part biosboot --fstype=biosboot --size=1 --ondisk=sda
+part / --fstype=xfs --grow --ondisk=sda

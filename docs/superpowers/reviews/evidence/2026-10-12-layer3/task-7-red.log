@@ -1,0 +1,99 @@
+--- FAIL: TestAuxGolden (0.00s)
+    --- FAIL: TestAuxGolden/ubuntu (0.00s)
+        aux_test.go:29: meta-data.golden: got , [] render: assembler not implemented; want instance-id: lober-task-42
+            local-hostname: web-01
+    --- FAIL: TestAuxGolden/esxi (0.00s)
+        aux_test.go:29: esxi-bootcfg.golden: got , [] render: assembler not implemented; want bootstate=0
+            title=Loading ESXi installer
+            timeout=5
+            prefix=http://ng.internal/artifacts/esxi8
+            kernel=b.b00
+            kernelopt=runweasel ks=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/ks.cfg
+            modules=jumpstrt.gz --- useropts.gz --- k.b00 --- chain.b00
+            build=8.0.0-2000000
+            updated=0
+--- FAIL: TestUbuntuNoCloudDirectoryAndMetadata (0.00s)
+    aux_test.go:43: [] render: assembler not implemented
+--- FAIL: TestESXiPreservesFullModulePathsOrderAndUnknownFields (0.00s)
+    aux_test.go:77: [] render: assembler not implemented
+--- FAIL: TestESXiMalformedOriginalIsContentProblem (0.00s)
+    aux_test.go:97: want no output and render_esxi_bootcfg_invalid Problem, got "" [] render: assembler not implemented
+--- FAIL: TestMenuGolden (0.01s)
+    --- FAIL: TestMenuGolden/rocky-bios (0.00s)
+        menu_test.go:42: render: [] render: assembler not implemented
+    --- FAIL: TestMenuGolden/rocky-uefi (0.00s)
+        menu_test.go:42: render: [] render: assembler not implemented
+    --- FAIL: TestMenuGolden/debian-bios (0.00s)
+        menu_test.go:42: render: [] render: assembler not implemented
+    --- FAIL: TestMenuGolden/debian-uefi (0.00s)
+        menu_test.go:42: render: [] render: assembler not implemented
+    --- FAIL: TestMenuGolden/ubuntu-bios (0.00s)
+        menu_test.go:42: render: [] render: assembler not implemented
+    --- FAIL: TestMenuGolden/ubuntu-uefi (0.00s)
+        menu_test.go:42: render: [] render: assembler not implemented
+    --- FAIL: TestMenuGolden/esxi-uefi (0.00s)
+        menu_test.go:42: render: [] render: assembler not implemented
+--- FAIL: TestMenuRegressionBootAndInstallerArguments (0.00s)
+    menu_test.go:62: rocky: [] render: assembler not implemented
+--- FAIL: TestMenuRejectsMissingValuesAndArtifacts (0.00s)
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/rocky-value-gateway (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/rocky-value-artifacts (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/rocky-value-task (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/rocky-value-token (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/rocky-value-syslog-addr (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/rocky-role-kernel (0.00s)
+        menu_test.go:122: want no output and render_artifact_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/rocky-role-initrd (0.00s)
+        menu_test.go:122: want no output and render_artifact_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/rocky-role-stage2 (0.00s)
+        menu_test.go:122: want no output and render_artifact_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/rocky-role-repo (0.00s)
+        menu_test.go:122: want no output and render_artifact_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/debian-value-gateway (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/debian-value-artifacts (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/debian-value-task (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/debian-value-token (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/debian-role-kernel (0.00s)
+        menu_test.go:122: want no output and render_artifact_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/debian-role-initrd (0.00s)
+        menu_test.go:122: want no output and render_artifact_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/ubuntu-value-gateway (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/ubuntu-value-artifacts (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/ubuntu-value-task (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/ubuntu-value-token (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/ubuntu-role-kernel (0.00s)
+        menu_test.go:122: want no output and render_artifact_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/ubuntu-role-initrd (0.00s)
+        menu_test.go:122: want no output and render_artifact_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/ubuntu-role-iso (0.00s)
+        menu_test.go:122: want no output and render_artifact_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/esxi-value-gateway (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/esxi-value-artifacts (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/esxi-value-task (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/esxi-value-token (0.00s)
+        menu_test.go:106: want no output and render_system_value_missing Problem, got "" [] render: assembler not implemented
+    --- FAIL: TestMenuRejectsMissingValuesAndArtifacts/esxi-role-mboot (0.00s)
+        menu_test.go:122: want no output and render_artifact_missing Problem, got "" [] render: assembler not implemented
+--- FAIL: TestMenuActualFirmwareAndSnapshotCompatibility (0.00s)
+    menu_test.go:146: want no output and render_firmware_invalid Problem, got "" [] render: assembler not implemented
+--- FAIL: TestMenuMachineURLsAreEscapedAndInputIsFrozen (0.00s)
+    menu_test.go:171: [] render: assembler not implemented
+FAIL
+FAIL	github.com/lober/lober/internal/render	0.442s
+FAIL
