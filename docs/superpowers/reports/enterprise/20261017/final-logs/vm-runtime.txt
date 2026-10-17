@@ -1,0 +1,6 @@
+Linux 6.8.0-142-generic #142-Ubuntu SMP PREEMPT_DYNAMIC Wed Sep  2 14:24:27 UTC 2026
+go version go1.27.2 linux/amd64
+v24.22.0
+Python 3.12.3
+psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+4

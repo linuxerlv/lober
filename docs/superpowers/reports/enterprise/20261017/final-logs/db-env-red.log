@@ -1,0 +1,50 @@
+[Sanitized copy: PostgreSQL URI literals redacted; original retained in restricted VM logs.]
+test_keyword_connection_string_is_split_into_environment (test_gate_db_env.DatabaseEnvironmentTests.test_keyword_connection_string_is_split_into_environment) ... FAIL
+test_percent_encoded_password_is_preserved (test_gate_db_env.DatabaseEnvironmentTests.test_percent_encoded_password_is_preserved) ... ERROR
+test_pgx_search_path_is_translated_for_libpq (test_gate_db_env.DatabaseEnvironmentTests.test_pgx_search_path_is_translated_for_libpq) ... ERROR
+test_uri_database_is_not_used_as_literal_database_name (test_gate_db_env.DatabaseEnvironmentTests.test_uri_database_is_not_used_as_literal_database_name) ... FAIL
+
+======================================================================
+ERROR: test_percent_encoded_password_is_preserved (test_gate_db_env.DatabaseEnvironmentTests.test_percent_encoded_password_is_preserved)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/dev/lober-enterprise-20261017-f68432a/gate-red/test_gate_db_env.py", line 19, in test_percent_encoded_password_is_preserved
+    self.assertEqual(env["PGPASSWORD"], "dummy@test")
+                     ~~~^^^^^^^^^^^^^^
+KeyError: 'PGPASSWORD'
+
+======================================================================
+ERROR: test_pgx_search_path_is_translated_for_libpq (test_gate_db_env.DatabaseEnvironmentTests.test_pgx_search_path_is_translated_for_libpq)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/dev/lober-enterprise-20261017-f68432a/gate-red/test_gate_db_env.py", line 28, in test_pgx_search_path_is_translated_for_libpq
+    self.assertEqual(env["PGOPTIONS"], "-c search_path=qa_schema")
+                     ~~~^^^^^^^^^^^^^
+KeyError: 'PGOPTIONS'
+
+======================================================================
+FAIL: test_keyword_connection_string_is_split_into_environment (test_gate_db_env.DatabaseEnvironmentTests.test_keyword_connection_string_is_split_into_environment)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/dev/lober-enterprise-20261017-f68432a/gate-red/test_gate_db_env.py", line 23, in test_keyword_connection_string_is_split_into_environment
+    self.assertEqual(env["PGDATABASE"], "testdb")
+AssertionError: "host=127.0.0.1 port=5432 dbname=testdb user=qa password='dummy test'" != 'testdb'
+- host=127.0.0.1 port=5432 dbname=testdb user=qa password='dummy test'
++ testdb
+
+
+======================================================================
+FAIL: test_uri_database_is_not_used_as_literal_database_name (test_gate_db_env.DatabaseEnvironmentTests.test_uri_database_is_not_used_as_literal_database_name)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/dev/lober-enterprise-20261017-f68432a/gate-red/test_gate_db_env.py", line 13, in test_uri_database_is_not_used_as_literal_database_name
+    self.assertEqual(env["PGDATABASE"], "testdb")
+AssertionError: '<redacted-postgres-uri> != 'testdb'
+- <redacted-postgres-uri>
++ testdb
+
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.001s
+
+FAILED (failures=2, errors=2)

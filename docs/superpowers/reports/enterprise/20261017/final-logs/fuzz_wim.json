@@ -1,0 +1,17 @@
+{
+  "product_sha": "f68432abd0a7960b6b96c4a98ef42901ea44fb48",
+  "test_sha": "eb22f6e6d326971289faa6cce4abfdc4ec0f197e",
+  "run_id": "vm-20261017-603abacb65350d84",
+  "binary_sha256": "8a058d13e62a9fdf9d9939aed23905325a55699119f271fafdb40c0b3f4086e7",
+  "manifest_sha256": "8ca67b6f9af784676932b4027e3401172a2567a27bfbdfcf06e5fc464afc650b",
+  "aggregated_at_utc": "2026-10-17T14:19:21.835379+00:00",
+  "status": "PASS",
+  "count": 1,
+  "failed": 0,
+  "skipped": 0,
+  "evidence": "fuzz_wim.log",
+  "evidence_sha256": "cf3796048a48fcae6786b8a000e71b4a77fd75aac416f61d298dab2829469f44",
+  "count_unit": "10-minute fuzz command",
+  "executions": 4334970,
+  "origin_checkout_sha": "6405b58cca314bd6577f2755e52fa46bac231da1"
+}

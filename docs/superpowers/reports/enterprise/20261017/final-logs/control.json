@@ -1,0 +1,17 @@
+{
+  "run_id": "vm-20261017-603abacb65350d84",
+  "manifest_sha256": "8ca67b6f9af784676932b4027e3401172a2567a27bfbdfcf06e5fc464afc650b",
+  "product_sha": "f68432abd0a7960b6b96c4a98ef42901ea44fb48",
+  "test_sha": "eb22f6e6d326971289faa6cce4abfdc4ec0f197e",
+  "binary_sha256": "8a058d13e62a9fdf9d9939aed23905325a55699119f271fafdb40c0b3f4086e7",
+  "evidence": "control.log",
+  "status": "PASS",
+  "count": 88,
+  "failed": 0,
+  "skipped": 0,
+  "duration_seconds": 19.592,
+  "runtime": "Linux-6.8.0-142-generic-x86_64-with-glibc2.39",
+  "python": "3.12.3",
+  "failed_cases": [],
+  "evidence_sha256": "9c7e560a5d0f647aaaad07bcff99d105b379ea4d212dabbff6b26f05d3cfa26e"
+}
