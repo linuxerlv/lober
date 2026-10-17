@@ -6,9 +6,11 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const { chromium } = await import(pathToFileURL(process.argv[2]).href);
 const browser = await chromium.launch({ headless: true });
 const results = [];
+let currentPage;
 async function signIn(username) {
   const context = await browser.newContext({ locale: 'zh-CN' });
   const page = await context.newPage();
+  currentPage = page;
   await page.goto(input.url + '/#/auth/login');
   await page.locator('input:not([type="password"]):not([type="checkbox"])').first().fill(username);
   await page.locator('input[type="password"]').fill(input.password);
@@ -39,6 +41,16 @@ try {
   console.log(JSON.stringify({ status: 'PASS', count: results.length, cases: results }));
 } catch (error) {
   console.error(String(error));
+  console.error('Completed browser checks: ' + JSON.stringify(results));
+  if (currentPage) {
+    console.error('Current route: ' + new URL(currentPage.url()).hash);
+    // Rendered page text excludes input values; do not log network responses,
+    // storage or form values, which can contain credentials.
+    console.error('Rendered text: ' + (await currentPage.locator('body').innerText()).slice(0, 2500));
+    if (input.failureScreenshot) {
+      await currentPage.screenshot({ path: input.failureScreenshot, fullPage: true });
+    }
+  }
   process.exitCode = 1;
 } finally {
   await browser.close();

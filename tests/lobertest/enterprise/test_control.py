@@ -208,7 +208,7 @@ class ControlTests(unittest.TestCase):
 
     def test_browser_production_pages_and_independent_viewer_context(self):
         command = [os.environ["LOBER_ENTERPRISE_NODE"], os.environ["LOBER_ENTERPRISE_UI_SCRIPT"], os.environ["LOBER_ENTERPRISE_PLAYWRIGHT"]]
-        completed = subprocess.run(command, input=json.dumps({"url": self.url, "password": self.password}), capture_output=True, text=True, timeout=150)
+        completed = subprocess.run(command, input=json.dumps({"url": self.url, "password": self.password, "failureScreenshot": str(self.work / "ui-failure.png")}), capture_output=True, text=True, timeout=150)
         if completed.returncode:
             self.fail("Production browser checks failed: " + completed.stderr[-1800:])
         output = json.loads(completed.stdout.strip())
