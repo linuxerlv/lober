@@ -19,7 +19,7 @@ async function signIn(username) {
 try {
   const admin = await signIn('admin');
   await admin.page.goto(input.url + '/#/access/role-menus');
-  await admin.page.locator('.el-checkbox').first().waitFor();
+  await admin.page.locator('input[type="checkbox"][value="role-menus"]').waitFor();
   results.push('administrator-role-menu-page');
   await admin.page.goto(input.url + '/#/hosts');
   await admin.page.locator('.vxe-grid').first().waitFor();
