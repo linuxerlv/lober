@@ -5,18 +5,13 @@ import type { RequestClientOptions } from '@vben/request';
 
 import { useAppConfig } from '@vben/hooks';
 import { preferences } from '@vben/preferences';
-import {
-
-  errorMessageResponseInterceptor,
-  RequestClient,
-} from '@vben/request';
+import { errorMessageResponseInterceptor, RequestClient } from '@vben/request';
 import { useAccessStore } from '@vben/stores';
 
 import { ElMessage } from 'element-plus';
 
 import { useAuthStore } from '#/store';
 import { sessionResponseInterceptor } from './session-interceptor';
-
 
 import {
   normalizeErrorResponseInterceptor,
@@ -49,7 +44,12 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
   // 处理返回的响应数据格式：HTTP 2xx 判成功并解包 data，非 2xx 按状态码
   // 判失败（替代 vben 上游只读 body.code 的 defaultResponseInterceptor，
   // 原因见 ./response-interceptor.ts 文件头注释）。
-  client.addResponseInterceptor(sessionResponseInterceptor(() => useAccessStore().accessToken, () => useAuthStore().clearSession()));
+  client.addResponseInterceptor(
+    sessionResponseInterceptor(
+      () => useAccessStore().accessToken,
+      () => useAuthStore().clearSession(),
+    ),
+  );
   client.addResponseInterceptor(statusCodeResponseInterceptor());
 
   // 非 2xx 的失败响应在此补一份 friendlyMessage/bizCode，供

@@ -24,7 +24,7 @@ async function logout() {
     />
     <div class="flex justify-center gap-3">
       <ElButton @click="refreshAccess">重新读取权限</ElButton
-      ><ElButton @click="router.push('/account/password')">修改密码</ElButton
+      ><ElButton @click="router.push('/account/profile')">个人设置</ElButton
       ><ElButton @click="logout">退出登录</ElButton>
     </div>
   </main>

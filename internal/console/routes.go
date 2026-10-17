@@ -55,6 +55,9 @@ func (s *server) installRoutes(out *Server, rs []route) {
 type userResponse struct {
 	Username           string     `json:"username"`
 	DisplayName        string     `json:"displayName"`
+	Email              string     `json:"email"`
+	Avatar             string     `json:"avatar"`
+	Bio                string     `json:"bio"`
 	Role               store.Role `json:"role"`
 	Permissions        []string   `json:"permissions"`
 	Disabled           bool       `json:"disabled"`
@@ -66,7 +69,7 @@ type userResponse struct {
 }
 
 func toUserResponse(u store.User) userResponse {
-	return userResponse{Username: u.Username, DisplayName: u.DisplayName, Role: u.Role, Permissions: PermsOf(u.Role), Disabled: u.Disabled, CreatedAt: u.CreatedAt, Rev: u.Rev, MustChangePassword: u.MustChangePassword}
+	return userResponse{Username: u.Username, DisplayName: u.DisplayName, Email: u.Email, Avatar: u.Avatar, Bio: u.Bio, Role: u.Role, Permissions: PermsOf(u.Role), Disabled: u.Disabled, CreatedAt: u.CreatedAt, Rev: u.Rev, MustChangePassword: u.MustChangePassword, MenuIDs: []string{}}
 }
 func (s *server) userInfo(c *gin.Context) {
 	u, ok := Get(c, func() (userResponse, error) { return s.currentUserResponse(c.Request.Context(), *userOf(c)) })

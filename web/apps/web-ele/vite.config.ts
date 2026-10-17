@@ -25,8 +25,16 @@ export default defineConfig(async () => {
       ],
       server: {
         proxy: {
-          '/console': { target: process.env.VITE_CONSOLE_PROXY_TARGET || 'http://127.0.0.1:8080', changeOrigin: true },
-          '/openapi.json': { target: process.env.VITE_CONSOLE_PROXY_TARGET || 'http://127.0.0.1:8080', changeOrigin: true },
+          '/console': {
+            target:
+              process.env.VITE_CONSOLE_PROXY_TARGET || 'http://127.0.0.1:8080',
+            changeOrigin: true,
+          },
+          '/openapi.json': {
+            target:
+              process.env.VITE_CONSOLE_PROXY_TARGET || 'http://127.0.0.1:8080',
+            changeOrigin: true,
+          },
         },
       },
     },

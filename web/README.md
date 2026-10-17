@@ -1,123 +1,60 @@
-# Lober 控制台 WebUI
+# Lober 控制台
 
-## 本仓库当前状态
+源码在 `apps/web-ele`，使用 Vue 3、Vben 和 Element Plus；依赖由 `pnpm-lock.yaml` 锁定，上游来源见 `UPSTREAM_PIN.md`。
 
-**前端源码树尚未落地。** 原因：本轮实施环境没有 Node 与 pnpm（`node -v`、 `pnpm -v` 均返回 command not found），M8 计划里需要 clone 上游 monorepo 并 `pnpm install`/`pnpm build` 的任务（任务 2、3、5、6、7、8、9、10、11、12、13，以及任务 4 的前端构建部分）在这个环境下无法执行，不属于"可以绕过但选择不做"，是环境硬约束。
+## 运行和构建
 
-**已就位的部分：**
+在 `web` 目录执行：
 
-- `web/UPSTREAM_PIN.md`：对上游仓库实际状态的核对记录（版本号、目录结构、响应拦截器字段名、偏好设置字段路径、图标在线解析机制），含 pin 的 commit sha，供接手人直接按此 clone。
-- `internal/console/ui/embed.go` + `embed_test.go`：Go 侧的 `go:embed` handler，已按 TDD 实现并测试通过，可以直接内嵌真实前端产物。
-- `internal/console/ui/dist/`：**最小占位产物**（`index.html` 一个骨架页面，外加两个用来锁住 embed 模式与缓存策略测试的占位文件）。这不是真实前端，只是为了让 `go:embed all:dist` 有东西可嵌，使 `internal/console/ui` 包能编译通过，`cmd/lober`（M9）才能完成装配。真实前端构建产物会整体覆盖这个目录（vite build 的 outDir 直接指向这里，见任务 4 的设计，不是构建完再复制）。
-
-**接手人需要做什么（按 M8 计划任务 2 起，在有 Node/pnpm 的机器上）：**
-
-1. 按 `web/UPSTREAM_PIN.md` 记录的 pin commit sha clone 上游仓库（不要跟 main 头，理由见该文档与 SPEC §12.9：装机功能开发中途跟版会把两类问题混在一起排查）。
-2. 按 SPEC §12.2 与 `UPSTREAM_PIN.md` 的核对结果做仓库级与应用级精简。
-3. 按本文档下面「构建流程」一节，把 `apps/web-ele/vite.config.ts` 的 `build.outDir` 指向 `internal/console/ui/dist`（不是构建完再复制）。
-4. 按 `docs/contracts/http-console.md` 实现 API 客户端与 P1 六个页面（登录、任务列表、任务详情、建任务、主机清单、模板），具体要求见 M8 计划任务 5 起的各条。
-5. 构建产物覆盖占位 dist 后，`go test ./internal/console/ui/` 应该仍然全部通过（handler 的行为不依赖 dist 内容是占位还是真实产物）。
-
-## 交付方式
-
-**构建必须在有外网的机器上做。** 气隙内网装不上 npm 依赖，这不是能绕的事—— `pnpm install` 需要连 registry 拉取整棵依赖树，包括含原生二进制的依赖（如 esbuild、Rollup 的原生绑定），私有源镜像不解决"内网本身没有出网通道" 这个前提问题。
-
-三种做法，按推荐顺序（SPEC §12.3）：
-
-1. **开发机或 CI 构建，只把 `dist`（或含 dist 的发布包）带进内网 —— MVP 采用** 优点：内网只需要拿到构建产物，不需要拿到 `node_modules` 或任何 npm 相关的东西，交付物最小、审计面最小。缺点：内网无法临时改前端调试，改动需要走"外网改 → 构建 → 带进内网"的完整流程。
-2. **外网 `pnpm fetch` 灌满离线 store，整个 store 带进内网后 `pnpm install --offline`** 适用场景：内网确实需要在现场用 Node/pnpm 本地调试或重新构建（比如现场排查一个只在特定网络环境下复现的前端 bug）。代价是要把一个完整的 pnpm store（体量以百 MB 到 GB 计，取决于依赖树）带进内网，且 `pnpm fetch` 在这套依赖树（Vite 8、Tailwind 4，含原生二进制依赖）下能否真的完整离线安装**本轮未实测**（见 `UPSTREAM_PIN.md`"未能核实的项"），接手人若选此方案需先在外网环境验证一遍完整流程。
-3. **内网起私有 registry（verdaccio / Nexus）镜像上游 —— 只有当内网确实需要改前端时才值得** 代价最高（要在内网维护一套 registry 服务及其镜像同步机制），仅在方案 2的"临时离线安装"不够用、需要长期在内网迭代前端代码时才考虑。
-
-**本项目当前选择方案 1。** 原因：本系统的前端定制收敛在四处（`apps/web-ele/ src/**`、`.env*`、`index.html`、根 `package.json` 的 `scripts`，见下文「与上游同步」一节），日常迭代在有外网的开发环境完成，气隙内网只是部署目标，不是开发环境——不需要方案 2/3 提供的"内网本地构建"能力。
-
-**`pnpm-lock.yaml` 必须提交。** 这是锁定依赖树具体版本的唯一依据，没有它，"外网构建"这一步在不同时间点执行会拿到不同的依赖版本，version pin（见 `UPSTREAM_PIN.md`）的意义就打折扣。
-
-**`dist` 是否入库取决于交付方式：** 方案 1（当前选择）下，如果内网部署时只能拿到 git 仓库本身（没有独立的发布包分发渠道），`dist` 就必须提交进仓库；如果部署走"发布包"（release tar，独立于 git 仓库分发），则不必提交， `.gitignore` 里 `internal/console/ui/dist/` 的忽略规则对真实产物依然生效（本轮加的例外只覆盖当前的占位文件路径，不是给真实产物开的口子——真实产物落地后，接手人需要重新评估是否需要针对真实文件名再加例外，或者改用发布包分发从而不需要例外）。
-
-## 气隙验收
-
-以下三条 grep 检查必须在**构建产物**（`internal/console/ui/dist/` 的真实内容，不是占位文件）上跑，且必须无匹配才能视为气隙验收通过。本轮占位产物不含真实前端资源，这三条检查暂不适用，留给接手人在真实构建产物就位后执行：
-
-```bash
-# 1. 产物里无第三方统计脚本的域名（SPEC §12.4 第 1 条：生产构建注入的百度统计）
-grep -r "hm\.baidu\.com" internal/console/ui/dist/
-
-# 2. 产物里无公共 CDN 的域名（SPEC §12.4 第 2 条：logo 与默认头像默认指向 unpkg.com）
-grep -r "unpkg\.com" internal/console/ui/dist/
-
-# 3. 路由定义源码里无在线图标名（SPEC §12.4 第 3 条，见下方"图标"一节）
-grep -rn "icon:\s*['\"][a-z-]\+:[a-z-]\+['\"]" apps/web-ele/src/router/routes/
+```sh
+pnpm install --frozen-lockfile
+pnpm --filter @vben/web-ele dev
+pnpm exec vitest run --config apps/web-ele/vitest.config.ts
+pnpm --filter @vben/web-ele typecheck
+pnpm --filter @vben/web-ele build
 ```
 
-三条都应该无输出（无匹配）。
+开发服务通过同源 `/console` 和 `/openapi.json` 转发 Go API，默认目标为 `http://127.0.0.1:8080`。API 在其他地址时，在启动 Vite 的进程环境中设置 `VITE_CONSOLE_PROXY_TARGET`。例如 PowerShell：
 
-### SPEC §12.4 三处外网依赖的具体处置
-
-本轮通过实机核对（见 `UPSTREAM_PIN.md`）确认了这三处依赖在当前上游版本中的具体表现形式，接手人处置时可直接参照：
-
-1. **百度统计脚本**：位于 `apps/web-ele/index.html` 的 `<head>` 内，被 `if (window._VBEN_ADMIN_PRO_APP_CONF_)` 条件门控（开源版本该变量不存在，条件天然为假）。**仍需物理删除这段 `<script>`**，不能依赖"条件恰好不满足"这种脆弱保证。
-
-2. **logo 与默认头像**：`packages/@core/preferences` 的默认配置里 `logo.source` 与 `app.defaultAvatar` 两个字段默认值都指向 `https://unpkg.com/@vbenjs/static-source@0.1.7/...`。在 `apps/web-ele/src/preferences.ts` 的 `overridesPreferences` 里覆盖这两个字段，指向 `public/` 下的本地文件。
-
-3. **图标在线解析**（SPEC 附录 B 待核实项，本轮已核实，见下）。
-
-### 图标：为什么会有在线解析风险，怎么规避
-
-`@vben/icons` 包同时提供两条路径：
-
-- `lucide.ts` 具名导出约 90 个来自 `@lucide/vue`（本地依赖，构建时静态打包）的图标组件——**这条路径完全离线**，用组件对象而不是字符串引用。
-- `create-icon.ts` 导出的 `createIconifyIcon(icon: string)`，以及包本身 re-export 的 `@iconify/vue` 的 `Icon` 组件——**这条路径接受一个图标名字符串（如 `'lucide:search'`、`'mdi:github'`），运行时若该名字未被 `addCollection()` 预注册到本地，会向 Iconify 在线 API 请求 SVG 数据**。上游示例路由（如 `router/routes/modules/vben.ts`，本身是 SPEC §12.2 的删除目标，但暴露了框架的常见写法）里 `meta.icon` 字段大量使用这种字符串形式。
-
-**规避方式：路由 `meta.icon` 字段只赋值 `lucide.ts` 导出的组件对象，不写图标名字符串。** 若确实需要某个 `lucide.ts` 未覆盖的图形，必须在应用启动时调用 `addCollection()` 预注册该图标数据，使 `Icon` 组件命中本地缓存而不外发请求。
-
-**`grep -rn "icon:\s*['\"][a-z-]\+:[a-z-]\+['\"]"` 这条检查只能覆盖"直接写字符串"的情形**（形如 `icon: 'lucide:search'`），无法检测"变量间接持有一个字符串图标名"这种写法——若审查时发现这种间接写法，需要人工追踪变量来源，静态 grep 不够用。
-
-**断网验证仍是必要步骤（SPEC 任务 7 明确要求）：** 本轮受限于本机没有 Node/pnpm 无法运行应用，**没有做过实际断网测试**。接手人在真实构建产物就位、且有能运行前端的环境后，必须实际断开外网连接打开控制台页面，确认全部图标正常显示——静态 grep 检查不了图标名是否恰好命中了浏览器本地已有的 DNS/HTTP 缓存这种运气因素，只有真实断网测试能排除这种假阳性。
-
-## 构建流程（供有 Node/pnpm 环境时参照）
-
-```bash
-# 1. 按 UPSTREAM_PIN.md 记录的 pin commit clone
-git clone https://github.com/vbenjs/vue-vben-admin.git /tmp/vben-upstream
-cd /tmp/vben-upstream
-git checkout 8f2295700eae45fc6d07dbabc5ca6ab586b12855
-
-# 2. 按 SPEC §12.2 精简（删非目标应用、mock、演示、文档站源码等，
-#    packages/** 与 internal/** 全留）
-
-# 3. 把结果移到本仓库的 web/ 目录，vite.config.ts 的 build.outDir 改为
-#    直接指向 ../../../internal/console/ui/dist（相对于
-#    web/apps/web-ele/vite.config.ts 的路径），而不是构建完再复制——
-#    go:embed 不接受 ".." 路径，产物必须原生落在 embed 所在包的目录树内，
-#    这一步做对了后面就不需要额外的复制脚本。
-
-# 4. 安装与构建（在有外网的机器上）
-pnpm install
-pnpm run build:ele
-
-# 5. 确认产物落地
-ls internal/console/ui/dist/index.html
-
-# 6. 跑 Go 测试确认 embed 与产物兼容
-go test ./internal/console/ui/ -v
+```powershell
+$env:VITE_CONSOLE_PROXY_TARGET='http://192.168.137.21:18080'
+pnpm --filter @vben/web-ele dev
 ```
 
-## 与上游同步
+生产构建输出到仓库根 `internal/console/ui/dist/`，这是忽略的交付制品。当前 Go 服务提供 API，不负责静态页面；用同源服务器托管完整 dist 并转发 API。SPA 路由需要回退到 `index.html`。Nginx 示例：
 
-**不做侵入式修改，定制只收敛在四处**（SPEC §12.9）：
+```nginx
+server {
+    listen 8088;
+    root /opt/lober/ui;
+    location /console/ {
+        proxy_pass http://127.0.0.1:18080;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+        client_max_body_size 8m;
+    }
+    location = /openapi.json {
+        proxy_pass http://127.0.0.1:18080;
+    }
+    location / { try_files $uri $uri/ /index.html; }
+}
+```
 
-- `apps/web-ele/src/**`
-- `apps/web-ele/.env*`
-- `apps/web-ele/index.html`
-- 根 `package.json` 的 `scripts`
+在有依赖的开发环境构建，将 dist、Go 程序及配置作为发布包带到内网。图标、Logo、默认头像使用本地资源；个人头像为内嵌 PNG/JPEG。发布包不包含账号口令或数据库连接串。
 
-`packages/**` 与 `internal/**` 保持原样（删除文件不算"改"，只是不需要的应用/文档/CI 相关内容不进本仓库）。升级上游版本时，直接拿新 pin commit 的这两棵树整体覆盖本仓库对应位置，四处定制内容不动。
+## 账号和权限
 
-**pin 住一个上游 commit，升级当独立任务做。** 5.x 仍在快速迭代——`UPSTREAM_PIN.md` 记录的核对时点与 SPEC 写作时点只隔一天，但历史上这一带已经换过 Vite 大版本、CSS 框架、TypeScript 大版本、表单底层实现。在装机功能开发中途跟版，会把 "装机逻辑坏了"和"前端框架升级坏了"两类问题混在一起排查，升级必须是一次独立提交、独立验证的任务。
+- 初始 admin 登录后必须先修改密码；成功后所有旧会话失效，需要重新登录。所有账号可从头像下拉的“个人设置”修改自己的显示名、邮箱、头像、简介，并进入修改密码页。邮箱仅为联系资料。
+- “权限管理 → 账号管理”仅 admin 可访问。支持创建账号，给账号分配 viewer、operator、hook-author、hook-approver、admin 中的一个角色，重置密码，禁用/启用账号。后端禁止禁用本人及停用/降级最后一个管理员。
+- “权限管理 → 角色与菜单”仅 admin 可修改五个角色的可见菜单。只能选择该角色已有读取权限的菜单；设置菜单不会增加 API 写入或审批权限。admin 的权限管理入口必须保留。
+- 从未配置的角色使用默认可见菜单；保存空列表表示没有业务菜单，进入“暂无可访问菜单”。个人设置和退出仍可使用。
+- 当前用户信息在导航、窗口重新聚焦及每 30 秒不重叠检查时刷新。角色或菜单变更后旧路由、标签和缓存被移除；直接输入隐藏页面 URL 会返回可访问首页。
+- 页面按当前权限隐藏操作按钮，提交前再次检查；后端每个请求仍执行认证和授权。viewer 只有读取入口；作者可提交，审批人可审核，禁止自我审批等状态限制保留。
+- 表单使用 rev 防并发覆盖。409 时保留编辑，应重新读取并核对后保存。网络错误明确提示，登出失败可重试。
 
-## 相关文档
+## 当前接口与能力边界
 
-- `web/UPSTREAM_PIN.md`：上游版本核对记录与 pin commit。
-- `docs/contracts/http-console.md`：前后端对接的 HTTP 契约（冻结文档）。
-- `docs/superpowers/plans/2026-09-20-lober-mvp-08-webui.md`：本模块完整实现计划，含全部 15 个任务的细节要求。
-- SPEC.md §12：控制台 WebUI 的设计依据与已确定值。
+认证使用 `/console/v1/auth/login` 的 `{token,expiresAt,user}`；当前资料 `/user/info`；本人资料 `PUT /user/profile`；本人改密 `POST /auth/password`。权限来自当前用户的 `permissions`，不调用不存在的 `/auth/codes` 或 refresh 接口。
+
+业务视图使用当前分页 `{items,next}`、主机键 `sn`、ISO `/isos`、脚本/模板版本路径及 rev。报表页提供真实审计查询和 CSV 导出。独立报表统计、磁盘 dry-run 及第 7 层真实任务控制尚未提供；页面说明边界，后端错误不会被当作成功。

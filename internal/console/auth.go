@@ -66,6 +66,7 @@ func (s *server) authRoutes() []route {
 		{method: "POST", path: "/console/v1/auth/logout", perm: PermAnyUser, tag: "auth", summary: "Sign out", handle: s.logout},
 		{method: "POST", path: "/console/v1/auth/password", perm: PermAnyUser, audit: "user.password.change", tag: "auth", summary: "Change own password and revoke all sessions", req: passwordRequest{}, handle: s.changePassword},
 		{method: "GET", path: "/console/v1/user/info", perm: PermAnyUser, tag: "auth", summary: "Current user and permissions", resp: userResponse{}, handle: s.userInfo},
+		{method: "PUT", path: "/console/v1/user/profile", perm: PermAnyUser, audit: "user.profile.update", tag: "auth", summary: "Update own profile", req: profileRequest{}, resp: userResponse{}, handle: s.updateProfile},
 	}
 }
 func (s *server) login(c *gin.Context) {

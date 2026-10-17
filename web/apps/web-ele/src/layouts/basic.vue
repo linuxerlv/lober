@@ -89,6 +89,13 @@ const showDot = computed(() =>
 const menus = computed(() => [
   {
     handler: () => {
+      router.push('/account/profile');
+    },
+    icon: BookOpenText,
+    text: '个人设置',
+  },
+  {
+    handler: () => {
       router.push('/account/password');
     },
     icon: BookOpenText,
@@ -128,8 +135,11 @@ const avatar = computed(() => {
 });
 
 async function handleLogout() {
-  try { await authStore.logout(false); }
-  catch { ElMessage.error('退出失败，请检查网络后重试'); }
+  try {
+    await authStore.logout(false);
+  } catch {
+    ElMessage.error('退出失败，请检查网络后重试');
+  }
 }
 
 function handleNoticeClear() {
@@ -230,8 +240,10 @@ watch(
         :avatar
         :menus
         :text="userStore.userInfo?.realName"
-        description="ann.vben@gmail.com"
-        tag-text="Pro"
+        :description="
+          authStore.sessionUser?.email || authStore.sessionUser?.username
+        "
+        :tag-text="authStore.sessionUser?.role"
         @clear-preferences-and-logout="handleLogout"
         @logout="handleLogout"
       />
