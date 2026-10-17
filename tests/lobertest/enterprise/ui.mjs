@@ -21,6 +21,7 @@ async function signIn(username) {
 try {
   const admin = await signIn('admin');
   await admin.page.goto(input.url + '/#/access/role-menus');
+  await admin.page.getByLabel('配置角色', { exact: true }).selectOption('admin');
   await admin.page.locator('input[type="checkbox"][value="role-menus"]').waitFor();
   results.push('administrator-role-menu-page');
   await admin.page.goto(input.url + '/#/hosts');
