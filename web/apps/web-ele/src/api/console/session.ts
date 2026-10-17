@@ -1,11 +1,12 @@
 import type { UserInfo } from '@vben/types';
+
 import { sessionHome } from '#/access/policy';
 export type ConsoleRole =
-  | 'viewer'
-  | 'operator'
-  | 'hook-author'
+  | 'admin'
   | 'hook-approver'
-  | 'admin';
+  | 'hook-author'
+  | 'operator'
+  | 'viewer';
 export interface ConsoleSessionUser {
   username: string;
   displayName: string;

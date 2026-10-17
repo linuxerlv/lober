@@ -11,12 +11,12 @@ import { useAccessStore } from '@vben/stores';
 import { ElMessage } from 'element-plus';
 
 import { useAuthStore } from '#/store';
-import { sessionResponseInterceptor } from './session-interceptor';
 
 import {
   normalizeErrorResponseInterceptor,
   statusCodeResponseInterceptor,
 } from './response-interceptor';
+import { sessionResponseInterceptor } from './session-interceptor';
 
 const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
 

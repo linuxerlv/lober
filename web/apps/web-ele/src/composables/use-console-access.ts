@@ -1,11 +1,13 @@
 import { onMounted, onUnmounted } from 'vue';
+
 import { useAccessStore } from '@vben/stores';
-import { useAuthStore } from '#/store';
+
 import { canOperate, consoleMenus } from '#/access/policy';
 import { refreshAccess } from '#/access/refresh';
+import { useAuthStore } from '#/store';
 export function useConsoleAccess() {
-  const auth = useAuthStore(),
-    access = useAccessStore();
+  const access = useAccessStore();
+    const auth = useAuthStore();
   return {
     can: (permission: string) =>
       !!access.accessToken && canOperate(auth.sessionUser, permission),

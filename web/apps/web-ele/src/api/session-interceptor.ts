@@ -1,8 +1,9 @@
 import type { ResponseInterceptorConfig } from '@vben/request';
+
 import { CanceledError } from '@vben/request';
 
 export function sessionResponseInterceptor(
-  currentToken: () => string | null,
+  currentToken: () => null | string,
   onExpired: () => Promise<void>,
 ): ResponseInterceptorConfig {
   function stale(config: any) {

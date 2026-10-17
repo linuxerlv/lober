@@ -1,6 +1,7 @@
 import { createApp } from 'vue';
-import { createPinia } from 'pinia';
 import { createMemoryHistory,createRouter } from 'vue-router';
+
+import { createPinia } from 'pinia';
 import { expect,it,vi } from 'vitest';
 vi.mock('#/api',()=>({loginApi:vi.fn(),logoutApi:vi.fn(),getUserInfoApi:vi.fn()}));
 import { createRouterGuard } from './guard';

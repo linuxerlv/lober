@@ -1,11 +1,15 @@
 import type { Router } from 'vue-router';
+
 import { useAccessStore, useTabbarStore } from '@vben/stores';
 import { generateMenus, startProgress, stopProgress } from '@vben/utils';
+
 import { ElMessage } from 'element-plus';
-import { useAuthStore } from '#/store';
-import { accessRoutes, routes } from './routes';
-import { createConsoleGuard } from './console-access';
+
 import { registerAccessRefresh } from '#/access/refresh';
+import { useAuthStore } from '#/store';
+
+import { createConsoleGuard } from './console-access';
+import { accessRoutes, routes } from './routes';
 export function createRouterGuard(router: Router) {
   router.beforeEach(() => {
     startProgress();

@@ -1,7 +1,9 @@
 import { createApp, defineComponent, h, nextTick } from 'vue';
-import { createPinia } from 'pinia';
+import { createMemoryHistory, createRouter } from 'vue-router';
+
 import { useAccessStore } from '@vben/stores';
-import { createRouter, createMemoryHistory } from 'vue-router';
+
+import { createPinia } from 'pinia';
 import { afterEach, expect, it, vi } from 'vitest';
 const io = vi.hoisted(() => ({
   list: vi.fn(),
@@ -25,6 +27,7 @@ vi.mock('#/api', () => ({
   getUserInfoApi: vi.fn(),
 }));
 import { useAuthStore } from '#/store';
+
 import Users from './users.vue';
 const cleanup: Array<() => void> = [];
 afterEach(() => {
@@ -45,8 +48,8 @@ async function setup(admin = true) {
     ],
     next: '',
   });
-  const pinia = createPinia(),
-    router = createRouter({
+  const pinia = createPinia();
+    const router = createRouter({
       history: createMemoryHistory(),
       routes: [{ path: '/', component: { template: '<div />' } }],
     });

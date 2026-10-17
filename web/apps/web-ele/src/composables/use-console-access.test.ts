@@ -1,6 +1,8 @@
 import { createApp } from 'vue';
-import { createPinia } from 'pinia';
+
 import { useAccessStore } from '@vben/stores';
+
+import { createPinia } from 'pinia';
 import { afterEach, expect, it, vi } from 'vitest';
 vi.mock('#/api', () => ({
   loginApi: vi.fn(),
@@ -8,6 +10,7 @@ vi.mock('#/api', () => ({
   getUserInfoApi: vi.fn(),
 }));
 import { registerAccessRefresh } from '#/access/refresh';
+
 import { useConsoleSessionRefresh } from './use-console-access';
 afterEach(() => {
   vi.useRealTimers();

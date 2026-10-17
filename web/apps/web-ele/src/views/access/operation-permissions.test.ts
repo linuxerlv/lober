@@ -1,7 +1,9 @@
 import { createApp, defineComponent, h, nextTick } from 'vue';
-import { createPinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
+
 import { useAccessStore } from '@vben/stores';
+
+import { createPinia } from 'pinia';
 import { afterEach, expect, it, vi } from 'vitest';
 vi.mock('#/api', () => ({
   loginApi: vi.fn(),
@@ -9,8 +11,8 @@ vi.mock('#/api', () => ({
   getUserInfoApi: vi.fn(),
 }));
 import AccessButton from '#/components/access-button.vue';
-import { useAuthStore } from '#/store';
 import { useConsoleAccess } from '#/composables/use-console-access';
+import { useAuthStore } from '#/store';
 const cleanup: Array<() => void> = [];
 afterEach(() => cleanup.splice(0).forEach((fn) => fn()));
 it('hides unauthorized buttons and rechecks permission before a deferred action runs', async () => {
@@ -20,8 +22,8 @@ it('hides unauthorized buttons and rechecks permission before a deferred action 
   });
   await router.push('/');
   const pinia = createPinia();
-  let auth!: ReturnType<typeof useAuthStore>,
-    access!: ReturnType<typeof useConsoleAccess>;
+  let access!: ReturnType<typeof useConsoleAccess>,
+    auth!: ReturnType<typeof useAuthStore>;
   const clicked = vi.fn();
   const el = document.createElement('div');
   document.body.append(el);

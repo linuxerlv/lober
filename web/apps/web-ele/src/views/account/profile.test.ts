@@ -1,6 +1,7 @@
 import { createApp, defineComponent, h, nextTick } from 'vue';
-import { createPinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
+
+import { createPinia } from 'pinia';
 import { afterEach, expect, it, vi } from 'vitest';
 const io = vi.hoisted(() => ({ profile: vi.fn(), getUserInfoApi: vi.fn() }));
 vi.mock('#/api/console/accounts', () => ({
@@ -13,7 +14,9 @@ vi.mock('#/api', () => ({
   logoutApi: vi.fn(),
 }));
 import { useAccessStore } from '@vben/stores';
+
 import { useAuthStore } from '#/store';
+
 import Profile from './profile.vue';
 const cleanup: Array<() => void> = [];
 afterEach(() => {
@@ -37,8 +40,8 @@ it('keeps security fields read-only and retains the personal draft on a conflict
     passwordChangeRequired: false,
   };
   io.getUserInfoApi.mockResolvedValue(user);
-  const pinia = createPinia(),
-    router = createRouter({
+  const pinia = createPinia();
+    const router = createRouter({
       history: createMemoryHistory(),
       routes: [{ path: '/', component: { template: '<div />' } }],
     });

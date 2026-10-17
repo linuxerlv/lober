@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
+
 import { ElAlert, ElButton, ElCard, ElInput, ElMessage } from 'element-plus';
+
 import { changePasswordApi } from '#/api';
 import { useAuthStore } from '#/store';
 const auth = useAuthStore();
@@ -9,8 +11,8 @@ const form = reactive({
   newPassword: '',
   confirmPassword: '',
 });
-const busy = ref(false),
-  error = ref('');
+const busy = ref(false);
+  const error = ref('');
 async function submit() {
   if (busy.value) return;
   error.value = '';
@@ -75,8 +77,7 @@ async function logout() {
         role="alert"
       />
       <form @submit.prevent="submit">
-        <label class="mb-4 block"
-          >当前密码<ElInput
+        <label class="mb-4 block">当前密码<ElInput
             v-model="form.currentPassword"
             name="currentPassword"
             type="password"
@@ -84,8 +85,7 @@ async function logout() {
             autocomplete="current-password"
             :disabled="busy"
         /></label>
-        <label class="mb-4 block"
-          >新密码<ElInput
+        <label class="mb-4 block">新密码<ElInput
             v-model="form.newPassword"
             name="newPassword"
             type="password"
@@ -93,8 +93,7 @@ async function logout() {
             autocomplete="new-password"
             :disabled="busy"
         /></label>
-        <label class="mb-4 block"
-          >确认新密码<ElInput
+        <label class="mb-4 block">确认新密码<ElInput
             v-model="form.confirmPassword"
             name="confirmPassword"
             type="password"
@@ -102,9 +101,9 @@ async function logout() {
             autocomplete="new-password"
             :disabled="busy"
         /></label>
-        <ElButton native-type="submit" type="primary" :loading="busy"
-          >修改并重新登录</ElButton
-        >
+        <ElButton native-type="submit" type="primary" :loading="busy">
+修改并重新登录
+</ElButton>
         <ElButton :disabled="busy" @click="logout">退出登录</ElButton>
       </form>
     </ElCard>

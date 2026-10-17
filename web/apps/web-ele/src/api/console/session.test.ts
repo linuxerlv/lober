@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { toFrameworkUser, createSessionApi } from './session';
+
+import { createSessionApi, toFrameworkUser } from './session';
 
 export const viewer = {
   username: 'alice',

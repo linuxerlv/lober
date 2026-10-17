@@ -1,5 +1,7 @@
 import type { NavigationGuard, Router, RouteRecordRaw } from 'vue-router';
+
 import type { ConsoleSessionUser } from '#/api/console/session';
+
 import { canOperate, consoleMenus, sessionHome } from '#/access/policy';
 
 export function consoleAccessKey(user: ConsoleSessionUser): string {
@@ -88,7 +90,7 @@ interface ConsoleGuardOptions {
   router: Router;
   baseRoutes: RouteRecordRaw[];
   routes: RouteRecordRaw[];
-  getToken: () => string | null;
+  getToken: () => null | string;
   getUser: () => ConsoleSessionUser | null;
   refreshUser: () => Promise<unknown>;
   clearCaches: () => void;

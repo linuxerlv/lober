@@ -1,5 +1,7 @@
 import { fileURLToPath } from 'node:url';
-import { mergeConfig, defineConfig } from 'vitest/config';
+
+import { defineConfig, mergeConfig } from 'vitest/config';
+
 import shared from '../../vitest.config';
 
 export default mergeConfig(
@@ -8,6 +10,6 @@ export default mergeConfig(
     resolve: {
       alias: { '#': fileURLToPath(new URL('./src', import.meta.url)) },
     },
-    test: { include: ['apps/web-ele/src/**/*.test.ts'] },
+    test: { include: ['apps/web-ele/src/**/*.test.ts'], maxWorkers:2 },
   }),
 );

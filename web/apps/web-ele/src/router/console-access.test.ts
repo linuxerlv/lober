@@ -1,16 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import type { ConsoleSessionUser } from '#/api/console/session';
+
 import {
   createMemoryHistory,
   createRouter,
   type RouteRecordRaw,
 } from 'vue-router';
+
+import { describe, expect, it } from 'vitest';
+
 import {
-  filterConsoleRoutes,
-  replaceConsoleRoutes,
   consoleAccessKey,
+  filterConsoleRoutes,
   firstConsolePath,
+  replaceConsoleRoutes,
 } from './console-access';
-import type { ConsoleSessionUser } from '#/api/console/session';
 const user: ConsoleSessionUser = {
   username: 'alice',
   displayName: 'Alice',

@@ -1,6 +1,7 @@
-import { requestClient } from '#/api/request';
-import { createSessionApi } from '#/api/console/session';
 import type { PasswordInput } from '#/api/console/session';
+
+import { createSessionApi } from '#/api/console/session';
+import { requestClient } from '#/api/request';
 export namespace AuthApi {
   export interface LoginParams {
     password?: string;

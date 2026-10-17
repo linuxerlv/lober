@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest';
+
 import { sessionResponseInterceptor } from './session-interceptor';
 it('does not expire a newer session when an old request returns 401', async () => {
   const expired = vi.fn(async () => {});

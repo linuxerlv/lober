@@ -40,3 +40,5 @@ export default defineConfig(async () => {
     },
   };
 });
+import process from 'node:process';
+

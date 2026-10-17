@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+
 import { createRoleMenusApi } from './role-menus';
 it('uses the revision and target role when saving menus', async () => {
   const requests: unknown[] = [];

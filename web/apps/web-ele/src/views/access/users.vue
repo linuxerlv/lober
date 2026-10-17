@@ -1,22 +1,25 @@
 <script setup lang="ts">
-import type { ConsoleSessionUser, ConsoleRole } from '#/api/console/session';
+import type { ConsoleRole, ConsoleSessionUser } from '#/api/console/session';
+
 import { computed, onMounted, reactive, ref } from 'vue';
+
 import { ElAlert, ElButton, ElCard } from 'element-plus';
+
 import { accountsApi, roleLabels } from '#/api/console/accounts';
 import { useConsoleAccess } from '#/composables/use-console-access';
 import { useAuthStore } from '#/store';
-const auth = useAuthStore(),
-  { can, refresh } = useConsoleAccess();
+const auth = useAuthStore();
+  const { can, refresh } = useConsoleAccess();
 const allowed = computed(
   () => auth.sessionUser?.role === 'admin' && can('user:manage'),
 );
-const items = ref<ConsoleSessionUser[]>([]),
-  cursor = ref(''),
-  loading = ref(false),
-  saving = ref(false),
-  editing = ref(false),
-  error = ref(''),
-  notice = ref('');
+const cursor = ref('');
+  const editing = ref(false);
+  const error = ref('');
+  const items = ref<ConsoleSessionUser[]>([]);
+  const loading = ref(false);
+  const notice = ref('');
+  const saving = ref(false);
 const form = reactive({
   username: '',
   displayName: '',
@@ -113,8 +116,8 @@ onMounted(() => load());
 <template>
   <div class="accounts-page">
     <ElCard v-if="!allowed"><p>仅管理员可以管理账号及分配角色。</p></ElCard>
-    <ElCard v-else
-      ><h1>账号管理</h1>
+    <ElCard v-else>
+<h1>账号管理</h1>
       <p class="muted">为每个账号分配角色；角色菜单在“角色与菜单”中设置。</p>
       <ElAlert
         v-if="error"
@@ -130,11 +133,11 @@ onMounted(() => load());
         role="status"
       />
       <div class="actions">
-        <ElButton type="primary" @click="edit()" :disabled="saving"
-          >创建账号</ElButton
-        ><ElButton @click="load()" :disabled="loading || saving"
-          >刷新列表</ElButton
-        >
+        <ElButton type="primary" @click="edit()" :disabled="saving">
+创建账号
+</ElButton><ElButton @click="load()" :disabled="loading || saving">
+刷新列表
+</ElButton>
       </div>
       <div class="table-wrap">
         <table>
@@ -163,13 +166,12 @@ onMounted(() => load());
           </tbody>
         </table>
       </div>
-      <ElButton v-if="cursor" @click="load(true)" :loading="loading"
-        >加载更多</ElButton
-      >
+      <ElButton v-if="cursor" @click="load(true)" :loading="loading">
+加载更多
+</ElButton>
       <form v-if="editing" @submit.prevent="save" class="account-form">
         <h2>{{ form.rev ? '编辑账号' : '创建账号' }}</h2>
-        <label
-          >用户名<input
+        <label>用户名<input
             name="username"
             v-model="form.username"
             :readonly="!!form.rev"
@@ -178,23 +180,19 @@ onMounted(() => load());
             pattern="[A-Za-z0-9_]+"
             maxlength="64"
         /></label>
-        <label
-          >显示名称<input
+        <label>显示名称<input
             name="displayName"
             v-model="form.displayName"
             maxlength="100"
             :disabled="saving"
         /></label>
-        <label
-          >角色<select name="role" v-model="form.role" :disabled="saving">
+        <label>角色<select name="role" v-model="form.role" :disabled="saving">
             <option v-for="(label, key) in roleLabels" :key="key" :value="key">
               {{ label }}
             </option>
-          </select></label
-        >
+          </select></label>
         <p class="muted">{{ descriptions[form.role] }}</p>
-        <label
-          >{{ form.rev ? '重置密码（留空保留原密码）' : '初始密码'
+        <label>{{ form.rev ? '重置密码（留空保留原密码）' : '初始密码'
           }}<input
             name="password"
             v-model="form.password"
@@ -203,28 +201,27 @@ onMounted(() => load());
             :required="!form.rev"
             :disabled="saving"
         /></label>
-        <label v-if="form.rev" class="check"
-          ><input
+        <label v-if="form.rev" class="check"><input
             name="disabled"
             type="checkbox"
             v-model="form.disabled"
             :disabled="saving || form.username === auth.sessionUser?.username"
-          />禁用账号（使已有登录失效）</label
-        >
+          />禁用账号（使已有登录失效）</label>
         <p class="muted">
           不能禁用本人，也不能停用或降级最后一个管理员。重置密码后该账号的已有登录全部失效。
         </p>
         <div class="actions">
-          <ElButton native-type="submit" type="primary" :loading="saving"
-            >保存账号</ElButton
-          ><ElButton
+          <ElButton native-type="submit" type="primary" :loading="saving">
+保存账号
+</ElButton><ElButton
             @click="
               editing = false;
               form.password = '';
             "
             :disabled="saving"
-            >取消</ElButton
-          >
+            >
+取消
+</ElButton>
         </div>
       </form>
     </ElCard>

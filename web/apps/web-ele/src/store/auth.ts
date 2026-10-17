@@ -1,22 +1,27 @@
 import type { Recordable } from '@vben/types';
+
 import type { ConsoleSessionUser } from '#/api/console/session';
+
 import { ref, shallowRef } from 'vue';
 import { useRouter } from 'vue-router';
+
 import { LOGIN_PATH } from '@vben/constants';
-import { useAccessStore, useUserStore, useTabbarStore } from '@vben/stores';
+import { useAccessStore, useTabbarStore, useUserStore } from '@vben/stores';
+
 import { defineStore } from 'pinia';
+
+import { sessionHome } from '#/access/policy';
 import { getUserInfoApi, loginApi, logoutApi } from '#/api';
 import { toFrameworkUser } from '#/api/console/session';
-import { sessionHome } from '#/access/policy';
 export const useAuthStore = defineStore('auth', () => {
-  const access = useAccessStore(),
-    users = useUserStore(),
-    tabs = useTabbarStore(),
-    router = useRouter();
-  const loginLoading = ref(false),
-    sessionUser = shallowRef<ConsoleSessionUser | null>(null);
-  let generation = 0,
-    pending: { token: string; request: Promise<ConsoleSessionUser> } | null =
+  const access = useAccessStore();
+    const users = useUserStore();
+    const tabs = useTabbarStore();
+    const router = useRouter();
+  const loginLoading = ref(false);
+    const sessionUser = shallowRef<ConsoleSessionUser | null>(null);
+  let generation = 0;
+    let pending: null | { token: string; request: Promise<ConsoleSessionUser> } =
       null;
   function applySessionUser(user: ConsoleSessionUser) {
     sessionUser.value = user;

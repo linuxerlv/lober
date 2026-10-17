@@ -1,11 +1,14 @@
+import type { ConsoleSessionUser } from '#/api/console/session';
+
 import {
   createMemoryHistory,
   createRouter,
   type RouteRecordRaw,
 } from 'vue-router';
+
 import { describe, expect, it, vi } from 'vitest';
+
 import { createConsoleGuard } from './console-access';
-import type { ConsoleSessionUser } from '#/api/console/session';
 const component = { template: '<div />' };
 const base: RouteRecordRaw[] = [
   '/auth/login',
@@ -32,7 +35,7 @@ const business: RouteRecordRaw[] = [
   },
 ];
 function setup() {
-  let token: string | null = 'token';
+  let token: null | string = 'token';
   let user: ConsoleSessionUser = {
     username: 'alice',
     displayName: 'Alice',
@@ -46,8 +49,8 @@ function setup() {
     passwordChangeRequired: false,
   };
   const router = createRouter({ history: createMemoryHistory(), routes: base });
-  const error = vi.fn(),
-    clearCaches = vi.fn();
+  const clearCaches = vi.fn();
+    const error = vi.fn();
   const refresh = vi.fn(async () => user);
   router.beforeEach(
     createConsoleGuard({
@@ -69,7 +72,7 @@ function setup() {
     setUser: (value: Partial<ConsoleSessionUser>) => {
       user = { ...user, ...value };
     },
-    setToken: (value: string | null) => {
+    setToken: (value: null | string) => {
       token = value;
     },
   };

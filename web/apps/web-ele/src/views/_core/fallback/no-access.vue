@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { ElButton, ElEmpty, ElAlert } from 'element-plus';
 import { useRouter } from 'vue-router';
-import { useAuthStore } from '#/store';
+
+import { ElAlert, ElButton, ElEmpty } from 'element-plus';
+
 import { refreshAccess } from '#/access/refresh';
-const auth = useAuthStore(),
-  router = useRouter(),
-  error = ref('');
+import { useAuthStore } from '#/store';
+const auth = useAuthStore();
+  const router = useRouter();
+  const error = ref('');
 async function logout() {
   try {
     await auth.logout(false);
@@ -23,9 +25,7 @@ async function logout() {
       type="error"
     />
     <div class="flex justify-center gap-3">
-      <ElButton @click="refreshAccess">重新读取权限</ElButton
-      ><ElButton @click="router.push('/account/profile')">个人设置</ElButton
-      ><ElButton @click="logout">退出登录</ElButton>
+      <ElButton @click="refreshAccess">重新读取权限</ElButton><ElButton @click="router.push('/account/profile')">个人设置</ElButton><ElButton @click="logout">退出登录</ElButton>
     </div>
   </main>
 </template>

@@ -56,6 +56,19 @@ func checkConsoleFile(fset *token.FileSet, pkg string, f *ast.File) []violation 
 func checkAssemblyFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
 	return checkHTTPImports(fset, pkg, f, true)
 }
+
+// The contract exporter cannot reach stores or inherit the assembly point's
+// broad module access. Its imports are exactly those needed to write OpenAPI.
+func checkOpenAPIFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
+	var found []violation
+	for _, imp := range f.Imports {
+		name, _ := strconv.Unquote(imp.Path.Value)
+		if name != "encoding/json" && name != "os" && name != gin && name != pkgConsole {
+			found = append(found, violation{rule: ruleOpenAPI, pkg: pkg, subject: name, pos: position(fset, imp.Pos())})
+		}
+	}
+	return found
+}
 func checkHTTPImports(fset *token.FileSet, pkg string, f *ast.File, assembly bool) []violation {
 	var found []violation
 	for _, imp := range f.Imports {

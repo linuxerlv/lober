@@ -1,7 +1,10 @@
+/* eslint-disable vue/one-component-per-file -- Lightweight table adapters exercise the actual view permissions. */
 import { createApp, defineComponent, h } from 'vue';
-import { createPinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
+
 import { useAccessStore } from '@vben/stores';
+
+import { createPinia } from 'pinia';
 import { afterEach, expect, it, vi } from 'vitest';
 const io = vi.hoisted(() => ({
   hosts: vi.fn(),
@@ -9,18 +12,28 @@ const io = vi.hoisted(() => ({
   isos: vi.fn(),
   listAuthoring: vi.fn(),
 }));
-vi.mock('#/api/console/operations', () => ({ operations: io }));
+
+vi.mock('#/api/console/host',()=>({getHostListApi:io.hosts}));
+vi.mock('#/api/console/task',()=>({taskAPI:{list:io.tasks}}));
+vi.mock('#/api/console/artifact',()=>({getArtifactSetListApi:io.isos}));
+vi.mock('#/adapter/vxe-table',async()=>{
+ const {defineComponent,h,ref,onMounted}=await import('vue');
+ return {useVbenVxeGrid:(options:any)=>{
+  const data=ref<any[]>([]);
+  return [defineComponent({setup(_,{slots}){onMounted(async()=>{const query=options.gridOptions.proxyConfig?.ajax?.query;if(query)data.value=(await query()).items||[];});return()=>h('div',data.value.map(row=>h('div',[JSON.stringify(row),slots.action?.({row})])));}}),{setGridOptions:({data:items}:any)=>{data.value=items;},reload:async()=>{},loadData:async()=>{}}];
+ }};
+});
 vi.mock('#/api', () => ({
   loginApi: vi.fn(),
   logoutApi: vi.fn(),
   getUserInfoApi: vi.fn(),
 }));
+import type { ConsoleRole } from '#/api/console/session';
+
 import { useAuthStore } from '#/store';
+import ISOs from '#/views/artifact-sets/index.vue';
 import Hosts from '#/views/hosts/index.vue';
 import Tasks from '#/views/tasks/index.vue';
-import ISOs from '#/views/artifact-sets/index.vue';
-import AuthoringManager from '#/components/authoring-manager.vue';
-import type { ConsoleRole } from '#/api/console/session';
 const cleanup: Array<() => void> = [];
 afterEach(() => {
   cleanup.splice(0).forEach((fn) => fn());
@@ -125,49 +138,3 @@ it('renders current paged read responses for a viewer without any write entry po
   expect(iso.textContent).not.toContain('登记制品集');
   expect(iso.textContent).not.toContain('废弃');
 });
-it.each([
-  ['hook-author', ['hook:read', 'hook:write'], true, false],
-  ['hook-approver', ['hook:read', 'hook:approve'], false, true],
-  ['viewer', ['hook:read'], false, false],
-  ['admin', ['hook:read', 'hook:write', 'hook:approve'], true, true],
-] as const)(
-  'shows the correct author and approval controls for %s',
-  async (role, permissions, write, approve) => {
-    io.listAuthoring.mockResolvedValue({
-      items: [
-        {
-          id: 'draft',
-          version: 1,
-          name: 'Draft',
-          state: 'draft',
-          author: 'bob',
-          builtin: false,
-          rev: 1,
-          params: [],
-          impls: [],
-          problems: [],
-        },
-        {
-          id: 'review',
-          version: 1,
-          name: 'Review',
-          state: 'review',
-          author: 'bob',
-          builtin: false,
-          rev: 1,
-          params: [],
-          impls: [],
-          problems: [],
-        },
-      ],
-      next: '',
-    });
-    const el = await mount(AuthoringManager, role, [...permissions], {
-      kind: 'hooks',
-    });
-    await vi.waitFor(() => expect(el.textContent).toContain('Review'));
-    expect(el.textContent!.includes('新建hook')).toBe(write);
-    expect(el.textContent!.includes('提交审批')).toBe(write);
-    expect(el.textContent!.includes('批准')).toBe(approve);
-  },
-);

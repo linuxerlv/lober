@@ -21,7 +21,7 @@ $env:VITE_CONSOLE_PROXY_TARGET='http://192.168.137.21:18080'
 pnpm --filter @vben/web-ele dev
 ```
 
-生产构建输出到仓库根 `internal/console/ui/dist/`，这是忽略的交付制品。当前 Go 服务提供 API，不负责静态页面；用同源服务器托管完整 dist 并转发 API。SPA 路由需要回退到 `index.html`。Nginx 示例：
+生产构建输出到仓库根 `internal/console/ui/dist/`。先构建前端，再构建 Go 程序，`console.WithFrontend` 将真实制品嵌入二进制并提供 SPA 回退。仓库中的占位文件仅保证未构建时 Go 可编译，不是发布页面。也可用同源服务器托管完整 dist 并转发 API；Nginx 示例：
 
 ```nginx
 server {

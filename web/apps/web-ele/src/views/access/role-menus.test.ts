@@ -1,7 +1,9 @@
 import { createApp, defineComponent, h, nextTick } from 'vue';
-import { createPinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
+
 import { useAccessStore } from '@vben/stores';
+
+import { createPinia } from 'pinia';
 import { afterEach, expect, it, vi } from 'vitest';
 const io = vi.hoisted(() => ({
   getRoleMenusApi: vi.fn(),
@@ -14,6 +16,7 @@ vi.mock('#/api', () => ({
   getUserInfoApi: vi.fn(),
 }));
 import { useAuthStore } from '#/store';
+
 import RoleMenus from './role-menus.vue';
 const roles = ['viewer', 'operator', 'hook-author', 'hook-approver', 'admin'];
 const fixture = {
@@ -63,8 +66,8 @@ afterEach(() => {
 });
 async function setup() {
   io.getRoleMenusApi.mockResolvedValue(structuredClone(fixture));
-  const pinia = createPinia(),
-    router = createRouter({
+  const pinia = createPinia();
+    const router = createRouter({
       history: createMemoryHistory(),
       routes: [{ path: '/', component: { template: '<div />' } }],
     });

@@ -1,7 +1,9 @@
 import { createApp, defineComponent, nextTick } from 'vue';
-import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
+
 import { useAccessStore } from '@vben/stores';
+
+import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const io = vi.hoisted(() => ({

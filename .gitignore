@@ -28,6 +28,7 @@ internal/console/ui/dist/
 # 静默跳过下划线开头的文件，而真实 Vite 产物里有 4 个这样的文件（_baseClone、
 # _plugin-vue_export-helper、_app-config 等），漏掉它们的表现是运行时白屏。
 !internal/console/ui/dist/
+internal/console/ui/dist/*
 !internal/console/ui/dist/index.html
 !internal/console/ui/dist/_placeholder-keeps-embed-underscore-mode.js
 /.wf-*.js

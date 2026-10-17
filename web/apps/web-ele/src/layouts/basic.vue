@@ -3,78 +3,20 @@ import type { NotificationItem } from '@vben/layouts';
 
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
 
 import { AuthenticationLoginExpiredModal } from '@vben/common-ui';
-import { VBEN_DOC_URL, VBEN_GITHUB_URL } from '@vben/constants';
 import { useWatermark } from '@vben/hooks';
-import { BookOpenText, CircleHelp, SvgGithubIcon } from '@vben/icons';
-import {
-  BasicLayout,
-  LockScreen,
-  Notification,
-  UserDropdown,
-} from '@vben/layouts';
+import { BookOpenText } from '@vben/icons';
+import { BasicLayout, LockScreen, Notification, UserDropdown } from '@vben/layouts';
 import { preferences, usePreferences } from '@vben/preferences';
 import { useAccessStore, useUserStore } from '@vben/stores';
-import { openWindow } from '@vben/utils';
 
-import { $t } from '#/locales';
+import { ElMessage } from 'element-plus';
+
 import { useAuthStore } from '#/store';
 import LoginForm from '#/views/_core/authentication/login.vue';
 
-const notifications = ref<NotificationItem[]>([
-  {
-    id: 1,
-    avatar: 'https://avatar.vercel.sh/vercel.svg?text=VB',
-    date: '3小时前',
-    isRead: true,
-    message: '描述信息描述信息描述信息',
-    title: '收到了 14 份新周报',
-  },
-  {
-    id: 2,
-    avatar: 'https://avatar.vercel.sh/1',
-    date: '刚刚',
-    isRead: false,
-    message: '描述信息描述信息描述信息',
-    title: '朱偏右 回复了你',
-  },
-  {
-    id: 3,
-    avatar: 'https://avatar.vercel.sh/1',
-    date: '2024-01-01',
-    isRead: false,
-    message: '描述信息描述信息描述信息',
-    title: '曲丽丽 评论了你',
-  },
-  {
-    id: 4,
-    avatar: 'https://avatar.vercel.sh/satori',
-    date: '1天前',
-    isRead: false,
-    message: '描述信息描述信息描述信息',
-    title: '代办提醒',
-  },
-  {
-    id: 5,
-    avatar: 'https://avatar.vercel.sh/satori',
-    date: '1天前',
-    isRead: false,
-    message: '描述信息描述信息描述信息',
-    title: '跳转Workspace示例',
-    link: '/workspace',
-  },
-  {
-    id: 6,
-    avatar: 'https://avatar.vercel.sh/satori',
-    date: '1天前',
-    isRead: false,
-    message: '描述信息描述信息描述信息',
-    title: '跳转外部链接示例',
-    link: 'https://doc.vben.pro',
-  },
-]);
+const notifications = ref<NotificationItem[]>([]);
 
 const router = useRouter();
 const userStore = useUserStore();
@@ -82,51 +24,19 @@ const authStore = useAuthStore();
 const accessStore = useAccessStore();
 const { destroyWatermark, updateWatermark } = useWatermark();
 const { isDark } = usePreferences();
-const showDot = computed(() =>
-  notifications.value.some((item) => !item.isRead),
-);
+const showDot = computed(() => notifications.value.some((item) => !item.isRead));
 
 const menus = computed(() => [
+  {handler:()=>router.push('/account/profile'),icon:BookOpenText,text:'个人设置'},
   {
-    handler: () => {
-      router.push('/account/profile');
-    },
-    icon: BookOpenText,
-    text: '个人设置',
-  },
-  {
-    handler: () => {
-      router.push('/account/password');
-    },
+    handler: () => router.push('/account/password'),
     icon: BookOpenText,
     text: '修改密码',
   },
   {
-    handler: () => {
-      openWindow(VBEN_DOC_URL, {
-        target: '_blank',
-      });
-    },
+    handler: handleLogout,
     icon: BookOpenText,
-    text: $t('ui.widgets.document'),
-  },
-  {
-    handler: () => {
-      openWindow(VBEN_GITHUB_URL, {
-        target: '_blank',
-      });
-    },
-    icon: SvgGithubIcon,
-    text: 'GitHub',
-  },
-  {
-    handler: () => {
-      openWindow(`${VBEN_GITHUB_URL}/issues`, {
-        target: '_blank',
-      });
-    },
-    icon: CircleHelp,
-    text: $t('ui.widgets.qa'),
+    text: '退出登录',
   },
 ]);
 
@@ -135,11 +45,7 @@ const avatar = computed(() => {
 });
 
 async function handleLogout() {
-  try {
-    await authStore.logout(false);
-  } catch {
-    ElMessage.error('退出失败，请检查网络后重试');
-  }
+  try { await authStore.logout(false); } catch { ElMessage.error('退出失败，请检查网络后重试'); }
 }
 
 function handleNoticeClear() {
@@ -170,11 +76,7 @@ const handleClick = (item: NotificationItem) => {
   }
 };
 
-function navigateTo(
-  link: string,
-  query?: Record<string, any>,
-  state?: Record<string, any>,
-) {
+function navigateTo(link: string, query?: Record<string, any>, state?: Record<string, any>) {
   if (link.startsWith('http://') || link.startsWith('https://')) {
     // 外部链接，在新标签页打开
     window.open(link, '_blank');
@@ -196,9 +98,7 @@ watch(
   }),
   async ({ enable, content, isDark: isDarkValue }) => {
     if (enable) {
-      const watermarkColor = isDarkValue
-        ? 'rgba(255, 255, 255, 0.12)'
-        : 'rgba(0, 0, 0, 0.12)';
+      const watermarkColor = isDarkValue ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.12)';
 
       await updateWatermark({
         advancedStyle: {
@@ -214,9 +114,7 @@ watch(
           ],
           type: 'linear',
         },
-        content:
-          content ||
-          `${userStore.userInfo?.username} - ${userStore.userInfo?.realName}`,
+        content: content || `${userStore.userInfo?.username} - ${userStore.userInfo?.realName}`,
       });
     } else {
       destroyWatermark();
@@ -240,9 +138,7 @@ watch(
         :avatar
         :menus
         :text="userStore.userInfo?.realName"
-        :description="
-          authStore.sessionUser?.email || authStore.sessionUser?.username
-        "
+        :description="authStore.sessionUser?.email || userStore.userInfo?.username"
         :tag-text="authStore.sessionUser?.role"
         @clear-preferences-and-logout="handleLogout"
         @logout="handleLogout"
@@ -261,10 +157,7 @@ watch(
       />
     </template>
     <template #extra>
-      <AuthenticationLoginExpiredModal
-        v-model:open="accessStore.loginExpired"
-        :avatar
-      >
+      <AuthenticationLoginExpiredModal v-model:open="accessStore.loginExpired" :avatar>
         <LoginForm />
       </AuthenticationLoginExpiredModal>
     </template>

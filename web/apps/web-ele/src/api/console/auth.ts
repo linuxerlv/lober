@@ -5,6 +5,6 @@ export {
 } from '../core/auth';
 export { getUserInfoApi as getConsoleUserInfoApi } from '../core/user';
 export type {
-  ConsoleSessionUser as ConsoleUserInfo,
   ConsoleLoginResult as AuthLoginResult,
+  ConsoleSessionUser as ConsoleUserInfo,
 } from './session';

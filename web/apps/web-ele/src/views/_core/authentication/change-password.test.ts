@@ -1,7 +1,9 @@
 import { createApp, nextTick } from 'vue';
-import { createPinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
+
 import { useAccessStore } from '@vben/stores';
+
+import { createPinia } from 'pinia';
 import { afterEach, expect, it, vi } from 'vitest';
 const io = vi.hoisted(() => ({
   changePasswordApi: vi.fn(),

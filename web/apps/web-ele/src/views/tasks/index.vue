@@ -1,123 +1,117 @@
 <script setup lang="ts">
-import type { Task } from '#/api/console/operations';
-import { ref } from 'vue';
+import type { Task } from '#/api/console/task';
+
+import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import {
-  ElAlert,
-  ElButton,
-  ElCard,
-  ElInput,
-  ElMessageBox,
-  ElTable,
-  ElTableColumn,
-  ElTag,
-} from 'element-plus';
-import { operations } from '#/api/console/operations';
-import AccessButton from '#/components/access-button.vue';
-import { useConsoleAccess } from '#/composables/use-console-access';
-import { errorMessage, useConsoleList } from '#/composables/use-console-list';
-const router = useRouter(),
-  { run } = useConsoleAccess();
+
+import { Page } from '@vben/common-ui';
+import { useAccessStore } from '@vben/stores';
+
+import { ElAlert, ElButton, ElInput, ElOption, ElSelect, ElTag } from 'element-plus';
+
+import { useVbenVxeGrid } from '#/adapter/vxe-table';
+import { errorMessage } from '#/api/console/problem';
+import { taskAPI } from '#/api/console/task';
+
+import { taskStateLabels } from './task-state';
+import { latestOnly } from './wizard-state';
+
+defineOptions({ name: 'TasksIndex' });
+const router = useRouter();
+const access = useAccessStore();
 const sn = ref('');
-const { items, next, loading, error, load } = useConsoleList((cursor) =>
-  operations.tasks({ cursor, limit: 100, host_sn: sn.value || undefined }),
-);
-async function action(item: Task, op: 'cancel' | 'retry') {
-  try {
-    await ElMessageBox.confirm(
-      op === 'cancel'
-        ? `确认取消主机 ${item.hostSN} 的任务？`
-        : `确认重试主机 ${item.hostSN} 的任务？重试可能重新执行装机操作。`,
-      '确认操作',
-      { type: 'warning' },
-    );
-  } catch {
-    return;
-  }
-  try {
-    if (
-      (await run(`task:${op}`, () => operations.taskAction(item.id, op))) !==
-      undefined
-    )
-      await load();
-  } catch (e) {
-    error.value = errorMessage(e);
-  }
+const state = ref('');
+const cursor = ref('');
+const busy = ref(false);
+const error = ref('');
+const gate = latestOnly();
+const [Grid, grid] = useVbenVxeGrid<Task>({
+  gridOptions: {
+    columns: [
+      { field: 'hostSN', title: '主机 SN', minWidth: 170 },
+      { field: 'id', title: '任务 ID', minWidth: 200 },
+      { field: 'snapshot.iso.name', title: 'ISO', minWidth: 150 },
+      { field: 'snapshot.template.name', title: '模板', minWidth: 140 },
+      { field: 'templateVersion', title: '版本', width: 70 },
+      { field: 'state', title: '状态', minWidth: 240, slots: { default: 'state' } },
+      { field: 'createdBy', title: '创建人', width: 110 },
+      {
+        field: 'createdAt',
+        title: '创建时间',
+        width: 180,
+        formatter: ({ cellValue }: { cellValue: number }) =>
+          new Date(cellValue * 1000).toLocaleString(),
+      },
+      { title: '操作', width: 90, fixed: 'right', slots: { default: 'action' } },
+    ],
+    rowConfig: { keyField: 'id' },
+    pagerConfig: { enabled: false },
+    height: 'auto',
+  },
+});
+async function load(more = false) {
+  busy.value = true;
+  error.value = '';
+  await gate.run(
+    taskAPI.list({
+      host_sn: sn.value,
+      state: state.value,
+      cursor: more ? cursor.value : '',
+      limit: 100,
+    }),
+    (page) => {
+      cursor.value = page.next;
+      grid.setGridOptions({ data: page.items ?? [] });
+      busy.value = false;
+    },
+    (reason) => {
+      error.value = errorMessage(reason);
+      busy.value = false;
+    },
+  );
 }
+onMounted(() => load());
 </script>
+
 <template>
-  <main class="p-6">
-    <header class="mb-5 flex flex-wrap items-center gap-3">
-      <h1 class="mr-auto text-2xl font-semibold">任务</h1>
-      <ElInput
-        v-model="sn"
-        class="!w-56"
-        placeholder="按主机 SN 查询"
-        @keyup.enter="load()"
-      /><ElButton :loading="loading" @click="load()">查询</ElButton
-      ><AccessButton
-        permission="task:create"
+  <Page title="任务" description="任务使用创建时固化的 ISO、模板版本和参数。">
+    <div class="mb-4 flex flex-wrap gap-2">
+      <ElInput v-model="sn" placeholder="主机 SN（精确匹配）" class="!w-64" @keyup.enter="load()" />
+      <ElSelect v-model="state" placeholder="全部状态" clearable class="!w-64">
+        <ElOption
+          v-for="(label, value) in taskStateLabels"
+          :key="value"
+          :label="label"
+          :value="value"
+        />
+      </ElSelect>
+      <ElButton :loading="busy" @click="load()">查询</ElButton>
+      <ElButton
+        v-if="access.accessCodes.includes('task:create')"
         type="primary"
         @click="router.push('/tasks/new')"
-        >建任务</AccessButton
       >
-    </header>
-    <ElAlert
-      v-if="error"
-      class="mb-4"
-      :title="error"
-      type="error"
-      :closable="false"
-    /><ElCard
-      ><ElTable :data="items" row-key="id"
-        ><ElTableColumn
-          prop="hostSN"
-          label="主机 SN"
-          min-width="150"
-        /><ElTableColumn label="模板" min-width="180"
-          ><template #default="{ row }"
-            >{{ row.snapshot.template.name }} · v{{
-              row.templateVersion
-            }}</template
-          ></ElTableColumn
-        ><ElTableColumn label="ISO" min-width="150"
-          ><template #default="{ row }">{{
-            row.snapshot.iso.name
-          }}</template></ElTableColumn
-        ><ElTableColumn label="状态" width="120"
-          ><template #default="{ row }"
-            ><ElTag>{{ row.state }}</ElTag></template
-          ></ElTableColumn
-        ><ElTableColumn prop="createdBy" label="创建人" /><ElTableColumn
-          label="创建时间"
-          width="170"
-          ><template #default="{ row }">{{
-            new Date(row.createdAt * 1000).toLocaleString()
-          }}</template></ElTableColumn
-        ><ElTableColumn label="操作" min-width="200"
-          ><template #default="{ row }"
-            ><ElButton link @click="router.push('/tasks/' + row.id)"
-              >详情</ElButton
-            ><AccessButton
-              permission="task:cancel"
-              link
-              :disabled="row.canCancel.length > 0"
-              :title="row.canCancel.map((p: any) => p.message).join('\n')"
-              @click="action(row as Task, 'cancel')"
-              >取消任务</AccessButton
-            ><AccessButton
-              permission="task:retry"
-              link
-              :disabled="row.canRetry.length > 0"
-              :title="row.canRetry.map((p: any) => p.message).join('\n')"
-              @click="action(row as Task, 'retry')"
-              >重试</AccessButton
-            ></template
-          ></ElTableColumn
-        ></ElTable
-      ><ElButton v-if="next" class="mt-4" :loading="loading" @click="load(true)"
-        >加载更多</ElButton
-      ></ElCard
-    >
-  </main>
+        批量建任务
+      </ElButton>
+    </div>
+    <ElAlert v-if="error" :title="error" type="error" :closable="false" class="mb-3" />
+    <Grid>
+      <template #state="{ row }">
+        <ElTag
+          :type="row.state === 'failed' ? 'danger' : row.state === 'done' ? 'success' : 'info'"
+        >
+          {{ taskStateLabels[row.state as keyof typeof taskStateLabels] }}
+        </ElTag>
+      </template>
+      <template #action="{ row }">
+        <ElButton type="primary" link @click="router.push(`/tasks/${encodeURIComponent(row.id)}`)">
+          详情
+        </ElButton>
+      </template>
+    </Grid>
+    <div class="mt-3 flex gap-2">
+      <ElButton :loading="busy" @click="load()">回到第一页</ElButton>
+      <ElButton v-if="cursor" :loading="busy" @click="load(true)">下一页</ElButton>
+    </div>
+  </Page>
 </template>

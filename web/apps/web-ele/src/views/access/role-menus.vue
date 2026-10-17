@@ -1,20 +1,23 @@
 <script setup lang="ts">
 import type { RoleMenuList } from '#/api/console/role-menus';
 import type { ConsoleRole } from '#/api/console/session';
+
 import { computed, onMounted, reactive, ref } from 'vue';
+
 import { ElAlert, ElButton, ElCard, ElEmpty } from 'element-plus';
+
 import { getRoleMenusApi, saveRoleMenusApi } from '#/api/console/role-menus';
 import { useConsoleAccess } from '#/composables/use-console-access';
 import { useAuthStore } from '#/store';
 const { can, refresh } = useConsoleAccess();
 const auth = useAuthStore();
-const state = ref<RoleMenuList | null>(null),
-  role = ref<ConsoleRole>('viewer');
+const role = ref<ConsoleRole>('viewer');
+  const state = ref<null | RoleMenuList>(null);
 const drafts = reactive<Record<string, string[]>>({});
-const loading = ref(false),
-  saving = ref(false),
-  error = ref(''),
-  notice = ref('');
+const error = ref('');
+  const loading = ref(false);
+  const notice = ref('');
+  const saving = ref(false);
 const labels: Record<ConsoleRole, string> = {
   viewer: '只读用户',
   operator: '运维操作员',
@@ -115,8 +118,7 @@ onMounted(load);
         :closable="false"
       />
       <template v-if="state">
-        <label class="mb-5 block font-medium"
-          >配置角色
+        <label class="mb-5 block font-medium">配置角色
           <select
             v-model="role"
             aria-label="配置角色"
@@ -145,12 +147,8 @@ onMounted(load);
               :disabled="menu.required || saving || loading"
               @change="toggle(menu.id, $event)"
             />
-            <span
-              >{{ menu.title
-              }}<span v-if="menu.required" class="ml-2 text-xs text-gray-500"
-                >必留入口</span
-              ></span
-            >
+            <span>{{ menu.title
+              }}<span v-if="menu.required" class="ml-2 text-xs text-gray-500">必留入口</span></span>
           </label>
         </div>
         <p class="mb-5 text-sm text-gray-500">
@@ -164,11 +162,12 @@ onMounted(load);
         :loading="saving"
         :disabled="!state || loading || saving"
         @click="save"
-        >保存配置</ElButton
-      >
-      <ElButton :disabled="saving || loading" :loading="loading" @click="load"
-        >重新读取</ElButton
-      >
+        >
+保存配置
+</ElButton>
+      <ElButton :disabled="saving || loading" :loading="loading" @click="load">
+重新读取
+</ElButton>
     </ElCard>
   </main>
 </template>

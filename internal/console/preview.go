@@ -44,39 +44,46 @@ const previewToken = "sample-token"
 const previewFinalizeToken = "sample-finalize-token"
 const previewTask = "sample-task"
 
-func (s *server) previewTemplate(c *gin.Context) {
+type resolvedPreview struct {
+	Input    params.Input
+	Firmware catalog.Firmware
+	Sample   []string
+}
+type previewParamsResponse struct {
+	Fields   []paramFieldDTO `json:"fields"`
+	Problems []problemJSON   `json:"problems"`
+	Sample   []string        `json:"sample"`
+}
+
+func (s *server) previewTemplateFacts(c *gin.Context, req previewRequest) (resolvedPreview, bool) {
 	k, ok := templateKeyOf(c)
 	if !ok {
-		return
-	}
-	var req previewRequest
-	if !Bind(c, &req) {
-		return
+		return resolvedPreview{}, false
 	}
 	if req.Series != "" && !req.Series.Valid() || req.Firmware != "" && !req.Firmware.Valid() {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
-		return
+		return resolvedPreview{}, false
 	}
 	tpl, ok := Get(c, func() (model.Template, error) { return s.deps.Templates.GetTemplate(c.Request.Context(), k) })
 	if !ok {
-		return
+		return resolvedPreview{}, false
 	}
 	hooks, ok := Get(c, func() (map[model.HookKey]model.Hook, error) {
 		return s.templateHooks(c.Request.Context(), []model.Template{tpl})
 	})
 	if !ok {
-		return
+		return resolvedPreview{}, false
 	}
 	sample := []string{}
 	var item model.ISO
 	if req.ISOID != "" {
 		item, ok = Get(c, func() (model.ISO, error) { return s.deps.ISOs.GetISO(c.Request.Context(), req.ISOID) })
 		if !ok {
-			return
+			return resolvedPreview{}, false
 		}
 		if req.Series != "" && req.Series != item.Series {
 			Fail(c, 400, nil, model.ConsoleBadRequest)
-			return
+			return resolvedPreview{}, false
 		}
 	} else {
 		series := req.Series
@@ -85,7 +92,7 @@ func (s *server) previewTemplate(c *gin.Context) {
 		}
 		if series == catalog.SeriesESXi {
 			Judge(c, []model.Problem{model.NewProblem("iso_version_missing", model.Subject{Kind: model.KindISO, ID: "sample-iso"}, model.ISOVersionLabel)})
-			return
+			return resolvedPreview{}, false
 		}
 		item = SampleISO(series)
 		sample = append(sample, "ISO")
@@ -94,11 +101,11 @@ func (s *server) previewTemplate(c *gin.Context) {
 	if req.HostSN != "" {
 		sn, ok := normalizedHostSN(c, req.HostSN)
 		if !ok {
-			return
+			return resolvedPreview{}, false
 		}
 		host, ok = Get(c, func() (model.Host, error) { return s.deps.Hosts.GetHost(c.Request.Context(), sn) })
 		if !ok {
-			return
+			return resolvedPreview{}, false
 		}
 	} else {
 		sample = append(sample, "主机")
@@ -108,11 +115,35 @@ func (s *server) previewTemplate(c *gin.Context) {
 		firmware = catalog.FirmwareUEFI
 		sample = append(sample, "firmware")
 	}
-	frozen, problems := snapshot.Build(params.Input{Template: tpl, Hooks: hooks, ISO: item, Host: host, Entered: enteredOf(req.Entered)})
+	return resolvedPreview{Input: params.Input{Template: tpl, Hooks: hooks, ISO: item, Host: host, Entered: enteredOf(req.Entered)}, Firmware: firmware, Sample: sample}, true
+}
+
+func (s *server) previewParams(c *gin.Context) {
+	var req previewRequest
+	if !Bind(c, &req) {
+		return
+	}
+	facts, ok := s.previewTemplateFacts(c, req)
+	if !ok {
+		return
+	}
+	result := params.Evaluate(facts.Input)
+	Ok(c, previewParamsResponse{Fields: paramFields(result.Fields), Problems: jsonProblems(result.Problems), Sample: facts.Sample})
+}
+func (s *server) previewTemplate(c *gin.Context) {
+	var req previewRequest
+	if !Bind(c, &req) {
+		return
+	}
+	facts, ok := s.previewTemplateFacts(c, req)
+	if !ok {
+		return
+	}
+	frozen, problems := snapshot.Build(facts.Input)
 	if !Judge(c, problems) {
 		return
 	}
-	files, labels, problems, err := s.renderPreview(c.Request.Context(), frozen, firmware, previewTask)
+	files, labels, problems, err := s.renderPreview(c.Request.Context(), frozen, facts.Firmware, previewTask)
 	if err != nil {
 		RespondError(c, err)
 		return
@@ -120,7 +151,7 @@ func (s *server) previewTemplate(c *gin.Context) {
 	if !Judge(c, problems) {
 		return
 	}
-	sample = append(sample, labels...)
+	sample := append(facts.Sample, labels...)
 	for i := range files {
 		files[i].Sample = len(sample) > 0
 	}

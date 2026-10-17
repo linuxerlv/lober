@@ -1,4 +1,5 @@
 import type { RouteRecordRaw } from 'vue-router';
+
 import { Settings } from '@vben/icons';
 const routes: RouteRecordRaw[] = [
   {
