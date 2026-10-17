@@ -52,8 +52,7 @@ function setup() {
   const clearCaches = vi.fn();
     const error = vi.fn();
   const refresh = vi.fn(async () => user);
-  router.beforeEach(
-    createConsoleGuard({
+  const controller=createConsoleGuard({
       router,
       baseRoutes: base,
       routes: business,
@@ -62,10 +61,11 @@ function setup() {
       refreshUser: refresh,
       onError: error,
       clearCaches,
-    }),
-  );
+    });
+  router.beforeEach(controller);
   return {
     router,
+    controller,
     refresh,
     error,
     clearCaches,
@@ -78,6 +78,22 @@ function setup() {
   };
 }
 describe('console navigation', () => {
+  it('returns to a business page when an empty menu is restored', async()=>{
+    const s=setup();s.setUser({menuIds:[],menuRev:2});await s.router.push('/hosts');
+    expect(s.router.currentRoute.value.path).toBe('/no-access');
+    s.setUser({menuIds:['hosts'],menuRev:3});await s.controller.refresh();
+    expect(s.router.currentRoute.value.path).toBe('/hosts');
+  });
+  it('retries leaving a revoked page after a redirect refresh failed', async()=>{
+    const s=setup();await s.router.push('/hosts');
+    s.setUser({menuIds:['templates'],menuRev:2});
+    s.refresh.mockImplementationOnce(async()=>({} as ConsoleSessionUser)).mockRejectedValueOnce(new Error('offline during redirect'));
+    await s.controller.refresh();
+    expect(s.router.hasRoute('Hosts')).toBe(false);
+    await s.controller.refresh();
+    expect(s.router.currentRoute.value.path).toBe('/templates');
+    expect(s.router.currentRoute.value.matched.some(route=>route.name==='Hosts')).toBe(false);
+  });
   it('keeps personal settings accessible with no business menus', async () => {
     const s = setup();
     s.setUser({ menuIds: [] });

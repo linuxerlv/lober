@@ -169,10 +169,10 @@ export function createConsoleGuard(
         : { path: '/account/password', replace: true };
     if (
       to.path === '/account/password' ||
-      to.path === '/account/profile' ||
-      to.path === '/no-access'
+      to.path === '/account/profile'
     )
       return true;
+    if(to.path==='/no-access') return sessionHome(user)==='/no-access' ? true : {path:sessionHome(user),replace:true};
     if (to.path === '/auth/login' || to.path === '/')
       return { path: sessionHome(user), replace: true };
     const resolved = options.router.resolve(to.fullPath);
@@ -184,20 +184,21 @@ export function createConsoleGuard(
     async refresh() {
       try {
         const state = await synchronize();
-        if (!state?.changed) return;
+        if (!state) return;
         const current = options.router.currentRoute.value;
+        const resolved = options.router.resolve(current.fullPath);
         const allowed =
-          options.router
-            .resolve(current.fullPath)
-            .matched.some((route) => route.meta.menuId) ||
+          resolved.matched.some((route) => route.meta.menuId) ||
           current.path === '/account/profile' ||
           current.path === '/account/password' ||
-          current.path === '/no-access';
+          (current.path === '/no-access' && sessionHome(state.user)==='/no-access');
         const path = state.user.passwordChangeRequired
           ? '/account/password'
           : allowed
             ? current.fullPath
             : sessionHome(state.user);
+        const matchedCurrent=resolved.matched.length===current.matched.length&&resolved.matched.every((route,index)=>route===current.matched[index]);
+        if(!state.changed&&path===current.fullPath&&matchedCurrent)return;
         await options.router.replace({ path, force: true });
       } catch (error) {
         options.onError(error);

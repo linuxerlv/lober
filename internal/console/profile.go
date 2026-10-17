@@ -22,10 +22,13 @@ func (s *server) updateProfile(c *gin.Context) {
 		RespondError(c, err)
 		return
 	}
-	// Fresh authenticated identity plus CAS: unrelated credential/role edits can
-	// never be overwritten by a stale profile form or mass-assigned JSON fields.
+	// Keep the revision attached to the authenticated snapshot. A slow request
+	// must not relabel old credentials/roles with a guessed newer revision.
 	u := *userOf(c)
-	u.Rev = req.Rev
+	if req.Rev != u.Rev {
+		RespondError(c, store.ErrConflict)
+		return
+	}
 	u.DisplayName = req.DisplayName
 	u.Email = req.Email
 	u.Avatar = req.Avatar
