@@ -9,32 +9,32 @@ const results = [];
 async function signIn(username) {
   const context = await browser.newContext({ locale: 'zh-CN' });
   const page = await context.newPage();
-  await page.goto(input.url + '/auth/login');
+  await page.goto(input.url + '/#/auth/login');
   await page.locator('input:not([type="password"]):not([type="checkbox"])').first().fill(username);
   await page.locator('input[type="password"]').fill(input.password);
   await page.getByRole('button', { name: 'login', exact: true }).click();
-  await page.waitForURL(url => !url.pathname.startsWith('/auth'), { timeout: 30000 });
+  await page.waitForURL(url => !url.hash.startsWith('#/auth'), { timeout: 30000 });
   return { page, context };
 }
 try {
   const admin = await signIn('admin');
-  await admin.page.goto(input.url + '/access/role-menus');
+  await admin.page.goto(input.url + '/#/access/role-menus');
   await admin.page.locator('.el-checkbox').first().waitFor();
   results.push('administrator-role-menu-page');
-  await admin.page.goto(input.url + '/hosts');
+  await admin.page.goto(input.url + '/#/hosts');
   await admin.page.locator('.vxe-grid').first().waitFor();
   await admin.page.reload();
   await admin.page.locator('.vxe-grid').first().waitFor();
   results.push('production-spa-deep-link-refresh');
   const viewer = await signIn('enterprise_viewer');
-  await viewer.page.goto(input.url + '/hosts');
+  await viewer.page.goto(input.url + '/#/hosts');
   await viewer.page.locator('.vxe-grid').first().waitFor();
   if (await viewer.page.getByRole('button', { name: /新建|登记主机|导入.*CSV|CSV.*导入/ }).count()) {
     throw new Error('Viewer page exposes a host write button');
   }
   results.push('viewer-read-only-host-page');
-  await viewer.page.goto(input.url + '/access/users');
-  await viewer.page.waitForURL(url => url.pathname !== '/access/users', { timeout: 30000 });
+  await viewer.page.goto(input.url + '/#/access/users');
+  await viewer.page.waitForURL(url => url.hash.split('?')[0] !== '#/access/users', { timeout: 30000 });
   results.push('viewer-admin-route-denied');
   console.log(JSON.stringify({ status: 'PASS', count: results.length, cases: results }));
 } catch (error) {
