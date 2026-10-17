@@ -308,16 +308,16 @@ class ControlTests(unittest.TestCase):
         self.assert_status(self.request("POST", "/hosts", token, {"sn": "DENIED-" + secrets.token_hex(4).upper(), "attrs": {}}), 403)
 
     def test_local_source_outside_allowed_root_never_ready(self):
-        item = self.assert_status(self.admin("POST", "/isos", {"name": "outside-root", "family": "linux", "series": "rocky", "sources": [{"kind": "path", "addr": "/etc/passwd"}]}), 200)
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            progress = self.assert_status(self.admin("GET", "/isos/" + item["id"] + "/progress"), 200)
-            self.assertNotEqual(progress["state"], "ready")
-            if progress["state"] == "failed":
-                self.assertTrue(any(source["error"] for source in progress["sources"]))
-                return
-            time.sleep(.1)
-        self.fail("Out-of-root source was not rejected with a persistent reason")
+        # Registration rejects the path synchronously, after persisting the ISO
+        # identity. No source may be queued or become ready after that rejection.
+        result = self.assert_status(self.admin("POST", "/isos", {"name": "outside-root", "family": "linux", "series": "rocky", "sources": [{"kind": "path", "addr": "/etc/passwd"}]}), 422)
+        self.assertTrue(any(problem["code"] == "iso_source_rejected" and "本地路径" in problem["message"] for problem in result["problems"]))
+        page = self.assert_status(self.admin("GET", "/isos?limit=100"), 200)
+        rows = [item for item in page["items"] if item["name"] == "outside-root"]
+        self.assertEqual(len(rows), 1)
+        progress = self.assert_status(self.admin("GET", "/isos/" + rows[0]["id"] + "/progress"), 200)
+        self.assertNotEqual(progress["state"], "ready")
+        self.assertEqual(progress["sources"], [])
 
     def test_upload_missing_range_is_rejected_and_invalid_media_never_ready(self):
         payload = b"This is deliberately not a valid installation ISO."
@@ -336,7 +336,9 @@ class ControlTests(unittest.TestCase):
         self.fail("Invalid uploaded media did not reach a diagnosed failed state")
 
     def test_invalid_iso_family_series_is_rejected(self):
-        self.assert_status(self.admin("POST", "/isos", {"family": "windows", "series": "rocky", "sources": [{"kind": "upload", "size": 100}]}), 422)
+        before = self.assert_status(self.admin("GET", "/isos"), 200)
+        self.assert_status(self.admin("POST", "/isos", {"name": "invalid-family-series", "family": "windows", "series": "rocky", "sources": [{"kind": "upload", "size": 100}]}), 400)
+        self.assertEqual(self.assert_status(self.admin("GET", "/isos"), 200), before)
 
     def test_unusable_iso_cannot_create_any_tasks(self):
         host = self.host()

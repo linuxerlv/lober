@@ -12,7 +12,7 @@ async function signIn(username) {
   await page.goto(input.url + '/auth/login');
   await page.locator('input:not([type="password"]):not([type="checkbox"])').first().fill(username);
   await page.locator('input[type="password"]').fill(input.password);
-  await page.getByRole('button', { name: /登\s*录|Sign in|Log in/i }).first().click();
+  await page.getByRole('button', { name: 'login', exact: true }).click();
   await page.waitForURL(url => !url.pathname.startsWith('/auth'), { timeout: 30000 });
   return { page, context };
 }
