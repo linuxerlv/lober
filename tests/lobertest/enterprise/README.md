@@ -4,6 +4,11 @@
 这里使用 Python 标准库 unittest，显式收集本目录，避免旧 pytest 的 needs_vm/slow
 默认过滤或自动部署。不要用外层 `uv run pytest` 的全绿替代本目录结果。
 
+release 同时要求 Go 漏洞扫描与前端依赖审计结果。前端审计使用
+`pnpm audit --prod --json --registry=https://registry.npmjs.org`；镜像站不支持审计
+接口时必须记录失败，不能当作零漏洞。workspace 的生产依赖分类也包含构建工具，
+告警需另行确认实际交付范围和可利用性。
+
 所有执行和被测服务均在指定测试 VM 上。产品需要 Linux、真实 PostgreSQL、psql、
 pg_dump；浏览器用锁文件对应 Playwright 和 Linux Chromium headless shell。
 fixturegen.sh 复用 isotest.Image 生成明确标注的合成介质，经过真实上传/识别/导入，
