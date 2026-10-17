@@ -222,6 +222,7 @@ async function validate() {
 async function lifecycle(
   action: 'approve' | 'deprecate' | 'reject' | 'submit',
 ) {
+  if (!(action === 'submit' ? rights.value?.submit : action === 'deprecate' ? rights.value?.deprecate : rights.value?.review)) return;
   const token = editorToken;
   if (action === 'reject' && !reason.value.trim()) {
     ElMessage.warning('请填写驳回理由');
@@ -245,6 +246,7 @@ async function lifecycle(
   ElMessage.success('状态已更新');
 }
 async function newVersion() {
+  if (!rights.value?.newVersion) return;
   const token = editorToken;
   const row = selected.value;
   if (!row) return;
@@ -261,7 +263,7 @@ async function remove() {
   const row = selected.value;
   if (!row) return;
   await ElMessageBox.confirm('删除这个草稿版本？', '删除草稿');
-  if (!currentEditor(token, row)) return;
+  if (!currentEditor(token, row) || !rights.value?.edit) return;
   await api.deleteHookApi(row.id, row.version, row.rev);
   if (!currentEditor(token, row)) return;
   visible.value = false;

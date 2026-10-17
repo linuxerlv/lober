@@ -1,17 +1,15 @@
 import { fileURLToPath } from 'node:url';
 
-import Vue from '@vitejs/plugin-vue';
-import { defineConfig } from 'vitest/config';
+import { defineConfig, mergeConfig } from 'vitest/config';
 
-export default defineConfig({
-  plugins: [Vue()],
-  resolve: {
-    alias: { '#': fileURLToPath(new URL('./src', import.meta.url)) },
-  },
-  test: {
-    environment: 'happy-dom',
-    include: ['apps/web-ele/src/**/*.test.ts'],
-    clearMocks: true,
-    restoreMocks: true,
-  },
-});
+import shared from '../../vitest.config';
+
+export default mergeConfig(
+  shared,
+  defineConfig({
+    resolve: {
+      alias: { '#': fileURLToPath(new URL('./src', import.meta.url)) },
+    },
+    test: { include: ['apps/web-ele/src/**/*.test.ts'], maxWorkers:2 },
+  }),
+);

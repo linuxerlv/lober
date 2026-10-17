@@ -11,6 +11,7 @@ const flow = vi.hoisted(() => ({
   calls: 0,
 }));
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('@vben/stores',()=>({useAccessStore:()=>({accessCodes:['task:create']})}));
 vi.mock('@vben/common-ui', async () => {
   const { defineComponent, h } = await import('vue');
   return { Page: defineComponent({ setup: (_, ctx) => () => h('main', ctx.slots.default?.()) }) };

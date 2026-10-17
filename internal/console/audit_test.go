@@ -140,6 +140,8 @@ func Test每条正式审计路由都写入正确操作者和目标(t *testing.T)
 		}
 		return env.Data
 	}
+	run("role.menus.update", "PUT", "/console/v1/roles/viewer/menus", `{"menuIds":["hosts"],"rev":0}`, admin, "role", "viewer")
+	run("user.profile.update", "PUT", "/console/v1/user/profile", `{"displayName":"管理员","email":"admin@example.com","rev":1}`, admin, "user", "admin")
 	run("user.create", "POST", "/console/v1/users", `{"username":"carol","role":"viewer","password":"carol password"}`, admin, "user", "carol")
 	run("user.update", "PUT", "/console/v1/users/carol", `{"role":"operator","rev":1}`, admin, "user", "carol")
 	run("user.disable", "DELETE", "/console/v1/users/carol", "", admin, "user", "carol")
@@ -204,6 +206,7 @@ func Test每条正式审计路由都写入正确操作者和目标(t *testing.T)
 		run("task."+op, "POST", "/console/v1/tasks/"+taskID+"/"+op, "", admin, "task", taskID)
 	}
 	run("template.deprecate", "POST", lifecyclePath("templates", approvedTemplate, "deprecate", 5), "", reviewer, "template", approvedTemplate+"@1")
+	run("user.password.change", "POST", "/console/v1/auth/password", `{"currentPassword":"admin password","newPassword":"replacement admin password"}`, admin, "user", "admin")
 	for _, r := range s.Routes() {
 		if r.Audit != "" && !seen[r.Method+" "+r.Path] {
 			t.Error("audited route not exercised", r)

@@ -5,6 +5,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
+import { useAccessStore } from '@vben/stores';
 
 import {
   ElAlert,
@@ -34,6 +35,7 @@ import { collectEditable, latestOnly, selectionChanged } from './wizard-state';
 defineOptions({ name: 'TasksNew' });
 type Host = Schemas['WizardHostItem'];
 const router = useRouter();
+const access=useAccessStore();
 const step = ref(0);
 const busy = ref(false);
 const error = ref('');
@@ -278,6 +280,7 @@ async function next() {
       await evaluate();
     } else if (step.value === 3) await evaluate(true);
     else if (step.value === 4) {
+      if(!access.accessCodes.includes('task:create')) return;
       const entered = collectEditable(forms.value, state.value.entered);
       const result = await wizardAPI.submit({
         ...selection(),

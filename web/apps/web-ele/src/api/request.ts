@@ -5,22 +5,18 @@ import type { RequestClientOptions } from '@vben/request';
 
 import { useAppConfig } from '@vben/hooks';
 import { preferences } from '@vben/preferences';
-import {
-  authenticateResponseInterceptor,
-  errorMessageResponseInterceptor,
-  RequestClient,
-} from '@vben/request';
+import { errorMessageResponseInterceptor, RequestClient } from '@vben/request';
 import { useAccessStore } from '@vben/stores';
 
 import { ElMessage } from 'element-plus';
 
 import { useAuthStore } from '#/store';
 
-import { errorMessage } from './console/problem';
 import {
   normalizeErrorResponseInterceptor,
   statusCodeResponseInterceptor,
 } from './response-interceptor';
+import { sessionResponseInterceptor } from './session-interceptor';
 
 const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
 
@@ -29,24 +25,6 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
     ...options,
     baseURL,
   });
-
-  /**
-   * 重新认证逻辑
-   */
-  async function doReAuthenticate() {
-    console.warn('Access token or refresh token is invalid or expired. ');
-    const accessStore = useAccessStore();
-    const authStore = useAuthStore();
-    accessStore.setAccessToken(null);
-    if (
-      preferences.app.loginExpiredMode === 'modal' &&
-      accessStore.isAccessChecked
-    ) {
-      accessStore.setLoginExpired(true);
-    } else {
-      await authStore.logout();
-    }
-  }
 
   function formatToken(token: null | string) {
     return token ? `Bearer ${token}` : null;
@@ -66,6 +44,12 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
   // 处理返回的响应数据格式：HTTP 2xx 判成功并解包 data，非 2xx 按状态码
   // 判失败（替代 vben 上游只读 body.code 的 defaultResponseInterceptor，
   // 原因见 ./response-interceptor.ts 文件头注释）。
+  client.addResponseInterceptor(
+    sessionResponseInterceptor(
+      () => useAccessStore().accessToken,
+      () => useAuthStore().clearSession(),
+    ),
+  );
   client.addResponseInterceptor(statusCodeResponseInterceptor());
 
   // 非 2xx 的失败响应在此补一份 friendlyMessage/bizCode，供
@@ -74,23 +58,15 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
   // 与调用方看到的都是补齐后的 error。
   client.addResponseInterceptor(normalizeErrorResponseInterceptor());
 
-  // token过期的处理
-  client.addResponseInterceptor(
-    authenticateResponseInterceptor({
-      client,
-      doReAuthenticate,
-      doRefreshToken: async () => '',
-      enableRefreshToken: false,
-      formatToken,
-    }),
-  );
-
   // 通用的错误处理,如果没有进入上面的错误处理逻辑，就会进入这里
   client.addResponseInterceptor(
     errorMessageResponseInterceptor((msg: string, error) => {
       // 这里可以根据业务进行定制,你可以拿到 error 内的信息进行定制化处理，根据不同的 code 做不同的提示，而不是直接使用 message.error 提示 msg
       // 当前mock接口返回的错误字段是 error 或者 message
-      ElMessage.error(errorMessage(error) || msg);
+      const responseData = error?.response?.data ?? {};
+      const errorMessage = responseData?.error ?? responseData?.message ?? '';
+      // 如果没有错误信息，则会根据状态码进行提示
+      ElMessage.error(errorMessage || msg);
     }),
   );
 

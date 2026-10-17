@@ -6,9 +6,12 @@ import { useRouter } from 'vue-router';
 
 import { AuthenticationLoginExpiredModal } from '@vben/common-ui';
 import { useWatermark } from '@vben/hooks';
+import { BookOpenText } from '@vben/icons';
 import { BasicLayout, LockScreen, Notification, UserDropdown } from '@vben/layouts';
 import { preferences, usePreferences } from '@vben/preferences';
 import { useAccessStore, useUserStore } from '@vben/stores';
+
+import { ElMessage } from 'element-plus';
 
 import { useAuthStore } from '#/store';
 import LoginForm from '#/views/_core/authentication/login.vue';
@@ -24,14 +27,15 @@ const { isDark } = usePreferences();
 const showDot = computed(() => notifications.value.some((item) => !item.isRead));
 
 const menus = computed(() => [
+  {handler:()=>router.push('/account/profile'),icon:BookOpenText,text:'个人设置'},
   {
     handler: () => router.push('/account/password'),
-    icon: 'lucide:key-round',
+    icon: BookOpenText,
     text: '修改密码',
   },
   {
     handler: handleLogout,
-    icon: 'lucide:log-out',
+    icon: BookOpenText,
     text: '退出登录',
   },
 ]);
@@ -41,7 +45,7 @@ const avatar = computed(() => {
 });
 
 async function handleLogout() {
-  await authStore.logout(false);
+  try { await authStore.logout(false); } catch { ElMessage.error('退出失败，请检查网络后重试'); }
 }
 
 function handleNoticeClear() {
@@ -134,7 +138,8 @@ watch(
         :avatar
         :menus
         :text="userStore.userInfo?.realName"
-        :description="userStore.userInfo?.username"
+        :description="authStore.sessionUser?.email || userStore.userInfo?.username"
+        :tag-text="authStore.sessionUser?.role"
         @clear-preferences-and-logout="handleLogout"
         @logout="handleLogout"
       />

@@ -35,6 +35,7 @@ export interface Schemas {
   "IsoResponse": { "arch": Schemas["CatalogArch"]; "artifacts": ({ [key: string]: string; }) | null; "family": Schemas["CatalogFamily"]; "id": string; "name": string; "offers": ({ [key: string]: (Array<Schemas["OptionResponse"]>) | null; }) | null; "rev": number; "series": Schemas["CatalogSeries"]; "sha256": string; "state": Schemas["ModelISOState"]; "version": string; };
   "IsoSourceReq": { "addr"?: string; "kind": Schemas["SourceKind"]; "role"?: string; "sha256"?: string; "size"?: number; };
   "LoginRequest": { "password": string; "username": string; };
+  "MenuDefinition": { "id": string; "permission": string; "required": boolean; "title": string; };
   "ModelBindingSource": string;
   "ModelCode": string;
   "ModelImplKind": string;
@@ -47,14 +48,19 @@ export interface Schemas {
   "ParamDeclDTO": { "default": string; "label": string; "list": boolean; "max": number | null; "min": number | null; "name": string; "offer": string; "options": (Array<Schemas["OptionResponse"]>) | null; "required": boolean; "type": Schemas["ModelParamType"]; };
   "ParamFieldDTO": { "key": Schemas["ParamsFieldKey"]; "label": string; "list": boolean; "locked": boolean; "options": (Array<Schemas["OptionResponse"]>) | null; "prefill": string; "required": boolean; "type": Schemas["ModelParamType"]; };
   "ParamsFieldKey": string;
+  "PasswordRequest": { "currentPassword": string; "newPassword": string; };
   "PreviewFile": { "body": string; "digest"?: string; "kind": string; "name": string; "sample": boolean; "slot"?: string; };
   "PreviewParamsResponse": { "fields": (Array<Schemas["ParamFieldDTO"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "sample": (Array<string>) | null; };
   "PreviewRequest": { "entered"?: ({ [key: string]: string; }) | null; "firmware"?: Schemas["CatalogFirmware"]; "hostSN"?: string; "isoID"?: string; "series"?: Schemas["CatalogSeries"]; };
   "PreviewResponse": { "files": (Array<Schemas["PreviewFile"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "sample": (Array<string>) | null; };
   "ProblemJSON": { "code": Schemas["ModelCode"]; "message": string; "next": string; "subject": Schemas["SubjectJSON"]; };
   "ProblemList": { "problems": (Array<Schemas["ProblemJSON"]>) | null; };
+  "ProfileRequest": { "avatar": string; "bio": string; "displayName": string; "email": string; "rev": number; };
   "ReferenceDetail": { "references": (Array<Schemas["SubjectJSON"]>) | null; };
   "RejectRequest": { "reason": string; };
+  "RoleMenuListResponse": { "menus": (Array<Schemas["MenuDefinition"]>) | null; "roles": (Array<Schemas["RoleMenuResponse"]>) | null; };
+  "RoleMenuRequest": { "menuIds": Array<string>; "rev": number; };
+  "RoleMenuResponse": { "availableMenuIds": (Array<string>) | null; "menuIds": (Array<string>) | null; "rev": number; "role": Schemas["StoreRole"]; };
   "SessionResponse": { "expiresAt": number; "token": string; "user": Schemas["UserResponse"]; };
   "SlotInfo": { "col": number; "exec": boolean; "line": number; "name": string; "timing": Schemas["CatalogTiming"]; };
   "SlotList": { "problems": (Array<Schemas["ProblemJSON"]>) | null; "slots": (Array<Schemas["SlotInfo"]>) | null; };
@@ -83,7 +89,7 @@ export interface Schemas {
   "TemplateVersionPage": { "items": (Array<Schemas["TemplateResponse"]>) | null; };
   "UserCreateRequest": { "disabled": boolean; "displayName": string; "password": string; "role": Schemas["StoreRole"]; "username": string; };
   "UserPage": { "items": (Array<Schemas["UserResponse"]>) | null; "next": string; };
-  "UserResponse": { "createdAt": number; "disabled": boolean; "displayName": string; "passwordChangeRequired": boolean; "permissions": (Array<string>) | null; "rev": number; "role": Schemas["StoreRole"]; "username": string; };
+  "UserResponse": { "avatar": string; "bio": string; "createdAt": number; "disabled": boolean; "displayName": string; "email": string; "menuIds": (Array<string>) | null; "menuRev": number; "passwordChangeRequired": boolean; "permissions": (Array<string>) | null; "rev": number; "role": Schemas["StoreRole"]; "username": string; };
   "UserUpdateRequest": { "disabled": boolean; "displayName": string; "password"?: string; "rev": number; "role": Schemas["StoreRole"]; "username"?: string; };
   "ValidateResponse": { "ok": boolean; "problems": (Array<Schemas["ProblemJSON"]>) | null; };
   "VersionPage": { "items": (Array<Schemas["HookResponse"]>) | null; };
@@ -125,6 +131,12 @@ export interface Paths {
   };
   "/console/v1/auth/logout": {
     "post": {
+      responses: { "200": { "application/json": { "code": 0; "data": (Record<string, unknown>) | null; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+    };
+  };
+  "/console/v1/auth/password": {
+    "post": {
+      requestBody: { "application/json": Schemas["PasswordRequest"]; };
       responses: { "200": { "application/json": { "code": 0; "data": (Record<string, unknown>) | null; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };
@@ -308,6 +320,18 @@ export interface Paths {
       responses: { "200": { "application/json": { "code": 0; "data": (Record<string, unknown>) | null; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };
+  "/console/v1/roles/{role}/menus": {
+    "put": {
+      path: { "role": string; };
+      requestBody: { "application/json": Schemas["RoleMenuRequest"]; };
+      responses: { "200": { "application/json": { "code": 0; "data": Schemas["RoleMenuResponse"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+    };
+  };
+  "/console/v1/roles/menus": {
+    "get": {
+      responses: { "200": { "application/json": { "code": 0; "data": Schemas["RoleMenuListResponse"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+    };
+  };
   "/console/v1/tasks": {
     "get": {
       query: { "host_sn"?: string; "state"?: Schemas["ModelTaskState"]; "created_from"?: number; "created_to"?: number; "cursor"?: string; "limit"?: number; };
@@ -475,6 +499,12 @@ export interface Paths {
   };
   "/console/v1/user/info": {
     "get": {
+      responses: { "200": { "application/json": { "code": 0; "data": Schemas["UserResponse"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+    };
+  };
+  "/console/v1/user/profile": {
+    "put": {
+      requestBody: { "application/json": Schemas["ProfileRequest"]; };
       responses: { "200": { "application/json": { "code": 0; "data": Schemas["UserResponse"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };

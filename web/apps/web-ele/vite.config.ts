@@ -1,5 +1,3 @@
-import process from 'node:process';
-
 import { defineConfig, viteCssLayerPlugin } from '@vben/vite-config';
 
 import ElementPlus from 'unplugin-element-plus/vite';
@@ -27,15 +25,20 @@ export default defineConfig(async () => {
       ],
       server: {
         proxy: {
-          '/console/v1': {
+          '/console': {
+            target:
+              process.env.VITE_CONSOLE_PROXY_TARGET || 'http://127.0.0.1:8080',
             changeOrigin: true,
-            target: process.env.LOBER_API_TARGET || 'http://127.0.0.1:58080',
           },
           '/openapi.json': {
-            target: process.env.LOBER_API_TARGET || 'http://127.0.0.1:58080',
+            target:
+              process.env.VITE_CONSOLE_PROXY_TARGET || 'http://127.0.0.1:8080',
+            changeOrigin: true,
           },
         },
       },
     },
   };
 });
+import process from 'node:process';
+

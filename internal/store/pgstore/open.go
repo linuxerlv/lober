@@ -29,6 +29,7 @@ var models = []any{
 	&taskRow{}, &taskEventRow{},
 	&auditRow{},
 	&userRow{},
+	&roleMenuRow{},
 }
 
 // batchSize 是一条语句最多写或查的行数：PostgreSQL 一条语句最多 65535 个参数，CSV 导入一次可能有几千台主机。

@@ -150,6 +150,7 @@ async function removeHost(host: HostListItem) {
   } catch {
     return;
   }
+  if (!canWrite.value) return;
   try {
     await deleteHostApi(host.sn, host.rev);
     search();
@@ -197,6 +198,7 @@ async function previewCSV() {
   }
 }
 async function commitCSV() {
+  if (!canWrite.value || csvBusy.value) return;
   csvBusy.value = true;
   failure.value = undefined;
   try {

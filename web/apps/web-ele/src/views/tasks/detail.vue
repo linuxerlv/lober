@@ -120,7 +120,8 @@ function connect() {
   });
 }
 async function control(retry: boolean) {
-  if (busy.value || !task.value) return;
+  const permission=retry?'task:retry':'task:cancel';
+  if (!access.accessCodes.includes(permission) || busy.value || !task.value) return;
   try {
     await ElMessageBox.confirm(
       retry ? '重试会沿用原任务快照，目标机下次引导可能重新安装。确认重试？' : '确认取消该任务？',
@@ -130,6 +131,7 @@ async function control(retry: boolean) {
   } catch {
     return;
   }
+  if (!access.accessCodes.includes(permission)) return;
   busy.value = true;
   error.value = '';
   problems.value = [];

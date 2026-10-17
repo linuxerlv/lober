@@ -1,13 +1,19 @@
-import type { Schemas } from '#/api/console/generated';
+import type { PasswordInput } from '#/api/console/session';
 
+import { createSessionApi } from '#/api/console/session';
 import { requestClient } from '#/api/request';
 export namespace AuthApi {
-  export type LoginParams = Schemas['LoginRequest'];
-  export type LoginResult = Schemas['SessionResponse'];
+  export interface LoginParams {
+    password?: string;
+    username?: string;
+  }
 }
 export function loginApi(data: AuthApi.LoginParams) {
-  return requestClient.post<AuthApi.LoginResult>('/auth/login', data);
+  return createSessionApi(requestClient).login(data);
 }
 export function logoutApi() {
-  return requestClient.post<null>('/auth/logout');
+  return createSessionApi(requestClient).logout();
+}
+export function changePasswordApi(data: PasswordInput) {
+  return createSessionApi(requestClient).password(data);
 }

@@ -10,6 +10,9 @@ import (
 type userRow struct {
 	Username           string `gorm:"primaryKey"`
 	DisplayName        string `gorm:"not null"`
+	Email              string `gorm:"not null;default:''"`
+	Avatar             string `gorm:"not null;default:''"`
+	Bio                string `gorm:"not null;default:''"`
 	Role               string `gorm:"not null;check:chk_users_role,role IN ('viewer','operator','hook-author','hook-approver','admin')"`
 	Password           string `gorm:"not null"`
 	Disabled           bool   `gorm:"not null"`
@@ -20,13 +23,13 @@ type userRow struct {
 
 func (userRow) TableName() string { return "users" }
 func toUserRow(u store.User) userRow {
-	return userRow{Username: u.Username, DisplayName: u.DisplayName, Role: string(u.Role), Password: u.Password, Disabled: u.Disabled, MustChangePassword: u.MustChangePassword, CreatedAt: u.CreatedAt, Rev: u.Rev}
+	return userRow{Username: u.Username, DisplayName: u.DisplayName, Email: u.Email, Avatar: u.Avatar, Bio: u.Bio, Role: string(u.Role), Password: u.Password, Disabled: u.Disabled, MustChangePassword: u.MustChangePassword, CreatedAt: u.CreatedAt, Rev: u.Rev}
 }
 func (r userRow) user() store.User {
-	return store.User{Username: r.Username, DisplayName: r.DisplayName, Role: store.Role(r.Role), Password: r.Password, Disabled: r.Disabled, MustChangePassword: r.MustChangePassword, CreatedAt: r.CreatedAt, Rev: r.Rev}
+	return store.User{Username: r.Username, DisplayName: r.DisplayName, Email: r.Email, Avatar: r.Avatar, Bio: r.Bio, Role: store.Role(r.Role), Password: r.Password, Disabled: r.Disabled, MustChangePassword: r.MustChangePassword, CreatedAt: r.CreatedAt, Rev: r.Rev}
 }
 
-var userColumns = []string{"display_name", "role", "password", "disabled", "must_change_password", "rev"}
+var userColumns = []string{"display_name", "email", "avatar", "bio", "role", "password", "disabled", "must_change_password", "rev"}
 
 func (s *Store) CreateUser(ctx context.Context, u store.User, a store.Audit) (store.User, error) {
 	if err := store.CheckAudit(a); err != nil {

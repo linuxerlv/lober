@@ -2,43 +2,25 @@ import type { RouteRecordRaw } from 'vue-router';
 
 import { Inbox } from '@vben/icons';
 
-/**
- * 制品集路由（SPEC §12.6）。ISO 登记与导入进度（异步 job）。
- *
- * 角色可见性（SPEC §12.5 角色表）：仅 viewer / admin——admin 持有
- * artifact:import 权限码，operator/hook-author/hook-approver 的可见路由表
- * 都没有列出 /artifact-sets，不放宽。
- */
+/** 菜单可见性由后端角色配置决定，操作权限由当前会话权限码决定。 */
 const routes: RouteRecordRaw[] = [
   {
     meta: {
       icon: Inbox,
       order: 50,
-      title: 'ISO',
-      authority: [
-        'viewer',
-        'operator',
-        'hook-author',
-        'hook-approver',
-        'admin',
-      ],
+      title: '制品集',
+      menuId: 'isos',
     },
     name: 'ArtifactSets',
-    path: '/isos',
+    path: '/artifact-sets',
     children: [
       {
         name: 'ArtifactSetsIndex',
         path: '',
         component: () => import('#/views/artifact-sets/index.vue'),
         meta: {
-          title: 'ISO 来源与导入',
-          authority: [
-            'viewer',
-            'operator',
-            'hook-author',
-            'hook-approver',
-            'admin',
-          ],
+          title: '制品集导入',
+          menuId: 'isos',
         },
       },
     ],

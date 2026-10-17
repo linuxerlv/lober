@@ -1,20 +1,9 @@
-import type { UserInfo } from '@vben/types';
-
-import type { Schemas } from '#/api/console/generated';
-
+import { createSessionApi } from '#/api/console/session';
+import { type ConsoleSessionUser, toFrameworkUser } from '#/api/console/session';
 import { requestClient } from '#/api/request';
-export function getUserInfoApi() {
-  return requestClient.get<Schemas['UserResponse']>('/user/info');
+export function toUserInfo(user:Omit<ConsoleSessionUser,'menuIds'|'menuRev'> & Partial<Pick<ConsoleSessionUser,'menuIds'|'menuRev'>>) {
+ return toFrameworkUser({...user,menuIds:user.menuIds||[],menuRev:user.menuRev||0});
 }
-export function toUserInfo(user: Schemas['UserResponse']): UserInfo {
-  return {
-    ...user,
-    avatar: '/avatar.svg',
-    desc: '',
-    token: '',
-    userId: user.username,
-    realName: user.displayName || user.username,
-    roles: [user.role],
-    homePath: user.passwordChangeRequired ? '/account/password' : '/tasks',
-  };
+export function getUserInfoApi() {
+  return createSessionApi(requestClient).info();
 }

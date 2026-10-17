@@ -17,6 +17,7 @@ type Store interface {
 	Events
 	AuditLog
 	Users
+	RoleMenus
 	// Close 释放连接这类资源，之后不能再调用别的方法。
 	Close() error
 }

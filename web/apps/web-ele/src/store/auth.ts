@@ -1,120 +1,114 @@
-import type { Recordable, UserInfo } from '@vben/types';
+import type { Recordable } from '@vben/types';
 
-import { ref } from 'vue';
+import type { ConsoleSessionUser } from '#/api/console/session';
+
+import { ref, shallowRef } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { LOGIN_PATH } from '@vben/constants';
-import { preferences } from '@vben/preferences';
-import { resetAllStores, useAccessStore, useUserStore } from '@vben/stores';
+import { useAccessStore, useTabbarStore, useUserStore } from '@vben/stores';
 
-import { ElNotification } from 'element-plus';
 import { defineStore } from 'pinia';
 
-import { getUserInfoApi, loginApi, logoutApi, toUserInfo } from '#/api';
-import { $t } from '#/locales';
-
+import { sessionHome } from '#/access/policy';
+import { getUserInfoApi, loginApi, logoutApi } from '#/api';
+import { toFrameworkUser } from '#/api/console/session';
 export const useAuthStore = defineStore('auth', () => {
-  const accessStore = useAccessStore();
-  const userStore = useUserStore();
-  const router = useRouter();
-
+  const access = useAccessStore();
+    const users = useUserStore();
+    const tabs = useTabbarStore();
+    const router = useRouter();
   const loginLoading = ref(false);
-
-  /**
-   * 异步处理登录操作
-   * Asynchronously handle the login process
-   * @param params 登录表单数据
-   */
+    const sessionUser = shallowRef<ConsoleSessionUser | null>(null);
+  let generation = 0;
+    let pending: null | { token: string; request: Promise<ConsoleSessionUser> } =
+      null;
+  function applySessionUser(user: ConsoleSessionUser) {
+    sessionUser.value = user;
+    users.setUserInfo(toFrameworkUser(user));
+    access.setAccessCodes([...user.permissions]);
+  }
+  async function refreshSessionUser(): Promise<ConsoleSessionUser> {
+    const token = access.accessToken;
+    if (!token) throw new Error('当前没有有效会话');
+    if (pending?.token === token) return pending.request;
+    const version = generation;
+    const request = getUserInfoApi().then((user) => {
+      if (generation === version && access.accessToken === token)
+        applySessionUser(user);
+      return user;
+    });
+    pending = { token, request };
+    try {
+      return await request;
+    } finally {
+      if (pending?.request === request) pending = null;
+    }
+  }
+  async function clearSession(redirect = true) {
+    generation++;
+    pending = null;
+    const previous = router.currentRoute.value.fullPath;
+    sessionUser.value = null;
+    access.$reset();
+    users.$reset();
+    tabs.$reset();
+    if (router.currentRoute.value.path !== LOGIN_PATH)
+      await router.replace({
+        path: LOGIN_PATH,
+        query: redirect ? { redirect: encodeURIComponent(previous) } : {},
+      });
+  }
   async function authLogin(
     params: Recordable<any>,
     onSuccess?: () => Promise<void> | void,
   ) {
-    // 异步处理用户登录操作并获取 accessToken
-    let userInfo: null | UserInfo = null;
+    const version = ++generation;
+    loginLoading.value = true;
     try {
-      loginLoading.value = true;
-      const { token: accessToken } = await loginApi({
-        username: String(params.username ?? ''),
-        password: String(params.password ?? ''),
-      });
-
-      // 如果成功获取到 accessToken
-      if (accessToken) {
-        // 将 accessToken 存储到 accessStore 中
-        accessStore.setAccessToken(accessToken);
-
-        // 获取用户信息并存储到 accessStore 中
-        userInfo = await fetchUserInfo();
-
-        userStore.setUserInfo(userInfo);
-
-        if (userInfo.passwordChangeRequired) {
-          accessStore.setLoginExpired(false);
-          await router.push('/account/password');
-        } else if (accessStore.loginExpired) {
-          accessStore.setLoginExpired(false);
-        } else {
-          onSuccess
-            ? await onSuccess?.()
-            : await router.push(
-                userInfo.homePath || preferences.app.defaultHomePath,
-              );
-        }
-
-        if (userInfo?.realName) {
-          ElNotification({
-            message: `${$t('authentication.loginSuccessDesc')}:${userInfo?.realName}`,
-            title: $t('authentication.loginSuccess'),
-            type: 'success',
-          });
-        }
-      }
+      const result = await loginApi(params);
+      if (version !== generation) return { userInfo: null };
+      if (!result.token || !result.user)
+        throw new Error('登录响应缺少会话信息');
+      access.setAccessToken(result.token);
+      access.setIsAccessChecked(false);
+      access.setLoginExpired(false);
+      applySessionUser(result.user);
+      if (result.user.passwordChangeRequired)
+        await router.push('/account/password');
+      else if (onSuccess) await onSuccess();
+      else await router.push(sessionHome(result.user));
+      return { userInfo: toFrameworkUser(result.user) };
     } finally {
       loginLoading.value = false;
     }
-
-    return {
-      userInfo,
-    };
   }
-
-  async function logout(redirect: boolean = true) {
+  async function logout(redirect = true) {
     try {
-      if (accessStore.accessToken) await logoutApi();
-    } catch {
-      // 不做任何处理
+      await logoutApi();
+    } catch (error: any) {
+      if (error?.response?.status !== 401) throw error;
     }
-    resetAllStores();
-    accessStore.setLoginExpired(false);
-
-    // 回登录页带上当前路由地址
-    await router.replace({
-      path: LOGIN_PATH,
-      query: redirect
-        ? {
-            redirect: encodeURIComponent(router.currentRoute.value.fullPath),
-          }
-        : {},
-    });
+    await clearSession(redirect);
   }
-
   async function fetchUserInfo() {
-    const user = await getUserInfoApi();
-    const userInfo = toUserInfo(user);
-    accessStore.setAccessCodes(user.permissions ?? []);
-    userStore.setUserInfo(userInfo);
-    return userInfo;
+    return toFrameworkUser(await refreshSessionUser());
   }
-
   function $reset() {
+    generation++;
+    pending = null;
+    sessionUser.value = null;
     loginLoading.value = false;
   }
-
   return {
     $reset,
-    authLogin,
-    fetchUserInfo,
     loginLoading,
+    sessionUser,
+    applySessionUser,
+    refreshSessionUser,
+    clearSession,
+    authLogin,
     logout,
+    fetchUserInfo,
   };
 });

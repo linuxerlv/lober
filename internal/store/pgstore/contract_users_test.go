@@ -20,6 +20,7 @@ func aUser(name string) store.User {
 func Test契约用户(t *testing.T) {
 	runCases(t, []testCase{
 		{"create readback and audit", userCreateReadBack},
+		{"personal profile persists and clears", userProfileReadBack},
 		{"zero fields and restore", userUpdateToZero},
 		{"identity immutable", userUpdateKeepsUsername},
 		{"revision missing and notfound", userUpdateConflict},
@@ -33,6 +34,36 @@ func Test契约用户(t *testing.T) {
 		{"concurrent create", userConcurrentCreate},
 		{"invalid query and cancelled context", userQueryInvalid},
 	})
+}
+func userProfileReadBack(t *testing.T, s *pgstore.Store) {
+	u := aUser("profile")
+	u.Email = "profile@example.com"
+	u.Bio = "运维人员"
+	got, err := s.CreateUser(t.Context(), u, anAudit("user.create"))
+	must(t, err, "create profile")
+	back, err := s.GetUser(t.Context(), u.Username)
+	must(t, err, "read profile")
+	wantEqual(t, back, got, "profile fields")
+	back.Email = ""
+	back.Bio = ""
+	back.Avatar = ""
+	back.DisplayName = ""
+	updated, err := s.UpdateUser(t.Context(), back, anAudit("user.profile.update"))
+	must(t, err, "clear profile")
+	read, err := s.GetUser(t.Context(), u.Username)
+	must(t, err, "read cleared profile")
+	wantEqual(t, read, updated, "zero profile fields persist")
+	back = updated
+	back.Email = "changed@example.com"
+	fault := anAudit("user.profile.update")
+	fault.Actor = pgtest.FaultActor
+	_, err = s.UpdateUser(t.Context(), back, fault)
+	if err == nil {
+		t.Fatal("audit failure accepted")
+	}
+	read, err = s.GetUser(t.Context(), u.Username)
+	must(t, err, "rollback read")
+	wantEqual(t, read, updated, "audit rollback")
 }
 func userCreateReadBack(t *testing.T, s *pgstore.Store) {
 	in := aUser("alice")

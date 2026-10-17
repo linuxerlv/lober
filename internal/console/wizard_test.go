@@ -364,7 +364,7 @@ func Test向导只接受程序当前携带的内置身份及版本(t *testing.T)
 func Test向导提交期间新版本审批必须等待任务提交(t *testing.T) {
 	dsn := pgtest.Schema(t)
 	st := pgtest.OpenAt(t, dsn)
-	s := New(Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Events: st, Audit: st, Users: st, Clock: func() int64 { return fixedAt }})
+	s := New(Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Events: st, Audit: st, Users: st, RoleMenus: st, Clock: func() int64 { return fixedAt }})
 	_, _, token, iso, tpl := seedWizardFixture(t, s, st)
 	next, err := st.NewTemplateVersion(t.Context(), tpl.ID, 1, "author")
 	if err != nil {

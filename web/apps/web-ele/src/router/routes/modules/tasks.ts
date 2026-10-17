@@ -2,34 +2,14 @@ import type { RouteRecordRaw } from 'vue-router';
 
 import { List } from '@vben/icons';
 
-/**
- * 任务路由（SPEC §12.6）。任务列表是主战场（app.defaultHomePath = /tasks）。
- *
- * 角色可见性（SPEC §12.5 角色表）：viewer / operator / admin 三个角色可见。
- * hook-author / hook-approver 未列在可见路由里，不放宽（§12.6「就这些，不
- * 扩张」同样适用于角色可见范围，不只是页面数量）。
- *
- * task:arm 权限码不存在（SPEC 0.4 删掉了 armed 状态），本路由树不出现
- * arm/disarm 相关的任何入口——这不是遗漏，是设计上刻意不做。
- *
- * 不显式设置顶层 component：generateAccessible 对含 children 的顶层路由会
- * 删除其 component（避免多层 BasicLayout），实际渲染内容由 path: '' 的
- * TasksIndex 子路由承担（同一地址下"列表即父路由自身"的既定模式，见
- * packages/effects/access/src/accessible.ts 的 fork 定制注释）。
- */
+/** 菜单可见性由后端角色配置决定，操作权限由当前会话权限码决定。 */
 const routes: RouteRecordRaw[] = [
   {
     meta: {
       icon: List,
       order: 10,
       title: '任务',
-      authority: [
-        'viewer',
-        'operator',
-        'hook-author',
-        'hook-approver',
-        'admin',
-      ],
+      menuId: 'tasks',
     },
     name: 'Tasks',
     path: '/tasks',
@@ -40,13 +20,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/tasks/index.vue'),
         meta: {
           title: '任务列表',
-          authority: [
-            'viewer',
-            'operator',
-            'hook-author',
-            'hook-approver',
-            'admin',
-          ],
+          menuId: 'tasks',
         },
       },
       {
@@ -62,7 +36,8 @@ const routes: RouteRecordRaw[] = [
           // （如需要）。
           hideInMenu: true,
           title: '建任务',
-          authority: ['operator', 'admin'],
+          permission: 'task:create',
+          menuId: 'tasks',
         },
       },
       {
@@ -72,13 +47,7 @@ const routes: RouteRecordRaw[] = [
         meta: {
           hideInMenu: true,
           title: '任务详情',
-          authority: [
-            'viewer',
-            'operator',
-            'hook-author',
-            'hook-approver',
-            'admin',
-          ],
+          menuId: 'tasks',
         },
       },
     ],

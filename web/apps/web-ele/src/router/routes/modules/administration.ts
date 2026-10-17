@@ -4,18 +4,18 @@ const routes: RouteRecordRaw[] = [
   {
     name: 'Users',
     path: '/users',
-    component: () => import('#/views/users/index.vue'),
-    meta: { title: '用户管理', order: 60, authority: ['admin'] },
+    redirect:'/access/users',
+    meta: { title: '用户管理', hideInMenu:true, hideInTab:true, menuId:'role-menus', permission:'user:manage' },
   },
   {
     name: 'Audit',
     path: '/audit',
-    component: () => import('#/views/audit/index.vue'),
-    meta: { title: '审计', order: 70, authority: ['admin'] },
+    redirect:'/reports',
+    meta: { title: '审计', hideInMenu:true, hideInTab:true, menuId:'reports', permission:'audit:read' },
   },
   {
-    name: 'AccountPassword',
-    path: '/account/password',
+    name: 'LegacyAccountPassword',
+    path: '/account/change-password',
     component: () => import('#/views/account/password.vue'),
     meta: {
       title: '修改密码',

@@ -1,103 +1,113 @@
-import { createPinia, setActivePinia } from 'pinia';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createApp, defineComponent, nextTick } from 'vue';
+import { createMemoryHistory, createRouter } from 'vue-router';
 
-const state = vi.hoisted(() => {
-  const access = {
-    accessToken: null as null | string,
-    loginExpired: false,
-    setAccessToken: vi.fn(),
-    setAccessCodes: vi.fn(),
-    setLoginExpired: vi.fn(),
-  };
-  access.setAccessToken.mockImplementation((token) => {
-    access.accessToken = token;
-  });
-  const user = { setUserInfo: vi.fn() };
-  const router = {
-    push: vi.fn(),
-    replace: vi.fn(),
-    currentRoute: { value: { fullPath: '/tasks' } },
-  };
-  return {
-    access,
-    user,
-    router,
-    login: vi.fn(),
-    info: vi.fn(),
-    logout: vi.fn(),
-    reset: vi.fn(),
-  };
-});
-vi.mock('@vben/stores', () => ({
-  useAccessStore: () => state.access,
-  useUserStore: () => state.user,
-  resetAllStores: state.reset,
+import { useAccessStore } from '@vben/stores';
+
+import { createPinia, setActivePinia } from 'pinia';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const io = vi.hoisted(() => ({
+  loginApi: vi.fn(),
+  logoutApi: vi.fn(),
+  getUserInfoApi: vi.fn(),
 }));
-vi.mock('vue-router', () => ({ useRouter: () => state.router }));
-vi.mock('@vben/constants', () => ({ LOGIN_PATH: '/auth/login' }));
-vi.mock('@vben/preferences', () => ({
-  preferences: { app: { defaultHomePath: '/tasks' } },
-}));
-vi.mock('element-plus', () => ({ ElNotification: vi.fn() }));
-vi.mock('#/locales', () => ({ $t: (key: string) => key }));
-vi.mock('#/api/request', () => ({ requestClient: {} }));
-vi.mock('#/api', async () => ({
-  loginApi: state.login,
-  getUserInfoApi: state.info,
-  logoutApi: state.logout,
-  toUserInfo: (await import('#/api/core/user')).toUserInfo,
-}));
+vi.mock('#/api', () => io);
 import { useAuthStore } from './auth';
 
 const user = {
-  username: 'admin',
-  displayName: '管理员',
-  role: 'admin',
-  permissions: ['user:manage'],
+  username: 'alice',
+  displayName: 'Alice',
+  role: 'viewer' as const,
+  permissions: ['host:read'],
   disabled: false,
-  passwordChangeRequired: false,
   createdAt: 1,
   rev: 1,
+  passwordChangeRequired: false,
+  menuIds: ['hosts'],
+  menuRev: 0,
 };
-describe('console authentication flow', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setActivePinia(createPinia());
-    state.access.accessToken = null;
-    state.login.mockResolvedValue({
-      token: 'server-session',
-      expiresAt: 10,
-      user,
-    });
-    state.info.mockResolvedValue(user);
+const cleanups: Array<() => void> = [];
+afterEach(() => {
+  cleanups.splice(0).forEach((fn) => fn());
+  vi.resetAllMocks();
+});
+async function setup() {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: ['/auth/login', '/hosts', '/no-access', '/account/password'].map(
+      (path) => ({ path, component: { template: '<div />' } }),
+    ),
   });
-  it('stores the real token and current-user permissions', async () => {
-    await useAuthStore().authLogin({ username: 'admin', password: 'secret' });
-    expect(state.access.setAccessToken).toHaveBeenCalledWith('server-session');
-    expect(state.access.setAccessCodes).toHaveBeenCalledWith(['user:manage']);
-    expect(state.user.setUserInfo).toHaveBeenCalledWith(
-      expect.objectContaining({ realName: '管理员', roles: ['admin'] }),
+  await router.push('/auth/login');
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  let store!: ReturnType<typeof useAuthStore>;
+  const el = document.createElement('div');
+  document.body.append(el);
+  const app = createApp(
+    defineComponent({
+      setup() {
+        store = useAuthStore();
+        return () => null;
+      },
+    }),
+  );
+  app.use(pinia);
+  app.use(router);
+  app.mount(el);
+  cleanups.push(() => {
+    app.unmount();
+    el.remove();
+  });
+  return { store, router, access: useAccessStore(pinia) };
+}
+describe('authentication state', () => {
+  it('establishes the backend token, permissions and role without auth/codes', async () => {
+    const { store, router, access } = await setup();
+    io.loginApi.mockResolvedValue({ token: 'first', expiresAt: 10, user });
+    await store.authLogin({ username: 'alice', password: 'old' });
+    expect(access.accessToken).toBe('first');
+    expect(access.accessCodes).toEqual(['host:read']);
+    expect(store.sessionUser).toEqual(user);
+    expect(router.currentRoute.value.path).toBe('/hosts');
+    expect(io.getUserInfoApi).not.toHaveBeenCalled();
+  });
+  it('keeps the session when logout cannot reach the backend', async () => {
+    const { store, access } = await setup();
+    access.setAccessToken('first');
+    store.applySessionUser(user);
+    io.logoutApi.mockRejectedValue(new Error('offline'));
+    await expect(store.logout()).rejects.toThrow('offline');
+    expect(access.accessToken).toBe('first');
+    expect(store.sessionUser).toEqual(user);
+  });
+  it('clears an already expired session without another logout request', async () => {
+    const { store, router, access } = await setup();
+    access.setAccessToken('first');
+    store.applySessionUser(user);
+    io.logoutApi.mockRejectedValue({ response: { status: 401 } });
+    await store.logout();
+    expect(access.accessToken).toBeNull();
+    expect(store.sessionUser).toBeNull();
+    expect(router.currentRoute.value.path).toBe('/auth/login');
+    expect(io.logoutApi).toHaveBeenCalledTimes(1);
+  });
+  it('ignores an old account response arriving after the token changes', async () => {
+    const { store, access } = await setup();
+    access.setAccessToken('first');
+    store.applySessionUser(user);
+    let finish!: (value: typeof user) => void;
+    io.getUserInfoApi.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
     );
-    expect(state.router.push).toHaveBeenCalledWith('/tasks');
-  });
-  it('forces password change before executing a requested redirect', async () => {
-    state.info.mockResolvedValue({ ...user, passwordChangeRequired: true });
-    const onSuccess = vi.fn();
-    await useAuthStore().authLogin(
-      { username: 'admin', password: 'secret' },
-      onSuccess,
-    );
-    expect(state.router.push).toHaveBeenCalledWith('/account/password');
-    expect(onSuccess).not.toHaveBeenCalled();
-  });
-  it('sends logout before clearing local authentication', async () => {
-    state.access.accessToken = 'server-session';
-    await useAuthStore().logout(false);
-    expect(state.logout).toHaveBeenCalledOnce();
-    expect(state.reset).toHaveBeenCalledOnce();
-    expect(state.router.replace).toHaveBeenCalledWith({
-      path: '/auth/login',
-      query: {},
-    });
+    const old = store.refreshSessionUser();
+    access.setAccessToken('second');
+    store.applySessionUser({ ...user, username: 'bob' });
+    finish(user);
+    await old;
+    await nextTick();
+    expect(store.sessionUser?.username).toBe('bob');
   });
 });

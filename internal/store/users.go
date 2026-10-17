@@ -18,6 +18,9 @@ type Users interface {
 type User struct {
 	Username           string `json:"username"`
 	DisplayName        string `json:"displayName"`
+	Email              string `json:"email"`
+	Avatar             string `json:"avatar"`
+	Bio                string `json:"bio"`
 	Role               Role   `json:"role"`
 	Password           string `json:"-"`
 	Disabled           bool   `json:"disabled"`
@@ -74,5 +77,5 @@ func CheckUser(u User) error {
 	if len(ps) > 0 {
 		return &ProblemsError{Kind: ErrInvalid, Problems: ps}
 	}
-	return nil
+	return CheckProfile(u.DisplayName, u.Email, u.Avatar, u.Bio)
 }

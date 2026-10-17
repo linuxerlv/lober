@@ -260,6 +260,7 @@ onBeforeUnmount(() => {
 });
 
 async function uploadFile(id: string, role: string, file: File) {
+  if (!canWrite.value) return;
   const key = uploadKey(id, role);
   if (uploadActive.has(key)) return;
   uploadStopped.delete(key);
@@ -284,6 +285,7 @@ async function uploadFile(id: string, role: string, file: File) {
     localStorage.setItem(identityKey(id, role), identity);
     for (const chunk of missingChunks(source.totalSize, source.ranges ?? [])) {
       if (disposed || uploadStopped.has(key)) break;
+      if (!canWrite.value) throw new Error('上传权限已变更，上传已停止');
       uploadMessages[key] =
         `上传 ${chunk.start}–${chunk.end} / ${file.size} 字节`;
       await uploadISOChunkApi(
@@ -368,6 +370,7 @@ async function operation(
       return;
     }
   }
+  if (!canWrite.value) return;
   failure.value = undefined;
   try {
     if (action === 'delete') {
@@ -394,7 +397,7 @@ function openSource() {
   sourceOpen.value = true;
 }
 async function registerSource() {
-  if (!selected.value || busy.value) return;
+  if (!canWrite.value || !selected.value || busy.value) return;
   const id = selected.value.id;
   busy.value = true;
   failure.value = undefined;
