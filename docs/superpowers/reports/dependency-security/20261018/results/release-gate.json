@@ -1,0 +1,19 @@
+{
+  "profile": "release",
+  "product_sha": "88bce232fc633ff5dc06c0285748d17f4f47b184",
+  "status": "FAIL",
+  "problems": [
+    "frontend_audit: FAIL",
+    "frontend_audit: failed or skipped required cases",
+    "real_media: BLOCKED",
+    "real_media: invalid count",
+    "pxe_state: BLOCKED",
+    "pxe_state: invalid count",
+    "real_install: BLOCKED",
+    "real_install: invalid count",
+    "capacity_soak: NOT_RUN",
+    "capacity_soak: invalid count",
+    "supported_upgrade: BLOCKED",
+    "supported_upgrade: invalid count"
+  ]
+}

@@ -1,0 +1,68 @@
+=== make check ===
+gofmt -l $(go list -f {{.Dir}} ./...)
+go vet ./...
+go test -count=1 -run '^Test全模块依赖守卫$' ./internal/archtest
+ok  	github.com/lober/lober/internal/archtest	0.136s
+go test ./...
+?   	github.com/lober/lober/cmd/console-openapi	[no test files]
+ok  	github.com/lober/lober/cmd/lober	5.012s
+ok  	github.com/lober/lober/internal/archtest	58.314s
+ok  	github.com/lober/lober/internal/builtin	0.476s
+ok  	github.com/lober/lober/internal/console	86.039s
+ok  	github.com/lober/lober/internal/core/activation	0.018s
+ok  	github.com/lober/lober/internal/core/admission	0.003s
+ok  	github.com/lober/lober/internal/core/catalog	0.004s
+ok  	github.com/lober/lober/internal/core/model	0.022s
+ok  	github.com/lober/lober/internal/core/params	0.007s
+ok  	github.com/lober/lober/internal/core/scan	0.004s
+ok  	github.com/lober/lober/internal/core/snapshot	0.016s
+ok  	github.com/lober/lober/internal/iso	14.168s
+ok  	github.com/lober/lober/internal/iso/iso9660	0.030s
+ok  	github.com/lober/lober/internal/iso/isotest	0.006s
+ok  	github.com/lober/lober/internal/render	4.898s
+ok  	github.com/lober/lober/internal/store	0.007s
+ok  	github.com/lober/lober/internal/store/pgstore	62.929s
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	1.689s
+go test -race -timeout=20m ./...
+?   	github.com/lober/lober/cmd/console-openapi	[no test files]
+ok  	github.com/lober/lober/cmd/lober	71.692s
+ok  	github.com/lober/lober/internal/archtest	79.368s
+ok  	github.com/lober/lober/internal/builtin	2.719s
+ok  	github.com/lober/lober/internal/console	403.055s
+ok  	github.com/lober/lober/internal/core/activation	1.145s
+ok  	github.com/lober/lober/internal/core/admission	1.022s
+ok  	github.com/lober/lober/internal/core/catalog	1.015s
+ok  	github.com/lober/lober/internal/core/model	1.095s
+ok  	github.com/lober/lober/internal/core/params	1.025s
+ok  	github.com/lober/lober/internal/core/scan	1.014s
+ok  	github.com/lober/lober/internal/core/snapshot	1.059s
+ok  	github.com/lober/lober/internal/iso	15.923s
+ok  	github.com/lober/lober/internal/iso/iso9660	1.204s
+ok  	github.com/lober/lober/internal/iso/isotest	3.033s
+ok  	github.com/lober/lober/internal/render	6.033s
+ok  	github.com/lober/lober/internal/store	1.030s
+ok  	github.com/lober/lober/internal/store/pgstore	75.460s
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	1.789s
+GOOS=linux GOARCH=amd64 go build ./...
+WIRE_LOADER_MODE=fallback WIRE_LOADER_ARTIFACTS=0 go tool wire diff ./cmd/lober
+
+=== go test -count=1 ./... (final test source) ===
+?   	github.com/lober/lober/cmd/console-openapi	[no test files]
+ok  	github.com/lober/lober/cmd/lober	10.914s
+ok  	github.com/lober/lober/internal/archtest	72.300s
+ok  	github.com/lober/lober/internal/builtin	0.880s
+ok  	github.com/lober/lober/internal/console	109.629s
+ok  	github.com/lober/lober/internal/core/activation	0.025s
+ok  	github.com/lober/lober/internal/core/admission	0.004s
+ok  	github.com/lober/lober/internal/core/catalog	0.005s
+ok  	github.com/lober/lober/internal/core/model	0.027s
+ok  	github.com/lober/lober/internal/core/params	0.010s
+ok  	github.com/lober/lober/internal/core/scan	0.005s
+ok  	github.com/lober/lober/internal/core/snapshot	0.021s
+ok  	github.com/lober/lober/internal/iso	14.913s
+ok  	github.com/lober/lober/internal/iso/iso9660	0.047s
+ok  	github.com/lober/lober/internal/iso/isotest	0.008s
+ok  	github.com/lober/lober/internal/render	5.304s
+ok  	github.com/lober/lober/internal/store	0.012s
+ok  	github.com/lober/lober/internal/store/pgstore	56.553s
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	1.160s

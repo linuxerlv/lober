@@ -1,0 +1,30 @@
+test_blocked_cannot_pass (test_gate.GateTests.test_blocked_cannot_pass) ... ok
+test_complete_required_suite_passes (test_gate.GateTests.test_complete_required_suite_passes) ... ok
+test_empty_profile_fails (test_gate.GateTests.test_empty_profile_fails) ... ok
+test_failed_cases_override_pass_label (test_gate.GateTests.test_failed_cases_override_pass_label) ... ok
+test_missing_evidence_fails (test_gate.GateTests.test_missing_evidence_fails) ... ok
+test_missing_required_suite_fails (test_gate.GateTests.test_missing_required_suite_fails) ... ok
+test_negative_failure_count_fails_closed (test_gate.GateTests.test_negative_failure_count_fails_closed) ... ok
+test_non_numeric_count_fails_closed (test_gate.GateTests.test_non_numeric_count_fails_closed) ... ok
+test_skipped_required_cases_fail (test_gate.GateTests.test_skipped_required_cases_fail) ... ok
+test_unselected_blocked_suite_does_not_hide_selected_success (test_gate.GateTests.test_unselected_blocked_suite_does_not_hide_selected_success) ... ok
+test_wrong_product_identity_fails (test_gate.GateTests.test_wrong_product_identity_fails) ... ok
+test_zero_cases_fails (test_gate.GateTests.test_zero_cases_fails) ... ok
+test_keyword_connection_string_is_split_into_environment (test_gate_db_env.DatabaseEnvironmentTests.test_keyword_connection_string_is_split_into_environment) ... ok
+test_percent_encoded_password_is_preserved (test_gate_db_env.DatabaseEnvironmentTests.test_percent_encoded_password_is_preserved) ... ok
+test_pgx_search_path_is_translated_for_libpq (test_gate_db_env.DatabaseEnvironmentTests.test_pgx_search_path_is_translated_for_libpq) ... ok
+test_uri_database_is_not_used_as_literal_database_name (test_gate_db_env.DatabaseEnvironmentTests.test_uri_database_is_not_used_as_literal_database_name) ... ok
+test_authorized_get_cannot_pass_with_validation_error (test_gate_permission.PermissionAssertionTests.test_authorized_get_cannot_pass_with_validation_error) ... ok
+test_deliberately_invalid_write_can_reach_validation (test_gate_permission.PermissionAssertionTests.test_deliberately_invalid_write_can_reach_validation) ... ok
+test_changed_evidence_is_rejected (test_gate_provenance.ProvenanceTests.test_changed_evidence_is_rejected) ... ok
+test_changed_source_archive_is_rejected (test_gate_provenance.ProvenanceTests.test_changed_source_archive_is_rejected) ... ok
+test_changed_test_source_is_rejected (test_gate_provenance.ProvenanceTests.test_changed_test_source_is_rejected) ... ok
+test_evidence_outside_result_root_is_rejected (test_gate_provenance.ProvenanceTests.test_evidence_outside_result_root_is_rejected) ... ok
+test_interrupted_rerun_invalidates_previous_pass (test_gate_provenance.ProvenanceTests.test_interrupted_rerun_invalidates_previous_pass) ... ok
+test_matching_artifacts_pass (test_gate_provenance.ProvenanceTests.test_matching_artifacts_pass) ... ok
+test_wrong_binary_is_rejected (test_gate_provenance.ProvenanceTests.test_wrong_binary_is_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 25 tests in 0.005s
+
+OK

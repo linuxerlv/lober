@@ -1,0 +1,19 @@
+?   	github.com/lober/lober/cmd/console-openapi	[no test files]
+ok  	github.com/lober/lober/cmd/lober	10.914s
+ok  	github.com/lober/lober/internal/archtest	72.300s
+ok  	github.com/lober/lober/internal/builtin	0.880s
+ok  	github.com/lober/lober/internal/console	109.629s
+ok  	github.com/lober/lober/internal/core/activation	0.025s
+ok  	github.com/lober/lober/internal/core/admission	0.004s
+ok  	github.com/lober/lober/internal/core/catalog	0.005s
+ok  	github.com/lober/lober/internal/core/model	0.027s
+ok  	github.com/lober/lober/internal/core/params	0.010s
+ok  	github.com/lober/lober/internal/core/scan	0.005s
+ok  	github.com/lober/lober/internal/core/snapshot	0.021s
+ok  	github.com/lober/lober/internal/iso	14.913s
+ok  	github.com/lober/lober/internal/iso/iso9660	0.047s
+ok  	github.com/lober/lober/internal/iso/isotest	0.008s
+ok  	github.com/lober/lober/internal/render	5.304s
+ok  	github.com/lober/lober/internal/store	0.012s
+ok  	github.com/lober/lober/internal/store/pgstore	56.553s
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	1.160s

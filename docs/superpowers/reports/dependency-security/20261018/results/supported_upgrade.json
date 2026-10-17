@@ -1,0 +1,14 @@
+{
+  "product_sha": "88bce232fc633ff5dc06c0285748d17f4f47b184",
+  "test_sha": "932b1375a3d5d8bf6fec3a20097071f9f8c3d608",
+  "run_id": "vm-security-20261018-1c71a62e06991542",
+  "binary_sha256": "be7630aac1787701ad9abb5dd3a230a90abe0d329e458f0abfbc6329efab7970",
+  "manifest_sha256": "4e24a1d6ced5e949c8065b37bd90033c521d48e4b45466e614feeb4889c9ccfd",
+  "status": "BLOCKED",
+  "count": 0,
+  "failed": 0,
+  "skipped": 0,
+  "evidence": "supported_upgrade.log",
+  "evidence_sha256": "ee4a3fd6fd9d16bad2522fbdd9cfa20922fdf30a73b90086afd400523e863628",
+  "reason": "BLOCKED: approved source version, supported migration and full-system restore qualification are absent."
+}

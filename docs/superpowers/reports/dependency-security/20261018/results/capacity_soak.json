@@ -1,0 +1,14 @@
+{
+  "product_sha": "88bce232fc633ff5dc06c0285748d17f4f47b184",
+  "test_sha": "932b1375a3d5d8bf6fec3a20097071f9f8c3d608",
+  "run_id": "vm-security-20261018-1c71a62e06991542",
+  "binary_sha256": "be7630aac1787701ad9abb5dd3a230a90abe0d329e458f0abfbc6329efab7970",
+  "manifest_sha256": "4e24a1d6ced5e949c8065b37bd90033c521d48e4b45466e614feeb4889c9ccfd",
+  "status": "NOT_RUN",
+  "count": 0,
+  "failed": 0,
+  "skipped": 0,
+  "evidence": "capacity_soak.log",
+  "evidence_sha256": "a5e5e1f06fc73faa20b8bef1151bc2760b24513d1be10b2a08b5d5b72fdd8b32",
+  "reason": "NOT_RUN: planned capacity and 24-hour mixed workload have not run."
+}

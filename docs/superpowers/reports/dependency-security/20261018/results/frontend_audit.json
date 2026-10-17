@@ -1,0 +1,49 @@
+{
+  "product_sha": "88bce232fc633ff5dc06c0285748d17f4f47b184",
+  "test_sha": "932b1375a3d5d8bf6fec3a20097071f9f8c3d608",
+  "run_id": "vm-security-20261018-1c71a62e06991542",
+  "binary_sha256": "be7630aac1787701ad9abb5dd3a230a90abe0d329e458f0abfbc6329efab7970",
+  "manifest_sha256": "4e24a1d6ced5e949c8065b37bd90033c521d48e4b45466e614feeb4889c9ccfd",
+  "status": "FAIL",
+  "count": 3,
+  "failed": 3,
+  "skipped": 0,
+  "evidence": "frontend_audit.log",
+  "evidence_sha256": "e835c0d478646add422b7332bfa7c48763545871ab3bf6b6f54ec22c114de27b",
+  "count_unit": "unique advisory records",
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 1,
+      "high": 2,
+      "critical": 0
+    },
+    "dependencies": 1235,
+    "devDependencies": 0,
+    "optionalDependencies": 296,
+    "totalDependencies": 1531
+  },
+  "remaining": [
+    {
+      "module_name": "node-forge",
+      "severity": "high",
+      "github_advisory_id": "GHSA-86w9-cpqp-85rv",
+      "url": "https://github.com/advisories/GHSA-86w9-cpqp-85rv"
+    },
+    {
+      "module_name": "braces",
+      "severity": "high",
+      "github_advisory_id": "GHSA-vfj7-8cjw-p6xm",
+      "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+    },
+    {
+      "module_name": "smol-toml",
+      "severity": "moderate",
+      "github_advisory_id": "GHSA-r4xh-jqrq-34v2",
+      "url": "https://github.com/advisories/GHSA-r4xh-jqrq-34v2"
+    }
+  ],
+  "command": "pnpm audit --prod --json --registry=https://registry.npmjs.org",
+  "scope": "Whole workspace production-dependency classification, including build/check tools; no advisories suppressed"
+}
