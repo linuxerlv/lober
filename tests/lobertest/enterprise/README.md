@@ -20,14 +20,19 @@ fixturegen.sh 复用 isotest.Image 生成明确标注的合成介质，经过真
 
 ```bash
 bash tests/lobertest/enterprise/fixturegen.sh /private/run/synthetic-rocky.iso
-python3 tests/lobertest/enterprise/run.py gate --output /private/run/logs --product-sha PRODUCT_SHA --test-sha TEST_SHA > /private/run/logs/gate.log 2>&1
-python3 tests/lobertest/enterprise/run.py control --output /private/run/logs --product-sha PRODUCT_SHA --test-sha TEST_SHA > /private/run/logs/control.log 2>&1
-python3 tests/lobertest/enterprise/gate.py --profile control-smoke --results /private/run/logs --product-sha PRODUCT_SHA
-python3 tests/lobertest/enterprise/gate.py --profile release --results /private/run/logs --product-sha PRODUCT_SHA
+python3 tests/lobertest/enterprise/run.py gate --output /private/run/logs --product-sha PRODUCT_SHA --test-sha TEST_SHA --manifest /private/run/candidate.json > /private/run/logs/gate.log 2>&1
+python3 tests/lobertest/enterprise/run.py control --output /private/run/logs --product-sha PRODUCT_SHA --test-sha TEST_SHA --manifest /private/run/candidate.json > /private/run/logs/control.log 2>&1
+python3 tests/lobertest/enterprise/gate.py --profile control-smoke --results /private/run/logs --product-sha PRODUCT_SHA --manifest /private/run/candidate.json
+python3 tests/lobertest/enterprise/gate.py --profile release --results /private/run/logs --product-sha PRODUCT_SHA --manifest /private/run/candidate.json
 ```
 
 每条命令独立记录退出码；目录预先创建。backend/frontend 结果须由相应实际门禁退出码和
 用例/包数量生成，证据为同目录原始日志。run.py 自己记录当前套件结果、零收集、失败和 skip。
+每轮使用新的 run_id。candidate.json 由独立构建步骤冻结，包含 product_sha、test_sha、
+run_id、binary（VM 上的路径）、binary_sha256、source_archive、source_archive_sha256，
+以及 files（从已提交 Git archive 得出的逐文件 SHA256 映射）。运行器验证实际二进制、
+归档和解压源码；开始时先把旧结果原子替换成 RUNNING。所有结果还必须匹配 run_id、
+manifest_sha256，以及实际日志的 evidence_sha256，故中断、换包或日志被覆盖无法复用旧 PASS。
 release profile 缺少真实介质、PXE/状态机、真实安装、容量长稳或受支持升级证据时返回非零。
 control-smoke 通过只代表该明确子集通过；它不是计划中的完整控制面或发布验收。
 

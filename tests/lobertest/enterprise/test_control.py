@@ -408,8 +408,11 @@ def permission_case(role, method, path, allowed):
     def test(self):
         response = self.request(method, path, self.tokens[role], {} if method != "GET" else None)
         if allowed:
-            # A malformed write must reach validation, not silently pass authorization.
-            self.assertIn(response[0], (200, 400, 422))
+            if method == "GET":
+                self.assert_status(response, 200)
+            else:
+                # Deliberately malformed writes must reach handler validation.
+                self.assertIn(response[0], (200, 400, 422))
         else:
             self.assert_status(response, 403)
     return test
