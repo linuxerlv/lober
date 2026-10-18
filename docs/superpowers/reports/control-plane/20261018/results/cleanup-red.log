@@ -1,0 +1,26 @@
+test_active_candidate_stops_before_unmount_and_database_proxy_close (test_gate_cleanup.CleanupTests.test_active_candidate_stops_before_unmount_and_database_proxy_close) ... FAIL
+
+======================================================================
+FAIL: test_active_candidate_stops_before_unmount_and_database_proxy_close (test_gate_cleanup.CleanupTests.test_active_candidate_stops_before_unmount_and_database_proxy_close)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/dev/lober-control-20261018/cleanup-red/test_gate_cleanup.py", line 63, in test_active_candidate_stops_before_unmount_and_database_proxy_close
+    self.assertEqual(Probe.tearDown_exceptions, [])
+AssertionError: Lists differ: [(<class 'RuntimeError'>, RuntimeError('St[192 chars]80>)] != []
+
+First list contains 2 additional elements.
+First extra element 0:
+(<class 'RuntimeError'>, RuntimeError('Staging still held by live candidate'), <traceback object at 0x7ac8b3c12500>)
+
++ []
+- [(<class 'RuntimeError'>,
+-   RuntimeError('Staging still held by live candidate'),
+-   <traceback object at 0x7ac8b3c12500>),
+-  (<class 'RuntimeError'>,
+-   RuntimeError('Proxy removed while candidate was alive'),
+-   <traceback object at 0x7ac8b3c12080>)]
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)

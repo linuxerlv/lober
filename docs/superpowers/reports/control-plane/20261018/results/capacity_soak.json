@@ -1,0 +1,14 @@
+{
+  "product_sha": "88bce232fc633ff5dc06c0285748d17f4f47b184",
+  "test_sha": "fc6d827f1a21afed5430febc25a41756ad6d37b9",
+  "run_id": "vm-control-20261018-9400840715ba9728",
+  "binary_sha256": "be7630aac1787701ad9abb5dd3a230a90abe0d329e458f0abfbc6329efab7970",
+  "manifest_sha256": "f7f8c1d831249f013e48087853c2bf4207af1cdec42bfbcc9597175de53d10eb",
+  "status": "NOT_RUN",
+  "reason": "Capacity and 24-hour mixed workload qualification not run.",
+  "count": 0,
+  "failed": 0,
+  "skipped": 0,
+  "evidence": "capacity_soak.log",
+  "evidence_sha256": "c03aa8ef07d52eef49f13ea45bf5183a649d884b878efdf0f0f0ed6c155851c8"
+}

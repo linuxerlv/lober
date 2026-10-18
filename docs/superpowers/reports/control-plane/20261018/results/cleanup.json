@@ -1,0 +1,7 @@
+{
+  "dedicated_timeout_rules_remaining": 0,
+  "enterprise_tmpfs_mounts_remaining": 0,
+  "shared_database_stopped": false,
+  "existing_qa_service_changed": false,
+  "scope": "Own test dependency resources; no PVE operation performed"
+}

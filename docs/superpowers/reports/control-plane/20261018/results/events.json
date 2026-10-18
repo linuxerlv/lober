@@ -1,0 +1,17 @@
+{
+  "run_id": "vm-control-20261018-9400840715ba9728",
+  "manifest_sha256": "f7f8c1d831249f013e48087853c2bf4207af1cdec42bfbcc9597175de53d10eb",
+  "product_sha": "88bce232fc633ff5dc06c0285748d17f4f47b184",
+  "test_sha": "fc6d827f1a21afed5430febc25a41756ad6d37b9",
+  "binary_sha256": "be7630aac1787701ad9abb5dd3a230a90abe0d329e458f0abfbc6329efab7970",
+  "evidence": "events.log",
+  "status": "PASS",
+  "count": 4,
+  "failed": 0,
+  "skipped": 0,
+  "duration_seconds": 58.12,
+  "runtime": "Linux-6.8.0-142-generic-x86_64-with-glibc2.39",
+  "python": "3.12.3",
+  "failed_cases": [],
+  "evidence_sha256": "68cde91c68c3b1a94251d6869fb65a7c53930621145676efac250fbba0fa83f9"
+}

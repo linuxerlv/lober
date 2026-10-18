@@ -1,0 +1,5 @@
+# Preserve raw VM evidence and its digests without line-ending conversion.
+* -text
+*.log -diff
+candidate.json -diff
+baseline-candidate.json -diff
