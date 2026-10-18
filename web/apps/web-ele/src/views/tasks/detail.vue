@@ -25,6 +25,7 @@ import { errorMessage, problemsOf } from '#/api/console/problem';
 import { taskAPI, taskStreamURL } from '#/api/console/task';
 import ProblemList from '#/components/console/ProblemList.vue';
 
+import { eventDetails } from './event-details';
 import { taskStateLabels } from './task-state';
 import { mergeEvents } from './wizard-state';
 
@@ -60,9 +61,7 @@ const [EventGrid, eventGrid] = useVbenVxeGrid<TaskEvent>({
         title: '详情',
         minWidth: 300,
         formatter: ({ row }: { row: TaskEvent }) =>
-          Object.entries(row.fields ?? {})
-            .map(([key, value]) => `${key}=${value}`)
-            .join('；'),
+          eventDetails(row.fields),
       },
     ],
     rowConfig: { keyField: 'seq' },

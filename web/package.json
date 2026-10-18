@@ -37,6 +37,7 @@
     "lint:console": "eslint apps/web-ele/src apps/web-ele/vite.config.ts apps/web-ele/vitest.config.ts scripts/generate-console-types.mjs",
     "test:console": "vitest run --config apps/web-ele/vitest.config.ts --maxWorkers=2",
     "check:console": "pnpm check:console-types && pnpm --filter @vben/web-ele typecheck && pnpm lint:console && pnpm test:console && pnpm build:ele",
+    "test:dependencies": "node --test scripts/dependency-security.test.mjs",
     "dev:ele": "pnpm -F @vben/web-ele run dev",
     "format": "vsh lint --format",
     "lint": "vsh lint",
