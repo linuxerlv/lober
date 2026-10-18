@@ -1,0 +1,9 @@
+{
+  "name": "ubuntu-24.04.5-live-server-amd64.iso",
+  "url": "https://releases.ubuntu.com/24.04/ubuntu-24.04.5-live-server-amd64.iso",
+  "bytes": 4080486400,
+  "sha256": "97f3d7ffb032c3eb3b23d2c8be9cc76e60c2c1f2c0146ba5ba9fe01cafae0fd8",
+  "expected": "97f3d7ffb032c3eb3b23d2c8be9cc76e60c2c1f2c0146ba5ba9fe01cafae0fd8",
+  "verified": true,
+  "at": 1792331102
+}

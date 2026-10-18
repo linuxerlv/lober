@@ -1,0 +1,6 @@
+{
+  "reason": "PVE start API returned before QEMU reached running; initial serial capture exited before connection.",
+  "task_state_before_reset": "booting",
+  "boot_attempt_preserved": true,
+  "no_answer_fetched": true
+}

@@ -1,0 +1,10 @@
+test_open_sse_closes_after_account_disabled_without_leaking_next_event (test_events.EventTests.test_open_sse_closes_after_account_disabled_without_leaking_next_event) ... ok
+test_real_browser_network_disconnect_catches_up_without_duplicate_rows (test_events.EventTests.test_real_browser_network_disconnect_catches_up_without_duplicate_rows) ... Browser scenario: real-browser-offline-reconnect-replay-and-deduplication
+ok
+test_sse_large_backlog_last_event_id_resume_and_store_deduplication (test_events.EventTests.test_sse_large_backlog_last_event_id_resume_and_store_deduplication) ... ok
+test_sse_recovers_live_events_without_notification_and_no_duplicate_delivery (test_events.EventTests.test_sse_recovers_live_events_without_notification_and_no_duplicate_delivery) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 39.031s
+
+OK

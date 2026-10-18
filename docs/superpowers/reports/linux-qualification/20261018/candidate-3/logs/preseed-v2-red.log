@@ -1,0 +1,14 @@
+=== RUN   TestPreseedMirrorSelectionsAreSeenAndAuthenticated
+=== RUN   TestPreseedMirrorSelectionsAreSeenAndAuthenticated/official
+    preseed_mirror_test.go:61: mirror/protocol must be preset and seen: got "10 mirror/protocol doesn't exist\n10 mirror/protocol doesn't exist\n" (exit status 10)
+    preseed_mirror_test.go:61: mirror/http/hostname must be preset and seen: got "10 mirror/http/hostname doesn't exist\n10 mirror/http/hostname doesn't exist\n" (exit status 10)
+    preseed_mirror_test.go:61: mirror/http/directory must be preset and seen: got "10 mirror/http/directory doesn't exist\n10 mirror/http/directory doesn't exist\n" (exit status 10)
+    preseed_mirror_test.go:61: debian-installer/allow_unauthenticated must be preset and seen: got "10 debian-installer/allow_unauthenticated doesn't exist\n10 debian-installer/allow_unauthenticated doesn't exist\n" (exit status 10)
+=== RUN   TestPreseedMirrorSelectionsAreSeenAndAuthenticated/internal-signed
+    preseed_mirror_test.go:32: snapshot: [param_unknown_field（param TASK9-FIXTURE tpl/mirror_host）：表单里没有字段「tpl/mirror_host」 param_unknown_field（param TASK9-FIXTURE tpl/mirror_path）：表单里没有字段「tpl/mirror_path」]
+--- FAIL: TestPreseedMirrorSelectionsAreSeenAndAuthenticated (0.22s)
+    --- FAIL: TestPreseedMirrorSelectionsAreSeenAndAuthenticated/official (0.22s)
+    --- FAIL: TestPreseedMirrorSelectionsAreSeenAndAuthenticated/internal-signed (0.00s)
+FAIL
+FAIL	github.com/lober/lober/internal/builtin	0.226s
+FAIL

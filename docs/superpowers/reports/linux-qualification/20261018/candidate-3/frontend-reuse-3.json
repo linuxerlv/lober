@@ -1,0 +1,10 @@
+{
+  "status": "REUSED_UNCHANGED",
+  "from_run_id": "vm-linux-20261018-candidate-2",
+  "from_test_sha": "8051bc1c50824711e5b7c7537b31fe7aaefcb952",
+  "web_files": 1226,
+  "web_manifest_sha256": "8c02d18654ffafad470d1f50ca27caaa52d6d22da2668ad309ee172ece8511ee",
+  "frontend_files": 213,
+  "frontend_manifest_sha256": "c43f495a3f9bbcb609e3cbdefb8b6d576f42a6e411ece2b759f510d34783f2d2",
+  "verification": "Entire committed web tree and actual embedded UI assets match candidate 2 byte for byte."
+}

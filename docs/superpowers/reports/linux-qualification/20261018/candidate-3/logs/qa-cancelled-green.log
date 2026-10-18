@@ -1,0 +1,11 @@
+test_cancelled_task_stops_wait_without_sleeping (test_linux_acceptance.LinuxAcceptanceChecks.test_cancelled_task_stops_wait_without_sleeping) ... debian cancelled
+{"status": "FAIL", "system": "debian", "negative": false, "at": 1792330144, "product_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "test_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "binary_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "harness_test_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "harness_sha256": "6c272ebcbccaac57cc298750522f788ee2b8212df7cffcd069683ed147e24fb5", "evidence_sha256": {}, "task": "cancelled-fixture", "state": "cancelled", "events": 0}
+ok
+test_disk_first_is_not_gateway_reboot_evidence (test_linux_acceptance.LinuxAcceptanceChecks.test_disk_first_is_not_gateway_reboot_evidence) ... ok
+test_pve_encoded_serial_keeps_machine_identity (test_linux_acceptance.LinuxAcceptanceChecks.test_pve_encoded_serial_keeps_machine_identity) ... ok
+test_timeout_or_another_hook_is_not_required_hook_failure (test_linux_acceptance.LinuxAcceptanceChecks.test_timeout_or_another_hook_is_not_required_hook_failure) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.001s
+
+OK

@@ -1,0 +1,8 @@
+=== RUN   TestPreseedMirrorSelectionsAreSeenAndAuthenticated
+=== RUN   TestPreseedMirrorSelectionsAreSeenAndAuthenticated/official
+=== RUN   TestPreseedMirrorSelectionsAreSeenAndAuthenticated/internal-signed
+--- PASS: TestPreseedMirrorSelectionsAreSeenAndAuthenticated (0.38s)
+    --- PASS: TestPreseedMirrorSelectionsAreSeenAndAuthenticated/official (0.19s)
+    --- PASS: TestPreseedMirrorSelectionsAreSeenAndAuthenticated/internal-signed (0.19s)
+PASS
+ok  	github.com/lober/lober/internal/builtin	0.383s

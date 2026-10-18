@@ -1,0 +1,15 @@
+{
+  "status": "PREPARED",
+  "system": "debian",
+  "negative": true,
+  "at": 1792331108,
+  "product_sha": "668a512849895ddd00310aca399d0589c9e43cf1",
+  "test_sha": "09bc87d49b808df830996bdadf98905d84f0ba94",
+  "binary_sha256": "96b986c43885e51e38174835122517286cdc084055e9b229c4df0774eab1fdf7",
+  "harness_test_sha": "09bc87d49b808df830996bdadf98905d84f0ba94",
+  "harness_sha256": "6c272ebcbccaac57cc298750522f788ee2b8212df7cffcd069683ed147e24fb5",
+  "evidence_sha256": {},
+  "task": "hhihvkgqnpirs4yjfiycbascqa",
+  "media": "soxac2md6tnosq56chtbgj7rdy",
+  "version": "13.7.0"
+}
