@@ -62,6 +62,8 @@ func importFixture(series catalog.Series) map[string][]byte {
 	case "preseed":
 		f[".disk/info"] = []byte("Debian GNU/Linux 13.6.0 Trixie - Official amd64 NETINST Binary-1")
 		f["dists/trixie/Release"] = []byte("release")
+		f["dists/trixie/main/binary-amd64/Packages.gz"] = []byte("package-index")
+		f["pool/main/c/curl/curl.deb"] = []byte("main-media-package")
 		f["install.amd/vmlinuz"] = []byte("wrong-cd-kernel")
 		f["install.amd/initrd.gz"] = []byte("wrong-cd-initrd")
 	case "autoinstall":
@@ -91,6 +93,56 @@ func importFixture(series catalog.Series) map[string][]byte {
 		f["efi/boot/bootx64.efi"] = []byte("mboot")
 	}
 	return f
+}
+
+func TestDebianRepositoryMustHaveReleaseIndexAndPool(t *testing.T) {
+	for _, broken := range []string{"dists/trixie/Release", "dists/trixie/main/binary-amd64/Packages.gz", "pool/main/c/curl/curl.deb"} {
+		t.Run(broken, func(t *testing.T) {
+			s, db := importSetup(t)
+			i, err := db.CreateISO(t.Context(), model.ISO{Name: "incomplete-debian", Family: "linux", Series: "debian"}, importAudit())
+			if err != nil {
+				t.Fatal(err)
+			}
+			main := importFixture("debian")
+			delete(main, broken)
+			importUpload(t, s, i, "", isotest.Image(main))
+			importUpload(t, s, i, "netboot", isotest.Image(map[string][]byte{".disk/info": []byte("Debian GNU/Linux 13.6.0 amd64 NETBOOT"), "linux": []byte("kernel"), "initrd.gz": []byte("initrd")}))
+			err = s.Import(t.Context(), i.ID)
+			var p model.Problem
+			if !errors.As(err, &p) || p.Code != "iso_repo_incomplete" {
+				t.Fatalf("incomplete Debian repository accepted: %v", err)
+			}
+			got, err := db.GetISO(t.Context(), i.ID)
+			if err != nil || got.State != model.ISOFailed {
+				t.Fatal(got.State, err)
+			}
+		})
+	}
+}
+
+func TestDebianRepositoryDiscoversSuiteAndMatchesArchitecture(t *testing.T) {
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Run(arch, func(t *testing.T) {
+			s, db := importSetup(t)
+			i, err := db.CreateISO(t.Context(), model.ISO{Name: "debian-suite-layout", Family: "linux", Series: "debian"}, importAudit())
+			if err != nil {
+				t.Fatal(err)
+			}
+			main := importFixture("debian")
+			main[".disk/info"] = []byte("Debian GNU/Linux 13.6.0 Official " + arch + " DVD Binary-1")
+			for name, data := range main {
+				if strings.HasPrefix(name, "dists/trixie/") {
+					delete(main, name)
+					main[strings.Replace(strings.Replace(name, "dists/trixie/", "dists/new-suite/", 1), "binary-amd64/", "binary-"+arch+"/", 1)] = data
+				}
+			}
+			importUpload(t, s, i, "", isotest.Image(main))
+			importUpload(t, s, i, "netboot", isotest.Image(map[string][]byte{".disk/info": []byte("Debian GNU/Linux 13.6.0 " + arch + " NETBOOT"), "linux": []byte("kernel"), "initrd.gz": []byte("initrd")}))
+			if err := s.Import(t.Context(), i.ID); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 func TestImportFormats(t *testing.T) {
 	for _, series := range []catalog.Series{"rocky", "debian", "ubuntu", "sles15", "leap15", "sles16", "leap16", "windows-server"} {
@@ -136,6 +188,15 @@ func TestImportFormats(t *testing.T) {
 				}
 			}
 			if series == "debian" {
+				if got.Artifacts["repo"] == "" {
+					t.Fatal("ready Debian ISO has no HTTP repository for the shipped preseed")
+				}
+				for _, name := range []string{"dists/trixie/Release", "pool/main/c/curl/curl.deb"} {
+					b, err := os.ReadFile(filepath.Join(s.dirs.Artifacts, got.Artifacts["repo"], name))
+					if err != nil || !bytes.Equal(b, importFixture(series)[name]) {
+						t.Fatalf("main Debian repository %s unavailable: %v", name, err)
+					}
+				}
 				b, _ := os.ReadFile(filepath.Join(s.dirs.Artifacts, got.Artifacts["initrd"]))
 				if string(b) != "netbootinitrd" {
 					t.Fatal(string(b))

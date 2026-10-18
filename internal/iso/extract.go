@@ -63,6 +63,15 @@ func (s *Sources) extract(ctx context.Context, id string, found Identified, main
 		if extra == nil {
 			return nil, importProblem(id, "iso_extra_source_invalid", "source.netboot", "netboot")
 		}
+		if err := validateDebianRepository(ctx, id, found.Arch, main); err != nil {
+			return nil, err
+		}
+		// The netboot medium supplies the installer, while the main DVD supplies
+		// the HTTP package repository referenced by the shipped preseed answer.
+		if err := copyImportTree(ctx, main, filepath.Join(tmp, "install")); err != nil {
+			return nil, err
+		}
+		roles["repo"] = "install/"
 		// The legacy optical path is accepted only on media explicitly marked NETBOOT.
 		arch := "amd64"
 		if found.Arch == "aarch64" {
@@ -137,6 +146,87 @@ func (s *Sources) extract(ctx context.Context, id string, found Identified, main
 		return nil, importProblem(id, "iso_version_missing", "version", string(found.Format))
 	}
 	return roles, nil
+}
+
+// Discover the suite from the medium, rather than assuming a Debian codename.
+// This checks minimum mirror structure; package availability still needs a real
+// installation, and the publisher digest is verified separately by Import.
+func validateDebianRepository(ctx context.Context, id string, arch catalog.Arch, tree fs.FS) error {
+	debArch := "amd64"
+	if arch == "aarch64" {
+		debArch = "arm64"
+	}
+	nonempty := func(name string) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		st, err := fs.Stat(tree, name)
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return st.Mode().IsRegular() && st.Size() > 0, nil
+	}
+	suites, err := fs.ReadDir(tree, "dists")
+	if err != nil {
+		return err
+	}
+	validIndex := false
+	for _, suite := range suites {
+		if !suite.IsDir() {
+			continue
+		}
+		root := path.Join("dists", suite.Name())
+		ok, err := nonempty(path.Join(root, "Release"))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		for _, suffix := range []string{"", ".gz", ".xz", ".bz2"} {
+			ok, err = nonempty(path.Join(root, "main", "binary-"+debArch, "Packages"+suffix))
+			if err != nil {
+				return err
+			}
+			if ok {
+				validIndex = true
+				break
+			}
+		}
+		if validIndex {
+			break
+		}
+	}
+	hasPackage := false
+	err = fs.WalkDir(tree, "pool", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !entry.IsDir() && strings.HasSuffix(name, ".deb") {
+			ok, err := nonempty(name)
+			if err != nil {
+				return err
+			}
+			if ok {
+				hasPackage = true
+				return fs.SkipAll
+			}
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if !validIndex || !hasPackage {
+		return importProblem(id, "iso_repo_incomplete", "artifacts.repo", "dists/*/Release, main/binary-"+debArch+"/Packages, pool/*.deb")
+	}
+	return nil
 }
 
 func importRepoRoot(ctx context.Context, tree fs.FS) (string, error) {

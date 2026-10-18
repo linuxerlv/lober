@@ -35,7 +35,7 @@ var mediaSeries = []mediaExpectation{
 	{"almalinux", "kickstart", []Marker{{Path: ".treeinfo", Contains: []string{"AlmaLinux"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
 	{"openeuler", "kickstart", []Marker{{Path: ".treeinfo", Contains: []string{"openEuler"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
 	{"opencloudos", "kickstart", []Marker{{Path: ".treeinfo", Contains: []string{"OpenCloudOS"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
-	{"debian", "preseed", nil, nil, ProbeDiskInfo, nil, &ExtraSource{Role: "netboot", SameVersion: true, RolesFromExtra: []string{"kernel", "initrd"}}, []string{"kernel", "initrd"}},
+	{"debian", "preseed", nil, nil, ProbeDiskInfo, nil, &ExtraSource{Role: "netboot", SameVersion: true, RolesFromExtra: []string{"kernel", "initrd"}}, []string{"kernel", "initrd", "repo"}},
 	{"ubuntu", "autoinstall", nil, nil, ProbeDiskInfo, nil, nil, []string{"kernel", "initrd", "iso"}},
 	{"sles15", "autoyast", []Marker{{Path: "media.1/products", Contains: []string{"SLES"}}}, nil, ProbeProducts, []string{"repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "repo"}},
 	{"leap15", "autoyast", []Marker{{Path: "media.1/products", Contains: []string{"openSUSE"}}}, nil, ProbeProducts, []string{"repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "repo"}},
