@@ -24,6 +24,12 @@ type config struct {
 	SeedAdmin string        `yaml:"seedAdmin"`
 	ISO       isoConfig     `yaml:"iso"`
 	Preview   previewConfig `yaml:"preview"`
+	Machine   machineConfig `yaml:"machine"`
+}
+type machineConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	KeyFile      string `yaml:"keyFile"`
+	SyslogListen string `yaml:"syslogListen"`
 }
 type pgConfig struct {
 	DSN      string `yaml:"dsn"`

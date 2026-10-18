@@ -271,6 +271,10 @@ var codeTable = map[Code]codeSpec{
 	"host_has_open_task": {CategoryState, 0,
 		"这台主机已有未结束的任务",
 		"等那个任务结束，或先取消它"},
+	"task_control_state": {CategoryState, 1,
+		"当前任务状态不能%[1]v", "刷新任务后检查当前状态"},
+	"task_retry_after_reboot": {CategoryState, 0,
+		"任务已进入重启阶段，不能重试装机", "检查目标系统与任务日志；确需重装时人工创建新任务"},
 	// ISO 不可用：获取中、导入中、已废弃，或状态不认识；导入失败不归这里，另报 iso_import_failed
 	// （T5-1）。参数：状态的称呼（StateLabel：中文显示名，不认识的回落到标识，空状态回落到
 	// stateUnknown，C-7）。已废弃的 ISO 不能再被新引用（C26），所以下一步要把它与「等它导入完成」分开说。

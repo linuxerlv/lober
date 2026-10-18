@@ -69,7 +69,8 @@ type Task struct {
 	// Rev 是仓储的乐观锁版本：每次写入加 1，由仓储维护。推进状态时，调用方把读到的 State 与 Rev 一起
 	// 带回作期望值，对不上就写不进去，所以并发的推进只有一次生效（C33）。第 1 层的判定都不看它，
 	// 快照里也不放它。
-	Rev int64
+	Rev       int64
+	Execution *Execution `json:",omitempty"`
 }
 
 // SnapshotSchema 是本层产出的快照格式版本。任务要保存很久，格式将来变了，渲染靠它认出旧快照，

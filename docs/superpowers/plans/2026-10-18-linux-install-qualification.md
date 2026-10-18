@@ -56,6 +56,7 @@ Consumes store interfaces, explicit clock and notifier. Produces Boot/Authorize/
 - RED: illegal boot, boot cap, scope/expiry/cross-task/old-attempt token, exact/conflicting duplicate signals, required/optional failure, out-of-order rank and irreversible post-reboot retry.
 - Implement bounded CAS retries, durable progress/deadlines/attempt epoch, signing and constant-time verification; only source snapshot decides slot/digest validity.
 - Fresh/restarted sweeper reads pending work from DB; no reliance on in-memory notification.
+- Persist stage/rank and the retained SPEC budgets: boot15/pre10/packages60/post20/reboot8/initialization15 minutes. Credential lifetimes remain separate.
 - GREEN real-store tests with deterministic explicit time; no live disk writes in these tests.
 
 ## Task5 — canonical machine gateway and event/log transport
@@ -65,6 +66,8 @@ Consumes declared engine/renderer interfaces; produces plain text machine endpoi
 - RED: every URL rendered by the existing formats resolves, unsupported files/digests/scopes reject, body-size limits and secret-free error handling.
 - Serve only allowed frozen files; hook bytes must match declared digest. Actual first answer advances installing once. No console envelope or authentication on machine token routes.
 - Collect bounded binary-safe hook logs as events; add scoped syslog collection without cross-task attribution guesses.
+- Redact machine credential paths before persisting either log channel; decode UTF-8 logs for console display while escaping binary control bytes.
+- Queue Linux signal bodies before metadata, replay unacknowledged records, and retain target credentials until ready is acknowledged. A separate timer replays reports and cleanup only; it never reruns hooks.
 - GREEN integration and architecture dependency tests; gateway cannot import execution/render/pgstore siblings directly.
 
 ## Task6 — assembly, configuration and service lifecycle
@@ -76,6 +79,7 @@ Files: cmd/lober config,providers,taskcontrol,main,wire injector/generated outpu
 
 ## Task7 — real media import and Linux target installation
 
+- After implementation review and complete VM checks, integrate the product candidate into dev and then test, following the user's branch rule; run guest qualification from that test candidate.
 - Freeze source/binary/media identities. Register/import real ISO through current API, use built-in/approved templates and real host registration/batch task creation.
 - Boot dedicated PVE target by actual PXE/iPXE into the machine gateway. Capture serial, task events, service logs and guest inspection.
 - Verify Debian, Ubuntu, SUSE15/16 where available, AlmaLinux and Rocky Linux separately. Source unavailable or unsupported is explicit FAIL/BLOCKED, never a substitute distro PASS.
@@ -85,5 +89,5 @@ Files: cmd/lober config,providers,taskcontrol,main,wire injector/generated outpu
 ## Task8 — Linux-stage qualification report and branch integration
 
 - One whole-branch independent review; fix significant findings with recorded regressions, then rerun affected checks on frozen inputs.
-- Integrate verified product commits to dev then test according to existing rule. Publish sanitized Linux matrix, evidence digests and defects. No remote push/main merge.
+- Publish sanitized Linux matrix, evidence digests and defects on test. Later installation defects repeat the verified dev→test product flow. No remote push/main merge.
 - Capacity/24-hour soak and supported-upgrade qualification remain separate enterprise work; do not call Linux success full release approval.

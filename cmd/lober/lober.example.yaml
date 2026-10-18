@@ -18,6 +18,11 @@ iso:
 # Configure these to the real gateway/artifact/SMB services when available.
 # Omitted endpoints remain explicitly labelled samples in preview responses.
 preview: {}
+# Enable only after setting preview.gateway, preview.artifacts and preview.syslogAddr.
+machine:
+  enabled: false
+  keyFile: "/var/lib/lober/staging/machine-signing.key"
+  syslogListen: "0.0.0.0:10514"
 # tls:
 #   cert: "/etc/lober/server.crt"
 #   key: "/etc/lober/server.key"

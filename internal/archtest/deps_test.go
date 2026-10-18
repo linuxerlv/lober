@@ -44,13 +44,16 @@ const (
 // pkgRender 与 pkgBuiltin 是第 3 层的两个包：它们自己和它们下面的包分别算渲染、内置内容。内置内容按格式分子目录放正文，
 // 子目录里有 .go 文件时就是内置内容的子包，按内置内容的规则查；只放正文的子目录不是包。
 const (
-	pkgRender   = modulePath + "/internal/render"
-	pkgBuiltin  = modulePath + "/internal/builtin"
-	pkgConsole  = modulePath + "/internal/console"
-	pkgAssembly = modulePath + "/cmd/lober"
-	pkgOpenAPI  = modulePath + "/cmd/console-openapi"
-	gin         = "github.com/gin-gonic/gin"
-	yamlV3      = "gopkg.in/yaml.v3"
+	pkgRender    = modulePath + "/internal/render"
+	pkgBuiltin   = modulePath + "/internal/builtin"
+	pkgConsole   = modulePath + "/internal/console"
+	pkgExecution = modulePath + "/internal/execution"
+	pkgMachine   = modulePath + "/internal/machine"
+	pkgEvents    = modulePath + "/internal/events"
+	pkgAssembly  = modulePath + "/cmd/lober"
+	pkgOpenAPI   = modulePath + "/cmd/console-openapi"
+	gin          = "github.com/gin-gonic/gin"
+	yamlV3       = "gopkg.in/yaml.v3"
 )
 
 // pkgGuard 是守卫自己，也就是本包。只有它自己算守卫，它下面的包不算。
@@ -64,23 +67,26 @@ var sourceRoots = []string{"internal", "cmd"}
 type layer string
 
 const (
-	layerCore     layer = "层 1"
-	layerStore    layer = "存储层"
-	layerRender   layer = "渲染"
-	layerBuiltin  layer = "内置内容"
-	layerISO      layer = "ISO"
-	layerConsole  layer = "控制台"
-	layerAssembly layer = "装配点"
-	layerOpenAPI  layer = "契约导出"
-	layerGuard    layer = "守卫"
+	layerCore      layer = "层 1"
+	layerStore     layer = "存储层"
+	layerRender    layer = "渲染"
+	layerBuiltin   layer = "内置内容"
+	layerISO       layer = "ISO"
+	layerConsole   layer = "控制台"
+	layerExecution layer = "执行状态机"
+	layerMachine   layer = "机器网关"
+	layerEvents    layer = "事件日志"
+	layerAssembly  layer = "装配点"
+	layerOpenAPI   layer = "契约导出"
+	layerGuard     layer = "守卫"
 )
 
 // layers 是 layer 的全部取值，按日志里的先后排。
-var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerAssembly, layerOpenAPI, layerGuard}
+var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerExecution, layerMachine, layerEvents, layerAssembly, layerOpenAPI, layerGuard}
 
 // minChecked 是 Test全模块依赖守卫 每层至少要查到的包数。删了某层的包就改这里；渲染与内置内容的包加进来以后，
 // 补上它们的下限——忘了补会由「查到了包的层都登记了下限」那一条报出来。
-var minChecked = map[layer]int{layerCore: 7, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerOpenAPI: 1, layerGuard: 1}
+var minChecked = map[layer]int{layerCore: 7, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerExecution: 1, layerMachine: 1, layerEvents: 1, layerAssembly: 1, layerOpenAPI: 1, layerGuard: 1}
 
 // minDirs 是 moduleSourceDirs 至少要遍历到的目录数。目录遍历没有别的防线：sourceRoots 少了一项、或者
 // checkModule 收到空的 dirs，ruleListed（整包被构建约束排除的目录）与 go test 的缓存跟踪都会静默失效，
@@ -276,6 +282,9 @@ func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[
 		case layerConsole:
 			found = append(found, ignoredFiles(p)...)
 			found = append(found, checkSources(fsys, p, checkConsoleFile)...)
+		case layerExecution, layerMachine, layerEvents:
+			found = append(found, ignoredFiles(p)...)
+			found = append(found, checkSources(fsys, p, checkMachineFile)...)
 		case layerAssembly:
 			found = append(found, assemblyIgnoredFiles(fsys, p)...)
 			found = append(found, checkSources(fsys, p, checkAssemblyFile)...)
@@ -308,6 +317,12 @@ func layerOf(pkg string) layer {
 		return layerISO
 	case under(pkg, pkgConsole):
 		return layerConsole
+	case under(pkg, pkgExecution):
+		return layerExecution
+	case under(pkg, pkgMachine):
+		return layerMachine
+	case under(pkg, pkgEvents):
+		return layerEvents
 	case pkg == pkgAssembly:
 		return layerAssembly
 	case pkg == pkgOpenAPI:
