@@ -123,5 +123,5 @@ class EventTests(EnterpriseServiceFixture, unittest.TestCase):
         self.assertEqual(outcome['status'], 'PASS')
         self.assertEqual(outcome['count'], 1)
         persisted = self.assert_status(self.admin('GET', '/tasks/' + task['id'] + '/events'), 200)['items']
-        self.assertEqual([item['seq'] for item in persisted], [1, 2, 3, 4])
+        self.assertEqual([item['seq'] for item in persisted], [1, 2, 3, 4, 5])
         print('Browser scenario: ' + outcome['cases'][0], flush=True)

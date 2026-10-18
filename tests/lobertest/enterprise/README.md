@@ -51,6 +51,7 @@ control-complete 在 smoke 基础上要求真实浏览器业务、事件传输�
 flows 使用当前构建的真实表单、独立登录会话和后端；旧请求隔离只延迟实际服务响应，不伪造业务响应。
 events 的 eventgen.sh 仅在 enterprise 随机 schema 中向 pending 的 ENTERPRISE 主机任务追加 test.transport
 探针事件，验证存储及 SSE/浏览器回放，不改变任务状态，不代表机器安装信号或真实执行链。
+浏览器还会延迟真实 REST 事件响应，等待同一 seq 经 SSE 显示后再放行 REST，验证两通道重叠不增加重复行。
 recovery 需要免密 sudo mount/umount/iptables；使用独立 8 MiB tmpfs、本实例 DB 代理和自身随机来源端口。
 TCP 超时用只匹配该来源地址/端口的 OUTPUT DROP 规则制造；finally 删除原规则，不改共享服务或默认策略。
 该超时依赖真实内核连接超时，单例预算 170 秒；来源失败后按实际契约显式 retry，崩溃中的 fetching 则重启续传。

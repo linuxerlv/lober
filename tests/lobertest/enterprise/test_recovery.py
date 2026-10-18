@@ -20,7 +20,6 @@ class RecoveryTests(EnterpriseServiceFixture, unittest.TestCase):
     def configure(cls, config):
         fields = postgres_env(config['pg']['dsn'])
         cls.proxy = DatabaseProxy(fields.get('PGHOST', '127.0.0.1'), int(fields.get('PGPORT', '5432')))
-        cls.addClassCleanup(cls.proxy.close)
         # PostgreSQL protocol bytes are forwarded unchanged, including authentication.
         dsn = config['pg']['dsn']
         if '://' in dsn:
@@ -39,7 +38,19 @@ class RecoveryTests(EnterpriseServiceFixture, unittest.TestCase):
             capture_output=True, timeout=10)
         if result.returncode:
             raise RuntimeError('Cannot mount bounded dedicated tmpfs for ENOSPC qualification')
-        cls.addClassCleanup(cls.unmount)
+        cls.mounted = True
+
+    @classmethod
+    def cleanup(cls):
+        try:
+            super().cleanup()
+        finally:
+            try:
+                if getattr(cls, 'mounted', False):
+                    cls.unmount()
+            finally:
+                if getattr(cls, 'proxy', None):
+                    cls.proxy.close()
 
     @classmethod
     def unmount(cls):

@@ -10,6 +10,12 @@ from service_fixture import EnterpriseServiceFixture
 
 
 class BrowserFlowTests(EnterpriseServiceFixture, unittest.TestCase):
+    def test_failure_diagnostics_redact_authentication_material(self):
+        result = subprocess.run([os.environ['LOBER_ENTERPRISE_NODE'], str(Path(__file__).with_name('redact-test.mjs'))],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, 'Diagnostic redaction regression failed')
+        self.assertIn('PASS:', result.stdout)
+
     def run_browser(self, script, count, **extra):
         evidence = self.work / script.replace('.mjs', '')
         data = dict(url=self.url, password=self.password, fixture=os.environ['LOBER_ENTERPRISE_FIXTURE'],

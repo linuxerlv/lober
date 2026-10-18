@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { redact } from './redact.mjs';
 
 export const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const { chromium } = await import(pathToFileURL(process.argv[2]).href);
 export const browser = await chromium.launch({ headless: true });
 export const completed = [];
 const trace = [];
+const secrets = [input.password];
 let currentPage;
 
 export function watch(page) {
@@ -30,6 +32,7 @@ export async function signIn(username, existingPage) {
   await page.getByRole('button', { name: 'login', exact: true }).click();
   const result = await (await loggedIn).json();
   assert.equal(result.code, 0, 'UI login failed');
+  secrets.push(result.data.token);
   await page.waitForURL(url => !url.hash.startsWith('#/auth'));
   return { page, context, token: result.data.token };
 }
@@ -64,11 +67,11 @@ export async function run(action) {
     await action();
     console.log(JSON.stringify({ status: 'PASS', count: completed.length, cases: completed }));
   } catch (error) {
-    console.error(String(error).replace(/access_token=[^&\s"']+/g, 'access_token=[redacted]'));
+    console.error(redact(error, secrets));
     console.error('Completed checks: ' + JSON.stringify(completed));
     if (currentPage && !currentPage.isClosed()) {
       console.error('Current route: ' + new URL(currentPage.url()).hash);
-      console.error('Rendered text: ' + (await currentPage.locator('body').innerText()).slice(0, 2500));
+      console.error('Rendered text: ' + redact((await currentPage.locator('body').innerText()).slice(0, 2500), secrets));
       if (input.failureScreenshot) await currentPage.screenshot({ path: input.failureScreenshot, fullPage: true });
     }
     if (input.tracePath) fs.writeFileSync(input.tracePath, JSON.stringify(trace, null, 2));

@@ -112,7 +112,11 @@ class EnterpriseServiceFixture:
     def cleanup(cls):
         if cls.proc and cls.proc.poll() is None:
             cls.proc.terminate()
-            cls.proc.wait(timeout=25)
+            try:
+                cls.proc.wait(timeout=25)
+            except subprocess.TimeoutExpired:
+                cls.proc.kill()
+                cls.proc.wait(timeout=10)
         if cls.log:
             cls.log.close()
         if cls.config:
@@ -183,4 +187,3 @@ class EnterpriseServiceFixture:
         approved = self.assert_status(self.request("POST", version_path + "/approve?rev=" + str(review["rev"]), self.tokens["hook-approver"]), 200)
         self.assertEqual(approved["state"], "approved")
         return {"templateID": template["id"], "templateVersion": 1}
-
