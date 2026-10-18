@@ -221,7 +221,13 @@ func validISOVersion(v string) bool {
 func (iso ISO) Unusable() []Problem {
 	switch iso.State {
 	case ISOReady:
-		return iso.Validate()
+		problems := iso.Validate()
+		// Older Debian imports could be marked ready before publishing the main
+		// repository. Do not freeze new tasks that the shipped preseed cannot use.
+		if len(problems) == 0 && iso.Series == "debian" && iso.Artifacts["repo"] == "" {
+			problems = append(problems, NewProblem("iso_artifact_missing", iso.at("artifacts.repo"), "repo"))
+		}
+		return problems
 	case ISOFailed:
 		return []Problem{NewProblem("iso_import_failed", iso.at(""))}
 	}
