@@ -1,10 +1,14 @@
-# 实际 Linux 装机（脚本尚待 VM 验证）
+# 实际 Linux 装机验收
 
 `linux_install.py` 不属于 131 项控制面回归，也不发送模拟机器信号或直接写业务表。它操作本轮独占的 PVE VM102，检查 VM 名称、MAC、32GiB 磁盘序列号、SMBIOS 序列号和私有数据库 schema，拒绝其他目标。
 
 本轮环境的私有状态位于 `/home/dev/lober-linux-20261018`。其中 instance.json、instance-private.json、candidate.json、owned-pve-resources.json、pve-session.json、guest-key / .pub 以及 import-SERIES.json 须先准备并校验。不得提交这些私有状态、认证材料、安装应答、serial 原文或数据库备份。
 
 先完成产品验证并经 dev → test 集成，再冻结候选。真实 ISO 必须从发行方获取，校验实际字节并经产品 API 导入；Debian 使用含所需包的 DVD-1 与同版 mini。Leap16 必须从真实介质解析 Agama 产品选择，脚本遇到缺少或不唯一的产品列表会停止，不能手填猜测 ID。
+
+Debian 新任务派生自 preseed v2。该版本使用显式镜像参数，默认从 `deb.debian.org/debian` 下载并执行 Debian 原生归档签名校验；安装网络须可访问该源。`mirror_host` / `mirror_path` 可改为已受安装器信任的内部签名仓库。DVD 整体签名通过不代表其解包目录具备 HTTP APT 仓库签名，不能启用 `allow_unauthenticated` 来绕过。旧 preseed v1 的冻结版本保留，不能通过修改旧版本修复已创建的任务。
+
+工具自身的回归测试验证取消状态、精确 hook 失败归因、网络优先引导和序列号识别；这些检查通过不代表任何 Linux 已完成实际安装。真实结果仅以绑定候选源码和二进制的逐系统验收证据为准。
 
 先应用本轮独占网络配置、确认专用制品服务器及机器网关可达、配置已停止的 VM102 的 SMBIOS 序列号 LOBER-LINUX-102。每个命令均在测试 VM 执行：
 

@@ -22,7 +22,7 @@ if not __debug__:
 
 
 OS = {
-    'debian': ('debian', 'preseed', 1),
+    'debian': ('debian', 'preseed', 2),
     'ubuntu': ('ubuntu', 'autoinstall', 1),
     'leap15': ('leap15', 'autoyast', 1),
     'leap16': ('leap16', 'agama', 1),
@@ -254,7 +254,7 @@ uname -r
             if task['state'] != previous:
                 print(self.system, task['state'], flush=True)
                 previous = task['state']
-            if task['state'] in ['done', 'failed', 'canceled']:
+            if task['state'] in ['done', 'failed', 'cancelled']:
                 events = self.events(task)
                 (self.run / 'events-private.json').write_text(json.dumps(events, indent=2))
                 expected = 'failed' if self.negative else 'done'
