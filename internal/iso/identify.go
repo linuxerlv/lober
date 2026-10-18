@@ -20,6 +20,7 @@ type Identified struct {
 	Version  string
 	Arch     catalog.Arch
 	Editions []model.Option
+	repoRoot string // SUSE repository root within the ISO; empty for legacy root layouts.
 }
 
 const identifyTextLimit = 1 << 20
@@ -40,6 +41,11 @@ func Identify(ctx context.Context, fsys fs.FS) (Identified, error) {
 	}
 	if err := ctx.Err(); err != nil {
 		return out, err
+	}
+	// Real SUSE DVDs also carry .treeinfo. Resolve their product metadata before
+	// the generic Anaconda marker, including Agama's nested install/ repository.
+	if suse, matched, err := identifySUSELayout(ctx, fsys); matched || err != nil {
+		return suse, err
 	}
 	for _, f := range catalog.Formats() {
 		media, _ := catalog.FormatMedia(f)
@@ -256,7 +262,11 @@ func identifyText(ctx context.Context, fsys fs.FS, name string) (string, error) 
 }
 
 func identifyGeneral(ctx context.Context, fsys fs.FS) (map[string]string, error) {
-	text, err := identifyText(ctx, fsys, ".treeinfo")
+	return identifyGeneralAt(ctx, fsys, ".treeinfo")
+}
+
+func identifyGeneralAt(ctx context.Context, fsys fs.FS, name string) (map[string]string, error) {
+	text, err := identifyText(ctx, fsys, name)
 	if err != nil {
 		return nil, err
 	}

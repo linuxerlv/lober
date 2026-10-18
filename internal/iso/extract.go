@@ -112,13 +112,20 @@ func (s *Sources) extract(ctx context.Context, id string, found Identified, main
 		if err := file("initrd", boot+"initrd", "initrd", main); err != nil {
 			return nil, err
 		}
+		repo := found.repoRoot
+		if repo == "" {
+			repo = "."
+		}
 		for _, required := range catalog.RepoPaths(found.Series) {
-			st, e := fs.Stat(main, required)
+			st, e := fs.Stat(main, path.Join(repo, required))
 			if e != nil || st.IsDir() || st.Size() == 0 {
 				return nil, importProblem(id, "iso_repo_incomplete", "artifacts.repo", required)
 			}
 		}
 		roles["repo"] = "install/"
+		if repo != "." {
+			roles["repo"] += repo + "/"
+		}
 		if found.Format == "agama" {
 			if err := file("live-root", "LiveOS/squashfs.img", "squashfs.img", main); err != nil {
 				return nil, err
