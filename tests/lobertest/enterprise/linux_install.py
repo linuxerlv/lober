@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import time
@@ -35,6 +36,14 @@ GUEST = '192.168.56.50'
 
 def require_network_first(config):
     assert config.get('boot') == 'order=net0;scsi0', 'qualification requires PXE before the owned disk'
+
+
+def require_owned_serial(config):
+    values = dict(field.split('=', 1) for field in config.get('smbios1', '').split(',') if '=' in field)
+    serial = values.get('serial', '')
+    if values.get('base64') == '1':
+        serial = base64.b64decode(serial, validate=True).decode('ascii')
+    assert serial == SN, 'owned guest SMBIOS serial mismatch'
 
 
 def require_hook_failure(task, events):
@@ -68,12 +77,17 @@ class Campaign:
         self.http = requests.Session()
         self.http.trust_env = False
         self.token = None
-        self.run = root / ('real-' + system + ('-required-failure' if negative else '-positive'))
+        self.manifest = json.loads((root / 'candidate.json').read_text())
+        assert re.fullmatch(r'[a-z0-9-]+', self.manifest['run_id'])
+        self.run = root / ('real-' + system + '-' + self.manifest['run_id'] + ('-required-failure' if negative else '-positive'))
         self.run.mkdir(exist_ok=True, mode=0o700)
         self.run.chmod(0o700)
-        self.manifest = json.loads((root / 'candidate.json').read_text())
         binary = Path(self.manifest['binary'])
         assert hashlib.sha256(binary.read_bytes()).hexdigest() == self.manifest['binary_sha256']
+        self.qa = json.loads(Path(__file__).with_name('qualification-source.json').read_text())
+        assert re.fullmatch(r'[0-9a-f]{40}', self.qa['test_sha'])
+        assert self.qa['files']['linux_install.py'] == hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        assert self.qa['binary_sha256'] == self.manifest['binary_sha256'] and self.qa['run_id'] == self.manifest['run_id']
         prepared = self.run / 'candidate-at-prepare.json'
         if prepared.exists():
             assert json.loads(prepared.read_text())['binary_sha256'] == self.manifest['binary_sha256'], 'campaign candidate changed'
@@ -121,7 +135,7 @@ class Campaign:
         assert config['name'] == 'lober-linux-20261018'
         assert 'serial=LOBER_LINUX_TARGET' in config['scsi0'] and 'size=32G' in config['scsi0']
         assert MAC in config['net0'].lower() and 'bridge=vmbr1' in config['net0']
-        assert 'serial=' + SN in config.get('smbios1', '')
+        require_owned_serial(config)
         require_network_first(config)
         assert not any(k.startswith(('scsi', 'sata', 'ide', 'virtio')) and k[-1:].isdigit()
             and k != 'scsi0' for k in config)
@@ -362,6 +376,7 @@ printf 'RETAINED_AUTH_PATHS_END\\n'
         result = {'status': status, 'system': self.system, 'negative': self.negative,
             'at': int(time.time()), 'product_sha': self.manifest['product_sha'],
             'test_sha': self.manifest['test_sha'], 'binary_sha256': self.manifest['binary_sha256'],
+            'harness_test_sha': self.qa['test_sha'],
             'harness_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             'evidence_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in self.run.iterdir() if p.suffix in ['.log', '.pcap']}, **fields}

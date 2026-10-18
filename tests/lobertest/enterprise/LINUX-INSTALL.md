@@ -27,3 +27,5 @@ prepare 经两名不同角色用户审批派生模板和必需 firstboot hook，
 重复启动必须保持 net0 → scsi0 的引导顺序，使用只匹配本目标 IP/机器网关端口的受限 tcpdump 证明实际 PXE 请求及网关 local boot 响应；还比较重启前后的根文件系统 UUID。VM 需要 tcpdump 和免密 sudo。抓包受限保存，不得公开可能含凭据的原文。
 
 当前脚本未在指定 VM 上运行验证。PVE 存储/连接恢复、补充产品修复完整验证、脚本语法与实际 API/guest agent 协议检查均完成后，才能开始用其结果作验收依据。
+
+验收脚本单独从 test 的已提交 Git archive 导出，在脚本旁生成 qualification-source.json，绑定该 archive 的 test SHA、脚本 SHA256、候选 run_id 和二进制 SHA256。该生成文件不含秘密。结果分别记录构建候选的 test_sha 与验收脚本的 harness_test_sha；修改 QA 工具时不能改写已经完成的产品测试证据。PVE 对 SMBIOS 字符串使用 base64 标记时，脚本按标记解码后检查实际 SN。
