@@ -11,10 +11,13 @@ import unittest
 
 from gate import atomic_json, begin_run, digest, validate_candidate
 
+SUITES = {"gate": "test_gate*.py", "control": "test_control.py",
+          "flows": "test_flows.py", "events": "test_events.py", "recovery": "test_recovery.py"}
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("suite", choices=("control", "gate"))
+    parser.add_argument("suite", choices=tuple(SUITES))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--product-sha", required=True)
     parser.add_argument("--test-sha", required=True)
@@ -42,7 +45,7 @@ def main():
         atomic_json(result_path, {**common, "status": "FAIL", "count": 0, "failed": 1, "skipped": 0,
                                   "problems": problems, "evidence_sha256": digest(log) if log.is_file() else ""})
         return 1
-    pattern = "test_gate*.py" if args.suite == "gate" else "test_control.py"
+    pattern = SUITES[args.suite]
     suite = unittest.defaultTestLoader.discover(str(Path(__file__).parent), pattern=pattern)
     started = time.monotonic()
     result = unittest.TextTestRunner(verbosity=2).run(suite)

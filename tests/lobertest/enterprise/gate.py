@@ -81,7 +81,7 @@ def evaluate(required, results, product_sha, manifest=None):
                 problems.append(f"{name}: run identity mismatch")
             if row.get("manifest_sha256") != manifest.get("_sha256"):
                 problems.append(f"{name}: build manifest mismatch")
-            if name in ("control", "gate"):
+            if name in ("control", "gate", "flows", "events", "recovery"):
                 if row.get("test_sha") != manifest.get("test_sha"):
                     problems.append(f"{name}: test source identity mismatch")
                 if row.get("binary_sha256") != manifest.get("binary_sha256"):
@@ -91,7 +91,7 @@ def evaluate(required, results, product_sha, manifest=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("control-smoke", "release"), required=True)
+    parser.add_argument("--profile", choices=("control-smoke", "control-complete", "release"), required=True)
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--product-sha", required=True)
     parser.add_argument("--manifest", type=Path, required=True)

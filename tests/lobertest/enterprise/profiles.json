@@ -1,4 +1,5 @@
 {
   "control-smoke": ["backend", "frontend", "gate", "control"],
-  "release": ["backend", "frontend", "gate", "control", "fuzz_iso", "fuzz_wim", "security_scan", "frontend_audit", "real_media", "pxe_state", "real_install", "capacity_soak", "supported_upgrade"]
+  "control-complete": ["backend", "frontend", "gate", "control", "flows", "events", "recovery"],
+  "release": ["backend", "frontend", "gate", "control", "flows", "events", "recovery", "fuzz_iso", "fuzz_wim", "security_scan", "frontend_audit", "real_media", "pxe_state", "real_install", "capacity_soak", "supported_upgrade"]
 }

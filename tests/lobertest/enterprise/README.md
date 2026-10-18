@@ -20,6 +20,7 @@ fixturegen.sh 复用 isotest.Image 生成明确标注的合成介质，经过真
 - LOBER_ENTERPRISE_BINARY：本轮候选二进制绝对路径。
 - LOBER_ENTERPRISE_FIXTURE：fixturegen.sh 输出的合成 ISO 路径。
 - LOBER_ENTERPRISE_NODE、LOBER_ENTERPRISE_UI_SCRIPT、LOBER_ENTERPRISE_PLAYWRIGHT：VM 上的 Node、ui.mjs 及 Playwright index.mjs 路径。
+- LOBER_ENTERPRISE_VM_IP：指定测试 VM 自身的 IPv4；recovery 的来源服务只绑定该地址的临时端口。
 
 在仓库根运行（替换结果目录与完整 SHA；不得将秘密写入命令历史）：
 
@@ -27,7 +28,11 @@ fixturegen.sh 复用 isotest.Image 生成明确标注的合成介质，经过真
 bash tests/lobertest/enterprise/fixturegen.sh /private/run/synthetic-rocky.iso
 python3 tests/lobertest/enterprise/run.py gate --output /private/run/logs --product-sha PRODUCT_SHA --test-sha TEST_SHA --manifest /private/run/candidate.json > /private/run/logs/gate.log 2>&1
 python3 tests/lobertest/enterprise/run.py control --output /private/run/logs --product-sha PRODUCT_SHA --test-sha TEST_SHA --manifest /private/run/candidate.json > /private/run/logs/control.log 2>&1
+python3 tests/lobertest/enterprise/run.py flows --output /private/run/logs --product-sha PRODUCT_SHA --test-sha TEST_SHA --manifest /private/run/candidate.json > /private/run/logs/flows.log 2>&1
+python3 tests/lobertest/enterprise/run.py events --output /private/run/logs --product-sha PRODUCT_SHA --test-sha TEST_SHA --manifest /private/run/candidate.json > /private/run/logs/events.log 2>&1
+python3 tests/lobertest/enterprise/run.py recovery --output /private/run/logs --product-sha PRODUCT_SHA --test-sha TEST_SHA --manifest /private/run/candidate.json > /private/run/logs/recovery.log 2>&1
 python3 tests/lobertest/enterprise/gate.py --profile control-smoke --results /private/run/logs --product-sha PRODUCT_SHA --manifest /private/run/candidate.json
+python3 tests/lobertest/enterprise/gate.py --profile control-complete --results /private/run/logs --product-sha PRODUCT_SHA --manifest /private/run/candidate.json
 python3 tests/lobertest/enterprise/gate.py --profile release --results /private/run/logs --product-sha PRODUCT_SHA --manifest /private/run/candidate.json
 ```
 
@@ -40,6 +45,16 @@ run_id、binary（VM 上的路径）、binary_sha256、source_archive、source_a
 manifest_sha256，以及实际日志的 evidence_sha256，故中断、换包或日志被覆盖无法复用旧 PASS。
 release profile 缺少真实介质、PXE/状态机、真实安装、容量长稳或受支持升级证据时返回非零。
 control-smoke 通过只代表该明确子集通过；它不是计划中的完整控制面或发布验收。
+control-complete 在 smoke 基础上要求真实浏览器业务、事件传输和控制面故障恢复三套结果。
+名称只指 profiles.json 列出的集合；导入发布/删除的精确崩溃时刻、全部安全/容量/升级场景仍需单独资格证据。
+
+flows 使用当前构建的真实表单、独立登录会话和后端；旧请求隔离只延迟实际服务响应，不伪造业务响应。
+events 的 eventgen.sh 仅在 enterprise 随机 schema 中向 pending 的 ENTERPRISE 主机任务追加 test.transport
+探针事件，验证存储及 SSE/浏览器回放，不改变任务状态，不代表机器安装信号或真实执行链。
+recovery 需要免密 sudo mount/umount/iptables；使用独立 8 MiB tmpfs、本实例 DB 代理和自身随机来源端口。
+TCP 超时用只匹配该来源地址/端口的 OUTPUT DROP 规则制造；finally 删除原规则，不改共享服务或默认策略。
+该超时依赖真实内核连接超时，单例预算 170 秒；来源失败后按实际契约显式 retry，崩溃中的 fetching 则重启续传。
+不得用 HTTP 408 响应代替 TCP 超时验收。临时配置为 0600，不应复制到公共报告。
 
 控制面覆盖五角色真实 HTTP、认证与权限撤销、CSV 原子性、CAS、并发唯一性、模板审批、
 真实导入合成 ISO 后批量建任务、快照固化、浏览器登录/路由权限/深链接、服务进程重启、
