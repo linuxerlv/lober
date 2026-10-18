@@ -43,3 +43,9 @@ func (l *loggingStore) TransitionTask(ctx context.Context, id string, expect sto
 	l.log("task.transition", start, err)
 	return got, appended, err
 }
+func (l *loggingStore) UpdateTaskExecution(ctx context.Context, id string, expect store.TaskExpect, to model.TaskState, runtime *model.Execution, events []store.NewEvent, audit store.Audit) (model.Task, []store.Appended, error) {
+	start := time.Now()
+	got, appended, err := l.Store.UpdateTaskExecution(ctx, id, expect, to, runtime, events, audit)
+	l.log("task.execution", start, err)
+	return got, appended, err
+}

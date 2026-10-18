@@ -77,8 +77,10 @@ func TestLinuxNativeFirstbootRunsOfflineSlotsInSnapshotOrder(t *testing.T) {
 				output := filepath.Join(d, "output")
 				transport := `#!/bin/sh
 for value in "$@"; do
+ case "$value" in */installed) printf '%s\n' "$value" >> "$QA_SIGNALS"; exit 0;; esac
  case "$value" in -o) exit 88;; *v1/signal*) printf '%s\n' "$value" >> "$QA_SIGNALS";; esac
 done
+[ -f "$QA_RECOVERED" ] && exit 0
 exit 7
 `
 				if e := os.WriteFile(filepath.Join(bin, "curl"), []byte(transport), 0700); e != nil {
@@ -99,6 +101,7 @@ exit 7
 					}
 					stage := strings.ReplaceAll(commandPayloads(command)[0], "/mnt/sysroot", d)
 					cmd := exec.Command("bash", "-s")
+					cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "QA_SIGNALS="+filepath.Join(d, "installer-signals"))
 					cmd.Stdin = strings.NewReader(stage)
 					if out, e := cmd.CombinedOutput(); e != nil {
 						t.Fatalf("stage %v %s", e, out)
@@ -122,7 +125,7 @@ exit 7
 					if e != nil {
 						t.Fatal(e)
 					}
-					if e := os.WriteFile(path, []byte(strings.NewReplacer("/var/lib/lober", local, "/root/", d+"/root/", "/var/log/installer/", d+"/var/log/installer/", "/var/adm/autoinstall/", d+"/var/adm/autoinstall/").Replace(string(body))), 0600); e != nil {
+					if e := os.WriteFile(path, []byte(strings.NewReplacer("/var/lib/lober", local, "/etc/systemd/system", d+"/etc/systemd/system", "/root/", d+"/root/", "/var/log/installer/", d+"/var/log/installer/", "/var/adm/autoinstall/", d+"/var/adm/autoinstall/").Replace(string(body))), 0600); e != nil {
 						t.Fatal(e)
 					}
 				}
@@ -131,7 +134,7 @@ exit 7
 					args = append([]string{"sh"}, args...)
 				}
 				cmd := exec.Command(shell, args...)
-				cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "QA_OUTPUT="+output, "QA_SIGNALS="+signals)
+				cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "QA_OUTPUT="+output, "QA_SIGNALS="+signals, "QA_RECOVERED="+filepath.Join(d, "recovered"))
 				out, e := cmd.CombinedOutput()
 				if requiredFailure {
 					exit, ok := e.(*exec.ExitError)
@@ -150,15 +153,37 @@ exit 7
 				if strings.Contains(text, r.Values["token"]) || !strings.Contains(text, "native-finalize-independent") {
 					t.Fatal("wrong reboot credential")
 				}
-				if strings.Contains(text, "init-done") == requiredFailure || strings.Contains(text, "ready") == requiredFailure {
+				queued := ""
+				metas, _ := filepath.Glob(filepath.Join(local, "outbox-finalize", "*.meta"))
+				for _, meta := range metas {
+					body, _ := os.ReadFile(meta)
+					queued += string(body)
+				}
+				if strings.Contains(queued, "init-done") == requiredFailure || strings.Contains(queued, "ready") == requiredFailure {
 					t.Fatal("cleanup ran after required failure or omitted success")
 				}
 				_, e = os.Stat(filepath.Join(local, "finalize.token"))
 				if requiredFailure && e != nil {
 					t.Fatal("failed task credential erased")
 				}
-				if !requiredFailure && !os.IsNotExist(e) {
-					t.Fatal("success credential retained")
+				if !requiredFailure {
+					if e != nil {
+						t.Fatal("offline completion discarded credential")
+					}
+					if e = os.WriteFile(filepath.Join(d, "recovered"), nil, 0600); e != nil {
+						t.Fatal(e)
+					}
+					retry := exec.Command("sh", filepath.Join(local, "cleanup.sh"))
+					retry.Env = cmd.Env
+					if data, e := retry.CombinedOutput(); e != nil {
+						t.Fatalf("completion replay: %v %s", e, data)
+					}
+					if _, e = os.Stat(filepath.Join(local, "finalize.token")); !os.IsNotExist(e) {
+						t.Fatal("acknowledged success credential retained")
+					}
+					if data, _ := os.ReadFile(output); string(data) != "onetwo" {
+						t.Fatal("replay reran hooks")
+					}
 				}
 			})
 		}

@@ -36,6 +36,9 @@ overrides:
   pinia: 'catalog:'
   vue: 'catalog:'
   tinypool: ^2.1.2
+  'braces@3': npm:@franciscosolis/braces@3.1.1
+  'smol-toml@1': 1.9.1
+  'shell-quote@1': 1.11.0
   'brace-expansion@2': ^2.1.7
   'fast-uri@3': ^3.1.8
   'glob@10': ^10.5.0
@@ -144,7 +147,6 @@ catalog:
   eslint-plugin-yml: ^3.6.0
   execa: ^10.0.0
   find-up: ^8.0.0
-  get-port: ^7.2.0
   globals: ^17.7.0
   h3: ^1.15.11
   happy-dom: ^20.14.5
@@ -157,7 +159,6 @@ catalog:
   lodash.clonedeep: ^4.5.0
   medium-zoom: ^1.1.0
   naive-ui: ^2.44.1
-  nitropack: ^2.13.4
   nprogress: ^0.2.0
   ora: ^9.4.1
   oxfmt: ^0.65.0

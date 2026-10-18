@@ -176,6 +176,9 @@ type Tasks interface {
 	TransitionTask(ctx context.Context, id string, expect TaskExpect, to model.TaskState, events []NewEvent) (model.Task, []Appended, error)
 	// TransitionTaskByUser 是用户发起的推进（取消、重试），要审计，其余与 TransitionTask 相同。
 	TransitionTaskByUser(ctx context.Context, id string, expect TaskExpect, to model.TaskState, events []NewEvent, a Audit) (model.Task, []Appended, error)
+	// UpdateTaskExecution atomically commits runtime progress, state and events.
+	// A nonzero audit is checked and written in that same transaction.
+	UpdateTaskExecution(ctx context.Context, id string, expect TaskExpect, to model.TaskState, runtime *model.Execution, events []NewEvent, a Audit) (model.Task, []Appended, error)
 }
 
 // Events 是任务的追加式日志，不审计。追加事件不算改任务：任务的 State 与 Rev 都不变，调用方手里的 TaskExpect

@@ -197,6 +197,23 @@ func runtimeLauncher(instance model.SnapshotInstance, windows bool) string {
 }
 
 func runtimeSignalFunction(r Request, slot model.SnapshotSlot, values map[catalog.SystemValue]string) string {
+	if r.Snapshot.Format != "unattend" && r.Snapshot.Format != "esxi-ks" {
+		token := values["token"]
+		if slot.Timing == "firstboot" {
+			token = ""
+		}
+		wget := r.Snapshot.Format == "preseed" && (slot.Timing == "pre" || slot.Timing == "post-installer")
+		return signalQueue(values["gateway"], values["task"], token, wget) + fmt.Sprintf(`signal() {
+ phase=$1; instance=$2; rc=$3; digest=$4; body=$5
+ label_instance=$instance; label_step=0
+ case "$phase" in hook-report) label_step=1;; slot-end) label_instance=999999999; label_step=9;; esac
+ label=$(printf '1-%%09d-%%09d-%%d' %d "$label_instance" "$label_step")
+ request="$phase?slot=%d&timing=%s&rc=$rc"
+ if [ "$instance" -ne 0 ]; then request="$request&instance=$instance&digest=$digest"; fi
+ queue_signal "$label" "$request" "$body"
+}
+`, slot.Seq, slot.Seq, slot.Timing)
+	}
 	address := catalog.SignalURL(values["gateway"], values["task"], "TOKEN", "PHASE")
 	before, after := tokenURLParts(address)
 	after = strings.TrimSuffix(after, "PHASE")

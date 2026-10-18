@@ -170,6 +170,22 @@ fi
 		}
 		rc = exit.ExitCode()
 	}
+	if transportFailure && r.Snapshot.Format != "esxi-ks" && r.Snapshot.Format != "unattend" {
+		// Restore transport and replay only the durable reports. Hooks must not
+		// be rerun to recover telemetry after their original native exit status.
+		token := r.Values["token"]
+		if r.Snapshot.Slots[0].Timing == "firstboot" {
+			token = ""
+		}
+		replay := "DIR=" + shQuote(local) + "\n" + signalQueue(r.Values["gateway"], r.Values["task"], token, r.Snapshot.Format == "preseed" && r.Snapshot.Slots[0].Timing != "firstboot") + "flush_signals\n"
+		replay = strings.ReplaceAll(replay, "/usr/bin/wget", shQuote(filepath.Join(bin, "wget")))
+		retry := exec.Command("busybox", "sh", "-s")
+		retry.Env = append(cmd.Env, "QA_TRANSPORT_FAIL=0")
+		retry.Stdin = strings.NewReader(replay)
+		if data, err := retry.CombinedOutput(); err != nil {
+			t.Fatalf("signal replay failed: %v %s", err, data)
+		}
+	}
 	sig, _ := os.ReadFile(telemetry)
 	result, _ := os.ReadFile(output)
 	if rc != 0 {
