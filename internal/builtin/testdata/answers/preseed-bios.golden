@@ -7,8 +7,11 @@ d-i netcfg/get_hostname string lober-node
 d-i netcfg/hostname string lober-node
 d-i netcfg/get_domain string local
 d-i mirror/country string manual
+d-i mirror/protocol string http
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
 d-i mirror/http/proxy string
-d-i preseed/early_command string set -e; repo='http://artifacts.example.test/media/repo/'; rest="${repo#*://}"; debconf-set mirror/protocol "${repo%%:*}"; debconf-set mirror/http/hostname "${rest%%/*}"; debconf-set mirror/http/directory "/${rest#*/}"
+d-i debian-installer/allow_unauthenticated boolean false
 # partman-auto chooses the native BIOS/EFI atomic recipe.
 d-i partman-auto/disk string /dev/sda
 d-i partman-auto/method string regular
