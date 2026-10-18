@@ -1,0 +1,7 @@
+{
+  "status": "SIGNATURE_VERIFIED_ISO_HASH_PENDING",
+  "fingerprint": "843938DF228D22F7B3742BC0D94AA3F0EFE21092",
+  "fingerprint_source": "https://ubuntu.com/tutorials/how-to-verify-ubuntu",
+  "checksum_sha256": "728064ecf411f4ab702d9c3ca0a938ce672771424c028a1b52b2449f7eb5a068",
+  "signature_url": "https://releases.ubuntu.com/24.04/SHA256SUMS.gpg"
+}
