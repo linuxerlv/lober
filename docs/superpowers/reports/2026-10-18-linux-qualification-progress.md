@@ -1,8 +1,8 @@
 # Linux 装机验收进度（未完成）
 
-更新时间：2026-10-18 21:57，Asia/Shanghai。构建、检查和装机均在指定测试 VM `192.168.137.21` 及独占 PVE VM102 上执行。
+更新时间：2026-10-19 02:16，Asia/Shanghai。构建、检查和装机均在指定测试 VM `192.168.137.21` 及独占 PVE VM102 上执行。
 
-**当前结论：第三候选完整后端检查及 131 项企业控制面回归通过，control-complete 通过；Linux 实际安装尚无 PASS。Debian preseed v2 与 VM102 的 DHCP 隔离已在原生安装器越过默认路由和镜像地址确认页，正在安装；Ubuntu ISO 整文件哈希及官方签名验证通过。**
+**当前结论：第三候选完整后端检查及 131 项企业控制面回归通过，control-complete 通过；Linux 实际安装尚无 PASS。2026-10-19 02:14 检查时 PVE 与测试 VM 均不可达，本机用于 192.168.137.x 的以太网显示 Disconnected、0 bps，网段路由不存在，无法远程判定 PVE 电源或存储状态。Debian 最后可验证状态为已自动通过官方镜像校验、正在下载安装组件，最终装机结果待恢复后核实。Ubuntu ISO 整文件哈希及官方签名验证通过。**
 
 ## 第二候选产品（保留历史证据）
 
@@ -58,7 +58,7 @@
 
 | 系统 | 介质 / 导入 | 实际安装结论 |
 | --- | --- | --- |
-| Debian 13.7.0 | DVD SHA256 与官方 CD 签名通过；mini SHA256 通过；真实导入 ready，kernel/initrd/repo 齐全 | IN PROGRESS：第三候选正常 cancel/retry 后获得正确 DHCP 地址与网关，自动通过官方镜像校验并下载安装组件；尚未完成磁盘安装与 RC41 验收 |
+| Debian 13.7.0 | DVD SHA256 与官方 CD 签名通过；mini SHA256 通过；真实导入 ready，kernel/initrd/repo 齐全 | UNCONFIRMED：最后观察到第三候选获得正确 DHCP 地址与网关，自动通过官方镜像校验并下载安装组件；随后链路中断，尚未观察到完整安装、RC41 或正向验收结果 |
 | Ubuntu 24.04.5 | 实际 4080486400 字节 ISO 整文件 SHA256 与官方签名校验均通过，尚未导入/安装 | NOT RUN |
 | openSUSE Leap 15.6 | 部分下载，未完成整文件验证 | NOT RUN |
 | openSUSE Leap 16.0 | 官方版本和校验值已固定，未完成下载 | NOT RUN |
@@ -94,3 +94,10 @@ Ubuntu 校验文件签名指纹 `843938DF228D22F7B3742BC0D94AA3F0EFE21092` 对�
 - Ubuntu 实际引导需 8GiB RAM。启动前还需核对 PVE 内存预算，当前未调整其他 VM 的资源。
 - 继续完成各 Linux 的实际安装、SSH、root 级凭据清理和重复经网关启动不重装。容量长稳和受支持升级仍是未完成项目；control-complete 不是 release 通过。
 - ESXi7/8 与 Windows Server2022 均未启动，等待 Linux 结果汇报后用户另行确认。
+
+
+## 2026-10-19 02:14 连通性中断
+
+PVE SSH / 8006、测试 VM SSH 均无法连接。进一步核对本机网络发现，以太网链路为 Disconnected、0 bps，192.168.137.1 地址未处于可用状态，192.168.137.0/24 路由不存在。此证据只能确定物理链路不可用，不能据此断言 PVE 内核、USB 存储崩溃或主机已关机。详见 `candidate-3/infrastructure-connectivity-20261019.json`。
+
+没有因失联而重启 PVE、修改宿主机参数或操作其他 VM。最后一次远程检查确认 wbt=75000；VM101 的临时 balloon 调整从未执行。恢复后先检查实际 task/guest 结果、存储日志和独占 DHCP 过滤状态，再决定能否安全续跑；已进入 installing 的目标不能直接重置或重装。后续介质队列的最新结果也需恢复后读取，不推测为已完成。
