@@ -4,6 +4,9 @@
 这里使用 Python 标准库 unittest，显式收集本目录，避免旧 pytest 的 needs_vm/slow
 默认过滤或自动部署。不要用外层 `uv run pytest` 的全绿替代本目录结果。
 
+实际 Linux 装机另见 [LINUX-INSTALL.md](LINUX-INSTALL.md)。新增脚本仍待指定 VM
+验证；它的未执行状态不能算作真实装机或 release 通过。
+
 release 同时要求 Go 漏洞扫描与前端依赖审计结果。前端审计使用
 `pnpm audit --prod --json --registry=https://registry.npmjs.org`；镜像站不支持审计
 接口时必须记录失败，不能当作零漏洞。workspace 的生产依赖分类也包含构建工具，

@@ -1,0 +1,106 @@
+test_complete_business_forms_import_approval_and_batch (test_flows.BrowserFlowTests.test_complete_business_forms_import_approval_and_batch) ... Browser scenarios: host-registration-and-csv-preview-confirmation, browser-file-upload-and-server-import-progress, derive-template-replace-hook-and-independent-approval, per-host-render-preview-and-atomic-two-host-task-batch
+ok
+test_failure_diagnostics_redact_authentication_material (test_flows.BrowserFlowTests.test_failure_diagnostics_redact_authentication_material) ... ok
+test_late_real_response_does_not_overwrite_new_resource (test_flows.BrowserFlowTests.test_late_real_response_does_not_overwrite_new_resource) ... Browser scenarios: late-real-template-response-cannot-overwrite-new-editor
+ok
+test_open_page_role_revocation_empty_menu_and_account_switch (test_flows.BrowserFlowTests.test_open_page_role_revocation_empty_menu_and_account_switch) ... FAIL
+
+======================================================================
+FAIL: test_open_page_role_revocation_empty_menu_and_account_switch (test_flows.BrowserFlowTests.test_open_page_role_revocation_empty_menu_and_account_switch)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/dev/lober-linux-20261018/test-source/tests/lobertest/enterprise/test_flows.py", line 51, in test_open_page_role_revocation_empty_menu_and_account_switch
+    self.run_browser('ui-access.mjs', 3)
+  File "/home/dev/lober-linux-20261018/test-source/tests/lobertest/enterprise/test_flows.py", line 27, in run_browser
+    self.assertEqual(result.returncode, 0, 'Browser scenario failed: ' + result.stderr[-3000:])
+AssertionError: 1 != 0 : Browser scenario failed: TimeoutError: apiRequestContext.fetch: Timeout 30000ms exceeded.
+Call log:
+  - → PUT http://127.0.0.1:55441/console/v1/roles/viewer/menus
+    - user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36
+    - accept: */*
+    - accept-encoding: gzip,deflate,br
+    - Authorization: Bearer [redacted]
+    - content-type: application/json
+    - content-length: 22
+
+Completed checks: ["open-page-role-revocation-removes-write-controls-and-denies-api"]
+Current route: #/hosts
+Rendered text: Lober 控制台
+任务
+主机清单
+主机清单
+模板
+hook
+制品集
+工具
+主机清单
+主机清单
+搜索
+⌘ K
+主机清单
+主机清单
+
+登记主机 SN、可选架构固件和任意属性；建任务时从这里选择主机。
+
+查询
+SN
+	
+架构
+	
+固件
+	
+登记属性
+	
+修订
+	
+操作
+B2-3D1C671B-ONE
+	
+x86_64
+	
+uefi
+	
+	
+1
+	
+
+
+B2-3D1C671B-TWO
+	
+x86_64
+	
+uefi
+	
+rack：B2
+	
+1
+	
+上一页
+下一页
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+page.screenshot: Timeout 20000ms exceeded.
+Call log:
+  - taking page screenshot
+  - waiting for fonts to load...
+  - fonts loaded
+
+    at run (/home/dev/lober-linux-20261018/test-source/tests/lobertest/enterprise/browser.mjs:75:54)
+    at async file:///home/dev/lober-linux-20261018/test-source/tests/lobertest/enterprise/ui-access.mjs:4:1 {
+  log: [
+    '  - taking page screenshot',
+    '  - waiting for fonts to load...',
+    '  - fonts loaded'
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v24.22.0
+
+
+----------------------------------------------------------------------
+Ran 4 tests in 204.415s
+
+FAILED (failures=1)

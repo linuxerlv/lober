@@ -1,0 +1,24 @@
+=== RUN   TestLegacyReadyDebianRequiresRepository
+--- PASS: TestLegacyReadyDebianRequiresRepository (0.00s)
+PASS
+ok  	github.com/lober/lober/internal/core/model	0.004s
+=== RUN   TestLegacyDebianWithoutRepoCannotCreateBatch
+--- PASS: TestLegacyDebianWithoutRepoCannotCreateBatch (0.00s)
+PASS
+ok  	github.com/lober/lober/internal/core/admission	0.001s
+=== RUN   TestDebianRepositoryMustHaveReleaseIndexAndPool
+=== RUN   TestDebianRepositoryMustHaveReleaseIndexAndPool/dists/trixie/Release
+=== RUN   TestDebianRepositoryMustHaveReleaseIndexAndPool/dists/trixie/main/binary-amd64/Packages.gz
+=== RUN   TestDebianRepositoryMustHaveReleaseIndexAndPool/pool/main/c/curl/curl.deb
+--- PASS: TestDebianRepositoryMustHaveReleaseIndexAndPool (0.34s)
+    --- PASS: TestDebianRepositoryMustHaveReleaseIndexAndPool/dists/trixie/Release (0.12s)
+    --- PASS: TestDebianRepositoryMustHaveReleaseIndexAndPool/dists/trixie/main/binary-amd64/Packages.gz (0.11s)
+    --- PASS: TestDebianRepositoryMustHaveReleaseIndexAndPool/pool/main/c/curl/curl.deb (0.11s)
+=== RUN   TestDebianRepositoryDiscoversSuiteAndMatchesArchitecture
+=== RUN   TestDebianRepositoryDiscoversSuiteAndMatchesArchitecture/amd64
+=== RUN   TestDebianRepositoryDiscoversSuiteAndMatchesArchitecture/arm64
+--- PASS: TestDebianRepositoryDiscoversSuiteAndMatchesArchitecture (0.25s)
+    --- PASS: TestDebianRepositoryDiscoversSuiteAndMatchesArchitecture/amd64 (0.13s)
+    --- PASS: TestDebianRepositoryDiscoversSuiteAndMatchesArchitecture/arm64 (0.13s)
+PASS
+ok  	github.com/lober/lober/internal/iso	0.597s

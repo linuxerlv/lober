@@ -1,0 +1,52 @@
+gofmt -l $(go list -f {{.Dir}} ./...)
+go vet ./...
+go test -count=1 -run '^Test全模块依赖守卫$' ./internal/archtest
+ok  	github.com/lober/lober/internal/archtest	0.124s
+go test ./...
+?   	github.com/lober/lober/cmd/console-openapi	[no test files]
+ok  	github.com/lober/lober/cmd/lober	7.424s
+ok  	github.com/lober/lober/internal/archtest	36.260s
+ok  	github.com/lober/lober/internal/builtin	0.417s
+ok  	github.com/lober/lober/internal/console	64.768s
+ok  	github.com/lober/lober/internal/core/activation	(cached)
+ok  	github.com/lober/lober/internal/core/admission	(cached)
+ok  	github.com/lober/lober/internal/core/catalog	0.004s
+ok  	github.com/lober/lober/internal/core/model	(cached)
+ok  	github.com/lober/lober/internal/core/params	(cached)
+ok  	github.com/lober/lober/internal/core/scan	(cached)
+ok  	github.com/lober/lober/internal/core/snapshot	(cached)
+ok  	github.com/lober/lober/internal/events	(cached)
+ok  	github.com/lober/lober/internal/execution	0.832s
+ok  	github.com/lober/lober/internal/iso	12.593s
+ok  	github.com/lober/lober/internal/iso/iso9660	(cached)
+ok  	github.com/lober/lober/internal/iso/isotest	(cached)
+ok  	github.com/lober/lober/internal/machine	(cached)
+ok  	github.com/lober/lober/internal/render	(cached)
+ok  	github.com/lober/lober/internal/store	(cached)
+ok  	github.com/lober/lober/internal/store/pgstore	43.143s
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	0.750s
+go test -race -timeout=20m ./...
+?   	github.com/lober/lober/cmd/console-openapi	[no test files]
+ok  	github.com/lober/lober/cmd/lober	50.137s
+ok  	github.com/lober/lober/internal/archtest	49.006s
+ok  	github.com/lober/lober/internal/builtin	2.085s
+ok  	github.com/lober/lober/internal/console	392.620s
+ok  	github.com/lober/lober/internal/core/activation	(cached)
+ok  	github.com/lober/lober/internal/core/admission	(cached)
+ok  	github.com/lober/lober/internal/core/catalog	1.018s
+ok  	github.com/lober/lober/internal/core/model	(cached)
+ok  	github.com/lober/lober/internal/core/params	(cached)
+ok  	github.com/lober/lober/internal/core/scan	(cached)
+ok  	github.com/lober/lober/internal/core/snapshot	(cached)
+ok  	github.com/lober/lober/internal/events	(cached)
+ok  	github.com/lober/lober/internal/execution	2.134s
+ok  	github.com/lober/lober/internal/iso	18.117s
+ok  	github.com/lober/lober/internal/iso/iso9660	(cached)
+ok  	github.com/lober/lober/internal/iso/isotest	(cached)
+ok  	github.com/lober/lober/internal/machine	(cached)
+ok  	github.com/lober/lober/internal/render	(cached)
+ok  	github.com/lober/lober/internal/store	(cached)
+ok  	github.com/lober/lober/internal/store/pgstore	75.156s
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	1.775s
+GOOS=linux GOARCH=amd64 go build ./...
+WIRE_LOADER_MODE=fallback WIRE_LOADER_ARTIFACTS=0 go tool wire diff ./cmd/lober

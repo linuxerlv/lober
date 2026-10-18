@@ -1,0 +1,13 @@
+{
+  "dev-integration.json": "89a19aadda7a0c812987a9c6f15ec3cc42794cff4a22877efa64dbbf62139da8",
+  "logs/debian-repo-check.log": "1293d1112eb6dc209c6240ed7f62c1b541e422bf064368ebdfe5847129702d3d",
+  "logs/debian-repo-check.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "logs/debian-reviewed-check.log": "a1ca69d616b13f5d4984b44b40e254d7def2ce92a31346ebced9e5ed4b77ad93",
+  "logs/debian-reviewed-check.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "logs/debian-review-red.log": "eec53f93e1e942d69c35fa5fff5267c5ca3ba73ceddd83b2aa844eb81426cb39",
+  "logs/debian-review-red.exit": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+  "logs/debian-review-green.log": "4279779469e591f690fa1079210d08dbb764579f266e1b10c65af67c2fce99d4",
+  "logs/debian-review-green.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "logs/linux-acceptance-checkers.log": "79ac70c131f85710caee1bb095e2e35f34ac1d09e2095827acde83c80157b8c2",
+  "logs/linux-acceptance-checkers.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+}

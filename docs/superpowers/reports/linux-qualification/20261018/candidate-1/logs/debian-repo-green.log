@@ -1,0 +1,5 @@
+ok  	github.com/lober/lober/internal/iso	17.919s
+ok  	github.com/lober/lober/internal/core/catalog	0.002s
+ok  	github.com/lober/lober/internal/core/admission	0.002s
+ok  	github.com/lober/lober/cmd/lober	7.599s
+ok  	github.com/lober/lober/internal/machine	0.003s
