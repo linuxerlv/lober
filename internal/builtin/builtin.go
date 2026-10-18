@@ -85,7 +85,7 @@ func shippedTemplates() []model.Template {
 			id = "esxi"
 		}
 		version := 1
-		if format == "kickstart" {
+		if format == "kickstart" || format == "preseed" {
 			version = 2
 		}
 		ss := series(format)
@@ -95,6 +95,13 @@ func shippedTemplates() []model.Template {
 		}
 		tpl.Assembly["packages"] = []model.Instance{fixedInstance("packages", "packages", "curl", true)}
 		switch format {
+		case "preseed":
+			// A DVD tree is not a signed HTTP APT repository. Keep repository
+			// selection explicit and let the installer enforce archive signatures.
+			tpl.Params = []model.ParamDecl{
+				{Name: "mirror_host", Label: "Debian mirror host", Type: "word", Default: "deb.debian.org"},
+				{Name: "mirror_path", Label: "Debian mirror path", Type: "word", Default: "/debian"},
+			}
 		case "autoinstall":
 			tpl.Params = []model.ParamDecl{{Name: "hostname", Type: "hostname", Default: "lober-node"}}
 		case "agama":

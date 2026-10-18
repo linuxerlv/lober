@@ -335,36 +335,6 @@ func TestAutoYaSTNativeUserAndKey(t *testing.T) {
 	}
 }
 
-func TestPreseedEarlyCommandConfiguresArtifactMirror(t *testing.T) {
-	r := fixtureRequest(t, templateFor(t, "preseed"), "uefi")
-	out := renderFixture(t, r)
-	prefix := "d-i preseed/early_command string "
-	var command string
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, prefix) {
-			command = strings.TrimPrefix(line, prefix)
-		}
-	}
-	if command == "" {
-		t.Fatal("missing native early command")
-	}
-	file := filepath.Join(t.TempDir(), "debconf")
-	cmd := exec.Command(os.Getenv("LOBER_TEST_BASH"))
-	cmd.Env = append(os.Environ(), "DEBCONF_OUTPUT="+file)
-	cmd.Stdin = strings.NewReader("debconf-set() { printf '%s=%s\\n' \"$1\" \"$2\" >> \"$DEBCONF_OUTPUT\"; }\n" + command + "\n")
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("early command: %v %s", err, b)
-	}
-	b, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "mirror/protocol=http\nmirror/http/hostname=artifacts.example.test\nmirror/http/directory=/media/repo/\n"
-	if string(b) != want {
-		t.Fatalf("mirror settings %q", b)
-	}
-}
-
 func TestPOSIXHookSyntaxAndESXiVersions(t *testing.T) {
 	for _, h := range Hooks() {
 		for _, impl := range h.Impls {
