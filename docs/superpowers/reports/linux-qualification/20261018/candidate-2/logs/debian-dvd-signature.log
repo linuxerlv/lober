@@ -1,0 +1,12 @@
+[GNUPG:] NEWSIG
+[GNUPG:] KEY_CONSIDERED DF9B9C49EAA9298432589D76DA87E80D6294BE9B 0
+[GNUPG:] SIG_ID P/ZhU8RF0g0EHLXLYMplxXuCYos 2026-09-12 1789230046
+[GNUPG:] GOODSIG DA87E80D6294BE9B Debian CD signing key <debian-cd@lists.debian.org>
+[GNUPG:] VALIDSIG DF9B9C49EAA9298432589D76DA87E80D6294BE9B 2026-09-12 1789230046 0 4 0 1 8 00 DF9B9C49EAA9298432589D76DA87E80D6294BE9B
+[GNUPG:] TRUST_UNDEFINED 0 pgp
+gpg: Signature made Sun Sep 13 00:20:46 2026 CST
+gpg:                using RSA key DF9B9C49EAA9298432589D76DA87E80D6294BE9B
+gpg: Good signature from "Debian CD signing key <debian-cd@lists.debian.org>" [unknown]
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the owner.
+Primary key fingerprint: DF9B 9C49 EAA9 2984 3258  9D76 DA87 E80D 6294 BE9B

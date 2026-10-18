@@ -1,61 +1,81 @@
 # Linux 装机验收进度（未完成）
 
-更新时间：2026-10-18 20:33，Asia/Shanghai。所有构建和测试均在指定测试 VM `192.168.137.21` 执行。
+更新时间：2026-10-18 21:15，Asia/Shanghai。构建、检查和装机均在指定测试 VM `192.168.137.21` 及独占 PVE VM102 上执行。
 
-环境恢复更新：用户恢复 PVE 后，已重新连接并确认 wbt_lat_usec 为原值 75000；测试盘完成 ext4 日志恢复并正常挂载，PostgreSQL、原有 DHCP/nginx 正常。没有再次更改宿主机参数；其他介质下载仍暂停。首次仓库发布修复和补充审查修复的完整 make check 均通过，最终产品提交为 d3014e535f1f2a3366cc726b5f30247bd750c8a9，已按 dev → test 集成。291 个后端源码/模块文件逐一匹配 VM 已验证输入，证据见 reviewed-fix/dev-integration.json。新的 test 候选正在准备，旧候选结果不能替代新候选企业回归。
+**当前结论：第二候选完整后端检查、前端检查及 131 项企业控制面回归通过；Linux 实际安装尚无 PASS。Debian 已进入真实安装器，发现默认 preseed 仍会询问镜像地址，DVD 解包目录还缺 APT 仓库签名。新的 Debian 软件源策略待用户选择，Ubuntu 介质继续获取。**
 
-## 已冻结并集成的候选
+## 已集成并冻结的产品
 
-- 产品 / dev：`0a9b327475139e2eab7292ed609c403abdc8d448`。
-- test：`e4d105951ec64bf025bc804e4152616242b43c2d`，由 dev 合入，产品文件一致。
-- 原始 test Git archive SHA256：`7ae41fd4b5c401caf629ae3ee7c92068ad2cba43f78195f7f5f3f4e1a68b35c3`。
-- 实际候选二进制 SHA256：`970c01038496741045e6af0fee17ff0b3a180147dbb77a2a8cd664fd8b511ba3`。
-- 从同一 test 源码构建的真实前端包含 213 个文件，清单 SHA256：`c43f495a3f9bbcb609e3cbdefb8b6d576f42a6e411ece2b759f510d34783f2d2`。
-- VM 构建清单：`/home/dev/lober-linux-20261018/candidate.json`，包含源码、实际生成资源和二进制绑定。不得用其他候选的旧 PASS 替代。
+- 产品 / dev：`d3014e535f1f2a3366cc726b5f30247bd750c8a9`，完整 VM `make check` 通过后按 dev → test 集成。
+- 候选二进制的 test 源码：`8051bc1c50824711e5b7c7537b31fe7aaefcb952`。
+- 二进制 SHA256：`79713e6ee6ad70dbf38b7ea13fd6836a4568d3027d89b4d6d81ee45b327ac92b`。
+- 原始 test Git archive SHA256：`fe0d7553ab88b13720e8174b1513f9dd37d411dd434973eb20c82a4dedc7542b`。
+- 前端 213 个实际生成文件，清单 SHA256：`c43f495a3f9bbcb609e3cbdefb8b6d576f42a6e411ece2b759f510d34783f2d2`。
+- `candidate-2/candidate-2.json` 绑定源码、实际资源、二进制、run_id；291 个后端源码/模块文件逐一匹配 VM 已验证输入。
+- 验收工具独立从 test `13e129b11b7838f3b1a20415aa723b913dd71676` 冻结，结果分别记录构建 test_sha 和 harness_test_sha。QA 修正没有改写已经完成的产品测试证据。
+- 没有 push、main 合并；主工作区已有修改未动。
 
-## 验证结果与界限
+## 第二候选的验证
 
-| 范围 | 结果 | 证据 / 限制 |
+证据目录：`linux-qualification/20261018/candidate-2/`，每套结果包含退出码、原始日志及证据 SHA256。
+
+| 范围 | 实际结果 |
+| --- | --- |
+| 完整后端 make check | PASS：21 个测试包，格式、vet、普通测试、race、Linux 构建、Wire 漂移检查通过 |
+| 嵌入真实前端后的检查/构建 | PASS：cmd/lober 8.492s、console 57.231s，二进制构建成功 |
+| 前端完整检查 | PASS：26 文件、91 测试；11 个构建任务通过 |
+| 依赖消费者回归 | PASS：16 项真实 stylelint / glob / CSpell / Knip / shell-quote 等消费者检查 |
+| 官方 npm 生产依赖审计 | PASS：1408 项依赖，所有级别告警为 0；不是完整代码安全审计 |
+| 企业 gate | 30 PASS，0 failed，0 skipped |
+| 企业 control | 88 PASS，0 failed，0 skipped |
+| 企业 flows | 4 PASS，0 failed，0 skipped |
+| 企业 events | 4 PASS，0 failed，0 skipped |
+| 企业 recovery | 5 PASS，0 failed，0 skipped，含真实 TCP 超时、ENOSPC、SIGKILL 和数据库连接丢失 |
+| control-complete profile | PASS，缺项列表为空 |
+| Linux 验收工具自身检查 | 3 PASS：拒绝磁盘优先冒充 PXE、精确 RC41 失败归因、PVE base64 序列号解码；不算装机 PASS |
+
+第一候选的 flows 超时和 events 启动失败原始证据保留在 candidate-1；第二候选重新执行通过，未修改旧结果。braces 修复分支的来源及消费者回归已记录，仍需跟踪其维护风险。
+
+## Debian 导入修复
+
+真实 netinst + 同版 mini 导入曾被标为 ready，但只有 kernel/initrd，缺少内置 preseed 引用的 repo。netinst 还缺 curl 包，因此实际试装改用官方 DVD-1 + 同版 mini，探针通过正常 API 删除。
+
+已提交的补充修复发布主介质仓库、补充 Debian 必需角色，并拒绝旧 ready 记录缺 repo 时创建新任务。最低仓库结构检查从介质发现 suite，要求 Release、匹配架构的 Packages 索引及 pool 包文件，不猜测 codename。新增回归在 VM 上观察到 RED → GREEN，最终完整检查退出码为 0。
+
+补充审查的 4 项 Important 均已处理：上述旧记录与仓库结构检查，以及验收负例核对冻结 hook 的 slot/instance/digest/firstboot/RC41、retry 实际 HTTP422 + task_retry_after_reboot；重复启动要求 net0 → scsi0，并抓取网关 local boot 响应、比较文件系统 UUID。
+
+## 真实 Linux 矩阵
+
+| 系统 | 介质 / 导入 | 实际安装结论 |
 | --- | --- | --- |
-| 集成前完整后端门禁 | PASS | `logs/make-check.log`，普通测试、race、vet、格式、构建、Wire 均通过；这是 0a9b327 的结果 |
-| 从实际 test 源码重跑前端 | PASS | `logs/test-frontend.log` / `.exit=0`；26 文件、91 测试，11 个构建任务通过 |
-| 嵌入真实前端后的 Go 检查与构建 | PASS | `logs/test-build.log`；cmd/lober 8.192s，internal/console 213.635s，构建成功 |
-| 企业门禁自检 gate | PASS | `enterprise-candidate-1/gate.log`；30 项 |
-| 企业控制面 control | PASS | `enterprise-candidate-1/control.log`；88 项 |
-| 企业故障恢复 recovery | PASS | `enterprise-candidate-1/recovery.log`；5 项，包含真实 TCP 超时、ENOSPC、进程崩溃、数据库连接中断 |
-| 浏览器 flows | FAIL，需重跑 | 4 项中 1 项失败；截图写入/等待超时，发生于存储阻塞期间。其余成功不能替代整个套件通过 |
-| 事件 events | FAIL，需重跑 | 服务启动未在 15 秒内就绪，0 项收集。不得当作 skip 或 PASS |
-| 依赖专项 / 官方 npm 审计 | PASS | 16 项真实消费者回归；审计所有级别 0。braces 使用修复分支，仍需跟踪其维护风险 |
-| Debian 补充仓库发布修复 | 定向 PASS；完整验证待重跑 | `logs/debian-repo-red.log` → `debian-repo-green.log`。5 个相关包通过，完整 Go 回归被连接中断打断 |
-| 实际 Linux 安装 | **尚无 PASS** | Debian、Ubuntu、Leap15、Leap16、AlmaLinux、Rocky 均未完成安装验收 |
+| Debian 13.7.0 | DVD SHA256 与官方 CD 签名通过；mini SHA256 通过；真实导入 ready，kernel/initrd/repo 齐全 | BLOCKED：两次真实 PXE 启动，第二次读取应答进入 installing，但仍询问镜像地址；未完成安装、未到 RC41 场景 |
+| Ubuntu 24.04.5 | 单连接限速下载中；官方 SHA256SUMS 签名验证通过，ISO 整文件哈希尚待完成 | NOT RUN |
+| openSUSE Leap 15.6 | 部分下载，未完成整文件验证 | NOT RUN |
+| openSUSE Leap 16.0 | 官方版本和校验值已固定，未完成下载 | NOT RUN |
+| AlmaLinux 9.8 | 部分下载，未完成整文件验证 | NOT RUN |
+| Rocky Linux 9.8 | 部分下载，未完成整文件验证 | NOT RUN |
 
-以上日志根目录均为测试 VM 的 `/home/dev/lober-linux-20261018/`；依赖日志另在 `/home/dev/lober-linux-deps-20261018/`。失联前未全部导回本地，恢复后需校验原始退出码和日志哈希。
+Debian DVD 的实际只读检查确认包含 curl、openssh-server、qemu-guest-agent。全文件 SHA256 为 `347b6c67a3cc0b7ddb60b178f683470c4e2b7ac426c996d9337a2ff36c1a32d2`，官方 CD 签名 key 指纹为 `DF9B9C49EAA9298432589D76DA87E80D6294BE9B`，参照 [Debian 官方校验说明](https://www.debian.org/CD/verify)。没有把 CD 签名验证混同为 APT 仓库签名验证。
 
-## 本轮发现及修复
+Ubuntu 校验文件签名指纹 `843938DF228D22F7B3742BC0D94AA3F0EFE21092` 对照 [Ubuntu 官方说明](https://ubuntu.com/tutorials/how-to-verify-ubuntu)。签名通过不代表尚未下载完整的 ISO 哈希已通过。
 
-使用真实 Debian 13.7 netinst + 同版 mini.iso 调用真实导入 API，结果被标为 ready，但制品只有 kernel/initrd，没有 repo。内置 preseed 引用了 `sys:repo`，因此原来的导入测试无法证明内置模板可交付。
+## Debian 当前阻塞与待确认方案
 
-在独立产品工作树补充了主介质仓库发布、Debian 必需制品 repo，以及包文件/Release 文件保留回归。先在 VM 上得到失败：`ready Debian ISO has no HTTP repository for the shipped preseed`；修复后 iso、catalog、admission、cmd/lober、machine 共 5 包通过，再完成完整回归。最终补充修复已提交并推进 dev/test。
+1. 第一次原生安装器提示没有默认路由，尚未获取应答文件。保留 serial-attempt1 的脱敏片段，通过正常 API 取消并重试。第二次未改 DHCP 设置；抓包确认来自 192.168.56.2 的 ACK 包含 /24 掩码及默认网关 192.168.56.2。首次原因仍未确认，不称作已修复。
+2. 第二次获取应答后停在镜像 hostname 确认页。从实际 mini initrd 提取的 debconf-set 只调用 db_set，没有设置 seen；当前 early_command 动态写值无法满足无人值守。
+3. 实际 HTTP 检查确认 DVD 目录的 InRelease 和 Release.gpg 均为 404。Debian 安装器使用签名 Release 链校验安装源，参见 [Debian SecureApt](https://wiki.debian.org/SecureApt)。完整 ISO 校验通过不会自动补出这些仓库签名。
+4. 当前任务通过正常 API 取消，VM102 已停止；原生失败、正常 cancel/retry 事件和定向 DHCP 抓包保留。没有伪造 installed/done，也没有把其他失败当作必需 hook 的 RC41。
 
-真实 netinst 缺少内置安装需要的 curl 包，故只用来复现导入问题，已通过产品 API 删除该独占探针。实际 Debian 装机使用官方 DVD-1 + 同版 mini，下载后必须校验 SHA256 并确认仓库包可用。
+建议的局部设计：新增 preseed v2，显式预置可配置的镜像 host/path，默认 Debian 官方签名网络源；保留旧 v1 的冻结内容和严格签名检查。完成回归、dev → test 集成后再试装。若要求必须离线，则需要内部签名仓库路径，不能用 allow_unauthenticated 绕过。
 
-补充独立审查指出 4 项 Important，已逐项核对并作一次修复：旧 ready Debian 记录缺 repo 时拒绝新任务；从真实目录发现 suite 并要求 Release、匹配架构的包索引和 pool 包；负例核对冻结 hook 的 RC41，retry 校验实际 HTTP422 及 task_retry_after_reboot；重复引导强制 net0 优先，并捕获真实网关 local boot 响应、比较根文件系统 UUID。新增 Go 回归已观察 RED→GREEN，最终 make check 退出码为 0。
+此软件源策略选择已向用户提出，尚未据此修改产品代码。
 
-`tests/lobertest/enterprise/linux_install.py` 是本轮新增的装机脚本：独占 VM/磁盘/MAC 校验、两人审批派生模板与必需 hook、真实向导建任务、PVE 启动、服务端终态、SSH、guest agent 的 root 检查、凭据清理及重复磁盘启动。指定 VM 的语法检查与 2 项防误判检查通过；实际装机流程尚未运行，不能作为装机通过证据。
+## 环境与后续
 
-## 环境中断与恢复记录
-
-1. PVE 底层 `/dev/sda` 为 USB UAS 设备；内核日志出现写命令超时和 USB 设备重置。thin pool 数据约 21.93%、元数据约 1.78%，内存可用约 5.4 GiB，未发现容量耗尽。
-2. 即使单连接限速下载，VM I/O pressure 仍曾接近 100%；数据库与浏览器测试受到影响。已暂停本轮相关下载，旧并发进程已退出。
-3. 经用户明确批准，对 PVE `/sys/block/sda/queue/wbt_lat_usec` 从 75000 临时改为 0，预先设置 180 秒自动恢复任务 `lober-linux-wbt-restore-20261018.timer`；诊断程序也设置 finally 恢复。
-4. 诊断约一分钟时 PVE SSH 连接被重置，随后宿主机与测试 VM 失联。用户恢复 PVE 后已确认参数为 75000；无法证明此前自动恢复任务是否在重启前执行。**失联原因尚未确认。** 不把暂时改善当作根因已解决。
-5. 没有启动 ESXi / Windows，没有启动专用装机 VM102，也没有重启 PVE 或现有 QA VM。
-
-## 恢复后的顺序
-
-1. 先确认 PVE 本机状态、内核磁盘日志、原参数恢复为 75000、自动恢复任务状态；在确认存储可靠前不扩大并发。
-2. 恢复测试 VM，检查 PostgreSQL、独占数据盘挂载/标记、源文件及候选哈希；保留现有 QA 服务。若有重启，重新核对挂载，刷新 PVE ticket。
-3. 导回已有原始证据；重跑未完成的 Go 检查及受环境影响的 flows/events，不能复用失败日志或旧 PASS。
-4. 完成 Debian 补充修复验证后，产品提交 → dev 集成验证 → test 合入，再冻结新候选。重跑受候选变更影响的企业套件。
-5. 校验真实介质，应用已验证的独占 MAC DHCP/NAT 配置，配置并启动 VM102；逐个执行 Debian、Ubuntu、Leap15/16、AlmaLinux、Rocky 实际装机和重复磁盘启动。
-6. 容量长稳、升级等未执行项目继续标记未完成。Linux 结果汇报后，由用户确认是否继续 ESXi7/8 与 Windows Server2022。
+- 用户恢复 PVE 后，确认宿主机 wbt_lat_usec 为原值 75000；测试盘完成 ext4 日志恢复。原有 PostgreSQL、DHCP、nginx 正常。没有再次改变宿主机全局参数，先前失联原因仍未确认。
+- 测试 VM101 使用独占新增数据盘；只有 VM102 的 MAC/IP 使用新增 PXE 保留和来源受限 NAT，保留了原 Kea 配置备份。VM100 未改动。
+- PVE 的 SMBIOS 字符串需要 base64 标记；已配置并验证解码后的 SN 为 LOBER-LINUX-102。目标只有 32GiB 专用磁盘 LOBER_LINUX_TARGET。
+- 原始 serial、口令、票据、应答和私有数据库状态留在受限目录；公共报告只保存脱敏片段及校验值。
+- Ubuntu 实际引导需 8GiB RAM。启动前还需核对 PVE 内存预算，当前未调整其他 VM 的资源。
+- 继续完成各 Linux 的实际安装、SSH、root 级凭据清理和重复经网关启动不重装。容量长稳和受支持升级仍是未完成项目；control-complete 不是 release 通过。
+- ESXi7/8 与 Windows Server2022 均未启动，等待 Linux 结果汇报后用户另行确认。

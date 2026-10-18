@@ -1,0 +1,25 @@
+$ node --test scripts/dependency-security.test.mjs
+✔ the changesets editor dependency rejects comment-following line terminators (15.498948ms)
+✔ compile rejects excessive brace nesting with a controlled depth error (2.726319ms)
+✔ expand rejects excessive brace nesting with a controlled depth error (0.577209ms)
+✔ stringify rejects excessive brace nesting with a controlled depth error (1.378936ms)
+✔ compile rejects excessive parenthesis nesting with a controlled depth error (0.377428ms)
+✔ expand rejects excessive parenthesis nesting with a controlled depth error (0.271767ms)
+✔ stringify rejects excessive parenthesis nesting with a controlled depth error (0.365219ms)
+✔ compile guards a supplied AST that bypasses the parser (1.341243ms)
+✔ expand guards a supplied AST that bypasses the parser (1.098683ms)
+✔ stringify guards a supplied AST that bypasses the parser (3.907488ms)
+✔ depth options cannot disable the security bound (0.68965ms)
+✔ the glob consumer retains nested sets, ranges, escaping and deduplication (1.61742ms)
+✔ real fast-glob discovers CSS and Vue files and respects exclusions (38.00253ms)
+✔ real stylelint applies a brace-pattern override and reports invalid CSS (562.868448ms)
+✔ real CSpell reads TOML config and preserves spelling failure exits (3523.59485ms)
+✔ real Knip still detects an unused manifest dependency (872.517667ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5206.363116

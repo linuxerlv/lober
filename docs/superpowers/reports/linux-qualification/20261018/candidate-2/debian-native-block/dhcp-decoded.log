@@ -1,0 +1,197 @@
+21:00:54.834030 IP (tos 0x0, ttl 64, id 256, offset 0, flags [none], proto UDP (17), length 425)
+    0.0.0.0.68 > 255.255.255.255.67: [udp sum ok] BOOTP/DHCP, Request from bc:24:11:92:41:78, length 397, xid 0x229ade2d, secs 4, Flags [none] (0x0000)
+	  Client-Ethernet-Address bc:24:11:92:41:78
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Discover
+	    MSZ (57), length 2: 1472
+	    ARCH (93), length 2: 0
+	    NDI (94), length 3: 1.2.1
+	    Vendor-Class (60), length 32: "PXEClient:Arch:00000:UNDI:002001"
+	    User-Class (77), length 4: 
+	      instance#1: [ERROR: invalid option]
+	    Parameter-Request (55), length 23: 
+	      Subnet-Mask (1), Default-Gateway (3), Domain-Name-Server (6), LOG (7)
+	      Hostname (12), Domain-Name (15), RP (17), MTU (26)
+	      Vendor-Option (43), Vendor-Class (60), TFTP (66), BF (67)
+	      Unknown (119), Unknown (128), Unknown (129), Unknown (130)
+	      Unknown (131), Unknown (132), Unknown (133), Unknown (134)
+	      Unknown (135), Unknown (175), Unknown (203)
+	    Unknown (175), length 45: 177.5.1.26.244.16.0.235.3.1.20.1.23.1.1.34.1.1.19.1.1.17.1.1.39.1.1.25.1.1.16.1.2.33.1.1.21.1.1.24.1.1.18.1.1
+	    Client-ID (61), length 7: ether bc:24:11:92:41:78
+	    GUID (97), length 17: 0.36.91.50.2.64.135.237.66.188.96.103.17.36.250.146.66
+	    END (255), length 0
+21:00:54.834723 IP (tos 0x10, ttl 128, id 0, offset 0, flags [DF], proto UDP (17), length 350)
+    192.168.56.2.67 > 192.168.56.50.68: [udp sum ok] BOOTP/DHCP, Reply, length 322, xid 0x229ade2d, Flags [none] (0x0000)
+	  Your-IP 192.168.56.50
+	  Server-IP 192.168.56.2
+	  Client-Ethernet-Address bc:24:11:92:41:78
+	  file "http://192.168.56.2:18091/boot.ipxe"
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Offer
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    Default-Gateway (3), length 4: 192.168.56.2
+	    Domain-Name-Server (6), length 4: 192.168.137.1
+	    Hostname (12), length 25: "lober-linux-qualification"
+	    Lease-Time (51), length 4: 14400
+	    Server-ID (54), length 4: 192.168.56.2
+	    RN (58), length 4: 3600
+	    RB (59), length 4: 7200
+	    Client-ID (61), length 7: ether bc:24:11:92:41:78
+	    END (255), length 0
+21:00:55.872026 IP (tos 0x0, ttl 64, id 514, offset 0, flags [none], proto UDP (17), length 425)
+    0.0.0.0.68 > 255.255.255.255.67: [udp sum ok] BOOTP/DHCP, Request from bc:24:11:92:41:78, length 397, xid 0x229ade2d, secs 10, Flags [none] (0x0000)
+	  Client-Ethernet-Address bc:24:11:92:41:78
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Discover
+	    MSZ (57), length 2: 1472
+	    ARCH (93), length 2: 0
+	    NDI (94), length 3: 1.2.1
+	    Vendor-Class (60), length 32: "PXEClient:Arch:00000:UNDI:002001"
+	    User-Class (77), length 4: 
+	      instance#1: [ERROR: invalid option]
+	    Parameter-Request (55), length 23: 
+	      Subnet-Mask (1), Default-Gateway (3), Domain-Name-Server (6), LOG (7)
+	      Hostname (12), Domain-Name (15), RP (17), MTU (26)
+	      Vendor-Option (43), Vendor-Class (60), TFTP (66), BF (67)
+	      Unknown (119), Unknown (128), Unknown (129), Unknown (130)
+	      Unknown (131), Unknown (132), Unknown (133), Unknown (134)
+	      Unknown (135), Unknown (175), Unknown (203)
+	    Unknown (175), length 45: 177.5.1.26.244.16.0.235.3.1.20.1.23.1.1.34.1.1.19.1.1.17.1.1.39.1.1.25.1.1.16.1.2.33.1.1.21.1.1.24.1.1.18.1.1
+	    Client-ID (61), length 7: ether bc:24:11:92:41:78
+	    GUID (97), length 17: 0.36.91.50.2.64.135.237.66.188.96.103.17.36.250.146.66
+	    END (255), length 0
+21:00:55.872552 IP (tos 0x10, ttl 128, id 0, offset 0, flags [DF], proto UDP (17), length 350)
+    192.168.56.2.67 > 192.168.56.50.68: [udp sum ok] BOOTP/DHCP, Reply, length 322, xid 0x229ade2d, Flags [none] (0x0000)
+	  Your-IP 192.168.56.50
+	  Server-IP 192.168.56.2
+	  Client-Ethernet-Address bc:24:11:92:41:78
+	  file "http://192.168.56.2:18091/boot.ipxe"
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Offer
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    Default-Gateway (3), length 4: 192.168.56.2
+	    Domain-Name-Server (6), length 4: 192.168.137.1
+	    Hostname (12), length 25: "lober-linux-qualification"
+	    Lease-Time (51), length 4: 14400
+	    Server-ID (54), length 4: 192.168.56.2
+	    RN (58), length 4: 3600
+	    RB (59), length 4: 7200
+	    Client-ID (61), length 7: ether bc:24:11:92:41:78
+	    END (255), length 0
+21:00:57.904285 IP (tos 0x0, ttl 64, id 772, offset 0, flags [none], proto UDP (17), length 437)
+    0.0.0.0.68 > 255.255.255.255.67: [udp sum ok] BOOTP/DHCP, Request from bc:24:11:92:41:78, length 409, xid 0x229ade2d, secs 18, Flags [none] (0x0000)
+	  Client-Ethernet-Address bc:24:11:92:41:78
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Request
+	    MSZ (57), length 2: 1472
+	    ARCH (93), length 2: 0
+	    NDI (94), length 3: 1.2.1
+	    Vendor-Class (60), length 32: "PXEClient:Arch:00000:UNDI:002001"
+	    User-Class (77), length 4: 
+	      instance#1: [ERROR: invalid option]
+	    Parameter-Request (55), length 23: 
+	      Subnet-Mask (1), Default-Gateway (3), Domain-Name-Server (6), LOG (7)
+	      Hostname (12), Domain-Name (15), RP (17), MTU (26)
+	      Vendor-Option (43), Vendor-Class (60), TFTP (66), BF (67)
+	      Unknown (119), Unknown (128), Unknown (129), Unknown (130)
+	      Unknown (131), Unknown (132), Unknown (133), Unknown (134)
+	      Unknown (135), Unknown (175), Unknown (203)
+	    Unknown (175), length 45: 177.5.1.26.244.16.0.235.3.1.20.1.23.1.1.34.1.1.19.1.1.17.1.1.39.1.1.25.1.1.16.1.2.33.1.1.21.1.1.24.1.1.18.1.1
+	    Client-ID (61), length 7: ether bc:24:11:92:41:78
+	    GUID (97), length 17: 0.36.91.50.2.64.135.237.66.188.96.103.17.36.250.146.66
+	    Server-ID (54), length 4: 192.168.56.2
+	    Requested-IP (50), length 4: 192.168.56.50
+	    END (255), length 0
+21:00:57.905845 IP (tos 0x10, ttl 128, id 0, offset 0, flags [DF], proto UDP (17), length 350)
+    192.168.56.2.67 > 192.168.56.50.68: [udp sum ok] BOOTP/DHCP, Reply, length 322, xid 0x229ade2d, Flags [none] (0x0000)
+	  Your-IP 192.168.56.50
+	  Server-IP 192.168.56.2
+	  Client-Ethernet-Address bc:24:11:92:41:78
+	  file "http://192.168.56.2:18091/boot.ipxe"
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: ACK
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    Default-Gateway (3), length 4: 192.168.56.2
+	    Domain-Name-Server (6), length 4: 192.168.137.1
+	    Hostname (12), length 25: "lober-linux-qualification"
+	    Lease-Time (51), length 4: 14400
+	    Server-ID (54), length 4: 192.168.56.2
+	    RN (58), length 4: 3600
+	    RB (59), length 4: 7200
+	    Client-ID (61), length 7: ether bc:24:11:92:41:78
+	    END (255), length 0
+21:01:11.929063 IP (tos 0x0, ttl 64, id 0, offset 0, flags [none], proto UDP (17), length 328)
+    0.0.0.0.68 > 255.255.255.255.67: [udp sum ok] BOOTP/DHCP, Request from bc:24:11:92:41:78, length 300, xid 0x3b854606, Flags [none] (0x0000)
+	  Client-Ethernet-Address bc:24:11:92:41:78
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Discover
+	    MSZ (57), length 2: 576
+	    Parameter-Request (55), length 7: 
+	      Subnet-Mask (1), Default-Gateway (3), Domain-Name-Server (6), Hostname (12)
+	      Domain-Name (15), BR (28), NTP (42)
+	    Vendor-Class (60), length 3: "d-i"
+	    Client-ID (61), length 7: ether bc:24:11:92:41:78
+	    END (255), length 0
+	    PAD (0), length 0, occurs 29
+21:01:11.929449 IP (tos 0x10, ttl 128, id 0, offset 0, flags [DF], proto UDP (17), length 350)
+    192.168.56.2.67 > 192.168.56.50.68: [udp sum ok] BOOTP/DHCP, Reply, length 322, xid 0x3b854606, Flags [none] (0x0000)
+	  Your-IP 192.168.56.50
+	  Server-IP 192.168.56.2
+	  Client-Ethernet-Address bc:24:11:92:41:78
+	  file "http://192.168.56.2:18091/boot.ipxe"
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Offer
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    Default-Gateway (3), length 4: 192.168.56.2
+	    Domain-Name-Server (6), length 4: 192.168.137.1
+	    Hostname (12), length 25: "lober-linux-qualification"
+	    Lease-Time (51), length 4: 14400
+	    Server-ID (54), length 4: 192.168.56.2
+	    RN (58), length 4: 3600
+	    RB (59), length 4: 7200
+	    Client-ID (61), length 7: ether bc:24:11:92:41:78
+	    END (255), length 0
+21:01:11.961053 IP (tos 0x0, ttl 64, id 0, offset 0, flags [none], proto UDP (17), length 328)
+    0.0.0.0.68 > 255.255.255.255.67: [udp sum ok] BOOTP/DHCP, Request from bc:24:11:92:41:78, length 300, xid 0x3b854606, Flags [none] (0x0000)
+	  Client-Ethernet-Address bc:24:11:92:41:78
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Request
+	    Requested-IP (50), length 4: 192.168.56.50
+	    Server-ID (54), length 4: 192.168.56.2
+	    MSZ (57), length 2: 576
+	    Parameter-Request (55), length 7: 
+	      Subnet-Mask (1), Default-Gateway (3), Domain-Name-Server (6), Hostname (12)
+	      Domain-Name (15), BR (28), NTP (42)
+	    Vendor-Class (60), length 3: "d-i"
+	    Client-ID (61), length 7: ether bc:24:11:92:41:78
+	    END (255), length 0
+	    PAD (0), length 0, occurs 17
+21:01:11.961445 IP (tos 0x10, ttl 128, id 0, offset 0, flags [DF], proto UDP (17), length 350)
+    192.168.56.2.67 > 192.168.56.50.68: [udp sum ok] BOOTP/DHCP, Reply, length 322, xid 0x3b854606, Flags [none] (0x0000)
+	  Your-IP 192.168.56.50
+	  Server-IP 192.168.56.2
+	  Client-Ethernet-Address bc:24:11:92:41:78
+	  file "http://192.168.56.2:18091/boot.ipxe"
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: ACK
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    Default-Gateway (3), length 4: 192.168.56.2
+	    Domain-Name-Server (6), length 4: 192.168.137.1
+	    Hostname (12), length 25: "lober-linux-qualification"
+	    Lease-Time (51), length 4: 14400
+	    Server-ID (54), length 4: 192.168.56.2
+	    RN (58), length 4: 3600
+	    RB (59), length 4: 7200
+	    Client-ID (61), length 7: ether bc:24:11:92:41:78
+	    END (255), length 0
+reading from file /home/dev/lober-linux-20261018/real-debian-vm-linux-20261018-candidate-2-required-failure/dhcp-repro.pcap, link-type EN10MB (Ethernet), snapshot length 262144

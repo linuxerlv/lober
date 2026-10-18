@@ -1,0 +1,15 @@
+{
+  "run_id": "vm-linux-20261018-candidate-2",
+  "product_sha": "d3014e535f1f2a3366cc726b5f30247bd750c8a9",
+  "test_sha": "8051bc1c50824711e5b7c7537b31fe7aaefcb952",
+  "binary_sha256": "79713e6ee6ad70dbf38b7ea13fd6836a4568d3027d89b4d6d81ee45b327ac92b",
+  "manifest_sha256": "210a21cc4133a27af0c5bb8850aba721d0c63f109ddf8fae3c60e9bfbe6fa262",
+  "status": "PASS",
+  "count": 91,
+  "failed": 0,
+  "skipped": 0,
+  "evidence": "frontend.log",
+  "evidence_sha256": "51bc2f5efbbf0a4dd4fda787a0fa3defb05984e0a4075350de3e5d3474d27822",
+  "test_files": 26,
+  "command": "pnpm check:console"
+}

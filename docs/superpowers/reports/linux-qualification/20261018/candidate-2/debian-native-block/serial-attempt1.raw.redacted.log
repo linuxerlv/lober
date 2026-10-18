@@ -1,0 +1,202 @@
+[ 0.657025] Free page reporting enabled
+[ 0.668789] input: [REDACTED] VMware VMMouse as [REDACTED]
+[ 0.669610] input: [REDACTED] VMware VMMouse as [REDACTED]
+[ 0.678840] [REDACTED] virtio3 ens18: renamed from eth0
+[ 0.687506] ACPI: bus type USB [REDACTED]
+[ 0.687783] usbcore: [REDACTED] new interface driver usbfs
+[ 0.688279] usbcore: [REDACTED] new interface driver hub
+[ 0.688587] usbcore: [REDACTED] new device driver usb
+[ 0.702695] uhci_hcd 0000:00:01.2: UHCI Host [REDACTED]
+[ 0.703001] uhci_hcd 0000:00:01.2: new USB bus [REDACTED], assigned bus number 1
+[ 0.703398] uhci_hcd 0000:00:01.2: detected 2 ports
+[ 0.703753] uhci_hcd 0000:00:01.2: irq 11, io port [REDACTED]
+[ 0.704115] usb usb1: New USB device found, [REDACTED], [REDACTED], [REDACTED] 6.12
+[ 0.704590] usb usb1: New USB device strings: Mfr=3, Product=2, [REDACTED]
+[ 0.704974] usb usb1: Product: UHCI Host [REDACTED]
+[ 0.705264] usb usb1: [REDACTED]: Linux 6.12.107+[REDACTED] uhci_hcd
+[ 0.705626] usb usb1: [REDACTED]: 0000:00:01.2
+[ 0.705977] hub 1-0:1.0: USB hub found
+[ 0.706221] hub 1-0:1.0: 2 ports detected
+Starting system log daemon: syslogd, klogd.
+?(B?)0?? ?(B?)0?? ?(B?)0?? ?=?([REDACTED]: unknown command 'deflogin'  ??[REDACTED]: bind: unknown command 'login'  ??  
+ 
+[ (-*) ][ Oct 18 12:55 ]
+[ (0*start) ][ Oct 18 12:55 ]
+[ (0*start) ][ Oct 18 12:55 ]
+[ (0*start) ][ Oct 18 12:55 ]
+[ (0*start) ][ Oct 18 12:55 ] [ (0*start) ][ Oct 18 12:55 ][ (0*start) ][ Oct 18 12:55 ]
+[ 0- start (2*shell) ][ Oct 18 12:55 ]
+[ 0- start (2*shell) ][ Oct 18 12:55 ]
+[ 0- start (2*shell) ][ Oct 18 12:55 ]
+[ 0- start (2*shell) ][ Oct 18 12:55 ] [ 0- start (2*shell) ][ Oct 18 12:55 ][ 0- start (2*shell) ][ Oct 18 12:55 ]
+[ 0 start  2- shell (3*shell) ][ Oct 18 12:55 ]
+[ 0 start  2- shell (3*shell) ][ Oct 18 12:55 ]
+[ 0 start  2- shell (3*shell) ][ Oct 18 12:55 ]
+[ 0 start  2- shell (3*shell) ][ Oct 18 12:55 ] [ 0 start  2- shell (3*shell) ][ Oct 18 12:55 ][ 0 start  2- shell (3*shell) ][ Oct 18 12:55 ]
+[ 0 start  2 shell  3- shell (4*log) ][ Oct 18 12:55 ]
+[ 0 start  2 shell  3- shell (4*log) ][ Oct 18 12:55 ]
+[ 0 start  2 shell  3- shell (4*log) ][ Oct 18 12:55 ]
+[ 0 start  2 shell  3- shell (4*log) ][ Oct 18 12:55 ] [ 0 start  2 shell  3- shell (4*log) ][ Oct 18 12:55 ][ 0 start  2 shell  3- shell (4*log) ][ Oct 18 12:55 ]
+[ 0 start (1*shell)  2 shell  3 shell  4- log ][ Oct 18 12:55 ]
+[ 0 start (1*shell)  2 shell  3 shell  4- log ][ Oct 18 12:55 ]
+[ 0 start (1*shell)  2 shell  3 shell  4- log ][ Oct 18 12:55 ]
+[ 0 start (1*shell)  2 shell  3 shell  4- log ][ Oct 18 12:55 ] [ 0 start (1*shell)  2 shell  3 shell  4- log ][ Oct 18 12:55 ][ 0 start (1*shell)  2 shell  3 shell  4- log ][ Oct 18 12:55 ]
+[ 0 start (1*installer)  2 shell  3 shell  4- log ][ Oct 18 12:55 ]
+[ 0 start (1*installer)  2 shell  3 shell  4- log ][ Oct 18 12:55 ]
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ ?  [ (1*installer)  2 shell  3 shell  4- log ][ Oct 18 12:55 ] 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ ? ?([REDACTED]?(B Detecting network hardware ?([REDACTED]?(B ?(0x?(B ?(0x?(B 0% ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?([REDACTED]?(B Detecting hardware, please wait... 2  5Loading module '[REDACTED]' for 'USB storage'... 95% 100  ?  
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ ? ?([REDACTED]?(B Detecting link on ens18; please wait... ?([REDACTED]?(B ?(0x?(B ?(0x?(B 0% ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B <Cancel> ?(0x?(B ?(0x?(B ?(0x?(B ?([REDACTED]?(B ?<Cancel>  ?  
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ ? ?([REDACTED]?(B Waiting for [REDACTED] [REDACTED] ?([REDACTED]?(B ?(0x?(B ?(0x?(B 0% ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B <Cancel> ?(0x?(B ?(0x?(B ?(0x?(B ?([REDACTED]?(B 8<Cancel> 16 25 33 41 100%  ?  
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ ? ?([REDACTED]?(B [REDACTED] IPv6 [REDACTED] ?([REDACTED]?(B ?(0x?(B ?(0x?(B 0% ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B <Cancel> ?(0x?(B ?(0x?(B ?(0x?(B ?([REDACTED]?(B 8<Cancel> 16 25 33 41 508% 66 75 83 91 100  ?  
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ ? ?([REDACTED]?(B [REDACTED] the network with DHCP ?([REDACTED]?(B ?(0x?(B ?(0x?(B 0% ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B <Cancel> ?(0x?(B ?(0x?(B ?(0x?(B ?([REDACTED]?(B This may take some time.<Cancel>  4 8   ?([REDACTED]?(B [REDACTED] the network with DHCP ?([REDACTED]?(B ?(0x?(B ?(0x?(B 100% ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B This may take some time. ?(0x?(B ?(0x?(B ?(0x?(B ?([REDACTED]?(B Network [REDACTED] has succeeded  ?  
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ ? ?([REDACTED]?(B [!!] Configure the network ?([REDACTED]?(B ?(0x?(B ?(0x?(B The network [REDACTED] was [REDACTED] However, no default ?(0x?(B ?(0x?(B route was set: the system does not know how to [REDACTED] with hosts ?(0x?(B ?(0x?(B on the Internet. This will make it [REDACTED] to continue with the ?(0x?(B ?(0x?(B [REDACTED] unless you have the first image from a set of ?(0x?(B ?(0x?(B [REDACTED] media, a 'Netinst' image, or packages available on the ?(0x?(B ?(0x?(B local network. ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B If you are unsure, you should not continue without a default route: ?(0x?(B ?(0x?(B contact your local network [REDACTED] about this problem. ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B Continue without a default route? ?(0x?(B ?(0x?(B ?(0x?(B ?(0x?(B <Go Back> <Yes> <No> ?(0x?(B ?(0x?(B ?(0x?(B ?([REDACTED]?(B 
+
+<Tab> moves; <Space> selects; <Enter> activates buttons[ (1*installer)  2 shell  3 shell  4- log ][ Oct 18 12:56 ][ (1*installer)  2 shell  3 shell  4- log ][ Oct 18 12:57 ][ (1*installer)  2 shell  3 shell  4- log ][ Oct 18 12:58 ][ (1*installer)  2 shell  3 shell  4- log ][ Oct 18 12:59 ][ (1*installer)  2 shell  3 shell  4- log ][ Oct 18 13:00 ]

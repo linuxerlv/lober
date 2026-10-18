@@ -1,0 +1,16 @@
+{
+  "status": "BLOCKED",
+  "system": "debian",
+  "negative": true,
+  "at": 1792328087,
+  "product_sha": "d3014e535f1f2a3366cc726b5f30247bd750c8a9",
+  "test_sha": "8051bc1c50824711e5b7c7537b31fe7aaefcb952",
+  "binary_sha256": "79713e6ee6ad70dbf38b7ea13fd6836a4568d3027d89b4d6d81ee45b327ac92b",
+  "harness_test_sha": "13e129b11b7838f3b1a20415aa723b913dd71676",
+  "harness_sha256": "6e4f17063eb99f378bb87ded60121754cf452ceddd35fd027d7260fd1549122a",
+  "evidence_sha256": {},
+  "task": "acym4hoyoxdwyzllyvuv725wgu",
+  "media": "soxac2md6tnosq56chtbgj7rdy",
+  "version": "13.7.0",
+  "reason": "Native mirror hostname prompt; extracted DVD has no InRelease/Release.gpg. No required-hook RC41 observed."
+}

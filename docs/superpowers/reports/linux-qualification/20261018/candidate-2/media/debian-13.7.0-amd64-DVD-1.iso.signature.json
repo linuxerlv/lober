@@ -1,0 +1,8 @@
+{
+  "status": "PASS",
+  "fingerprint": "DF9B9C49EAA9298432589D76DA87E80D6294BE9B",
+  "key_source": "https://www.debian.org/CD/key-DA87E80D6294BE9B.txt",
+  "fingerprint_source": "https://www.debian.org/CD/verify",
+  "signature_url": "https://cdimage.debian.org/debian-cd/current/amd64/iso-dvd/SHA256SUMS.sign",
+  "checksum_sha256": "b960a988620d0a55e6578288829bcd26d80eac0d4c0890a5ee4c41b9ab7971cd"
+}
