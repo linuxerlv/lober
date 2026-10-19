@@ -1,0 +1,17 @@
+{
+  "status": "PASS",
+  "scope": "Owned PG16 native clients, linked host libraries and real connection verified; no backup/restore result claimed.",
+  "source_image_id": "sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4",
+  "files": {
+    "psql": {
+      "sha256": "2314c8af76f7ef4005505c891e7fa09abf5d492739c8d3cea26cae71b3a730c8",
+      "version": "psql (PostgreSQL) 16.15 (Debian 16.15-1.pgdg12+2)"
+    },
+    "pg_dump": {
+      "sha256": "b24e777de7beeb22f41c8233285c7f15c5c936739a38330bd780ea7252865cfe",
+      "version": "pg_dump (PostgreSQL) 16.15 (Debian 16.15-1.pgdg12+2)"
+    }
+  },
+  "server_version": "16.15 (Debian 16.15-1.pgdg12+2)",
+  "existing_host_pg18_clients": "unchanged; owned PATH prefix required for enterprise run"
+}

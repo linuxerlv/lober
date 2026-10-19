@@ -1,0 +1,28 @@
+{
+  "at": 1792377728,
+  "windows": {
+    "at": 1792377723,
+    "available_bytes": 2415448064,
+    "total_bytes": 17006317568
+  },
+  "wsl_available_bytes": 7821983744,
+  "real_os_guest_started": false,
+  "profiles": {
+    "1024": {
+      "status": "BLOCKED_MEMORY",
+      "reason": "Windows headroom insufficient: need 3221225472 available bytes before guest start"
+    },
+    "2048": {
+      "status": "BLOCKED_MEMORY",
+      "reason": "Windows headroom insufficient: need 4294967296 available bytes before guest start"
+    },
+    "4096": {
+      "status": "BLOCKED_MEMORY",
+      "reason": "Windows headroom insufficient: need 6442450944 available bytes before guest start"
+    },
+    "8192": {
+      "status": "BLOCKED_MEMORY",
+      "reason": "Windows headroom insufficient: need 10737418240 available bytes before guest start"
+    }
+  }
+}

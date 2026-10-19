@@ -60,6 +60,11 @@ def require_hook_failure(task, events):
 
 
 class Campaign:
+    sn = SN
+    guest = GUEST
+    ssh_port = 22
+    qualification_tag = 'linux-20261018'
+
     def __init__(self, root, system, negative=False):
         os.umask(0o077)
         self.root = root.resolve(strict=True)
@@ -202,12 +207,12 @@ uname -r
         draft = self.api('PUT', f'/templates/{draft["id"]}/versions/{draft["version"]}', payload, token=author)
         template = self.approve('templates', draft, author, approver)
         hosts = self.api('GET', '/hosts?limit=100')['items']
-        host = next((h for h in hosts if h['sn'] == SN), None)
+        host = next((h for h in hosts if h['sn'] == self.sn), None)
         if host:
-            assert host['attrs'].get('qualification') == 'linux-20261018'
+            assert host['attrs'].get('qualification') == self.qualification_tag
         else:
-            self.api('POST', '/hosts', {'sn': SN, 'arch': 'x86_64', 'firmware': 'bios',
-                'attrs': {'qualification': 'linux-20261018'}})
+            self.api('POST', '/hosts', {'sn': self.sn, 'arch': 'x86_64', 'firmware': 'bios',
+                'attrs': {'qualification': self.qualification_tag}})
         entered = {'account/1/pwhash': self.private['guestHash'], 'sshkey/1/key': (self.root / 'guest-key.pub').read_text().strip(),
             'network/1/hostname': 'lober-' + self.system, 'network/1/interface': 'ens18',
             'packages/1/packages': 'curl\nqemu-guest-agent'}
@@ -218,12 +223,12 @@ uname -r
             assert len(products) == 1, 'real Agama product inventory must resolve before creating a task'
             entered['tpl/product'] = products[0]['value']
         selection = {'isoID': media['id'], 'templateID': template['id'], 'templateVersion': template['version']}
-        params = self.api('POST', '/wizard/params', {**selection, 'hostSNs': [SN], 'entered': {SN: entered}})
+        params = self.api('POST', '/wizard/params', {**selection, 'hostSNs': [self.sn], 'entered': {self.sn: entered}})
         (self.run / 'params-private.json').write_text(json.dumps(params, indent=2))
         assert not params['common'] and not params['hosts'][0]['problems'], 'wizard rejected qualification parameters'
-        created = self.api('POST', '/wizard/tasks', {**selection, 'hosts': [{'sn': SN, 'entered': entered}]})
+        created = self.api('POST', '/wizard/tasks', {**selection, 'hosts': [{'sn': self.sn, 'entered': entered}]})
         task = created['tasks'][0]
-        assert task['hostSN'] == SN and task['state'] == 'pending'
+        assert task['hostSN'] == self.sn and task['state'] == 'pending'
         (self.run / 'task-private.json').write_text(json.dumps(task, indent=2))
         (self.run / 'candidate-at-prepare.json').write_text(json.dumps(self.manifest, indent=2))
         self.save('PREPARED', task=task['id'], media=media['id'], version=media['version'])
@@ -283,14 +288,17 @@ uname -r
             time.sleep(1)
         raise RuntimeError('guest inspection agent timed out')
 
+    def guest_ssh_args(self, command):
+        return ['ssh', '-p', str(self.ssh_port), '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
+            '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=accept-new',
+            '-o', 'UserKnownHostsFile=' + str(self.run / 'known_hosts'),
+            '-i', str(self.root / 'guest-key'), 'lober@' + self.guest, command]
+
     def inspect(self):
         self.check_guest()
         task = self.task()
         assert task['state'] == ('failed' if self.negative else 'done')
-        ssh = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
-            '-o', 'StrictHostKeyChecking=accept-new', '-o', 'UserKnownHostsFile=' + str(self.run / 'known_hosts'),
-            '-i', str(self.root / 'guest-key'), 'lober@' + GUEST,
-            'cat /etc/os-release; uname -r; findmnt -n -o SOURCE /; ip -4 route'],
+        ssh = subprocess.run(self.guest_ssh_args('cat /etc/os-release; uname -r; findmnt -n -o SOURCE /; ip -4 route'),
             capture_output=True, text=True, timeout=30)
         (self.run / 'ssh.log').write_text(ssh.stdout + ssh.stderr)
         assert ssh.returncode == 0, 'installed guest SSH/network check failed'

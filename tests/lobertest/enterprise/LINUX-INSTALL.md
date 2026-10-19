@@ -2,7 +2,7 @@
 
 ## WSL 预检（2026-10-19）
 
-用户允许在 WSL 满足条件时测试，并要求每次只运行一个系统。当前 WSL 的 KVM 实际 vCPU 探测通过，但 Windows 物理内存不足，真实装机尚未启动。详见 [WSL 预检报告](../../../docs/superpowers/reports/2026-10-19-wsl-qualification-preflight.md)。
+用户允许在 WSL 满足条件时测试，并要求每次只运行一个系统。WSL 的 KVM 实际 vCPU 探测通过；曾因 Windows 物理内存不足停止准备，空闲回收后重新通过低内存目标准入，正在串行准备，真实装机尚未启动。详见 [WSL 预检报告](../../../docs/superpowers/reports/2026-10-19-wsl-qualification-preflight.md)。
 
 `wsl_safety.py` 是新增的资源保护工具，尚未接入下述 PVE 验收脚本，也不是 WSL 装机运行器。它提供持有至目标退出的单实例文件锁、独占 32GiB qcow2 校验和重启后的新抓包检查。后续 WSL 运行器必须接入这些保护并验证后，才能启动实际测试机；不能直接在 WSL 运行下面的 PVE start 命令。
 
@@ -49,5 +49,15 @@ prepare 经两名不同角色用户审批派生模板和必需 firstboot hook，
 重复启动必须保持 net0 → scsi0 的引导顺序，使用只匹配本目标 IP/机器网关端口的受限 tcpdump 证明实际 PXE 请求及网关 local boot 响应；还比较重启前后的根文件系统 UUID。VM 需要 tcpdump 和免密 sudo。抓包受限保存，不得公开可能含凭据的原文。
 
 当前脚本未在指定 VM 上运行验证。PVE 存储/连接恢复、补充产品修复完整验证、脚本语法与实际 API/guest agent 协议检查均完成后，才能开始用其结果作验收依据。
+
+### WSL 串行运行适配（尚无实际装机 PASS）
+
+用户允许 WSL 满足条件后运行。`wsl_install.py` 复用实际 API、hook 及来宾验收流程，禁止 PVE 操作；独占根目录固定为 `/home/mgr/lober-wsl-20261019`，SLIRP 网段 `172.30.194.0/24`，来宾 SSH 仅转发到 `127.0.0.1:22221`。QA 的四个文件、候选二进制和网络/内存 profile 必须通过 `qualification-source.json` 的哈希绑定；不能从可变工作区直接作最终装机验收。
+
+真实 start 只允许在 `lober-wsl-guest-20261019.service` 中运行，MainPID 必须为监督进程，MemoryMax 必须为来宾内存加 512MiB，MemorySwapMax=0、KillMode=control-group、SendSIGKILL=yes、Restart=no、TimeoutStopSec=10s。单实例锁持有至 QEMU 退出；监督进程终止会清理子进程。prepare/start/qualify 使用新的 WSL 入口，禁止套用上方 PVE 命令启动 WSL。
+
+Windows 内存采样必须在 30 秒内，不能使用 WSL 虚拟 MemAvailable 替代宿主物理余量。启动前要求来宾内存 + 512MiB 开销 + 1536MiB 宿主保留，并检查 WSL 余量；运行时若宿主低于保留线则停止自有目标。Debian 2GiB 目标需 Windows 可用 4GiB，其他 4GiB 目标需 6GiB，Ubuntu 8GiB 目标需 10GiB。一次仅一个系统，构建和浏览器工作负载不得与装机重叠。
+
+WSL 的 45 项检查器/暂停 KVM 探针通过仅说明保护与检查代码通过这些用例，不代表真实 PXE、Linux 安装或 131 项控制面套件在 WSL 已通过。SLIRP 验收也不能代替物理网络 DHCP/PXE 验收。
 
 验收脚本单独从 test 的已提交 Git archive 导出，在脚本旁生成 qualification-source.json，绑定该 archive 的 test SHA、脚本 SHA256、候选 run_id 和二进制 SHA256。该生成文件不含秘密。结果分别记录构建候选的 test_sha 与验收脚本的 harness_test_sha；修改 QA 工具时不能改写已经完成的产品测试证据。PVE 对 SMBIOS 字符串使用 base64 标记时，脚本按标记解码后检查实际 SN。

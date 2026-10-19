@@ -3,10 +3,29 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from wsl_safety import admit_memory, guest_lock, owned_disk, require_repeat_network
+from wsl_safety import admit_memory, guest_lock, owned_disk, require_repeat_network, require_runtime_memory, require_guest_unit
 
 
 class WslSafetyTests(unittest.TestCase):
+    def test_real_guest_requires_its_own_capped_systemd_group(self):
+        properties={'MainPID':'123','MemoryMax':str(2560*1024**2),'MemorySwapMax':'0','KillMode':'control-group',
+                    'SendSIGKILL':'yes','Restart':'no','TimeoutStopUSec':'10s'}
+        cgroup='0::/system.slice/lober-wsl-guest-20261019.service\n'
+        require_guest_unit(properties,123,2048,cgroup)
+        for change in [{'MainPID':'456'},{'MemoryMax':'infinity'},{'MemorySwapMax':'infinity'},
+                       {'KillMode':'process'},{'SendSIGKILL':'no'},{'Restart':'always'},{'TimeoutStopUSec':'90s'}]:
+            with self.assertRaises(ValueError):require_guest_unit(dict(properties,**change),123,2048,cgroup)
+        with self.assertRaises(ValueError):require_guest_unit(properties,123,2048,'0::/user.slice/another.service')
+
+    def test_running_work_stops_before_host_reserve_is_exhausted(self):
+        fresh = {'at': 100, 'available_bytes': 2*1024**3}
+        require_runtime_memory(fresh, 1024**3, now=110)
+        for snapshot, linux_free in [({'at': 100, 'available_bytes': 1024**3}, 1024**3),
+                                     (fresh, 128*1024**2),
+                                     ({'at': 1, 'available_bytes': 2*1024**3}, 1024**3),
+                                     ({'at': 100, 'available_bytes': float('nan')}, 1024**3)]:
+            with self.assertRaises(ValueError): require_runtime_memory(snapshot, linux_free, now=110)
+
     def test_memory_requires_fresh_windows_and_linux_headroom(self):
         fresh = {'at': 100, 'available_bytes': 6 * 1024**3}
         admit_memory(fresh, 2048, 6 * 1024**3, now=110)

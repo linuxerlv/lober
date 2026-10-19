@@ -1,0 +1,9 @@
+{
+  "at": 1792377541,
+  "scope": "checker regressions and paused KVM probes; no real OS install",
+  "tests": 45,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "status": "PASS"
+}

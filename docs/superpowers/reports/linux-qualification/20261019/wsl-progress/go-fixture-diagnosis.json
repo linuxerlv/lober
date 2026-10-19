@@ -1,0 +1,17 @@
+{
+  "observed_case": "TestEnabledMachineRejectsInvalidEndpointOrUnprotectedKey/public-key",
+  "probe": [
+    {
+      "umask": "0o77",
+      "requested": "0o644",
+      "actual": "0o600"
+    },
+    {
+      "umask": "0o22",
+      "requested": "0o644",
+      "actual": "0o644"
+    }
+  ],
+  "historical_proposal_superseded": "Runner inherited0077, so public-key fixture became0600 and product correctly accepted a protected key; retry Go child with explicit0022, leave private parent077.",
+  "verified_resolution": "Keep private runner umask077. Explicitly chmod only the public-key negative test fixture0644 and assert its permission. Same entire test passed with race count1 under077 and022. Production code unchanged."
+}

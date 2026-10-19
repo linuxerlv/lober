@@ -10,24 +10,46 @@ HOST_RESERVE = 1536 * MIB
 QEMU_OVERHEAD = 512 * MIB
 MARKER = 'OWNED-BY-LOBER-WSL-QUALIFICATION'
 PURPOSE = 'linux-install-qualification-20261019'
+GUEST_UNIT = 'lober-wsl-guest-20261019.service'
 
 
-def admit_memory(snapshot, guest_mib, linux_available, *, now=None):
-    """Windows free RAM is required; WSL's virtual MemAvailable alone is unsafe."""
+def require_guest_unit(properties, pid, ram_mib, cgroup):
+    expected={'MainPID':str(pid),'MemoryMax':str((ram_mib+512)*MIB),'MemorySwapMax':'0',
+              'KillMode':'control-group','SendSIGKILL':'yes','Restart':'no','TimeoutStopUSec':'10s'}
+    if any(properties.get(key)!=value for key,value in expected.items()):
+        raise ValueError('real guest requires the owned memory-capped systemd process group')
+    if cgroup.strip()!='0::/system.slice/'+GUEST_UNIT:
+        raise ValueError('real guest supervisor is outside its owned systemd process group')
+
+
+def _observed_memory(snapshot, linux_available, now):
     now = time.time() if now is None else now
-    if not isinstance(guest_mib, int) or not 1024 <= guest_mib <= 8192:
-        raise ValueError('guest memory is outside the reviewed 1–8 GiB limits')
     at = snapshot.get('at', -1)
     if not isinstance(at, (int, float)) or not math.isfinite(at) or not 0 <= now-at <= 30:
         raise ValueError('Windows memory observation is stale or in the future')
     available = snapshot.get('available_bytes')
     if type(available) is not int or available < 0 or type(linux_available) is not int or linux_available < 0:
         raise ValueError('physical memory observations must be nonnegative integer byte counts')
+    return available
+
+
+def admit_memory(snapshot, guest_mib, linux_available, *, now=None):
+    """Windows free RAM is required; WSL's virtual MemAvailable alone is unsafe."""
+    if not isinstance(guest_mib, int) or not 1024 <= guest_mib <= 8192:
+        raise ValueError('guest memory is outside the reviewed 1–8 GiB limits')
+    available = _observed_memory(snapshot, linux_available, now)
     required = guest_mib * MIB + QEMU_OVERHEAD + HOST_RESERVE
     if available < required:
         raise ValueError(f'Windows headroom insufficient: need {required} available bytes before guest start')
     if linux_available < guest_mib * MIB + 1024 * MIB:
         raise ValueError('WSL headroom insufficient')
+
+
+def require_runtime_memory(snapshot, linux_available, *, now=None):
+    """An active, already budgeted process must still preserve host reserve."""
+    available = _observed_memory(snapshot, linux_available, now)
+    if available < HOST_RESERVE or linux_available < 384*MIB:
+        raise ValueError('active work must stop: physical memory reserve exhausted')
 
 
 @contextmanager

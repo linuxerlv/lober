@@ -1,0 +1,53 @@
+gofmt -l $(go list -f {{.Dir}} ./...)
+go vet ./...
+go test -count=1 -run '^Test全模块依赖守卫$' ./internal/archtest
+ok  	github.com/lober/lober/internal/archtest	0.300s
+go test ./...
+?   	github.com/lober/lober/cmd/console-openapi	[no test files]
+ok  	github.com/lober/lober/cmd/lober	(cached)
+ok  	github.com/lober/lober/internal/archtest	104.034s
+ok  	github.com/lober/lober/internal/builtin	1.290s
+ok  	github.com/lober/lober/internal/console	(cached)
+ok  	github.com/lober/lober/internal/core/activation	(cached)
+ok  	github.com/lober/lober/internal/core/admission	(cached)
+ok  	github.com/lober/lober/internal/core/catalog	(cached)
+ok  	github.com/lober/lober/internal/core/model	(cached)
+ok  	github.com/lober/lober/internal/core/params	(cached)
+ok  	github.com/lober/lober/internal/core/scan	(cached)
+ok  	github.com/lober/lober/internal/core/snapshot	(cached)
+ok  	github.com/lober/lober/internal/events	(cached)
+ok  	github.com/lober/lober/internal/execution	(cached)
+ok  	github.com/lober/lober/internal/iso	18.065s
+ok  	github.com/lober/lober/internal/iso/iso9660	(cached)
+ok  	github.com/lober/lober/internal/iso/isotest	(cached)
+ok  	github.com/lober/lober/internal/machine	(cached)
+ok  	github.com/lober/lober/internal/render	7.517s
+ok  	github.com/lober/lober/internal/store	(cached)
+ok  	github.com/lober/lober/internal/store/pgstore	(cached)
+ok  	github.com/lober/lober/internal/store/pgstore/pgtest	(cached)
+go test -race -timeout=20m ./...
+?   	github.com/lober/lober/cmd/console-openapi	[no test files]
+--- FAIL: TestEnabledMachineRejectsInvalidEndpointOrUnprotectedKey (1.16s)
+    --- FAIL: TestEnabledMachineRejectsInvalidEndpointOrUnprotectedKey/public-key (0.24s)
+        machine_test.go:92: unsafe machine configuration accepted
+FAIL
+FAIL	github.com/lober/lober/cmd/lober	53.177s
+ok  	github.com/lober/lober/internal/archtest	55.221s
+ok  	github.com/lober/lober/internal/builtin	3.177s
+ok  	github.com/lober/lober/internal/console	625.583s
+ok  	github.com/lober/lober/internal/core/activation	1.079s
+ok  	github.com/lober/lober/internal/core/admission	1.021s
+ok  	github.com/lober/lober/internal/core/catalog	1.024s
+ok  	github.com/lober/lober/internal/core/model	1.104s
+ok  	github.com/lober/lober/internal/core/params	1.030s
+ok  	github.com/lober/lober/internal/core/scan	1.022s
+ok  	github.com/lober/lober/internal/core/snapshot	1.067s
+ok  	github.com/lober/lober/internal/events	1.013s
+ok  	github.com/lober/lober/internal/execution	2.307s
+ok  	github.com/lober/lober/internal/iso	23.680s
+ok  	github.com/lober/lober/internal/iso/iso9660	1.195s
+ok  	github.com/lober/lober/internal/iso/isotest	3.055s
+ok  	github.com/lober/lober/internal/machine	1.014s
+ok  	github.com/lober/lober/internal/render	8.744s
+ok  	github.com/lober/lober/internal/store	1.041s
+make: *** [Makefile:30: race] Terminated

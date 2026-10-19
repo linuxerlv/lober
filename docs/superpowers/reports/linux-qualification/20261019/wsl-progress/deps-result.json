@@ -1,0 +1,26 @@
+{
+  "phase": "deps",
+  "status": "PASS",
+  "started": 1792375510,
+  "steps": [
+    {
+      "number": 1,
+      "command": [
+        "/home/mgr/lober-wsl-20261019/tools/node-v24.22.0-linux-x64/bin/node",
+        "/home/mgr/lober-wsl-20261019/tools/pnpm/node_modules/pnpm/bin/pnpm.cjs",
+        "install",
+        "--frozen-lockfile",
+        "--ignore-scripts",
+        "--network-concurrency=2",
+        "--store-dir",
+        "/home/mgr/lober-wsl-20261019/cache/pnpm"
+      ],
+      "status": "PASS",
+      "windows_min_available_bytes": 2599997440,
+      "exit": 0,
+      "seconds": 425.409
+    }
+  ],
+  "guard_sha256": "c5961e40f368b5207b07faf1a51e2386cbc721ce0c155727665ce52a41d8f816",
+  "finished": 1792375935
+}

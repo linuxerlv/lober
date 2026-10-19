@@ -1,0 +1,33 @@
+{
+  "scope": "exact mutable QA inputs used by45 checker run; final install harness must freeze a later committed archive",
+  "files": {
+    "linux_install.py": {
+      "executed_sha256": "ee71e735d880f08b8b67c3d9b2e1a599112b84a8c7f749a1ffa4ae7dc66242bc",
+      "lf_sha256": "ee71e735d880f08b8b67c3d9b2e1a599112b84a8c7f749a1ffa4ae7dc66242bc"
+    },
+    "wsl_safety.py": {
+      "executed_sha256": "176f164a9aefd1449f1bf53a642d87ce3319d4e507e3ef4ce94ca633b5692263",
+      "lf_sha256": "176f164a9aefd1449f1bf53a642d87ce3319d4e507e3ef4ce94ca633b5692263"
+    },
+    "wsl_qemu.py": {
+      "executed_sha256": "4fecd842081e9d12a4eab5b3d87f2a08e0eb791cbd5429ac66ed24dc6eececa7",
+      "lf_sha256": "4fecd842081e9d12a4eab5b3d87f2a08e0eb791cbd5429ac66ed24dc6eececa7"
+    },
+    "wsl_install.py": {
+      "executed_sha256": "6ce93df7be251f16784cd898db4dafcd0249f642869e192203c88593a1727c9f",
+      "lf_sha256": "6ce93df7be251f16784cd898db4dafcd0249f642869e192203c88593a1727c9f"
+    },
+    "test_wsl_safety.py": {
+      "executed_sha256": "5ee0ed80bdfa78bd685bb97146cdbc1c1de6fe5e638b1b69dd49237a68abc6b7",
+      "lf_sha256": "5ee0ed80bdfa78bd685bb97146cdbc1c1de6fe5e638b1b69dd49237a68abc6b7"
+    },
+    "test_wsl_qemu.py": {
+      "executed_sha256": "66bdd10fa64aca8782704a18aca160e2c475ba3a0a0591ae32e6a7e13e56d7a5",
+      "lf_sha256": "66bdd10fa64aca8782704a18aca160e2c475ba3a0a0591ae32e6a7e13e56d7a5"
+    },
+    "test_wsl_campaign.py": {
+      "executed_sha256": "0d80a8cd683581fae8a8b1badb4cb11b3af422fbff0ec8a5d5690e699cc33ecb",
+      "lf_sha256": "0d80a8cd683581fae8a8b1badb4cb11b3af422fbff0ec8a5d5690e699cc33ecb"
+    }
+  }
+}

@@ -75,6 +75,14 @@ func TestEnabledMachineRejectsInvalidEndpointOrUnprotectedKey(t *testing.T) {
 				if err := os.WriteFile(cfg.Machine.KeyFile, bytes.Repeat([]byte("x"), 32), 0644); err != nil {
 					t.Fatal(err)
 				}
+				// WriteFile's mode is filtered by the caller's umask. Make
+				// the unsafe fixture explicit even in a private test runner.
+				if err := os.Chmod(cfg.Machine.KeyFile, 0644); err != nil {
+					t.Fatal(err)
+				}
+				if info, err := os.Stat(cfg.Machine.KeyFile); err != nil || info.Mode().Perm() != 0644 {
+					t.Fatal("public-key fixture is not public", err)
+				}
 			case "symlink-key":
 				target := cfg.Machine.KeyFile + ".target"
 				if err := os.WriteFile(target, bytes.Repeat([]byte("x"), 32), 0600); err != nil {
