@@ -1,0 +1,13 @@
+{
+  "status": "FAIL",
+  "exit": 2,
+  "failed_case": "TestIncrementalGateRejectsPackageInExistingRoot",
+  "cause_observed": "The copied Git-index fixture omitted ignored ui/dist placeholders and go:embed found no files.",
+  "normal_packages_passed": 20,
+  "not_run": [
+    "race",
+    "cross",
+    "gen"
+  ],
+  "evidence_sha256": "bfc06b804d4001b64d2e3f5ac93d631b6c9780c43f529ad8979601b4fb068665"
+}

@@ -1,0 +1,6 @@
+{
+  "node": "v24.22.0",
+  "node_tar_sha256": "cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008",
+  "pnpm": "11.16.0",
+  "source": "https://nodejs.org/dist/v24.22.0/SHASUMS256.txt"
+}

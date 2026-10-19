@@ -1,0 +1,26 @@
+{
+  "status": "PREFLIGHT_PROBES_COMPLETE",
+  "kvm_vcpu": {
+    "enabled": true,
+    "present": true
+  },
+  "disk_probe_bytes": 33554432,
+  "disk_probe_seconds": 0.05,
+  "disk_probe_sha256": "edeadec8f638055689d5be63b4bcf2654fb64bf91fb6651e9a924f052a9c7db0",
+  "publishers": {
+    "debian": {
+      "status": 200,
+      "bytes": 2610,
+      "sha256": "b960a988620d0a55e6578288829bcd26d80eac0d4c0890a5ee4c41b9ab7971cd"
+    },
+    "node": {
+      "error": "The read operation timed out"
+    },
+    "npm": {
+      "status": 200,
+      "bytes": 2939,
+      "sha256": "dea171a30fd5003a9a5da772dc698de1baa299c3101053356a54b270410070ea"
+    }
+  },
+  "memory_policy": "One guest only; per-guest host/WSL memory admission and limits required. Ubuntu 8GiB not admitted by this probe."
+}

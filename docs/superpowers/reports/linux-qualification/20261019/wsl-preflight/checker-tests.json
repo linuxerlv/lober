@@ -1,0 +1,14 @@
+{
+  "status": "PASS",
+  "count": 38,
+  "failed": 0,
+  "skipped": 0,
+  "scope": "Gate checkers30, PVE acceptance checkers4, new WSL safety checkers4. No application or real OS installation qualification.",
+  "source_product_sha": "668a512849895ddd00310aca399d0589c9e43cf1",
+  "source_test_sha": "09bc87d49b808df830996bdadf98905d84f0ba94",
+  "qa_files_sha256": {
+    "wsl_safety.py": "b5187a80c1b62eae908adb408f7f061e96521c85ddd28db1d8a4abe4381c2573",
+    "test_wsl_safety.py": "8ebac7b7aeb4c1529244b899068a76a2048232615fb87dbfe425150aa3a81735"
+  },
+  "evidence_sha256": "49589ffbf7c7cec0b0e18e416ab44e9b0e77e93a347611455d87c8cede6036e1"
+}

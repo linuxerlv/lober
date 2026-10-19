@@ -1,5 +1,23 @@
 # 实际 Linux 装机验收
 
+## WSL 预检（2026-10-19）
+
+用户允许在 WSL 满足条件时测试，并要求每次只运行一个系统。当前 WSL 的 KVM 实际 vCPU 探测通过，但 Windows 物理内存不足，真实装机尚未启动。详见 [WSL 预检报告](../../../docs/superpowers/reports/2026-10-19-wsl-qualification-preflight.md)。
+
+`wsl_safety.py` 是新增的资源保护工具，尚未接入下述 PVE 验收脚本，也不是 WSL 装机运行器。它提供持有至目标退出的单实例文件锁、独占 32GiB qcow2 校验和重启后的新抓包检查。后续 WSL 运行器必须接入这些保护并验证后，才能启动实际测试机；不能直接在 WSL 运行下面的 PVE start 命令。
+
+内存准入同时要求 Windows 实际可用内存与 WSL MemAvailable。Windows 观察值须在 30 秒内；预留宿主 1536MiB、QEMU 开销 512MiB。因此 2GiB Debian 目标要求 Windows 至少可用 4GiB，WSL 至少可用 3GiB；WSL 的 10GiB 配置上限不代表 Windows 有这么多空闲内存。内存值异常、过期或不足均拒绝。示例只检查内存，不启动或验收系统：
+
+```bash
+python3 tests/lobertest/enterprise/wsl_safety.py \
+  --host-memory /mnt/e/src/lober/.tmp/linux-qualification/wsl-host-memory.json \
+  --guest-memory-mib 2048
+```
+
+Windows 观察文件由本轮受控 PowerShell 采样生成，包含 Unix 时间、可用和总物理字节数。不可在采样停止后复用旧值。退出码 0 只表示内存准入，不是环境或安装 PASS。
+
+以下 PVE 流程及其原有资源约束保留。
+
 `linux_install.py` 不属于 131 项控制面回归，也不发送模拟机器信号或直接写业务表。它操作本轮独占的 PVE VM102，检查 VM 名称、MAC、32GiB 磁盘序列号、SMBIOS 序列号和私有数据库 schema，拒绝其他目标。
 
 本轮环境的私有状态位于 `/home/dev/lober-linux-20261018`。其中 instance.json、instance-private.json、candidate.json、owned-pve-resources.json、pve-session.json、guest-key / .pub 以及 import-SERIES.json 须先准备并校验。不得提交这些私有状态、认证材料、安装应答、serial 原文或数据库备份。

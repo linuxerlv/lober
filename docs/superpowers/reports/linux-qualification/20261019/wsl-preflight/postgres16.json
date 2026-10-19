@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "server_version": "16.15 (Debian 16.15-1.pgdg12+2)",
+  "container": "lober-wsl-pg16",
+  "image_id": "sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4",
+  "memory_limit": 268435456,
+  "test_role": "lober_test",
+  "superuser": false,
+  "port": 15432,
+  "existing_postgresql18": "unchanged"
+}
