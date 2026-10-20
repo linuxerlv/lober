@@ -202,6 +202,13 @@ func answerPart(e expansion, part catalog.SystemPart, subject model.Subject) (st
 		cleanup += "systemctl stop lober-signals.timer >/dev/null 2>&1 || :\n"
 		// Installer copies may retain the answer's passwords and boot credential.
 		cleanup += "rm -f /root/anaconda-ks.cfg /root/original-ks.cfg /var/log/installer/autoinstall-user-data /var/log/installer/autoinstall-user-data.txt /var/log/installer/cdebconf/questions.dat /var/adm/autoinstall/cache/installedSystem.xml\n"
+		// Installer logs persist tokenized answer and signal URLs from kernel arguments.
+		cleanup += "for ROOT in /var/lib/lober /var/lib/cloud /var/log/installer /var/log/anaconda /var/log/YaST2 /var/adm/autoinstall/cache /root; do\n"
+		cleanup += " [ -d \"$ROOT\" ] || continue\n"
+		cleanup += " grep -rlI -E '/v1/(answer|signal)/[^/[:space:]]+/[A-Za-z0-9_.=-]{32,}/' \"$ROOT\" 2>/dev/null | while IFS= read -r FILE; do\n"
+		cleanup += "  sed -i -E 's#(/v1/(answer|signal)/[^/[:space:]]+/)[A-Za-z0-9_.=-]{32,}/#\\1[redacted]/#g' \"$FILE\"\n"
+		cleanup += " done\n"
+		cleanup += "done\n"
 		staging := "set -eu\numask 077\nmkdir -p " + shQuote(root+"/var/lib/lober") + "\n" + writeHeredoc(root+"/var/lib/lober/cleanup.sh", "LOBER_CLEANUP_EOF", cleanup)
 		staging += signalQueue(values[0], values[1], values[2], e.request.Snapshot.Format == "preseed")
 		staging += "for DIR in /var/lib/lober " + shQuote(root+"/var/lib/lober") + "; do flush_signals; done\n"
