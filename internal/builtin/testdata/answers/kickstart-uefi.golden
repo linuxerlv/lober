@@ -3,7 +3,7 @@ lang en_US.UTF-8
 keyboard us
 timezone UTC
 url --url='http://artifacts.example.test/media/repo/'
-logging --host=192.0.2.1 --port=514 --level=info
+logging --host=192.0.2.1 --port=514
 network --bootproto=dhcp --device=link --activate --hostname='lober-node'
 rootpw --lock
 user --name='lober' --password='$6$fixture$notARealPasswordHash' --iscrypted --groups=wheel

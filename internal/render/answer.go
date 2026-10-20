@@ -153,7 +153,7 @@ func answerPart(e expansion, part catalog.SystemPart, subject model.Subject) (st
 			return "", []model.Problem{model.NewProblem("render_line_invalid", subject, "syslog-addr")}
 		}
 		host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
-		return "logging --host=" + host + " --port=" + port + " --level=info", nil
+		return "logging --host=" + host + " --port=" + port, nil
 	case "firstboot":
 		values, p := answerValues(e, subject, "finalize-token")
 		if len(p) != 0 {
