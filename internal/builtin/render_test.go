@@ -238,13 +238,15 @@ func decodedCommands(text string) string {
 	var all []string
 	for _, line := range strings.Split(text, "\n") {
 		for _, piece := range strings.Split(line, "echo ") {
-			token, _, ok := strings.Cut(piece, " | base64 -d | sh")
-			if !ok {
-				continue
-			}
-			b, err := base64.StdEncoding.DecodeString(token)
-			if err == nil {
-				all = append(all, string(b))
+			for _, suffix := range []string{" | base64 -d | sh", " | /usr/libexec/platform-python -m base64 -d | sh"} {
+				token, _, ok := strings.Cut(piece, suffix)
+				if !ok {
+					continue
+				}
+				b, err := base64.StdEncoding.DecodeString(token)
+				if err == nil {
+					all = append(all, string(b))
+				}
 			}
 		}
 	}

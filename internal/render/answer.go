@@ -126,7 +126,7 @@ func answerSlot(e expansion, slot model.SnapshotSlot, subject model.Subject) (st
 	if e.request.Snapshot.Format == "esxi-ks" {
 		return "command -v base64||exit 127;" + encodedShell(b.String()), nil
 	}
-	return encodedShell(b.String()), nil
+	return installerShellPayload(e.request.Snapshot.Format, b.String()), nil
 }
 
 func answerPart(e expansion, part catalog.SystemPart, subject model.Subject) (string, []model.Problem) {
@@ -187,7 +187,7 @@ func answerPart(e expansion, part catalog.SystemPart, subject model.Subject) (st
 		body += writeHeredoc(root+"/etc/systemd/system/lober-signals.timer", "LOBER_TIMER_EOF", replayTimer)
 		body += "ln -sf ../lober-signals.timer " + shQuote(root+"/etc/systemd/system/timers.target.wants/lober-signals.timer") + "\n"
 		body += "ln -sf ../lober-firstboot.service " + shQuote(root+"/etc/systemd/system/multi-user.target.wants/lober-firstboot.service") + "\ntouch " + shQuote(root+"/var/lib/lober/firstboot.pending") + "\n"
-		return encodedShell(body), nil
+		return installerShellPayload(e.request.Snapshot.Format, body), nil
 	case "cleanup":
 		values, p := answerValues(e, subject, "gateway", "task", "token")
 		if len(p) != 0 {
@@ -213,7 +213,7 @@ func answerPart(e expansion, part catalog.SystemPart, subject model.Subject) (st
 		} else {
 			staging += "curl -fsS --retry 3 --retry-all-errors --max-time 10 -X POST " + shQuote(address) + " --data-binary '' >/dev/null\n"
 		}
-		return encodedShell(staging), nil
+		return installerShellPayload(e.request.Snapshot.Format, staging), nil
 	}
 	return "", []model.Problem{model.NewProblem("render_replacement_missing", subject, part)}
 }
@@ -314,6 +314,13 @@ func psQuote(text string) string { return "'" + strings.ReplaceAll(text, "'", "'
 func writeHeredoc(path, marker, body string) string {
 	return "cat > " + shQuote(path) + " <<'" + marker + "'\n" + body + marker + "\n"
 }
+func installerShellPayload(format catalog.Format, body string) string {
+	if format == "kickstart" {
+		return "echo " + base64.StdEncoding.EncodeToString([]byte(body)) + " | /usr/libexec/platform-python -m base64 -d | sh"
+	}
+	return encodedShell(body)
+}
+
 func encodedShell(body string) string {
 	return "echo " + base64.StdEncoding.EncodeToString([]byte(body)) + " | base64 -d | sh"
 }

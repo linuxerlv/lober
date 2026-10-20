@@ -93,9 +93,45 @@ func TestAnswerGolden(t *testing.T) {
 	}
 }
 
+func TestKickstartInstallerPayloadsDoNotRequireBase64(t *testing.T) {
+	r := answerFixture(t, "kickstart", true, "bios")
+	got, problems, err := Render(r)
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("render: %v %v", problems, err)
+	}
+	answer := string(got)
+	if strings.Contains(answer, "| base64 -d | sh") {
+		t.Fatal("Kickstart installer payload still requires base64, which is absent from the minimal AlmaLinux installer")
+	}
+	if !strings.Contains(answer, "| /usr/libexec/platform-python -m base64 -d | sh") {
+		t.Fatal("Kickstart installer payload does not use the Anaconda-provided Python decoder")
+	}
+}
+
+func TestKickstartPythonPayloadPreservesShellBytes(t *testing.T) {
+	want := "O'Brien 50% backslash \\ unicode 宁波\n"
+	command := installerShellPayload("kickstart", want)
+	if strings.Contains(command, "\n") {
+		t.Fatal("Kickstart payload wrapper contains a raw newline")
+	}
+	if !strings.Contains(command, " | /usr/libexec/platform-python -m base64 -d") {
+		t.Fatal("Kickstart payload wrapper does not decode through Anaconda's Python runtime")
+	}
+	command = strings.TrimSuffix(command, " | sh")
+	command = strings.Replace(command, "/usr/libexec/platform-python", "python", 1)
+	got, err := exec.Command("sh", "-c", command).Output()
+	if err != nil {
+		t.Fatalf("Anaconda Python decoder wrapper: %v", err)
+	}
+	if !bytes.Equal(got, []byte(want)) {
+		t.Fatalf("POSIX printf changed payload bytes: got %q, want %q", got, want)
+	}
+}
+
 func commandPayloads(text string) []string {
 	var out []string
-	for _, match := range regexp.MustCompile(`echo ([A-Za-z0-9+/=]+) \| base64 -d \| sh`).FindAllStringSubmatch(text, -1) {
+	pattern := regexp.MustCompile(`echo ([A-Za-z0-9+/=]+) \| (?:base64 -d|/usr/libexec/platform-python -m base64 -d) \| sh`)
+	for _, match := range pattern.FindAllStringSubmatch(text, -1) {
 		b, err := base64.StdEncoding.DecodeString(match[1])
 		if err == nil {
 			out = append(out, string(b))
