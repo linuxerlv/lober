@@ -6,7 +6,7 @@ timezone UTC --utc
 bootloader --location=mbr
 network --bootproto=dhcp --activate --hostname=web-01
 rootpw --lock
-logging --host=10.10.0.1 --port=514 --level=info
+logging --host=10.10.0.1 --port=514
 %packages
 @core
 curl

@@ -128,6 +128,17 @@ func TestKickstartPythonPayloadPreservesShellBytes(t *testing.T) {
 	}
 }
 
+func TestKickstartSyslogOmitsUnsupportedLevel(t *testing.T) {
+	r := answerFixture(t, "kickstart", false, "bios")
+	e, problems, err := answerExpansion(r)
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("answer expansion: %v %v", problems, err)
+	}
+	if got, want := e.parts["syslog"], "logging --host=10.10.0.1 --port=514"; got != want {
+		t.Fatalf("Kickstart syslog directive = %q, want %q", got, want)
+	}
+}
+
 func commandPayloads(text string) []string {
 	var out []string
 	pattern := regexp.MustCompile(`echo ([A-Za-z0-9+/=]+) \| (?:base64 -d|/usr/libexec/platform-python -m base64 -d) \| sh`)
