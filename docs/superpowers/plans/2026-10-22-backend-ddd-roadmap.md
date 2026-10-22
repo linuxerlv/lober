@@ -2,7 +2,7 @@
 
 依据：已确认的 `docs/superpowers/specs/2026-10-22-backend-ddd-four-layer-design.md`。
 
-本文负责阶段顺序、交付范围和回退边界。具体执行使用每个阶段的实施计划。第一阶段已验收，第二阶段实现已进入候选验收，其余阶段在前置契约落定后编写，不能把路线表当作可直接执行的细节计划。
+本文负责阶段顺序、交付范围和回退边界。具体执行使用每个阶段的实施计划。第一阶段已验收，第二阶段模块分支已通过技术验收，其余阶段在前置契约落定后编写，不能把路线表当作可直接执行的细节计划。
 
 ## 阶段与交付
 
@@ -17,7 +17,7 @@
 
 第一阶段详细计划：`docs/superpowers/plans/2026-10-22-backend-ddd-phase1.md`。
 
-第一阶段已本地合入develop，提交 `bdc6371`；最终验证在lober虚拟机通过。第二阶段实施计划见[编写与预览](2026-10-23-backend-ddd-phase2-authoring-preview.md)，Task1–5已实现并独立审查通过；Task6关闭边界并执行完整验证，独立Task6与整分支审查尚待完成。最新状态见[第二阶段证据](../reviews/2026-10-23-ddd-phase2-evidence.md)。第二阶段尚未合入develop。
+第一阶段已本地合入develop，提交 `bdc6371`；最终验证在lober虚拟机通过。第二阶段实施计划见[编写与预览](2026-10-23-backend-ddd-phase2-authoring-preview.md)，六项任务均已实现并独立审查通过；Task6关闭边界、完整验证和整分支审查均通过。源码提交为33ed106，交付codex/ddd-authoring模块分支，保留一项既有测试日志噪声作为后续清理项。最新状态见[第二阶段证据](../reviews/2026-10-23-ddd-phase2-evidence.md)。第二阶段尚未合入develop。
 
 ## 全过程约束
 

@@ -10,7 +10,7 @@
 
 **Spec:** [已批准四层设计](../specs/2026-10-22-backend-ddd-four-layer-design.md)、[总路线第二阶段](2026-10-22-backend-ddd-roadmap.md)、[现有模块契约](../../contracts/backend-modules.md)。
 
-状态：用户已于2026-10-23批准，按分任务实施、独立审查方式执行。以下检查框只按实际完成结果更新，不代表第二阶段代码已经完成。
+状态：用户已于2026-10-23批准。六项实施、逐任务独立审查和整分支独立审查均已完成；完整检查在lober虚拟机通过。交付模块分支codex/ddd-authoring，尚未合入develop。详见[阶段证据](../reviews/2026-10-23-ddd-phase2-evidence.md)。
 
 ## Global Constraints
 
@@ -38,7 +38,7 @@
 - 起点：本地 `develop` 的 `bdc6371749a9122680a18383561567e89a05e9c2`，源码树 `e142da851e771ef6a93732d31addda9104e3af65`。
 - 模块分支：`codex/ddd-authoring`，从该提交建立。当前复用已隔离的工作区；不修改主目录的用户文档，也不处理原dev工作区的网页产物。
 - 第一阶段及集成的验证依据见[集成记录](../reviews/2026-10-22-ddd-develop-integration.md)。其中的通过结果属于该基线，不能冒充第二阶段验收。
-- 本次交付仅为计划及总路线链接。用户审阅计划后，再沿用前序选定的逐任务实施、独立审查方式。
+- 计划已获用户批准，已沿用逐任务实施、独立审查方式完成第二阶段；本轮交付通过技术验收的模块分支。
 - 实施后先在模块分支验收，再按仓库流程合入develop。推送及test、preview、main的推进不包含在本计划的实施授权中。
 
 ## 2. 文件与职责
@@ -260,8 +260,8 @@ NewHooks/NewTemplates的必需仓储、Clock与后者的SelectionGuard缺失时�
 - [x] 逐项删除 `migrationExceptions` 的阶段2共55项、`consoleRuleMigrationExceptions` 的阶段2共28项；阶段2及向导许可均为0。原360项在无额外清理时降为277项。若连带移除其他已失效许可，逐条说明；不能把83项转移阶段、改符号名续用或自动扩容清单。
 - [x] 删除模板/组件仓储字段和旧ProblemsOf/HookProblems/templateHooks/templateProblems/renderPreview等生产桥；harness_test中的Wizard从测试仓储独立取得Hooks/Templates，不再从已删除的console.Deps字段取值。确认错误转换共享函数仍只映射错误，不经它们回调仓储或领域业务；正式编号六项能力及唯一通知桥不扩大。
 - [x] 在lober VM执行根目录 `make check`，包括强制全模块检查、普通与并发全包、Linux构建和Wire差异。再执行 `pnpm --dir web check:console-types`；生成文件应无差异，不以刷新它掩盖公开名称变化。没有前端业务修改时不重复全量前端构建；若实际修改前端，则按仓库要求补类型、相关测试与构建。
-- [ ] 对冻结提交完成独立整分支审查，逐项对应32条路由、数据库契约和五个Review Focus。记录完整命令、退出码、跳过项、失败及修复、源码树和实际环境；未执行的检查不能记通过。
-- [ ] 仅在通过后提交 `refactor(authoring): enforce phase-two contract boundaries`，交付模块分支。合入develop前核对其实际新提交并对合并结果重新验证；发现缺陷按模块回退，保留第一阶段保护。
+- [x] 对冻结提交完成独立整分支审查，逐项对应32条路由、数据库契约和五个Review Focus。记录完整命令、退出码、跳过项、失败及修复、源码树和实际环境；未执行的检查不能记通过。
+- [x] 仅在通过后提交 `refactor(authoring): enforce phase-two contract boundaries`，交付模块分支。合入develop前核对其实际新提交并对合并结果重新验证；发现缺陷按模块回退，保留第一阶段保护。
 
 ## 5. lober虚拟机执行约定
 
