@@ -46,6 +46,10 @@ func jsonProblems(ps []model.Problem) []problemJSON {
 	return out
 }
 func RespondError(c *gin.Context, err error) {
+	if errors.Is(err, store.ErrTemplateNotCurrent) {
+		Fail(c, 409, nil, model.ConsoleTemplateCurrent)
+		return
+	}
 	if errors.Is(err, store.ErrLastAdmin) {
 		Fail(c, 409, nil, model.ConsoleLastAdmin)
 		return

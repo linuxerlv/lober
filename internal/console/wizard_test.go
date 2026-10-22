@@ -404,7 +404,7 @@ func Test向导只接受程序当前携带的内置身份及版本(t *testing.T)
 func Test向导提交期间新版本审批必须等待任务提交(t *testing.T) {
 	dsn := pgtest.Schema(t)
 	st := pgtest.OpenAt(t, dsn)
-	s := New(Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Events: st, Audit: st, Users: st, Clock: func() int64 { return fixedAt }})
+	s := New(Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, CurrentTasks: st, Events: st, Audit: st, Users: st, Clock: func() int64 { return fixedAt }})
 	_, _, token, iso, tpl := seedWizardFixture(t, s, st)
 	next, err := st.NewTemplateVersion(t.Context(), tpl.ID, 1, "author")
 	if err != nil {
@@ -481,5 +481,272 @@ func Test向导提交期间新版本审批必须等待任务提交(t *testing.T)
 	newer, err := st.GetTemplate(t.Context(), key)
 	if err != nil || newer.State != model.VersionApproved {
 		t.Fatal(newer, err)
+	}
+}
+
+// 两个入口各自持有服务和连接池，只共享数据库；数据库报告的等待关系决定放行顺序。
+func Test任务提交与独立实例审批的契约(t *testing.T) {
+	for _, c := range []struct {
+		name, action, gate  string
+		first               bool
+		wantCode, wantTasks int
+	}{
+		{"新版本先审批，旧选择拒绝", "approve", "", true, 409, 0},
+		{"已读旧选择，审批先于身份保护提交", "approve", "before", false, 409, 0},
+		{"任务已锁版本，新版本审批等待提交", "approve", "tasks", false, 200, 1},
+		{"同版本先废弃，旧选择拒绝", "deprecate", "", true, 409, 0},
+		{"已读旧选择，废弃先于身份保护提交", "deprecate", "before", false, 409, 0},
+		{"任务已锁版本，同版本废弃等待提交", "deprecate", "tasks", false, 200, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dsn := pgtest.Schema(t)
+			st := pgtest.OpenAt(t, dsn)
+			other := pgtest.OpenAt(t, dsn)
+			newServer := func(db *pgstore.Store) *Server {
+				return New(Deps{Hosts: db, ISOs: db, Hooks: db, Templates: db, Tasks: db, CurrentTasks: db, Events: db, Audit: db, Users: db, Clock: func() int64 { return fixedAt }})
+			}
+			s, second := newServer(st), newServer(other)
+			_, _, token, iso, tpl := seedWizardFixture(t, s, st)
+			secondToken := loginHTTP(t, second, "admin", "admin password").Token
+			version, rev := tpl.Version, tpl.Rev
+			if c.action == "approve" {
+				next, err := st.NewTemplateVersion(t.Context(), tpl.ID, tpl.Version, "author")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := st.SubmitTemplate(t.Context(), model.TemplateKey{ID: next.ID, Version: next.Version}, next.Rev, store.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
+					t.Fatal(err)
+				}
+				version, rev = next.Version, next.Rev+1
+			}
+			before, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+			if err != nil {
+				t.Fatal(err)
+			}
+			change := func() int {
+				return httpCall(second, "POST", fmt.Sprintf("/console/v1/templates/%s/versions/%d/%s?rev=%d", tpl.ID, version, c.action, rev), "", secondToken).Code
+			}
+			submit := func() int {
+				w := httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-1"}]`), token)
+				if c.wantCode == 409 {
+					var body envelope
+					if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Code != 409 || body.Data != nil || body.Message != model.ConsoleTemplateCurrent {
+						t.Errorf("选择过期响应应为原有409及空data：%s", w.Body.String())
+					}
+				}
+				return w.Code
+			}
+			code := 0
+			if c.first {
+				if got := change(); got != 200 {
+					t.Fatalf("状态变更失败：%d", got)
+				}
+				code = submit()
+			} else if c.gate == "before" {
+				reached, release := make(chan struct{}), make(chan struct{})
+				var once sync.Once
+				unblock := func() { once.Do(func() { close(release) }) }
+				defer unblock()
+				s.server.deps.CurrentTasks = &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release}
+				submitted := make(chan int, 1)
+				go func() { submitted <- submit() }()
+				select {
+				case <-reached:
+				case <-time.After(5 * time.Second):
+					t.Fatal("任务未到达身份保护前的停顿点")
+				}
+				if got := change(); got != 200 {
+					t.Fatalf("状态变更失败：%d", got)
+				}
+				t.Log("应用已读旧选择，独立实例状态变更先于身份保护提交")
+				unblock()
+				code = wizardAwaitCode(t, submitted)
+			} else {
+				conn, err := pgx.Connect(t.Context(), dsn)
+				if err != nil {
+					t.Fatal("无法连接数据库锁夹具")
+				}
+				defer conn.Close(context.Background())
+				tx, err := conn.Begin(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback(context.Background())
+				if _, err := tx.Exec(t.Context(), `LOCK TABLE tasks IN SHARE MODE`); err != nil {
+					t.Fatal(err)
+				}
+				submitted := make(chan int, 1)
+				go func() { submitted <- submit() }()
+				writer := wizardWaitForDatabaseGate(t, tx, "tasks", int(conn.PgConn().PID()))
+				t.Logf("已确认任务连接 %d 在 tasks 等待夹具连接 %d", writer, conn.PgConn().PID())
+				changed := make(chan int, 1)
+				go func() { changed <- change() }()
+				overtook, got := wizardChangeCompletedOrBlocked(t, tx, changed, writer)
+				if overtook {
+					if got != 200 {
+						t.Fatalf("状态变更失败：%d", got)
+					}
+					t.Error("任务已锁住所选版本并开始插入，独立实例状态变更仍先提交")
+				} else {
+					t.Log("已确认状态变更正在等待任务事务")
+				}
+				if err := tx.Commit(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				code = wizardAwaitCode(t, submitted)
+				if !overtook && wizardAwaitCode(t, changed) != 200 {
+					t.Fatal("放行后状态变更失败")
+				}
+			}
+			tasks, err := st.ListTasks(t.Context(), store.TaskQuery{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+			if err != nil {
+				t.Fatal(err)
+			}
+			created := 0
+			for _, a := range after.Items {
+				if a.Action == "task.create" {
+					created++
+				}
+			}
+			t.Logf("提交返回 %d，任务 %d 条，任务审计 %d 条，全部新增审计 %d 条", code, len(tasks.Items), created, len(after.Items)-len(before.Items))
+			if code != c.wantCode || len(tasks.Items) != c.wantTasks || created != c.wantTasks || len(after.Items)-len(before.Items) != c.wantTasks+1 {
+				t.Errorf("应返回 %d、任务和任务审计各 %d 条、全部新增审计 %d 条", c.wantCode, c.wantTasks, c.wantTasks+1)
+			}
+			for _, task := range tasks.Items {
+				if task.TemplateVersion != tpl.Version || task.Snapshot.Template.Version != tpl.Version {
+					t.Errorf("任务没有固定所选版本：%+v", task)
+				}
+			}
+			current, err := other.GetTemplate(t.Context(), model.TemplateKey{ID: tpl.ID, Version: version})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantState := model.VersionApproved
+			if c.action == "deprecate" {
+				wantState = model.VersionDeprecated
+			}
+			if current.State != wantState {
+				t.Errorf("状态应为 %s，得到 %s", wantState, current.State)
+			}
+		})
+	}
+}
+
+func wizardWaitForDatabaseGate(t *testing.T, tx pgx.Tx, table string, blocker int) int {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	for {
+		var pid int
+		err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT a.pid FROM pg_stat_activity a WHERE a.wait_event_type='Lock' AND $2=ANY(pg_blocking_pids(a.pid)) AND EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid=a.pid AND l.relation=to_regclass($1)) LIMIT 1),0)`, table, blocker).Scan(&pid)
+		if err != nil {
+			t.Fatalf("未能确认任务到达数据库锁：%v", err)
+		}
+		if pid != 0 {
+			return pid
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("任务未到达数据库锁")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+func wizardChangeCompletedOrBlocked(t *testing.T, tx pgx.Tx, done <-chan int, writer int) (bool, int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	for {
+		select {
+		case code := <-done:
+			return true, code
+		default:
+		}
+		var blocked bool
+		err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(a.pid)) AND EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid=a.pid AND NOT l.granted) AND EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid=a.pid AND l.relation IN ('templates'::regclass,'template_versions'::regclass)))`, writer).Scan(&blocked)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			return false, 0
+		}
+		select {
+		case code := <-done:
+			return true, code
+		case <-ctx.Done():
+			t.Fatal("状态变更既未返回，也未观察到它等待任务事务")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+func wizardAwaitCode(t *testing.T, done <-chan int) int {
+	t.Helper()
+	select {
+	case code := <-done:
+		return code
+	case <-time.After(5 * time.Second):
+		t.Fatal("操作未完成")
+		return 0
+	}
+}
+
+// 只暂停真正的写入入口，恢复后仍使用真实数据库事务。
+type wizardCurrentTaskGate struct {
+	store.CurrentTaskCreator
+	reached chan<- struct{}
+	release <-chan struct{}
+}
+
+func (g *wizardCurrentTaskGate) CreateCurrentTasks(ctx context.Context, tasks []model.Task, a store.Audit) ([]model.Task, error) {
+	close(g.reached)
+	select {
+	case <-g.release:
+		return g.CurrentTaskCreator.CreateCurrentTasks(ctx, tasks, a)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func Test向导事务内一般准入仍返回422(t *testing.T) {
+	s, st, token, iso, tpl := wizardFixture(t)
+	reached, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	s.server.deps.CurrentTasks = &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release}
+	submitted := make(chan int, 1)
+	go func() {
+		submitted <- httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-1"}]`), token).Code
+	}()
+	select {
+	case <-reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("未到达事务前停顿点")
+	}
+	if err := st.DeprecateISO(t.Context(), iso.ID, iso.Rev, store.Audit{Actor: "seed", Action: "iso.deprecate", At: fixedAt}); err != nil {
+		t.Fatal(err)
+	}
+	unblock()
+	if code := wizardAwaitCode(t, submitted); code != 422 {
+		t.Fatalf("镜像废弃应为422，得到%d", code)
+	}
+	tasks, err := st.ListTasks(t.Context(), store.TaskQuery{})
+	if err != nil || len(tasks.Items) != 0 {
+		t.Fatal(tasks, err)
+	}
+	audit, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range audit.Items {
+		if a.Action == "task.create" {
+			t.Fatal("失败提交不应留下任务审计")
+		}
 	}
 }

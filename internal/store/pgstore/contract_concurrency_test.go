@@ -25,6 +25,7 @@ func Test契约并发(t *testing.T) {
 	runCases(t, []testCase{
 		{"同一台主机的几批任务同时提交，恰好一批成功，其余报 host_has_open_task", concurrentBatches},
 		{"不同主机的几批任务同时提交，全都成功", concurrentDisjointBatches},
+		{"当前选择：反序主机整批竞争，只有一批成功且审计不多写", concurrentCurrentBatches},
 		{"同一个任务用同一个期望值同时推进，恰好一次成功，只有它带的事件落库", concurrentTransitions},
 		{"同一个任务同时追加事件，Seq 连续、不重、不缺，一批的几条相邻", concurrentAppends},
 		{"同一个 Key 同时追加，只落一条", concurrentSameKey},
@@ -53,6 +54,12 @@ func together(n int, fn func(i int)) {
 // BatchError，里面只有 host_has_open_task。在事务里重跑准入时每台都报，靠部分唯一索引兜底时可能只报撞上的那一台，所以
 // 不要求每台都报。
 func concurrentBatches(t *testing.T, s *pgstore.Store) {
+	concurrentBatchesUsing(t, s, s.CreateTasks)
+}
+func concurrentCurrentBatches(t *testing.T, s *pgstore.Store) {
+	concurrentBatchesUsing(t, s, s.CreateCurrentTasks)
+}
+func concurrentBatchesUsing(t *testing.T, s *pgstore.Store, create func(context.Context, []model.Task, store.Audit) ([]model.Task, error)) {
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1", "SN-2", "SN-3")
 	batches := make([][]model.Task, workers)
@@ -66,7 +73,7 @@ func concurrentBatches(t *testing.T, s *pgstore.Store) {
 	audits := auditEntries(t, s)
 	results := make([][]model.Task, workers)
 	errs := make([]error, workers)
-	together(workers, func(i int) { results[i], errs[i] = s.CreateTasks(t.Context(), batches[i], anAudit("task.create")) })
+	together(workers, func(i int) { results[i], errs[i] = create(t.Context(), batches[i], anAudit("task.create")) })
 	winner := -1
 	for i, err := range errs {
 		if err == nil {

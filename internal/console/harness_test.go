@@ -19,7 +19,7 @@ func newHTTPServer(t *testing.T) (*Server, *pgstore.Store, *atomic.Int64) {
 	st := pgtest.OpenStore(t)
 	now := new(atomic.Int64)
 	now.Store(fixedAt)
-	s := New(Deps{Hosts: st, ISOs: st, Sources: st, Hooks: st, Templates: st, Tasks: st, Events: st, Audit: st, Users: st, Clock: now.Load, Notifier: NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	s := New(Deps{Hosts: st, ISOs: st, Sources: st, Hooks: st, Templates: st, Tasks: st, CurrentTasks: st, Events: st, Audit: st, Users: st, Clock: now.Load, Notifier: NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	return s, st, now
 }
 func seedHTTPUser(t *testing.T, s *Server, st store.Users, name string, role store.Role) (string, store.User) {

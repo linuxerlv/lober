@@ -37,6 +37,12 @@ func (l *loggingStore) CreateTasks(ctx context.Context, tasks []model.Task, a st
 	l.log("task.create", start, err)
 	return got, err
 }
+func (l *loggingStore) CreateCurrentTasks(ctx context.Context, tasks []model.Task, a store.Audit) ([]model.Task, error) {
+	start := time.Now()
+	got, err := l.Store.CreateCurrentTasks(ctx, tasks, a)
+	l.log("task.create", start, err)
+	return got, err
+}
 func (l *loggingStore) TransitionTask(ctx context.Context, id string, expect store.TaskExpect, to model.TaskState, events []store.NewEvent) (model.Task, []store.Appended, error) {
 	start := time.Now()
 	got, appended, err := l.Store.TransitionTask(ctx, id, expect, to, events)

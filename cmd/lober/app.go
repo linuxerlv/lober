@@ -96,7 +96,7 @@ func supervisorOf(ctx context.Context, raw *iso.Sources, st store.Store, j *dele
 	return s, s.Close
 }
 func consoleDepsOf(st store.Store, src *sourceSupervisor, j *deletionJournal, hub console.Notifier, cfg config, clock console.Clock, logger *slog.Logger) console.Deps {
-	return console.Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Events: st, Audit: st, Users: st, Sources: st, ISOSource: src, ISODeletion: j, BootConfig: bootConfigReader{root: cfg.ISO.Artifacts}, PreviewEndpoints: console.PreviewEndpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, TaskCtl: taskControlStub{}, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
+	return console.Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, CurrentTasks: st, Events: st, Audit: st, Users: st, Sources: st, ISOSource: src, ISODeletion: j, BootConfig: bootConfigReader{root: cfg.ISO.Artifacts}, PreviewEndpoints: console.PreviewEndpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, TaskCtl: taskControlStub{}, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
 }
 func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st store.Store, consoleServer *console.Server, raw *iso.Sources, s *sourceSupervisor, j *deletionJournal, g *registrationGate) *app {
 	return &app{Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Native: raw, Supervisor: s, Deletion: j, Gate: g}

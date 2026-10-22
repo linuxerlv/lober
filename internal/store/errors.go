@@ -22,6 +22,8 @@ var (
 	// 删掉、改了名），报不出是谁；重读之后再写，得到的必然是成功或 DuplicateError。
 	ErrConflict  = errors.New("store：Rev 或状态对不上，重读之后再判断")
 	ErrLastAdmin = fmt.Errorf("%w: at least one enabled administrator is required", ErrConflict)
+	// ErrTemplateNotCurrent：事务保护内确认所选模板已不是当前已审批版本。
+	ErrTemplateNotCurrent = fmt.Errorf("%w: 所选模板已不是当前已审批版本", ErrConflict)
 	// ErrDuplicate：唯一键撞了，总是包在 DuplicateError 里。
 	ErrDuplicate = errors.New("store：唯一键重复")
 	// ErrImmutable：改已审批、已废弃或内置的版本，或者改内置的身份（C23、C25）。系统更新（UpdateISO）碰到已废弃的

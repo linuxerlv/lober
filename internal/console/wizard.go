@@ -452,7 +452,7 @@ func (s *server) wizardSubmit(c *gin.Context) {
 		return
 	}
 	created, ok := Write(c, func() ([]model.Task, error) {
-		return s.deps.Tasks.CreateTasks(c.Request.Context(), tasks, s.auditFrom(c, ""))
+		return s.deps.CurrentTasks.CreateCurrentTasks(c.Request.Context(), tasks, s.auditFrom(c, ""))
 	})
 	if !ok {
 		return

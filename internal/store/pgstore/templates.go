@@ -228,6 +228,13 @@ func (s *Store) templateStep(ctx context.Context, k model.TemplateKey, rev int64
 		return err
 	}
 	err := s.write(ctx, func(tx *gorm.DB) error {
+		// 先锁身份再锁版本，与向导提交、开版本和删除保持同一顺序。
+		switch _, ok, err := templateTables.lockIdent(tx, k.ID); {
+		case err != nil:
+			return err
+		case !ok:
+			return templateNotFound(k)
+		}
 		row, err := lockTemplateVersion(tx, k, rev)
 		if err != nil {
 			return err

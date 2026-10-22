@@ -20,6 +20,7 @@ type Deps struct {
 	Hooks            store.Hooks
 	Templates        store.Templates
 	Tasks            store.Tasks
+	CurrentTasks     store.CurrentTaskCreator
 	Events           store.Events
 	Audit            store.AuditLog
 	Users            store.Users

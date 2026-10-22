@@ -14,6 +14,7 @@ type Store interface {
 	Hooks
 	Templates
 	Tasks
+	CurrentTaskCreator
 	Events
 	AuditLog
 	Users
@@ -156,7 +157,7 @@ type Tasks interface {
 	//     两批同时提交时就不会互相等死。ISO 或模板版本不存在报 ErrNotFound：按键找不到，准入无从判起。
 	//  3. 用锁住之后读到的数据重跑准入判定（BatchProblems），没登记的 SN 报 host_not_registered。判定用的是任务里
 	//     钉住的模板版本（TemplateID、TemplateVersion），不另取当前的已审批版本：已被新版本取代、但仍是已审批的
-	//     旧版本照样通过。它是不是当前版本（C23）由第 5 层在提交时用 model.CurrentApproved 比对。任何一处有
+	//     旧版本照样通过。向导需要当前版本（C23）时使用 CurrentTaskCreator。任何一处有
 	//     问题，整批回滚，报 BatchError，不写任务，也不写审计。
 	//  4. 全部通过才写：ID 用 NewID 生成，State 为 pending，Rev 为 1。并发下撞上「一台主机一个未结束任务」的
 	//     约束时，同样回滚并报 BatchError，问题是 host_has_open_task。

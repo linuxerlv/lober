@@ -33,6 +33,15 @@ var forShare = clause.Locking{Strength: "SHARE"}
 // CreateTasks 见 store.Tasks。快照里的串都存得下，由 store.CheckNewTasks 查过：jsonb 不收 NUL，encoding/json 还会把非法的
 // UTF-8 换成 U+FFFD。任务逐个插入：撞上 idx_tasks_open 时，才知道撞上的是哪一台。
 func (s *Store) CreateTasks(ctx context.Context, ts []model.Task, a store.Audit) ([]model.Task, error) {
+	return s.createTasks(ctx, ts, a, false)
+}
+
+// CreateCurrentTasks 见 store.CurrentTaskCreator。身份读锁先于其他准入锁，直到任务与审计一起提交才释放。
+func (s *Store) CreateCurrentTasks(ctx context.Context, ts []model.Task, a store.Audit) ([]model.Task, error) {
+	return s.createTasks(ctx, ts, a, true)
+}
+
+func (s *Store) createTasks(ctx context.Context, ts []model.Task, a store.Audit, current bool) ([]model.Task, error) {
 	if err := store.CheckAudit(a); err != nil {
 		return nil, err
 	}
@@ -50,6 +59,11 @@ func (s *Store) CreateTasks(ctx context.Context, ts []model.Task, a store.Audit)
 		rows[i], ids[i] = row, t.ID
 	}
 	err := s.write(ctx, func(tx *gorm.DB) error {
+		if current {
+			if err := lockCurrentTemplate(tx, model.TemplateKey{ID: ts[0].TemplateID, Version: ts[0].TemplateVersion}); err != nil {
+				return err
+			}
+		}
 		in, err := admit(tx, ts)
 		if err != nil {
 			return err
@@ -81,6 +95,37 @@ func (s *Store) CreateTasks(ctx context.Context, ts []model.Task, a store.Audit)
 		}
 	}
 	return out, nil
+}
+
+// lockCurrentTemplate 先锁身份，再用下一条查询读取最新版本事实；等审批提交后也能读到它的新状态。
+// 这里只取 CurrentApproved 所需的版本号和状态，完整所选版本仍由 admit 加锁读取。
+func lockCurrentTemplate(tx *gorm.DB, k model.TemplateKey) error {
+	var owner ident
+	switch err := tx.Table(templateTables.idents).Clauses(forShare).Where("id = ?", k.ID).Take(&owner).Error; {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return templateNotFound(k)
+	case err != nil:
+		return err
+	}
+	var facts []struct {
+		Version int
+		State   model.VersionState
+	}
+	if err := tx.Table(templateTables.versions).Select("version", "state").Where("template_id = ?", k.ID).Scan(&facts).Error; err != nil {
+		return err
+	}
+	versions := make([]model.Template, len(facts))
+	for i, f := range facts {
+		versions[i] = model.Template{ID: k.ID, Version: f.Version, State: f.State}
+	}
+	if !slices.ContainsFunc(versions, func(t model.Template) bool { return t.Version == k.Version }) {
+		return templateNotFound(k)
+	}
+	cur, ok := model.CurrentApproved(versions)
+	if !ok || cur.Version != k.Version {
+		return store.ErrTemplateNotCurrent
+	}
+	return nil
 }
 
 // admit 是批量建任务的第 2、3 步：在事务 tx 里按固定的顺序加锁，再用锁住之后读到的数据重跑准入（store.BatchProblems）。

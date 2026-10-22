@@ -26,6 +26,10 @@ func Test契约任务(t *testing.T) {
 		{"建任务：ID 合规且是安全词，State 为 pending，Rev 为 1，读回来与写进去的相同", taskCreate},
 		{"建任务：仓储不解释快照，nil 与空的 map、切片都原样存下", taskCreateSnapshot},
 		{"建任务：主机的任务结束之后，可以再给它建", taskCreateAfterFinished},
+		{"建任务：普通仓储仍接受旧的已审批版本", taskCreateOlderApproved},
+		{"当前选择：旧选择整批拒绝且不写审计", taskCurrentStale},
+		{"当前选择：一般准入失败仍报整批错误", taskCurrentRejected},
+		{"当前选择：返回顺序与默认字段不变", taskCurrentCreate},
 		{"建任务：入参的每条前提各一个反例，都报 ErrInvalid，什么都不写", taskCreateInvalid},
 		{"建任务：批里 SN 重复报 host_duplicate_in_batch", taskCreateDuplicate},
 		{"建任务：ISO 或模板版本不存在报 ErrNotFound", taskCreateMissing},
@@ -49,6 +53,64 @@ func Test契约任务(t *testing.T) {
 		{"返回值与入参都是拷贝：快照是深拷贝", taskCopies},
 	})
 	runAudited(t, taskAuditedOps())
+}
+
+func taskCurrentStale(t *testing.T, s *pgstore.Store) {
+	f := newFixture(t, s)
+	batch := f.newTasks(t, mustTaskHosts(t, s, "SN-2", "SN-1")...)
+	next, err := s.NewTemplateVersion(t.Context(), f.tpl.ID, f.tpl.Version, "author")
+	must(t, err, "创建新版本")
+	templateOps.to(t, s, next, model.VersionApproved)
+	before := taskSnapshot(t, s)
+	_, err = s.CreateCurrentTasks(t.Context(), batch, anAudit("task.create"))
+	wantIs(t, err, store.ErrTemplateNotCurrent, "选择已失效")
+	wantIs(t, err, store.ErrConflict, "保留冲突类别")
+	wantTasksUnchanged(t, s, before, "旧选择被拒绝后")
+}
+
+func taskCurrentRejected(t *testing.T, s *pgstore.Store) {
+	f := newFixture(t, s)
+	hs := mustTaskHosts(t, s, "SN-1", "SN-2")
+	f.mustCreate(t, s, hs[1])
+	before := taskSnapshot(t, s)
+	_, err := s.CreateCurrentTasks(t.Context(), f.newTasks(t, hs...), anAudit("task.create"))
+	var be *store.BatchError
+	if !errors.As(err, &be) || !errors.Is(err, store.ErrRejected) {
+		t.Fatalf("主机被占用应报整批准入错误，得到 %v", err)
+	}
+	wantTasksUnchanged(t, s, before, "一般准入拒绝后")
+}
+
+func taskCurrentCreate(t *testing.T, s *pgstore.Store) {
+	f := newFixture(t, s)
+	in := f.newTasks(t, mustTaskHosts(t, s, "SN-2", "SN-1")...)
+	got, err := s.CreateCurrentTasks(t.Context(), in, anAudit("task.create"))
+	must(t, err, "按当前选择建任务")
+	wantEqual(t, len(got), 2, "任务数")
+	for i, task := range got {
+		want := in[i]
+		want.ID, want.State, want.Rev = task.ID, model.TaskPending, 1
+		if !model.ValidID(task.ID) {
+			t.Fatal("任务编号不合法")
+		}
+		wantEqual(t, task, want, "返回顺序与默认字段")
+		wantEqual(t, mustGetTask(t, s, task.ID), want, "落库结果")
+	}
+}
+
+// 当前版本要求属于向导；普通仓储调用仍可明确指定旧的已审批版本。
+func taskCreateOlderApproved(t *testing.T, s *pgstore.Store) {
+	f := newFixture(t, s)
+	next, err := s.NewTemplateVersion(t.Context(), f.tpl.ID, f.tpl.Version, "author")
+	must(t, err, "创建较新版本")
+	templateOps.to(t, s, next, model.VersionApproved)
+	before := len(auditEntries(t, s))
+	created := f.mustCreate(t, s, mustTaskHosts(t, s, "SN-OLD")...)
+	if len(created) != 1 || created[0].TemplateVersion != f.tpl.Version || created[0].Snapshot.Template.Version != f.tpl.Version {
+		t.Fatalf("应保留明确选择的旧版本，得到 %+v", created)
+	}
+	wantEqual(t, len(taskPages(t, s, store.TaskQuery{Limit: 500})[0]), 1, "只有一个任务")
+	wantEqual(t, len(auditEntries(t, s))-before, 2, "登记主机与创建任务各一条审计")
 }
 
 // fixture 是建任务要用的一套记录：一个 ready 的 Rocky ISO、一个已审批的 kickstart 模板，以及它引用的已审批 hook。
@@ -217,6 +279,17 @@ func taskAuditedOps() []auditedOp {
 			batch := newFixture(t, s).newTasks(t, mustTaskHosts(t, s, "SN-2", "SN-1")...)
 			return unchangedOnError(t, s, func(a store.Audit) ([]target, error) {
 				got, err := s.CreateTasks(t.Context(), batch, a)
+				var targets []target // 每个任务一条，按入参的顺序
+				for _, task := range got {
+					targets = append(targets, target{"task", task.ID})
+				}
+				return targets, err
+			})
+		}},
+		{"CreateCurrentTasks", func(t *testing.T, s *pgstore.Store) auditedCall {
+			batch := newFixture(t, s).newTasks(t, mustTaskHosts(t, s, "SN-2", "SN-1")...)
+			return unchangedOnError(t, s, func(a store.Audit) ([]target, error) {
+				got, err := s.CreateCurrentTasks(t.Context(), batch, a)
 				var targets []target // 每个任务一条，按入参的顺序
 				for _, task := range got {
 					targets = append(targets, target{"task", task.ID})
