@@ -339,12 +339,15 @@ func (s *Store) ListTemplateVersions(ctx context.Context, id string) ([]model.Te
 
 // ListTemplates 见 store.Templates。按系过滤看的是选出的那一项，与状态的过滤一样；系存成 jsonb 数组，按包含关系比。
 func (s *Store) ListTemplates(ctx context.Context, q store.TemplateQuery) (store.Page[model.Template], error) {
-	db, limit, err := templateTables.listQuery(s.read(ctx), q.Cursor, q.Limit, q.NamePrefix, q.States, q.ApprovedOnly)
+	if q.Selection != nil {
+		q.ApprovedOnly = true
+	}
+	db, limit, err := templateTables.listQuery(s.read(ctx), q.Cursor, q.Limit, q.NamePrefix, q.States, q.ApprovedOnly, q.Page, false)
 	switch {
 	case err != nil:
 		return store.Page[model.Template]{}, err
 	case db == nil, !storable(string(q.Series)):
-		return emptyPage[model.Template](), nil
+		return emptyPage[model.Template](q.Page), nil
 	}
 	if q.Series != "" {
 		series, err := encodeJSON([]catalog.Series{q.Series})
@@ -353,13 +356,23 @@ func (s *Store) ListTemplates(ctx context.Context, q store.TemplateQuery) (store
 		}
 		db = db.Where("template_versions.series @> CAST(? AS jsonb)", series)
 	}
+	if q.Selection != nil {
+		db, err = templateSelectionQuery(db, q.Selection)
+		if err != nil {
+			return store.Page[model.Template]{}, err
+		}
+	}
+	db, total, err := numberedQuery[templateVersionRow](db, q.Page, limit)
+	if err != nil {
+		return store.Page[model.Template]{}, err
+	}
 	var rows []templateVersionRow
 	if err := db.Find(&rows).Error; err != nil {
 		return store.Page[model.Template]{}, err
 	}
 	return page(rows, limit, templateVersionRow.template, func(r templateVersionRow) string {
 		return store.EncodeCursor(templateTables.idents, r.NameKey, r.TemplateID)
-	})
+	}, total)
 }
 
 // EnsureBuiltinTemplate 见 store.Templates，规则同 EnsureBuiltinHook：名字必须带保留前缀，随身份定下；先确定并锁住身份，

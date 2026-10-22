@@ -27,6 +27,7 @@ type Signal struct {
 }
 type Engine interface {
 	Boot(context.Context, string, catalog.Arch, catalog.Firmware) (model.Task, bool, error)
+	Preseed(context.Context, string) (model.Task, bool, error)
 	GetAuthorized(context.Context, string, string, bool) (model.Task, error)
 	Answer(context.Context, string, string) (model.Task, error)
 	Signal(context.Context, string, string, Signal) error
@@ -127,6 +128,13 @@ func (h *handler) boot(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400)
 		return
 	}
+	// DHCP 把这一个地址同时交给网卡的引导客户端与安装器：iPXE 执行返回的菜单，
+	// 而 Debian 安装器在 auto 模式下会把同一个地址当 preseed 下载，并覆盖内核
+	// 命令行上的 preseed/url（D1）。装好了识别就交给安装器，其余一律按 iPXE 走。
+	if installerAgent(r.UserAgent()) {
+		h.installerBoot(w, r, q.Get("sn"))
+		return
+	}
 	task, found, err := h.engine.Boot(r.Context(), q.Get("sn"), arch, fw)
 	if err != nil {
 		fail(w, 503)
@@ -140,6 +148,44 @@ func (h *handler) boot(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fail(w, 422)
 		return
+	}
+	w.Write(body)
+}
+
+// installerAgent 报告这次 /v1/boot 请求是不是安装器自己发起的。识别宁可保守：
+// 只认抓包证实的 debian-installer，未知或空的 UA 一律走 iPXE 菜单，行为与分流
+// 之前完全一致。
+func installerAgent(agent string) bool {
+	return strings.HasPrefix(strings.TrimSpace(agent), "debian-installer")
+}
+
+// installerBoot 给按 DHCP bootfile 地址前来取 preseed 的 Debian 安装器发真实应答：
+// 它到这一步时 iPXE 必已引导过，pending 的任务没有安装器可发，保持不给安装；
+// 非 preseed 格式不会出现 debian-installer 客户端，同样落回不给安装。发应答与
+// /v1/answer 同步做状态推进（d-i 不会再取命令行里的应答地址，状态机若不在这里
+// 推进会停在 booting）。
+func (h *handler) installerBoot(w http.ResponseWriter, r *http.Request, sn string) {
+	task, found, err := h.engine.Preseed(r.Context(), sn)
+	if err != nil {
+		fail(w, 503)
+		return
+	}
+	if !found || task.Snapshot.Format != "preseed" {
+		io.WriteString(w, "#!ipxe\nexit || sanboot --no-describe --drive 0x80\n")
+		return
+	}
+	body, err := h.render(Request{Context: r.Context(), Task: task, Kind: catalog.FileAnswer, Values: h.values(task)})
+	if err != nil {
+		fail(w, 422)
+		return
+	}
+	install, _ := h.engine.Credentials(task)
+	if _, err := h.engine.Answer(r.Context(), task.ID, install); err != nil {
+		fail(w, 409)
+		return
+	}
+	if h.observe != nil {
+		h.observe(task, r.RemoteAddr)
 	}
 	w.Write(body)
 }

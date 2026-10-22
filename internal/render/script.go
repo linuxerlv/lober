@@ -242,8 +242,11 @@ func runtimeSignalFunction(r Request, slot model.SnapshotSlot, values map[catalo
 }
 
 func renderWindowsScript(r Request, slot model.SnapshotSlot) ([]byte, []model.Problem, error) {
+	if p := bootSnapshotProblems(r); len(p) != 0 {
+		return nil, p, nil
+	}
 	var p []model.Problem
-	for _, role := range []string{"winpe-busybox", "winpe-curl"} {
+	for _, role := range catalog.RequiredRoles(r.Snapshot.Series) {
 		_, problem := artifactURL(r, "", role)
 		if problem != nil {
 			p = append(p, *problem)

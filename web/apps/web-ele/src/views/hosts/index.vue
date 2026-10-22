@@ -32,9 +32,11 @@ import {
   updateHostApi,
 } from '#/api/console/host';
 import { errorMessage, problemsOf, referencesOf } from '#/api/console/problem';
+import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { NumberedPage } from '#/composables/numbered-page';
 
-import { attributesOf, CsvImportSession, CursorPage } from './inventory-state';
+import { attributesOf, CsvImportSession } from './inventory-state';
 
 defineOptions({ name: 'HostsIndex' });
 const access = useAccessStore();
@@ -43,8 +45,10 @@ const failure = ref<unknown>();
 const problems = computed(() => problemsOf(failure.value));
 const references = computed(() => referencesOf(failure.value));
 const filters = reactive({ prefix: '', attr_key: '', attr_value: '' });
-const page = reactive(new CursorPage<HostListItem>());
+const appliedFilters = reactive({ ...filters });
+const page = reactive(new NumberedPage<HostListItem>());
 const [Grid, gridApi] = useVbenVxeGrid<HostListItem>({
+  class: 'h-auto',
   gridOptions: {
     columns: [
       { field: 'sn', title: 'SN', minWidth: 180 },
@@ -59,15 +63,16 @@ const [Grid, gridApi] = useVbenVxeGrid<HostListItem>({
       { field: 'rev', title: '修订', width: 80 },
       { title: '操作', width: 160, slots: { default: 'action' } },
     ],
-    height: 'auto',
+    maxHeight: 520,
     pagerConfig: { enabled: false },
     rowConfig: { keyField: 'sn' },
     proxyConfig: {
       ajax: {
         query: async () => {
           try {
-            return await page.load((cursor) =>
-              getHostListApi({ ...filters, cursor, limit: 50 }),
+            const query = { ...appliedFilters };
+            return await page.load((pagination) =>
+              getHostListApi({ ...query, ...pagination }),
             );
           } catch (error) {
             failure.value = error;
@@ -81,15 +86,16 @@ const [Grid, gridApi] = useVbenVxeGrid<HostListItem>({
 });
 function search() {
   failure.value = undefined;
+  Object.assign(appliedFilters, filters);
   page.reset();
   void gridApi.reload();
 }
-function nextPage() {
-  page.advance();
+function changePage(value: number) {
+  page.setPage(value);
   void gridApi.reload();
 }
-function previousPage() {
-  page.back();
+function changePageSize(value: number) {
+  page.setPageSize(value);
   void gridApi.reload();
 }
 const editorOpen = ref(false);
@@ -135,7 +141,7 @@ async function saveHost() {
     else await createHostApi(data);
     editorOpen.value = false;
     ElMessage.success('主机已保存');
-    search();
+    void gridApi.reload();
   } catch (error) {
     failure.value = error;
   } finally {
@@ -153,7 +159,7 @@ async function removeHost(host: HostListItem) {
   if (!canWrite.value) return;
   try {
     await deleteHostApi(host.sn, host.rev);
-    search();
+    void gridApi.reload();
   } catch (error) {
     failure.value = error;
   }
@@ -205,7 +211,7 @@ async function commitCSV() {
     await csv.commit(commitHostCSVApi, confirmed.value);
     csvOpen.value = false;
     ElMessage.success('CSV 已整体导入');
-    search();
+    void gridApi.reload();
   } catch (error) {
     failure.value = error;
   } finally {
@@ -281,12 +287,14 @@ async function commitCSV() {
         </ElButton>
       </template>
     </Grid>
-    <div class="mt-3 flex justify-end gap-3">
-      <ElButton :disabled="!page.history.length" @click="previousPage">
-        上一页
-      </ElButton>
-      <ElButton :disabled="!page.next" @click="nextPage">下一页</ElButton>
-    </div>
+    <ListPagination
+      :current-page="page.page"
+      :page-size="page.pageSize"
+      :total="page.total"
+      :disabled="page.loading"
+      @page-change="changePage"
+      @size-change="changePageSize"
+    />
     <ElDialog
       v-model="editorOpen"
       :title="editingSN ? '编辑主机' : '登记主机'"

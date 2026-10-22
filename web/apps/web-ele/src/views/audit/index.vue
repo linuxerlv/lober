@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AuditRecordItem } from '#/api/console/audit';
 
-import { reactive, ref } from 'vue';
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 
 import { Page } from '@vben/common-ui';
 
@@ -10,7 +10,9 @@ import { ElAlert, ElButton, ElInput, ElInputNumber } from 'element-plus';
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { exportAudit, listAudit } from '#/api/console/audit';
 import { errorMessage, problemsOf } from '#/api/console/problem';
+import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { NumberedPage } from '#/composables/numbered-page';
 
 const filters = reactive({
   target_kind: '',
@@ -20,15 +22,15 @@ const filters = reactive({
   from: 0,
   to: 0,
 });
+const appliedFilters = { ...filters };
 const failure = ref<unknown>();
 const downloading = ref(false);
-const cursor = ref('');
-const next = ref('');
-const history = ref<string[]>([]);
+const pagination = reactive(new NumberedPage<AuditRecordItem>());
 let generation = 0;
-let latestItems: AuditRecordItem[] = [];
 const [Grid, grid] = useVbenVxeGrid<AuditRecordItem>({
+  class: 'h-auto',
   gridOptions: {
+    maxHeight: 520,
     columns: [
       { field: 'id', title: 'ID', width: 80 },
       {
@@ -46,44 +48,31 @@ const [Grid, grid] = useVbenVxeGrid<AuditRecordItem>({
     ],
     pagerConfig: { enabled: false },
     rowConfig: { keyField: 'id' },
-    proxyConfig: {
-      ajax: {
-        query: async () => {
-          const run = ++generation;
-          try {
-            const page = await listAudit({
-              ...filters,
-              cursor: cursor.value,
-              limit: 50,
-            });
-            if (run === generation) {
-              next.value = page.next;
-              latestItems = page.items ?? [];
-            }
-            return { items: latestItems };
-          } catch (error) {
-            if (run === generation) failure.value = error;
-            return { items: latestItems };
-          }
-        },
-      },
-    },
   },
 });
-function search() {
-  cursor.value = '';
-  history.value = [];
+async function load() {
+  const run = ++generation;
+  const query = { ...appliedFilters };
   failure.value = undefined;
-  void grid.reload();
+  try {
+    const page = await pagination.load((params) => listAudit({ ...query, ...params }));
+    if (run === generation) grid.setGridOptions({ data: page.items });
+  } catch (error) {
+    if (run === generation) failure.value = error;
+  }
 }
-function forward() {
-  history.value.push(cursor.value);
-  cursor.value = next.value;
-  void grid.reload();
+function search() {
+  Object.assign(appliedFilters, filters);
+  pagination.reset();
+  void load();
 }
-function back() {
-  cursor.value = history.value.pop() ?? '';
-  void grid.reload();
+function changePage(page: number) {
+  pagination.setPage(page);
+  void load();
+}
+function changePageSize(size: number) {
+  pagination.setPageSize(size);
+  void load();
 }
 async function download() {
   downloading.value = true;
@@ -102,6 +91,8 @@ async function download() {
     downloading.value = false;
   }
 }
+onMounted(() => load());
+onBeforeUnmount(() => { ++generation; pagination.reset(); });
 </script>
 <template>
   <Page
@@ -139,13 +130,18 @@ async function download() {
         v-model="filters.to"
         :min="0"
         aria-label="结束时间（Unix 秒）"
-      /><ElButton type="primary" @click="search">查询</ElButton><ElButton :loading="downloading" @click="download">
+      /><ElButton type="primary" :loading="pagination.loading" @click="search">查询</ElButton><ElButton :loading="downloading" @click="download">
 导出全部 CSV
 </ElButton>
     </div>
-    <div class="mb-3 flex gap-2">
-      <ElButton :disabled="!history.length" @click="back">上一页</ElButton><ElButton :disabled="!next" @click="forward">下一页</ElButton>
-    </div>
     <Grid />
+    <ListPagination
+      :current-page="pagination.page"
+      :page-size="pagination.pageSize"
+      :total="pagination.total"
+      :disabled="pagination.loading"
+      @page-change="changePage"
+      @size-change="changePageSize"
+    />
   </Page>
 </template>

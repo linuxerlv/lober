@@ -40,9 +40,10 @@ import {
   uploadISOChunkApi,
 } from '#/api/console/artifact';
 import { errorMessage, problemsOf, referencesOf } from '#/api/console/problem';
+import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { NumberedPage } from '#/composables/numbered-page';
 
-import { CursorPage } from '../hosts/inventory-state';
 import SourceForm from './SourceForm.vue';
 import { missingChunks, verifyReselectedFile } from './upload';
 
@@ -82,8 +83,10 @@ const filters = reactive<{
   family: '' | ISOCreateParams['family'];
   state: string;
 }>({ family: '', state: '' });
-const page = reactive(new CursorPage<ISOItem>());
+const appliedFilters = reactive({ ...filters });
+const page = reactive(new NumberedPage<ISOItem>());
 const [Grid, gridApi] = useVbenVxeGrid<ISOItem>({
+  class: 'h-auto',
   gridOptions: {
     columns: [
       { field: 'name', title: '名字', minWidth: 180 },
@@ -100,19 +103,23 @@ const [Grid, gridApi] = useVbenVxeGrid<ISOItem>({
       },
       { title: '操作', width: 300, slots: { default: 'action' } },
     ],
-    height: 'auto',
+    maxHeight: 520,
     pagerConfig: { enabled: false },
     rowConfig: { keyField: 'id' },
     proxyConfig: {
       ajax: {
         query: async () => {
           try {
-            return await page.load((cursor) =>
+            const query = {
+              ...(appliedFilters.family
+                ? { family: appliedFilters.family }
+                : {}),
+              state: appliedFilters.state,
+            };
+            return await page.load((pagination) =>
               getArtifactSetListApi({
-                ...(filters.family ? { family: filters.family } : {}),
-                state: filters.state,
-                cursor,
-                limit: 50,
+                ...query,
+                ...pagination,
               }),
             );
           } catch (error) {
@@ -127,15 +134,16 @@ const [Grid, gridApi] = useVbenVxeGrid<ISOItem>({
 });
 function search() {
   failure.value = undefined;
+  Object.assign(appliedFilters, filters);
   page.reset();
   void gridApi.reload();
 }
-function nextPage() {
-  page.advance();
+function changePage(value: number) {
+  page.setPage(value);
   void gridApi.reload();
 }
-function previousPage() {
-  page.back();
+function changePageSize(value: number) {
+  page.setPageSize(value);
   void gridApi.reload();
 }
 const createOpen = ref(false);
@@ -324,7 +332,7 @@ async function createISO() {
     });
     createOpen.value = false;
     ElMessage.success('ISO 已登记');
-    search();
+    void gridApi.reload();
     await openDetails(item);
     for (const draft of drafts)
       if (draft.file && draft.source.kind === 'upload')
@@ -512,12 +520,14 @@ function percent(source: SourceProgress) {
         </ElButton>
       </template>
     </Grid>
-    <div class="mt-3 flex justify-end gap-3">
-      <ElButton :disabled="!page.history.length" @click="previousPage">
-        上一页
-      </ElButton>
-      <ElButton :disabled="!page.next" @click="nextPage">下一页</ElButton>
-    </div>
+    <ListPagination
+      :current-page="page.page"
+      :page-size="page.pageSize"
+      :total="page.total"
+      :disabled="page.loading"
+      @page-change="changePage"
+      @size-change="changePageSize"
+    />
     <ElDialog
       v-model="createOpen"
       title="新建 ISO"

@@ -47,6 +47,7 @@ type templateResponse struct {
 type templatePage struct {
 	Items []templateResponse `json:"items"`
 	Next  string             `json:"next"`
+	Total *int64             `json:"total,omitempty"`
 }
 type templateVersionPage struct {
 	Items []templateResponse `json:"items"`
@@ -56,6 +57,8 @@ type deriveRequest struct {
 	Name string `json:"name"`
 }
 type templateListQuery struct {
+	Page     int                `form:"page"`
+	PageSize int                `form:"page_size"`
 	Prefix   string             `form:"prefix"`
 	State    model.VersionState `form:"state"`
 	Approved bool               `form:"approved"`
@@ -142,7 +145,7 @@ func (s *server) listTemplates(c *gin.Context) {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return
 	}
-	q := store.TemplateQuery{NamePrefix: common.NamePrefix, States: common.States, ApprovedOnly: common.ApprovedOnly, Cursor: common.Cursor, Limit: common.Limit, Series: series}
+	q := store.TemplateQuery{NamePrefix: common.NamePrefix, States: common.States, ApprovedOnly: common.ApprovedOnly, Cursor: common.Cursor, Limit: common.Limit, Page: common.Page, Series: series}
 	page, ok := Get(c, func() (store.Page[model.Template], error) {
 		return s.deps.Templates.ListTemplates(c.Request.Context(), q)
 	})
@@ -151,7 +154,7 @@ func (s *server) listTemplates(c *gin.Context) {
 	}
 	items, ok := Get(c, func() ([]templateResponse, error) { return s.templateResponses(c.Request.Context(), page.Items) })
 	if ok {
-		Ok(c, templatePage{items, page.Next})
+		Ok(c, templatePage{items, page.Next, page.Total})
 	}
 }
 func (s *server) listTemplateVersions(c *gin.Context) {

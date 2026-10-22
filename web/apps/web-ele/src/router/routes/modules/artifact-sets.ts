@@ -9,7 +9,6 @@ const routes: RouteRecordRaw[] = [
       icon: Inbox,
       order: 50,
       title: '制品集',
-      menuId: 'isos',
     },
     name: 'ArtifactSets',
     path: '/artifact-sets',

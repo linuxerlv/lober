@@ -14,7 +14,6 @@ const routes: RouteRecordRaw[] = [
       icon: BookOpenText,
       order: 70,
       title: '报表与审计',
-      menuId: 'reports',
     },
     name: 'Reports',
     path: '/reports',

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { User, UserCreate } from '#/api/console/user';
 
-import { computed, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 
 import { Page } from '@vben/common-ui';
 import { useAccessStore, useUserStore } from '@vben/stores';
@@ -27,19 +27,20 @@ import {
   listUsers,
   updateUser,
 } from '#/api/console/user';
+import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { NumberedPage } from '#/composables/numbered-page';
 
 const access = useAccessStore();
 const current = useUserStore();
 const allowed = computed(() => access.accessCodes.includes('user:manage'));
 const failure = ref<unknown>();
-const cursor = ref('');
-const next = ref('');
-const history = ref<string[]>([]);
+const pagination = reactive(new NumberedPage<User>());
 let generation = 0;
-let latestItems: User[] = [];
 const [Grid, grid] = useVbenVxeGrid<User>({
+  class: 'h-auto',
   gridOptions: {
+    maxHeight: 520,
     columns: [
       { field: 'username', title: '用户名', minWidth: 160 },
       { field: 'displayName', title: '显示名', minWidth: 160 },
@@ -50,40 +51,25 @@ const [Grid, grid] = useVbenVxeGrid<User>({
     ],
     pagerConfig: { enabled: false },
     rowConfig: { keyField: 'username' },
-    proxyConfig: {
-      ajax: {
-        query: async () => {
-          const run = ++generation;
-          try {
-            const page = await listUsers({ cursor: cursor.value, limit: 50 });
-            if (run === generation) {
-              next.value = page.next;
-              latestItems = page.items ?? [];
-            }
-            return { items: latestItems };
-          } catch (error) {
-            if (run === generation) failure.value = error;
-            return { items: latestItems };
-          }
-        },
-      },
-    },
   },
 });
-function refresh() {
-  cursor.value = '';
-  history.value = [];
+async function refresh() {
+  const run = ++generation;
   failure.value = undefined;
-  void grid.reload();
+  try {
+    const page = await pagination.load(listUsers);
+    if (run === generation) grid.setGridOptions({ data: page.items });
+  } catch (error) {
+    if (run === generation) failure.value = error;
+  }
 }
-function forward() {
-  history.value.push(cursor.value);
-  cursor.value = next.value;
-  void grid.reload();
+function changePage(page: number) {
+  pagination.setPage(page);
+  void refresh();
 }
-function back() {
-  cursor.value = history.value.pop() ?? '';
-  void grid.reload();
+function changePageSize(size: number) {
+  pagination.setPageSize(size);
+  void refresh();
 }
 const open = ref(false);
 const editing = ref<User>();
@@ -155,6 +141,8 @@ async function disable(user: User) {
     failure.value = error;
   }
 }
+onMounted(() => refresh());
+onBeforeUnmount(() => { ++generation; pagination.reset(); });
 </script>
 <template>
   <Page
@@ -170,7 +158,7 @@ async function disable(user: User) {
     />
     <ProblemList :problems="problemsOf(failure)" />
     <div class="mb-3 flex gap-2">
-      <ElButton v-if="allowed" type="primary" @click="edit()">新建用户</ElButton><ElButton @click="refresh">刷新</ElButton><ElButton :disabled="!history.length" @click="back">上一页</ElButton><ElButton :disabled="!next" @click="forward">下一页</ElButton>
+      <ElButton v-if="allowed" type="primary" @click="edit()">新建用户</ElButton><ElButton :loading="pagination.loading" @click="refresh">刷新</ElButton>
     </div>
     <Grid>
 <template #action="{ row }">
@@ -189,6 +177,14 @@ async function disable(user: User) {
 </ElButton>
 </template>
 </Grid>
+    <ListPagination
+      :current-page="pagination.page"
+      :page-size="pagination.pageSize"
+      :total="pagination.total"
+      :disabled="pagination.loading"
+      @page-change="changePage"
+      @size-change="changePageSize"
+    />
     <ElDialog
       v-model="open"
       :title="editing ? '编辑用户' : '新建用户'"

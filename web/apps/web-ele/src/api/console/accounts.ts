@@ -1,5 +1,7 @@
 import type { ConsoleRole, ConsoleSessionUser } from './session';
 
+import type { NumberedPageParams } from '#/composables/numbered-page';
+
 import { requestClient } from '#/api/request';
 export interface ProfileInput {
   displayName: string;
@@ -28,9 +30,9 @@ interface AccountHttp {
 }
 export function createAccountsApi(client: AccountHttp) {
   return {
-    list: (cursor = '') =>
-      client.get<{ items: ConsoleSessionUser[]; next: string }>(
-        `/users?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+    list: ({ page = 1, page_size = 20 }: Partial<NumberedPageParams> = {}) =>
+      client.get<{ items: ConsoleSessionUser[]; next: string; total: number }>(
+        `/users?page=${page}&page_size=${page_size}`,
       ),
     profile: (data: ProfileInput) =>
       client.put<ConsoleSessionUser>('/user/profile', data),

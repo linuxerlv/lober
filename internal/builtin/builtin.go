@@ -56,7 +56,10 @@ func hook(name string, version int, description string) model.Hook {
 
 func instance(name string) model.Instance {
 	version := 1
-	if name == "packages" {
+	// account v2 drops the Leap 15.6 schema-invalid create_home user field (D3);
+	// partition v2 inlines kickstart part commands with reqpart instead of
+	// %pre+%include, which AlmaLinux 10 parses before %pre runs (D2).
+	if name == "packages" || name == "account" || name == "partition" {
 		version = 2
 	}
 	return model.Instance{HookID: "builtin-" + name, HookVersion: version}
@@ -84,9 +87,11 @@ func shippedTemplates() []model.Template {
 		if format == "esxi-ks" {
 			id = "esxi"
 		}
-		version := 1
+		// Content changes ship as higher version numbers: account/partition v2
+		// rebinds every template, kickstart/preseed already carried a v2.
+		version := 2
 		if format == "kickstart" || format == "preseed" {
-			version = 2
+			version = 3
 		}
 		ss := series(format)
 		tpl := model.Template{ID: "builtin-" + id, Version: version, Name: "lober:" + id, State: model.VersionApproved, Builtin: true, Family: ss[0].Family(), Series: ss, Body: body(format, file), Assembly: map[string][]model.Instance{}}

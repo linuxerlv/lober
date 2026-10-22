@@ -1,8 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { collectEditable, latestOnly, mergeEvents, selectionChanged } from './wizard-state';
+import {
+  collectEditable,
+  latestOnly,
+  mergeEvents,
+  mergeHostSelection,
+  selectionChanged,
+} from './wizard-state';
 
 describe('wizard preserves server authority', () => {
+  it('keeps off-page hosts and applies checked and unchecked rows only to the visible page', () => {
+    const first = { sn: 'first' };
+    const second = { sn: 'second' };
+    const third = { sn: 'third' };
+    expect(
+      mergeHostSelection([first, second], [second, third], [third]),
+    ).toEqual([first, third]);
+    expect(mergeHostSelection([first, third], [first], [first, first])).toEqual(
+      [third, first],
+    );
+  });
   it('submits only unlocked fields returned by the server for selected hosts', () => {
     const forms = [
       {
@@ -15,7 +32,11 @@ describe('wizard preserves server authority', () => {
     ];
     expect(
       collectEditable(forms as never, {
-        'SN-1': { 'tpl/password': 'a b', 'partition/1/disk': '/dev/sdb', fake: 'x' },
+        'SN-1': {
+          'tpl/password': 'a b',
+          'partition/1/disk': '/dev/sdb',
+          fake: 'x',
+        },
         'SN-2': { 'tpl/password': 'injected' },
       }),
     ).toEqual({ 'SN-1': { 'tpl/password': 'a b' } });
@@ -24,11 +45,21 @@ describe('wizard preserves server authority', () => {
   it('clears all downstream selection and values when ISO changes', () => {
     expect(
       selectionChanged(
-        { isoID: 'old', templateID: 'tpl', templateVersion: 2, entered: { host: { x: '1' } } },
+        {
+          isoID: 'old',
+          templateID: 'tpl',
+          templateVersion: 2,
+          entered: { host: { x: '1' } },
+        },
         'iso',
         'new',
       ),
-    ).toEqual({ isoID: 'new', templateID: '', templateVersion: 0, entered: {} });
+    ).toEqual({
+      isoID: 'new',
+      templateID: '',
+      templateVersion: 0,
+      entered: {},
+    });
   });
 
   it('ignores stale responses even if the older request finishes last', async () => {
@@ -72,6 +103,8 @@ describe('wizard preserves server authority', () => {
       { seq: 2, kind: 'second' },
       { seq: 3, kind: 'last' },
     ];
-    expect(mergeEvents(old as never, replay as never).map((event) => event.seq)).toEqual([1, 2, 3]);
+    expect(
+      mergeEvents(old as never, replay as never).map((event) => event.seq),
+    ).toEqual([1, 2, 3]);
   });
 });

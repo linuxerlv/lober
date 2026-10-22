@@ -7,12 +7,18 @@ import { useRouter } from 'vue-router';
 import { AuthenticationLoginExpiredModal } from '@vben/common-ui';
 import { useWatermark } from '@vben/hooks';
 import { BookOpenText } from '@vben/icons';
-import { BasicLayout, LockScreen, Notification, UserDropdown } from '@vben/layouts';
+import {
+  BasicLayout,
+  LockScreen,
+  Notification,
+  UserDropdown,
+} from '@vben/layouts';
 import { preferences, usePreferences } from '@vben/preferences';
 import { useAccessStore, useUserStore } from '@vben/stores';
 
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElTag } from 'element-plus';
 
+import { roleLabels } from '#/api/console/accounts';
 import { useAuthStore } from '#/store';
 import LoginForm from '#/views/_core/authentication/login.vue';
 
@@ -24,10 +30,16 @@ const authStore = useAuthStore();
 const accessStore = useAccessStore();
 const { destroyWatermark, updateWatermark } = useWatermark();
 const { isDark } = usePreferences();
-const showDot = computed(() => notifications.value.some((item) => !item.isRead));
+const showDot = computed(() =>
+  notifications.value.some((item) => !item.isRead),
+);
 
 const menus = computed(() => [
-  {handler:()=>router.push('/account/profile'),icon:BookOpenText,text:'个人设置'},
+  {
+    handler: () => router.push('/account/profile'),
+    icon: BookOpenText,
+    text: '个人设置',
+  },
   {
     handler: () => router.push('/account/password'),
     icon: BookOpenText,
@@ -45,7 +57,11 @@ const avatar = computed(() => {
 });
 
 async function handleLogout() {
-  try { await authStore.logout(false); } catch { ElMessage.error('退出失败，请检查网络后重试'); }
+  try {
+    await authStore.logout(false);
+  } catch {
+    ElMessage.error('退出失败，请检查网络后重试');
+  }
 }
 
 function handleNoticeClear() {
@@ -76,7 +92,11 @@ const handleClick = (item: NotificationItem) => {
   }
 };
 
-function navigateTo(link: string, query?: Record<string, any>, state?: Record<string, any>) {
+function navigateTo(
+  link: string,
+  query?: Record<string, any>,
+  state?: Record<string, any>,
+) {
   if (link.startsWith('http://') || link.startsWith('https://')) {
     // 外部链接，在新标签页打开
     window.open(link, '_blank');
@@ -95,10 +115,13 @@ watch(
     enable: preferences.app.watermark,
     content: preferences.app.watermarkContent,
     isDark: isDark.value,
+    username: userStore.userInfo?.username,
   }),
-  async ({ enable, content, isDark: isDarkValue }) => {
+  async ({ enable, content, isDark: isDarkValue, username }) => {
     if (enable) {
-      const watermarkColor = isDarkValue ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.12)';
+      const watermarkColor = isDarkValue
+        ? 'rgba(255, 255, 255, 0.12)'
+        : 'rgba(0, 0, 0, 0.12)';
 
       await updateWatermark({
         advancedStyle: {
@@ -114,7 +137,7 @@ watch(
           ],
           type: 'linear',
         },
-        content: content || `${userStore.userInfo?.username} - ${userStore.userInfo?.realName}`,
+        content: content || username || '',
       });
     } else {
       destroyWatermark();
@@ -138,11 +161,23 @@ watch(
         :avatar
         :menus
         :text="userStore.userInfo?.realName"
-        :description="authStore.sessionUser?.email || userStore.userInfo?.username"
-        :tag-text="authStore.sessionUser?.role"
+        :description="`用户名：${userStore.userInfo?.username || ''}`"
         @clear-preferences-and-logout="handleLogout"
         @logout="handleLogout"
-      />
+      >
+        <template #tagText>
+          <ElTag
+            v-if="authStore.sessionUser"
+            class="ml-2 shrink-0"
+            size="small"
+            type="success"
+            :aria-label="`角色：${roleLabels[authStore.sessionUser.role]}`"
+            :title="`角色：${roleLabels[authStore.sessionUser.role]}`"
+          >
+            {{ roleLabels[authStore.sessionUser.role] }}
+          </ElTag>
+        </template>
+      </UserDropdown>
     </template>
     <template #notification>
       <Notification
@@ -157,7 +192,10 @@ watch(
       />
     </template>
     <template #extra>
-      <AuthenticationLoginExpiredModal v-model:open="accessStore.loginExpired" :avatar>
+      <AuthenticationLoginExpiredModal
+        v-model:open="accessStore.loginExpired"
+        :avatar
+      >
         <LoginForm />
       </AuthenticationLoginExpiredModal>
     </template>

@@ -47,6 +47,7 @@ type isoResponse struct {
 type isoPage struct {
 	Items []isoResponse `json:"items"`
 	Next  string        `json:"next"`
+	Total *int64        `json:"total,omitempty"`
 }
 type sourceRange struct {
 	Start  int64 `json:"start"`
@@ -69,11 +70,13 @@ type isoProgress struct {
 	Sources []sourceProgress `json:"sources"`
 }
 type isoQuery struct {
-	Family catalog.Family `form:"family"`
-	Series catalog.Series `form:"series"`
-	State  model.ISOState `form:"state"`
-	Cursor string         `form:"cursor"`
-	Limit  int            `form:"limit"`
+	Page     int            `form:"page"`
+	PageSize int            `form:"page_size"`
+	Family   catalog.Family `form:"family"`
+	Series   catalog.Series `form:"series"`
+	State    model.ISOState `form:"state"`
+	Cursor   string         `form:"cursor"`
+	Limit    int            `form:"limit"`
 }
 type sourceQuery struct {
 	Role string `form:"role"`
@@ -113,11 +116,11 @@ func (s *server) isoRoutes() []route {
 	}
 }
 func (s *server) listISOs(c *gin.Context) {
-	limit, ok := queryLimit(c)
+	number, limit, ok := queryPagination(c)
 	if !ok {
 		return
 	}
-	q := store.ISOQuery{Family: catalog.Family(c.Query("family")), Series: catalog.Series(c.Query("series")), Cursor: c.Query("cursor"), Limit: limit}
+	q := store.ISOQuery{Family: catalog.Family(c.Query("family")), Series: catalog.Series(c.Query("series")), Cursor: c.Query("cursor"), Limit: limit, Page: number}
 	if q.Family != "" && !q.Family.Valid() || q.Series != "" && !q.Series.Valid() {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return
@@ -137,7 +140,7 @@ func (s *server) listISOs(c *gin.Context) {
 	for i, item := range page.Items {
 		items[i] = toISOResponse(item)
 	}
-	Ok(c, isoPage{items, page.Next})
+	Ok(c, isoPage{items, page.Next, page.Total})
 }
 func (s *server) getISO(c *gin.Context) {
 	item, ok := Get(c, func() (model.ISO, error) { return s.deps.ISOs.GetISO(c.Request.Context(), c.Param("id")) })

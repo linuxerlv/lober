@@ -157,6 +157,28 @@ func CheckQuery(cursor string, limit int) (int, error) {
 	return limit, nil
 }
 
+// CheckPageQuery validates numbered pagination while preserving legacy Page=0 behavior.
+// Numbered pages default to 20 rows and cannot be combined with a cursor.
+func CheckPageQuery(cursor string, limit, page int) (int, error) {
+	if page == 0 {
+		return CheckQuery(cursor, limit)
+	}
+	if page < 0 || cursor != "" {
+		return 0, invalidf("Page must be positive and cannot be combined with Cursor")
+	}
+	if limit == 0 {
+		limit = 20
+	}
+	n, err := CheckQuery("", limit)
+	if err != nil {
+		return 0, err
+	}
+	if page-1 > int(^uint(0)>>1)/n {
+		return 0, invalidf("Page offset overflows")
+	}
+	return n, nil
+}
+
 // 游标是上一页最后一条的排序键，连同列表的名字编成 JSON 数组，再做 base64url：调用方看不出里面是什么，也就不会依赖它；
 // 改坏的、别的列表给的游标都认得出来，报 ErrInvalid。各列表的排序键见各查询类型的说明，编解码只有这一份，认得什么样的
 // 游标不随实现里查询的写法变。

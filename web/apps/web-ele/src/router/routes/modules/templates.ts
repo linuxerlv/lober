@@ -9,7 +9,6 @@ const routes: RouteRecordRaw[] = [
       icon: SquareCode,
       order: 30,
       title: '模板',
-      menuId: 'templates',
     },
     name: 'Templates',
     path: '/templates',

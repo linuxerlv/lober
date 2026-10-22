@@ -170,6 +170,41 @@ func TestDurableLifecycleConcurrentDuplicatesAndPostRebootRetry(t *testing.T) {
 		t.Fatal("completed task reinstalled", err)
 	}
 }
+func TestPreseedServesBootedInstallerOnly(t *testing.T) {
+	st := pgtest.OpenStore(t)
+	fixture(t, st)
+	var now atomic.Int64
+	now.Store(1000)
+	s := service(t, st, &now)
+	ctx := t.Context()
+	// pending：机器还没 PXE 引导过，先把应答发给它只会提前推状态机。
+	if _, found, err := s.Preseed(ctx, "EXECUTION-GUEST"); err != nil || found {
+		t.Fatalf("pending task served before boot: %v %v", found, err)
+	}
+	if _, found, err := s.Preseed(ctx, "EXECUTION-NONE"); err != nil || found {
+		t.Fatalf("unregistered SN served: %v %v", found, err)
+	}
+	task := boot(t, s)
+	if _, found, err := s.Preseed(ctx, "EXECUTION-GUEST"); err != nil || !found {
+		t.Fatalf("booting task not served: %v %v", found, err)
+	}
+	if _, err := s.Answer(ctx, task.ID, s.Token(task, execution.Install)); err != nil {
+		t.Fatal(err)
+	}
+	// d-i 可能多次重取 DHCP filename 的 preseed；installing 阶段保持可发。
+	if _, found, err := s.Preseed(ctx, "EXECUTION-GUEST"); err != nil || !found {
+		t.Fatalf("installing task not refetchable: %v %v", found, err)
+	}
+	must(t, s.Signal(ctx, task.ID, s.Token(task, execution.Install), execution.Signal{Phase: "installed"}))
+	final := s.Token(task, execution.Finalize)
+	for _, phase := range []string{"booted", "init-start", "init-done", "ready"} {
+		must(t, s.Signal(ctx, task.ID, final, execution.Signal{Phase: phase}))
+	}
+	if _, found, err := s.Preseed(ctx, "EXECUTION-GUEST"); err != nil || found {
+		t.Fatalf("finished task served: %v %v", found, err)
+	}
+}
+
 func TestTimeoutRestartRetryRevokesOldCredentialAndAuditIsAtomic(t *testing.T) {
 	st := pgtest.OpenStore(t)
 	fixture(t, st)

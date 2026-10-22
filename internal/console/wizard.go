@@ -19,6 +19,7 @@ type wizardHostItem struct {
 type wizardHostPage struct {
 	Items []wizardHostItem `json:"items"`
 	Next  string           `json:"next"`
+	Total *int64           `json:"total,omitempty"`
 }
 type wizardISOItem struct {
 	isoResponse
@@ -28,6 +29,7 @@ type wizardISOItem struct {
 type wizardISOResult struct {
 	Items []wizardISOItem `json:"items"`
 	Next  string          `json:"next"`
+	Total *int64          `json:"total,omitempty"`
 }
 type wizardTemplateItem struct {
 	templateResponse
@@ -36,6 +38,7 @@ type wizardTemplateItem struct {
 type wizardTemplateResult struct {
 	Items []wizardTemplateItem `json:"items"`
 	Next  string               `json:"next"`
+	Total *int64               `json:"total,omitempty"`
 }
 type paramFieldDTO struct {
 	Key      params.FieldKey  `json:"key"`
@@ -79,20 +82,56 @@ type wizardParamsRequest struct {
 }
 type wizardISORequest struct {
 	HostSNs []string `json:"hostSNs" binding:"required,min=1"`
-	Cursor  string   `json:"cursor,omitempty"`
-	Limit   int      `json:"limit,omitempty"`
+	selectionPageRequest
 }
 type wizardTemplateRequest struct {
-	ISOID  string `json:"isoID" binding:"required"`
-	Cursor string `json:"cursor,omitempty"`
-	Limit  int    `json:"limit,omitempty"`
+	ISOID string `json:"isoID" binding:"required"`
+	selectionPageRequest
 }
+
+type selectionPageRequest struct {
+	Cursor   *string `json:"cursor,omitempty"`
+	Limit    *int    `json:"limit,omitempty"`
+	Page     *int    `json:"page,omitempty"`
+	PageSize *int    `json:"page_size,omitempty"`
+}
+
+func selectionPagination(c *gin.Context, input selectionPageRequest) (page, limit int, cursor string, ok bool) {
+	if input.Page != nil || input.PageSize != nil {
+		page, limit = 1, 20
+		if input.Page != nil {
+			page = *input.Page
+		}
+		if input.PageSize != nil {
+			limit = *input.PageSize
+		}
+		if page < 1 || limit < 1 || input.Cursor != nil || input.Limit != nil {
+			Fail(c, 400, nil, model.ConsoleBadRequest)
+			return 0, 0, "", false
+		}
+	} else {
+		if input.Cursor != nil {
+			cursor = *input.Cursor
+		}
+		if input.Limit != nil {
+			limit = *input.Limit
+		}
+	}
+	if _, err := store.CheckPageQuery(cursor, limit, page); err != nil {
+		RespondError(c, err)
+		return 0, 0, "", false
+	}
+	return page, limit, cursor, true
+}
+
 type wizardHostQuery struct {
 	Q         string `form:"q"`
 	AttrKey   string `form:"attr_key"`
 	AttrValue string `form:"attr_value"`
 	Cursor    string `form:"cursor"`
 	Limit     int    `form:"limit"`
+	Page      int    `form:"page"`
+	PageSize  int    `form:"page_size"`
 }
 
 func (s *server) wizardRoutes() []route {
@@ -105,7 +144,7 @@ func (s *server) wizardRoutes() []route {
 	}
 }
 func (s *server) wizardHosts(c *gin.Context) {
-	limit, ok := queryLimit(c)
+	pageNumber, limit, ok := queryPagination(c)
 	if !ok {
 		return
 	}
@@ -114,7 +153,7 @@ func (s *server) wizardHosts(c *gin.Context) {
 		prefix = normalized
 	}
 	page, ok := Get(c, func() (store.Page[model.Host], error) {
-		return s.deps.Hosts.ListHosts(c.Request.Context(), store.HostQuery{SNPrefix: prefix, AttrKey: c.Query("attr_key"), AttrValue: c.Query("attr_value"), Cursor: c.Query("cursor"), Limit: limit})
+		return s.deps.Hosts.ListHosts(c.Request.Context(), store.HostQuery{SNPrefix: prefix, AttrKey: c.Query("attr_key"), AttrValue: c.Query("attr_value"), Cursor: c.Query("cursor"), Limit: limit, Page: pageNumber})
 	})
 	if !ok {
 		return
@@ -129,7 +168,7 @@ func (s *server) wizardHosts(c *gin.Context) {
 		ps := admission.HostSelectable(h, open)
 		items[i] = wizardHostItem{toHostResponse(h), len(ps) == 0, jsonProblems(ps)}
 	}
-	Ok(c, wizardHostPage{items, page.Next})
+	Ok(c, wizardHostPage{Items: items, Next: page.Next, Total: page.Total})
 }
 func wizardSNs(c *gin.Context, raw []string) ([]string, bool) {
 	out := make([]string, len(raw))
@@ -200,6 +239,10 @@ func (s *server) wizardISOs(c *gin.Context) {
 	if !Bind(c, &req) {
 		return
 	}
+	pageNumber, limit, cursor, ok := selectionPagination(c, req.selectionPageRequest)
+	if !ok {
+		return
+	}
 	sns, ok := wizardSNs(c, req.HostSNs)
 	if !ok {
 		return
@@ -209,7 +252,7 @@ func (s *server) wizardISOs(c *gin.Context) {
 		return
 	}
 	page, ok := Get(c, func() (store.Page[model.ISO], error) {
-		return s.deps.ISOs.ListISOs(c.Request.Context(), store.ISOQuery{States: []model.ISOState{model.ISOReady}, Cursor: req.Cursor, Limit: req.Limit})
+		return s.deps.ISOs.ListISOs(c.Request.Context(), store.ISOQuery{States: []model.ISOState{model.ISOReady}, Cursor: cursor, Limit: limit, Page: pageNumber})
 	})
 	if !ok {
 		return
@@ -219,19 +262,27 @@ func (s *server) wizardISOs(c *gin.Context) {
 		ps := admission.ISOUsable(item, hosts)
 		items[i] = wizardISOItem{toISOResponse(item), len(ps) == 0, jsonProblems(ps)}
 	}
-	Ok(c, wizardISOResult{items, page.Next})
+	Ok(c, wizardISOResult{Items: items, Next: page.Next, Total: page.Total})
 }
 func (s *server) wizardTemplates(c *gin.Context) {
 	var req wizardTemplateRequest
 	if !Bind(c, &req) {
 		return
 	}
+	pageNumber, limit, cursor, ok := selectionPagination(c, req.selectionPageRequest)
+	if !ok {
+		return
+	}
 	iso, ok := Get(c, func() (model.ISO, error) { return s.deps.ISOs.GetISO(c.Request.Context(), req.ISOID) })
 	if !ok || !Judge(c, iso.Unusable()) {
 		return
 	}
+	if pageNumber > 0 {
+		s.numberedWizardTemplates(c, iso, pageNumber, limit)
+		return
+	}
 	page, ok := Get(c, func() (store.Page[model.Template], error) {
-		return s.deps.Templates.ListTemplates(c.Request.Context(), store.TemplateQuery{ApprovedOnly: true, Series: iso.Series, Cursor: req.Cursor, Limit: req.Limit})
+		return s.deps.Templates.ListTemplates(c.Request.Context(), store.TemplateQuery{ApprovedOnly: true, Series: iso.Series, Cursor: cursor, Limit: limit})
 	})
 	if !ok {
 		return
@@ -251,7 +302,33 @@ func (s *server) wizardTemplates(c *gin.Context) {
 		}
 		items = append(items, wizardTemplateItem{toTemplateResponse(t, hooks), true})
 	}
-	Ok(c, wizardTemplateResult{items, page.Next})
+	Ok(c, wizardTemplateResult{Items: items, Next: page.Next})
+}
+
+// Candidate eligibility is applied in SQL before COUNT and LIMIT/OFFSET.
+func (s *server) numberedWizardTemplates(c *gin.Context, iso model.ISO, pageNumber, limit int) {
+	selection := &store.TemplateSelection{ISO: iso}
+	for _, shipped := range builtin.Templates() {
+		selection.BuiltinTemplates = append(selection.BuiltinTemplates, model.TemplateKey{ID: shipped.ID, Version: shipped.Version})
+	}
+	for _, shipped := range builtin.Hooks() {
+		selection.BuiltinHooks = append(selection.BuiltinHooks, shipped.Key())
+	}
+	page, ok := Get(c, func() (store.Page[model.Template], error) {
+		return s.deps.Templates.ListTemplates(c.Request.Context(), store.TemplateQuery{Page: pageNumber, Limit: limit, Selection: selection})
+	})
+	if !ok {
+		return
+	}
+	hooks, ok := Get(c, func() (map[model.HookKey]model.Hook, error) { return s.templateHooks(c.Request.Context(), page.Items) })
+	if !ok {
+		return
+	}
+	items := make([]wizardTemplateItem, 0, len(page.Items))
+	for _, candidate := range page.Items {
+		items = append(items, wizardTemplateItem{toTemplateResponse(candidate, hooks), true})
+	}
+	Ok(c, wizardTemplateResult{Items: items, Next: page.Next, Total: page.Total})
 }
 
 // The shipped manifest is immutable program data; persisted obsolete builtin

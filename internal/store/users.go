@@ -45,6 +45,7 @@ func Roles() []Role        { return slices.Clone(roles) }
 func (r Role) Valid() bool { return slices.Contains(roles, r) }
 
 type UserQuery struct {
+	Page   int // Zero preserves cursor pagination; positive values select a numbered page.
 	Cursor string
 	Limit  int
 }

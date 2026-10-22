@@ -21,7 +21,7 @@ func addAudits(tx *gorm.DB, a store.Audit, kind string, ids ...string) error {
 // ListAudit 见 store.AuditLog。新的在前；游标是上一页最后一条的 ID，后面的页只取比它小的，翻页中途新写的审计不会
 // 插进来。
 func (s *Store) ListAudit(ctx context.Context, q store.AuditQuery) (store.Page[store.AuditEntry], error) {
-	limit, err := store.CheckQuery(q.Cursor, q.Limit)
+	limit, err := store.CheckPageQuery(q.Cursor, q.Limit, q.Page)
 	if err != nil {
 		return store.Page[store.AuditEntry]{}, err
 	}
@@ -32,7 +32,7 @@ func (s *Store) ListAudit(ctx context.Context, q store.AuditQuery) (store.Page[s
 		}
 	}
 	if !storable(q.TargetKind, q.TargetID, q.Actor, q.Action) {
-		return emptyPage[store.AuditEntry](), nil
+		return emptyPage[store.AuditEntry](q.Page), nil
 	}
 	db := s.read(ctx)
 	if q.Cursor != "" {
@@ -52,9 +52,13 @@ func (s *Store) ListAudit(ctx context.Context, q store.AuditQuery) (store.Page[s
 	if q.To != 0 {
 		db = db.Where("at <= ?", q.To)
 	}
+	db, total, err := numberedQuery[auditRow](db, q.Page, limit)
+	if err != nil {
+		return store.Page[store.AuditEntry]{}, err
+	}
 	var rows []auditRow
 	if err := db.Order("id DESC").Limit(limit + 1).Find(&rows).Error; err != nil {
 		return store.Page[store.AuditEntry]{}, err
 	}
-	return page(rows, limit, auditRow.entry, func(r auditRow) string { return store.EncodeCursor("audit", r.ID) })
+	return page(rows, limit, auditRow.entry, func(r auditRow) string { return store.EncodeCursor("audit", r.ID) }, total)
 }

@@ -3,7 +3,11 @@ package builtin
 import "github.com/lober/lober/internal/core/model"
 
 func partitionHook() model.Hook {
-	h := hook("partition", 1, "Destructive whole-disk installation. Native firmware determines boot partitions.")
+	// v2: kickstart part commands inlined at render time with reqpart, which
+	// creates the firmware-required boot partition (biosboot or /boot/efi);
+	// AlmaLinux 10 resolves %include before %pre runs, so generated part
+	// commands never reached the installer (D2).
+	h := hook("partition", 2, "Destructive whole-disk installation. Native firmware determines boot partitions.")
 	zero := int64(0)
 	h.Params = []model.ParamDecl{{Name: "disk", Type: "word", Default: "sda"}, {Name: "disk_index", Type: "int", Default: "0", Min: &zero}}
 	h.Impls = []model.Impl{

@@ -13,19 +13,29 @@ import (
 type menuDefinition struct {
 	ID         string `json:"id"`
 	Title      string `json:"title"`
+	ParentID   string `json:"parentId"`
 	Permission string `json:"permission"`
 	Required   bool   `json:"required"`
 }
 
 var menuCatalog = []menuDefinition{
-	{"tasks", "任务", PermTaskRead, false},
-	{"hosts", "主机清单", PermHostRead, false},
-	{"templates", "模板", PermTemplateRead, false},
-	{"hooks", "hook", PermHookRead, false},
-	{"isos", "制品集", PermISORead, false},
-	{"tools", "工具", PermTemplateRead, false},
-	{"reports", "报表与审计", PermAuditRead, false},
-	{"role-menus", "角色与菜单", PermUserManage, true},
+	{ID: "tasks-group", Title: "任务"},
+	{ID: "tasks", Title: "任务列表", ParentID: "tasks-group", Permission: PermTaskRead},
+	{ID: "hosts-group", Title: "主机清单"},
+	{ID: "hosts", Title: "主机清单", ParentID: "hosts-group", Permission: PermHostRead},
+	{ID: "templates-group", Title: "模板"},
+	{ID: "templates", Title: "模板", ParentID: "templates-group", Permission: PermTemplateRead},
+	{ID: "hooks-group", Title: "hook"},
+	{ID: "hooks", Title: "hook 管理与审批", ParentID: "hooks-group", Permission: PermHookRead},
+	{ID: "isos-group", Title: "制品集"},
+	{ID: "isos", Title: "制品集导入", ParentID: "isos-group", Permission: PermISORead},
+	{ID: "tools-group", Title: "工具"},
+	{ID: "tools", Title: "磁盘策略 dry-run", ParentID: "tools-group", Permission: PermTemplateRead},
+	{ID: "reports-group", Title: "报表与审计"},
+	{ID: "reports", Title: "报表与审计", ParentID: "reports-group", Permission: PermAuditRead},
+	{ID: "access", Title: "权限管理"},
+	{ID: "users", Title: "账号管理", ParentID: "access", Permission: PermUserManage},
+	{ID: "role-menus", Title: "角色与菜单", ParentID: "access", Permission: PermUserManage, Required: true},
 }
 
 type roleMenuResponse struct {
@@ -54,7 +64,8 @@ func availableMenus(role store.Role) []string {
 	out := []string{}
 	permissions := PermsOf(role)
 	for _, m := range menuCatalog {
-		if slices.Contains(permissions, m.Permission) {
+		// Folders carry hierarchy only; only second-level pages can be granted.
+		if m.ParentID != "" && slices.Contains(permissions, m.Permission) {
 			out = append(out, m.ID)
 		}
 	}

@@ -300,20 +300,27 @@ func (s *Store) ListHookVersions(ctx context.Context, id string) ([]model.Hook, 
 
 // ListHooks 见 store.Hooks，条件、排序与游标见 listQuery。
 func (s *Store) ListHooks(ctx context.Context, q store.HookQuery) (store.Page[model.Hook], error) {
-	db, limit, err := hookTables.listQuery(s.read(ctx), q.Cursor, q.Limit, q.NamePrefix, q.States, q.ApprovedOnly)
+	db, limit, err := hookTables.listQuery(s.read(ctx), q.Cursor, q.Limit, q.NamePrefix, q.States, q.ApprovedOnly, q.Page, q.AllVersions)
 	switch {
 	case err != nil:
 		return store.Page[model.Hook]{}, err
 	case db == nil:
-		return emptyPage[model.Hook](), nil
+		return emptyPage[model.Hook](q.Page), nil
+	}
+	db, total, err := numberedQuery[hookVersionRow](db, q.Page, limit)
+	if err != nil {
+		return store.Page[model.Hook]{}, err
 	}
 	var rows []hookVersionRow
 	if err := db.Find(&rows).Error; err != nil {
 		return store.Page[model.Hook]{}, err
 	}
 	return page(rows, limit, hookVersionRow.hook, func(r hookVersionRow) string {
+		if q.AllVersions {
+			return store.EncodeCursor(hookTables.versions, r.NameKey, r.HookID, r.Version)
+		}
 		return store.EncodeCursor(hookTables.idents, r.NameKey, r.HookID)
-	})
+	}, total)
 }
 
 // EnsureBuiltinHook 见 store.Hooks。比的是版本的全部字段，名字按身份上的，Rev 不比：内置的版本写入之后不会再变。名字
@@ -587,14 +594,23 @@ func (v versioning) nameOwner(db *gorm.DB, key string) (string, error) {
 // 的那一项。名字的前缀按 store.NameKeyPrefix 转了再与名字的 key 比；starts_with 按原样比，_、% 与反斜杠不必转义。按名字的
 // key、再按 ID 的字节序排，游标是上一页最后一项的这两样。条件存不下时查询为 nil：什么都匹配不上。
 func (v versioning) listQuery(db *gorm.DB, cursor string, limit int, prefix string, states []model.VersionState,
-	approvedOnly bool) (*gorm.DB, int, error) {
-	n, err := store.CheckQuery(cursor, limit)
+	approvedOnly bool, number int, allVersions bool) (*gorm.DB, int, error) {
+	n, err := store.CheckPageQuery(cursor, limit, number)
 	if err != nil {
 		return nil, 0, err
 	}
 	var afterKey, afterID string
+	var afterVersion int
+	cursorList := v.idents
+	if allVersions {
+		cursorList = v.versions
+	}
 	if cursor != "" {
-		if err := store.DecodeCursor(cursor, v.idents, &afterKey, &afterID); err != nil {
+		keys := []any{&afterKey, &afterID}
+		if allVersions {
+			keys = append(keys, &afterVersion)
+		}
+		if err := store.DecodeCursor(cursor, cursorList, keys...); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -611,7 +627,12 @@ func (v versioning) listQuery(db *gorm.DB, cursor string, limit int, prefix stri
 	if approvedOnly {
 		pick += " AND w.state = '" + string(model.VersionApproved) + "'"
 	}
-	db = v.joined(db).Where(v.versions + ".version = (" + pick + ")")
+	db = v.joined(db)
+	if !allVersions {
+		db = db.Where(v.versions + ".version = (" + pick + ")")
+	} else if approvedOnly {
+		db = db.Where(v.versions+".state = ?", string(model.VersionApproved))
+	}
 	if prefix != "" {
 		db = db.Where("starts_with("+v.idents+".name_key, ?)", store.NameKeyPrefix(prefix))
 	}
@@ -620,7 +641,15 @@ func (v versioning) listQuery(db *gorm.DB, cursor string, limit int, prefix stri
 	}
 	key, id := v.idents+`.name_key COLLATE "C"`, v.idents+`.id COLLATE "C"`
 	if cursor != "" {
-		db = db.Where("("+key+" > ? OR ("+key+" = ? AND "+id+" > ?))", afterKey, afterKey, afterID)
+		if allVersions {
+			db = db.Where("("+key+" > ? OR ("+key+" = ? AND "+id+" > ?) OR ("+key+" = ? AND "+id+" = ? AND "+v.versions+".version > ?))", afterKey, afterKey, afterID, afterKey, afterID, afterVersion)
+		} else {
+			db = db.Where("("+key+" > ? OR ("+key+" = ? AND "+id+" > ?))", afterKey, afterKey, afterID)
+		}
 	}
-	return db.Order(key + ", " + id).Limit(n + 1), n, nil
+	order := key + ", " + id
+	if allVersions {
+		order += ", " + v.versions + ".version ASC"
+	}
+	return db.Order(order).Limit(n + 1), n, nil
 }

@@ -9,7 +9,6 @@ const routes: RouteRecordRaw[] = [
       icon: List,
       order: 10,
       title: '任务',
-      menuId: 'tasks',
     },
     name: 'Tasks',
     path: '/tasks',

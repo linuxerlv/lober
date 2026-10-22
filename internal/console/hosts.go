@@ -27,8 +27,11 @@ type hostResponse struct {
 type hostPage struct {
 	Items []hostResponse `json:"items"`
 	Next  string         `json:"next"`
+	Total *int64         `json:"total,omitempty"`
 }
 type hostQuery struct {
+	Page      int    `form:"page"`
+	PageSize  int    `form:"page_size"`
 	Prefix    string `form:"prefix"`
 	AttrKey   string `form:"attr_key"`
 	AttrValue string `form:"attr_value"`
@@ -60,17 +63,17 @@ func (s *server) hostRoutes() []route {
 	}
 }
 func (s *server) listHosts(c *gin.Context) {
-	limit, ok := queryLimit(c)
+	number, limit, ok := queryPagination(c)
 	if !ok {
 		return
 	}
 	page, ok := Get(c, func() (store.Page[model.Host], error) {
-		return s.deps.Hosts.ListHosts(c.Request.Context(), store.HostQuery{SNPrefix: c.Query("prefix"), AttrKey: c.Query("attr_key"), AttrValue: c.Query("attr_value"), Cursor: c.Query("cursor"), Limit: limit})
+		return s.deps.Hosts.ListHosts(c.Request.Context(), store.HostQuery{SNPrefix: c.Query("prefix"), AttrKey: c.Query("attr_key"), AttrValue: c.Query("attr_value"), Cursor: c.Query("cursor"), Limit: limit, Page: number})
 	})
 	if !ok {
 		return
 	}
-	Ok(c, hostsPage(page.Items, page.Next))
+	Ok(c, hostsPage(page.Items, page.Next, page.Total))
 }
 func normalizedHostSN(c *gin.Context, raw string) (string, bool) {
 	sn, err := model.NormalizeSN(raw)
@@ -164,12 +167,16 @@ func (s *server) deleteHost(c *gin.Context) {
 	}
 	Ok(c, nil)
 }
-func hostsPage(hs []model.Host, next string) hostPage {
+func hostsPage(hs []model.Host, next string, total ...*int64) hostPage {
 	items := make([]hostResponse, len(hs))
 	for i, h := range hs {
 		items[i] = toHostResponse(h)
 	}
-	return hostPage{items, next}
+	var count *int64
+	if len(total) > 0 {
+		count = total[0]
+	}
+	return hostPage{items, next, count}
 }
 func (s *server) importHosts(c *gin.Context) {
 	dryRun := false

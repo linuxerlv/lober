@@ -22,6 +22,12 @@ type fixtureEngine struct {
 func (f *fixtureEngine) Boot(context.Context, string, catalog.Arch, catalog.Firmware) (model.Task, bool, error) {
 	return f.task, f.task.ID != "", nil
 }
+func (f *fixtureEngine) Preseed(_ context.Context, sn string) (model.Task, bool, error) {
+	if f.task.ID == "" || sn != f.task.HostSN {
+		return model.Task{}, false, nil
+	}
+	return f.task, true, nil
+}
 func (f *fixtureEngine) GetAuthorized(_ context.Context, id, token string, final bool) (model.Task, error) {
 	if id != f.task.ID || token != "install-token" || final {
 		return model.Task{}, errors.New("credential")
@@ -45,7 +51,7 @@ func gatewayFixture(t *testing.T) (*fixtureEngine, http.Handler) {
 	t.Helper()
 	body := "echo frozen\n"
 	digest := sha256.Sum256([]byte(body))
-	f := &fixtureEngine{task: model.Task{ID: "task-one", Snapshot: model.Snapshot{Format: "kickstart", Slots: []model.SnapshotSlot{{Seq: 2, Name: "init", Exec: true, Timing: "firstboot", Instances: []model.SnapshotInstance{{Digest: hex.EncodeToString(digest[:]), Body: body}}}}}}}
+	f := &fixtureEngine{task: model.Task{ID: "task-one", HostSN: "SN-ONE", Snapshot: model.Snapshot{Format: "kickstart", Slots: []model.SnapshotSlot{{Seq: 2, Name: "init", Exec: true, Timing: "firstboot", Instances: []model.SnapshotInstance{{Digest: hex.EncodeToString(digest[:]), Body: body}}}}}}}
 	return f, New(f, func(r Request) ([]byte, error) { return []byte(string(r.Kind) + ":" + r.Slot), nil }, Endpoints{Gateway: "http://gateway", Artifacts: "http://artifacts"})
 }
 func call(h http.Handler, method, path, body string) *httptest.ResponseRecorder {
@@ -107,5 +113,44 @@ func TestBootWithoutTaskReturnsLocalBootAndCanonicalPlatform(t *testing.T) {
 	w = call(h, "GET", "/v1/boot?sn=SN-ONE&arch=unknown&firmware=bios", "")
 	if w.Code == 200 {
 		t.Fatal("invalid architecture accepted")
+	}
+}
+
+// D1：Debian 安装器在 auto 模式下把 DHCP option 67 的 bootfile 地址当 preseed
+// 下载并覆盖内核命令行；网关对 debian-installer 客户端在 /v1/boot 上直接发
+// preseed 应答，其余客户端保持 iPXE 菜单。
+func TestBootServesPreseedAnswerToDebianInstallerAgent(t *testing.T) {
+	f, h := gatewayFixture(t)
+	f.task.Snapshot.Format = "preseed"
+	callUA := func(agent, sn string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/v1/boot?sn="+sn+"&arch=x86_64&firmware=bios", nil)
+		if agent != "" {
+			req.Header.Set("User-Agent", agent)
+		}
+		h.ServeHTTP(w, req)
+		return w
+	}
+	if w := callUA("iPXE/1.21.1+git-20220113", "SN-ONE"); w.Code != 200 || !strings.Contains(w.Body.String(), "menu:") {
+		t.Fatal("iPXE agent lost the menu", w.Code, w.Body)
+	}
+	if w := callUA("", "SN-ONE"); w.Code != 200 || !strings.Contains(w.Body.String(), "menu:") {
+		t.Fatal("unknown agent must keep the iPXE menu behavior", w.Code, w.Body)
+	}
+	if w := callUA("debian-installer", "SN-ONE"); w.Code != 200 || !strings.Contains(w.Body.String(), "answer:") {
+		t.Fatal("debian-installer agent did not get the preseed answer", w.Code, w.Body)
+	}
+	// 不给安装：无任务、别的 SN、非 preseed 格式都保持本地盘引导。
+	f.task.Snapshot.Format = "kickstart"
+	if w := callUA("debian-installer", "SN-ONE"); w.Code != 200 || !strings.Contains(w.Body.String(), "sanboot") {
+		t.Fatal("non-preseed format must not install", w.Code, w.Body)
+	}
+	f.task.Snapshot.Format = "preseed"
+	if w := callUA("debian-installer", "SN-OTHER"); w.Code != 200 || !strings.Contains(w.Body.String(), "sanboot") {
+		t.Fatal("unknown SN must not install", w.Code, w.Body)
+	}
+	f.task = model.Task{}
+	if w := callUA("debian-installer", "SN-ONE"); w.Code != 200 || !strings.Contains(w.Body.String(), "sanboot") {
+		t.Fatal("no task must not install", w.Code, w.Body)
 	}
 }
