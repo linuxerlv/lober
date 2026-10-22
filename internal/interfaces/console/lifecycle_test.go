@@ -3,6 +3,7 @@ package console
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -201,7 +202,8 @@ func Test生命周期校验只读并计算OK(t *testing.T) {
 	}
 	s.server.deps.Hooks = closed
 	// 编写应用在构造时接收引用读取器；失败注入也必须重新组装该能力。
-	s.server.deps.TemplateAuthoring = wizardDeps(s.server.deps, st).TemplateAuthoring
+	assembled := wizardDeps(s.server.deps, st)
+	s.server.deps.Wizard, s.server.deps.TemplateAuthoring = assembled.Wizard, assembled.TemplateAuthoring
 	w := httpCall(s, "POST", lifecyclePath("templates", tpl.ID, "validate", 0), "", admin)
 	if w.Code != 500 || strings.Contains(w.Body.String(), "hook_ref_missing") || strings.Contains(w.Body.String(), "database is closed") {
 		t.Fatal(w.Code, w.Body.String())
@@ -279,5 +281,45 @@ func Test组件驳回理由错误不被坏版本和修订盖掉(t *testing.T) {
 				t.Fatal(w.Code, w.Body.String())
 			}
 		}
+	}
+}
+
+func Test生命周期模板数字溢出仍返回400(t *testing.T) {
+	s, st, _ := newHTTPServer(t)
+	token := adminHTTP(t, s, st)
+	tpl, err := st.CreateTemplate(t.Context(), model.Template{Name: "overflow", Author: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overflow := "9223372036854775808"
+	for _, op := range []string{"submit", "approve", "reject", "deprecate"} {
+		for _, number := range []struct{ name, version, rev string }{{"version", overflow, "1"}, {"rev", "1", overflow}} {
+			t.Run(op+"/"+number.name, func(t *testing.T) {
+				body := ""
+				if op == "reject" {
+					body = `{"reason":"需要修改"}`
+				}
+				path := fmt.Sprintf("/console/v1/templates/%s/versions/%s/%s?rev=%s", tpl.ID, number.version, op, number.rev)
+				authoringErrorEnvelope(t, httpCall(s, "POST", path, body, token), 400, model.ConsoleBadRequest)
+			})
+		}
+	}
+	for _, number := range []struct{ name, version, rev string }{{"version", overflow, "1"}, {"rev", "1", overflow}, {"both", overflow, overflow}} {
+		t.Run("blank-reason/"+number.name, func(t *testing.T) {
+			path := fmt.Sprintf("/console/v1/templates/%s/versions/%s/reject?rev=%s", tpl.ID, number.version, number.rev)
+			authoringErrorEnvelope(t, httpCall(s, "POST", path, `{"reason":" \t "}`, token), 400, model.ConsoleRejectReason)
+		})
+	}
+	stored, err := st.GetTemplate(t.Context(), model.TemplateKey{ID: tpl.ID, Version: tpl.Version})
+	if err != nil || !reflect.DeepEqual(stored, tpl) {
+		t.Fatal("无效输入修改了模板", stored, err)
+	}
+	after, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+	if err != nil || !reflect.DeepEqual(before.Items, after.Items) {
+		t.Fatal("无效输入写了审计", after, err)
 	}
 }

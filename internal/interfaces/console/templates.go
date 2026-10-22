@@ -103,8 +103,14 @@ func templateViewResponses(vs []authoring.TemplateView) []templateResponse {
 	return out
 }
 func templateRevisionOf(c *gin.Context) authoring.TemplateRevision {
-	rev, _ := strconv.ParseInt(c.Query("rev"), 10, 64)
-	version, _ := strconv.Atoi(c.Param("version"))
+	rev, err := strconv.ParseInt(c.Query("rev"), 10, 64)
+	if err != nil {
+		rev = 0
+	}
+	version, err := strconv.Atoi(c.Param("version"))
+	if err != nil {
+		version = 0
+	}
 	return authoring.TemplateRevision{Key: model.TemplateKey{ID: c.Param("id"), Version: version}, Rev: rev}
 }
 func (s *server) templateRoutes() []route {
