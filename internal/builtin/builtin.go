@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
 )
 
 // Bodies are compiled data. Reading this embed.FS never accesses a host filesystem.

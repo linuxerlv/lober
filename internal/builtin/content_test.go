@@ -1,7 +1,7 @@
 package builtin
 
 import (
-	"github.com/lober/lober/internal/core/catalog"
+	"github.com/lober/lober/internal/domain/catalog"
 	"testing"
 )
 

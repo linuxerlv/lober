@@ -1,8 +1,8 @@
 package pgstore
 
 import (
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"gorm.io/gorm"
 )
 
@@ -13,7 +13,7 @@ func taskReference(tx *gorm.DB, condition string, value string) error {
 		return err
 	}
 	if len(rows) > 0 {
-		return &store.ReferencedError{References: []model.Subject{{Kind: store.TargetTask, ID: rows[0].ID}}}
+		return &repository.ReferencedError{References: []model.Subject{{Kind: repository.TargetTask, ID: rows[0].ID}}}
 	}
 	return nil
 }

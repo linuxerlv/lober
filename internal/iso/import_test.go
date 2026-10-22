@@ -6,10 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/iso/isotest"
-	"github.com/lober/lober/internal/store"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 	"io/fs"
 	"os"
@@ -18,7 +18,7 @@ import (
 	"testing"
 )
 
-func importSetup(t *testing.T) (*Sources, store.Store) {
+func importSetup(t *testing.T) (*Sources, repository.Store) {
 	t.Helper()
 	db := pgtest.Open(t)
 	root := t.TempDir()
@@ -35,8 +35,8 @@ func importSetup(t *testing.T) (*Sources, store.Store) {
 	}
 	return New(db, d), db
 }
-func importAudit() store.Audit {
-	return store.Audit{Actor: "alice", Action: "iso.source", At: 1790000000}
+func importAudit() repository.Audit {
+	return repository.Audit{Actor: "alice", Action: "iso.source", At: 1790000000}
 }
 func importUpload(t *testing.T, s *Sources, i model.ISO, role string, b []byte) {
 	t.Helper()
@@ -44,7 +44,7 @@ func importUpload(t *testing.T, s *Sources, i model.ISO, role string, b []byte) 
 	if err := s.Register(t.Context(), i, "upload", "", role, int64(len(b)), hex.EncodeToString(sum[:]), importAudit()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Upload(t.Context(), i.ID, role, 0, bytes.NewReader(b), store.Audit{}); err != nil {
+	if err := s.Upload(t.Context(), i.ID, role, 0, bytes.NewReader(b), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -159,7 +159,7 @@ func TestImportFormats(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := s.Import(t.Context(), i.ID); !errors.Is(err, store.ErrConflict) {
+			if err := s.Import(t.Context(), i.ID); !errors.Is(err, repository.ErrConflict) {
 				t.Fatal("ready reimport", err)
 			}
 		})
@@ -212,7 +212,7 @@ func TestImportRejectsAndCleans(t *testing.T) {
 
 // Store wrapper makes the last database write fail after filesystem publication.
 type importFailStore struct {
-	store.Store
+	repository.Store
 	fail bool
 }
 
@@ -293,7 +293,7 @@ func TestImportDuplicateAndChangedBytes(t *testing.T) {
 	}
 	dup := create("duplicate")
 	err := s.Import(t.Context(), dup.ID)
-	var de *store.DuplicateError
+	var de *repository.DuplicateError
 	if !errors.As(err, &de) || de.Existing != first.ID {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestImportExistingDestinationNeverOverwritten(t *testing.T) {
 	f := importFixture("ubuntu")
 	f["casper/vmlinuz"] = []byte("otherkernel")
 	importUpload(t, s, second, "", isotest.Image(f))
-	if e = s.Import(t.Context(), second.ID); !errors.Is(e, store.ErrConflict) {
+	if e = s.Import(t.Context(), second.ID); !errors.Is(e, repository.ErrConflict) {
 		t.Fatal(e)
 	}
 	i, _ := db.GetISO(t.Context(), second.ID)

@@ -4,11 +4,12 @@ import (
 	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/builtin"
-	"github.com/lober/lober/internal/core/admission"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/core/params"
-	"github.com/lober/lober/internal/core/snapshot"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/admission"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/params"
+	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/domain/selection"
+	"github.com/lober/lober/internal/domain/snapshot"
 )
 
 type wizardHostItem struct {
@@ -113,8 +114,8 @@ func (s *server) wizardHosts(c *gin.Context) {
 	if normalized, err := model.NormalizeSN(prefix); err == nil {
 		prefix = normalized
 	}
-	page, ok := Get(c, func() (store.Page[model.Host], error) {
-		return s.deps.Hosts.ListHosts(c.Request.Context(), store.HostQuery{SNPrefix: prefix, AttrKey: c.Query("attr_key"), AttrValue: c.Query("attr_value"), Cursor: c.Query("cursor"), Limit: limit})
+	page, ok := Get(c, func() (repository.Page[model.Host], error) {
+		return s.deps.Hosts.ListHosts(c.Request.Context(), repository.HostQuery{SNPrefix: prefix, AttrKey: c.Query("attr_key"), AttrValue: c.Query("attr_value"), Cursor: c.Query("cursor"), Limit: limit})
 	})
 	if !ok {
 		return
@@ -192,7 +193,7 @@ func respondWizardBatch(c *gin.Context, result admission.BatchResult) bool {
 	if !bad {
 		return true
 	}
-	RespondError(c, &store.BatchError{Result: result})
+	RespondError(c, &repository.BatchError{Result: result})
 	return false
 }
 func (s *server) wizardISOs(c *gin.Context) {
@@ -208,8 +209,8 @@ func (s *server) wizardISOs(c *gin.Context) {
 	if !ok || !missingWizardHosts(c, hosts, missing) {
 		return
 	}
-	page, ok := Get(c, func() (store.Page[model.ISO], error) {
-		return s.deps.ISOs.ListISOs(c.Request.Context(), store.ISOQuery{States: []model.ISOState{model.ISOReady}, Cursor: req.Cursor, Limit: req.Limit})
+	page, ok := Get(c, func() (repository.Page[model.ISO], error) {
+		return s.deps.ISOs.ListISOs(c.Request.Context(), repository.ISOQuery{States: []model.ISOState{model.ISOReady}, Cursor: req.Cursor, Limit: req.Limit})
 	})
 	if !ok {
 		return
@@ -230,8 +231,8 @@ func (s *server) wizardTemplates(c *gin.Context) {
 	if !ok || !Judge(c, iso.Unusable()) {
 		return
 	}
-	page, ok := Get(c, func() (store.Page[model.Template], error) {
-		return s.deps.Templates.ListTemplates(c.Request.Context(), store.TemplateQuery{ApprovedOnly: true, Series: iso.Series, Cursor: req.Cursor, Limit: req.Limit})
+	page, ok := Get(c, func() (repository.Page[model.Template], error) {
+		return s.deps.Templates.ListTemplates(c.Request.Context(), repository.TemplateQuery{ApprovedOnly: true, Series: iso.Series, Cursor: req.Cursor, Limit: req.Limit})
 	})
 	if !ok {
 		return
@@ -254,28 +255,16 @@ func (s *server) wizardTemplates(c *gin.Context) {
 	Ok(c, wizardTemplateResult{items, page.Next})
 }
 
-// The shipped manifest is immutable program data; persisted obsolete builtin
-// versions remain available to existing frozen tasks but are not wizard choices.
+// 内置清单由入口提供，领域规则只消费模板和组件版本键。
 func currentBuiltinSelection(t model.Template, hooks map[model.HookKey]model.Hook) bool {
-	if t.Builtin {
-		found := false
-		for _, shipped := range builtin.Templates() {
-			found = found || t.ID == shipped.ID && t.Version == shipped.Version
-		}
-		if !found {
-			return false
-		}
+	manifest := selection.Manifest{}
+	for _, shipped := range builtin.Templates() {
+		manifest.Templates = append(manifest.Templates, model.TemplateKey{ID: shipped.ID, Version: shipped.Version})
 	}
-	shippedHooks := map[model.HookKey]bool{}
-	for _, h := range builtin.Hooks() {
-		shippedHooks[model.HookKey{ID: h.ID, Version: h.Version}] = true
+	for _, shipped := range builtin.Hooks() {
+		manifest.Hooks = append(manifest.Hooks, model.HookKey{ID: shipped.ID, Version: shipped.Version})
 	}
-	for _, key := range store.HookRefs(t) {
-		if h, exists := hooks[key]; exists && h.Builtin && !shippedHooks[key] {
-			return false
-		}
-	}
-	return true
+	return selection.CurrentBuiltin(t, hooks, manifest)
 }
 func (s *server) wizardSelectionFacts(c *gin.Context, req wizardSelection) (model.Template, model.ISO, map[model.HookKey]model.Hook, bool) {
 	key := model.TemplateKey{ID: req.TemplateID, Version: req.TemplateVersion}

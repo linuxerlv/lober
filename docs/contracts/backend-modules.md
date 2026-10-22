@@ -65,11 +65,11 @@
 
 最终按接口、应用、领域、基础设施四层组织。向导五个操作进入任务应用模块；规则、网页字段和数据库记录各自独立。应用模块只通过已登记的小接口取得其他模块的能力，不直接导入其他模块的具体服务。随机编号、当前时间、文件、网络和数据库操作不进入领域层。
 
-临时放行的唯一机器清单是 `internal/archtest/migration_test.go` 中的 `migrationExceptions`。每条同时写 `Caller`、`File`、`Function`、`Target`、`Symbol`、`RemoveIn`。调用包与目标包用完整导入路径；文件相对模块根；方法写作 `(*server).listHosts`；包级类型声明固定写 `package-init`。经仓储接口调用的方法写作 `Hosts.ListHosts`，普通符号写作 `Page`。来源读取使用的是控制台自有的 `ISOSourceState` 接口，登记其真实目标，不能冒充 `store.ISOSources` 调用。
+未迁移控制台的临时放行清单是 `internal/archtest/migration_test.go` 中的 `migrationExceptions`。每条同时写 `Caller`、`File`、`Function`、`Target`、`Symbol`、`RemoveIn`。调用包与目标包用完整导入路径；文件相对模块根；方法写作 `(*server).listHosts`；包级类型声明固定写 `package-init`。经仓储接口调用的方法写作 `Hosts.ListHosts`，普通符号写作 `Page`。来源读取使用的是控制台自有的 `ISOSourceState` 接口，登记其真实目标，不能冒充 `repository.ISOSources` 调用。
 
-例如，`internal/console/hosts.go` 的 `(*server).listHosts` 仅允许访问 `github.com/lober/lober/internal/store` 的 `Hosts.ListHosts`、`HostQuery`、`Page`，清除阶段为 `3`。同包的 `createHost`、新文件或另一符号不能借用这条放行。清单为固定条目，不从待检查的代码自动生成许可。
+例如，`internal/console/hosts.go` 的 `(*server).listHosts` 仅允许访问 `github.com/lober/lober/internal/domain/repository` 的 `Hosts.ListHosts`、`HostQuery`、`Page`，清除阶段为 `3`。同包的 `createHost`、新文件或另一符号不能借用这条放行。清单为固定条目，不从待检查的代码自动生成许可。
 
-本任务只验证登记格式、精确匹配和清单重复，接入现有全模块检查。四层目录和依赖方向的正式限制由后续任务落地。目录迁移时必须逐条更新清单中的路径和已经迁移的类型，不能给整个旧目录或控制台包加通配许可。
+控制台清单目前验证登记格式、精确匹配和清单重复。领域目录、领域依赖方向与编号的精确调用限制已接入全模块检查。其余四层限制由后续任务落地。目录迁移时必须逐条更新清单中的路径和已经迁移的类型，不能给整个旧目录或控制台包加通配许可。
 
 | 总路线清除阶段 | 本次登记的现有代码 |
 | --- | --- |
@@ -87,3 +87,13 @@
 `Test向导参数输入顺序不串主机` 使用反序主机和不同参数，检查网页响应与数据库冻结快照。`Test向导参数输入按规范SN定位并拒绝未知行` 检查未知行、重复规范化键返回 400，且任务、审计都不增加。
 
 现有完整五步、整批拒绝、候选分页、当前已审批版本、五角色权限、内置发布选择和并发批次测试继续保留。真实数据库不可用时必须记录失败，不能跳过后声称验收完成。
+
+## 领域迁移后的职责
+
+`internal/core/*` 已迁到 `internal/domain/*`，`internal/render` 已迁到 `internal/domain/render`，原测试与样例一起保留。`internal/store` 根接口、验证、查询和错误契约已迁到 `internal/domain/repository`，接口按主机、镜像、编写、任务、事件、审计和用户拆文件。`Store` 只供组装与未迁移模块使用，新增应用服务使用小接口。
+
+用户、五角色、镜像来源和已收取字节区间由 `domain/model` 定义。用户模型没有网页或数据库标签；控制台通过现有 `userResponse` 转换，数据库继续使用独立记录。所有用户响应仍排除密码，保留 `passwordChangeRequired` 等八个字段。
+
+权限的唯一规则在 `domain/access`，控制台旧权限名字只精确转发，身份阶段清除。`domain/selection.CurrentBuiltin` 只消费显式 `Manifest` 和模型数据；旧发布不能新选，已存任务仍读取冻结快照。组件引用提取只有 `model.HookRefs` 一份实现，`repository.HookRefs` 暂时委托兼容。
+
+随机编号只有 `infrastructure/identity.NewID` 一份实现，仍为 128 位随机数编码的 26 字符小写 base32。旧数据库路径暂留，`internal/archtest/identity_rules_test.go` 的 `identityMigrationExceptions` 精确登记以下六处调用：`CreateHook`、`CreateISO`、`CreateTemplate`、`DeriveTemplate`、`createTasks`、测试夹具 `newSchema`。实际语法树访问必须逐条匹配包、文件、函数和 `NewID` 符号。点导入、包级函数值、同文件其他函数和同函数其他文件都不能借用。清除阶段为总路线第 1 阶段，任务 4 搬迁时删除旧路径条目。

@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/activation"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/activation"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 type templateRequest struct {
@@ -77,8 +77,8 @@ func toTemplateResponse(t model.Template, hooks map[model.HookKey]model.Hook) te
 func (s *server) templateHooks(ctx context.Context, templates []model.Template) (map[model.HookKey]model.Hook, error) {
 	unique := map[model.HookKey]bool{}
 	for _, t := range templates {
-		for _, k := range store.HookRefs(t) {
-			if store.CheckVersionKey(k.ID, k.Version) == nil {
+		for _, k := range repository.HookRefs(t) {
+			if repository.CheckVersionKey(k.ID, k.Version) == nil {
 				unique[k] = true
 			}
 		}
@@ -139,8 +139,8 @@ func (s *server) listTemplates(c *gin.Context) {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return
 	}
-	q := store.TemplateQuery{NamePrefix: common.NamePrefix, States: common.States, ApprovedOnly: common.ApprovedOnly, Cursor: common.Cursor, Limit: common.Limit, Series: series}
-	page, ok := Get(c, func() (store.Page[model.Template], error) {
+	q := repository.TemplateQuery{NamePrefix: common.NamePrefix, States: common.States, ApprovedOnly: common.ApprovedOnly, Cursor: common.Cursor, Limit: common.Limit, Series: series}
+	page, ok := Get(c, func() (repository.Page[model.Template], error) {
 		return s.deps.Templates.ListTemplates(c.Request.Context(), q)
 	})
 	if !ok {
@@ -169,7 +169,7 @@ func templateKeyOf(c *gin.Context) (model.TemplateKey, bool) {
 		return model.TemplateKey{}, false
 	}
 	k := model.TemplateKey{ID: c.Param("id"), Version: version}
-	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
+	if err := repository.CheckVersionKey(k.ID, k.Version); err != nil {
 		RespondError(c, err)
 		return k, false
 	}

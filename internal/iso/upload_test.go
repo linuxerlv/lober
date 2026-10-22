@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
@@ -24,7 +24,7 @@ func TestUploadOutOfOrderDuplicateMissingAndAutomaticFinish(t *testing.T) {
 		offset int64
 		data   string
 	}{{4, "efgh"}, {4, "efgh"}, {6, "ghij"}} {
-		if err := s.Upload(t.Context(), item.ID, "", chunk.offset, strings.NewReader(chunk.data), store.Audit{}); err != nil {
+		if err := s.Upload(t.Context(), item.ID, "", chunk.offset, strings.NewReader(chunk.data), repository.Audit{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -32,7 +32,7 @@ func TestUploadOutOfOrderDuplicateMissingAndAutomaticFinish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := progress.Sources[0]; got.Fetched != 6 || !reflect.DeepEqual(got.Missing, []store.Range{{Start: 0, Length: 4}, {Start: 10, Length: 2}}) {
+	if got := progress.Sources[0]; got.Fetched != 6 || !reflect.DeepEqual(got.Missing, []model.Range{{Start: 0, Length: 4}, {Start: 10, Length: 2}}) {
 		t.Fatalf("%+v", got)
 	}
 	// Refresh reconstructs progress from PostgreSQL, not instance memory.
@@ -41,12 +41,12 @@ func TestUploadOutOfOrderDuplicateMissingAndAutomaticFinish(t *testing.T) {
 		offset int64
 		data   string
 	}{{10, "kl"}, {0, "abcd"}} {
-		if err := s.Upload(t.Context(), item.ID, "", chunk.offset, strings.NewReader(chunk.data), store.Audit{}); err != nil {
+		if err := s.Upload(t.Context(), item.ID, "", chunk.offset, strings.NewReader(chunk.data), repository.Audit{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	src := mustSource(t, s, item.ID, "")
-	if src.State != store.SourceFetched || src.Fetched != 12 {
+	if src.State != model.SourceFetched || src.Fetched != 12 {
 		t.Fatalf("%+v", src)
 	}
 	got, err := os.ReadFile(s.sourcePath(src))
@@ -63,14 +63,14 @@ func TestUploadRejectedDoesNotOverwriteConfirmedBytes(t *testing.T) {
 	if err := s.Register(t.Context(), item, "upload", "", "", 8, "", sourceAudit()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abcd"), store.Audit{}); err != nil {
+	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abcd"), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, chunk := range []struct {
 		offset int64
 		data   string
 	}{{-1, "x"}, {7, "overflow"}, {1, "X"}, {0, "abcdXXXXXXXX"}, {4, ""}} {
-		if err := s.Upload(t.Context(), item.ID, "", chunk.offset, strings.NewReader(chunk.data), store.Audit{}); err == nil {
+		if err := s.Upload(t.Context(), item.ID, "", chunk.offset, strings.NewReader(chunk.data), repository.Audit{}); err == nil {
 			t.Fatalf("accepted %+v", chunk)
 		}
 		src := mustSource(t, s, item.ID, "")
@@ -91,21 +91,21 @@ func TestCancelRetryAllSourcesAndFetchedPreserved(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("ab"), store.Audit{}); err != nil {
+	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("ab"), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Cancel(t.Context(), item.ID, sourceAudit()); err != nil {
 		t.Fatal(err)
 	}
 	for _, role := range []string{"", "netboot"} {
-		if src := mustSource(t, s, item.ID, role); src.State != store.SourceCancelled {
+		if src := mustSource(t, s, item.ID, role); src.State != model.SourceCancelled {
 			t.Fatalf("%+v", src)
 		}
 	}
 	if current, err := s.store.GetISO(t.Context(), item.ID); err != nil || current.State != model.ISOAcquiring {
 		t.Fatalf("ISO cancellation: %+v %v", current, err)
 	}
-	if err := s.Upload(t.Context(), item.ID, "", 2, strings.NewReader("cd"), store.Audit{}); !errors.Is(err, store.ErrConflict) {
+	if err := s.Upload(t.Context(), item.ID, "", 2, strings.NewReader("cd"), repository.Audit{}); !errors.Is(err, repository.ErrConflict) {
 		t.Fatalf("upload after cancel: %v", err)
 	}
 	if err := s.Retry(t.Context(), item.ID, sourceAudit()); err != nil {
@@ -114,14 +114,14 @@ func TestCancelRetryAllSourcesAndFetchedPreserved(t *testing.T) {
 	for _, role := range []string{"", "netboot"} {
 		src := mustSource(t, s, item.ID, role)
 		ranges, err := s.store.RangesOf(t.Context(), item.ID, role)
-		if src.State != store.SourcePending || src.Fetched != 0 || err != nil || len(ranges) != 0 {
+		if src.State != model.SourcePending || src.Fetched != 0 || err != nil || len(ranges) != 0 {
 			t.Fatalf("retry: %+v %+v %v", src, ranges, err)
 		}
 	}
 	if _, err := os.Stat(s.stagingPath(item.ID, "")); !os.IsNotExist(err) {
 		t.Fatalf("retry preserves partial: %v", err)
 	}
-	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abcd"), store.Audit{}); err != nil {
+	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abcd"), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Cancel(t.Context(), item.ID, sourceAudit()); err != nil {
@@ -130,7 +130,7 @@ func TestCancelRetryAllSourcesAndFetchedPreserved(t *testing.T) {
 	if err := s.Retry(t.Context(), item.ID, sourceAudit()); err != nil {
 		t.Fatal(err)
 	}
-	if src := mustSource(t, s, item.ID, ""); src.State != store.SourceFetched {
+	if src := mustSource(t, s, item.ID, ""); src.State != model.SourceFetched {
 		t.Fatalf("retry resets fetched: %+v", src)
 	}
 }
@@ -142,7 +142,7 @@ func TestUploadCancelledContextDoesNotWrite(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := s.Upload(ctx, item.ID, "", 0, strings.NewReader("abcd"), store.Audit{}); !errors.Is(err, context.Canceled) {
+	if err := s.Upload(ctx, item.ID, "", 0, strings.NewReader("abcd"), repository.Audit{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel: %v", err)
 	}
 	if src := mustSource(t, s, item.ID, ""); src.Fetched != 0 {
@@ -155,7 +155,7 @@ func TestUploadPublicationCrashRestoresFinalAsPartial(t *testing.T) {
 	if err := s.Register(t.Context(), item, "upload", "", "", 4, "", sourceAudit()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("ab"), store.Audit{}); err != nil {
+	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("ab"), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	// Model a process dying between rename and SaveSource(fetched).
@@ -169,10 +169,10 @@ func TestUploadPublicationCrashRestoresFinalAsPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 	s = New(s.store, s.dirs)
-	if err := s.Upload(t.Context(), item.ID, "", 2, strings.NewReader("cd"), store.Audit{}); err != nil {
+	if err := s.Upload(t.Context(), item.ID, "", 2, strings.NewReader("cd"), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
-	if src := mustSource(t, s, item.ID, ""); src.State != store.SourceFetched {
+	if src := mustSource(t, s, item.ID, ""); src.State != model.SourceFetched {
 		t.Fatalf("%+v", src)
 	}
 	if got, err := os.ReadFile(s.sourcePath(mustSource(t, s, item.ID, ""))); err != nil || string(got) != "abcd" {
@@ -185,13 +185,13 @@ func TestUploadTruncatedConfirmedFileRejectsOverlap(t *testing.T) {
 	if err := s.Register(t.Context(), item, "upload", "", "", 8, "", sourceAudit()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abcd"), store.Audit{}); err != nil {
+	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abcd"), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Truncate(s.stagingPath(item.ID, ""), 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("XY"), store.Audit{}); err == nil {
+	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("XY"), repository.Audit{}); err == nil {
 		t.Fatal("overlap accepted despite missing confirmed bytes")
 	}
 }
@@ -201,13 +201,13 @@ func TestUploadFinalChunkReplayedAfterLostAcknowledgement(t *testing.T) {
 	if err := s.Register(t.Context(), item, "upload", "", "", 4, "", sourceAudit()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abcd"), store.Audit{}); err != nil {
+	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abcd"), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Upload(t.Context(), item.ID, "", 2, strings.NewReader("cd"), store.Audit{}); err != nil {
+	if err := s.Upload(t.Context(), item.ID, "", 2, strings.NewReader("cd"), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Upload(t.Context(), item.ID, "", 2, strings.NewReader("XX"), store.Audit{}); err == nil {
+	if err := s.Upload(t.Context(), item.ID, "", 2, strings.NewReader("XX"), repository.Audit{}); err == nil {
 		t.Fatal("conflicting replay accepted")
 	}
 	if got, err := os.ReadFile(s.sourcePath(mustSource(t, s, item.ID, ""))); err != nil || string(got) != "abcd" {
@@ -220,7 +220,7 @@ func TestRetryAuditFailurePreservesPartialFileAndRanges(t *testing.T) {
 	if err := s.Register(t.Context(), item, "upload", "", "", 8, "", sourceAudit()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abcd"), store.Audit{}); err != nil {
+	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abcd"), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Cancel(t.Context(), item.ID, sourceAudit()); err != nil {
@@ -231,7 +231,7 @@ func TestRetryAuditFailurePreservesPartialFileAndRanges(t *testing.T) {
 	if err := s.Retry(t.Context(), item.ID, a); err == nil {
 		t.Fatal("audit injection did not fail")
 	}
-	if src := mustSource(t, s, item.ID, ""); src.State != store.SourceCancelled || src.Fetched != 4 {
+	if src := mustSource(t, s, item.ID, ""); src.State != model.SourceCancelled || src.Fetched != 4 {
 		t.Fatalf("audit rollback: %+v", src)
 	}
 	if got, err := os.ReadFile(s.stagingPath(item.ID, "")); err != nil || string(got) != "abcd" {

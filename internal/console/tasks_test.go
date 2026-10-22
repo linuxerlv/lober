@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
@@ -60,7 +60,7 @@ func Test任务列表详情事件及查询边界(t *testing.T) {
 	if detail.Snapshot.Template.Params["hostname"].Items[0] != "node" || detail.CanCancel == nil || detail.CanRetry == nil {
 		t.Fatal(detail)
 	}
-	_, err := st.AppendEvents(t.Context(), task.ID, []store.NewEvent{{At: fixedAt, Kind: "slot.start", Key: "one"}, {At: fixedAt, Kind: "slot.exit", Key: "two", Fields: map[string]string{"code": "0"}}})
+	_, err := st.AppendEvents(t.Context(), task.ID, []repository.NewEvent{{At: fixedAt, Kind: "slot.start", Key: "one"}, {At: fixedAt, Kind: "slot.exit", Key: "two", Fields: map[string]string{"code": "0"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,26 +83,26 @@ func Test任务列表详情事件及查询边界(t *testing.T) {
 }
 
 type taskControlFixture struct {
-	st     store.Tasks
-	calls  []store.Audit
+	st     repository.Tasks
+	calls  []repository.Audit
 	reject error
 	block  []model.Problem
 }
 
-func (f *taskControlFixture) Cancel(ctx context.Context, task model.Task, a store.Audit) error {
+func (f *taskControlFixture) Cancel(ctx context.Context, task model.Task, a repository.Audit) error {
 	f.calls = append(f.calls, a)
 	if f.reject != nil {
 		return f.reject
 	}
-	_, _, err := f.st.TransitionTaskByUser(ctx, task.ID, store.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskCancelled, nil, a)
+	_, _, err := f.st.TransitionTaskByUser(ctx, task.ID, repository.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskCancelled, nil, a)
 	return err
 }
-func (f *taskControlFixture) Retry(ctx context.Context, task model.Task, a store.Audit) error {
+func (f *taskControlFixture) Retry(ctx context.Context, task model.Task, a repository.Audit) error {
 	f.calls = append(f.calls, a)
 	if f.reject != nil {
 		return f.reject
 	}
-	_, _, err := f.st.TransitionTaskByUser(ctx, task.ID, store.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskPending, nil, a)
+	_, _, err := f.st.TransitionTaskByUser(ctx, task.ID, repository.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskPending, nil, a)
 	return err
 }
 func (f *taskControlFixture) CanCancel(model.Task) []model.Problem { return f.block }
@@ -112,7 +112,7 @@ func Test任务控制委托审计及错误隔离(t *testing.T) {
 	s, st, token, task, _ := taskFixture(t)
 	ctl := &taskControlFixture{st: st}
 	s.server.deps.TaskCtl = ctl
-	before, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,14 +135,14 @@ func Test任务控制委托审计及错误隔离(t *testing.T) {
 	if len(ctl.calls) != 2 || ctl.calls[0].Actor != "admin" || ctl.calls[0].Action != "task.cancel" || ctl.calls[1].Action != "task.retry" || ctl.calls[1].At != fixedAt {
 		t.Fatal(ctl.calls)
 	}
-	after, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	after, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if err != nil || len(after.Items) != len(before.Items)+2 {
 		t.Fatal(after, err)
 	}
 	for _, test := range []struct {
 		err    error
 		status int
-	}{{store.ErrConflict, 409}, {Problems([]model.Problem{model.NewProblem("host_has_open_task", model.Subject{Kind: model.KindHost, ID: "SN-1"})}), 422}, {errors.New("private backend credential"), 500}, {ErrTaskControlUnavailable, 422}} {
+	}{{repository.ErrConflict, 409}, {Problems([]model.Problem{model.NewProblem("host_has_open_task", model.Subject{Kind: model.KindHost, ID: "SN-1"})}), 422}, {errors.New("private backend credential"), 500}, {ErrTaskControlUnavailable, 422}} {
 		ctl.reject = test.err
 		w := httpCall(s, "POST", "/console/v1/tasks/"+task.ID+"/cancel", "", token)
 		if w.Code != test.status || strings.Contains(w.Body.String(), "private backend credential") {
@@ -154,7 +154,7 @@ func Test任务控制委托审计及错误隔离(t *testing.T) {
 		default:
 		}
 	}
-	final, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	final, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if len(final.Items) != len(after.Items) {
 		t.Fatal("failed control audited")
 	}
@@ -180,18 +180,18 @@ func Test任务预览只使用固化快照及引用删除保护(t *testing.T) {
 	}
 	host.Attrs = map[string]string{"rack": "changed"}
 	host.Firmware = "bios"
-	if host, err = st.UpdateHost(t.Context(), host, store.Audit{Actor: "seed", Action: "host.update", At: fixedAt}); err != nil {
+	if host, err = st.UpdateHost(t.Context(), host, repository.Audit{Actor: "seed", Action: "host.update", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	if err = st.DeprecateTemplate(t.Context(), model.TemplateKey{ID: task.TemplateID, Version: task.TemplateVersion}, 3, store.Audit{Actor: "seed", Action: "template.deprecate", At: fixedAt}); err != nil {
+	if err = st.DeprecateTemplate(t.Context(), model.TemplateKey{ID: task.TemplateID, Version: task.TemplateVersion}, 3, repository.Audit{Actor: "seed", Action: "template.deprecate", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	second := responseData[previewResponse](t, httpCall(s, "POST", path, fmt.Sprintf(`{"firmware":"uefi","hostSN":"MISSING","isoID":"MISSING","entered":{"tpl/hostname":"spoof"}}`), token))
 	if !reflect.DeepEqual(first, second) || len(first.Files) < 2 || !strings.Contains(first.Files[1].Body, "node") {
 		t.Fatal(first, second)
 	}
-	after, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	back, _ := st.GetTask(t.Context(), task.ID)
 	if len(before.Items) != len(after.Items) || back.Rev != task.Rev || !reflect.DeepEqual(back.Snapshot, task.Snapshot) {
 		t.Fatal("preview changed state")
@@ -269,9 +269,9 @@ func awaitStreamRecord(t *testing.T, ch <-chan streamRecord, timeout time.Durati
 }
 func Test任务SSE补读分页丢通知续读及断开退订(t *testing.T) {
 	s, st, token, task, _ := taskFixture(t)
-	batch := make([]store.NewEvent, 205)
+	batch := make([]repository.NewEvent, 205)
 	for i := range batch {
-		batch[i] = store.NewEvent{At: fixedAt, Kind: "stream.test", Key: fmt.Sprintf("event-%d", i)}
+		batch[i] = repository.NewEvent{At: fixedAt, Kind: "stream.test", Key: fmt.Sprintf("event-%d", i)}
 	}
 	if _, err := st.AppendEvents(t.Context(), task.ID, batch); err != nil {
 		t.Fatal(err)
@@ -294,7 +294,7 @@ func Test任务SSE补读分页丢通知续读及断开退订(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	if _, err := st.AppendEvents(t.Context(), task.ID, []store.NewEvent{{At: fixedAt, Kind: "stream.hint", Key: "hint"}}); err != nil {
+	if _, err := st.AppendEvents(t.Context(), task.ID, []repository.NewEvent{{At: fixedAt, Kind: "stream.hint", Key: "hint"}}); err != nil {
 		t.Fatal(err)
 	}
 	s.server.hub.Publish(task.ID)
@@ -302,7 +302,7 @@ func Test任务SSE补读分页丢通知续读及断开退订(t *testing.T) {
 	if e.event.Seq != 206 {
 		t.Fatal(e)
 	}
-	if _, err := st.AppendEvents(t.Context(), task.ID, []store.NewEvent{{At: fixedAt, Kind: "stream.lost", Key: "lost"}}); err != nil {
+	if _, err := st.AppendEvents(t.Context(), task.ID, []repository.NewEvent{{At: fixedAt, Kind: "stream.lost", Key: "lost"}}); err != nil {
 		t.Fatal(err)
 	}
 	e = awaitStreamRecord(t, ch, 7*time.Second)
@@ -342,7 +342,7 @@ func Test任务SSE补读分页丢通知续读及断开退订(t *testing.T) {
 
 func Test任务接口五角色权限(t *testing.T) {
 	s, st, _, _, _ := taskFixture(t)
-	for i, role := range []store.Role{store.RoleAdmin, store.RoleOperator, store.RoleHookAuthor, store.RoleHookApprover, store.RoleViewer} {
+	for i, role := range []model.Role{model.RoleAdmin, model.RoleOperator, model.RoleHookAuthor, model.RoleHookApprover, model.RoleViewer} {
 		actor := fmt.Sprintf("taskrole%d", i)
 		seedAuthUser(t, st, actor, role, "pw")
 		actor = loginHTTP(t, s, actor, "pw").Token
@@ -354,7 +354,7 @@ func Test任务接口五角色权限(t *testing.T) {
 			count++
 			path := strings.ReplaceAll(r.Path, ":id", "missing")
 			w := httpCall(s, r.Method, path, `{}`, actor)
-			allowed := r.Perm == PermTaskRead || role == store.RoleAdmin || role == store.RoleOperator
+			allowed := r.Perm == PermTaskRead || role == model.RoleAdmin || role == model.RoleOperator
 			if allowed && (w.Code == 401 || w.Code == 403) || !allowed && w.Code != 403 {
 				t.Fatal(role, r, w.Code)
 			}
@@ -367,7 +367,7 @@ func Test任务接口五角色权限(t *testing.T) {
 
 func Test任务SSE连接期间复查禁用改密及会话过期(t *testing.T) {
 	s, st, token, task, clock := taskFixture(t)
-	seedHTTPUser(t, s, st, "backup", store.RoleAdmin)
+	seedHTTPUser(t, s, st, "backup", model.RoleAdmin)
 	srv := httptest.NewServer(s.Engine)
 	defer srv.Close()
 	for _, reason := range []string{"disabled", "password", "expired"} {
@@ -392,7 +392,7 @@ func Test任务SSE连接期间复查禁用改密及会话过期(t *testing.T) {
 			} else {
 				u.Disabled = reason == "disabled"
 				u.MustChangePassword = reason == "password"
-				if _, err := st.UpdateUser(t.Context(), u, store.Audit{Actor: "seed", Action: "user.update", At: fixedAt}); err != nil {
+				if _, err := st.UpdateUser(t.Context(), u, repository.Audit{Actor: "seed", Action: "user.update", At: fixedAt}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -412,7 +412,7 @@ func Test任务SSE连接期间复查禁用改密及会话过期(t *testing.T) {
 				}
 				u.Disabled = false
 				u.MustChangePassword = false
-				if _, err = st.UpdateUser(t.Context(), u, store.Audit{Actor: "seed", Action: "user.update", At: fixedAt}); err != nil {
+				if _, err = st.UpdateUser(t.Context(), u, repository.Audit{Actor: "seed", Action: "user.update", At: fixedAt}); err != nil {
 					t.Fatal(err)
 				}
 			}

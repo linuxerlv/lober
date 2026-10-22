@@ -3,8 +3,8 @@ package console
 import (
 	"context"
 	"errors"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // ErrTaskControlUnavailable is the explicit layer-7 assembly placeholder.
@@ -13,8 +13,8 @@ var ErrTaskControlUnavailable = errors.New("task control is not implemented")
 
 // TaskControl delegates lifecycle decisions to the future execution layer.
 type TaskControl interface {
-	Cancel(context.Context, model.Task, store.Audit) error
-	Retry(context.Context, model.Task, store.Audit) error
+	Cancel(context.Context, model.Task, repository.Audit) error
+	Retry(context.Context, model.Task, repository.Audit) error
 	CanCancel(model.Task) []model.Problem
 	CanRetry(model.Task) []model.Problem
 }
@@ -23,5 +23,5 @@ func Problems(ps []model.Problem) error {
 	if len(ps) == 0 {
 		return nil
 	}
-	return &store.ProblemsError{Kind: store.ErrRejected, Problems: ps}
+	return &repository.ProblemsError{Kind: repository.ErrRejected, Problems: ps}
 }

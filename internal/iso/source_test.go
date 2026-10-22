@@ -4,18 +4,20 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"github.com/lober/lober/internal/core/catalog"
+	"github.com/lober/lober/internal/domain/catalog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
-func sourceAudit() store.Audit { return store.Audit{Actor: "source-test", Action: "iso.source", At: 1} }
+func sourceAudit() repository.Audit {
+	return repository.Audit{Actor: "source-test", Action: "iso.source", At: 1}
+}
 func sourceFixture(t *testing.T, series string) (*Sources, model.ISO) {
 	t.Helper()
 	db := pgtest.Open(t)
@@ -27,7 +29,7 @@ func sourceFixture(t *testing.T, series string) (*Sources, model.ISO) {
 	return New(db, dirs), item
 }
 
-func mustSource(t *testing.T, s *Sources, id, role string) store.Source {
+func mustSource(t *testing.T, s *Sources, id, role string) model.Source {
 	t.Helper()
 	src, ok, err := s.store.GetSource(t.Context(), id, role)
 	if err != nil || !ok {
@@ -35,9 +37,9 @@ func mustSource(t *testing.T, s *Sources, id, role string) store.Source {
 	}
 	return src
 }
-func mustSourceSave(t *testing.T, s *Sources, src store.Source) store.Source {
+func mustSourceSave(t *testing.T, s *Sources, src model.Source) model.Source {
 	t.Helper()
-	src, err := s.store.SaveSource(t.Context(), src, store.Audit{})
+	src, err := s.store.SaveSource(t.Context(), src, repository.Audit{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +82,7 @@ func TestLocalFetchOriginalAndDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := mustSource(t, s, item.ID, "")
-	if src.State != store.SourceFetched || src.Fetched != int64(len(b)) {
+	if src.State != model.SourceFetched || src.Fetched != int64(len(b)) {
 		t.Fatalf("%+v", src)
 	}
 	got, err := os.ReadFile(s.sourcePath(src))
@@ -97,15 +99,15 @@ func TestSourceDigestMismatch(t *testing.T) {
 	if err := s.Register(t.Context(), item, "upload", "", "", 3, sourceDigest([]byte("bad")), sourceAudit()); err != nil {
 		t.Fatal(err)
 	}
-	err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abc"), store.Audit{})
+	err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abc"), repository.Audit{})
 	if err == nil {
 		t.Fatal("digest mismatch accepted")
 	}
-	var problem *store.ProblemsError
+	var problem *repository.ProblemsError
 	if !errors.As(err, &problem) || len(problem.Problems) != 1 || problem.Problems[0].Subject != (model.Subject{Kind: "iso", ID: item.ID, Path: "source"}) {
 		t.Fatalf("source problem contract: %v", err)
 	}
-	if src := mustSource(t, s, item.ID, ""); src.State != store.SourceFailed {
+	if src := mustSource(t, s, item.ID, ""); src.State != model.SourceFailed {
 		t.Fatalf("%+v", src)
 	}
 	if _, err := os.Stat(s.sourcePath(mustSource(t, s, item.ID, ""))); !os.IsNotExist(err) {
@@ -118,7 +120,7 @@ func TestSourceRegisterChecksPersistedStateRoleAudit(t *testing.T) {
 	if err := s.Register(t.Context(), item, "upload", "", "../bad", 1, "", sourceAudit()); err == nil {
 		t.Fatal("unsafe role accepted")
 	}
-	if err := s.Register(t.Context(), item, "upload", "", "", 1, "", store.Audit{}); err != store.ErrAuditRequired {
+	if err := s.Register(t.Context(), item, "upload", "", "", 1, "", repository.Audit{}); err != repository.ErrAuditRequired {
 		t.Fatalf("audit: %v", err)
 	}
 	for _, role := range []string{"", "netboot"} {
@@ -134,7 +136,7 @@ func TestSourceRegisterChecksPersistedStateRoleAudit(t *testing.T) {
 	if _, err := s.store.UpdateISO(t.Context(), item); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Register(t.Context(), item, "upload", "", "", 1, "", sourceAudit()); err != store.ErrConflict {
+	if err := s.Register(t.Context(), item, "upload", "", "", 1, "", sourceAudit()); err != repository.ErrConflict {
 		t.Fatalf("state: %v", err)
 	}
 }

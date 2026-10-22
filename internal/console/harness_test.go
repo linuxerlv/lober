@@ -1,7 +1,8 @@
 package console
 
 import (
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 	"io"
@@ -22,9 +23,9 @@ func newHTTPServer(t *testing.T) (*Server, *pgstore.Store, *atomic.Int64) {
 	s := New(Deps{Hosts: st, ISOs: st, Sources: st, Hooks: st, Templates: st, Tasks: st, CurrentTasks: st, Events: st, Audit: st, Users: st, Clock: now.Load, Notifier: NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	return s, st, now
 }
-func seedHTTPUser(t *testing.T, s *Server, st store.Users, name string, role store.Role) (string, store.User) {
+func seedHTTPUser(t *testing.T, s *Server, st repository.Users, name string, role model.Role) (string, model.User) {
 	t.Helper()
-	u, err := st.CreateUser(t.Context(), store.User{Username: name, DisplayName: name, Role: role, Password: "private-hash", CreatedAt: fixedAt}, store.Audit{Actor: "test", Action: "user.create", At: fixedAt})
+	u, err := st.CreateUser(t.Context(), model.User{Username: name, DisplayName: name, Role: role, Password: "private-hash", CreatedAt: fixedAt}, repository.Audit{Actor: "test", Action: "user.create", At: fixedAt})
 	if err != nil {
 		t.Fatal(err)
 	}

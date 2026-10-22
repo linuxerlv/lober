@@ -5,9 +5,9 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/activation"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/activation"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 type rejectRequest struct {
@@ -48,8 +48,8 @@ func (s *server) templateLifecycleRoutes() []route {
 	}
 }
 
-type hookStateStep func(context.Context, model.HookKey, int64, store.Audit) error
-type templateStateStep func(context.Context, model.TemplateKey, int64, store.Audit) error
+type hookStateStep func(context.Context, model.HookKey, int64, repository.Audit) error
+type templateStateStep func(context.Context, model.TemplateKey, int64, repository.Audit) error
 
 func (s *server) stepHook(c *gin.Context, step hookStateStep, detail string) {
 	k, ok := hookKeyOf(c)
@@ -94,7 +94,7 @@ func rejectReason(c *gin.Context) (string, bool) {
 }
 func (s *server) submitHook(c *gin.Context) { s.stepHook(c, s.deps.Hooks.SubmitHook, "") }
 func (s *server) approveHook(c *gin.Context) {
-	s.stepHook(c, func(ctx context.Context, k model.HookKey, rev int64, a store.Audit) error {
+	s.stepHook(c, func(ctx context.Context, k model.HookKey, rev int64, a repository.Audit) error {
 		return s.deps.Hooks.ApproveHook(ctx, k, rev, userOf(c).Username, a)
 	}, "")
 }
@@ -129,7 +129,7 @@ func (s *server) submitTemplate(c *gin.Context) {
 func (s *server) approveTemplate(c *gin.Context) {
 	s.templateSelection.Lock()
 	defer s.templateSelection.Unlock()
-	s.stepTemplate(c, func(ctx context.Context, k model.TemplateKey, rev int64, a store.Audit) error {
+	s.stepTemplate(c, func(ctx context.Context, k model.TemplateKey, rev int64, a repository.Audit) error {
 		return s.deps.Templates.ApproveTemplate(ctx, k, rev, userOf(c).Username, a)
 	}, "")
 }

@@ -14,10 +14,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/lober/lober/internal/core/admission"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/admission"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
@@ -33,11 +33,11 @@ import (
 // 只是一个普通的操作者。
 func TestOpen不注入失败(t *testing.T) {
 	s := pgtest.OpenAt(t, pgtest.Schema(t))
-	a := store.Audit{Actor: pgtest.FaultActor, Action: "host.create", At: 1_790_000_000}
+	a := repository.Audit{Actor: pgtest.FaultActor, Action: "host.create", At: 1_790_000_000}
 	if _, err := s.CreateHost(t.Context(), model.Host{SN: "SN-1"}, a); err != nil {
 		t.Fatalf("Open 建的表不该注入失败：%v", err)
 	}
-	p, err := s.ListAudit(t.Context(), store.AuditQuery{})
+	p, err := s.ListAudit(t.Context(), repository.AuditQuery{})
 	if err != nil {
 		t.Fatalf("列出审计：%v", err)
 	}
@@ -76,7 +76,7 @@ func TestOpen按选项设连接池上限(t *testing.T) {
 	}
 }
 
-// 游标里藏着存不下的串（PostgreSQL 的 text 不收 NUL）：仓储给不出这样的游标，认不出来（store.DecodeCursor），报
+// 游标里藏着存不下的串（PostgreSQL 的 text 不收 NUL）：仓储给不出这样的游标，认不出来（repository.DecodeCursor），报
 // ErrInvalid，不把数据库的编码错误交给调用方。每个带游标的列表都试一遍，NUL 放在排序键的不同位置；审计的排序键只有整数，
 // 藏不进串。契约测试里的坏游标是解不开的串与排序键为 null 的，排序键里藏着 NUL 的只在这里。按存不下的键取、删与过滤
 // 当作没有，见契约测试（hostUnstorableKeys 与 ISO、任务、审计各组列表的过滤用例）。
@@ -88,27 +88,27 @@ func Test游标里藏着存不下的串报ErrInvalid(t *testing.T) {
 		list func() error
 	}{
 		{"主机", func() error {
-			_, err := s.ListHosts(ctx, store.HostQuery{Cursor: store.EncodeCursor("hosts", "SN\x00")})
+			_, err := s.ListHosts(ctx, repository.HostQuery{Cursor: repository.EncodeCursor("hosts", "SN\x00")})
 			return err
 		}},
 		{"ISO", func() error {
-			_, err := s.ListISOs(ctx, store.ISOQuery{Cursor: store.EncodeCursor("isos", "a\x00", "b")})
+			_, err := s.ListISOs(ctx, repository.ISOQuery{Cursor: repository.EncodeCursor("isos", "a\x00", "b")})
 			return err
 		}},
 		{"hook", func() error {
-			_, err := s.ListHooks(ctx, store.HookQuery{Cursor: store.EncodeCursor("hooks", "lvm", "a\x00")})
+			_, err := s.ListHooks(ctx, repository.HookQuery{Cursor: repository.EncodeCursor("hooks", "lvm", "a\x00")})
 			return err
 		}},
 		{"模板", func() error {
-			_, err := s.ListTemplates(ctx, store.TemplateQuery{Cursor: store.EncodeCursor("templates", "\x00", "a")})
+			_, err := s.ListTemplates(ctx, repository.TemplateQuery{Cursor: repository.EncodeCursor("templates", "\x00", "a")})
 			return err
 		}},
 		{"任务", func() error {
-			_, err := s.ListTasks(ctx, store.TaskQuery{Cursor: store.EncodeCursor("tasks", int64(1), "a\x00")})
+			_, err := s.ListTasks(ctx, repository.TaskQuery{Cursor: repository.EncodeCursor("tasks", int64(1), "a\x00")})
 			return err
 		}},
 	} {
-		if err := c.list(); !errors.Is(err, store.ErrInvalid) {
+		if err := c.list(); !errors.Is(err, repository.ErrInvalid) {
 			t.Errorf("%s的游标藏着 NUL 应报 ErrInvalid，得到 %v", c.name, err)
 		}
 	}
@@ -124,7 +124,7 @@ func Test同时写同一份内容由索引兜底报出对方(t *testing.T) {
 	ctx := t.Context()
 	newISO := func(name string) model.ISO {
 		iso, err := s.CreateISO(ctx, model.ISO{Name: name, Family: "linux", Series: "rocky"},
-			store.Audit{Actor: "alice", Action: "iso.create", At: 1})
+			repository.Audit{Actor: "alice", Action: "iso.create", At: 1})
 		if err != nil {
 			t.Fatalf("新建 ISO %s：%v", name, err)
 		}
@@ -161,7 +161,7 @@ func Test同时写同一份内容由索引兜底报出对方(t *testing.T) {
 	case <-time.After(time.Minute):
 		t.Fatal("A 提交之后，B 的系统更新一分钟内没有返回")
 	}
-	var de *store.DuplicateError
+	var de *repository.DuplicateError
 	if !errors.As(err, &de) || de.Field != "sha256" || de.Existing != a.ID {
 		t.Fatalf("B 撞上 A 已提交的内容，应报 DuplicateError{sha256, %s}，得到 %v", a.ID, err)
 	}
@@ -197,7 +197,7 @@ func Test同时导入同一组主机不会互相等死(t *testing.T) {
 			rand.Shuffle(len(batch), func(i, j int) { batch[i], batch[j] = batch[j], batch[i] })
 			wg.Go(func() {
 				<-start
-				_, err := s.ImportHosts(t.Context(), batch, store.Audit{Actor: "alice", Action: "host.import", At: 1})
+				_, err := s.ImportHosts(t.Context(), batch, repository.Audit{Actor: "alice", Action: "host.import", At: 1})
 				errs <- err
 			})
 		}
@@ -222,7 +222,7 @@ func Test同时导入同一组主机不会互相等死(t *testing.T) {
 	}
 	audits, total := make(map[string]int, n), 0
 	for cursor := ""; ; {
-		p, err := s.ListAudit(t.Context(), store.AuditQuery{Cursor: cursor, Limit: 500})
+		p, err := s.ListAudit(t.Context(), repository.AuditQuery{Cursor: cursor, Limit: 500})
 		if err != nil {
 			t.Fatalf("列出审计：%v", err)
 		}
@@ -256,7 +256,7 @@ func Test同时导入同一组主机不会互相等死(t *testing.T) {
 func Test带着旧Rev的写入等对方提交之后报冲突(t *testing.T) {
 	dsn := pgtest.Schema(t)
 	s := pgtest.OpenAt(t, dsn)
-	audit := func(action string) store.Audit { return store.Audit{Actor: "alice", Action: action, At: 1} }
+	audit := func(action string) repository.Audit { return repository.Audit{Actor: "alice", Action: action, At: 1} }
 
 	for i, c := range []struct {
 		name  string
@@ -280,7 +280,7 @@ func Test带着旧Rev的写入等对方提交之后报冲突(t *testing.T) {
 			}
 			err = writeWhileHeld(t, dsn, `UPDATE hosts SET arch = 'aarch64', rev = rev + 1 WHERE sn = $1`, h.SN,
 				func() error { return c.write(ctx, h) })
-			if !errors.Is(err, store.ErrConflict) {
+			if !errors.Is(err, repository.ErrConflict) {
 				t.Fatalf("对方提交之后 Rev 已是 %d，带着 %d 写入应报 ErrConflict，得到 %v", h.Rev+1, h.Rev, err)
 			}
 			want := h
@@ -321,7 +321,7 @@ func Test带着旧Rev的写入等对方提交之后报冲突(t *testing.T) {
 			}
 			err = writeWhileHeld(t, dsn, `UPDATE isos SET arch = 'aarch64', rev = rev + 1 WHERE id = $1`, iso.ID,
 				func() error { return c.write(ctx, iso) })
-			if !errors.Is(err, store.ErrConflict) {
+			if !errors.Is(err, repository.ErrConflict) {
 				t.Fatalf("对方提交之后 Rev 已是 %d，带着 %d 写入应报 ErrConflict，得到 %v", iso.Rev+1, iso.Rev, err)
 			}
 			want := iso
@@ -338,7 +338,7 @@ func Test带着旧Rev的写入等对方提交之后报冲突(t *testing.T) {
 func Test带着旧Rev写hook与模板版本的等对方提交之后报冲突(t *testing.T) {
 	dsn := pgtest.Schema(t)
 	s := pgtest.OpenAt(t, dsn)
-	audit := func(action string) store.Audit { return store.Audit{Actor: "alice", Action: action, At: 1} }
+	audit := func(action string) repository.Audit { return repository.Audit{Actor: "alice", Action: action, At: 1} }
 	// setState 不经仓储把版本 1 置为 state：这里只看加锁与 Rev，不必让内容过激活判定
 	setState := func(t *testing.T, table, owner, id string, state model.VersionState) {
 		t.Helper()
@@ -383,7 +383,7 @@ func Test带着旧Rev写hook与模板版本的等对方提交之后报冲突(t *
 			h.State = c.state
 			err = writeWhileHeld(t, dsn, `UPDATE hook_versions SET description = 'held', rev = rev + 1 WHERE hook_id = $1`, h.ID,
 				func() error { return c.write(ctx, h) })
-			if !errors.Is(err, store.ErrConflict) {
+			if !errors.Is(err, repository.ErrConflict) {
 				t.Fatalf("对方提交之后 Rev 已是 %d，带着 %d 写入应报 ErrConflict，得到 %v", h.Rev+1, h.Rev, err)
 			}
 			want := h
@@ -430,7 +430,7 @@ func Test带着旧Rev写hook与模板版本的等对方提交之后报冲突(t *
 			tpl.State = c.state
 			err = writeWhileHeld(t, dsn, `UPDATE template_versions SET body = 'held', rev = rev + 1 WHERE template_id = $1`, tpl.ID,
 				func() error { return c.write(ctx, tpl) })
-			if !errors.Is(err, store.ErrConflict) {
+			if !errors.Is(err, repository.ErrConflict) {
 				t.Fatalf("对方提交之后 Rev 已是 %d，带着 %d 写入应报 ErrConflict，得到 %v", tpl.Rev+1, tpl.Rev, err)
 			}
 			want := tpl
@@ -466,7 +466,7 @@ func Test同时开新版本等对方提交之后报冲突(t *testing.T) {
 		_, err := s.NewHookVersion(ctx, h.ID, 1, "dave")
 		return err
 	})
-	if !errors.Is(err, store.ErrConflict) {
+	if !errors.Is(err, repository.ErrConflict) {
 		t.Fatalf("对方开的版本 2 提交之后还没审批，再开新版本应报 ErrConflict，得到 %v", err)
 	}
 	vs, err := s.ListHookVersions(ctx, h.ID)
@@ -485,7 +485,7 @@ func Test审批模板等引用的hook版本提交之后再判定(t *testing.T) {
 	dsn := pgtest.Schema(t)
 	s := pgtest.OpenAt(t, dsn)
 	ctx := t.Context()
-	audit := func(action string) store.Audit { return store.Audit{Actor: "alice", Action: action, At: 1} }
+	audit := func(action string) repository.Audit { return repository.Audit{Actor: "alice", Action: action, At: 1} }
 	h, err := s.CreateHook(ctx, model.Hook{Name: "LVM", Author: "alice", Impls: []model.Impl{{
 		Family: "linux", Series: []catalog.Series{"rocky"}, Kind: model.ImplFragment, Body: "autopart --type=lvm\n"}}})
 	if err != nil {
@@ -516,8 +516,8 @@ func Test审批模板等引用的hook版本提交之后再判定(t *testing.T) {
 		return s.ApproveTemplate(ctx, templateKey(tpl), tpl.Rev, "bob", audit("template.approve"))
 	}
 	err = writeWhileHeld(t, dsn, `UPDATE hook_versions SET state = 'deprecated', rev = rev + 1 WHERE hook_id = $1`, h.ID, approve)
-	var pe *store.ProblemsError
-	if !errors.As(err, &pe) || pe.Kind != store.ErrRejected || len(pe.Problems) != 1 || pe.Problems[0].Code != "hook_ref_deprecated" {
+	var pe *repository.ProblemsError
+	if !errors.As(err, &pe) || pe.Kind != repository.ErrRejected || len(pe.Problems) != 1 || pe.Problems[0].Code != "hook_ref_deprecated" {
 		t.Fatalf("hook 的废弃提交之后，审批应报 ProblemsError(ErrRejected)，问题是 hook_ref_deprecated，得到 %v", err)
 	}
 	if got, err := s.GetTemplate(ctx, templateKey(tpl)); err != nil || !reflect.DeepEqual(got, tpl) {
@@ -537,7 +537,7 @@ func Test同时占用同一个名字由唯一索引兜底报出对方(t *testing
 			_, err := s.CreateHook(ctx, model.Hook{Name: "SAME", Author: "alice"})
 			return err
 		})
-	var de *store.DuplicateError
+	var de *repository.DuplicateError
 	if !errors.As(err, &de) || de.Field != "name" || de.Existing != "held" {
 		t.Fatalf("撞上对方已提交的名字，应报 DuplicateError{name, held}，得到 %v", err)
 	}
@@ -607,7 +607,7 @@ func Test建任务撞上没提交的重试由部分唯一索引兜底(t *testing
 	s := pgtest.OpenAt(t, dsn)
 	ctx := t.Context()
 	f := newTaskFixture(t, s, "SN-1", "SN-2")
-	audit := store.Audit{Actor: "alice", Action: "task.create", At: 1}
+	audit := repository.Audit{Actor: "alice", Action: "task.create", At: 1}
 	failed := f.mustFailed(t, s, "SN-1")
 	audits := auditCount(t, s)
 	err := writeWhileHeld(t, dsn, `UPDATE tasks SET state = 'pending', rev = rev + 1 WHERE id = $1`, failed.ID, func() error {
@@ -618,11 +618,11 @@ func Test建任务撞上没提交的重试由部分唯一索引兜底(t *testing
 		"SN-1": admission.HostSelectable(model.Host{SN: "SN-1"}, true),
 		"SN-2": {},
 	}}
-	var be *store.BatchError
-	if !errors.As(err, &be) || !errors.Is(err, store.ErrRejected) || !reflect.DeepEqual(be.Result, want) {
+	var be *repository.BatchError
+	if !errors.As(err, &be) || !errors.Is(err, repository.ErrRejected) || !reflect.DeepEqual(be.Result, want) {
 		t.Fatalf("撞上重试之后应报 BatchError，只有 SN-1 报 host_has_open_task：得到 %v（%+v）", err, be)
 	}
-	p, err := s.ListTasks(ctx, store.TaskQuery{})
+	p, err := s.ListTasks(ctx, repository.TaskQuery{})
 	if err != nil || len(p.Items) != 1 || p.Items[0].ID != failed.ID || p.Items[0].State != model.TaskPending {
 		t.Fatalf("库里应只有重试回 pending 的那一个任务，得到 %+v、%v", p.Items, err)
 	}
@@ -646,13 +646,13 @@ func Test推进撞上没提交的新任务由部分唯一索引兜底(t *testing
 		`last_seq) SELECT 'held', host_sn, iso_id, template_id, template_version, 'pending', snapshot, created_by, created_at, 1, 0 ` +
 		`FROM tasks WHERE id = $1`
 	err := writeWhileHeld(t, dsn, hold, failed.ID, func() error {
-		_, _, err := s.TransitionTaskByUser(ctx, failed.ID, store.TaskExpect{State: failed.State, Rev: failed.Rev}, model.TaskPending,
-			[]store.NewEvent{{At: 1, Kind: "task.retry"}}, store.Audit{Actor: "alice", Action: "task.retry", At: 1})
+		_, _, err := s.TransitionTaskByUser(ctx, failed.ID, repository.TaskExpect{State: failed.State, Rev: failed.Rev}, model.TaskPending,
+			[]repository.NewEvent{{At: 1, Kind: "task.retry"}}, repository.Audit{Actor: "alice", Action: "task.retry", At: 1})
 		return err
 	})
-	var pe *store.ProblemsError
+	var pe *repository.ProblemsError
 	want := admission.HostSelectable(model.Host{SN: "SN-1"}, true)
-	if !errors.As(err, &pe) || pe.Kind != store.ErrRejected || !reflect.DeepEqual(pe.Problems, want) {
+	if !errors.As(err, &pe) || pe.Kind != repository.ErrRejected || !reflect.DeepEqual(pe.Problems, want) {
 		t.Fatalf("撞上别人刚建的任务之后，重试应报 ProblemsError(ErrRejected)，问题是 host_has_open_task，得到 %v", err)
 	}
 	if got, err := s.GetTask(ctx, failed.ID); err != nil || !reflect.DeepEqual(got, failed) {
@@ -693,10 +693,10 @@ func Test建任务等锁住的记录提交之后再重跑准入(t *testing.T) {
 			ctx := t.Context()
 			f := newTaskFixture(t, s, "SN-1", "SN-2")
 			err := writeWhileHeld(t, dsn, c.hold, c.key(f), func() error {
-				_, err := s.CreateTasks(ctx, f.tasks("SN-2", "SN-1"), store.Audit{Actor: "alice", Action: "task.create", At: 1})
+				_, err := s.CreateTasks(ctx, f.tasks("SN-2", "SN-1"), repository.Audit{Actor: "alice", Action: "task.create", At: 1})
 				return err
 			})
-			var be *store.BatchError
+			var be *repository.BatchError
 			if !errors.As(err, &be) {
 				t.Fatalf("对方提交之后，建任务应报 BatchError，得到 %v", err)
 			}
@@ -707,7 +707,7 @@ func Test建任务等锁住的记录提交之后再重跑准入(t *testing.T) {
 			if !slices.Equal(codes, []model.Code{c.code}) {
 				t.Fatalf("重跑准入应只报 %s，得到 %v", c.code, be)
 			}
-			if p, err := s.ListTasks(ctx, store.TaskQuery{}); err != nil || len(p.Items) != 0 {
+			if p, err := s.ListTasks(ctx, repository.TaskQuery{}); err != nil || len(p.Items) != 0 {
 				t.Fatalf("准入没通过时一个任务都不建，得到 %+v、%v", p.Items, err)
 			}
 		})
@@ -731,18 +731,18 @@ func Test建任务等主机上没提交的新任务提交之后逐台报出(t *t
 		`last_seq) SELECT 'held' || n, 'SN-' || n, i.id, v.template_id, v.version, 'pending', 'null', 'bob', 1, 1, 0 ` +
 		`FROM isos i, template_versions v, generate_series(1, 2) AS n WHERE i.id = $1`
 	err := writeWhileHeld(t, dsn, hold, f.iso.ID, func() error {
-		_, err := s.CreateTasks(ctx, f.tasks("SN-2", "SN-1"), store.Audit{Actor: "alice", Action: "task.create", At: 1})
+		_, err := s.CreateTasks(ctx, f.tasks("SN-2", "SN-1"), repository.Audit{Actor: "alice", Action: "task.create", At: 1})
 		return err
 	})
 	want := admission.BatchResult{Common: []model.Problem{}, ByHost: map[string][]model.Problem{
 		"SN-1": admission.HostSelectable(model.Host{SN: "SN-1"}, true),
 		"SN-2": admission.HostSelectable(model.Host{SN: "SN-2"}, true),
 	}}
-	var be *store.BatchError
-	if !errors.As(err, &be) || !errors.Is(err, store.ErrRejected) || !reflect.DeepEqual(be.Result, want) {
+	var be *repository.BatchError
+	if !errors.As(err, &be) || !errors.Is(err, repository.ErrRejected) || !reflect.DeepEqual(be.Result, want) {
 		t.Fatalf("对方提交之后，建任务应报 BatchError，两台都报 host_has_open_task：得到 %v（%+v）", err, be)
 	}
-	p, err := s.ListTasks(ctx, store.TaskQuery{})
+	p, err := s.ListTasks(ctx, repository.TaskQuery{})
 	if err != nil {
 		t.Fatalf("列出任务：%v", err)
 	}
@@ -771,16 +771,16 @@ func Test推进与追加事件等对方提交之后再比对与分配(t *testing
 		write func(ctx context.Context, s *pgstore.Store, task model.Task) error // 在对方提交之前开始，带着对方提交之前读到的 task
 	}{
 		{"带着旧期望值推进", func(ctx context.Context, s *pgstore.Store, task model.Task) error {
-			_, _, err := s.TransitionTask(ctx, task.ID, store.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskInstalling, nil)
-			if !errors.Is(err, store.ErrConflict) {
+			_, _, err := s.TransitionTask(ctx, task.ID, repository.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskInstalling, nil)
+			if !errors.Is(err, repository.ErrConflict) {
 				return fmt.Errorf("对方提交之后 Rev 已是 %d，带着 %d 推进应报 ErrConflict，得到 %v", task.Rev+1, task.Rev, err)
 			}
 			return nil
 		}},
 		{"追加事件", func(ctx context.Context, s *pgstore.Store, task model.Task) error {
 			got, err := s.AppendEvents(ctx, task.ID,
-				[]store.NewEvent{{At: 1, Kind: "signal.recv", Key: "sig-1"}, {At: 1, Kind: "signal.recv", Key: "sig-2"}})
-			if want := []store.Appended{{Seq: 1, Duplicate: true}, {Seq: 2}}; err != nil || !reflect.DeepEqual(got, want) {
+				[]repository.NewEvent{{At: 1, Kind: "signal.recv", Key: "sig-1"}, {At: 1, Kind: "signal.recv", Key: "sig-2"}})
+			if want := []repository.Appended{{Seq: 1, Duplicate: true}, {Seq: 2}}; err != nil || !reflect.DeepEqual(got, want) {
 				return fmt.Errorf("对方提交之后，追加应得到 %+v，得到 %+v、%v", want, got, err)
 			}
 			return nil
@@ -791,7 +791,7 @@ func Test推进与追加事件等对方提交之后再比对与分配(t *testing
 			s := pgtest.OpenAt(t, dsn)
 			ctx := t.Context()
 			in := newTaskFixture(t, s, "SN-1").tasks("SN-1")
-			created, err := s.CreateTasks(ctx, in, store.Audit{Actor: "alice", Action: "task.create", At: 1})
+			created, err := s.CreateTasks(ctx, in, repository.Audit{Actor: "alice", Action: "task.create", At: 1})
 			if err != nil {
 				t.Fatalf("建任务：%v", err)
 			}
@@ -820,7 +820,7 @@ type taskFixture struct {
 func newTaskFixture(t *testing.T, s *pgstore.Store, sns ...string) taskFixture {
 	t.Helper()
 	ctx := t.Context()
-	audit := store.Audit{Actor: "alice", Action: "fixture.setup", At: 1}
+	audit := repository.Audit{Actor: "alice", Action: "fixture.setup", At: 1}
 	for _, sn := range sns {
 		if _, err := s.CreateHost(ctx, model.Host{SN: sn}, audit); err != nil {
 			t.Fatalf("登记 %s：%v", sn, err)
@@ -855,7 +855,7 @@ func newTaskFixture(t *testing.T, s *pgstore.Store, sns ...string) taskFixture {
 	return taskFixture{iso: iso, tpl: tpl, hook: hook}
 }
 
-// tasks 是给 sns 这几台主机各建一个任务的入参。快照只填仓储要对上的几项（store.CheckNewTasks）：仓储不解释快照。
+// tasks 是给 sns 这几台主机各建一个任务的入参。快照只填仓储要对上的几项（repository.CheckNewTasks）：仓储不解释快照。
 func (f taskFixture) tasks(sns ...string) []model.Task {
 	ts := make([]model.Task, len(sns))
 	for i, sn := range sns {
@@ -870,11 +870,11 @@ func (f taskFixture) tasks(sns ...string) []model.Task {
 func (f taskFixture) mustFailed(t *testing.T, s *pgstore.Store, sn string) model.Task {
 	t.Helper()
 	ctx := t.Context()
-	created, err := s.CreateTasks(ctx, f.tasks(sn), store.Audit{Actor: "alice", Action: "task.create", At: 1})
+	created, err := s.CreateTasks(ctx, f.tasks(sn), repository.Audit{Actor: "alice", Action: "task.create", At: 1})
 	if err != nil {
 		t.Fatalf("给 %s 建任务：%v", sn, err)
 	}
-	failed, _, err := s.TransitionTask(ctx, created[0].ID, store.TaskExpect{State: model.TaskPending, Rev: 1}, model.TaskFailed, nil)
+	failed, _, err := s.TransitionTask(ctx, created[0].ID, repository.TaskExpect{State: model.TaskPending, Rev: 1}, model.TaskFailed, nil)
 	if err != nil {
 		t.Fatalf("把任务推进到 failed：%v", err)
 	}

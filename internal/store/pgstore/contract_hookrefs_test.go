@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 )
 
-// hookRefsManyBatches 覆盖模板引用的 hook 版本多于一批（batchSize）时的三处分批，都按 store.HookRefs 的顺序切：保存模板时
+// hookRefsManyBatches 覆盖模板引用的 hook 版本多于一批（batchSize）时的三处分批，都按 repository.HookRefs 的顺序切：保存模板时
 // 往 template_hook_refs 写引用（insertRefs），审批模板时给引用的 hook 版本加读锁并取出（ApproveTemplate），建任务时同样
 // 加锁取出（admit）。要走到第二批，模板就得引用 batchSize 个以上不同的 hook 版本，所以夹具大，三条路径共用一份。
 // 它挂在 Test契约模板 的 runCases 里，跟别的用例共用并发位，不另占一个。
@@ -29,7 +29,7 @@ func tinyHook(name string) model.Hook {
 	}}
 }
 
-// 建 batchSize+1 个 hook，模板的插槽里放 batchSize+1 个实例，各引用一个 hook 的版本 1。引用按 ID 排（store.HookRefs），ID
+// 建 batchSize+1 个 hook，模板的插槽里放 batchSize+1 个实例，各引用一个 hook 的版本 1。引用按 ID 排（repository.HookRefs），ID
 // 最大的那个 last 排在第 batchSize+1 位，落在第二批；三处各让 last 带出一个只有第二批走到了才对的结果：
 //
 //   - 保存：last 还是草稿时删它，要报 ErrReferenced。只写了第一批的引用，就删得掉。
@@ -49,13 +49,13 @@ func hookRefsManyBatches(t *testing.T, s *pgstore.Store) {
 		in.Assembly["分区"] = append(in.Assembly["分区"], model.Instance{HookID: h.ID, HookVersion: h.Version})
 	}
 	tpl := templateOps.mustCreateFrom(t, s, in)
-	refs := store.HookRefs(tpl)
+	refs := repository.HookRefs(tpl)
 	if len(refs) != n || refs[pgstore.BatchSizeForTest] != last.Key() {
-		t.Fatalf("夹具不对：模板应引用 %d 个 hook 版本，%s 排在第 %d 位；得到 %d 个", n, store.VersionID(last.ID, 1), n, len(refs))
+		t.Fatalf("夹具不对：模板应引用 %d 个 hook 版本，%s 排在第 %d 位；得到 %d 个", n, repository.VersionID(last.ID, 1), n, len(refs))
 	}
 
 	// 保存
-	wantIs(t, s.DeleteHookDraft(ctx, last.Key(), last.Rev), store.ErrReferenced, "删除被模板引用、引用排在第二批的 hook 草稿")
+	wantIs(t, s.DeleteHookDraft(ctx, last.Key(), last.Rev), repository.ErrReferenced, "删除被模板引用、引用排在第二批的 hook 草稿")
 
 	// 审批
 	for _, h := range hooks {

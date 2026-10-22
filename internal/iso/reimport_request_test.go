@@ -5,9 +5,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/iso/isotest"
-	"github.com/lober/lober/internal/store"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
@@ -28,7 +28,7 @@ func TestRequestReimportPersistsRecoverableWorkBeforeExtraction(t *testing.T) {
 		return item
 	}
 	item := create("queued-reimport")
-	audit := store.Audit{Actor: "operator", Action: "iso.reimport", At: 1790000000}
+	audit := repository.Audit{Actor: "operator", Action: "iso.reimport", At: 1790000000}
 	if err := s.RequestReimport(t.Context(), item.ID, audit); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestRequestReimportPersistsRecoverableWorkBeforeExtraction(t *testing.T) {
 	if !found {
 		t.Fatal("durable request missing after restart", work)
 	}
-	entries, err := db.ListAudit(t.Context(), store.AuditQuery{TargetKind: "iso", TargetID: item.ID, Action: "iso.reimport"})
+	entries, err := db.ListAudit(t.Context(), repository.AuditQuery{TargetKind: "iso", TargetID: item.ID, Action: "iso.reimport"})
 	if err != nil || len(entries.Items) != 1 || entries.Items[0].Actor != "operator" {
 		t.Fatal(entries, err)
 	}
@@ -76,7 +76,7 @@ func TestRequestReimportPersistsRecoverableWorkBeforeExtraction(t *testing.T) {
 		t.Fatal("failed audit changed work", back, err)
 	}
 	audit.Actor = "operator"
-	if err := s.RequestReimport(t.Context(), ready.ID, audit); !errors.Is(err, store.ErrConflict) {
+	if err := s.RequestReimport(t.Context(), ready.ID, audit); !errors.Is(err, repository.ErrConflict) {
 		t.Fatal("ready reimport accepted", err)
 	}
 }

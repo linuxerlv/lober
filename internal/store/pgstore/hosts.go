@@ -9,8 +9,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // hostColumns 是修改主机时写的列：整条替换，改成零值的也照写（不带 Select 的 Updates 会跳过零值）。
@@ -24,12 +24,12 @@ var upsertHost = clause.OnConflict{
 		clause.Assignment{Column: clause.Column{Name: "rev"}, Value: gorm.Expr("hosts.rev + 1")}),
 }
 
-// CreateHost 见 store.Hosts。SN 已登记由主键报出来，不先查：先查再插，两次同时登记就都查不到。
-func (s *Store) CreateHost(ctx context.Context, h model.Host, a store.Audit) (model.Host, error) {
-	if err := store.CheckAudit(a); err != nil {
+// CreateHost 见 repository.Hosts。SN 已登记由主键报出来，不先查：先查再插，两次同时登记就都查不到。
+func (s *Store) CreateHost(ctx context.Context, h model.Host, a repository.Audit) (model.Host, error) {
+	if err := repository.CheckAudit(a); err != nil {
 		return model.Host{}, err
 	}
-	if err := store.CheckHosts([]model.Host{h}); err != nil {
+	if err := repository.CheckHosts([]model.Host{h}); err != nil {
 		return model.Host{}, err
 	}
 	h.Rev = 1
@@ -49,12 +49,12 @@ func (s *Store) CreateHost(ctx context.Context, h model.Host, a store.Audit) (mo
 	return row.host()
 }
 
-// UpdateHost 见 store.Hosts。
-func (s *Store) UpdateHost(ctx context.Context, h model.Host, a store.Audit) (model.Host, error) {
-	if err := store.CheckAudit(a); err != nil {
+// UpdateHost 见 repository.Hosts。
+func (s *Store) UpdateHost(ctx context.Context, h model.Host, a repository.Audit) (model.Host, error) {
+	if err := repository.CheckAudit(a); err != nil {
 		return model.Host{}, err
 	}
-	if err := store.CheckHosts([]model.Host{h}); err != nil {
+	if err := repository.CheckHosts([]model.Host{h}); err != nil {
 		return model.Host{}, err
 	}
 	row, err := toHostRow(h)
@@ -78,14 +78,14 @@ func (s *Store) UpdateHost(ctx context.Context, h model.Host, a store.Audit) (mo
 	return row.host()
 }
 
-// ImportHosts 见 store.Hosts。按 hostLockOrder 的次序写，写一行就锁住一行：同时导入的两批、导入与批量建任务，都按同一个
+// ImportHosts 见 repository.Hosts。按 hostLockOrder 的次序写，写一行就锁住一行：同时导入的两批、导入与批量建任务，都按同一个
 // 次序给行加锁，不会互相等死。写完在同一个事务里读回各台的 Rev，这些行此时由本事务锁着，读到的就是本次写下的。返回值
 // 与审计都按入参的顺序。
-func (s *Store) ImportHosts(ctx context.Context, hs []model.Host, a store.Audit) ([]model.Host, error) {
-	if err := store.CheckAudit(a); err != nil {
+func (s *Store) ImportHosts(ctx context.Context, hs []model.Host, a repository.Audit) ([]model.Host, error) {
+	if err := repository.CheckAudit(a); err != nil {
 		return nil, err
 	}
-	if err := store.CheckHosts(hs); err != nil {
+	if err := repository.CheckHosts(hs); err != nil {
 		return nil, err
 	}
 	rows := make([]hostRow, len(hs))
@@ -132,9 +132,9 @@ func (s *Store) ImportHosts(ctx context.Context, hs []model.Host, a store.Audit)
 	return out, nil
 }
 
-// DeleteHost 见 store.Hosts。被任务引用时由外键报出来（任务 9 加上 tasks 表之后），翻成 ErrReferenced。
-func (s *Store) DeleteHost(ctx context.Context, sn string, rev int64, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+// DeleteHost 见 repository.Hosts。被任务引用时由外键报出来（任务 9 加上 tasks 表之后），翻成 ErrReferenced。
+func (s *Store) DeleteHost(ctx context.Context, sn string, rev int64, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
 	if !storable(sn) {
@@ -155,7 +155,7 @@ func (s *Store) DeleteHost(ctx context.Context, sn string, rev int64, a store.Au
 	return translate(err, true, nil)
 }
 
-// GetHost 见 store.Hosts。
+// GetHost 见 repository.Hosts。
 func (s *Store) GetHost(ctx context.Context, sn string) (model.Host, error) {
 	if !storable(sn) {
 		return model.Host{}, hostNotFound(sn)
@@ -171,7 +171,7 @@ func (s *Store) GetHost(ctx context.Context, sn string) (model.Host, error) {
 	return row.host()
 }
 
-// GetHosts 见 store.Hosts。
+// GetHosts 见 repository.Hosts。
 func (s *Store) GetHosts(ctx context.Context, sns []string) (map[string]model.Host, error) {
 	keys := slices.DeleteFunc(slices.Clone(sns), func(sn string) bool { return !storable(sn) })
 	out := make(map[string]model.Host, len(keys))
@@ -191,17 +191,17 @@ func (s *Store) GetHosts(ctx context.Context, sns []string) (map[string]model.Ho
 	return out, nil
 }
 
-// ListHosts 见 store.Hosts。按 SN 的字节序排，游标是上一页最后一台的 SN。SN 前缀用 starts_with 比，不用 LIKE：
+// ListHosts 见 repository.Hosts。按 SN 的字节序排，游标是上一页最后一台的 SN。SN 前缀用 starts_with 比，不用 LIKE：
 // _、% 与反斜杠都按原样比，不必转义。
-func (s *Store) ListHosts(ctx context.Context, q store.HostQuery) (store.Page[model.Host], error) {
-	limit, err := store.CheckHostQuery(q)
+func (s *Store) ListHosts(ctx context.Context, q repository.HostQuery) (repository.Page[model.Host], error) {
+	limit, err := repository.CheckHostQuery(q)
 	if err != nil {
-		return store.Page[model.Host]{}, err
+		return repository.Page[model.Host]{}, err
 	}
 	var after string
 	if q.Cursor != "" {
-		if err := store.DecodeCursor(q.Cursor, "hosts", &after); err != nil {
-			return store.Page[model.Host]{}, err
+		if err := repository.DecodeCursor(q.Cursor, "hosts", &after); err != nil {
+			return repository.Page[model.Host]{}, err
 		}
 	}
 	if !storable(q.SNPrefix, q.AttrKey, q.AttrValue) {
@@ -220,9 +220,9 @@ func (s *Store) ListHosts(ctx context.Context, q store.HostQuery) (store.Page[mo
 	}
 	var rows []hostRow
 	if err := db.Order(`sn COLLATE "C"`).Limit(limit + 1).Find(&rows).Error; err != nil {
-		return store.Page[model.Host]{}, err
+		return repository.Page[model.Host]{}, err
 	}
-	return page(rows, limit, hostRow.host, func(r hostRow) string { return store.EncodeCursor("hosts", r.SN) })
+	return page(rows, limit, hostRow.host, func(r hostRow) string { return repository.EncodeCursor("hosts", r.SN) })
 }
 
 // hostLockOrder 是给多台主机加锁的次序：按 SN 的字节序升序，与 SQL 里的 ORDER BY sn COLLATE "C" 相同。凡在一个事务里给
@@ -251,5 +251,5 @@ func lockHost(tx *gorm.DB, sn string, rev int64) (hostRow, error) {
 }
 
 func hostNotFound(sn string) error {
-	return errorf(store.ErrNotFound, "主机 %q 没有登记", sn)
+	return errorf(repository.ErrNotFound, "主机 %q 没有登记", sn)
 }

@@ -11,36 +11,36 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
 // Only ISO byte acquisition/import is substituted; audit persistence still
 // uses the actual source repository transactions. Real IO is assembled in T14.
-type auditedISOSource struct{ st store.ISOSources }
+type auditedISOSource struct{ st repository.ISOSources }
 
-func (f auditedISOSource) Register(ctx context.Context, item model.ISO, kind, addr, role string, size int64, digest string, a store.Audit) error {
-	src := store.Source{ISOID: item.ID, Role: role, Kind: store.SourceUpload, TotalSize: size, ExpectedSHA256: digest, State: store.SourcePending}
+func (f auditedISOSource) Register(ctx context.Context, item model.ISO, kind, addr, role string, size int64, digest string, a repository.Audit) error {
+	src := model.Source{ISOID: item.ID, Role: role, Kind: model.SourceUpload, TotalSize: size, ExpectedSHA256: digest, State: model.SourcePending}
 	if kind == "url" {
-		src.Kind, src.URL = store.SourceRemote, addr
+		src.Kind, src.URL = model.SourceRemote, addr
 	}
 	if kind == "path" {
-		src.Kind, src.Path = store.SourceLocal, addr
+		src.Kind, src.Path = model.SourceLocal, addr
 	}
 	_, err := f.st.SaveSource(ctx, src, a)
 	return err
 }
-func (f auditedISOSource) Upload(context.Context, string, string, int64, io.Reader, store.Audit) error {
+func (f auditedISOSource) Upload(context.Context, string, string, int64, io.Reader, repository.Audit) error {
 	return nil
 }
-func (f auditedISOSource) step(ctx context.Context, id string, state store.SourceState, a store.Audit) error {
+func (f auditedISOSource) step(ctx context.Context, id string, state model.SourceState, a repository.Audit) error {
 	src, exists, err := f.st.GetSource(ctx, id, "")
 	if err != nil {
 		return err
 	}
 	if !exists {
-		return store.ErrNotFound
+		return repository.ErrNotFound
 	}
 	if state != "" {
 		src.State = state
@@ -48,13 +48,13 @@ func (f auditedISOSource) step(ctx context.Context, id string, state store.Sourc
 	_, err = f.st.SaveSource(ctx, src, a)
 	return err
 }
-func (f auditedISOSource) Cancel(ctx context.Context, id string, a store.Audit) error {
-	return f.step(ctx, id, store.SourceCancelled, a)
+func (f auditedISOSource) Cancel(ctx context.Context, id string, a repository.Audit) error {
+	return f.step(ctx, id, model.SourceCancelled, a)
 }
-func (f auditedISOSource) Retry(ctx context.Context, id string, a store.Audit) error {
-	return f.step(ctx, id, store.SourcePending, a)
+func (f auditedISOSource) Retry(ctx context.Context, id string, a repository.Audit) error {
+	return f.step(ctx, id, model.SourcePending, a)
 }
-func (f auditedISOSource) Reimport(ctx context.Context, id string, a store.Audit) error {
+func (f auditedISOSource) Reimport(ctx context.Context, id string, a repository.Audit) error {
 	return f.step(ctx, id, "", a)
 }
 func (f auditedISOSource) FreeSpace(context.Context) (int64, int64, error) {
@@ -71,7 +71,7 @@ func Test每条正式审计路由都写入正确操作者和目标(t *testing.T)
 	seen := map[string]bool{}
 	run := func(action, method, path, body, token, kind, id string) map[string]any {
 		t.Helper()
-		before, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 1})
+		before, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,7 +96,7 @@ func Test每条正式审计路由都写入正确操作者和目标(t *testing.T)
 				id = tasks[0].(map[string]any)["id"].(string)
 			}
 		}
-		entries, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+		entries, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -152,7 +152,7 @@ func Test每条正式审计路由都写入正确操作者和目标(t *testing.T)
 	for _, op := range []string{"cancel", "retry", "reimport"} {
 		run("iso."+op, "POST", "/console/v1/isos/"+acquiredID+"/"+op, "", admin, "iso", acquiredID)
 	}
-	missing, err := st.CreateISO(t.Context(), model.ISO{Name: "missing-source", Family: "linux", Series: "rocky"}, store.Audit{Actor: "seed", Action: "iso.create", At: fixedAt})
+	missing, err := st.CreateISO(t.Context(), model.ISO{Name: "missing-source", Family: "linux", Series: "rocky"}, repository.Audit{Actor: "seed", Action: "iso.create", At: fixedAt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func Test审计分页过滤完整CSV及公式作为文本(t *testing.T) {
 	for i := range hosts {
 		hosts[i] = model.Host{SN: fmt.Sprintf("SN-%03d", i)}
 	}
-	if _, err := st.ImportHosts(t.Context(), hosts, store.Audit{Actor: "=1+2", Action: "host.import", Detail: " \t@SUM(1,2)\n下一行", At: fixedAt}); err != nil {
+	if _, err := st.ImportHosts(t.Context(), hosts, repository.Audit{Actor: "=1+2", Action: "host.import", Detail: " \t@SUM(1,2)\n下一行", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
 	page := responseData[auditPage](t, httpCall(s, "GET", "/console/v1/audit?action=host.import&limit=2", "", token))
@@ -235,7 +235,7 @@ func Test审计分页过滤完整CSV及公式作为文本(t *testing.T) {
 			t.Fatal(q)
 		}
 	}
-	before, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	w := httpCall(s, "GET", "/console/v1/audit/export?action=host.import", "", token)
 	if w.Code != 200 || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/csv") || w.Header().Get("Content-Disposition") == "" {
 		t.Fatal(w.Code, w.Body.String())
@@ -247,7 +247,7 @@ func Test审计分页过滤完整CSV及公式作为文本(t *testing.T) {
 	if strings.Join(rows[0], ",") != "id,at,actor,action,target_kind,target_id,detail" || rows[1][2] != "\t=1+2" || rows[1][6] != "\t \t@SUM(1,2)\n下一行" {
 		t.Fatal(rows[:2])
 	}
-	after, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if len(before.Items) != len(after.Items) || before.Items[0].ID != after.Items[0].ID {
 		t.Fatal("read-only audit access mutated logs")
 	}
@@ -272,14 +272,14 @@ func Test审计分页过滤完整CSV及公式作为文本(t *testing.T) {
 func Test审计接口五角色权限(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	adminHTTP(t, s, st)
-	for i, role := range store.Roles() {
+	for i, role := range model.Roles() {
 		name := fmt.Sprintf("auditrole%d", i)
 		seedAuthUser(t, st, name, role, "pw")
 		token := loginHTTP(t, s, name, "pw").Token
 		for _, path := range []string{"/console/v1/audit", "/console/v1/audit/export"} {
 			w := httpCall(s, "GET", path, "", token)
 			want := 403
-			if role == store.RoleAdmin {
+			if role == model.RoleAdmin {
 				want = 200
 			}
 			if w.Code != want {

@@ -3,15 +3,16 @@ package pgstore
 import (
 	"context"
 	"errors"
+	"github.com/lober/lober/internal/infrastructure/identity"
 	"slices"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"github.com/lober/lober/internal/core/admission"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/admission"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // finishedStates 是结束了的任务的状态：查「这台主机有没有未结束的任务」时用它（openTasksOf、FindOpenTask）。它由
@@ -30,28 +31,28 @@ var finishedStates = func() []string {
 // forShare 是读锁：别的事务照样能读、能同样加读锁，但改不了、删不掉这一行，要等本事务结束。
 var forShare = clause.Locking{Strength: "SHARE"}
 
-// CreateTasks 见 store.Tasks。快照里的串都存得下，由 store.CheckNewTasks 查过：jsonb 不收 NUL，encoding/json 还会把非法的
+// CreateTasks 见 repository.Tasks。快照里的串都存得下，由 repository.CheckNewTasks 查过：jsonb 不收 NUL，encoding/json 还会把非法的
 // UTF-8 换成 U+FFFD。任务逐个插入：撞上 idx_tasks_open 时，才知道撞上的是哪一台。
-func (s *Store) CreateTasks(ctx context.Context, ts []model.Task, a store.Audit) ([]model.Task, error) {
+func (s *Store) CreateTasks(ctx context.Context, ts []model.Task, a repository.Audit) ([]model.Task, error) {
 	return s.createTasks(ctx, ts, a, false)
 }
 
-// CreateCurrentTasks 见 store.CurrentTaskCreator。身份读锁先于其他准入锁，直到任务与审计一起提交才释放。
-func (s *Store) CreateCurrentTasks(ctx context.Context, ts []model.Task, a store.Audit) ([]model.Task, error) {
+// CreateCurrentTasks 见 repository.CurrentTaskCreator。身份读锁先于其他准入锁，直到任务与审计一起提交才释放。
+func (s *Store) CreateCurrentTasks(ctx context.Context, ts []model.Task, a repository.Audit) ([]model.Task, error) {
 	return s.createTasks(ctx, ts, a, true)
 }
 
-func (s *Store) createTasks(ctx context.Context, ts []model.Task, a store.Audit, current bool) ([]model.Task, error) {
-	if err := store.CheckAudit(a); err != nil {
+func (s *Store) createTasks(ctx context.Context, ts []model.Task, a repository.Audit, current bool) ([]model.Task, error) {
+	if err := repository.CheckAudit(a); err != nil {
 		return nil, err
 	}
-	if err := store.CheckNewTasks(ts); err != nil {
+	if err := repository.CheckNewTasks(ts); err != nil {
 		return nil, err
 	}
 	rows := make([]taskRow, len(ts))
 	ids := make([]string, len(ts))
 	for i, t := range ts {
-		t.ID, t.State, t.Rev = store.NewID(), model.TaskPending, 1
+		t.ID, t.State, t.Rev = identity.NewID(), model.TaskPending, 1
 		row, err := toTaskRow(t)
 		if err != nil {
 			return nil, err
@@ -77,7 +78,7 @@ func (s *Store) createTasks(ctx context.Context, ts []model.Task, a store.Audit,
 			// 看得到它时的给，与第 3 步报的同形
 			if openTaskTaken(err) {
 				in.OpenTask[r.HostSN] = true
-				if be := store.BatchProblems(in, nil); be != nil {
+				if be := repository.BatchProblems(in, nil); be != nil {
 					return be
 				}
 			}
@@ -123,12 +124,12 @@ func lockCurrentTemplate(tx *gorm.DB, k model.TemplateKey) error {
 	}
 	cur, ok := model.CurrentApproved(versions)
 	if !ok || cur.Version != k.Version {
-		return store.ErrTemplateNotCurrent
+		return repository.ErrTemplateNotCurrent
 	}
 	return nil
 }
 
-// admit 是批量建任务的第 2、3 步：在事务 tx 里按固定的顺序加锁，再用锁住之后读到的数据重跑准入（store.BatchProblems）。
+// admit 是批量建任务的第 2、3 步：在事务 tx 里按固定的顺序加锁，再用锁住之后读到的数据重跑准入（repository.BatchProblems）。
 // 主机按 SN 的字节序加写锁（lockHosts）；ISO、模板版本与它引用的 hook 版本加读锁，废弃与删除都要等这一批提交。ISO 或模板
 // 版本不存在报 ErrNotFound：按键找不到，准入无从判起。同一批的 ISO 与模板版本都相同（CheckNewTasks 查过），看第一个任务
 // 就够了。通过时返回判定的入参，插入时撞上 idx_tasks_open 还要拿它重判。
@@ -166,7 +167,7 @@ func admit(tx *gorm.DB, batch []model.Task) (admission.BatchInput, error) {
 		return admission.BatchInput{}, err
 	}
 	// 引用的 hook 版本按 HookRefs 的顺序加锁，与审批模板时相同；不存在的不放进入参，由准入当作没废弃
-	for chunk := range slices.Chunk(store.HookRefs(in.Template), batchSize) {
+	for chunk := range slices.Chunk(repository.HookRefs(in.Template), batchSize) {
 		rows, err := hookVersionsIn(tx, chunk, lockOf("SHARE", hookTables.versions))
 		if err != nil {
 			return admission.BatchInput{}, err
@@ -196,7 +197,7 @@ func admit(tx *gorm.DB, batch []model.Task) (admission.BatchInput, error) {
 		}
 		in.Hosts, in.OpenTask[h.SN] = append(in.Hosts, h), open[h.SN]
 	}
-	return in, store.BatchProblems(in, missing)
+	return in, repository.BatchProblems(in, missing)
 }
 
 // lockHosts 在事务 tx 里给 sns 这几台主机加写锁并取出，没登记的不在结果里。按 hostLockOrder 的次序加锁（LockRows 在排序
@@ -234,9 +235,9 @@ func openTasksOf(tx *gorm.DB, sns []string) (map[string]bool, error) {
 	return open, nil
 }
 
-// GetTask 见 store.Tasks。
+// GetTask 见 repository.Tasks。
 func (s *Store) GetTask(ctx context.Context, id string) (model.Task, error) {
-	if err := store.CheckID(id); err != nil {
+	if err := repository.CheckID(id); err != nil {
 		return model.Task{}, err
 	}
 	var row taskRow
@@ -249,9 +250,9 @@ func (s *Store) GetTask(ctx context.Context, id string) (model.Task, error) {
 	return row.task()
 }
 
-// FindOpenTask 见 store.Tasks。SN 不是规范化之后的写法报 ErrInvalid（store.CheckSN）。
+// FindOpenTask 见 repository.Tasks。SN 不是规范化之后的写法报 ErrInvalid（repository.CheckSN）。
 func (s *Store) FindOpenTask(ctx context.Context, sn string) (model.Task, bool, error) {
-	if err := store.CheckSN(sn); err != nil {
+	if err := repository.CheckSN(sn); err != nil {
 		return model.Task{}, false, err
 	}
 	var row taskRow
@@ -268,17 +269,17 @@ func (s *Store) FindOpenTask(ctx context.Context, sn string) (model.Task, bool, 
 	return t, true, nil
 }
 
-// ListTasks 见 store.Tasks。按 CreatedAt 倒序、再按 ID 的字节序排，游标是上一页最后一个的这两样。
-func (s *Store) ListTasks(ctx context.Context, q store.TaskQuery) (store.Page[model.Task], error) {
-	limit, err := store.CheckQuery(q.Cursor, q.Limit)
+// ListTasks 见 repository.Tasks。按 CreatedAt 倒序、再按 ID 的字节序排，游标是上一页最后一个的这两样。
+func (s *Store) ListTasks(ctx context.Context, q repository.TaskQuery) (repository.Page[model.Task], error) {
+	limit, err := repository.CheckQuery(q.Cursor, q.Limit)
 	if err != nil {
-		return store.Page[model.Task]{}, err
+		return repository.Page[model.Task]{}, err
 	}
 	var afterAt int64
 	var afterID string
 	if q.Cursor != "" {
-		if err := store.DecodeCursor(q.Cursor, "tasks", &afterAt, &afterID); err != nil {
-			return store.Page[model.Task]{}, err
+		if err := repository.DecodeCursor(q.Cursor, "tasks", &afterAt, &afterID); err != nil {
+			return repository.Page[model.Task]{}, err
 		}
 	}
 	// 存不下的状态谁都不是，去掉；给了状态却一个都不剩，就什么都匹配不上
@@ -309,43 +310,43 @@ func (s *Store) ListTasks(ctx context.Context, q store.TaskQuery) (store.Page[mo
 	}
 	var rows []taskRow
 	if err := db.Order(`created_at DESC, id COLLATE "C"`).Limit(limit + 1).Find(&rows).Error; err != nil {
-		return store.Page[model.Task]{}, err
+		return repository.Page[model.Task]{}, err
 	}
-	return page(rows, limit, taskRow.task, func(r taskRow) string { return store.EncodeCursor("tasks", r.CreatedAt, r.ID) })
+	return page(rows, limit, taskRow.task, func(r taskRow) string { return repository.EncodeCursor("tasks", r.CreatedAt, r.ID) })
 }
 
-// TransitionTask 见 store.Tasks。
-func (s *Store) TransitionTask(ctx context.Context, id string, expect store.TaskExpect, to model.TaskState, events []store.NewEvent) (model.Task, []store.Appended, error) {
+// TransitionTask 见 repository.Tasks。
+func (s *Store) TransitionTask(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState, events []repository.NewEvent) (model.Task, []repository.Appended, error) {
 	return s.transition(ctx, id, expect, to, events, nil)
 }
 
-// TransitionTaskByUser 见 store.Tasks。
-func (s *Store) TransitionTaskByUser(ctx context.Context, id string, expect store.TaskExpect, to model.TaskState, events []store.NewEvent, a store.Audit) (model.Task, []store.Appended, error) {
-	if err := store.CheckAudit(a); err != nil {
+// TransitionTaskByUser 见 repository.Tasks。
+func (s *Store) TransitionTaskByUser(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState, events []repository.NewEvent, a repository.Audit) (model.Task, []repository.Appended, error) {
+	if err := repository.CheckAudit(a); err != nil {
 		return model.Task{}, nil, err
 	}
 	return s.transition(ctx, id, expect, to, events, &a)
 }
 
-// transition 是两种推进共用的部分，a 为 nil 时不写审计（系统发起的推进）。先查 ID、目标状态与事件（store.CheckTransition）；
+// transition 是两种推进共用的部分，a 为 nil 时不写审计（系统发起的推进）。先查 ID、目标状态与事件（repository.CheckTransition）；
 // 再给任务行加写锁、比对期望值，追加事件，用一条 UPDATE 写下状态、Rev 与事件的计数，最后写审计。一步推进合不合规矩不在这里
 // 判断，那是第 7 层状态机的事。
 //
 // C31 不先查：推进不锁主机，先查的话，别人刚建、还没提交的任务查不到，两边就都落了库。推进到未结束的状态时由 idx_tasks_open
-// 挡住，撞上时整个推进回滚，问题与准入判定报的相同（store.OpenTaskProblems）。
-func (s *Store) transition(ctx context.Context, id string, expect store.TaskExpect, to model.TaskState, events []store.NewEvent, a *store.Audit) (model.Task, []store.Appended, error) {
-	if err := store.CheckTransition(id, to, events); err != nil {
+// 挡住，撞上时整个推进回滚，问题与准入判定报的相同（repository.OpenTaskProblems）。
+func (s *Store) transition(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState, events []repository.NewEvent, a *repository.Audit) (model.Task, []repository.Appended, error) {
+	if err := repository.CheckTransition(id, to, events); err != nil {
 		return model.Task{}, nil, err
 	}
 	var row taskRow
-	var appended []store.Appended
+	var appended []repository.Appended
 	err := s.write(ctx, func(tx *gorm.DB) error {
 		var err error
 		if row, err = lockTask(tx, id); err != nil {
 			return err
 		}
 		if row.State != string(expect.State) || row.Rev != expect.Rev {
-			return errorf(store.ErrConflict, "任务 %s 现为 %s、Rev %d，期望的是 %s、Rev %d：重读之后再判断",
+			return errorf(repository.ErrConflict, "任务 %s 现为 %s、Rev %d，期望的是 %s、Rev %d：重读之后再判断",
 				id, row.State, row.Rev, expect.State, expect.Rev)
 		}
 		if appended, err = appendEvents(tx, &row, events); err != nil {
@@ -354,7 +355,7 @@ func (s *Store) transition(ctx context.Context, id string, expect store.TaskExpe
 		row.State, row.Rev = string(to), row.Rev+1
 		if err := tx.Model(&taskRow{ID: id}).Select("state", "rev", "last_seq").Updates(&row).Error; err != nil {
 			if openTaskTaken(err) {
-				return store.OpenTaskProblems(row.HostSN)
+				return repository.OpenTaskProblems(row.HostSN)
 			}
 			return err
 		}
@@ -393,5 +394,5 @@ func openTaskTaken(err error) bool {
 }
 
 func taskNotFound(id string) error {
-	return errorf(store.ErrNotFound, "任务 %s 不存在", id)
+	return errorf(repository.ErrNotFound, "任务 %s 不存在", id)
 }

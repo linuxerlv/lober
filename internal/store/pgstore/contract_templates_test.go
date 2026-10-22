@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/activation"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/activation"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 )
 
@@ -116,19 +116,19 @@ var templateOps = versioned[model.Template]{
 	newVersion: func(ctx context.Context, s *pgstore.Store, id string, from int, author string) (model.Template, error) {
 		return s.NewTemplateVersion(ctx, id, from, author)
 	},
-	submit: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a store.Audit) error {
+	submit: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a repository.Audit) error {
 		return s.SubmitTemplate(ctx, model.TemplateKey{ID: id, Version: v}, rev, a)
 	},
-	approve: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, approver string, a store.Audit) error {
+	approve: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, approver string, a repository.Audit) error {
 		return s.ApproveTemplate(ctx, model.TemplateKey{ID: id, Version: v}, rev, approver, a)
 	},
-	reject: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a store.Audit) error {
+	reject: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a repository.Audit) error {
 		return s.RejectTemplate(ctx, model.TemplateKey{ID: id, Version: v}, rev, a)
 	},
-	deprecate: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a store.Audit) error {
+	deprecate: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a repository.Audit) error {
 		return s.DeprecateTemplate(ctx, model.TemplateKey{ID: id, Version: v}, rev, a)
 	},
-	rename: func(ctx context.Context, s *pgstore.Store, id, name string, a store.Audit) error {
+	rename: func(ctx context.Context, s *pgstore.Store, id, name string, a repository.Audit) error {
 		return s.RenameTemplate(ctx, id, name, a)
 	},
 	deleteDraft: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64) error {
@@ -140,8 +140,8 @@ var templateOps = versioned[model.Template]{
 	versions: func(ctx context.Context, s *pgstore.Store, id string) ([]model.Template, error) {
 		return s.ListTemplateVersions(ctx, id)
 	},
-	list: func(ctx context.Context, s *pgstore.Store, q listQuery) (store.Page[model.Template], error) {
-		return s.ListTemplates(ctx, store.TemplateQuery{NamePrefix: q.NamePrefix, States: q.States, ApprovedOnly: q.ApprovedOnly, Cursor: q.Cursor, Limit: q.Limit})
+	list: func(ctx context.Context, s *pgstore.Store, q listQuery) (repository.Page[model.Template], error) {
+		return s.ListTemplates(ctx, repository.TemplateQuery{NamePrefix: q.NamePrefix, States: q.States, ApprovedOnly: q.ApprovedOnly, Cursor: q.Cursor, Limit: q.Limit})
 	},
 	ensureBuiltin: func(ctx context.Context, s *pgstore.Store, t model.Template) error {
 		return s.EnsureBuiltinTemplate(ctx, t)
@@ -206,17 +206,17 @@ func templateUnstorable(t *testing.T, s *pgstore.Store) {
 		in := fullTemplate("Base-2")
 		c.mod(&in)
 		_, err := s.CreateTemplate(t.Context(), in)
-		wantProblems(t, err, store.ErrInvalid, c.want(""), "新建："+c.name)
+		wantProblems(t, err, repository.ErrInvalid, c.want(""), "新建："+c.name)
 		in = templateOps.mustGet(t, s, draft.ID, 1) // 每次重读一份：mod 改的是 map 与切片里的元素
 		c.mod(&in)
 		_, err = s.SaveTemplateDraft(t.Context(), in)
-		wantProblems(t, err, store.ErrInvalid, c.want(draft.ID+"@1"), "保存："+c.name)
+		wantProblems(t, err, repository.ErrInvalid, c.want(draft.ID+"@1"), "保存："+c.name)
 	}
 	in := fullTemplate("a b")
 	in.Body = "\x00"
 	want := []model.Problem{nameProblem(t, "a b", model.Subject{Kind: "template"}), notStorable("template", "", "")}
 	_, err := s.CreateTemplate(t.Context(), in)
-	wantProblems(t, err, store.ErrInvalid, want, "名字不合法、正文也存不下")
+	wantProblems(t, err, repository.ErrInvalid, want, "名字不合法、正文也存不下")
 	wantAuthoredUnchanged(t, s, before, "文本存不下时")
 }
 
@@ -233,15 +233,15 @@ func templateDerivedFromFixed(t *testing.T, s *pgstore.Store) {
 	in := sampleTemplate("Base-1")
 	in.DerivedFrom = &srcKey
 	_, err = s.CreateTemplate(ctx, in)
-	wantIs(t, err, store.ErrInvalid, "新建时带了 DerivedFrom")
+	wantIs(t, err, repository.ErrInvalid, "新建时带了 DerivedFrom")
 	plain.DerivedFrom = &srcKey
 	_, err = s.SaveTemplateDraft(ctx, plain)
-	wantIs(t, err, store.ErrInvalid, "给新建的模板补上 DerivedFrom")
+	wantIs(t, err, repository.ErrInvalid, "给新建的模板补上 DerivedFrom")
 	for _, from := range []*model.TemplateKey{nil, {ID: src.ID, Version: 2}, {ID: plain.ID, Version: 1}} {
 		in := derived
 		in.DerivedFrom = from
 		_, err = s.SaveTemplateDraft(ctx, in)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("把派生模板的 DerivedFrom 改成 %v", from))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("把派生模板的 DerivedFrom 改成 %v", from))
 	}
 	wantAuthoredUnchanged(t, s, before, "改 DerivedFrom 时")
 }
@@ -311,25 +311,25 @@ func templateDeriveBad(t *testing.T, s *pgstore.Store) {
 	}
 	for _, name := range []string{"", "Derived 1", "派生"} {
 		_, err := s.DeriveTemplate(ctx, from, name, "carol")
-		wantProblems(t, err, store.ErrInvalid, []model.Problem{nameProblem(t, name, model.Subject{Kind: "template"})}, fmt.Sprintf("派生时名字为 %q", name))
+		wantProblems(t, err, repository.ErrInvalid, []model.Problem{nameProblem(t, name, model.Subject{Kind: "template"})}, fmt.Sprintf("派生时名字为 %q", name))
 	}
 	// 派生是用户的路径：用了保留前缀报 name_reserved，新身份还没有 ID（C12）
 	for _, name := range reservedNames {
 		_, err := s.DeriveTemplate(ctx, from, name, "carol")
-		wantProblems(t, err, store.ErrInvalid, []model.Problem{reservedProblem(t, name, model.Subject{Kind: "template"})},
+		wantProblems(t, err, repository.ErrInvalid, []model.Problem{reservedProblem(t, name, model.Subject{Kind: "template"})},
 			fmt.Sprintf("派生时名字用了保留前缀 %q", name))
 	}
 	for _, author := range []string{"", "\xff"} {
 		_, err := s.DeriveTemplate(ctx, from, "Derived", author)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("派生时作者为 %q", author))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("派生时作者为 %q", author))
 	}
 	_, err := s.DeriveTemplate(ctx, model.TemplateKey{ID: src.ID, Version: 2}, "Derived", "carol")
-	wantIs(t, err, store.ErrNotFound, "来源版本不存在")
+	wantIs(t, err, repository.ErrNotFound, "来源版本不存在")
 	_, err = s.DeriveTemplate(ctx, model.TemplateKey{ID: "nosuchid", Version: 1}, "Derived", "carol")
-	wantIs(t, err, store.ErrNotFound, "来源身份不存在")
+	wantIs(t, err, repository.ErrNotFound, "来源身份不存在")
 	for _, bad := range []model.TemplateKey{{ID: "Bad", Version: 1}, {ID: src.ID, Version: 0}} {
 		_, err = s.DeriveTemplate(ctx, bad, "Derived", "carol")
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("来源的键 %v 不合格式", bad))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("来源的键 %v 不合格式", bad))
 	}
 	wantAuthoredUnchanged(t, s, before, "派生被拒时")
 }
@@ -350,7 +350,7 @@ func templateApproveRejected(t *testing.T, s *pgstore.Store) {
 		want := append(activation.Template(tpl, map[model.HookKey]model.Hook{}), approverProblems(tpl.Author, c.approver, model.Subject{Kind: "template", ID: tpl.ID + "@1"})...)
 		wantCodes(t, want, c.codes)
 		err := s.ApproveTemplate(t.Context(), model.TemplateKey{ID: tpl.ID, Version: 1}, tpl.Rev, c.approver, anAudit("template.approve"))
-		wantProblems(t, err, store.ErrRejected, want, "审批人 "+c.approver)
+		wantProblems(t, err, repository.ErrRejected, want, "审批人 "+c.approver)
 	}
 	wantAuthoredUnchanged(t, s, before, "审批被拒时")
 }
@@ -370,7 +370,7 @@ func templateApproveHookRefs(t *testing.T, s *pgstore.Store) {
 	want := activation.Template(tpl, hooks)
 	wantCodes(t, want, []model.Code{"hook_ref_deprecated"})
 	before := authoredSnapshot(t, s)
-	wantProblems(t, s.ApproveTemplate(ctx, key, tpl.Rev, "bob", anAudit("template.approve")), store.ErrRejected, want, "引用的 hook 刚被废弃")
+	wantProblems(t, s.ApproveTemplate(ctx, key, tpl.Rev, "bob", anAudit("template.approve")), repository.ErrRejected, want, "引用的 hook 刚被废弃")
 	wantAuthoredUnchanged(t, s, before, "审批被拒时")
 
 	// 驳回，改成引用一个不存在的版本与一个草稿版本
@@ -382,7 +382,7 @@ func templateApproveHookRefs(t *testing.T, s *pgstore.Store) {
 	in = templateOps.to(t, s, in, model.VersionReview)
 	want = activation.Template(in, map[model.HookKey]model.Hook{draftHook.Key(): draftHook})
 	wantCodes(t, want, []model.Code{"hook_ref_missing", "hook_ref_unapproved"})
-	wantProblems(t, s.ApproveTemplate(ctx, key, in.Rev, "bob", anAudit("template.approve")), store.ErrRejected, want, "引用不存在与没审批的版本")
+	wantProblems(t, s.ApproveTemplate(ctx, key, in.Rev, "bob", anAudit("template.approve")), repository.ErrRejected, want, "引用不存在与没审批的版本")
 
 	// 引用的版本都审批了，模板就能批
 	must(t, s.RejectTemplate(ctx, key, in.Rev, anAudit("template.reject")), "再驳回")
@@ -416,23 +416,23 @@ func templateListSeries(t *testing.T, s *pgstore.Store) {
 	must(t, err, "改勾的系")
 	for _, c := range []struct {
 		name string
-		q    store.TemplateQuery
+		q    repository.TemplateQuery
 		want []model.Template
 	}{
-		{"almalinux", store.TemplateQuery{Series: "almalinux"}, []model.Template{alma, both, moved2}},
-		{"rocky", store.TemplateQuery{Series: "rocky"}, []model.Template{both, rocky}},
-		{"不过滤", store.TemplateQuery{}, []model.Template{alma, both, moved2, none, rocky}},
-		{"没有模板勾的系", store.TemplateQuery{Series: "debian"}, nil},
-		{"不认识的系", store.TemplateQuery{Series: "Rocky"}, nil},
-		{"ApprovedOnly 时看当前的已审批版本", store.TemplateQuery{Series: "rocky", ApprovedOnly: true}, []model.Template{moved1}},
-		{"ApprovedOnly 时的 almalinux", store.TemplateQuery{Series: "almalinux", ApprovedOnly: true}, nil},
-		{"与名字前缀同时给", store.TemplateQuery{Series: "rocky", NamePrefix: "ROCKY"}, []model.Template{rocky}},
+		{"almalinux", repository.TemplateQuery{Series: "almalinux"}, []model.Template{alma, both, moved2}},
+		{"rocky", repository.TemplateQuery{Series: "rocky"}, []model.Template{both, rocky}},
+		{"不过滤", repository.TemplateQuery{}, []model.Template{alma, both, moved2, none, rocky}},
+		{"没有模板勾的系", repository.TemplateQuery{Series: "debian"}, nil},
+		{"不认识的系", repository.TemplateQuery{Series: "Rocky"}, nil},
+		{"ApprovedOnly 时看当前的已审批版本", repository.TemplateQuery{Series: "rocky", ApprovedOnly: true}, []model.Template{moved1}},
+		{"ApprovedOnly 时的 almalinux", repository.TemplateQuery{Series: "almalinux", ApprovedOnly: true}, nil},
+		{"与名字前缀同时给", repository.TemplateQuery{Series: "rocky", NamePrefix: "ROCKY"}, []model.Template{rocky}},
 		// 存不下的系谁都没勾（store 的包说明）：当作没有，得到空的一页，不报数据库的编码错误
-		{"系含 NUL", store.TemplateQuery{Series: "rocky\x00"}, nil},
-		{"系不是 UTF-8", store.TemplateQuery{Series: "rocky\xff"}, nil},
+		{"系含 NUL", repository.TemplateQuery{Series: "rocky\x00"}, nil},
+		{"系不是 UTF-8", repository.TemplateQuery{Series: "rocky\xff"}, nil},
 	} {
 		c.q.Limit = 1 // 一条一页：翻页时过滤也要对
-		got := slices.Concat(allPages(t, func(cursor string) (store.Page[model.Template], error) {
+		got := slices.Concat(allPages(t, func(cursor string) (repository.Page[model.Template], error) {
 			c.q.Cursor = cursor
 			return s.ListTemplates(ctx, c.q)
 		})...)
@@ -440,7 +440,7 @@ func templateListSeries(t *testing.T, s *pgstore.Store) {
 	}
 }
 
-// 保存模板的任何一个版本时，仓储同时记下它引用了哪些 hook 版本（store.HookRefs）。模板的任一版本引用了某个 hook 草稿，
+// 保存模板的任何一个版本时，仓储同时记下它引用了哪些 hook 版本（repository.HookRefs）。模板的任一版本引用了某个 hook 草稿，
 // 包括模板的草稿与待审批的版本，这个草稿就删不掉（ErrReferenced，C26）；模板改掉装配表、或者模板草稿删了之后，就能删。
 // 只引用了同一个 hook 的别的版本，不挡这个版本。派生出的版本 1 也是一次保存：它照抄来源的装配表，来源引用的 hook 草稿
 // 它也引用。
@@ -458,10 +458,10 @@ func templateRefs(t *testing.T, s *pgstore.Store) {
 	lvm := hookOps.mustCreate(t, s, "LVM")
 	user := refTo("Base-1", lvm.Key())
 	before := authoredSnapshot(t, s)
-	wantIs(t, deleteHook(lvm), store.ErrReferenced, "被模板草稿引用")
+	wantIs(t, deleteHook(lvm), repository.ErrReferenced, "被模板草稿引用")
 	wantAuthoredUnchanged(t, s, before, "删除被拒时")
 	user = templateOps.to(t, s, user, model.VersionReview)
-	wantIs(t, deleteHook(lvm), store.ErrReferenced, "被待审批的模板引用")
+	wantIs(t, deleteHook(lvm), repository.ErrReferenced, "被待审批的模板引用")
 	must(t, s.RejectTemplate(ctx, model.TemplateKey{ID: user.ID, Version: 1}, user.Rev, anAudit("template.reject")), "驳回")
 	user = templateOps.mustGet(t, s, user.ID, 1)
 	user.Assembly = map[string][]model.Instance{"分区": {}}
@@ -472,7 +472,7 @@ func templateRefs(t *testing.T, s *pgstore.Store) {
 	// 模板的草稿删掉之后，它的引用也一起没了
 	nic := hookOps.mustCreate(t, s, "NIC")
 	other := refTo("Base-2", nic.Key())
-	wantIs(t, deleteHook(nic), store.ErrReferenced, "被另一个模板草稿引用")
+	wantIs(t, deleteHook(nic), repository.ErrReferenced, "被另一个模板草稿引用")
 	must(t, s.DeleteTemplateDraft(ctx, model.TemplateKey{ID: other.ID, Version: 1}, other.Rev), "删除模板草稿")
 	must(t, deleteHook(nic), "模板草稿删掉之后删除")
 
@@ -486,7 +486,7 @@ func templateRefs(t *testing.T, s *pgstore.Store) {
 	v2.Assembly = map[string][]model.Instance{"分区": {{HookID: disk2.ID, HookVersion: 2}}}
 	v2, err = s.SaveTemplateDraft(ctx, v2)
 	must(t, err, "模板版本 2 改成引用 disk@2")
-	wantIs(t, deleteHook(disk2), store.ErrReferenced, "被模板的版本 2 引用")
+	wantIs(t, deleteHook(disk2), repository.ErrReferenced, "被模板的版本 2 引用")
 	must(t, s.DeleteTemplateDraft(ctx, model.TemplateKey{ID: v2.ID, Version: 2}, v2.Rev), "删除模板版本 2")
 	must(t, deleteHook(disk2), "只剩引用 disk@1 的模板时删除 disk@2")
 
@@ -498,7 +498,7 @@ func templateRefs(t *testing.T, s *pgstore.Store) {
 	src.Assembly = map[string][]model.Instance{"分区": {}}
 	_, err = s.SaveTemplateDraft(ctx, src)
 	must(t, err, "来源改掉装配表")
-	wantIs(t, deleteHook(raid), store.ErrReferenced, "来源不再引用，派生出的草稿仍引用")
+	wantIs(t, deleteHook(raid), repository.ErrReferenced, "来源不再引用，派生出的草稿仍引用")
 	derived.Assembly = map[string][]model.Instance{"分区": {}}
 	_, err = s.SaveTemplateDraft(ctx, derived)
 	must(t, err, "派生出的草稿也改掉装配表")
@@ -513,14 +513,14 @@ type hookRef struct {
 	HookVersion     int
 }
 
-// wantRefsRecorded 直接查 template_hook_refs（接口看不到这张表）：它的行要恰好是库里每个模板版本按 store.HookRefs 算出的
+// wantRefsRecorded 直接查 template_hook_refs（接口看不到这张表）：它的行要恰好是库里每个模板版本按 repository.HookRefs 算出的
 // 引用，只记 HookID 合 model.ValidID 的（见 refRows）。经接口只有 DeleteHookDraft 读这张表，它碰得到的只有 hook 草稿；开新
 // 版本与装载内置模板记下的引用指向的都是已审批的 hook 版本，漏记了经接口查不出来（S5-8）。
 func wantRefsRecorded(t *testing.T, s *pgstore.Store, what string) {
 	t.Helper()
 	var want []hookRef
 	for _, tpl := range authoredSnapshot(t, s).Templates {
-		for _, k := range store.HookRefs(tpl) {
+		for _, k := range repository.HookRefs(tpl) {
 			if model.ValidID(k.ID) {
 				want = append(want, hookRef{tpl.ID, tpl.Version, k.ID, k.Version})
 			}
@@ -579,7 +579,7 @@ func templateCopies(t *testing.T, s *pgstore.Store) {
 	wantEqual(t, templateOps.mustGet(t, s, want.ID, 1), want, "改了新建的入参与返回值之后")
 
 	mutate(templateOps.mustGet(t, s, want.ID, 1))
-	p, err := s.ListTemplates(ctx, store.TemplateQuery{})
+	p, err := s.ListTemplates(ctx, repository.TemplateQuery{})
 	must(t, err, "列出")
 	mutate(p.Items[0])
 	vs, err := s.ListTemplateVersions(ctx, want.ID)

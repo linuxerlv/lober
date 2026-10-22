@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/lober/lober/internal/core/catalog"
+	"github.com/lober/lober/internal/domain/catalog"
 	"io"
 	"io/fs"
 	"os"

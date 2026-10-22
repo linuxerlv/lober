@@ -3,8 +3,8 @@ package console
 import (
 	"bytes"
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"log/slog"
 	"strings"
 	"testing"
@@ -28,15 +28,15 @@ func Test没有令牌一律401且未知路径404(t *testing.T) {
 }
 func Test权限使用仓储里的当前角色与禁用状态(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
-	token, u := seedHTTPUser(t, s, st, "alice", store.RoleAdmin)
-	seedHTTPUser(t, s, st, "backup", store.RoleAdmin)
+	token, u := seedHTTPUser(t, s, st, "alice", model.RoleAdmin)
+	seedHTTPUser(t, s, st, "backup", model.RoleAdmin)
 	s.server.installRoutes(s, []route{{method: "GET", path: "/console/v1/probe", perm: PermUserManage, tag: "probe", summary: "Protected probe", handle: func(c *gin.Context) { Ok(c, "allowed") }}})
 	if w := httpCall(s, "GET", "/console/v1/probe", "", token); w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
-	u.Role = store.RoleViewer
+	u.Role = model.RoleViewer
 	var err error
-	u, err = st.UpdateUser(t.Context(), u, store.Audit{Actor: "test", Action: "user.update", At: fixedAt})
+	u, err = st.UpdateUser(t.Context(), u, repository.Audit{Actor: "test", Action: "user.update", At: fixedAt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func Test权限使用仓储里的当前角色与禁用状态(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 	u.Disabled = true
-	_, err = st.UpdateUser(t.Context(), u, store.Audit{Actor: "test", Action: "user.update", At: fixedAt})
+	_, err = st.UpdateUser(t.Context(), u, repository.Audit{Actor: "test", Action: "user.update", At: fixedAt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,9 +54,9 @@ func Test权限使用仓储里的当前角色与禁用状态(t *testing.T) {
 }
 func Test审计取当前用户路由动作与注入时钟(t *testing.T) {
 	s, st, now := newHTTPServer(t)
-	token, _ := seedHTTPUser(t, s, st, "alice", store.RoleAdmin)
+	token, _ := seedHTTPUser(t, s, st, "alice", model.RoleAdmin)
 	now.Store(fixedAt + 42)
-	var got store.Audit
+	var got repository.Audit
 	s.server.installRoutes(s, []route{{method: "POST", path: "/console/v1/probe", perm: PermUserManage, audit: "probe.write", tag: "probe", summary: "Audited probe", handle: func(c *gin.Context) { got = s.server.auditFrom(c, "reason"); Ok(c, nil) }}})
 	if w := httpCall(s, "POST", "/console/v1/probe", "", token); w.Code != 200 {
 		t.Fatal(w.Body.String())
@@ -70,7 +70,7 @@ func Test审计取当前用户路由动作与注入时钟(t *testing.T) {
 }
 func TestPanic兜底回500且不泄露令牌(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
-	token, _ := seedHTTPUser(t, s, st, "alice", store.RoleViewer)
+	token, _ := seedHTTPUser(t, s, st, "alice", model.RoleViewer)
 	var log bytes.Buffer
 	s.server.logger = slog.New(slog.NewTextHandler(&log, nil))
 	s.server.installRoutes(s, []route{{method: "GET", path: "/console/v1/panic", perm: PermAnyUser, tag: "probe", summary: "Panic probe", handle: func(c *gin.Context) { panic("secret-value") }}})
@@ -81,7 +81,7 @@ func TestPanic兜底回500且不泄露令牌(t *testing.T) {
 }
 func Test查询令牌只允许SSE且Authorization优先(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
-	token, _ := seedHTTPUser(t, s, st, "alice", store.RoleViewer)
+	token, _ := seedHTTPUser(t, s, st, "alice", model.RoleViewer)
 	s.server.installRoutes(s, []route{{method: "GET", path: "/console/v1/probe/sse/:id", perm: PermTaskRead, tag: "probe", summary: "Stream probe", stream: true, handle: func(c *gin.Context) { Ok(c, true) }}})
 	s.server.installRoutes(s, []route{{method: "GET", path: "/console/v1/probe/stream", perm: PermAnyUser, tag: "probe", summary: "Not an SSE route", handle: func(c *gin.Context) { Ok(c, true) }}})
 	if w := httpCall(s, "GET", "/console/v1/user/info?access_token="+token, "", ""); w.Code != 401 {

@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/activation"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/core/snapshot"
+	"github.com/lober/lober/internal/domain/activation"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/snapshot"
 )
 
 // Valid authors may name a hostname parameter freely or write a literal.

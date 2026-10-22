@@ -2,11 +2,12 @@ package iso
 
 import (
 	"context"
+	"github.com/lober/lober/internal/domain/model"
 	"net"
 	"net/netip"
 	"sync"
 
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // Dirs are injected by the assembly point, never read from environment variables.
@@ -20,7 +21,7 @@ type Dirs struct {
 
 // Sources implements the caller-owned acquisition interface. It owns no workers.
 type Sources struct {
-	store       store.Store
+	store       repository.Store
 	dirs        Dirs
 	fileLocks   sync.Map
 	active      sync.Map
@@ -28,7 +29,7 @@ type Sources struct {
 	dialContext func(context.Context, string, string) (net.Conn, error)
 }
 
-func New(st store.Store, d Dirs) *Sources {
+func New(st repository.Store, d Dirs) *Sources {
 	d.LocalRoots = append([]string(nil), d.LocalRoots...)
 	return &Sources{store: st, dirs: d, resolver: func(ctx context.Context, host string) ([]netip.Addr, error) {
 		return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
@@ -58,11 +59,11 @@ func (s *Sources) FetchOne(ctx context.Context, id, role string) (err error) {
 	if err != nil {
 		return err
 	}
-	if src.State == store.SourceFetched {
+	if src.State == model.SourceFetched {
 		return nil
 	}
-	if src.Kind == store.SourceUpload || src.State != store.SourcePending && src.State != store.SourceFetching {
-		return store.ErrConflict
+	if src.Kind == model.SourceUpload || src.State != model.SourcePending && src.State != model.SourceFetching {
+		return repository.ErrConflict
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -75,15 +76,15 @@ func (s *Sources) FetchOne(ctx context.Context, id, role string) (err error) {
 	if err != nil {
 		return err
 	}
-	if src.State == store.SourcePending {
-		src.State = store.SourceFetching
-		src, err = s.store.SaveSource(ctx, src, store.Audit{})
+	if src.State == model.SourcePending {
+		src.State = model.SourceFetching
+		src, err = s.store.SaveSource(ctx, src, repository.Audit{})
 		if err != nil {
 			return err
 		}
 	}
-	if src.State != store.SourceFetching {
-		return store.ErrConflict
+	if src.State != model.SourceFetching {
+		return repository.ErrConflict
 	}
 	defer func() {
 		if err != nil {
@@ -91,12 +92,12 @@ func (s *Sources) FetchOne(ctx context.Context, id, role string) (err error) {
 		}
 	}()
 	switch src.Kind {
-	case store.SourceRemote:
+	case model.SourceRemote:
 		err = s.fetchRemote(ctx, src)
-	case store.SourceLocal:
+	case model.SourceLocal:
 		err = s.fetchLocal(ctx, src)
 	default:
-		err = store.ErrInvalid
+		err = repository.ErrInvalid
 	}
 	return err
 }

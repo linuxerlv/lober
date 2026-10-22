@@ -11,15 +11,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/core/params"
-	"github.com/lober/lober/internal/core/snapshot"
-	"github.com/lober/lober/internal/render"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/params"
+	"github.com/lober/lober/internal/domain/render"
+	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/domain/snapshot"
 )
 
-func previewFixture(t *testing.T, st store.Store) (model.Template, model.Hook) {
+func previewFixture(t *testing.T, st repository.Store) (model.Template, model.Hook) {
 	t.Helper()
 	h, err := st.CreateHook(t.Context(), model.Hook{Name: "preview-script", Author: "admin", TimeoutSec: 30, Required: true, Params: []model.ParamDecl{{Name: "msg", Type: "word", Default: "hook-default"}}, Impls: []model.Impl{{Family: "linux", Series: []catalog.Series{"rocky"}, Kind: model.ImplScript, Interpreter: "sh", Timings: []catalog.Timing{"post-target"}, Body: "#!/bin/sh\nprintf '%s\\n' \"$LOBER_PARAM_MSG\"\n"}}})
 	if err != nil {
@@ -83,10 +83,10 @@ func Test预览实物身份无回退与不写任务审计(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateHost(t.Context(), model.Host{SN: "SN-1", Arch: "x86_64", Firmware: "bios"}, store.Audit{Actor: "seed", Action: "host.create", At: fixedAt}); err != nil {
+	if _, err := st.CreateHost(t.Context(), model.Host{SN: "SN-1", Arch: "x86_64", Firmware: "bios"}, repository.Audit{Actor: "seed", Action: "host.create", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	p := responseData[previewResponse](t, httpCall(s, "POST", previewPath(tpl), fmt.Sprintf(`{"isoID":%q,"hostSN":"sn-1","firmware":"uefi"}`, item.ID), token))
 	if slices.Contains(p.Sample, "ISO") || slices.Contains(p.Sample, "主机") || !slices.Contains(p.Sample, "token") {
 		t.Fatal(p.Sample)
@@ -100,8 +100,8 @@ func Test预览实物身份无回退与不写任务审计(t *testing.T) {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
-	after, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
-	tasks, err := st.ListTasks(t.Context(), store.TaskQuery{})
+	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+	tasks, err := st.ListTasks(t.Context(), repository.TaskQuery{})
 	if err != nil || len(tasks.Items) != 0 || len(before.Items) != len(after.Items) {
 		t.Fatal("preview wrote data", err)
 	}
@@ -124,7 +124,7 @@ func Test预览输入问题不返回半截文件(t *testing.T) {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
-	h, err := st.GetHook(t.Context(), store.HookRefs(tpl)[0])
+	h, err := st.GetHook(t.Context(), repository.HookRefs(tpl)[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func Test预览实际内置模板的全部已声明系(t *testing.T) {
 				}
 				continue
 			}
-			hooks, err := st.GetHooks(t.Context(), store.HookRefs(tpl))
+			hooks, err := st.GetHooks(t.Context(), repository.HookRefs(tpl))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -291,7 +291,7 @@ func Test预览实际内置模板的全部已声明系(t *testing.T) {
 func Test预览与插槽对五角色都是只读权限(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	tpl, _ := previewFixture(t, st)
-	for i, role := range store.Roles() {
+	for i, role := range model.Roles() {
 		name := fmt.Sprintf("preview%d", i)
 		seedAuthUser(t, st, name, role, "pw")
 		token := loginHTTP(t, s, name, "pw").Token

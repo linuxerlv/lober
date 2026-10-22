@@ -3,26 +3,27 @@ package pgstore
 import (
 	"context"
 	"errors"
+	"github.com/lober/lober/internal/infrastructure/identity"
 	"reflect"
 	"slices"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // hookContentColumns 是保存草稿写的列：内容整条替换，改成零值的也照写；名字、状态、作者、审批人与内置标记由仓储管。
 var hookContentColumns = []string{"description", "params", "timeout_sec", "required", "impls", "rev"}
 
-// CreateHook 见 store.Hooks。名字撞了由唯一索引 idx_hooks_name_key 报出来，不先查：先查再插，两次同时新建就都查不到。
+// CreateHook 见 repository.Hooks。名字撞了由唯一索引 idx_hooks_name_key 报出来，不先查：先查再插，两次同时新建就都查不到。
 func (s *Store) CreateHook(ctx context.Context, h model.Hook) (model.Hook, error) {
-	name, key, err := store.CheckNewHook(h)
+	name, key, err := repository.CheckNewHook(h)
 	if err != nil {
 		return model.Hook{}, err
 	}
-	h.ID, h.Version, h.Name, h.State, h.Rev = store.NewID(), 1, name, model.VersionDraft, 1
+	h.ID, h.Version, h.Name, h.State, h.Rev = identity.NewID(), 1, name, model.VersionDraft, 1
 	row, err := toHookVersionRow(h)
 	if err != nil {
 		return model.Hook{}, err
@@ -39,10 +40,10 @@ func (s *Store) CreateHook(ctx context.Context, h model.Hook) (model.Hook, error
 	return row.hook()
 }
 
-// SaveHookDraft 见 store.Hooks。保存替换的是内容；名字、状态、作者、审批人与内置标记由仓储管，带来的与库里的不同报
-// ErrInvalid（store.CheckSameMeta）。
+// SaveHookDraft 见 repository.Hooks。保存替换的是内容；名字、状态、作者、审批人与内置标记由仓储管，带来的与库里的不同报
+// ErrInvalid（repository.CheckSameMeta）。
 func (s *Store) SaveHookDraft(ctx context.Context, h model.Hook) (model.Hook, error) {
-	if err := store.CheckHookDraft(h); err != nil {
+	if err := repository.CheckHookDraft(h); err != nil {
 		return model.Hook{}, err
 	}
 	var row hookVersionRow
@@ -51,11 +52,11 @@ func (s *Store) SaveHookDraft(ctx context.Context, h model.Hook) (model.Hook, er
 		if err != nil {
 			return err
 		}
-		what := "hook " + store.VersionID(h.ID, h.Version)
-		if err := store.CheckDraft(what, old.meta()); err != nil {
+		what := "hook " + repository.VersionID(h.ID, h.Version)
+		if err := repository.CheckDraft(what, old.meta()); err != nil {
 			return err
 		}
-		if err := store.CheckSameMeta(what, old.meta(), store.HookMeta(h)); err != nil {
+		if err := repository.CheckSameMeta(what, old.meta(), repository.HookMeta(h)); err != nil {
 			return err
 		}
 		h.Rev = old.Rev + 1
@@ -70,12 +71,12 @@ func (s *Store) SaveHookDraft(ctx context.Context, h model.Hook) (model.Hook, er
 	return row.hook()
 }
 
-// NewHookVersion 见 store.Hooks。新版本的号由 allocVersion 分配，删掉的草稿的号不再发。
+// NewHookVersion 见 repository.Hooks。新版本的号由 allocVersion 分配，删掉的草稿的号不再发。
 func (s *Store) NewHookVersion(ctx context.Context, id string, from int, author string) (model.Hook, error) {
-	if err := store.CheckVersionKey(id, from); err != nil {
+	if err := repository.CheckVersionKey(id, from); err != nil {
 		return model.Hook{}, err
 	}
-	if err := store.CheckAuthor(author); err != nil {
+	if err := repository.CheckAuthor(author); err != nil {
 		return model.Hook{}, err
 	}
 	var row hookVersionRow
@@ -89,7 +90,7 @@ func (s *Store) NewHookVersion(ctx context.Context, id string, from int, author 
 		case err != nil:
 			return err
 		case !ok:
-			return errorf(store.ErrNotFound, "hook %s 没有版本 %d", id, from)
+			return errorf(repository.ErrNotFound, "hook %s 没有版本 %d", id, from)
 		}
 		next, err := hookTables.allocVersion(tx, x)
 		if err != nil {
@@ -105,24 +106,24 @@ func (s *Store) NewHookVersion(ctx context.Context, id string, from int, author 
 	return row.hook()
 }
 
-// SubmitHook 见 store.Hooks。
-func (s *Store) SubmitHook(ctx context.Context, k model.HookKey, rev int64, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+// SubmitHook 见 repository.Hooks。
+func (s *Store) SubmitHook(ctx context.Context, k model.HookKey, rev int64, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
 	return s.hookStep(ctx, k, rev, a, model.VersionDraft, model.VersionReview, nil)
 }
 
-// ApproveHook 见 store.Hooks。重跑的判定看的是锁住之后读到的版本（store.ApproveHookProblems）。
-func (s *Store) ApproveHook(ctx context.Context, k model.HookKey, rev int64, approver string, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+// ApproveHook 见 repository.Hooks。重跑的判定看的是锁住之后读到的版本（repository.ApproveHookProblems）。
+func (s *Store) ApproveHook(ctx context.Context, k model.HookKey, rev int64, approver string, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
-	if err := store.CheckApprover(approver); err != nil {
+	if err := repository.CheckApprover(approver); err != nil {
 		return err
 	}
 	return s.hookStep(ctx, k, rev, a, model.VersionReview, model.VersionApproved, func(h *model.Hook) error {
-		if err := store.ApproveHookProblems(*h, approver); err != nil {
+		if err := repository.ApproveHookProblems(*h, approver); err != nil {
 			return err
 		}
 		h.Approver = approver
@@ -130,18 +131,18 @@ func (s *Store) ApproveHook(ctx context.Context, k model.HookKey, rev int64, app
 	})
 }
 
-// RejectHook 见 store.Hooks。
-func (s *Store) RejectHook(ctx context.Context, k model.HookKey, rev int64, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+// RejectHook 见 repository.Hooks。
+func (s *Store) RejectHook(ctx context.Context, k model.HookKey, rev int64, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
 	return s.hookStep(ctx, k, rev, a, model.VersionReview, model.VersionDraft, nil)
 }
 
-// DeprecateHook 见 store.Hooks。内置的版本也不能废弃：内置内容只读（C25）。正在审批的模板对这个版本加了读锁，废弃要等
+// DeprecateHook 见 repository.Hooks。内置的版本也不能废弃：内置内容只读（C25）。正在审批的模板对这个版本加了读锁，废弃要等
 // 那次审批提交（ApproveTemplate）。
-func (s *Store) DeprecateHook(ctx context.Context, k model.HookKey, rev int64, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+func (s *Store) DeprecateHook(ctx context.Context, k model.HookKey, rev int64, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
 	return s.hookStep(ctx, k, rev, a, model.VersionApproved, model.VersionDeprecated, nil)
@@ -149,9 +150,9 @@ func (s *Store) DeprecateHook(ctx context.Context, k model.HookKey, rev int64, a
 
 // hookStep 把版本 k 从 from 转到 to，审计已由调用方查过。先给版本行加写锁，再依次查 Rev、内置与状态；apply 非空时在
 // 转换之前对锁住之后读到的版本跑它，返回错误就什么都不写（审批的重跑判定）。审计写在转换之后，写失败时整个事务回滚。
-func (s *Store) hookStep(ctx context.Context, k model.HookKey, rev int64, a store.Audit, from, to model.VersionState,
+func (s *Store) hookStep(ctx context.Context, k model.HookKey, rev int64, a repository.Audit, from, to model.VersionState,
 	apply func(h *model.Hook) error) error {
-	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
+	if err := repository.CheckVersionKey(k.ID, k.Version); err != nil {
 		return err
 	}
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -159,8 +160,8 @@ func (s *Store) hookStep(ctx context.Context, k model.HookKey, rev int64, a stor
 		if err != nil {
 			return err
 		}
-		target := store.VersionID(k.ID, k.Version)
-		if err := store.CheckStep("hook "+target, row.meta(), from); err != nil {
+		target := repository.VersionID(k.ID, k.Version)
+		if err := repository.CheckStep("hook "+target, row.meta(), from); err != nil {
 			return err
 		}
 		if apply != nil {
@@ -182,25 +183,25 @@ func (s *Store) hookStep(ctx context.Context, k model.HookKey, rev int64, a stor
 	return translate(err, false, nil)
 }
 
-// RenameHook 见 store.Hooks。名字走用户的入口（store.NormalizeName），用了保留前缀报 name_reserved。
-func (s *Store) RenameHook(ctx context.Context, id, name string, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+// RenameHook 见 repository.Hooks。名字走用户的入口（repository.NormalizeName），用了保留前缀报 name_reserved。
+func (s *Store) RenameHook(ctx context.Context, id, name string, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
-	if err := store.CheckID(id); err != nil {
+	if err := repository.CheckID(id); err != nil {
 		return err
 	}
-	display, key, ps := store.NormalizeName(name, model.Subject{Kind: "hook", ID: id})
+	display, key, ps := repository.NormalizeName(name, model.Subject{Kind: "hook", ID: id})
 	if len(ps) > 0 {
-		return &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
+		return &repository.ProblemsError{Kind: repository.ErrInvalid, Problems: ps}
 	}
 	return s.rename(ctx, hookTables, id, display, key, a)
 }
 
-// DeleteHookDraft 见 store.Hooks。先锁身份、再锁版本，次序与别的写入一致：删的是最后一个版本时要连身份一起删，同时
+// DeleteHookDraft 见 repository.Hooks。先锁身份、再锁版本，次序与别的写入一致：删的是最后一个版本时要连身份一起删，同时
 // 给这个身份开新版本的那一次排在后面。引用查的是 template_hook_refs，它由保存模板的各个版本时维护。
 func (s *Store) DeleteHookDraft(ctx context.Context, k model.HookKey, rev int64) error {
-	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
+	if err := repository.CheckVersionKey(k.ID, k.Version); err != nil {
 		return err
 	}
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -214,8 +215,8 @@ func (s *Store) DeleteHookDraft(ctx context.Context, k model.HookKey, rev int64)
 		if err != nil {
 			return err
 		}
-		what := "hook " + store.VersionID(k.ID, k.Version)
-		if err := store.CheckDraft(what, row.meta()); err != nil {
+		what := "hook " + repository.VersionID(k.ID, k.Version)
+		if err := repository.CheckDraft(what, row.meta()); err != nil {
 			return err
 		}
 		var by []templateHookRefRow
@@ -225,7 +226,7 @@ func (s *Store) DeleteHookDraft(ctx context.Context, k model.HookKey, rev int64)
 		case err != nil:
 			return err
 		case len(by) > 0: // 报按键排在最前的那一个，说法每次都一样
-			return &store.ReferencedError{References: []model.Subject{{Kind: model.KindTemplate, ID: store.VersionID(by[0].TemplateID, by[0].TemplateVersion)}}}
+			return &repository.ReferencedError{References: []model.Subject{{Kind: model.KindTemplate, ID: repository.VersionID(by[0].TemplateID, by[0].TemplateVersion)}}}
 		}
 		if err := tx.Delete(&hookVersionRow{HookID: k.ID, Version: k.Version}).Error; err != nil {
 			return err
@@ -235,9 +236,9 @@ func (s *Store) DeleteHookDraft(ctx context.Context, k model.HookKey, rev int64)
 	return translate(err, true, nil)
 }
 
-// GetHook 见 store.Hooks。
+// GetHook 见 repository.Hooks。
 func (s *Store) GetHook(ctx context.Context, k model.HookKey) (model.Hook, error) {
-	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
+	if err := repository.CheckVersionKey(k.ID, k.Version); err != nil {
 		return model.Hook{}, err
 	}
 	row, ok, err := hookVersionAt(s.read(ctx), k)
@@ -250,10 +251,10 @@ func (s *Store) GetHook(ctx context.Context, k model.HookKey) (model.Hook, error
 	return row.hook()
 }
 
-// GetHooks 见 store.Hooks。键先全部查过格式，有一个不合就报 ErrInvalid，不当成找不到。
+// GetHooks 见 repository.Hooks。键先全部查过格式，有一个不合就报 ErrInvalid，不当成找不到。
 func (s *Store) GetHooks(ctx context.Context, ks []model.HookKey) (map[model.HookKey]model.Hook, error) {
 	for _, k := range ks {
-		if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
+		if err := repository.CheckVersionKey(k.ID, k.Version); err != nil {
 			return nil, err
 		}
 	}
@@ -274,9 +275,9 @@ func (s *Store) GetHooks(ctx context.Context, ks []model.HookKey) (map[model.Hoo
 	return out, nil
 }
 
-// ListHookVersions 见 store.Hooks。身份至少有一个版本（删掉最后一个版本时身份一起删掉），一个都没取到就是身份不存在。
+// ListHookVersions 见 repository.Hooks。身份至少有一个版本（删掉最后一个版本时身份一起删掉），一个都没取到就是身份不存在。
 func (s *Store) ListHookVersions(ctx context.Context, id string) ([]model.Hook, error) {
-	if err := store.CheckID(id); err != nil {
+	if err := repository.CheckID(id); err != nil {
 		return nil, err
 	}
 	var rows []hookVersionRow
@@ -285,7 +286,7 @@ func (s *Store) ListHookVersions(ctx context.Context, id string) ([]model.Hook, 
 		return nil, err
 	}
 	if len(rows) == 0 {
-		return nil, errorf(store.ErrNotFound, "hook %s 不存在", id)
+		return nil, errorf(repository.ErrNotFound, "hook %s 不存在", id)
 	}
 	out := make([]model.Hook, len(rows))
 	for i, r := range rows {
@@ -298,37 +299,37 @@ func (s *Store) ListHookVersions(ctx context.Context, id string) ([]model.Hook, 
 	return out, nil
 }
 
-// ListHooks 见 store.Hooks，条件、排序与游标见 listQuery。
-func (s *Store) ListHooks(ctx context.Context, q store.HookQuery) (store.Page[model.Hook], error) {
+// ListHooks 见 repository.Hooks，条件、排序与游标见 listQuery。
+func (s *Store) ListHooks(ctx context.Context, q repository.HookQuery) (repository.Page[model.Hook], error) {
 	db, limit, err := hookTables.listQuery(s.read(ctx), q.Cursor, q.Limit, q.NamePrefix, q.States, q.ApprovedOnly)
 	switch {
 	case err != nil:
-		return store.Page[model.Hook]{}, err
+		return repository.Page[model.Hook]{}, err
 	case db == nil:
 		return emptyPage[model.Hook](), nil
 	}
 	var rows []hookVersionRow
 	if err := db.Find(&rows).Error; err != nil {
-		return store.Page[model.Hook]{}, err
+		return repository.Page[model.Hook]{}, err
 	}
 	return page(rows, limit, hookVersionRow.hook, func(r hookVersionRow) string {
-		return store.EncodeCursor(hookTables.idents, r.NameKey, r.HookID)
+		return repository.EncodeCursor(hookTables.idents, r.NameKey, r.HookID)
 	})
 }
 
-// EnsureBuiltinHook 见 store.Hooks。比的是版本的全部字段，名字按身份上的，Rev 不比：内置的版本写入之后不会再变。名字
-// 走内置装载的入口（store.CheckBuiltinHook），必须带保留前缀；名字随身份定下，见 ensureBuiltinIdent。名字被别的身份
+// EnsureBuiltinHook 见 repository.Hooks。比的是版本的全部字段，名字按身份上的，Rev 不比：内置的版本写入之后不会再变。名字
+// 走内置装载的入口（repository.CheckBuiltinHook），必须带保留前缀；名字随身份定下，见 ensureBuiltinIdent。名字被别的身份
 // 占着由 ensureBuiltinIdent 在事务里查出来，报 DuplicateError：装载撞不上名字的唯一索引，translate 不用 holder。
 //
 // 先确定并锁住身份（ensureBuiltinIdent），锁住之后才查版本：两路同时装载同一个版本时，后到的一路等先到的一路提交，看得到
 // 它写下的版本，内容相同就什么都不做。先查版本再锁身份的话，后到的一路看不到对方还没提交的版本，会去建同一个身份或写
 // 同一个版本，撞上主键。这个次序只在 READ COMMITTED 下成立（见 write）。
 func (s *Store) EnsureBuiltinHook(ctx context.Context, h model.Hook) error {
-	key, err := store.CheckBuiltinHook(h)
+	key, err := repository.CheckBuiltinHook(h)
 	if err != nil {
 		return err
 	}
-	id := store.VersionID(h.ID, h.Version)
+	id := repository.VersionID(h.ID, h.Version)
 	h.Rev = 1
 	row, err := toHookVersionRow(h)
 	if err != nil {
@@ -350,7 +351,7 @@ func (s *Store) EnsureBuiltinHook(ctx context.Context, h model.Hook) error {
 			return err
 		}
 		if !reflect.DeepEqual(cur, h) {
-			return errorf(store.ErrBuiltinMismatch, "内置的 hook %s 与库里的同一版本不同：改了内置内容就要升版本号", id)
+			return errorf(repository.ErrBuiltinMismatch, "内置的 hook %s 与库里的同一版本不同：改了内置内容就要升版本号", id)
 		}
 		return nil
 	})
@@ -384,7 +385,7 @@ func lockHookVersion(tx *gorm.DB, k model.HookKey, rev int64) (hookVersionRow, e
 	case err != nil:
 		return hookVersionRow{}, err
 	case row.Rev != rev:
-		return hookVersionRow{}, staleRev("hook "+store.VersionID(k.ID, k.Version), row.Rev, rev)
+		return hookVersionRow{}, staleRev("hook "+repository.VersionID(k.ID, k.Version), row.Rev, rev)
 	}
 	return row, nil
 }
@@ -406,10 +407,10 @@ func hookVersionsIn(db *gorm.DB, ks []model.HookKey, lock ...clause.Expression) 
 }
 
 func hookNotFound(k model.HookKey) error {
-	return errorf(store.ErrNotFound, "hook %s 不存在", store.VersionID(k.ID, k.Version))
+	return errorf(repository.ErrNotFound, "hook %s 不存在", repository.VersionID(k.ID, k.Version))
 }
 
-// 下面是 hook 与模板共用的部分：hook 与模板的身份、版本与名字规则一一对应（store.Templates 的说明），表也一一对应。入参
+// 下面是 hook 与模板共用的部分：hook 与模板的身份、版本与名字规则一一对应（repository.Templates 的说明），表也一一对应。入参
 // 与版本状态的检查不用查库就能定下，放在 store 包（check_authoring.go）；这里只有身份表与版本表怎么读写。
 
 // versioning 是 hook 或模板的身份表与版本表，共用的读写按它取表名。表名都是常量，拼进 SQL 也不会有注入。
@@ -469,9 +470,9 @@ func (v versioning) lockForNewVersion(tx *gorm.DB, id string) (ident, error) {
 	case err != nil:
 		return ident{}, err
 	case !ok:
-		return ident{}, errorf(store.ErrNotFound, "%s %s 不存在", v.kind, id)
+		return ident{}, errorf(repository.ErrNotFound, "%s %s 不存在", v.kind, id)
 	case x.Builtin:
-		return ident{}, errorf(store.ErrImmutable, "%s %s 是内置的，不能开新版本", v.kind, id)
+		return ident{}, errorf(repository.ErrImmutable, "%s %s 是内置的，不能开新版本", v.kind, id)
 	}
 	return x, nil
 }
@@ -486,7 +487,7 @@ func (v versioning) allocVersion(tx *gorm.DB, x ident) (int, error) {
 	case err != nil:
 		return 0, err
 	case len(pending) > 0:
-		return 0, errorf(store.ErrConflict, "%s %s 已有未审批的版本 %d：先审批、驳回或删掉它", v.kind, x.ID, pending[0])
+		return 0, errorf(repository.ErrConflict, "%s %s 已有未审批的版本 %d：先审批、驳回或删掉它", v.kind, x.ID, pending[0])
 	}
 	next := x.LastVersion + 1
 	return next, tx.Table(v.idents).Where("id = ?", x.ID).Update("last_version", next).Error
@@ -530,11 +531,11 @@ func (v versioning) ensureBuiltinIdent(tx *gorm.DB, id string, version int, name
 		case err != nil:
 			return err
 		case holder == "":
-			return errorf(store.ErrConflict, "装载内置的 %s %s 时撞上的身份已经变了：重读之后再判断", v.kind, id)
+			return errorf(repository.ErrConflict, "装载内置的 %s %s 时撞上的身份已经变了：重读之后再判断", v.kind, id)
 		}
-		return &store.DuplicateError{Field: "name", Existing: holder}
+		return &repository.DuplicateError{Field: "name", Existing: holder}
 	case !x.Builtin || x.Name != name:
-		return errorf(store.ErrBuiltinMismatch, "%s %s 在库里名为 %q（内置：%v），程序自带的是内置的 %q", v.kind, id, x.Name, x.Builtin, name)
+		return errorf(repository.ErrBuiltinMismatch, "%s %s 在库里名为 %q（内置：%v），程序自带的是内置的 %q", v.kind, id, x.Name, x.Builtin, name)
 	case version > x.LastVersion:
 		return tx.Table(v.idents).Where("id = ?", id).Update("last_version", version).Error
 	}
@@ -543,15 +544,15 @@ func (v versioning) ensureBuiltinIdent(tx *gorm.DB, id string, version int, name
 
 // rename 给身份 id 改名，hook 与模板相同：不存在报 ErrNotFound，内置的报 ErrImmutable，名字被别的身份占了由唯一索引报
 // 出来，翻成 DuplicateError。只改大小写时 key 还是自己的，撞不上。名字只在身份上，版本那几行没改，它们的 Rev 不变。
-func (s *Store) rename(ctx context.Context, v versioning, id, name, key string, a store.Audit) error {
+func (s *Store) rename(ctx context.Context, v versioning, id, name, key string, a repository.Audit) error {
 	err := s.write(ctx, func(tx *gorm.DB) error {
 		switch x, ok, err := v.lockIdent(tx, id); {
 		case err != nil:
 			return err
 		case !ok:
-			return errorf(store.ErrNotFound, "%s %s 不存在", v.kind, id)
+			return errorf(repository.ErrNotFound, "%s %s 不存在", v.kind, id)
 		case x.Builtin:
-			return errorf(store.ErrImmutable, "%s %s 是内置的，不能改名", v.kind, id)
+			return errorf(repository.ErrImmutable, "%s %s 是内置的，不能改名", v.kind, id)
 		}
 		if err := tx.Table(v.idents).Where("id = ?", id).Updates(map[string]any{"name": name, "name_key": key}).Error; err != nil {
 			return err
@@ -584,17 +585,17 @@ func (v versioning) nameOwner(db *gorm.DB, key string) (string, error) {
 
 // listQuery 查 ListHooks 与 ListTemplates 的入参，给出取一页的查询（多取一条）与条数。每个身份一项：默认是最新的版本，
 // approvedOnly 时是当前的已审批版本，规则同 model.CurrentApproved（已审批的最高版本），没有就跳过；状态的过滤看的是选出
-// 的那一项。名字的前缀按 store.NameKeyPrefix 转了再与名字的 key 比；starts_with 按原样比，_、% 与反斜杠不必转义。按名字的
+// 的那一项。名字的前缀按 repository.NameKeyPrefix 转了再与名字的 key 比；starts_with 按原样比，_、% 与反斜杠不必转义。按名字的
 // key、再按 ID 的字节序排，游标是上一页最后一项的这两样。条件存不下时查询为 nil：什么都匹配不上。
 func (v versioning) listQuery(db *gorm.DB, cursor string, limit int, prefix string, states []model.VersionState,
 	approvedOnly bool) (*gorm.DB, int, error) {
-	n, err := store.CheckQuery(cursor, limit)
+	n, err := repository.CheckQuery(cursor, limit)
 	if err != nil {
 		return nil, 0, err
 	}
 	var afterKey, afterID string
 	if cursor != "" {
-		if err := store.DecodeCursor(cursor, v.idents, &afterKey, &afterID); err != nil {
+		if err := repository.DecodeCursor(cursor, v.idents, &afterKey, &afterID); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -613,7 +614,7 @@ func (v versioning) listQuery(db *gorm.DB, cursor string, limit int, prefix stri
 	}
 	db = v.joined(db).Where(v.versions + ".version = (" + pick + ")")
 	if prefix != "" {
-		db = db.Where("starts_with("+v.idents+".name_key, ?)", store.NameKeyPrefix(prefix))
+		db = db.Where("starts_with("+v.idents+".name_key, ?)", repository.NameKeyPrefix(prefix))
 	}
 	if len(keep) > 0 {
 		db = db.Where(v.versions+".state IN ?", keep)

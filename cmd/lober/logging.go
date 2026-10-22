@@ -5,13 +5,13 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 )
 
 type loggingStore struct {
-	store.Store
+	repository.Store
 	logger *slog.Logger
 }
 
@@ -25,25 +25,25 @@ func (l *loggingStore) log(op string, start time.Time, err error) {
 	}
 	l.logger.Debug("仓储调用", "operation", op, "duration", time.Since(start))
 }
-func (l *loggingStore) CreateHost(ctx context.Context, h model.Host, a store.Audit) (model.Host, error) {
+func (l *loggingStore) CreateHost(ctx context.Context, h model.Host, a repository.Audit) (model.Host, error) {
 	start := time.Now()
 	got, err := l.Store.CreateHost(ctx, h, a)
 	l.log("host.create", start, err)
 	return got, err
 }
-func (l *loggingStore) CreateTasks(ctx context.Context, tasks []model.Task, a store.Audit) ([]model.Task, error) {
+func (l *loggingStore) CreateTasks(ctx context.Context, tasks []model.Task, a repository.Audit) ([]model.Task, error) {
 	start := time.Now()
 	got, err := l.Store.CreateTasks(ctx, tasks, a)
 	l.log("task.create", start, err)
 	return got, err
 }
-func (l *loggingStore) CreateCurrentTasks(ctx context.Context, tasks []model.Task, a store.Audit) ([]model.Task, error) {
+func (l *loggingStore) CreateCurrentTasks(ctx context.Context, tasks []model.Task, a repository.Audit) ([]model.Task, error) {
 	start := time.Now()
 	got, err := l.Store.CreateCurrentTasks(ctx, tasks, a)
 	l.log("task.create", start, err)
 	return got, err
 }
-func (l *loggingStore) TransitionTask(ctx context.Context, id string, expect store.TaskExpect, to model.TaskState, events []store.NewEvent) (model.Task, []store.Appended, error) {
+func (l *loggingStore) TransitionTask(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState, events []repository.NewEvent) (model.Task, []repository.Appended, error) {
 	start := time.Now()
 	got, appended, err := l.Store.TransitionTask(ctx, id, expect, to, events)
 	l.log("task.transition", start, err)

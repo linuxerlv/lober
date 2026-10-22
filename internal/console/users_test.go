@@ -4,18 +4,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"testing"
 )
 
-func adminHTTP(t *testing.T, s *Server, st store.Users) string {
+func adminHTTP(t *testing.T, s *Server, st repository.Users) string {
 	t.Helper()
-	seedAuthUser(t, st, "admin", store.RoleAdmin, "admin password")
+	seedAuthUser(t, st, "admin", model.RoleAdmin, "admin password")
 	return loginHTTP(t, s, "admin", "admin password").Token
 }
 func Test用户管理全部路由权限矩阵(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
-	for i, role := range store.Roles() {
+	for i, role := range model.Roles() {
 		name := fmt.Sprintf("u%d", i)
 		seedAuthUser(t, st, name, role, "pw")
 		token := loginHTTP(t, s, name, "pw").Token
@@ -28,7 +29,7 @@ func Test用户管理全部路由权限矩阵(t *testing.T) {
 				path = "/console/v1/users/missing"
 			}
 			w := httpCall(s, rt.Method, path, `{}`, token)
-			if role == store.RoleAdmin {
+			if role == model.RoleAdmin {
 				if w.Code == 401 || w.Code == 403 {
 					t.Fatal(role, rt, w.Code)
 				}
@@ -75,7 +76,7 @@ func Test用户HTTP创建修改禁用恢复与审计(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 	loginHTTP(t, s, "bob", "replacement")
-	entries, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	entries, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +101,7 @@ func Test用户HTTP拒绝坏请求陈旧版本与自己禁用(t *testing.T) {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
-	if _, err := st.GetUser(t.Context(), "bob"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.GetUser(t.Context(), "bob"); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatal("invalid write persisted")
 	}
 	for _, path := range []string{"/console/v1/users?limit=bad", "/console/v1/users?limit=-1", "/console/v1/users?limit=501"} {
@@ -129,9 +130,9 @@ func Test用户HTTP拒绝坏请求陈旧版本与自己禁用(t *testing.T) {
 }
 func Test初始管理员强制改密在服务端执行并持久化(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
-	u := seedAuthUser(t, st, "admin", store.RoleAdmin, "seed password")
+	u := seedAuthUser(t, st, "admin", model.RoleAdmin, "seed password")
 	u.MustChangePassword = true
-	u, err := st.UpdateUser(t.Context(), u, store.Audit{Actor: "seed", Action: "user.update", At: fixedAt})
+	u, err := st.UpdateUser(t.Context(), u, repository.Audit{Actor: "seed", Action: "user.update", At: fixedAt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +170,7 @@ func Test初始管理员强制改密在服务端执行并持久化(t *testing.T)
 func Test用户列表不泄露口令并能按游标翻页(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	token := adminHTTP(t, s, st)
-	seedAuthUser(t, st, "bob", store.RoleViewer, "pw")
+	seedAuthUser(t, st, "bob", model.RoleViewer, "pw")
 	w := httpCall(s, "GET", "/console/v1/users?limit=1", "", token)
 	if w.Code != 200 {
 		t.Fatal(w.Body.String())

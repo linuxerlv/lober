@@ -1,6 +1,6 @@
 package builtin
 
-import "github.com/lober/lober/internal/core/model"
+import "github.com/lober/lober/internal/domain/model"
 
 func networkHook() model.Hook {
 	h := hook("network", 1, "DHCP network and host naming. Interface names must match the selected target.")

@@ -17,10 +17,10 @@ import (
 	"time"
 
 	"github.com/lober/lober/internal/console"
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/iso"
 	"github.com/lober/lober/internal/iso/isotest"
-	"github.com/lober/lober/internal/store"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
@@ -50,10 +50,10 @@ func rockyImage() []byte {
 		"images/pxeboot/vmlinuz": []byte("kernel"), "images/pxeboot/initrd.img": []byte("initrd"), "images/install.img": []byte("stage2"), "media/BaseOS/repodata/repomd.xml": []byte("base"), "media/AppStream/repodata/repomd.xml": []byte("app"), "media/Packages/sample.rpm": []byte("rpm"),
 	})
 }
-func assemblyAudit(action string) store.Audit {
-	return store.Audit{Actor: "operator", Action: action, At: assemblyAt}
+func assemblyAudit(action string) repository.Audit {
+	return repository.Audit{Actor: "operator", Action: action, At: assemblyAt}
 }
-func waitISO(t *testing.T, st store.ISOs, id string, state model.ISOState) model.ISO {
+func waitISO(t *testing.T, st repository.ISOs, id string, state model.ISOState) model.ISO {
 	t.Helper()
 	deadline := time.Now().Add(8 * time.Second)
 	for {
@@ -174,7 +174,7 @@ func Test装配后台获取导入及启动恢复(t *testing.T) {
 	if err := a.Deletion.Delete(t.Context(), failed.ID, waitISO(t, a.Store, failed.ID, model.ISOReady).Rev, assemblyAudit("iso.delete")); err != nil {
 		t.Fatal(err)
 	}
-	if err := restarted.Upload(t.Context(), upload.ID, "", 0, bytes.NewReader(otherImage), store.Audit{}); err != nil {
+	if err := restarted.Upload(t.Context(), upload.ID, "", 0, bytes.NewReader(otherImage), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	waitISO(t, a.Store, upload.ID, model.ISOReady)
@@ -188,7 +188,7 @@ func Test持久化删除快照先于删除及重启重试(t *testing.T) {
 	if err := a.Supervisor.Register(t.Context(), item, "upload", "", "", 4, "", assemblyAudit("iso.source.register")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Supervisor.Upload(t.Context(), item.ID, "", 0, bytes.NewReader([]byte("data")), store.Audit{}); err != nil {
+	if err := a.Supervisor.Upload(t.Context(), item.ID, "", 0, bytes.NewReader([]byte("data")), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	sources, err := a.Store.SourcesOf(t.Context(), item.ID)

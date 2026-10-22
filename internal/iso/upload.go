@@ -3,10 +3,11 @@ package iso
 import (
 	"bytes"
 	"context"
+	"github.com/lober/lober/internal/domain/model"
 	"io"
 	"os"
 
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // compareRange compares persisted bytes, not a caller-provided chunk digest.
@@ -20,7 +21,7 @@ func compareRange(ctx context.Context, left, right io.Reader) error {
 		n, e := io.ReadFull(left, a)
 		m, f := io.ReadFull(right, b)
 		if m != n || !bytes.Equal(a[:n], b[:m]) {
-			return store.ErrConflict
+			return repository.ErrConflict
 		}
 		if f != nil && f != io.EOF && f != io.ErrUnexpectedEOF {
 			return f
@@ -34,15 +35,15 @@ func compareRange(ctx context.Context, left, right io.Reader) error {
 	}
 }
 
-func (s *Sources) Upload(ctx context.Context, id, role string, offset int64, r io.Reader, a store.Audit) (err error) {
+func (s *Sources) Upload(ctx context.Context, id, role string, offset int64, r io.Reader, a repository.Audit) (err error) {
 	if err = ctx.Err(); err != nil {
 		return err
 	}
 	if err = checkSourceKey(id, role); err != nil {
 		return err
 	}
-	if a != (store.Audit{}) {
-		if err = store.CheckAudit(a); err != nil {
+	if a != (repository.Audit{}) {
+		if err = repository.CheckAudit(a); err != nil {
 			return err
 		}
 	}
@@ -52,8 +53,8 @@ func (s *Sources) Upload(ctx context.Context, id, role string, offset int64, r i
 	if err != nil {
 		return err
 	}
-	if src.Kind != store.SourceUpload || src.State != store.SourcePending && src.State != store.SourceFetching && src.State != store.SourceFetched {
-		return store.ErrConflict
+	if src.Kind != model.SourceUpload || src.State != model.SourcePending && src.State != model.SourceFetching && src.State != model.SourceFetched {
+		return repository.ErrConflict
 	}
 	if offset < 0 || offset >= src.TotalSize || src.TotalSize <= 0 || r == nil {
 		return sourceRejected(id, role, isoSourceReasonChunk)
@@ -89,7 +90,7 @@ func (s *Sources) Upload(ctx context.Context, id, role string, offset int64, r i
 		return err
 	}
 	flags := os.O_CREATE | os.O_RDWR
-	if src.State == store.SourceFetched {
+	if src.State == model.SourceFetched {
 		path = s.sourcePath(src)
 		flags = os.O_RDONLY
 	}
@@ -109,17 +110,17 @@ func (s *Sources) Upload(ctx context.Context, id, role string, offset int64, r i
 			return sourceRejected(id, role, isoSourceReasonChunk)
 		}
 	}
-	if src.State == store.SourceFetched {
+	if src.State == model.SourceFetched {
 		if err = compareRange(ctx, io.NewSectionReader(f, offset, n), io.NewSectionReader(chunk, 0, n)); err != nil {
 			return sourceRejected(id, role, isoSourceReasonChunk)
 		}
-		if a != (store.Audit{}) {
+		if a != (repository.Audit{}) {
 			_, err = s.store.SaveSource(ctx, src, a)
 		}
 		return err
 	}
-	if src.State == store.SourcePending {
-		src.State = store.SourceFetching
+	if src.State == model.SourcePending {
+		src.State = model.SourceFetching
 	}
 	// Persist the transition/audit only after the chunk bounds and all overlap
 	// bytes pass. SaveRange below atomically updates union progress and Rev.
@@ -143,8 +144,8 @@ func (s *Sources) Upload(ctx context.Context, id, role string, offset int64, r i
 	if err != nil {
 		return err
 	}
-	if src.State != store.SourceFetching {
-		return store.ErrConflict
+	if src.State != model.SourceFetching {
+		return repository.ErrConflict
 	}
 	ranges, err = s.store.RangesOf(ctx, id, role)
 	if err != nil {

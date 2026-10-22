@@ -3,7 +3,8 @@ package pgstore
 import (
 	"context"
 	"errors"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"gorm.io/gorm"
 )
 
@@ -19,21 +20,21 @@ type userRow struct {
 }
 
 func (userRow) TableName() string { return "users" }
-func toUserRow(u store.User) userRow {
+func toUserRow(u model.User) userRow {
 	return userRow{Username: u.Username, DisplayName: u.DisplayName, Role: string(u.Role), Password: u.Password, Disabled: u.Disabled, MustChangePassword: u.MustChangePassword, CreatedAt: u.CreatedAt, Rev: u.Rev}
 }
-func (r userRow) user() store.User {
-	return store.User{Username: r.Username, DisplayName: r.DisplayName, Role: store.Role(r.Role), Password: r.Password, Disabled: r.Disabled, MustChangePassword: r.MustChangePassword, CreatedAt: r.CreatedAt, Rev: r.Rev}
+func (r userRow) user() model.User {
+	return model.User{Username: r.Username, DisplayName: r.DisplayName, Role: model.Role(r.Role), Password: r.Password, Disabled: r.Disabled, MustChangePassword: r.MustChangePassword, CreatedAt: r.CreatedAt, Rev: r.Rev}
 }
 
 var userColumns = []string{"display_name", "role", "password", "disabled", "must_change_password", "rev"}
 
-func (s *Store) CreateUser(ctx context.Context, u store.User, a store.Audit) (store.User, error) {
-	if err := store.CheckAudit(a); err != nil {
-		return store.User{}, err
+func (s *Store) CreateUser(ctx context.Context, u model.User, a repository.Audit) (model.User, error) {
+	if err := repository.CheckAudit(a); err != nil {
+		return model.User{}, err
 	}
-	if err := store.CheckUser(u); err != nil {
-		return store.User{}, err
+	if err := repository.CheckUser(u); err != nil {
+		return model.User{}, err
 	}
 	u.Rev = 1
 	row := toUserRow(u)
@@ -41,22 +42,22 @@ func (s *Store) CreateUser(ctx context.Context, u store.User, a store.Audit) (st
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
-		return addAudits(tx, a, store.UserSubjectKind, u.Username)
+		return addAudits(tx, a, model.UserSubjectKind, u.Username)
 	})
 	if err != nil {
-		return store.User{}, translate(err, false, func(string) string { return u.Username })
+		return model.User{}, translate(err, false, func(string) string { return u.Username })
 	}
 	return row.user(), nil
 }
-func (s *Store) UpdateUser(ctx context.Context, u store.User, a store.Audit) (store.User, error) {
-	if err := store.CheckAudit(a); err != nil {
-		return store.User{}, err
+func (s *Store) UpdateUser(ctx context.Context, u model.User, a repository.Audit) (model.User, error) {
+	if err := repository.CheckAudit(a); err != nil {
+		return model.User{}, err
 	}
-	if err := store.CheckUser(u); err != nil {
-		return store.User{}, err
+	if err := repository.CheckUser(u); err != nil {
+		return model.User{}, err
 	}
 	if u.Rev < 1 {
-		return store.User{}, store.ErrInvalid
+		return model.User{}, repository.ErrInvalid
 	}
 	row := toUserRow(u)
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -68,20 +69,20 @@ func (s *Store) UpdateUser(ctx context.Context, u store.User, a store.Audit) (st
 		}
 		if err := tx.Clauses(forUpdate).First(&current, "username = ?", u.Username).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return store.ErrNotFound
+				return repository.ErrNotFound
 			}
 			return err
 		}
 		if current.Rev != u.Rev {
 			return staleRev("user", current.Rev, u.Rev)
 		}
-		if current.Role == string(store.RoleAdmin) && !current.Disabled && (u.Role != store.RoleAdmin || u.Disabled) {
+		if current.Role == string(model.RoleAdmin) && !current.Disabled && (u.Role != model.RoleAdmin || u.Disabled) {
 			var enabled int64
-			if err := tx.Model(&userRow{}).Where("role = ? AND disabled = false", string(store.RoleAdmin)).Count(&enabled).Error; err != nil {
+			if err := tx.Model(&userRow{}).Where("role = ? AND disabled = false", string(model.RoleAdmin)).Count(&enabled).Error; err != nil {
 				return err
 			}
 			if enabled <= 1 {
-				return store.ErrLastAdmin
+				return repository.ErrLastAdmin
 			}
 		}
 		row.CreatedAt = current.CreatedAt
@@ -89,35 +90,35 @@ func (s *Store) UpdateUser(ctx context.Context, u store.User, a store.Audit) (st
 		if err := tx.Model(&userRow{Username: u.Username}).Select(userColumns).Updates(&row).Error; err != nil {
 			return err
 		}
-		return addAudits(tx, a, store.UserSubjectKind, u.Username)
+		return addAudits(tx, a, model.UserSubjectKind, u.Username)
 	})
 	if err != nil {
-		return store.User{}, translate(err, false, nil)
+		return model.User{}, translate(err, false, nil)
 	}
 	return row.user(), nil
 }
-func (s *Store) GetUser(ctx context.Context, username string) (store.User, error) {
+func (s *Store) GetUser(ctx context.Context, username string) (model.User, error) {
 	if !storable(username) {
-		return store.User{}, store.ErrNotFound
+		return model.User{}, repository.ErrNotFound
 	}
 	var row userRow
 	if err := s.read(ctx).First(&row, "username = ?", username).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return store.User{}, store.ErrNotFound
+			return model.User{}, repository.ErrNotFound
 		}
-		return store.User{}, err
+		return model.User{}, err
 	}
 	return row.user(), nil
 }
-func (s *Store) ListUsers(ctx context.Context, q store.UserQuery) (store.Page[store.User], error) {
-	limit, err := store.CheckQuery(q.Cursor, q.Limit)
+func (s *Store) ListUsers(ctx context.Context, q repository.UserQuery) (repository.Page[model.User], error) {
+	limit, err := repository.CheckQuery(q.Cursor, q.Limit)
 	if err != nil {
-		return store.Page[store.User]{}, err
+		return repository.Page[model.User]{}, err
 	}
 	var after string
 	if q.Cursor != "" {
-		if err := store.DecodeCursor(q.Cursor, "users", &after); err != nil {
-			return store.Page[store.User]{}, err
+		if err := repository.DecodeCursor(q.Cursor, "users", &after); err != nil {
+			return repository.Page[model.User]{}, err
 		}
 	}
 	db := s.read(ctx)
@@ -126,7 +127,7 @@ func (s *Store) ListUsers(ctx context.Context, q store.UserQuery) (store.Page[st
 	}
 	var rows []userRow
 	if err := db.Order(`username COLLATE "C"`).Limit(limit + 1).Find(&rows).Error; err != nil {
-		return store.Page[store.User]{}, err
+		return repository.Page[model.User]{}, err
 	}
-	return page(rows, limit, func(r userRow) (store.User, error) { return r.user(), nil }, func(r userRow) string { return store.EncodeCursor("users", r.Username) })
+	return page(rows, limit, func(r userRow) (model.User, error) { return r.user(), nil }, func(r userRow) string { return repository.EncodeCursor("users", r.Username) })
 }

@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/admission"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/admission"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 func Test状态码按原因类别映射(t *testing.T) {
@@ -54,13 +54,13 @@ func Test仓储错误映射到状态码(t *testing.T) {
 		err  error
 		want int
 	}{
-		{"missing", store.ErrNotFound, 404}, {"conflict", store.ErrConflict, 409},
-		{"duplicate", &store.DuplicateError{Field: "sn", Existing: "SN-1"}, 409},
-		{"immutable", store.ErrImmutable, 409}, {"referenced", store.ErrReferenced, 409},
-		{"invalid", store.ErrInvalid, 400}, {"audit", store.ErrAuditRequired, 500},
-		{"problems", &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}, 422},
-		{"rejected", &store.ProblemsError{Kind: store.ErrRejected, Problems: ps}, 422},
-		{"batch", &store.BatchError{Result: admission.BatchResult{ByHost: map[string][]model.Problem{"SN-1": ps}}}, 422},
+		{"missing", repository.ErrNotFound, 404}, {"conflict", repository.ErrConflict, 409},
+		{"duplicate", &repository.DuplicateError{Field: "sn", Existing: "SN-1"}, 409},
+		{"immutable", repository.ErrImmutable, 409}, {"referenced", repository.ErrReferenced, 409},
+		{"invalid", repository.ErrInvalid, 400}, {"audit", repository.ErrAuditRequired, 500},
+		{"problems", &repository.ProblemsError{Kind: repository.ErrInvalid, Problems: ps}, 422},
+		{"rejected", &repository.ProblemsError{Kind: repository.ErrRejected, Problems: ps}, 422},
+		{"batch", &repository.BatchError{Result: admission.BatchResult{ByHost: map[string][]model.Problem{"SN-1": ps}}}, 422},
 		{"unknown", errors.New("backend-secret"), 500},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -76,7 +76,7 @@ func Test仓储错误映射到状态码(t *testing.T) {
 func Test失败响应的data装结构化详情(t *testing.T) {
 	p := model.NewProblem("sn_invalid", model.Subject{Kind: "host", ID: "SN-1", Path: "arch", Line: 2, Col: 3}, "为空")
 	c, w := testContext(t)
-	RespondError(c, &store.ProblemsError{Kind: store.ErrInvalid, Problems: []model.Problem{p}})
+	RespondError(c, &repository.ProblemsError{Kind: repository.ErrInvalid, Problems: []model.Problem{p}})
 	got := decodeEnvelope(t, w)
 	problem := got["data"].(map[string]any)["problems"].([]any)[0].(map[string]any)
 	subject := problem["subject"].(map[string]any)
@@ -89,7 +89,7 @@ func Test批量被拒时按SN给出每台的问题(t *testing.T) {
 	a := model.Problem{Code: "unknown", Message: "first host"}
 	z := model.Problem{Code: "unknown", Message: "last host"}
 	c, w := testContext(t)
-	RespondError(c, &store.BatchError{Result: admission.BatchResult{ByHost: map[string][]model.Problem{"Z": {z}, "A": {a}}}})
+	RespondError(c, &repository.BatchError{Result: admission.BatchResult{ByHost: map[string][]model.Problem{"Z": {z}, "A": {a}}}})
 	got := decodeEnvelope(t, w)
 	data := got["data"].(map[string]any)
 	if got["message"] != "first host" || len(data["common"].([]any)) != 0 || len(data["byHost"].(map[string]any)) != 2 {
@@ -99,7 +99,7 @@ func Test批量被拒时按SN给出每台的问题(t *testing.T) {
 
 func Test没有详情的错误data是null(t *testing.T) {
 	c, w := testContext(t)
-	RespondError(c, store.ErrNotFound)
+	RespondError(c, repository.ErrNotFound)
 	if decodeEnvelope(t, w)["data"] != nil {
 		t.Fatal(w.Body.String())
 	}
@@ -152,14 +152,14 @@ func TestGet与Write失败时停止成功时返回值(t *testing.T) {
 	if value, ok := Get(c, func() (string, error) { return "value", nil }); !ok || value != "value" || w.Body.Len() != 0 {
 		t.Fatal("get success")
 	}
-	if _, ok := Write(c, func() (string, error) { return "", store.ErrNotFound }); ok || w.Code != 404 || !c.IsAborted() {
+	if _, ok := Write(c, func() (string, error) { return "", repository.ErrNotFound }); ok || w.Code != 404 || !c.IsAborted() {
 		t.Fatal("write error")
 	}
 	c, w = testContext(t)
 	if value, ok := Write(c, func() (int, error) { return 7, nil }); !ok || value != 7 || w.Body.Len() != 0 {
 		t.Fatal("write success")
 	}
-	if _, ok := Get(c, func() (int, error) { return 0, store.ErrConflict }); ok || w.Code != 409 {
+	if _, ok := Get(c, func() (int, error) { return 0, repository.ErrConflict }); ok || w.Code != 409 {
 		t.Fatal("get error")
 	}
 }

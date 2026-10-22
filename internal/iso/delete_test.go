@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/iso/isotest"
-	"github.com/lober/lober/internal/store"
 )
 
 func TestCleanupDeletedRefusesLiveAndRemovesOwnedFiles(t *testing.T) {
@@ -32,7 +32,7 @@ func TestCleanupDeletedRefusesLiveAndRemovesOwnedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := DeletionSnapshot{ISO: i, Sources: srcs}
-	if err := s.CleanupDeleted(t.Context(), snapshot); !errors.Is(err, store.ErrConflict) {
+	if err := s.CleanupDeleted(t.Context(), snapshot); !errors.Is(err, repository.ErrConflict) {
 		t.Fatalf("live cleanup: %v", err)
 	}
 	paths := []string{s.finalPath(i.ID, ""), s.artifactRoot(i.Series, i.Version, i.Arch), filepath.Join(s.dirs.SMB, string(i.Series), i.Version, string(i.Arch))}
@@ -150,7 +150,7 @@ func TestCleanupDeletedPreservesLocalOriginalAndForeignPublication(t *testing.T)
 	if err := os.WriteFile(filepath.Join(root, ".lober-owner"), []byte("another ISO\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CleanupDeleted(t.Context(), snapshot); !errors.Is(err, store.ErrConflict) {
+	if err := s.CleanupDeleted(t.Context(), snapshot); !errors.Is(err, repository.ErrConflict) {
 		t.Fatalf("foreign ownership: %v", err)
 	}
 	if _, err := os.Stat(root); err != nil {

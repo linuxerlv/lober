@@ -1,6 +1,6 @@
 package builtin
 
-import "github.com/lober/lober/internal/core/model"
+import "github.com/lober/lober/internal/domain/model"
 
 func partitionHook() model.Hook {
 	h := hook("partition", 1, "Destructive whole-disk installation. Native firmware determines boot partitions.")

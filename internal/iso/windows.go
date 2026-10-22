@@ -3,7 +3,7 @@ package iso
 import (
 	"context"
 	"errors"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -47,7 +47,7 @@ func (s *Sources) extractWindows(ctx context.Context, id string, tree fs.FS, tmp
 	}
 	roles["winpeshl"] = "winpeshl.ini"
 	if len(roles) != 7 {
-		return nil, store.ErrInvalid
+		return nil, repository.ErrInvalid
 	}
 	return roles, nil
 }

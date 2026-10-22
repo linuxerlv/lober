@@ -3,9 +3,9 @@ package pgstore
 import (
 	"fmt"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // hook 与模板各有一张身份表和一张版本表，约定同 rows_registry.go。名字放在身份上，各版本共用，版本表里不存：改名不必
@@ -91,7 +91,7 @@ type templateVersionRow struct {
 
 func (templateVersionRow) TableName() string { return "template_versions" }
 
-// templateHookRefRow 是 template_hook_refs 表的一行：模板的一个版本引用了一个 hook 版本（store.HookRefs）。保存模板的
+// templateHookRefRow 是 template_hook_refs 表的一行：模板的一个版本引用了一个 hook 版本（repository.HookRefs）。保存模板的
 // 任何一个版本时在同一个事务里重写，删掉模板版本时随之删掉（CASCADE）。DeleteHookDraft 按 (hook_id, hook_version)
 // 的索引查它；对 hook_versions 刻意不建外键，见 schema.go。
 type templateHookRefRow struct {
@@ -131,17 +131,17 @@ func (r hookVersionRow) hook() (model.Hook, error) {
 		Author: r.Author, Approver: r.Approver, Builtin: r.Builtin, TimeoutSec: r.TimeoutSec, Required: r.Required, Rev: r.Rev,
 	}
 	if err := decodeJSON(r.Params, &h.Params); err != nil {
-		return model.Hook{}, fmt.Errorf("hook %s 的参数声明：%w", store.VersionID(r.HookID, r.Version), err)
+		return model.Hook{}, fmt.Errorf("hook %s 的参数声明：%w", repository.VersionID(r.HookID, r.Version), err)
 	}
 	if err := decodeJSON(r.Impls, &h.Impls); err != nil {
-		return model.Hook{}, fmt.Errorf("hook %s 的实现：%w", store.VersionID(r.HookID, r.Version), err)
+		return model.Hook{}, fmt.Errorf("hook %s 的实现：%w", repository.VersionID(r.HookID, r.Version), err)
 	}
 	return h, nil
 }
 
 // meta 是这个版本里由仓储管的字段，不必解开 JSON 的列。
-func (r hookVersionRow) meta() store.VersionMeta {
-	return store.VersionMeta{Name: r.Name, State: model.VersionState(r.State), Author: r.Author, Approver: r.Approver, Builtin: r.Builtin}
+func (r hookVersionRow) meta() repository.VersionMeta {
+	return repository.VersionMeta{Name: r.Name, State: model.VersionState(r.State), Author: r.Author, Approver: r.Approver, Builtin: r.Builtin}
 }
 
 // toTemplateVersionRow 把模板版本 t 转成一行，名字不存。
@@ -176,24 +176,24 @@ func (r templateVersionRow) template() (model.Template, error) {
 		{"取值来源", r.Bindings, &t.Bindings}, {"装配表", r.Assembly, &t.Assembly},
 	} {
 		if err := decodeJSON(f.col, f.into); err != nil {
-			return model.Template{}, fmt.Errorf("模板 %s 的%s：%w", store.VersionID(r.TemplateID, r.Version), f.what, err)
+			return model.Template{}, fmt.Errorf("模板 %s 的%s：%w", repository.VersionID(r.TemplateID, r.Version), f.what, err)
 		}
 	}
 	return t, nil
 }
 
 // meta 同 hookVersionRow.meta。
-func (r templateVersionRow) meta() store.VersionMeta {
-	return store.VersionMeta{Name: r.Name, State: model.VersionState(r.State), Author: r.Author, Approver: r.Approver, Builtin: r.Builtin}
+func (r templateVersionRow) meta() repository.VersionMeta {
+	return repository.VersionMeta{Name: r.Name, State: model.VersionState(r.State), Author: r.Author, Approver: r.Approver, Builtin: r.Builtin}
 }
 
-// refRows 是模板版本 t 在 template_hook_refs 里的行：它引用的 hook 版本，去重、排过序（store.HookRefs）。只记 HookID 合
+// refRows 是模板版本 t 在 template_hook_refs 里的行：它引用的 hook 版本，去重、排过序（repository.HookRefs）。只记 HookID 合
 // model.ValidID 的：库里每个 hook 版本的 ID 都合它，别的 ID 永远对不上任何版本，删 hook 草稿查到的结果不变（建任务与
-// 审批模板不读这张表，用 store.HookRefs 现算）。草稿
+// 审批模板不读这张表，用 repository.HookRefs 现算）。草稿
 // 却可以引用这样的 ID（激活时才报 hook_ref_missing），它可以很长，原样写进这张表的主键与索引，压不下去时就超过 btree
 // 索引一行的上限（SQLSTATE 54000），能存成 UTF-8 文本的草稿反倒存不下了（spec §3 总则）。
 func refRows(t model.Template) []templateHookRefRow {
-	refs := store.HookRefs(t)
+	refs := repository.HookRefs(t)
 	rows := make([]templateHookRefRow, 0, len(refs))
 	for _, k := range refs {
 		if model.ValidID(k.ID) {

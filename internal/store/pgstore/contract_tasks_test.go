@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/admission"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/core/params"
-	coresnapshot "github.com/lober/lober/internal/core/snapshot"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/admission"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/params"
+	"github.com/lober/lober/internal/domain/repository"
+	coresnapshot "github.com/lober/lober/internal/domain/snapshot"
 	"github.com/lober/lober/internal/store/pgstore"
 )
 
@@ -63,8 +63,8 @@ func taskCurrentStale(t *testing.T, s *pgstore.Store) {
 	templateOps.to(t, s, next, model.VersionApproved)
 	before := taskSnapshot(t, s)
 	_, err = s.CreateCurrentTasks(t.Context(), batch, anAudit("task.create"))
-	wantIs(t, err, store.ErrTemplateNotCurrent, "选择已失效")
-	wantIs(t, err, store.ErrConflict, "保留冲突类别")
+	wantIs(t, err, repository.ErrTemplateNotCurrent, "选择已失效")
+	wantIs(t, err, repository.ErrConflict, "保留冲突类别")
 	wantTasksUnchanged(t, s, before, "旧选择被拒绝后")
 }
 
@@ -74,8 +74,8 @@ func taskCurrentRejected(t *testing.T, s *pgstore.Store) {
 	f.mustCreate(t, s, hs[1])
 	before := taskSnapshot(t, s)
 	_, err := s.CreateCurrentTasks(t.Context(), f.newTasks(t, hs...), anAudit("task.create"))
-	var be *store.BatchError
-	if !errors.As(err, &be) || !errors.Is(err, store.ErrRejected) {
+	var be *repository.BatchError
+	if !errors.As(err, &be) || !errors.Is(err, repository.ErrRejected) {
 		t.Fatalf("主机被占用应报整批准入错误，得到 %v", err)
 	}
 	wantTasksUnchanged(t, s, before, "一般准入拒绝后")
@@ -109,7 +109,7 @@ func taskCreateOlderApproved(t *testing.T, s *pgstore.Store) {
 	if len(created) != 1 || created[0].TemplateVersion != f.tpl.Version || created[0].Snapshot.Template.Version != f.tpl.Version {
 		t.Fatalf("应保留明确选择的旧版本，得到 %+v", created)
 	}
-	wantEqual(t, len(taskPages(t, s, store.TaskQuery{Limit: 500})[0]), 1, "只有一个任务")
+	wantEqual(t, len(taskPages(t, s, repository.TaskQuery{Limit: 500})[0]), 1, "只有一个任务")
 	wantEqual(t, len(auditEntries(t, s))-before, 2, "登记主机与创建任务各一条审计")
 }
 
@@ -182,14 +182,14 @@ func mustGetTask(t *testing.T, s *pgstore.Store, id string) model.Task {
 // mustTransition 把任务 task 从它现在的状态推进到 to，不带事件，返回推进之后的任务。
 func mustTransition(t *testing.T, s *pgstore.Store, task model.Task, to model.TaskState) model.Task {
 	t.Helper()
-	got, _, err := s.TransitionTask(t.Context(), task.ID, store.TaskExpect{State: task.State, Rev: task.Rev}, to, nil)
+	got, _, err := s.TransitionTask(t.Context(), task.ID, repository.TaskExpect{State: task.State, Rev: task.Rev}, to, nil)
 	must(t, err, fmt.Sprintf("把任务 %s 从 %s 推进到 %s", task.ID, task.State, to))
 	return got
 }
 
 // anEvent 是一条合规则的事件，key 可空。
-func anEvent(kind, key string) store.NewEvent {
-	return store.NewEvent{At: at0, Kind: kind, Key: key, Fields: map[string]string{"slot": "分区", "exit": "0"}}
+func anEvent(kind, key string) repository.NewEvent {
+	return repository.NewEvent{At: at0, Kind: kind, Key: key, Fields: map[string]string{"slot": "分区", "exit": "0"}}
 }
 
 // sortedTasks 返回按任务列表的顺序排好的 ts 的副本：CreatedAt 倒序，再按 ID 的字节序。
@@ -202,18 +202,18 @@ func sortedTasks(ts []model.Task) []model.Task {
 }
 
 // taskPages 用查询 q 从头翻到尾，返回每一页；游标由它填。
-func taskPages(t *testing.T, s *pgstore.Store, q store.TaskQuery) [][]model.Task {
+func taskPages(t *testing.T, s *pgstore.Store, q repository.TaskQuery) [][]model.Task {
 	t.Helper()
-	return allPages(t, func(cursor string) (store.Page[model.Task], error) {
+	return allPages(t, func(cursor string) (repository.Page[model.Task], error) {
 		q.Cursor = cursor
 		return s.ListTasks(t.Context(), q)
 	})
 }
 
 // allEvents 是任务 id 的全部事件，按 Seq 从上一次读到的最后一条续读到尾。没有事件的一次也要是长度为 0 的切片（见包说明）。
-func allEvents(t *testing.T, s *pgstore.Store, id string) []store.Event {
+func allEvents(t *testing.T, s *pgstore.Store, id string) []repository.Event {
 	t.Helper()
-	var all []store.Event
+	var all []repository.Event
 	for range maxPages {
 		var after int64
 		if len(all) > 0 {
@@ -236,13 +236,13 @@ func allEvents(t *testing.T, s *pgstore.Store, id string) []store.Event {
 type taskContents struct {
 	contents
 	Tasks  []model.Task
-	Events map[string][]store.Event // 任务 ID → 它的全部事件
+	Events map[string][]repository.Event // 任务 ID → 它的全部事件
 }
 
 func taskSnapshot(t *testing.T, s *pgstore.Store) taskContents {
 	t.Helper()
-	c := taskContents{contents: snapshot(t, s), Events: map[string][]store.Event{}}
-	c.Tasks = slices.Concat(taskPages(t, s, store.TaskQuery{Limit: 500})...)
+	c := taskContents{contents: snapshot(t, s), Events: map[string][]repository.Event{}}
+	c.Tasks = slices.Concat(taskPages(t, s, repository.TaskQuery{Limit: 500})...)
 	for _, task := range c.Tasks {
 		c.Events[task.ID] = allEvents(t, s, task.ID)
 	}
@@ -277,7 +277,7 @@ func taskAuditedOps() []auditedOp {
 	return []auditedOp{
 		{"CreateTasks", func(t *testing.T, s *pgstore.Store) auditedCall {
 			batch := newFixture(t, s).newTasks(t, mustTaskHosts(t, s, "SN-2", "SN-1")...)
-			return unchangedOnError(t, s, func(a store.Audit) ([]target, error) {
+			return unchangedOnError(t, s, func(a repository.Audit) ([]target, error) {
 				got, err := s.CreateTasks(t.Context(), batch, a)
 				var targets []target // 每个任务一条，按入参的顺序
 				for _, task := range got {
@@ -288,7 +288,7 @@ func taskAuditedOps() []auditedOp {
 		}},
 		{"CreateCurrentTasks", func(t *testing.T, s *pgstore.Store) auditedCall {
 			batch := newFixture(t, s).newTasks(t, mustTaskHosts(t, s, "SN-2", "SN-1")...)
-			return unchangedOnError(t, s, func(a store.Audit) ([]target, error) {
+			return unchangedOnError(t, s, func(a repository.Audit) ([]target, error) {
 				got, err := s.CreateCurrentTasks(t.Context(), batch, a)
 				var targets []target // 每个任务一条，按入参的顺序
 				for _, task := range got {
@@ -299,9 +299,9 @@ func taskAuditedOps() []auditedOp {
 		}},
 		{"TransitionTaskByUser", func(t *testing.T, s *pgstore.Store) auditedCall {
 			task := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
-			expect := store.TaskExpect{State: task.State, Rev: task.Rev}
-			events := []store.NewEvent{anEvent("task.cancel", "cancel-1")}
-			return unchangedOnError(t, s, func(a store.Audit) ([]target, error) {
+			expect := repository.TaskExpect{State: task.State, Rev: task.Rev}
+			events := []repository.NewEvent{anEvent("task.cancel", "cancel-1")}
+			return unchangedOnError(t, s, func(a repository.Audit) ([]target, error) {
 				_, _, err := s.TransitionTaskByUser(t.Context(), task.ID, expect, model.TaskCancelled, events, a)
 				return []target{{"task", task.ID}}, err
 			})
@@ -311,7 +311,7 @@ func taskAuditedOps() []auditedOp {
 
 // unchangedOnError 给 call 套上一层：调用失败时，任务、事件、主机与 ISO 都要与调用之前相同。
 func unchangedOnError(t *testing.T, s *pgstore.Store, call auditedCall) auditedCall {
-	return func(a store.Audit) ([]target, error) {
+	return func(a repository.Audit) ([]target, error) {
 		before := taskSnapshot(t, s)
 		targets, err := call(a)
 		if err != nil {
@@ -322,7 +322,7 @@ func unchangedOnError(t *testing.T, s *pgstore.Store, call auditedCall) auditedC
 }
 
 // batchProblems 把 BatchError 里的问题排成一列：先 Common，再按 SN 的顺序逐台。
-func batchProblems(be *store.BatchError) []model.Problem {
+func batchProblems(be *repository.BatchError) []model.Problem {
 	ps := slices.Clone(be.Result.Common)
 	for _, sn := range slices.Sorted(maps.Keys(be.Result.ByHost)) {
 		ps = append(ps, be.Result.ByHost[sn]...)
@@ -395,10 +395,10 @@ func taskCreateAfterFinished(t *testing.T, s *pgstore.Store) {
 		ended++
 	}
 	f.mustCreate(t, s, hs...)
-	wantEqual(t, len(slices.Concat(taskPages(t, s, store.TaskQuery{HostSN: "SN-1"})...)), ended+1, "这台主机的任务数")
+	wantEqual(t, len(slices.Concat(taskPages(t, s, repository.TaskQuery{HostSN: "SN-1"})...)), ended+1, "这台主机的任务数")
 }
 
-// 批量建任务的第 1 步：入参本身不合前提就报 ErrInvalid，什么都不写。每条前提一个反例，规则见 store.CheckNewTasks。快照里
+// 批量建任务的第 1 步：入参本身不合前提就报 ErrInvalid，什么都不写。每条前提一个反例，规则见 repository.CheckNewTasks。快照里
 // 有存不下的文本也算（spec §3 总则）：pgstore 把快照存成 jsonb，固化下来的就不是写进去的那份（C29）。串藏在嵌套的结构、
 // 切片与 map 的键里也要查出来，几种位置各一例。
 func taskCreateInvalid(t *testing.T, s *pgstore.Store) {
@@ -450,7 +450,7 @@ func taskCreateInvalid(t *testing.T, s *pgstore.Store) {
 		{"同一批的模板版本不同", at(1, func(task *model.Task) { task.TemplateVersion, task.Snapshot.Template.Version = 2, 2 })},
 	} {
 		_, err := s.CreateTasks(t.Context(), c.mod(f.newTasks(t, hs...)), anAudit("task.create"))
-		wantIs(t, err, store.ErrInvalid, c.name)
+		wantIs(t, err, repository.ErrInvalid, c.name)
 	}
 	wantTasksUnchanged(t, s, before, "入参不合前提时")
 }
@@ -464,7 +464,7 @@ func taskCreateDuplicate(t *testing.T, s *pgstore.Store) {
 	}
 	// 每个重复的 SN 报一条，按它第一次出现的顺序
 	_, err := s.CreateTasks(t.Context(), f.newTasks(t, hs[1], hs[0], hs[1], hs[0], hs[1]), anAudit("task.create"))
-	wantProblems(t, err, store.ErrInvalid, []model.Problem{dup("SN-2"), dup("SN-1")}, "批里 SN 重复")
+	wantProblems(t, err, repository.ErrInvalid, []model.Problem{dup("SN-2"), dup("SN-1")}, "批里 SN 重复")
 	wantTasksUnchanged(t, s, before, "批里 SN 重复时")
 }
 
@@ -485,8 +485,8 @@ func taskCreateManyBatches(t *testing.T, s *pgstore.Store) {
 	batch := f.newTasks(t, hs...)
 	audits := len(auditEntries(t, s))
 	_, err := s.CreateTasks(ctx, batch, anAudit("task.create"))
-	var be *store.BatchError
-	if !errors.As(err, &be) || !errors.Is(err, store.ErrRejected) {
+	var be *repository.BatchError
+	if !errors.As(err, &be) || !errors.Is(err, repository.ErrRejected) {
 		t.Fatalf("有两台已有未结束的任务，应报 BatchError(ErrRejected)，得到 %v", err)
 	}
 	want := slices.Concat(admission.HostSelectable(hs[n-2], true), admission.HostSelectable(hs[n-1], true))
@@ -504,7 +504,7 @@ func taskCreateManyBatches(t *testing.T, s *pgstore.Store) {
 			t.Fatalf("第 %d 个任务是 %s 的、状态 %s，应是 %s 的、pending", i+1, task.HostSN, task.State, hs[i].SN)
 		}
 	}
-	if n := len(slices.Concat(taskPages(t, s, store.TaskQuery{States: []model.TaskState{model.TaskPending}, Limit: 500})...)); n != len(got) {
+	if n := len(slices.Concat(taskPages(t, s, repository.TaskQuery{States: []model.TaskState{model.TaskPending}, Limit: 500})...)); n != len(got) {
 		t.Fatalf("未结束的任务应恰好是这一批的 %d 个，得到 %d 个", len(got), n)
 	}
 	if added := len(auditEntries(t, s)) - audits; added != n { // 被拦下的那一次不写审计，系统推进也不写
@@ -527,9 +527,9 @@ func taskCreateMissing(t *testing.T, s *pgstore.Store) {
 	must(t, s.DeleteTemplateDraft(ctx, model.TemplateKey{ID: gone.tpl.ID, Version: gone.tpl.Version}, gone.tpl.Rev), "删除模板草稿")
 	before := taskSnapshot(t, s)
 	_, err := s.CreateTasks(ctx, noISO, anAudit("task.create"))
-	wantIs(t, err, store.ErrNotFound, "ISO 不存在")
+	wantIs(t, err, repository.ErrNotFound, "ISO 不存在")
 	_, err = s.CreateTasks(ctx, noTemplate, anAudit("task.create"))
-	wantIs(t, err, store.ErrNotFound, "模板版本不存在")
+	wantIs(t, err, repository.ErrNotFound, "模板版本不存在")
 	wantTasksUnchanged(t, s, before, "找不到 ISO 或模板版本时")
 }
 
@@ -607,7 +607,7 @@ func rejectedCases() []testCase {
 	}
 }
 
-// wantRejected 建 batch，要求在事务里重跑准入被拦下：BatchError 与对仓储现在的数据直接调用 store.BatchProblems 的结果相同
+// wantRejected 建 batch，要求在事务里重跑准入被拦下：BatchError 与对仓储现在的数据直接调用 repository.BatchProblems 的结果相同
 // （判定规则只有第 1 层那一份，仓储要做的是把锁住之后读到的数据交给它），问题的代码依次是 codes（batchProblems 的顺序），
 // 并且什么都没写，审计也没写。
 func wantRejected(t *testing.T, s *pgstore.Store, batch []model.Task, codes []model.Code) {
@@ -616,24 +616,24 @@ func wantRejected(t *testing.T, s *pgstore.Store, batch []model.Task, codes []mo
 	wantCodes(t, batchProblems(want), codes)
 	before := taskSnapshot(t, s)
 	_, err := s.CreateTasks(t.Context(), batch, anAudit("task.create"))
-	var be *store.BatchError
-	if !errors.As(err, &be) || !errors.Is(err, store.ErrRejected) {
+	var be *repository.BatchError
+	if !errors.As(err, &be) || !errors.Is(err, repository.ErrRejected) {
 		t.Fatalf("应报 BatchError(ErrRejected)，得到 %v", err)
 	}
 	wantEqual(t, be.Result, want.Result, "重跑准入的结果")
 	wantTasksUnchanged(t, s, before, "重跑准入没通过时")
 }
 
-// expectedBatch 是 batch 对仓储现在的数据跑 store.BatchProblems 的结果：主机、它们有没有未结束的任务、ISO、模板版本与它引用
+// expectedBatch 是 batch 对仓储现在的数据跑 repository.BatchProblems 的结果：主机、它们有没有未结束的任务、ISO、模板版本与它引用
 // 的 hook 版本都经接口读出，没登记的 SN 按批里的顺序列出。用例造的一批应当过不了准入。
-func expectedBatch(t *testing.T, s *pgstore.Store, batch []model.Task) *store.BatchError {
+func expectedBatch(t *testing.T, s *pgstore.Store, batch []model.Task) *repository.BatchError {
 	t.Helper()
 	ctx := t.Context()
 	in := admission.BatchInput{OpenTask: map[string]bool{}}
 	var missing []string
 	for _, task := range batch {
 		h, err := s.GetHost(ctx, task.HostSN)
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, repository.ErrNotFound) {
 			missing = append(missing, task.HostSN)
 			continue
 		}
@@ -644,11 +644,11 @@ func expectedBatch(t *testing.T, s *pgstore.Store, batch []model.Task) *store.Ba
 	}
 	in.ISO = mustGetISO(t, s, batch[0].ISOID)
 	in.Template = templateOps.mustGet(t, s, batch[0].TemplateID, batch[0].TemplateVersion)
-	hooks, err := s.GetHooks(ctx, store.HookRefs(in.Template))
+	hooks, err := s.GetHooks(ctx, repository.HookRefs(in.Template))
 	must(t, err, "读模板引用的 hook 版本")
 	in.Hooks = hooks
-	var be *store.BatchError
-	if err := store.BatchProblems(in, missing); !errors.As(err, &be) {
+	var be *repository.BatchError
+	if err := repository.BatchProblems(in, missing); !errors.As(err, &be) {
 		t.Fatalf("用例造的一批应当过不了准入，BatchProblems 得到 %v", err)
 	}
 	return be
@@ -658,21 +658,21 @@ func taskTransition(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	task := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
 	audits := auditEntries(t, s)
-	events := []store.NewEvent{anEvent("task.boot", "boot-1"), {At: at0 + 1, Kind: "slot.exit"}}
-	got, appended, err := s.TransitionTask(ctx, task.ID, store.TaskExpect{State: model.TaskPending, Rev: 1}, model.TaskBooting, events)
+	events := []repository.NewEvent{anEvent("task.boot", "boot-1"), {At: at0 + 1, Kind: "slot.exit"}}
+	got, appended, err := s.TransitionTask(ctx, task.ID, repository.TaskExpect{State: model.TaskPending, Rev: 1}, model.TaskBooting, events)
 	must(t, err, "推进")
 	want := task
 	want.State, want.Rev = model.TaskBooting, 2
 	wantEqual(t, got, want, "推进的返回值")
 	wantEqual(t, mustGetTask(t, s, task.ID), want, "推进之后读回来的")
-	wantEqual(t, appended, []store.Appended{{Seq: 1}, {Seq: 2}}, "推进时追加的事件")
-	wantEqual(t, allEvents(t, s, task.ID), []store.Event{
+	wantEqual(t, appended, []repository.Appended{{Seq: 1}, {Seq: 2}}, "推进时追加的事件")
+	wantEqual(t, allEvents(t, s, task.ID), []repository.Event{
 		{TaskID: task.ID, Seq: 1, NewEvent: anEvent("task.boot", "boot-1")},
-		{TaskID: task.ID, Seq: 2, NewEvent: store.NewEvent{At: at0 + 1, Kind: "slot.exit"}},
+		{TaskID: task.ID, Seq: 2, NewEvent: repository.NewEvent{At: at0 + 1, Kind: "slot.exit"}},
 	}, "事件与状态一起写下")
 	// 一步推进合不合规矩由第 7 层的状态机判断（C33），仓储照写：推进到同一个状态、退回更早的状态、从结束的状态再改
 	for _, to := range []model.TaskState{model.TaskBooting, model.TaskPending, model.TaskDone, model.TaskFailed} {
-		next, appended, err := s.TransitionTask(ctx, want.ID, store.TaskExpect{State: want.State, Rev: want.Rev}, to, nil)
+		next, appended, err := s.TransitionTask(ctx, want.ID, repository.TaskExpect{State: want.State, Rev: want.Rev}, to, nil)
 		must(t, err, fmt.Sprintf("从 %s 推进到 %s", want.State, to))
 		want.State, want.Rev = to, want.Rev+1
 		wantEqual(t, next, want, "推进到 "+string(to)+" 的返回值")
@@ -690,17 +690,17 @@ func taskTransitionConflict(t *testing.T, s *pgstore.Store) {
 	stale := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
 	cur := mustTransition(t, s, stale, model.TaskBooting)
 	before := taskSnapshot(t, s)
-	for _, e := range []store.TaskExpect{
+	for _, e := range []repository.TaskExpect{
 		{State: stale.State, Rev: stale.Rev}, // 读过之后被别人推进了
 		{State: cur.State, Rev: stale.Rev},   // 状态对上了，Rev 没对上
 		{State: stale.State, Rev: cur.Rev},   // Rev 对上了，状态没对上
 		{State: cur.State, Rev: cur.Rev + 1},
 		{State: cur.State},
 	} {
-		_, _, err := s.TransitionTask(ctx, cur.ID, e, model.TaskInstalling, []store.NewEvent{anEvent("task.install", "install-1")})
-		wantIs(t, err, store.ErrConflict, fmt.Sprintf("系统推进，期望 %+v", e))
+		_, _, err := s.TransitionTask(ctx, cur.ID, e, model.TaskInstalling, []repository.NewEvent{anEvent("task.install", "install-1")})
+		wantIs(t, err, repository.ErrConflict, fmt.Sprintf("系统推进，期望 %+v", e))
 		_, _, err = s.TransitionTaskByUser(ctx, cur.ID, e, model.TaskCancelled, nil, anAudit("task.cancel"))
-		wantIs(t, err, store.ErrConflict, fmt.Sprintf("用户推进，期望 %+v", e))
+		wantIs(t, err, repository.ErrConflict, fmt.Sprintf("用户推进，期望 %+v", e))
 	}
 	wantTasksUnchanged(t, s, before, "期望对不上时")
 	wantSeqCounter(t, s, cur.ID, 0, "期望对不上之后")
@@ -711,26 +711,26 @@ func taskTransitionConflict(t *testing.T, s *pgstore.Store) {
 func taskTransitionInvalid(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	task := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
-	expect := store.TaskExpect{State: task.State, Rev: task.Rev}
+	expect := repository.TaskExpect{State: task.State, Rev: task.Rev}
 	before := taskSnapshot(t, s)
 	for _, to := range []model.TaskState{"", "Pending", "started"} {
 		_, _, err := s.TransitionTask(ctx, task.ID, expect, to, nil)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("系统推进到 %q", to))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("系统推进到 %q", to))
 		_, _, err = s.TransitionTaskByUser(ctx, task.ID, expect, to, nil, anAudit("task.cancel"))
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("用户推进到 %q", to))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("用户推进到 %q", to))
 	}
-	for _, bad := range []store.NewEvent{
+	for _, bad := range []repository.NewEvent{
 		{Kind: "task.boot"},                      // 没有时间
 		{At: at0, Kind: "boot"},                  // Kind 不到两段
 		{At: at0, Kind: "task.boot", Key: "a b"}, // Key 不是安全词
 		{At: at0, Kind: "task.boot", Fields: map[string]string{"Exit": "0"}},
 		{At: at0, Kind: "task.boot", Fields: map[string]string{"log": "a\x00b"}},
 	} {
-		es := []store.NewEvent{anEvent("task.boot", "boot-1"), bad}
+		es := []repository.NewEvent{anEvent("task.boot", "boot-1"), bad}
 		_, _, err := s.TransitionTask(ctx, task.ID, expect, model.TaskBooting, es)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("系统推进，带了事件 %+v", bad))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("系统推进，带了事件 %+v", bad))
 		_, _, err = s.TransitionTaskByUser(ctx, task.ID, expect, model.TaskCancelled, es, anAudit("task.cancel"))
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("用户推进，带了事件 %+v", bad))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("用户推进，带了事件 %+v", bad))
 	}
 	wantTasksUnchanged(t, s, before, "推进不合规则时")
 }
@@ -739,16 +739,16 @@ func taskTransitionMissing(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...) // 有任务，只是不是要推进的那个
 	before := taskSnapshot(t, s)
-	expect := store.TaskExpect{State: model.TaskPending, Rev: 1}
+	expect := repository.TaskExpect{State: model.TaskPending, Rev: 1}
 	_, _, err := s.TransitionTask(ctx, "nosuchtask", expect, model.TaskBooting, nil)
-	wantIs(t, err, store.ErrNotFound, "系统推进不存在的任务")
+	wantIs(t, err, repository.ErrNotFound, "系统推进不存在的任务")
 	_, _, err = s.TransitionTaskByUser(ctx, "nosuchtask", expect, model.TaskCancelled, nil, anAudit("task.cancel"))
-	wantIs(t, err, store.ErrNotFound, "用户推进不存在的任务")
+	wantIs(t, err, repository.ErrNotFound, "用户推进不存在的任务")
 	for _, id := range []string{"", "Bad", "a@1", "-a", "a.b", "a/b"} {
 		_, _, err := s.TransitionTask(ctx, id, expect, model.TaskBooting, nil)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("系统推进 %q", id))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("系统推进 %q", id))
 		_, _, err = s.TransitionTaskByUser(ctx, id, expect, model.TaskCancelled, nil, anAudit("task.cancel"))
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("用户推进 %q", id))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("用户推进 %q", id))
 	}
 	wantTasksUnchanged(t, s, before, "找不到任务时")
 }
@@ -763,12 +763,12 @@ func taskTransitionOpenTask(t *testing.T, s *pgstore.Store) {
 	newer := f.mustCreate(t, s, hs...)[0] // 失败的任务已结束，可以再建
 	before := taskSnapshot(t, s)
 	want := admission.HostSelectable(hs[0], true)
-	expect := store.TaskExpect{State: failed.State, Rev: failed.Rev}
-	_, _, err := s.TransitionTaskByUser(ctx, failed.ID, expect, model.TaskPending, []store.NewEvent{anEvent("task.retry", "")}, anAudit("task.retry"))
-	wantProblems(t, err, store.ErrRejected, want, "重试")
+	expect := repository.TaskExpect{State: failed.State, Rev: failed.Rev}
+	_, _, err := s.TransitionTaskByUser(ctx, failed.ID, expect, model.TaskPending, []repository.NewEvent{anEvent("task.retry", "")}, anAudit("task.retry"))
+	wantProblems(t, err, repository.ErrRejected, want, "重试")
 	for _, to := range []model.TaskState{model.TaskPending, model.TaskBooting, model.TaskInstalling} {
 		_, _, err := s.TransitionTask(ctx, failed.ID, expect, to, nil)
-		wantProblems(t, err, store.ErrRejected, want, "系统推进到 "+string(to))
+		wantProblems(t, err, repository.ErrRejected, want, "系统推进到 "+string(to))
 	}
 	wantTasksUnchanged(t, s, before, "撞上未结束的任务时")
 	// 重试带着一条事件：它与计数在同一个事务里写，撞上 C31 时一起回滚，计数不被推进带走
@@ -786,10 +786,10 @@ func taskGet(t *testing.T, s *pgstore.Store) {
 	task := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
 	wantEqual(t, mustGetTask(t, s, task.ID), task, "读回来的")
 	_, err := s.GetTask(t.Context(), "nosuchtask")
-	wantIs(t, err, store.ErrNotFound, "读不存在的任务")
+	wantIs(t, err, repository.ErrNotFound, "读不存在的任务")
 	for _, id := range []string{"", "Bad", "a@1", "-a", "a.b", "a/b"} {
 		_, err := s.GetTask(t.Context(), id)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("GetTask(%q)", id))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("GetTask(%q)", id))
 	}
 }
 
@@ -826,7 +826,7 @@ func taskFindOpen(t *testing.T, s *pgstore.Store) {
 	// 编码错误（store 的包说明）
 	for _, sn := range []string{"sn-1", " SN-1", "SN-1\n", "", "SN-1\x00", "SN-1\xff"} {
 		_, _, err := s.FindOpenTask(ctx, sn)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("FindOpenTask(%q)", sn))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("FindOpenTask(%q)", sn))
 	}
 }
 
@@ -842,14 +842,14 @@ func taskListPaging(t *testing.T, s *pgstore.Store) {
 		want = append(want, got...)
 	}
 	want = sortedTasks(want)
-	whole, err := s.ListTasks(t.Context(), store.TaskQuery{Limit: len(want)})
+	whole, err := s.ListTasks(t.Context(), repository.TaskQuery{Limit: len(want)})
 	must(t, err, "一次全取")
 	wantItems(t, whole.Items, want, "一次全取")
 	if whole.Next != "" {
 		t.Fatalf("恰好取完时 Next 应为空，得到 %q", whole.Next)
 	}
 	for _, limit := range []int{2, 3} {
-		wantPaged(t, taskPages(t, s, store.TaskQuery{Limit: limit}), limit, want, fmt.Sprintf("每页 %d 条", limit))
+		wantPaged(t, taskPages(t, s, repository.TaskQuery{Limit: limit}), limit, want, fmt.Sprintf("每页 %d 条", limit))
 	}
 }
 
@@ -870,28 +870,28 @@ func taskListFilters(t *testing.T, s *pgstore.Store) {
 	e := create(hs[2], 400)
 	for _, q := range []struct {
 		name string
-		q    store.TaskQuery
+		q    repository.TaskQuery
 		want []model.Task
 	}{
-		{"不过滤", store.TaskQuery{}, []model.Task{a, b, c, d, e}},
-		{"按主机", store.TaskQuery{HostSN: "SN-1"}, []model.Task{a, b, c}},
-		{"主机要完全相等", store.TaskQuery{HostSN: "SN"}, nil},
-		{"按一个状态", store.TaskQuery{States: []model.TaskState{model.TaskPending}}, []model.Task{c, e}},
-		{"按几个状态", store.TaskQuery{States: []model.TaskState{model.TaskFailed, model.TaskDone, model.TaskBooting}}, []model.Task{a, b}},
-		{"时间范围含两端", store.TaskQuery{CreatedFrom: 200, CreatedTo: 300}, []model.Task{b, c, d}},
-		{"只给起点", store.TaskQuery{CreatedFrom: 300}, []model.Task{c, e}},
-		{"只给终点", store.TaskQuery{CreatedTo: 100}, []model.Task{a}},
-		{"几个条件同时给", store.TaskQuery{HostSN: "SN-1", States: []model.TaskState{model.TaskPending, model.TaskFailed}, CreatedTo: 250}, []model.Task{a}},
-		{"没有匹配的", store.TaskQuery{HostSN: "SN-9"}, nil},
+		{"不过滤", repository.TaskQuery{}, []model.Task{a, b, c, d, e}},
+		{"按主机", repository.TaskQuery{HostSN: "SN-1"}, []model.Task{a, b, c}},
+		{"主机要完全相等", repository.TaskQuery{HostSN: "SN"}, nil},
+		{"按一个状态", repository.TaskQuery{States: []model.TaskState{model.TaskPending}}, []model.Task{c, e}},
+		{"按几个状态", repository.TaskQuery{States: []model.TaskState{model.TaskFailed, model.TaskDone, model.TaskBooting}}, []model.Task{a, b}},
+		{"时间范围含两端", repository.TaskQuery{CreatedFrom: 200, CreatedTo: 300}, []model.Task{b, c, d}},
+		{"只给起点", repository.TaskQuery{CreatedFrom: 300}, []model.Task{c, e}},
+		{"只给终点", repository.TaskQuery{CreatedTo: 100}, []model.Task{a}},
+		{"几个条件同时给", repository.TaskQuery{HostSN: "SN-1", States: []model.TaskState{model.TaskPending, model.TaskFailed}, CreatedTo: 250}, []model.Task{a}},
+		{"没有匹配的", repository.TaskQuery{HostSN: "SN-9"}, nil},
 		// 空的切片与 nil 一样不过滤：第 5 层把 JSON 的空数组解出来就是它，当成「状态在空集合里」就一条都不给了
-		{"状态给空切片等于不过滤", store.TaskQuery{States: []model.TaskState{}}, []model.Task{a, b, c, d, e}},
+		{"状态给空切片等于不过滤", repository.TaskQuery{States: []model.TaskState{}}, []model.Task{a, b, c, d, e}},
 	} {
 		q.q.Limit = 1 // 一条一页：翻页时过滤也要对
 		wantItems(t, slices.Concat(taskPages(t, s, q.q)...), sortedTasks(q.want), q.name)
 	}
 	// 存不下的过滤条件谁都不是（store 的包说明）：当作没有，得到空的一页，不报数据库的编码错误
 	for _, bad := range []string{"\x00", "\xff"} {
-		for _, q := range []store.TaskQuery{
+		for _, q := range []repository.TaskQuery{
 			{HostSN: "SN-1" + bad}, {States: []model.TaskState{model.TaskState("pending" + bad)}},
 			{HostSN: "SN-1", States: []model.TaskState{model.TaskState(bad)}},
 		} {
@@ -906,18 +906,18 @@ func taskListDefaultLimit(t *testing.T, s *pgstore.Store) {
 		in = append(in, taskHost(fmt.Sprintf("SN-%03d", i)))
 	}
 	newFixture(t, s).mustCreate(t, s, mustImport(t, s, in)...) // 一批建出 101 个任务
-	wantDefaultLimit(t, slices.Concat(taskPages(t, s, store.TaskQuery{Limit: 500})...), func(cursor string) (store.Page[model.Task], error) {
-		return s.ListTasks(t.Context(), store.TaskQuery{Cursor: cursor})
+	wantDefaultLimit(t, slices.Concat(taskPages(t, s, repository.TaskQuery{Limit: 500})...), func(cursor string) (repository.Page[model.Task], error) {
+		return s.ListTasks(t.Context(), repository.TaskQuery{Cursor: cursor})
 	})
 }
 
 func taskListInvalid(t *testing.T, s *pgstore.Store) {
 	newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)
 	// 排序键为 null 的游标是伪造的：收下的话 created_at < 0，翻出空的一页、Next 为空，调用方以为翻到头了
-	for _, q := range []store.TaskQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"},
-		{Cursor: store.EncodeCursor("tasks", nil, nil)}} {
+	for _, q := range []repository.TaskQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"},
+		{Cursor: repository.EncodeCursor("tasks", nil, nil)}} {
 		_, err := s.ListTasks(t.Context(), q)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("Limit %d、Cursor %q", q.Limit, q.Cursor))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("Limit %d、Cursor %q", q.Limit, q.Cursor))
 	}
 }
 
@@ -950,10 +950,10 @@ func taskCopies(t *testing.T, s *pgstore.Store) {
 	open, _, err := s.FindOpenTask(ctx, "SN-1")
 	must(t, err, "找未结束的任务")
 	mutate(open)
-	p, err := s.ListTasks(ctx, store.TaskQuery{})
+	p, err := s.ListTasks(ctx, repository.TaskQuery{})
 	must(t, err, "列出")
 	mutate(p.Items[0])
-	moved, _, err := s.TransitionTask(ctx, want.ID, store.TaskExpect{State: model.TaskPending, Rev: 1}, model.TaskBooting, nil)
+	moved, _, err := s.TransitionTask(ctx, want.ID, repository.TaskExpect{State: model.TaskPending, Rev: 1}, model.TaskBooting, nil)
 	must(t, err, "推进")
 	mutate(moved)
 	want.State, want.Rev = model.TaskBooting, 2

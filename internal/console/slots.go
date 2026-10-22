@@ -2,10 +2,10 @@ package console
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/activation"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/core/scan"
+	"github.com/lober/lober/internal/domain/activation"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/scan"
 )
 
 type slotInfo struct {

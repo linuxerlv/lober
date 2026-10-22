@@ -32,7 +32,7 @@ type finding struct {
 func parseSource(t *testing.T, src string) (*token.FileSet, *ast.File) {
 	t.Helper()
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "x.go", src, parser.SkipObjectResolution)
+	f, err := parser.ParseFile(fset, "x.go", src, 0)
 	if err != nil {
 		t.Fatalf("测试源码解析失败：%v\n%s", err, src)
 	}
@@ -100,7 +100,7 @@ func Test守卫逐个文件的检查(t *testing.T) {
 	for _, n := range clockNames {
 		allClocks = append(allClocks, finding{ruleClock, "time." + n})
 	}
-	coreutils := "github.com/lober/lober/internal/coreutils"
+	coreutils := "github.com/lober/lober/internal/domainutils"
 
 	cases := []struct {
 		name string
@@ -127,7 +127,7 @@ func Test守卫逐个文件的检查(t *testing.T) {
 
 		{"别的模块要报", pkgModel, importing("golang.org/x/text/width"),
 			[]finding{{ruleOutside, "golang.org/x/text/width"}}},
-		{"前缀相撞的 internal/coreutils 不算层 1", pkgModel, importing(coreutils),
+		{"前缀相撞的 internal/domainutils 不算层 1", pkgModel, importing(coreutils),
 			[]finding{{ruleOutside, coreutils}}},
 		// 存储契约依赖层 1，反过来就成了环（spec §6.1）。
 		{"层 1 import 存储层要报", pkgModel, importing(pkgStore), []finding{{ruleOutside, pkgStore}}},
@@ -213,13 +213,13 @@ func Test含源文件的目录都要出现在go_list里(t *testing.T) {
 		listed []goPackage
 		want   []finding
 	}{
-		{"都列出了不报", []string{"internal/core", "internal/core/model", "internal/core/scan"}, listed, nil},
-		{"整包被构建约束排除的目录要报", []string{"internal/core", "internal/core/model", "internal/core/probeonly", "internal/core/scan"},
-			listed, []finding{{ruleListed, "internal/core/probeonly"}}},
-		{"internal/core 自己没列出也要报", []string{"internal/core", "internal/core/model"}, listed[1:],
-			[]finding{{ruleListed, "internal/core"}}},
+		{"都列出了不报", []string{"internal/domain", "internal/domain/model", "internal/domain/scan"}, listed, nil},
+		{"整包被构建约束排除的目录要报", []string{"internal/domain", "internal/domain/model", "internal/domain/probeonly", "internal/domain/scan"},
+			listed, []finding{{ruleListed, "internal/domain/probeonly"}}},
+		{"internal/domain 自己没列出也要报", []string{"internal/domain", "internal/domain/model"}, listed[1:],
+			[]finding{{ruleListed, "internal/domain"}}},
 		// 只有测试文件的目录不算含源文件，go list 照样会列出它。
-		{"列出的包多于目录不报", []string{"internal/core/model"}, listed, nil},
+		{"列出的包多于目录不报", []string{"internal/domain/model"}, listed, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -230,7 +230,7 @@ func Test含源文件的目录都要出现在go_list里(t *testing.T) {
 
 func Test只收集含非测试源文件的目录(t *testing.T) {
 	fsys := fstest.MapFS{
-		"doc.go":                   {}, // internal/core 自己也可能有包
+		"doc.go":                   {}, // internal/domain 自己也可能有包
 		"model/model.go":           {},
 		"model/model_test.go":      {},
 		"model/_gen/x.go":          {}, // go list 不进 _ 开头的目录
@@ -256,11 +256,11 @@ func Test只收集含非测试源文件的目录(t *testing.T) {
 // 真实的树是干净的：总检查漏接了哪一项，Test全模块依赖守卫 照样通过，所以组合本身也要有反例。
 func Test总检查接上了每一项(t *testing.T) {
 	fsys := fstest.MapFS{ // 以模块根为根
-		"internal/core/model/model.go":   {Data: []byte(importing(pkgScan))},
-		"internal/core/model/cgo.go":     {Data: []byte(importing("C"))},
-		"internal/core/model/x_linux.go": {Data: []byte(importing("os"))},
+		"internal/domain/model/model.go":   {Data: []byte(importing(pkgScan))},
+		"internal/domain/model/cgo.go":     {Data: []byte(importing("C"))},
+		"internal/domain/model/x_linux.go": {Data: []byte(importing("os"))},
 		// 被排除的测试文件只报它被排除，不解析：要是解析了，它 import 的 net 会多报一条。
-		"internal/core/model/x_windows_test.go": {Data: []byte(importing("net"))},
+		"internal/domain/model/x_windows_test.go": {Data: []byte(importing("net"))},
 	}
 	pkgs := []goPackage{{
 		ImportPath:     pkgModel,
@@ -268,11 +268,11 @@ func Test总检查接上了每一项(t *testing.T) {
 		CgoFiles:       []string{"cgo.go"},
 		IgnoredGoFiles: []string{"x_linux.go", "x_windows_test.go"},
 	}}
-	got, _ := checkModule(fsys, []string{"internal/core/model", "internal/core/probeonly"}, pkgs)
+	got, _ := checkModule(fsys, []string{"internal/domain/model", "internal/domain/probeonly"}, pkgs)
 	// 依次是目录覆盖、文件构成，再是三类文件各自的 import。model.go 按 model 的方向规则报，
 	// 说明解析时包名也接对了。
 	assertFindings(t, got, "", []finding{
-		{ruleListed, "internal/core/probeonly"},
+		{ruleListed, "internal/domain/probeonly"},
 		{ruleCgo, "cgo.go"},
 		{ruleIgnored, "x_linux.go"},
 		{ruleIgnored, "x_windows_test.go"},
@@ -283,7 +283,7 @@ func Test总检查接上了每一项(t *testing.T) {
 }
 
 // 存储层的三条规则（第 2 层计划任务 2，以及修补计划任务 U4 的 pgtest）各有正反例。三条都是白名单，照计划「包与文件」
-// 表；第 1 层的标准库白名单不套用到这里。
+// 表；仓储契约使用领域纯标准库白名单。
 func Test存储层的依赖规则(t *testing.T) {
 	thirdParty := "github.com/google/btree"
 	storex := "github.com/lober/lober/internal/storex"
@@ -294,15 +294,15 @@ func Test存储层的依赖规则(t *testing.T) {
 		want []finding
 	}{
 		// 一、契约只依赖标准库、层 1 和契约自己。
-		{"store 用层 1 白名单以外的标准库不报", pkgStore,
-			importing("context", "crypto/rand", "encoding/base32", "sync", pkgModel, pkgActivation, pkgAdmission), nil},
+		{"契约只用纯计算标准库", pkgStore,
+			importing("context", "math", "reflect", "encoding/base64", pkgModel, pkgActivation, pkgAdmission), nil},
 		{"store import 实现要报", pkgStore, importing(pkgPgstore), []finding{{ruleContract, pkgPgstore}}},
 		{"store import gorm 要报", pkgStore, importing("gorm.io/gorm"), []finding{{ruleContract, "gorm.io/gorm"}}},
 		{"cgo 的 C 不算标准库", pkgStore, importing("C"), []finding{{ruleContract, "C"}}},
 		{"前缀相撞的 internal/storex 不算契约", pkgStore, importing(storex), []finding{{ruleContract, storex}}},
 		// 新加的包与契约放行的一样多：不依赖第三方模块，也不依赖 pgstore。
 		{"存储层新加的包按契约的规则查", pkgStore + "/cache",
-			importing("context", "sync", pkgStore, pkgModel, pkgAdmission, thirdParty, "gorm.io/gorm", pkgPgstore),
+			importing("context", "reflect", pkgStore, pkgModel, pkgAdmission, thirdParty, "gorm.io/gorm", pkgPgstore),
 			[]finding{{ruleContract, thirdParty}, {ruleContract, "gorm.io/gorm"}, {ruleContract, pkgPgstore}}},
 
 		// 二、只有 pgstore 能依赖 gorm 与 pgx v5；存储层别的包，除了契约，它也不依赖。
@@ -339,9 +339,9 @@ func Test存储层的依赖规则(t *testing.T) {
 		{"pgstore 读时钟要报", pkgPgstore, withImport(`"time"`, "func f() { _ = time.Now(); time.Sleep(time.Second) }"),
 			[]finding{{ruleClock, "time.Now"}, {ruleClock, "time.Sleep"}}},
 		{"契约别名导入后读时钟要报", pkgStore, withImport(`t "time"`, "var clock = t.Since"),
-			[]finding{{ruleClock, "time.Since"}}},
+			[]finding{{ruleContract, "time"}, {ruleClock, "time.Since"}}},
 		{"存储层点导入 time 要报", pkgStore + "/cache", withImport(`. "time"`, "var d Duration"),
-			[]finding{{ruleDotTime, "time"}}},
+			[]finding{{ruleContract, "time"}, {ruleDotTime, "time"}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -385,7 +385,7 @@ func Test外部测试包的文件记在被测包里(t *testing.T) {
 // 真实的树是干净的，存储层的总检查漏接了哪一项，Test全模块依赖守卫 照样通过，所以组合也要有反例。
 func Test存储层总检查接上了每一项(t *testing.T) {
 	fsys := fstest.MapFS{ // 以模块根为根
-		"internal/store/store.go": {Data: []byte(importing(pkgPgstore))},
+		"internal/domain/repository/repository.go": {Data: []byte(importing(pkgPgstore))},
 		// gorm 只有 pgstore 能用：pg.go 要是被当成别的包，gorm 也会报。
 		"internal/store/pgstore/pg.go":      {Data: []byte(importing("gorm.io/gorm", "github.com/lib/pq"))},
 		"internal/store/pgstore/cgo.go":     {Data: []byte(importing("C"))},
@@ -394,16 +394,16 @@ func Test存储层总检查接上了每一项(t *testing.T) {
 		"internal/store/pgstore/x_windows_test.go": {Data: []byte(importing("github.com/lib/pq"))},
 	}
 	pkgs := []goPackage{
-		{ImportPath: pkgStore, GoFiles: []string{"store.go"}},
+		{ImportPath: pkgStore, GoFiles: []string{"repository.go"}},
 		{ImportPath: pkgPgstore, GoFiles: []string{"pg.go"}, CgoFiles: []string{"cgo.go"},
 			IgnoredGoFiles: []string{"x_linux.go", "x_windows_test.go"}},
 	}
-	got, _ := checkModule(fsys, []string{"internal/store", "internal/store/pgstore", "internal/store/probeonly"}, pkgs)
+	got, _ := checkModule(fsys, []string{"internal/domain/repository", "internal/store/pgstore", "internal/domain/repository/probeonly"}, pkgs)
 	// 依次是目录覆盖，再逐个包：先报被构建约束排除的文件（测试文件也算：*_linux_test.go 在 Windows 上静默不跑，契约测试
-	// 就零覆盖了），再是 import。store.go 按契约的规则报、pg.go 按 pgstore 的规则报，说明包名接对了；cgo 文件与被排除的
+	// 就零覆盖了），再是 import。repository.go 按契约的规则报、pg.go 按 pgstore 的规则报，说明包名接对了；cgo 文件与被排除的
 	// 非测试文件也解析了，在本平台不编译的文件躲不过守卫。cgo 不另报：C 不算标准库，import 那一条已经挡住它。
 	assertFindings(t, got, "", []finding{
-		{ruleListed, "internal/store/probeonly"},
+		{ruleListed, "internal/domain/repository/probeonly"},
 		{ruleContract, pkgPgstore},
 		{ruleIgnored, "x_linux.go"},
 		{ruleIgnored, "x_windows_test.go"},
@@ -477,9 +477,9 @@ func Test第3层总检查接上了每一项(t *testing.T) {
 		"internal/builtin/x_test.go":      {Data: []byte(importing(pkgRender, "gorm.io/gorm"))},
 		// 按格式分的子包：embed 与父包不报，越过层边界要报；只放正文的子目录不是包，也不在 dirs 里。
 		"internal/builtin/kickstart/embed.go": {Data: []byte(importing("embed", pkgBuiltin, pkgPgstore))},
-		"internal/render/render.go":           {Data: []byte(importing(pkgStore, pkgBuiltin, "embed"))},
-		"internal/render/cgo.go":              {Data: []byte(importing("C"))},
-		"internal/render/x_linux.go":          {Data: []byte(importing("os"))},
+		"internal/domain/render/render.go":    {Data: []byte(importing(pkgStore, pkgBuiltin, "embed"))},
+		"internal/domain/render/cgo.go":       {Data: []byte(importing("C"))},
+		"internal/domain/render/x_linux.go":   {Data: []byte(importing("os"))},
 	}
 	pkgs := []goPackage{
 		{ImportPath: pkgBuiltin, GoFiles: []string{"builtin.go"}, TestGoFiles: []string{"golden_test.go"},
@@ -487,12 +487,12 @@ func Test第3层总检查接上了每一项(t *testing.T) {
 		{ImportPath: pkgBuiltin + "/kickstart", GoFiles: []string{"embed.go"}},
 		{ImportPath: pkgRender, GoFiles: []string{"render.go"}, CgoFiles: []string{"cgo.go"}, IgnoredGoFiles: []string{"x_linux.go"}},
 	}
-	got, _ := checkModule(fsys, []string{"internal/builtin", "internal/builtin/kickstart", "internal/render",
-		"internal/render/probeonly"}, pkgs)
+	got, _ := checkModule(fsys, []string{"internal/builtin", "internal/builtin/kickstart", "internal/domain/render",
+		"internal/domain/render/probeonly"}, pkgs)
 	// 依次是目录覆盖，再逐个包。builtin.go 的 embed 不报、render.go 的要报，说明包名接对了；渲染照第 1 层的样子先报文件构成，
 	// cgo 文件与被排除的文件也解析了。
 	assertFindings(t, got, "", []finding{
-		{ruleListed, "internal/render/probeonly"},
+		{ruleListed, "internal/domain/render/probeonly"},
 		{ruleLayer3Apart, pkgRender},
 		{ruleLayer3, pkgPgstore},
 		{ruleCgo, "cgo.go"},
@@ -536,7 +536,7 @@ func Test每个包都要归到一层(t *testing.T) {
 	var want []finding
 	for _, p := range []string{
 		modulePath, modulePath + "/internal", modulePath + "/cmd/loberx", modulePath + "/tools/gen",
-		modulePath + "/internal/coreutils", modulePath + "/internal/storex", modulePath + "/internal/renderer",
+		modulePath + "/internal/domainutils", modulePath + "/internal/storex", modulePath + "/internal/renderer",
 		modulePath + "/internal/builtins", pkgGuard + "/fixture",
 	} {
 		pkgs = append(pkgs, goPackage{ImportPath: p, GoFiles: []string{"x.go"}})

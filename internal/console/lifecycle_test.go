@@ -7,14 +7,14 @@ import (
 
 	"github.com/lober/lober/internal/builtin"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
-func reviewerHTTP(t *testing.T, s *Server, st store.Users) string {
+func reviewerHTTP(t *testing.T, s *Server, st repository.Users) string {
 	t.Helper()
-	seedAuthUser(t, st, "reviewer", store.RoleHookApprover, "reviewer password")
+	seedAuthUser(t, st, "reviewer", model.RoleHookApprover, "reviewer password")
 	return loginHTTP(t, s, "reviewer", "reviewer password").Token
 }
 func lifecyclePath(kind, id, operation string, rev int64) string {
@@ -41,7 +41,7 @@ func Test生命周期Hook提交审批废弃与审计(t *testing.T) {
 	if h.State != model.VersionDeprecated || h.Rev != 4 {
 		t.Fatal(h)
 	}
-	audit, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	audit, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func Test生命周期修订前提与失败不写审计(t *testing.T) {
 			}
 		}
 	}
-	before, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	for _, op := range []string{"approve", "reject", "deprecate"} {
 		if w := httpCall(s, "POST", lifecyclePath("hooks", h.ID, op, 1), `{"reason":"fix"}`, reviewer); w.Code != 409 {
 			t.Fatal(op, w.Code, w.Body.String())
@@ -93,7 +93,7 @@ func Test生命周期修订前提与失败不写审计(t *testing.T) {
 	if err != nil || back.State != model.VersionReview || back.Rev != 2 {
 		t.Fatal(back, err)
 	}
-	after, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if len(after.Items) != len(before.Items)+1 {
 		t.Fatal("failed operations audited")
 	}
@@ -113,7 +113,7 @@ func Test生命周期驳回原样理由并允许再编辑(t *testing.T) {
 	if h.State != model.VersionDraft || h.Rev != 3 {
 		t.Fatal(h)
 	}
-	audit, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	audit, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	found := false
 	for _, a := range audit.Items {
 		if a.Action == "hook.reject" {
@@ -140,7 +140,7 @@ func Test生命周期模板审批重跑引用并保留待审批状态(t *testing
 		t.Fatal(tpl)
 	}
 	responseData[hookResponse](t, httpCall(s, "POST", lifecyclePath("hooks", hook.ID, "deprecate", hook.Rev), "", reviewer))
-	before, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	w := httpCall(s, "POST", lifecyclePath("templates", tpl.ID, "approve", 2), "", reviewer)
 	if w.Code != 422 || !strings.Contains(w.Body.String(), "hook_ref_deprecated") {
 		t.Fatal(w.Code, w.Body.String())
@@ -149,7 +149,7 @@ func Test生命周期模板审批重跑引用并保留待审批状态(t *testing
 	if err != nil || back.State != model.VersionReview || back.Rev != 2 {
 		t.Fatal(back, err)
 	}
-	after, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if len(after.Items) != len(before.Items) {
 		t.Fatal("rejected approval audited")
 	}
@@ -175,7 +175,7 @@ func Test生命周期校验只读并计算OK(t *testing.T) {
 	invalid := responseData[hookResponse](t, httpCall(s, "POST", "/console/v1/hooks", `{"name":"invalid"}`, admin))
 	valid := approvedTestHook(t, st, "valid")
 	tpl := responseData[templateResponse](t, httpCall(s, "POST", "/console/v1/templates", fmt.Sprintf(`{"name":"diagnostic","family":"linux","series":["rocky"],"body":"{{lober:syslog}}\n{{slot:x}}\n{{lober:cleanup}}\n{{lober:firstboot}}\n","assembly":{"x":[{"hookID":%q,"hookVersion":1}]}}`, valid.ID), admin))
-	before, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	for _, item := range []struct {
 		kind, id string
 		want     bool
@@ -185,7 +185,7 @@ func Test生命周期校验只读并计算OK(t *testing.T) {
 			t.Fatal(item, p)
 		}
 	}
-	after, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if len(after.Items) != len(before.Items) {
 		t.Fatal("validate audited")
 	}
@@ -207,7 +207,7 @@ func Test生命周期校验只读并计算OK(t *testing.T) {
 func Test生命周期十个端点权限与内置保护(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	seedBuiltinContent(t, st)
-	for i, role := range store.Roles() {
+	for i, role := range model.Roles() {
 		name := fmt.Sprintf("life%d", i)
 		seedAuthUser(t, st, name, role, "pw")
 		token := loginHTTP(t, s, name, "pw").Token
@@ -227,7 +227,7 @@ func Test生命周期十个端点权限与内置保护(t *testing.T) {
 			count++
 			path := strings.ReplaceAll(strings.ReplaceAll(r.Path, ":id", "missing"), ":version", "1") + "?rev=1"
 			w := httpCall(s, r.Method, path, `{"reason":"fix"}`, token)
-			allowed := role == store.RoleAdmin || (op == "submit" || op == "validate") && role == store.RoleHookAuthor || (op == "approve" || op == "reject" || op == "deprecate") && role == store.RoleHookApprover
+			allowed := role == model.RoleAdmin || (op == "submit" || op == "validate") && role == model.RoleHookAuthor || (op == "approve" || op == "reject" || op == "deprecate") && role == model.RoleHookApprover
 			if allowed && (w.Code == 401 || w.Code == 403) || !allowed && w.Code != 403 {
 				t.Fatal(role, r, w.Code)
 			}
@@ -235,7 +235,7 @@ func Test生命周期十个端点权限与内置保护(t *testing.T) {
 		if count != 10 {
 			t.Fatal(count)
 		}
-		if role == store.RoleAdmin {
+		if role == model.RoleAdmin {
 			h := builtin.Hooks()[0]
 			tpl := builtin.Templates()[0]
 			for _, item := range []struct {

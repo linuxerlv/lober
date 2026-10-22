@@ -6,11 +6,11 @@ import (
 	"fmt"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/core/params"
-	"github.com/lober/lober/internal/core/snapshot"
-	"github.com/lober/lober/internal/render"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/params"
+	"github.com/lober/lober/internal/domain/render"
+	"github.com/lober/lober/internal/domain/snapshot"
 )
 
 // BootConfig is supplied by assembly and reads immutable original ESXi media

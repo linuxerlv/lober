@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/activation"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/activation"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
@@ -110,19 +110,19 @@ var hookOps = versioned[model.Hook]{
 	newVersion: func(ctx context.Context, s *pgstore.Store, id string, from int, author string) (model.Hook, error) {
 		return s.NewHookVersion(ctx, id, from, author)
 	},
-	submit: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a store.Audit) error {
+	submit: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a repository.Audit) error {
 		return s.SubmitHook(ctx, model.HookKey{ID: id, Version: v}, rev, a)
 	},
-	approve: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, approver string, a store.Audit) error {
+	approve: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, approver string, a repository.Audit) error {
 		return s.ApproveHook(ctx, model.HookKey{ID: id, Version: v}, rev, approver, a)
 	},
-	reject: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a store.Audit) error {
+	reject: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a repository.Audit) error {
 		return s.RejectHook(ctx, model.HookKey{ID: id, Version: v}, rev, a)
 	},
-	deprecate: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a store.Audit) error {
+	deprecate: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64, a repository.Audit) error {
 		return s.DeprecateHook(ctx, model.HookKey{ID: id, Version: v}, rev, a)
 	},
-	rename: func(ctx context.Context, s *pgstore.Store, id, name string, a store.Audit) error {
+	rename: func(ctx context.Context, s *pgstore.Store, id, name string, a repository.Audit) error {
 		return s.RenameHook(ctx, id, name, a)
 	},
 	deleteDraft: func(ctx context.Context, s *pgstore.Store, id string, v int, rev int64) error {
@@ -134,8 +134,8 @@ var hookOps = versioned[model.Hook]{
 	versions: func(ctx context.Context, s *pgstore.Store, id string) ([]model.Hook, error) {
 		return s.ListHookVersions(ctx, id)
 	},
-	list: func(ctx context.Context, s *pgstore.Store, q listQuery) (store.Page[model.Hook], error) {
-		return s.ListHooks(ctx, store.HookQuery{NamePrefix: q.NamePrefix, States: q.States, ApprovedOnly: q.ApprovedOnly, Cursor: q.Cursor, Limit: q.Limit})
+	list: func(ctx context.Context, s *pgstore.Store, q listQuery) (repository.Page[model.Hook], error) {
+		return s.ListHooks(ctx, repository.HookQuery{NamePrefix: q.NamePrefix, States: q.States, ApprovedOnly: q.ApprovedOnly, Cursor: q.Cursor, Limit: q.Limit})
 	},
 	ensureBuiltin: func(ctx context.Context, s *pgstore.Store, h model.Hook) error { return s.EnsureBuiltinHook(ctx, h) },
 }
@@ -186,18 +186,18 @@ func hookUnstorable(t *testing.T, s *pgstore.Store) {
 		in := sampleHook("Base-2")
 		c.mod(&in)
 		_, err := s.CreateHook(t.Context(), in)
-		wantProblems(t, err, store.ErrInvalid, c.want(""), "新建："+c.name)
+		wantProblems(t, err, repository.ErrInvalid, c.want(""), "新建："+c.name)
 		in = hookOps.mustGet(t, s, draft.ID, 1) // 每次重读一份：mod 改的是切片里的元素
 		c.mod(&in)
 		_, err = s.SaveHookDraft(t.Context(), in)
-		wantProblems(t, err, store.ErrInvalid, c.want(draft.ID+"@1"), "保存："+c.name)
+		wantProblems(t, err, repository.ErrInvalid, c.want(draft.ID+"@1"), "保存："+c.name)
 	}
 	// 名字不合法与文本存不下一起时，名字的问题在前，顺序同激活判定
 	in := sampleHook("a b")
 	in.Impls[1].Body = "\xff"
 	want := []model.Problem{nameProblem(t, "a b", model.Subject{Kind: "hook"}), notStorable("impl", "", "impl/2")}
 	_, err := s.CreateHook(t.Context(), in)
-	wantProblems(t, err, store.ErrInvalid, want, "名字不合法、正文也存不下")
+	wantProblems(t, err, repository.ErrInvalid, want, "名字不合法、正文也存不下")
 	wantAuthoredUnchanged(t, s, before, "文本存不下时")
 }
 
@@ -219,7 +219,7 @@ func hookApproveRejected(t *testing.T, s *pgstore.Store) {
 		want := append(activation.Hook(h), approverProblems(h.Author, c.approver, model.Subject{Kind: "hook", ID: h.ID + "@1"})...)
 		wantCodes(t, want, c.codes)
 		err := s.ApproveHook(t.Context(), h.Key(), h.Rev, c.approver, anAudit("hook.approve"))
-		wantProblems(t, err, store.ErrRejected, want, "审批人 "+c.approver)
+		wantProblems(t, err, repository.ErrRejected, want, "审批人 "+c.approver)
 	}
 	wantAuthoredUnchanged(t, s, before, "审批被拒时")
 
@@ -256,7 +256,7 @@ func hookCopies(t *testing.T, s *pgstore.Store) {
 	m, err := s.GetHooks(ctx, []model.HookKey{want.Key()})
 	must(t, err, "批量取")
 	mutate(m[want.Key()])
-	p, err := s.ListHooks(ctx, store.HookQuery{})
+	p, err := s.ListHooks(ctx, repository.HookQuery{})
 	must(t, err, "列出")
 	mutate(p.Items[0])
 	vs, err := s.ListHookVersions(ctx, want.ID)
@@ -306,7 +306,7 @@ func hookGetHooks(t *testing.T, s *pgstore.Store) {
 	}
 	for _, k := range []model.HookKey{{ID: "Bad", Version: 1}, {ID: a.ID, Version: 0}} {
 		_, err := s.GetHooks(ctx, []model.HookKey{a.Key(), k})
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("批量取的键 %v 不合格式", k))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("批量取的键 %v 不合格式", k))
 	}
 }
 
@@ -368,15 +368,15 @@ type versioned[V any] struct {
 	create        func(ctx context.Context, s *pgstore.Store, v V) (V, error)
 	save          func(ctx context.Context, s *pgstore.Store, v V) (V, error)
 	newVersion    func(ctx context.Context, s *pgstore.Store, id string, from int, author string) (V, error)
-	submit        func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64, a store.Audit) error
-	approve       func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64, approver string, a store.Audit) error
-	reject        func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64, a store.Audit) error
-	deprecate     func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64, a store.Audit) error
-	rename        func(ctx context.Context, s *pgstore.Store, id, name string, a store.Audit) error
+	submit        func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64, a repository.Audit) error
+	approve       func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64, approver string, a repository.Audit) error
+	reject        func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64, a repository.Audit) error
+	deprecate     func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64, a repository.Audit) error
+	rename        func(ctx context.Context, s *pgstore.Store, id, name string, a repository.Audit) error
 	deleteDraft   func(ctx context.Context, s *pgstore.Store, id string, version int, rev int64) error
 	get           func(ctx context.Context, s *pgstore.Store, id string, version int) (V, error)
 	versions      func(ctx context.Context, s *pgstore.Store, id string) ([]V, error)
-	list          func(ctx context.Context, s *pgstore.Store, q listQuery) (store.Page[V], error)
+	list          func(ctx context.Context, s *pgstore.Store, q listQuery) (repository.Page[V], error)
 	ensureBuiltin func(ctx context.Context, s *pgstore.Store, v V) error
 }
 
@@ -473,7 +473,7 @@ func (k versioned[V]) currentApproved(vs []V) (V, bool) {
 // pages 用查询 q 从头翻到尾，返回每一页；游标由它填。
 func (k versioned[V]) pages(t *testing.T, s *pgstore.Store, q listQuery) [][]V {
 	t.Helper()
-	return allPages(t, func(cursor string) (store.Page[V], error) {
+	return allPages(t, func(cursor string) (repository.Page[V], error) {
 		q.Cursor = cursor
 		return k.list(t.Context(), s, q)
 	})
@@ -500,7 +500,7 @@ func (k versioned[V]) names(vs []V) []string {
 type authored struct {
 	Hooks     []model.Hook
 	Templates []model.Template
-	Audit     []store.AuditEntry
+	Audit     []repository.AuditEntry
 }
 
 func authoredSnapshot(t *testing.T, s *pgstore.Store) authored {
@@ -598,8 +598,8 @@ func runAudited(t *testing.T, ops []auditedOp) {
 		t.Parallel()
 		each(t, func(t *testing.T, s *pgstore.Store, call auditedCall) {
 			before := authoredSnapshot(t, s)
-			_, err := call(store.Audit{})
-			wantIs(t, err, store.ErrAuditRequired, "零值审计")
+			_, err := call(repository.Audit{})
+			wantIs(t, err, repository.ErrAuditRequired, "零值审计")
 			wantAuthoredUnchanged(t, s, before, "零值审计时")
 			_, err = call(anAudit("test.retry"))
 			must(t, err, "补上审计之后")
@@ -609,9 +609,9 @@ func runAudited(t *testing.T, ops []auditedOp) {
 		t.Parallel()
 		each(t, func(t *testing.T, s *pgstore.Store, call auditedCall) {
 			before := authoredSnapshot(t, s)
-			for _, a := range []store.Audit{{Actor: "alice", Action: "approve", At: at0}, {Action: "hook.approve", At: at0}, {Actor: "alice", Action: "hook.approve"}} {
+			for _, a := range []repository.Audit{{Actor: "alice", Action: "approve", At: at0}, {Action: "hook.approve", At: at0}, {Actor: "alice", Action: "hook.approve"}} {
 				_, err := call(a)
-				wantIs(t, err, store.ErrInvalid, fmt.Sprintf("审计 %+v", a))
+				wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("审计 %+v", a))
 			}
 			wantAuthoredUnchanged(t, s, before, "审计不合法时")
 			_, err := call(anAudit("test.retry"))
@@ -622,7 +622,7 @@ func runAudited(t *testing.T, ops []auditedOp) {
 		t.Parallel()
 		each(t, func(t *testing.T, s *pgstore.Store, call auditedCall) {
 			before := authoredSnapshot(t, s)
-			_, err := call(store.Audit{Actor: pgtest.FaultActor, Action: "test.fault", At: at0})
+			_, err := call(repository.Audit{Actor: pgtest.FaultActor, Action: "test.fault", At: at0})
 			if err == nil {
 				t.Fatal("审计写失败时应报错")
 			}
@@ -640,7 +640,7 @@ func runAudited(t *testing.T, ops []auditedOp) {
 		t.Parallel()
 		each(t, func(t *testing.T, s *pgstore.Store, call auditedCall) {
 			before := auditEntries(t, s)
-			a := store.Audit{Actor: "张三", Action: "test.audited", Detail: "理由：缺少分区说明", At: at0 + 1}
+			a := repository.Audit{Actor: "张三", Action: "test.audited", Detail: "理由：缺少分区说明", At: at0 + 1}
 			targets, err := call(a)
 			must(t, err, "调用")
 			after := auditEntries(t, s)
@@ -663,30 +663,30 @@ func runAudited(t *testing.T, ops []auditedOp) {
 // auditedOps 是 hook 或模板里要审计的方法。提交、审批、驳回、废弃针对一个版本，审计的对象是「ID@版本」；改名针对
 // 整个身份，对象是 ID。
 func (k versioned[V]) auditedOps() []auditedOp {
-	step := func(name string, from model.VersionState, do func(t *testing.T, s *pgstore.Store, h head, a store.Audit) error) auditedOp {
+	step := func(name string, from model.VersionState, do func(t *testing.T, s *pgstore.Store, h head, a repository.Audit) error) auditedOp {
 		return auditedOp{name, func(t *testing.T, s *pgstore.Store) auditedCall {
 			h := k.head(k.to(t, s, k.mustCreate(t, s, "Base-1"), from))
-			return func(a store.Audit) ([]target, error) {
+			return func(a repository.Audit) ([]target, error) {
 				return []target{{k.kind, fmt.Sprintf("%s@%d", h.ID, h.Version)}}, do(t, s, h, a)
 			}
 		}}
 	}
 	return []auditedOp{
-		step("提交", model.VersionDraft, func(t *testing.T, s *pgstore.Store, h head, a store.Audit) error {
+		step("提交", model.VersionDraft, func(t *testing.T, s *pgstore.Store, h head, a repository.Audit) error {
 			return k.submit(t.Context(), s, h.ID, h.Version, h.Rev, a)
 		}),
-		step("审批", model.VersionReview, func(t *testing.T, s *pgstore.Store, h head, a store.Audit) error {
+		step("审批", model.VersionReview, func(t *testing.T, s *pgstore.Store, h head, a repository.Audit) error {
 			return k.approve(t.Context(), s, h.ID, h.Version, h.Rev, "bob", a)
 		}),
-		step("驳回", model.VersionReview, func(t *testing.T, s *pgstore.Store, h head, a store.Audit) error {
+		step("驳回", model.VersionReview, func(t *testing.T, s *pgstore.Store, h head, a repository.Audit) error {
 			return k.reject(t.Context(), s, h.ID, h.Version, h.Rev, a)
 		}),
-		step("废弃", model.VersionApproved, func(t *testing.T, s *pgstore.Store, h head, a store.Audit) error {
+		step("废弃", model.VersionApproved, func(t *testing.T, s *pgstore.Store, h head, a repository.Audit) error {
 			return k.deprecate(t.Context(), s, h.ID, h.Version, h.Rev, a)
 		}),
 		{"改名", func(t *testing.T, s *pgstore.Store) auditedCall {
 			id := k.head(k.mustCreate(t, s, "Base-1")).ID
-			return func(a store.Audit) ([]target, error) {
+			return func(a repository.Audit) ([]target, error) {
 				return []target{{k.kind, id}}, k.rename(t.Context(), s, id, "Renamed-1", a)
 			}
 		}},
@@ -753,12 +753,12 @@ func (k versioned[V]) createBadName(t *testing.T, s *pgstore.Store) {
 	for _, name := range []string{"", "  ", "Rocky Base", "中文名", "Ｒocky", strings.Repeat("a", 65), "a\x00b", "\xff"} {
 		want := []model.Problem{nameProblem(t, name, model.Subject{Kind: k.kind})} // 还没有 ID，Subject 只有 Kind
 		_, err := k.create(t.Context(), s, k.sample(name))
-		wantProblems(t, err, store.ErrInvalid, want, fmt.Sprintf("名字 %q", name))
+		wantProblems(t, err, repository.ErrInvalid, want, fmt.Sprintf("名字 %q", name))
 	}
 	for _, name := range reservedNames {
 		want := []model.Problem{reservedProblem(t, name, model.Subject{Kind: k.kind})}
 		_, err := k.create(t.Context(), s, k.sample(name))
-		wantProblems(t, err, store.ErrInvalid, want, fmt.Sprintf("名字 %q 用了保留前缀", name))
+		wantProblems(t, err, repository.ErrInvalid, want, fmt.Sprintf("名字 %q 用了保留前缀", name))
 	}
 	wantAuthoredUnchanged(t, s, before, "名字不合法时")
 }
@@ -791,7 +791,7 @@ func (k versioned[V]) createBadInput(t *testing.T, s *pgstore.Store) {
 		{"存不下的作者", func(h *head) { h.Author = "a\x00" }},
 	} {
 		_, err := k.create(t.Context(), s, k.with(k.sample("Base-1"), c.mod))
-		wantIs(t, err, store.ErrInvalid, "新建时"+c.what)
+		wantIs(t, err, repository.ErrInvalid, "新建时"+c.what)
 	}
 	wantAuthoredUnchanged(t, s, before, "入参不对时")
 }
@@ -821,7 +821,7 @@ func (k versioned[V]) saveNotDraft(t *testing.T, s *pgstore.Store) {
 		v = k.to(t, s, v, state)
 		before := authoredSnapshot(t, s)
 		_, err := k.save(t.Context(), s, k.edit(v)) // 带着当前的 Rev
-		wantIs(t, err, store.ErrImmutable, "保存 "+string(state)+" 的版本")
+		wantIs(t, err, repository.ErrImmutable, "保存 "+string(state)+" 的版本")
 		wantAuthoredUnchanged(t, s, before, "保存被拒时")
 	}
 }
@@ -833,13 +833,13 @@ func (k versioned[V]) saveName(t *testing.T, s *pgstore.Store) {
 	before := authoredSnapshot(t, s)
 	for _, name := range []string{"Base-2", "base-1", " Base-1", ""} {
 		_, err := k.save(t.Context(), s, k.with(k.edit(v), func(h *head) { h.Name = name }))
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("保存时 Name 为 %q", name))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("保存时 Name 为 %q", name))
 	}
 	wantAuthoredUnchanged(t, s, before, "Name 不对时")
 	// 改名之后，带旧名字的保存被拒，带新名字的照常保存
 	must(t, k.rename(t.Context(), s, id, "Renamed-1", anAudit(k.kind+".rename")), "改名")
 	_, err := k.save(t.Context(), s, k.edit(v))
-	wantIs(t, err, store.ErrInvalid, "改名之后带着旧名字保存")
+	wantIs(t, err, repository.ErrInvalid, "改名之后带着旧名字保存")
 	_, err = k.save(t.Context(), s, k.with(k.edit(v), func(h *head) { h.Name = "Renamed-1" }))
 	must(t, err, "改名之后带着新名字保存")
 }
@@ -860,7 +860,7 @@ func (k versioned[V]) saveFixed(t *testing.T, s *pgstore.Store) {
 		{"内置标记", func(h *head) { h.Builtin = true }},
 	} {
 		_, err := k.save(t.Context(), s, k.with(k.edit(v), c.mod))
-		wantIs(t, err, store.ErrInvalid, "保存时改了"+c.what)
+		wantIs(t, err, repository.ErrInvalid, "保存时改了"+c.what)
 	}
 	wantAuthoredUnchanged(t, s, before, "改了不能改的字段时")
 }
@@ -872,12 +872,12 @@ func (k versioned[V]) saveConflict(t *testing.T, s *pgstore.Store) {
 	before := authoredSnapshot(t, s)
 	for _, rev := range []int64{0, k.head(stale).Rev, k.head(cur).Rev + 1} {
 		_, err := k.save(t.Context(), s, k.with(k.edit(cur), func(h *head) { h.Rev = rev }))
-		wantIs(t, err, store.ErrConflict, fmt.Sprintf("带着 Rev %d 保存", rev))
+		wantIs(t, err, repository.ErrConflict, fmt.Sprintf("带着 Rev %d 保存", rev))
 	}
 	_, err = k.save(t.Context(), s, k.with(cur, func(h *head) { h.ID = "nosuchid" }))
-	wantIs(t, err, store.ErrNotFound, "保存不存在的身份")
+	wantIs(t, err, repository.ErrNotFound, "保存不存在的身份")
 	_, err = k.save(t.Context(), s, k.with(cur, func(h *head) { h.Version = 2 }))
-	wantIs(t, err, store.ErrNotFound, "保存不存在的版本")
+	wantIs(t, err, repository.ErrNotFound, "保存不存在的版本")
 	wantAuthoredUnchanged(t, s, before, "保存被拒时")
 }
 
@@ -895,7 +895,7 @@ func (k versioned[V]) lifecycle(t *testing.T, s *pgstore.Store) {
 	rev := func() int64 { return k.head(cur).Rev }
 	must(t, k.submit(ctx, s, h.ID, 1, rev(), anAudit(k.kind+".submit")), "提交")
 	expect("提交", model.VersionReview, "")
-	reason := store.Audit{Actor: "bob", Action: k.kind + ".reject", Detail: "缺少说明", At: at0}
+	reason := repository.Audit{Actor: "bob", Action: k.kind + ".reject", Detail: "缺少说明", At: at0}
 	must(t, k.reject(ctx, s, h.ID, 1, rev(), reason), "驳回")
 	expect("驳回", model.VersionDraft, "")
 	saved, err := k.save(ctx, s, k.edit(cur))
@@ -942,7 +942,7 @@ func (k versioned[V]) badTransitions(t *testing.T, s *pgstore.Store) {
 		before := authoredSnapshot(t, s)
 		for _, step := range k.transitions() {
 			if step.from != state {
-				wantIs(t, step.do(t, s, k.head(v)), store.ErrConflict, fmt.Sprintf("从 %s %s", state, step.name))
+				wantIs(t, step.do(t, s, k.head(v)), repository.ErrConflict, fmt.Sprintf("从 %s %s", state, step.name))
 			}
 		}
 		wantAuthoredUnchanged(t, s, before, "转换不合规矩时")
@@ -956,10 +956,10 @@ func (k versioned[V]) transitionConflict(t *testing.T, s *pgstore.Store) {
 		for _, rev := range []int64{0, h.Rev - 1, h.Rev + 1} {
 			stale := h
 			stale.Rev = rev
-			wantIs(t, step.do(t, s, stale), store.ErrConflict, fmt.Sprintf("%s时带着 Rev %d", step.name, rev))
+			wantIs(t, step.do(t, s, stale), repository.ErrConflict, fmt.Sprintf("%s时带着 Rev %d", step.name, rev))
 		}
 		for _, missing := range []head{{ID: "nosuchid", Version: 1, Rev: h.Rev}, {ID: h.ID, Version: 2, Rev: h.Rev}} {
-			wantIs(t, step.do(t, s, missing), store.ErrNotFound, fmt.Sprintf("%s不存在的 %s@%d", step.name, missing.ID, missing.Version))
+			wantIs(t, step.do(t, s, missing), repository.ErrNotFound, fmt.Sprintf("%s不存在的 %s@%d", step.name, missing.ID, missing.Version))
 		}
 		wantAuthoredUnchanged(t, s, before, step.name+"被拒时")
 	}
@@ -978,11 +978,11 @@ func (k versioned[V]) approveApprover(t *testing.T, s *pgstore.Store) {
 		want := approverProblems(h.Author, c.approver, subj)
 		wantCodes(t, want, []model.Code{c.code})
 		err := k.approve(t.Context(), s, h.ID, 1, h.Rev, c.approver, anAudit(k.kind+".approve"))
-		wantProblems(t, err, store.ErrRejected, want, fmt.Sprintf("审批人 %q", c.approver))
+		wantProblems(t, err, repository.ErrRejected, want, fmt.Sprintf("审批人 %q", c.approver))
 	}
 	for _, approver := range []string{"b\x00b", "\xff"} {
 		err := k.approve(t.Context(), s, h.ID, 1, h.Rev, approver, anAudit(k.kind+".approve"))
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("审批人 %q", approver))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("审批人 %q", approver))
 	}
 	wantAuthoredUnchanged(t, s, before, "审批被拒时")
 	must(t, k.approve(t.Context(), s, h.ID, 1, h.Rev, "bob", anAudit(k.kind+".approve")), "换成 bob 审批")
@@ -1024,7 +1024,7 @@ func (k versioned[V]) newVersionPending(t *testing.T, s *pgstore.Store) {
 		t.Helper()
 		before := authoredSnapshot(t, s)
 		_, err := k.newVersion(t.Context(), s, id, 1, "carol")
-		wantIs(t, err, store.ErrConflict, what)
+		wantIs(t, err, repository.ErrConflict, what)
 		wantAuthoredUnchanged(t, s, before, what+"时")
 		k.wantLastVersion(t, s, id, last, what+"时")
 	}
@@ -1044,12 +1044,12 @@ func (k versioned[V]) newVersionBad(t *testing.T, s *pgstore.Store) {
 	id := k.head(k.to(t, s, k.mustCreate(t, s, "Base-1"), model.VersionApproved)).ID
 	before := authoredSnapshot(t, s)
 	_, err := k.newVersion(t.Context(), s, "nosuchid", 1, "carol")
-	wantIs(t, err, store.ErrNotFound, "身份不存在")
+	wantIs(t, err, repository.ErrNotFound, "身份不存在")
 	_, err = k.newVersion(t.Context(), s, id, 2, "carol")
-	wantIs(t, err, store.ErrNotFound, "来源版本不存在")
+	wantIs(t, err, repository.ErrNotFound, "来源版本不存在")
 	for _, author := range []string{"", "c\x00", "\xff"} {
 		_, err = k.newVersion(t.Context(), s, id, 1, author)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("作者 %q", author))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("作者 %q", author))
 	}
 	wantAuthoredUnchanged(t, s, before, "开新版本被拒时")
 	k.wantLastVersion(t, s, id, 1, "开新版本被拒之后")
@@ -1096,17 +1096,17 @@ func (k versioned[V]) renameBad(t *testing.T, s *pgstore.Store) {
 	for _, name := range []string{"", "Base 2", "中文名"} {
 		err := k.rename(t.Context(), s, id, name, anAudit(k.kind+".rename"))
 		want := []model.Problem{nameProblem(t, name, model.Subject{Kind: k.kind, ID: id})} // 改名针对整个身份：ID 不带版本
-		wantProblems(t, err, store.ErrInvalid, want, fmt.Sprintf("改名为 %q", name))
+		wantProblems(t, err, repository.ErrInvalid, want, fmt.Sprintf("改名为 %q", name))
 	}
 	for _, name := range reservedNames {
 		err := k.rename(t.Context(), s, id, name, anAudit(k.kind+".rename"))
 		want := []model.Problem{reservedProblem(t, name, model.Subject{Kind: k.kind, ID: id})}
-		wantProblems(t, err, store.ErrInvalid, want, fmt.Sprintf("改名为用了保留前缀的 %q", name))
+		wantProblems(t, err, repository.ErrInvalid, want, fmt.Sprintf("改名为用了保留前缀的 %q", name))
 	}
 	for _, name := range []string{"Other-1", "other-1", " OTHER-1 "} {
 		wantDuplicate(t, k.rename(t.Context(), s, id, name, anAudit(k.kind+".rename")), "name", other, fmt.Sprintf("改名为 %q", name))
 	}
-	wantIs(t, k.rename(t.Context(), s, "nosuchid", "Base-9", anAudit(k.kind+".rename")), store.ErrNotFound, "改不存在的身份")
+	wantIs(t, k.rename(t.Context(), s, "nosuchid", "Base-9", anAudit(k.kind+".rename")), repository.ErrNotFound, "改不存在的身份")
 	wantAuthoredUnchanged(t, s, before, "改名被拒时")
 }
 
@@ -1118,9 +1118,9 @@ func (k versioned[V]) deleteLast(t *testing.T, s *pgstore.Store) {
 	audits := auditEntries(t, s)
 	must(t, k.deleteDraft(ctx, s, only.ID, 1, only.Rev), "删除唯一的草稿")
 	_, err := k.get(ctx, s, only.ID, 1)
-	wantIs(t, err, store.ErrNotFound, "读删掉的版本")
+	wantIs(t, err, repository.ErrNotFound, "读删掉的版本")
 	_, err = k.versions(ctx, s, only.ID)
-	wantIs(t, err, store.ErrNotFound, "列出删掉的身份的版本")
+	wantIs(t, err, repository.ErrNotFound, "列出删掉的身份的版本")
 	wantItems(t, k.listed(t, s, listQuery{}), nil, "身份删掉之后的列表")
 	wantItems(t, auditEntries(t, s), audits, "删除草稿不写审计")
 	if again := k.head(k.mustCreate(t, s, "base-1")); again.ID == only.ID {
@@ -1152,9 +1152,9 @@ func (k versioned[V]) deleteStale(t *testing.T, s *pgstore.Store) {
 	k.newVersionOf(t, s, v1) // 另一个人又开了新版本
 	before := authoredSnapshot(t, s)
 	_, err := k.save(ctx, s, k.edit(old))
-	wantIs(t, err, store.ErrNotFound, "带着删掉的草稿保存")
-	wantIs(t, k.submit(ctx, s, h.ID, h.Version, h.Rev, anAudit(k.kind+".submit")), store.ErrNotFound, "提交删掉的草稿")
-	wantIs(t, k.deleteDraft(ctx, s, h.ID, h.Version, h.Rev), store.ErrNotFound, "再删一次删掉的草稿")
+	wantIs(t, err, repository.ErrNotFound, "带着删掉的草稿保存")
+	wantIs(t, k.submit(ctx, s, h.ID, h.Version, h.Rev, anAudit(k.kind+".submit")), repository.ErrNotFound, "提交删掉的草稿")
+	wantIs(t, k.deleteDraft(ctx, s, h.ID, h.Version, h.Rev), repository.ErrNotFound, "再删一次删掉的草稿")
 	wantAuthoredUnchanged(t, s, before, "带着删掉的草稿写时")
 }
 
@@ -1162,16 +1162,16 @@ func (k versioned[V]) deleteBad(t *testing.T, s *pgstore.Store) {
 	draft := k.head(k.mustCreate(t, s, "Base-1"))
 	before := authoredSnapshot(t, s)
 	for _, rev := range []int64{0, draft.Rev + 1} {
-		wantIs(t, k.deleteDraft(t.Context(), s, draft.ID, 1, rev), store.ErrConflict, fmt.Sprintf("带着 Rev %d 删除", rev))
+		wantIs(t, k.deleteDraft(t.Context(), s, draft.ID, 1, rev), repository.ErrConflict, fmt.Sprintf("带着 Rev %d 删除", rev))
 	}
-	wantIs(t, k.deleteDraft(t.Context(), s, "nosuchid", 1, 1), store.ErrNotFound, "删除不存在的身份")
-	wantIs(t, k.deleteDraft(t.Context(), s, draft.ID, 2, 1), store.ErrNotFound, "删除不存在的版本")
+	wantIs(t, k.deleteDraft(t.Context(), s, "nosuchid", 1, 1), repository.ErrNotFound, "删除不存在的身份")
+	wantIs(t, k.deleteDraft(t.Context(), s, draft.ID, 2, 1), repository.ErrNotFound, "删除不存在的版本")
 	wantAuthoredUnchanged(t, s, before, "删除被拒时")
 	// 已提交、已审批与已废弃的版本永不删除，只能删草稿
 	for i, state := range []model.VersionState{model.VersionReview, model.VersionApproved, model.VersionDeprecated} {
 		h := k.head(k.to(t, s, k.mustCreate(t, s, fmt.Sprintf("Base-%d", i+2)), state))
 		before := authoredSnapshot(t, s)
-		wantIs(t, k.deleteDraft(t.Context(), s, h.ID, 1, h.Rev), store.ErrImmutable, "删除 "+string(state)+" 的版本")
+		wantIs(t, k.deleteDraft(t.Context(), s, h.ID, 1, h.Rev), repository.ErrImmutable, "删除 "+string(state)+" 的版本")
 		wantAuthoredUnchanged(t, s, before, "删除被拒时")
 	}
 }
@@ -1201,12 +1201,12 @@ func (k versioned[V]) builtinEnsure(t *testing.T, s *pgstore.Store) {
 		{"名字", k.with(b1, func(h *head) { h.Name = "lober:Other" })},
 		{"名字的大小写", k.with(b1, func(h *head) { h.Name = "lober:base" })},
 	} {
-		wantIs(t, k.ensureBuiltin(ctx, s, c.v), store.ErrBuiltinMismatch, "版本 1 的"+c.what+"不同")
+		wantIs(t, k.ensureBuiltin(ctx, s, c.v), repository.ErrBuiltinMismatch, "版本 1 的"+c.what+"不同")
 	}
 	for _, c := range k.variants {
 		v := k.builtin("builtin-base", 1, "lober:Base") // 新造一份：mod 连切片与 map 里的元素一起改
 		c.mod(&v)
-		wantIs(t, k.ensureBuiltin(ctx, s, v), store.ErrBuiltinMismatch, "版本 1 的"+c.what+"不同")
+		wantIs(t, k.ensureBuiltin(ctx, s, v), repository.ErrBuiltinMismatch, "版本 1 的"+c.what+"不同")
 	}
 	wantAuthoredUnchanged(t, s, before, "内容不同时")
 
@@ -1216,7 +1216,7 @@ func (k versioned[V]) builtinEnsure(t *testing.T, s *pgstore.Store) {
 	wantEqual(t, k.mustVersions(t, s, "builtin-base"), []V{want1, want2}, "两个版本都在")
 	// 名字随身份定下（S5-1）：以后的版本换了名，同样报 ErrBuiltinMismatch；要改名只能换一个新 ID
 	b3 := k.with(b1, func(h *head) { h.Version, h.Name = 3, "lober:Renamed" })
-	wantIs(t, k.ensureBuiltin(ctx, s, b3), store.ErrBuiltinMismatch, "版本 3 带了另一个名字")
+	wantIs(t, k.ensureBuiltin(ctx, s, b3), repository.ErrBuiltinMismatch, "版本 3 带了另一个名字")
 }
 
 // 内置与用户建的身份共用一个名字空间（spec §6.2 第 11 条）：名字被别的身份占了，装载报 DuplicateError，Existing 是那个
@@ -1232,9 +1232,9 @@ func (k versioned[V]) builtinName(t *testing.T, s *pgstore.Store) {
 	user := k.head(k.mustCreate(t, s, "Base-1"))
 	before = authoredSnapshot(t, s)
 	_, err := k.create(ctx, s, k.sample("lober:BASE"))
-	wantProblems(t, err, store.ErrInvalid, []model.Problem{reservedProblem(t, "lober:BASE", model.Subject{Kind: k.kind})},
+	wantProblems(t, err, repository.ErrInvalid, []model.Problem{reservedProblem(t, "lober:BASE", model.Subject{Kind: k.kind})},
 		"用户新建时用了内置的名字")
-	wantProblems(t, k.rename(ctx, s, user.ID, "LOBER:base", anAudit(k.kind+".rename")), store.ErrInvalid,
+	wantProblems(t, k.rename(ctx, s, user.ID, "LOBER:base", anAudit(k.kind+".rename")), repository.ErrInvalid,
 		[]model.Problem{reservedProblem(t, "LOBER:base", model.Subject{Kind: k.kind, ID: user.ID})}, "用户改名为内置的名字")
 	wantAuthoredUnchanged(t, s, before, "用户用了内置的名字时")
 }
@@ -1249,13 +1249,13 @@ func (k versioned[V]) builtinImmutable(t *testing.T, s *pgstore.Store) {
 	h := k.head(b)
 	before := authoredSnapshot(t, s)
 	_, err := k.save(ctx, s, k.edit(b))
-	wantIs(t, err, store.ErrImmutable, "保存内置的版本")
+	wantIs(t, err, repository.ErrImmutable, "保存内置的版本")
 	_, err = k.newVersion(ctx, s, h.ID, 1, "carol")
-	wantIs(t, err, store.ErrImmutable, "给内置的身份开新版本")
-	wantIs(t, k.rename(ctx, s, h.ID, "Mine", anAudit(k.kind+".rename")), store.ErrImmutable, "给内置的身份改名")
-	wantIs(t, k.deleteDraft(ctx, s, h.ID, 1, h.Rev), store.ErrImmutable, "删除内置的版本")
+	wantIs(t, err, repository.ErrImmutable, "给内置的身份开新版本")
+	wantIs(t, k.rename(ctx, s, h.ID, "Mine", anAudit(k.kind+".rename")), repository.ErrImmutable, "给内置的身份改名")
+	wantIs(t, k.deleteDraft(ctx, s, h.ID, 1, h.Rev), repository.ErrImmutable, "删除内置的版本")
 	for _, step := range k.transitions() {
-		wantIs(t, step.do(t, s, h), store.ErrImmutable, step.name+"内置的版本")
+		wantIs(t, step.do(t, s, h), repository.ErrImmutable, step.name+"内置的版本")
 	}
 	wantAuthoredUnchanged(t, s, before, "改内置内容被拒时")
 }
@@ -1282,7 +1282,7 @@ func (k versioned[V]) builtinBadInput(t *testing.T, s *pgstore.Store) {
 		{"作者存不下", func(h *head) { h.Author = "\xff" }},
 	} {
 		err := k.ensureBuiltin(t.Context(), s, k.with(k.builtin("builtin-base", 1, "lober:Base"), c.mod))
-		wantIs(t, err, store.ErrInvalid, "装载的内置内容"+c.what)
+		wantIs(t, err, repository.ErrInvalid, "装载的内置内容"+c.what)
 	}
 	wantAuthoredUnchanged(t, s, before, "入参不对时")
 }
@@ -1300,22 +1300,22 @@ func (k versioned[V]) badKey(t *testing.T, s *pgstore.Store) {
 		what := fmt.Sprintf("%q@%d", key.id, key.version)
 		h := head{ID: key.id, Version: key.version, Rev: 1}
 		_, err := k.get(ctx, s, key.id, key.version)
-		wantIs(t, err, store.ErrInvalid, "读 "+what)
+		wantIs(t, err, repository.ErrInvalid, "读 "+what)
 		_, err = k.save(ctx, s, k.with(v, func(x *head) { x.ID, x.Version = key.id, key.version }))
-		wantIs(t, err, store.ErrInvalid, "保存 "+what)
-		wantIs(t, k.deleteDraft(ctx, s, key.id, key.version, 1), store.ErrInvalid, "删除 "+what)
+		wantIs(t, err, repository.ErrInvalid, "保存 "+what)
+		wantIs(t, k.deleteDraft(ctx, s, key.id, key.version, 1), repository.ErrInvalid, "删除 "+what)
 		for _, step := range k.transitions() {
-			wantIs(t, step.do(t, s, h), store.ErrInvalid, step.name+" "+what)
+			wantIs(t, step.do(t, s, h), repository.ErrInvalid, step.name+" "+what)
 		}
 		if key.version == 1 { // 下面几个方法只收 ID
 			_, err = k.versions(ctx, s, key.id)
-			wantIs(t, err, store.ErrInvalid, "列出版本 "+what)
-			wantIs(t, k.rename(ctx, s, key.id, "Base-9", anAudit(k.kind+".rename")), store.ErrInvalid, "改名 "+what)
+			wantIs(t, err, repository.ErrInvalid, "列出版本 "+what)
+			wantIs(t, k.rename(ctx, s, key.id, "Base-9", anAudit(k.kind+".rename")), repository.ErrInvalid, "改名 "+what)
 			_, err = k.newVersion(ctx, s, key.id, 1, "carol")
-			wantIs(t, err, store.ErrInvalid, "开新版本 "+what)
+			wantIs(t, err, repository.ErrInvalid, "开新版本 "+what)
 		} else {
 			_, err = k.newVersion(ctx, s, good, key.version, "carol")
-			wantIs(t, err, store.ErrInvalid, "从版本 "+what+" 开新版本")
+			wantIs(t, err, repository.ErrInvalid, "从版本 "+what+" 开新版本")
 		}
 	}
 	wantAuthoredUnchanged(t, s, before, "键不合格式时")
@@ -1436,7 +1436,7 @@ func (k versioned[V]) listDefaultLimit(t *testing.T, s *pgstore.Store) {
 	for i := range defaultPageSize + 1 {
 		k.mustCreate(t, s, fmt.Sprintf("Base-%03d", i))
 	}
-	wantDefaultLimit(t, slices.Concat(k.pages(t, s, listQuery{Limit: 500})...), func(cursor string) (store.Page[V], error) {
+	wantDefaultLimit(t, slices.Concat(k.pages(t, s, listQuery{Limit: 500})...), func(cursor string) (repository.Page[V], error) {
 		return k.list(t.Context(), s, listQuery{Cursor: cursor})
 	})
 }
@@ -1445,6 +1445,6 @@ func (k versioned[V]) listInvalid(t *testing.T, s *pgstore.Store) {
 	k.mustCreate(t, s, "Base-1")
 	for _, q := range []listQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"}} {
 		_, err := k.list(t.Context(), s, q)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("Limit %d、Cursor %q", q.Limit, q.Cursor))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("Limit %d、Cursor %q", q.Limit, q.Cursor))
 	}
 }

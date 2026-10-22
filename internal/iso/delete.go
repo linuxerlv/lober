@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // DeletionSnapshot is captured before the caller's audited Store.DeleteISO.
@@ -21,7 +21,7 @@ import (
 // until CleanupDeleted succeeds, and supplies its durable retry policy.
 type DeletionSnapshot struct {
 	ISO     model.ISO
-	Sources []store.Source
+	Sources []model.Source
 }
 
 // CleanupDeleted removes only managed bytes belonging to an already deleted
@@ -29,7 +29,7 @@ type DeletionSnapshot struct {
 // It never performs the audited database deletion itself.
 func (s *Sources) CleanupDeleted(ctx context.Context, snapshot DeletionSnapshot) error {
 	item := snapshot.ISO
-	if err := store.CheckID(item.ID); err != nil {
+	if err := repository.CheckID(item.ID); err != nil {
 		return err
 	}
 	// Acquiring/failed records may legitimately lack identification metadata.
@@ -42,14 +42,14 @@ func (s *Sources) CleanupDeleted(ctx context.Context, snapshot DeletionSnapshot)
 		checked.Arch = "x86_64"
 	}
 	if snapshot.Sources == nil || len(checked.Validate()) > 0 {
-		return store.ErrInvalid
+		return repository.ErrInvalid
 	}
 	seen := map[string]bool{}
 	for _, source := range snapshot.Sources {
 		if source.ISOID != item.ID || seen[source.Role] {
-			return store.ErrInvalid
+			return repository.ErrInvalid
 		}
-		if err := store.CheckSource(source); err != nil {
+		if err := repository.CheckSource(source); err != nil {
 			return err
 		}
 		seen[source.Role] = true
@@ -95,7 +95,7 @@ func (s *Sources) CleanupDeleted(ctx context.Context, snapshot DeletionSnapshot)
 	defer root.Close()
 	localPaths := map[string]bool{}
 	for _, source := range snapshot.Sources {
-		if source.Kind == store.SourceLocal {
+		if source.Kind == model.SourceLocal {
 			localPaths[filepath.Clean(source.Path)] = true
 		}
 	}
@@ -118,12 +118,12 @@ func (s *Sources) CleanupDeleted(ctx context.Context, snapshot DeletionSnapshot)
 			return err
 		}
 		if !st.Mode().IsRegular() && st.Mode()&fs.ModeSymlink == 0 {
-			return store.ErrConflict
+			return repository.ErrConflict
 		}
 		return root.Remove(name)
 	}
 	for _, source := range snapshot.Sources {
-		if source.Kind == store.SourceLocal {
+		if source.Kind == model.SourceLocal {
 			continue
 		}
 		name := filepath.Base(s.finalPath(item.ID, source.Role))
@@ -153,13 +153,13 @@ func (s *Sources) confirmDeleted(ctx context.Context, id string) error {
 		return err
 	}
 	_, err := s.store.GetISO(ctx, id)
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, repository.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	return store.ErrConflict
+	return repository.ErrConflict
 }
 
 func cleanupOwnedTree(ctx context.Context, base, rel, owner string, temp bool) error {
@@ -182,13 +182,13 @@ func cleanupOwnedTree(ctx context.Context, base, rel, owner string, temp bool) e
 		return err
 	}
 	if !st.IsDir() || st.Mode()&fs.ModeSymlink != 0 {
-		return store.ErrConflict
+		return repository.ErrConflict
 	}
 	f, err := root.Open(filepath.Join(rel, ".lober-owner"))
 	if err != nil {
 		// A partial temporary tree has not reached the ownership-marker step yet.
 		if !temp || !os.IsNotExist(err) {
-			return fmt.Errorf("%w: publication ownership unavailable", store.ErrConflict)
+			return fmt.Errorf("%w: publication ownership unavailable", repository.ErrConflict)
 		}
 	} else {
 		b, readErr := io.ReadAll(io.LimitReader(f, 256))
@@ -197,7 +197,7 @@ func cleanupOwnedTree(ctx context.Context, base, rel, owner string, temp bool) e
 			return readErr
 		}
 		if string(b) != owner {
-			return fmt.Errorf("%w: publication belongs to other content", store.ErrConflict)
+			return fmt.Errorf("%w: publication belongs to other content", repository.ErrConflict)
 		}
 	}
 	return root.RemoveAll(rel)

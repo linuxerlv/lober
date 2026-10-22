@@ -9,8 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
 )
 
 type csvRow struct {

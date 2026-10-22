@@ -2,15 +2,15 @@ package console
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"strconv"
 )
 
 type userUpdateRequest struct {
 	Username    string     `json:"username,omitempty"`
 	DisplayName string     `json:"displayName"`
-	Role        store.Role `json:"role" binding:"required"`
+	Role        model.Role `json:"role" binding:"required"`
 	Password    string     `json:"password,omitempty"`
 	Disabled    bool       `json:"disabled"`
 	Rev         int64      `json:"rev" binding:"required,gt=0"`
@@ -18,7 +18,7 @@ type userUpdateRequest struct {
 type userCreateRequest struct {
 	Username    string     `json:"username" binding:"required"`
 	DisplayName string     `json:"displayName"`
-	Role        store.Role `json:"role" binding:"required"`
+	Role        model.Role `json:"role" binding:"required"`
 	Password    string     `json:"password" binding:"required"`
 	Disabled    bool       `json:"disabled"`
 }
@@ -56,8 +56,8 @@ func (s *server) listUsers(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, ok := Get(c, func() (store.Page[store.User], error) {
-		return s.deps.Users.ListUsers(c.Request.Context(), store.UserQuery{Cursor: c.Query("cursor"), Limit: limit})
+	page, ok := Get(c, func() (repository.Page[model.User], error) {
+		return s.deps.Users.ListUsers(c.Request.Context(), repository.UserQuery{Cursor: c.Query("cursor"), Limit: limit})
 	})
 	if !ok {
 		return
@@ -82,8 +82,8 @@ func (s *server) createUser(c *gin.Context) {
 		RespondError(c, err)
 		return
 	}
-	u, ok := Write(c, func() (store.User, error) {
-		return s.deps.Users.CreateUser(c.Request.Context(), store.User{Username: req.Username, DisplayName: req.DisplayName, Role: req.Role, Password: password, Disabled: req.Disabled, CreatedAt: s.clock()}, s.auditFrom(c, ""))
+	u, ok := Write(c, func() (model.User, error) {
+		return s.deps.Users.CreateUser(c.Request.Context(), model.User{Username: req.Username, DisplayName: req.DisplayName, Role: req.Role, Password: password, Disabled: req.Disabled, CreatedAt: s.clock()}, s.auditFrom(c, ""))
 	})
 	if ok {
 		Ok(c, toUserResponse(u))
@@ -103,7 +103,7 @@ func (s *server) updateUser(c *gin.Context) {
 		Fail(c, 409, nil, model.ConsoleSelfDisable)
 		return
 	}
-	u, ok := Get(c, func() (store.User, error) { return s.deps.Users.GetUser(c.Request.Context(), username) })
+	u, ok := Get(c, func() (model.User, error) { return s.deps.Users.GetUser(c.Request.Context(), username) })
 	if !ok {
 		return
 	}
@@ -127,7 +127,7 @@ func (s *server) updateUser(c *gin.Context) {
 	}
 	s.credentials.Lock()
 	defer s.credentials.Unlock()
-	u, ok = Write(c, func() (store.User, error) { return s.deps.Users.UpdateUser(c.Request.Context(), u, s.auditFrom(c, "")) })
+	u, ok = Write(c, func() (model.User, error) { return s.deps.Users.UpdateUser(c.Request.Context(), u, s.auditFrom(c, "")) })
 	if !ok {
 		return
 	}
@@ -142,14 +142,14 @@ func (s *server) disableUser(c *gin.Context) {
 		Fail(c, 409, nil, model.ConsoleSelfDisable)
 		return
 	}
-	u, ok := Get(c, func() (store.User, error) { return s.deps.Users.GetUser(c.Request.Context(), username) })
+	u, ok := Get(c, func() (model.User, error) { return s.deps.Users.GetUser(c.Request.Context(), username) })
 	if !ok {
 		return
 	}
 	u.Disabled = true
 	s.credentials.Lock()
 	defer s.credentials.Unlock()
-	_, ok = Write(c, func() (store.User, error) { return s.deps.Users.UpdateUser(c.Request.Context(), u, s.auditFrom(c, "")) })
+	_, ok = Write(c, func() (model.User, error) { return s.deps.Users.UpdateUser(c.Request.Context(), u, s.auditFrom(c, "")) })
 	if ok {
 		s.sessions.dropUser(username)
 		Ok(c, nil)

@@ -6,10 +6,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/iso/iso9660"
-	"github.com/lober/lober/internal/store"
 	"io"
 	"io/fs"
 	"maps"
@@ -39,7 +39,7 @@ func (s *Sources) artifactRoot(series catalog.Series, version string, arch catal
 // destination filesystem; source, staging and SMB may be on different disks.
 // Same-platform content belonging to another ISO is never overwritten.
 func (s *Sources) Import(ctx context.Context, id string) (err error) {
-	if err := store.CheckID(id); err != nil {
+	if err := repository.CheckID(id); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -52,17 +52,17 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 		return err
 	}
 	if iso.State == model.ISOReady {
-		return store.ErrConflict
+		return repository.ErrConflict
 	}
 	if iso.State == model.ISODeprecated {
-		return store.ErrImmutable
+		return repository.ErrImmutable
 	}
 	srcs, err := s.store.SourcesOf(ctx, id)
 	if err != nil {
 		return err
 	}
-	var main store.Source
-	extras := map[string]store.Source{}
+	var main model.Source
+	extras := map[string]model.Source{}
 	for _, src := range srcs {
 		if src.Role == "" {
 			main = src
@@ -70,18 +70,18 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 			extras[src.Role] = src
 		}
 	}
-	if main.ISOID == "" || main.State != store.SourceFetched {
-		return store.ErrConflict
+	if main.ISOID == "" || main.State != model.SourceFetched {
+		return repository.ErrConflict
 	}
 	for _, src := range srcs {
-		if src.State != store.SourceFetched {
-			return store.ErrConflict
+		if src.State != model.SourceFetched {
+			return repository.ErrConflict
 		}
 	}
 	// Once bytes are complete, any content failure belongs to import, not fetch.
 	publicationConflict := false
 	defer func() {
-		if err != nil && (!errors.Is(err, store.ErrConflict) || publicationConflict) && !errors.Is(err, store.ErrImmutable) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		if err != nil && (!errors.Is(err, repository.ErrConflict) || publicationConflict) && !errors.Is(err, repository.ErrImmutable) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			s.failImport(ctx, id, err)
 		}
 	}()
@@ -203,13 +203,13 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 	if smbTmp != "" {
 		madeSMB, err = publishImportTree(smbTmp, smb, owner)
 		if err != nil {
-			publicationConflict = errors.Is(err, store.ErrConflict)
+			publicationConflict = errors.Is(err, repository.ErrConflict)
 			return err
 		}
 	}
 	made, err = publishImportTree(tmp, root, owner)
 	if err != nil {
-		publicationConflict = errors.Is(err, store.ErrConflict)
+		publicationConflict = errors.Is(err, repository.ErrConflict)
 		return err
 	}
 	relRoot, e := filepath.Rel(s.dirs.Artifacts, root)
@@ -231,7 +231,7 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 	}
 	if main.Error != "" {
 		main.Error = ""
-		if _, err = s.store.SaveSource(ctx, main, store.Audit{}); err != nil {
+		if _, err = s.store.SaveSource(ctx, main, repository.Audit{}); err != nil {
 			return err
 		}
 	}
@@ -282,10 +282,10 @@ func (s *Sources) rollbackImportAllowed(ctx context.Context, id, digest string) 
 	return err == nil && current.SHA256 == digest && current.State != model.ISOReady && current.State != model.ISODeprecated
 }
 
-func (s *Sources) openMedia(ctx context.Context, src store.Source) (*os.File, fs.FS, fs.FileInfo, error) {
+func (s *Sources) openMedia(ctx context.Context, src model.Source) (*os.File, fs.FS, fs.FileInfo, error) {
 	var f *os.File
 	var err error
-	if src.Kind == store.SourceLocal {
+	if src.Kind == model.SourceLocal {
 		root, rel, ok := localRoot(s.dirs.LocalRoots, src.Path)
 		if !ok {
 			return nil, nil, nil, sourceRejected(src.ISOID, src.Role, isoSourceReasonLocal)
@@ -301,7 +301,7 @@ func (s *Sources) openMedia(ctx context.Context, src store.Source) (*os.File, fs
 	if err != nil || !st.Mode().IsRegular() {
 		f.Close()
 		if err == nil {
-			err = store.ErrInvalid
+			err = repository.ErrInvalid
 		}
 		return nil, nil, nil, err
 	}
@@ -348,7 +348,7 @@ func (s *Sources) failImport(ctx context.Context, id string, cause error) {
 		text = "import failed"
 	}
 	src.Error = text
-	s.store.SaveSource(ctx, src, store.Audit{})
+	s.store.SaveSource(ctx, src, repository.Audit{})
 }
 func prepareImportTemp(p string) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
@@ -362,11 +362,11 @@ func prepareImportTemp(p string) error {
 func publishImportTree(tmp, root, owner string) (bool, error) {
 	if st, err := os.Lstat(root); err == nil {
 		if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
-			return false, store.ErrConflict
+			return false, repository.ErrConflict
 		}
 		b, err := os.ReadFile(filepath.Join(root, ".lober-owner"))
 		if err != nil || string(b) != owner {
-			return false, fmt.Errorf("%w: artifact destination already belongs to other content", store.ErrConflict)
+			return false, fmt.Errorf("%w: artifact destination already belongs to other content", repository.ErrConflict)
 		}
 		// A crash between rename and DB commit can reuse a complete immutable tree.
 		same, err := equalImportTrees(tmp, root)
@@ -374,7 +374,7 @@ func publishImportTree(tmp, root, owner string) (bool, error) {
 			return false, err
 		}
 		if !same {
-			return false, fmt.Errorf("%w: existing artifact tree differs", store.ErrConflict)
+			return false, fmt.Errorf("%w: existing artifact tree differs", repository.ErrConflict)
 		}
 		return false, nil
 	} else if !errors.Is(err, os.ErrNotExist) {

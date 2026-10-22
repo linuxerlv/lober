@@ -3,8 +3,8 @@ package pgstore
 import (
 	"fmt"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // 任务与事件的行类型，约定同 rows_registry.go。
@@ -76,7 +76,7 @@ func (r taskRow) task() (model.Task, error) {
 }
 
 // toEventRow 把要追加给任务 taskID 的事件 e 转成一行，Seq 由调用方分配。
-func toEventRow(taskID string, seq int64, e store.NewEvent) (taskEventRow, error) {
+func toEventRow(taskID string, seq int64, e repository.NewEvent) (taskEventRow, error) {
 	fields, err := encodeJSON(e.Fields)
 	if err != nil {
 		return taskEventRow{}, err
@@ -84,11 +84,11 @@ func toEventRow(taskID string, seq int64, e store.NewEvent) (taskEventRow, error
 	return taskEventRow{TaskID: taskID, Seq: seq, At: e.At, Kind: e.Kind, Key: e.Key, Fields: fields}, nil
 }
 
-// event 把一行转回 store.Event，字段同样每次解出新的 map。
-func (r taskEventRow) event() (store.Event, error) {
-	e := store.Event{TaskID: r.TaskID, Seq: r.Seq, NewEvent: store.NewEvent{At: r.At, Kind: r.Kind, Key: r.Key}}
+// event 把一行转回 repository.Event，字段同样每次解出新的 map。
+func (r taskEventRow) event() (repository.Event, error) {
+	e := repository.Event{TaskID: r.TaskID, Seq: r.Seq, NewEvent: repository.NewEvent{At: r.At, Kind: r.Kind, Key: r.Key}}
 	if err := decodeJSON(r.Fields, &e.Fields); err != nil {
-		return store.Event{}, fmt.Errorf("任务 %s 的事件 %d 的字段：%w", r.TaskID, r.Seq, err)
+		return repository.Event{}, fmt.Errorf("任务 %s 的事件 %d 的字段：%w", r.TaskID, r.Seq, err)
 	}
 	return e, nil
 }

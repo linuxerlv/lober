@@ -9,8 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
@@ -443,25 +443,25 @@ func Test数据库错误的翻译(t *testing.T) {
 		want   error  // 契约的哨兵；nil 表示原样返回
 		field  string // 翻成 DuplicateError 时的 Field
 	}{
-		{"主键撞了", pg("23505", "hosts_pkey"), false, holder, store.ErrDuplicate, "sn"},
-		{"SHA256 撞了", pg("23505", "idx_isos_sha256"), false, holder, store.ErrDuplicate, "sha256"},
-		{"hook 的名字撞了", pg("23505", "idx_hooks_name_key"), false, holder, store.ErrDuplicate, "name"},
-		{"模板的名字撞了", pg("23505", "idx_templates_name_key"), false, holder, store.ErrDuplicate, "name"},
+		{"主键撞了", pg("23505", "hosts_pkey"), false, holder, repository.ErrDuplicate, "sn"},
+		{"SHA256 撞了", pg("23505", "idx_isos_sha256"), false, holder, repository.ErrDuplicate, "sha256"},
+		{"hook 的名字撞了", pg("23505", "idx_hooks_name_key"), false, holder, repository.ErrDuplicate, "name"},
+		{"模板的名字撞了", pg("23505", "idx_templates_name_key"), false, holder, repository.ErrDuplicate, "name"},
 		// 约束认得，只是占着它的那一方在事务外查的时候刚好变了（导入失败、删掉、改了名）：重读之后必然是成功或
 		// DuplicateError，所以报 ErrConflict，不报原样的数据库错误
-		{"查不到占着 SHA256 的那一个报 ErrConflict", pg("23505", "idx_isos_sha256"), false, func(string) string { return "" }, store.ErrConflict, ""},
-		{"查不到占着名字的那一个报 ErrConflict", pg("23505", "idx_templates_name_key"), false, func(string) string { return "" }, store.ErrConflict, ""},
+		{"查不到占着 SHA256 的那一个报 ErrConflict", pg("23505", "idx_isos_sha256"), false, func(string) string { return "" }, repository.ErrConflict, ""},
+		{"查不到占着名字的那一个报 ErrConflict", pg("23505", "idx_templates_name_key"), false, func(string) string { return "" }, repository.ErrConflict, ""},
 		{"没给 holder 的写入撞上认得的唯一约束，原样返回", pg("23505", "hosts_pkey"), false, nil, nil, ""},
 		{"认不出的唯一约束原样返回", pg("23505", "isos_pkey"), false, holder, nil, ""},
-		{"删除时外键报 ErrReferenced", pg("23503", "fk_hook_versions_hook"), true, nil, store.ErrReferenced, ""},
-		{"写入时外键报 ErrNotFound", pg("23503", "fk_template_hook_refs_template"), false, nil, store.ErrNotFound, ""},
+		{"删除时外键报 ErrReferenced", pg("23503", "fk_hook_versions_hook"), true, nil, repository.ErrReferenced, ""},
+		{"写入时外键报 ErrNotFound", pg("23503", "fk_template_hook_refs_template"), false, nil, repository.ErrNotFound, ""},
 		{"认不出的外键原样返回", pg("23503", "fk_nobody"), true, nil, nil, ""},
-		{"删除主机时 RESTRICT 报 ErrReferenced", pg("23001", "fk_tasks_host"), true, nil, store.ErrReferenced, ""},
-		{"删除 ISO 时 RESTRICT 报 ErrReferenced", pg("23001", "fk_tasks_iso"), true, nil, store.ErrReferenced, ""},
+		{"删除主机时 RESTRICT 报 ErrReferenced", pg("23001", "fk_tasks_host"), true, nil, repository.ErrReferenced, ""},
+		{"删除 ISO 时 RESTRICT 报 ErrReferenced", pg("23001", "fk_tasks_iso"), true, nil, repository.ErrReferenced, ""},
 		{"非删除的 RESTRICT 原样返回", pg("23001", "fk_tasks_host"), false, nil, nil, ""},
 		{"认不出的 RESTRICT 原样返回", pg("23001", "fk_nobody"), true, nil, nil, ""},
 		{"CHECK 名的 RESTRICT 原样返回", pg("23001", "chk_isos_state"), true, nil, nil, ""},
-		{"CHECK 报 ErrInvalid", pg("23514", "chk_isos_state"), false, nil, store.ErrInvalid, ""},
+		{"CHECK 报 ErrInvalid", pg("23514", "chk_isos_state"), false, nil, repository.ErrInvalid, ""},
 		{"认不出的 CHECK 原样返回", pg("23514", "chk_nobody"), false, nil, nil, ""},
 		{"别的数据库错误原样返回", pg("P0001", ""), false, holder, nil, ""},
 		{"不是数据库错误原样返回", errors.New("连接断了"), false, holder, nil, ""},
@@ -477,7 +477,7 @@ func Test数据库错误的翻译(t *testing.T) {
 			if !errors.Is(got, c.want) {
 				t.Fatalf("应翻成 %v，得到 %v", c.want, got)
 			}
-			var de *store.DuplicateError
+			var de *repository.DuplicateError
 			if errors.As(got, &de) != (c.field != "") {
 				t.Fatalf("是不是 DuplicateError 不对：%v", got)
 			}

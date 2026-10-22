@@ -8,7 +8,7 @@
 // Content changes ship as higher version numbers with a lober release. Each ID/version
 // has an immutable serialization fingerprint and a full historical release fixture.
 // Never regenerate an old golden to accept changed content. Add a new version's golden
-// and retain old release fixtures so upgrades can replay every release into one store.
+// and retain old release fixtures so upgrades can replay every release into one repository.
 // Task 5 establishes a minimal kickstart skeleton; other formats and hook implementations
 // will be added separately, with version increments for any existing content changes.
 //

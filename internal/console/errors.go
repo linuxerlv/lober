@@ -5,8 +5,8 @@ import (
 	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"io"
 	"log/slog"
 	"maps"
@@ -46,15 +46,15 @@ func jsonProblems(ps []model.Problem) []problemJSON {
 	return out
 }
 func RespondError(c *gin.Context, err error) {
-	if errors.Is(err, store.ErrTemplateNotCurrent) {
+	if errors.Is(err, repository.ErrTemplateNotCurrent) {
 		Fail(c, 409, nil, model.ConsoleTemplateCurrent)
 		return
 	}
-	if errors.Is(err, store.ErrLastAdmin) {
+	if errors.Is(err, repository.ErrLastAdmin) {
 		Fail(c, 409, nil, model.ConsoleLastAdmin)
 		return
 	}
-	var referenced *store.ReferencedError
+	var referenced *repository.ReferencedError
 	if errors.As(err, &referenced) {
 		refs := make([]subjectJSON, len(referenced.References))
 		for i, s := range referenced.References {
@@ -63,7 +63,7 @@ func RespondError(c *gin.Context, err error) {
 		Fail(c, 409, referenceDetail{refs}, model.ConsoleReferenced)
 		return
 	}
-	var batch *store.BatchError
+	var batch *repository.BatchError
 	if errors.As(err, &batch) {
 		byHost := make(map[string][]problemJSON, len(batch.Result.ByHost))
 		for sn, ps := range batch.Result.ByHost {
@@ -72,7 +72,7 @@ func RespondError(c *gin.Context, err error) {
 		Fail(c, 422, batchDetail{jsonProblems(batch.Result.Common), byHost}, firstMessage(batch.Result.Common, batch.Result.ByHost))
 		return
 	}
-	var pe *store.ProblemsError
+	var pe *repository.ProblemsError
 	if errors.As(err, &pe) {
 		Fail(c, 422, problemList{jsonProblems(pe.Problems)}, firstMessage(pe.Problems, nil))
 		return
@@ -89,17 +89,17 @@ func RespondError(c *gin.Context, err error) {
 		return
 	}
 	switch {
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, repository.ErrNotFound):
 		status, message = 404, model.ConsoleNotFound
-	case errors.Is(err, store.ErrConflict):
+	case errors.Is(err, repository.ErrConflict):
 		status, message = 409, model.ConsoleConflict
-	case errors.Is(err, store.ErrDuplicate):
+	case errors.Is(err, repository.ErrDuplicate):
 		status, message = 409, model.ConsoleDuplicate
-	case errors.Is(err, store.ErrImmutable):
+	case errors.Is(err, repository.ErrImmutable):
 		status, message = 409, model.ConsoleImmutable
-	case errors.Is(err, store.ErrReferenced):
+	case errors.Is(err, repository.ErrReferenced):
 		status, message = 409, model.ConsoleReferenced
-	case errors.Is(err, store.ErrInvalid):
+	case errors.Is(err, repository.ErrInvalid):
 		status, message = 400, model.ConsoleBadRequest
 	}
 	if status == 500 {

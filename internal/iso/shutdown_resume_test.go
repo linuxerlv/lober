@@ -3,11 +3,10 @@ package iso
 import (
 	"context"
 	"errors"
+	"github.com/lober/lober/internal/domain/model"
 	"net/http"
 	"testing"
 	"time"
-
-	"github.com/lober/lober/internal/store"
 )
 
 func TestWorkerShutdownPreservesRemoteCheckpointForRestart(t *testing.T) {
@@ -47,7 +46,7 @@ func TestWorkerShutdownPreservesRemoteCheckpointForRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := mustSource(t, s, item.ID, "")
-	if src.State != store.SourceFetching || src.Fetched != 3 {
+	if src.State != model.SourceFetching || src.Fetched != 3 {
 		t.Fatal("shutdown lost resumable state", src)
 	}
 	restarted := New(s.store, s.dirs)
@@ -59,7 +58,7 @@ func TestWorkerShutdownPreservesRemoteCheckpointForRestart(t *testing.T) {
 	if err := restarted.FetchOne(t.Context(), item.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	if src := mustSource(t, restarted, item.ID, ""); src.State != store.SourceFetched || src.Fetched != 6 {
+	if src := mustSource(t, restarted, item.ID, ""); src.State != model.SourceFetched || src.Fetched != 6 {
 		t.Fatal(src)
 	}
 }

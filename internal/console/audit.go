@@ -9,8 +9,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 type auditItem struct {
@@ -51,23 +51,23 @@ func (s *server) auditRoutes() []route {
 		{method: "GET", path: "/console/v1/audit/export", perm: PermAuditRead, tag: "audit", summary: "Export every matching audit entry as formula-safe CSV", query: auditExportQuery{}, resp: "", responseMedia: "text/csv", raw: true, handle: s.exportAudit},
 	}
 }
-func toAuditItem(e store.AuditEntry) auditItem {
+func toAuditItem(e repository.AuditEntry) auditItem {
 	return auditItem{e.ID, e.At, e.Actor, e.Action, e.Detail, e.TargetKind, e.TargetID}
 }
-func auditFilters(c *gin.Context) (store.AuditQuery, bool) {
+func auditFilters(c *gin.Context) (repository.AuditQuery, bool) {
 	from, ok := queryNonnegative(c, "from")
 	if !ok {
-		return store.AuditQuery{}, false
+		return repository.AuditQuery{}, false
 	}
 	to, ok := queryNonnegative(c, "to")
 	if !ok {
-		return store.AuditQuery{}, false
+		return repository.AuditQuery{}, false
 	}
 	if to != 0 && from > to {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
-		return store.AuditQuery{}, false
+		return repository.AuditQuery{}, false
 	}
-	return store.AuditQuery{TargetKind: c.Query("target_kind"), TargetID: c.Query("target_id"), Actor: c.Query("actor"), Action: c.Query("action"), From: from, To: to}, true
+	return repository.AuditQuery{TargetKind: c.Query("target_kind"), TargetID: c.Query("target_id"), Actor: c.Query("actor"), Action: c.Query("action"), From: from, To: to}, true
 }
 func (s *server) listAudit(c *gin.Context) {
 	q, ok := auditFilters(c)
@@ -79,7 +79,9 @@ func (s *server) listAudit(c *gin.Context) {
 		return
 	}
 	q.Limit, q.Cursor = limit, c.Query("cursor")
-	page, ok := Get(c, func() (store.Page[store.AuditEntry], error) { return s.deps.Audit.ListAudit(c.Request.Context(), q) })
+	page, ok := Get(c, func() (repository.Page[repository.AuditEntry], error) {
+		return s.deps.Audit.ListAudit(c.Request.Context(), q)
+	})
 	if !ok {
 		return
 	}
@@ -117,7 +119,9 @@ func (s *server) exportAudit(c *gin.Context) {
 	// Buffer until all database pages succeed. A late read failure must still be
 	// a JSON error, not a seemingly successful truncated CSV download.
 	for {
-		page, ok := Get(c, func() (store.Page[store.AuditEntry], error) { return s.deps.Audit.ListAudit(c.Request.Context(), q) })
+		page, ok := Get(c, func() (repository.Page[repository.AuditEntry], error) {
+			return s.deps.Audit.ListAudit(c.Request.Context(), q)
+		})
 		if !ok {
 			return
 		}

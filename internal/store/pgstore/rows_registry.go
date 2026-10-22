@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
 )
 
 // 行类型只在本包：第 1 层的 model 类型不带 tag（第 1 层修补时 T7-4 定的），字段改名由 model 的 golden 测试守住。

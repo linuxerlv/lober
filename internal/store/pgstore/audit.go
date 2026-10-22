@@ -5,12 +5,12 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // addAudits 在事务 tx 里给每个对象写一条同样的审计，按 ids 的顺序，ID 也按这个顺序递增。调用方先写动作本身、后调用
 // 它：审计写失败（包括测试的失败注入）时，整个事务连同动作一起回滚（spec §6.2 第 8 条）。
-func addAudits(tx *gorm.DB, a store.Audit, kind string, ids ...string) error {
+func addAudits(tx *gorm.DB, a repository.Audit, kind string, ids ...string) error {
 	rows := make([]auditRow, len(ids))
 	for i, id := range ids {
 		rows[i] = newAuditRow(a, kind, id)
@@ -18,21 +18,21 @@ func addAudits(tx *gorm.DB, a store.Audit, kind string, ids ...string) error {
 	return tx.CreateInBatches(&rows, batchSize).Error
 }
 
-// ListAudit 见 store.AuditLog。新的在前；游标是上一页最后一条的 ID，后面的页只取比它小的，翻页中途新写的审计不会
+// ListAudit 见 repository.AuditLog。新的在前；游标是上一页最后一条的 ID，后面的页只取比它小的，翻页中途新写的审计不会
 // 插进来。
-func (s *Store) ListAudit(ctx context.Context, q store.AuditQuery) (store.Page[store.AuditEntry], error) {
-	limit, err := store.CheckQuery(q.Cursor, q.Limit)
+func (s *Store) ListAudit(ctx context.Context, q repository.AuditQuery) (repository.Page[repository.AuditEntry], error) {
+	limit, err := repository.CheckQuery(q.Cursor, q.Limit)
 	if err != nil {
-		return store.Page[store.AuditEntry]{}, err
+		return repository.Page[repository.AuditEntry]{}, err
 	}
 	var before int64
 	if q.Cursor != "" {
-		if err := store.DecodeCursor(q.Cursor, "audit", &before); err != nil {
-			return store.Page[store.AuditEntry]{}, err
+		if err := repository.DecodeCursor(q.Cursor, "audit", &before); err != nil {
+			return repository.Page[repository.AuditEntry]{}, err
 		}
 	}
 	if !storable(q.TargetKind, q.TargetID, q.Actor, q.Action) {
-		return emptyPage[store.AuditEntry](), nil
+		return emptyPage[repository.AuditEntry](), nil
 	}
 	db := s.read(ctx)
 	if q.Cursor != "" {
@@ -54,7 +54,7 @@ func (s *Store) ListAudit(ctx context.Context, q store.AuditQuery) (store.Page[s
 	}
 	var rows []auditRow
 	if err := db.Order("id DESC").Limit(limit + 1).Find(&rows).Error; err != nil {
-		return store.Page[store.AuditEntry]{}, err
+		return repository.Page[repository.AuditEntry]{}, err
 	}
-	return page(rows, limit, auditRow.entry, func(r auditRow) string { return store.EncodeCursor("audit", r.ID) })
+	return page(rows, limit, auditRow.entry, func(r auditRow) string { return repository.EncodeCursor("audit", r.ID) })
 }

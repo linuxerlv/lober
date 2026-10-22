@@ -9,7 +9,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/model"
 )
 
 type bootConfigReader struct{ root string }

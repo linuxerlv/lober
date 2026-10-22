@@ -22,8 +22,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
@@ -49,14 +49,14 @@ func runCases(t *testing.T, cases []testCase) {
 const at0 int64 = 1_790_000_000
 
 // anAudit 是只关心「给了审计」时用的一条合规则的审计。
-func anAudit(action string) store.Audit {
-	return store.Audit{Actor: "alice", Action: action, At: at0}
+func anAudit(action string) repository.Audit {
+	return repository.Audit{Actor: "alice", Action: action, At: at0}
 }
 
 // sentinels 是契约的全部哨兵错误。
 var sentinels = []error{
-	store.ErrNotFound, store.ErrConflict, store.ErrDuplicate, store.ErrImmutable, store.ErrReferenced,
-	store.ErrAuditRequired, store.ErrInvalid, store.ErrRejected, store.ErrBuiltinMismatch,
+	repository.ErrNotFound, repository.ErrConflict, repository.ErrDuplicate, repository.ErrImmutable, repository.ErrReferenced,
+	repository.ErrAuditRequired, repository.ErrInvalid, repository.ErrRejected, repository.ErrBuiltinMismatch,
 }
 
 func must(t *testing.T, err error, what string) {
@@ -77,7 +77,7 @@ func wantIs(t *testing.T, err, want error, what string) {
 // wantProblems 要求 err 是包着 kind 的 ProblemsError，问题与 want 完全相同，顺序也相同。
 func wantProblems(t *testing.T, err, kind error, want []model.Problem, what string) {
 	t.Helper()
-	var pe *store.ProblemsError
+	var pe *repository.ProblemsError
 	switch {
 	case !errors.As(err, &pe):
 		t.Fatalf("%s：应报 ProblemsError(%v)，得到 %v", what, kind, err)
@@ -91,7 +91,7 @@ func wantProblems(t *testing.T, err, kind error, want []model.Problem, what stri
 // wantDuplicate 要求 err 是 DuplicateError：撞上的键是 field，已有的那一个是 existing。
 func wantDuplicate(t *testing.T, err error, field, existing, what string) {
 	t.Helper()
-	var de *store.DuplicateError
+	var de *repository.DuplicateError
 	switch {
 	case !errors.As(err, &de):
 		t.Fatalf("%s：应报 DuplicateError，得到 %v", what, err)
@@ -122,7 +122,7 @@ const maxPages = 1000
 
 // pagesFrom 从游标 cursor 翻到尾，返回每一页的条目；list 用给定的游标取一页。每一页的 Items 都不能是 nil，没有
 // 条目的一页也是长度为 0 的切片（见包说明）：经它翻页的用例都顺带查了这一条。
-func pagesFrom[T any](t *testing.T, cursor string, list func(cursor string) (store.Page[T], error)) [][]T {
+func pagesFrom[T any](t *testing.T, cursor string, list func(cursor string) (repository.Page[T], error)) [][]T {
 	t.Helper()
 	var pages [][]T
 	for {
@@ -143,7 +143,7 @@ func pagesFrom[T any](t *testing.T, cursor string, list func(cursor string) (sto
 }
 
 // allPages 从头翻到尾。
-func allPages[T any](t *testing.T, list func(cursor string) (store.Page[T], error)) [][]T {
+func allPages[T any](t *testing.T, list func(cursor string) (repository.Page[T], error)) [][]T {
 	t.Helper()
 	return pagesFrom(t, "", list)
 }
@@ -163,13 +163,13 @@ func wantPaged[T any](t *testing.T, pages [][]T, limit int, want []T, what strin
 	wantItems(t, slices.Concat(pages...), want, what)
 }
 
-// defaultPageSize 是 Limit 为 0 时每页取的条数（store.CheckQuery）。
+// defaultPageSize 是 Limit 为 0 时每页取的条数（repository.CheckQuery）。
 const defaultPageSize = 100
 
 // wantDefaultLimit 查各个列表「Limit 为 0 时取 100」：仓储里恰好有 defaultPageSize+1 条，want 是它们按列表的顺序排好的样子
 // （用例用 Limit 500 一次取出）。list 带着给定的游标、Limit 为 0 取一页：第一页 100 条且 Next 不为空，第二页只剩 1 条且 Next
 // 为空，两页拼起来就是 want。实现写成 Limit(q.Limit+1) 这类回退，要等库里真有许多数据才暴露，这里先钉住。
-func wantDefaultLimit[T any](t *testing.T, want []T, list func(cursor string) (store.Page[T], error)) {
+func wantDefaultLimit[T any](t *testing.T, want []T, list func(cursor string) (repository.Page[T], error)) {
 	t.Helper()
 	if len(want) != defaultPageSize+1 {
 		t.Fatalf("用例要先备好 %d 条，备了 %d 条", defaultPageSize+1, len(want))
@@ -193,16 +193,16 @@ func wantDefaultLimit[T any](t *testing.T, want []T, list func(cursor string) (s
 type contents struct {
 	Hosts []model.Host
 	ISOs  []model.ISO
-	Users []store.User
-	Audit []store.AuditEntry
+	Users []model.User
+	Audit []repository.AuditEntry
 }
 
 func snapshot(t *testing.T, s *pgstore.Store) contents {
 	t.Helper()
 	return contents{
-		Hosts: slices.Concat(hostPages(t, s, store.HostQuery{Limit: 500})...),
-		ISOs:  slices.Concat(isoPages(t, s, store.ISOQuery{Limit: 500})...),
-		Users: slices.Concat(userPages(t, s, store.UserQuery{Limit: 500})...),
+		Hosts: slices.Concat(hostPages(t, s, repository.HostQuery{Limit: 500})...),
+		ISOs:  slices.Concat(isoPages(t, s, repository.ISOQuery{Limit: 500})...),
+		Users: slices.Concat(userPages(t, s, repository.UserQuery{Limit: 500})...),
 		Audit: auditEntries(t, s),
 	}
 }

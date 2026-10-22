@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 )
 
@@ -90,9 +90,9 @@ func mustReadyISO(t *testing.T, s *pgstore.Store, iso model.ISO, n int) model.IS
 }
 
 // isoPages 用查询 q 从头翻到尾，返回每一页；游标由它填。
-func isoPages(t *testing.T, s *pgstore.Store, q store.ISOQuery) [][]model.ISO {
+func isoPages(t *testing.T, s *pgstore.Store, q repository.ISOQuery) [][]model.ISO {
 	t.Helper()
-	return allPages(t, func(cursor string) (store.Page[model.ISO], error) {
+	return allPages(t, func(cursor string) (repository.Page[model.ISO], error) {
 		q.Cursor = cursor
 		return s.ListISOs(t.Context(), q)
 	})
@@ -130,7 +130,7 @@ func isoCreateBadSeries(t *testing.T, s *pgstore.Store) {
 		{"", ""},
 	} {
 		_, err := s.CreateISO(t.Context(), model.ISO{Name: "x", Family: c.family, Series: c.series}, anAudit("iso.create"))
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("族 %q、系 %q", c.family, c.series))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("族 %q、系 %q", c.family, c.series))
 	}
 	wantUnchanged(t, s, before, "族与系对不上时")
 }
@@ -139,7 +139,7 @@ func isoCreateBadName(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	for _, name := range []string{"a\x00b", "\xff"} {
 		_, err := s.CreateISO(t.Context(), rockyISO(name), anAudit("iso.create"))
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("名称 %q", name))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("名称 %q", name))
 	}
 	wantUnchanged(t, s, before, "名称存不下时")
 }
@@ -163,7 +163,7 @@ func isoCreateExtraFields(t *testing.T, s *pgstore.Store) {
 		in := rockyISO("x")
 		c.mod(&in)
 		_, err := s.CreateISO(t.Context(), in, anAudit("iso.create"))
-		wantIs(t, err, store.ErrInvalid, "新建时填了 "+c.field)
+		wantIs(t, err, repository.ErrInvalid, "新建时填了 "+c.field)
 	}
 	wantUnchanged(t, s, before, "多填了字段时")
 }
@@ -232,7 +232,7 @@ func isoUpdateFixedFields(t *testing.T, s *pgstore.Store) {
 		in := imported(iso, model.ISOImporting, 1)
 		c.mod(&in)
 		_, err := s.UpdateISO(t.Context(), in)
-		wantIs(t, err, store.ErrInvalid, "改 "+c.field)
+		wantIs(t, err, repository.ErrInvalid, "改 "+c.field)
 	}
 	wantUnchanged(t, s, before, "改不能改的字段时")
 }
@@ -246,12 +246,12 @@ func isoUpdateConflict(t *testing.T, s *pgstore.Store) {
 		in.State = model.ISOFailed
 		in.Rev = rev
 		_, err := s.UpdateISO(t.Context(), in)
-		wantIs(t, err, store.ErrConflict, fmt.Sprintf("带着 Rev %d 更新", rev))
+		wantIs(t, err, repository.ErrConflict, fmt.Sprintf("带着 Rev %d 更新", rev))
 	}
 	missing := cur
 	missing.ID = "nosuchiso"
 	_, err := s.UpdateISO(t.Context(), missing)
-	wantIs(t, err, store.ErrNotFound, "更新不存在的 ISO")
+	wantIs(t, err, repository.ErrNotFound, "更新不存在的 ISO")
 	wantUnchanged(t, s, before, "更新被拒时")
 }
 
@@ -266,7 +266,7 @@ func isoUpdateReadyInvalid(t *testing.T, s *pgstore.Store) {
 		t.Fatal("用例的记录应当不合法")
 	}
 	_, err := s.UpdateISO(t.Context(), in)
-	wantProblems(t, err, store.ErrInvalid, want, "置为 ready")
+	wantProblems(t, err, repository.ErrInvalid, want, "置为 ready")
 	wantUnchanged(t, s, before, "记录不合法时")
 
 	in.Version, in.Arch = "10.0.26100", "x86_64"
@@ -295,7 +295,7 @@ func isoUpdateStillReadyInvalid(t *testing.T, s *pgstore.Store) {
 			t.Fatal("用例的记录应当不合法")
 		}
 		_, err := s.UpdateISO(t.Context(), in)
-		wantProblems(t, err, store.ErrInvalid, want, c.name)
+		wantProblems(t, err, repository.ErrInvalid, want, c.name)
 	}
 	wantUnchanged(t, s, before, "记录不合法时")
 }
@@ -331,7 +331,7 @@ func isoUpdateUnstorable(t *testing.T, s *pgstore.Store) {
 				in := valid(state)
 				c.mod(&in, bad)
 				_, err := s.UpdateISO(t.Context(), in)
-				wantIs(t, err, store.ErrInvalid, fmt.Sprintf("%s：含 %q，置为 %s", c.field, bad, state))
+				wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("%s：含 %q，置为 %s", c.field, bad, state))
 			}
 		}
 	}
@@ -342,7 +342,7 @@ func isoUpdateUnstorable(t *testing.T, s *pgstore.Store) {
 	}
 }
 
-// SHA256 只能为空，或是 64 位小写十六进制（store.CheckISOText）。C4 按它去重：同一份内容写成大写就成了另一份；超长的值不先
+// SHA256 只能为空，或是 64 位小写十六进制（repository.CheckISOText）。C4 按它去重：同一份内容写成大写就成了另一份；超长的值不先
 // 挡下，会撞上 idx_isos_sha256 的 btree 行长上限，报出没翻译的 54000。不论置为什么状态都查：获取中的 ISO 可能在字节到齐之前
 // 就记下了操作员填的期望值（C3）。
 func isoUpdateBadSHA256(t *testing.T, s *pgstore.Store) {
@@ -357,7 +357,7 @@ func isoUpdateBadSHA256(t *testing.T, s *pgstore.Store) {
 			in := imported(iso, state, 1)
 			in.SHA256 = c.sum
 			_, err := s.UpdateISO(t.Context(), in)
-			wantIs(t, err, store.ErrInvalid, fmt.Sprintf("SHA256 %s，置为 %s", c.name, state))
+			wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("SHA256 %s，置为 %s", c.name, state))
 		}
 	}
 	wantUnchanged(t, s, before, "SHA256 不合格式时")
@@ -374,7 +374,7 @@ func isoUpdateBadState(t *testing.T, s *pgstore.Store) {
 			in := iso
 			in.State = state
 			_, err := s.UpdateISO(t.Context(), in)
-			wantIs(t, err, store.ErrInvalid, fmt.Sprintf("从 %s 经系统更新置为 %q", iso.State, state))
+			wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("从 %s 经系统更新置为 %q", iso.State, state))
 		}
 	}
 	wantUnchanged(t, s, before, "状态不对时")
@@ -390,7 +390,7 @@ func isoUpdateDeprecated(t *testing.T, s *pgstore.Store) {
 		in := deprecated
 		in.State = state
 		_, err := s.UpdateISO(t.Context(), in)
-		wantIs(t, err, store.ErrImmutable, fmt.Sprintf("把已废弃的 ISO 经系统更新置为 %s", state))
+		wantIs(t, err, repository.ErrImmutable, fmt.Sprintf("把已废弃的 ISO 经系统更新置为 %s", state))
 	}
 	wantUnchanged(t, s, before, "已废弃时")
 }
@@ -445,32 +445,32 @@ func isoDeprecate(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	for _, iso := range []model.ISO{acquiring, importing, failed} {
 		err := s.DeprecateISO(t.Context(), iso.ID, iso.Rev, anAudit("iso.deprecate"))
-		wantIs(t, err, store.ErrConflict, fmt.Sprintf("废弃 %s 的 ISO", iso.State))
+		wantIs(t, err, repository.ErrConflict, fmt.Sprintf("废弃 %s 的 ISO", iso.State))
 	}
-	wantIs(t, s.DeprecateISO(t.Context(), ready.ID, ready.Rev+1, anAudit("iso.deprecate")), store.ErrConflict, "Rev 对不上")
-	wantIs(t, s.DeprecateISO(t.Context(), "nosuchiso", 1, anAudit("iso.deprecate")), store.ErrNotFound, "废弃不存在的")
+	wantIs(t, s.DeprecateISO(t.Context(), ready.ID, ready.Rev+1, anAudit("iso.deprecate")), repository.ErrConflict, "Rev 对不上")
+	wantIs(t, s.DeprecateISO(t.Context(), "nosuchiso", 1, anAudit("iso.deprecate")), repository.ErrNotFound, "废弃不存在的")
 	wantUnchanged(t, s, before, "废弃被拒时")
 
 	must(t, s.DeprecateISO(t.Context(), ready.ID, ready.Rev, anAudit("iso.deprecate")), "废弃 ready 的 ISO")
 	want := ready
 	want.State, want.Rev = model.ISODeprecated, ready.Rev+1
 	wantEqual(t, mustGetISO(t, s, ready.ID), want, "废弃之后")
-	wantIs(t, s.DeprecateISO(t.Context(), ready.ID, want.Rev, anAudit("iso.deprecate")), store.ErrConflict, "再废弃一次")
+	wantIs(t, s.DeprecateISO(t.Context(), ready.ID, want.Rev, anAudit("iso.deprecate")), repository.ErrConflict, "再废弃一次")
 }
 
 func isoDelete(t *testing.T, s *pgstore.Store) {
 	a := mustCreateISO(t, s, rockyISO("A"))
 	b := mustCreateISO(t, s, rockyISO("B"))
 	before := snapshot(t, s)
-	wantIs(t, s.DeleteISO(t.Context(), a.ID, a.Rev+1, anAudit("iso.delete")), store.ErrConflict, "Rev 对不上")
-	wantIs(t, s.DeleteISO(t.Context(), "nosuchiso", 1, anAudit("iso.delete")), store.ErrNotFound, "删除不存在的")
+	wantIs(t, s.DeleteISO(t.Context(), a.ID, a.Rev+1, anAudit("iso.delete")), repository.ErrConflict, "Rev 对不上")
+	wantIs(t, s.DeleteISO(t.Context(), "nosuchiso", 1, anAudit("iso.delete")), repository.ErrNotFound, "删除不存在的")
 	wantUnchanged(t, s, before, "删除被拒时")
 
 	must(t, s.DeleteISO(t.Context(), a.ID, a.Rev, anAudit("iso.delete")), "删除")
 	_, err := s.GetISO(t.Context(), a.ID)
-	wantIs(t, err, store.ErrNotFound, "读删掉的 ISO")
+	wantIs(t, err, repository.ErrNotFound, "读删掉的 ISO")
 	wantEqual(t, mustGetISO(t, s, b.ID), b, "别的 ISO")
-	wantIs(t, s.DeleteISO(t.Context(), a.ID, a.Rev, anAudit("iso.delete")), store.ErrNotFound, "再删一次")
+	wantIs(t, s.DeleteISO(t.Context(), a.ID, a.Rev, anAudit("iso.delete")), repository.ErrNotFound, "再删一次")
 
 	// 已废弃的也能删；删掉之后，它占着的 SHA256 空出来，同样的内容可以由新的 ISO 导入
 	r := mustReadyISO(t, s, rockyISO("R"), 7)
@@ -487,13 +487,13 @@ func isoDeleteReferenced(t *testing.T, s *pgstore.Store) {
 	task := f.mustCreate(t, s, mustTaskHosts(t, s, "SN-1")...)[0]
 	iso := mustGetISO(t, s, f.iso.ID)
 	before := taskSnapshot(t, s)
-	wantIs(t, s.DeleteISO(ctx, iso.ID, iso.Rev, anAudit("iso.delete")), store.ErrReferenced, "删除被未结束任务引用的 ISO")
+	wantIs(t, s.DeleteISO(ctx, iso.ID, iso.Rev, anAudit("iso.delete")), repository.ErrReferenced, "删除被未结束任务引用的 ISO")
 	wantTasksUnchanged(t, s, before, "删除被拒时")
 	must(t, s.DeprecateISO(ctx, iso.ID, iso.Rev, anAudit("iso.deprecate")), "废弃被引用的 ISO")
 	mustTransition(t, s, task, model.TaskDone)
 	iso = mustGetISO(t, s, iso.ID)
 	before = taskSnapshot(t, s)
-	wantIs(t, s.DeleteISO(ctx, iso.ID, iso.Rev, anAudit("iso.delete")), store.ErrReferenced, "删除已废弃、任务都已结束的 ISO")
+	wantIs(t, s.DeleteISO(ctx, iso.ID, iso.Rev, anAudit("iso.delete")), repository.ErrReferenced, "删除已废弃、任务都已结束的 ISO")
 	wantTasksUnchanged(t, s, before, "删除被拒时")
 	other := mustCreateISO(t, s, rockyISO("Other"))
 	must(t, s.DeleteISO(ctx, other.ID, other.Rev, anAudit("iso.delete")), "删除没被引用的 ISO")
@@ -504,13 +504,13 @@ func isoBadID(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	for _, id := range []string{"", "Bad", "a@1", "-a", "a.b", "a/b"} {
 		_, err := s.GetISO(t.Context(), id)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("GetISO(%q)", id))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("GetISO(%q)", id))
 		in := imported(rockyISO("A"), model.ISOImporting, 1)
 		in.ID, in.Rev = id, 1
 		_, err = s.UpdateISO(t.Context(), in)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("UpdateISO(%q)", id))
-		wantIs(t, s.DeprecateISO(t.Context(), id, 1, anAudit("iso.deprecate")), store.ErrInvalid, fmt.Sprintf("DeprecateISO(%q)", id))
-		wantIs(t, s.DeleteISO(t.Context(), id, 1, anAudit("iso.delete")), store.ErrInvalid, fmt.Sprintf("DeleteISO(%q)", id))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("UpdateISO(%q)", id))
+		wantIs(t, s.DeprecateISO(t.Context(), id, 1, anAudit("iso.deprecate")), repository.ErrInvalid, fmt.Sprintf("DeprecateISO(%q)", id))
+		wantIs(t, s.DeleteISO(t.Context(), id, 1, anAudit("iso.delete")), repository.ErrInvalid, fmt.Sprintf("DeleteISO(%q)", id))
 	}
 	wantUnchanged(t, s, before, "ID 不合格式时")
 }
@@ -524,14 +524,14 @@ func isoListPaging(t *testing.T, s *pgstore.Store) {
 	slices.SortFunc(want, func(a, b model.ISO) int {
 		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
 	})
-	whole, err := s.ListISOs(t.Context(), store.ISOQuery{Limit: len(want)})
+	whole, err := s.ListISOs(t.Context(), repository.ISOQuery{Limit: len(want)})
 	must(t, err, "一次全取")
 	wantItems(t, whole.Items, want, "一次全取")
 	if whole.Next != "" {
 		t.Fatalf("恰好取完时 Next 应为空，得到 %q", whole.Next)
 	}
 	for _, limit := range []int{2, 3} {
-		wantPaged(t, isoPages(t, s, store.ISOQuery{Limit: limit}), limit, want, fmt.Sprintf("每页 %d 条", limit))
+		wantPaged(t, isoPages(t, s, repository.ISOQuery{Limit: limit}), limit, want, fmt.Sprintf("每页 %d 条", limit))
 	}
 }
 
@@ -547,25 +547,25 @@ func isoListFilters(t *testing.T, s *pgstore.Store) {
 	esxi = mustGetISO(t, s, esxi.ID)
 	for _, c := range []struct {
 		name string
-		q    store.ISOQuery
+		q    repository.ISOQuery
 		want []model.ISO
 	}{
-		{"不过滤", store.ISOQuery{}, []model.ISO{acquiring, ready, alma, server, desktop, esxi}},
-		{"按族", store.ISOQuery{Family: "linux"}, []model.ISO{acquiring, ready, alma}},
-		{"按系", store.ISOQuery{Series: "rocky"}, []model.ISO{acquiring, ready}},
-		{"按一个状态", store.ISOQuery{States: []model.ISOState{model.ISOReady}}, []model.ISO{ready, server}},
-		{"按几个状态", store.ISOQuery{States: []model.ISOState{model.ISOFailed, model.ISODeprecated}}, []model.ISO{desktop, esxi}},
-		{"族与状态同时给", store.ISOQuery{Family: "linux", States: []model.ISOState{model.ISOReady, model.ISOImporting}}, []model.ISO{ready, alma}},
-		{"组合不上的为空", store.ISOQuery{Family: "windows", Series: "rocky"}, nil},
+		{"不过滤", repository.ISOQuery{}, []model.ISO{acquiring, ready, alma, server, desktop, esxi}},
+		{"按族", repository.ISOQuery{Family: "linux"}, []model.ISO{acquiring, ready, alma}},
+		{"按系", repository.ISOQuery{Series: "rocky"}, []model.ISO{acquiring, ready}},
+		{"按一个状态", repository.ISOQuery{States: []model.ISOState{model.ISOReady}}, []model.ISO{ready, server}},
+		{"按几个状态", repository.ISOQuery{States: []model.ISOState{model.ISOFailed, model.ISODeprecated}}, []model.ISO{desktop, esxi}},
+		{"族与状态同时给", repository.ISOQuery{Family: "linux", States: []model.ISOState{model.ISOReady, model.ISOImporting}}, []model.ISO{ready, alma}},
+		{"组合不上的为空", repository.ISOQuery{Family: "windows", Series: "rocky"}, nil},
 		// 空的切片与 nil 一样不过滤：第 5 层把 JSON 的空数组解出来就是它，当成「状态在空集合里」就一条都不给了
-		{"状态给空切片等于不过滤", store.ISOQuery{States: []model.ISOState{}}, []model.ISO{acquiring, ready, alma, server, desktop, esxi}},
+		{"状态给空切片等于不过滤", repository.ISOQuery{States: []model.ISOState{}}, []model.ISO{acquiring, ready, alma, server, desktop, esxi}},
 	} {
 		c.q.Limit = 1 // 一条一页：翻页时过滤也要对
 		wantItems(t, slices.Concat(isoPages(t, s, c.q)...), c.want, c.name)
 	}
 	// 存不下的过滤条件谁都不是（store 的包说明）：当作没有，得到空的一页，不报数据库的编码错误
 	for _, bad := range []string{"\x00", "\xff"} {
-		for _, q := range []store.ISOQuery{
+		for _, q := range []repository.ISOQuery{
 			{Family: catalog.Family("linux" + bad)},
 			{Series: catalog.Series("rocky" + bad)},
 			{States: []model.ISOState{model.ISOState("ready" + bad)}},
@@ -578,9 +578,9 @@ func isoListFilters(t *testing.T, s *pgstore.Store) {
 
 func isoListInvalid(t *testing.T, s *pgstore.Store) {
 	mustCreateISO(t, s, rockyISO("A"))
-	for _, q := range []store.ISOQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"}} {
+	for _, q := range []repository.ISOQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"}} {
 		_, err := s.ListISOs(t.Context(), q)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("Limit %d、Cursor %q", q.Limit, q.Cursor))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("Limit %d、Cursor %q", q.Limit, q.Cursor))
 	}
 }
 
@@ -588,8 +588,8 @@ func isoListDefaultLimit(t *testing.T, s *pgstore.Store) {
 	for i := range defaultPageSize + 1 {
 		mustCreateISO(t, s, rockyISO(fmt.Sprintf("ISO-%03d", i)))
 	}
-	wantDefaultLimit(t, slices.Concat(isoPages(t, s, store.ISOQuery{Limit: 500})...), func(cursor string) (store.Page[model.ISO], error) {
-		return s.ListISOs(t.Context(), store.ISOQuery{Cursor: cursor})
+	wantDefaultLimit(t, slices.Concat(isoPages(t, s, repository.ISOQuery{Limit: 500})...), func(cursor string) (repository.Page[model.ISO], error) {
+		return s.ListISOs(t.Context(), repository.ISOQuery{Cursor: cursor})
 	})
 }
 
@@ -617,7 +617,7 @@ func isoCopies(t *testing.T, s *pgstore.Store) {
 	wantEqual(t, mustGetISO(t, s, iso.ID), want, "改了系统更新的入参与返回值之后")
 
 	mutate(mustGetISO(t, s, iso.ID))
-	p, err := s.ListISOs(t.Context(), store.ISOQuery{})
+	p, err := s.ListISOs(t.Context(), repository.ISOQuery{})
 	must(t, err, "列出")
 	mutate(p.Items[0])
 	wantEqual(t, mustGetISO(t, s, iso.ID), want, "改了读到的返回值之后")

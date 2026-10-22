@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
@@ -59,7 +59,7 @@ func concurrentBatches(t *testing.T, s *pgstore.Store) {
 func concurrentCurrentBatches(t *testing.T, s *pgstore.Store) {
 	concurrentBatchesUsing(t, s, s.CreateCurrentTasks)
 }
-func concurrentBatchesUsing(t *testing.T, s *pgstore.Store, create func(context.Context, []model.Task, store.Audit) ([]model.Task, error)) {
+func concurrentBatchesUsing(t *testing.T, s *pgstore.Store, create func(context.Context, []model.Task, repository.Audit) ([]model.Task, error)) {
 	f := newFixture(t, s)
 	hs := mustTaskHosts(t, s, "SN-1", "SN-2", "SN-3")
 	batches := make([][]model.Task, workers)
@@ -83,8 +83,8 @@ func concurrentBatchesUsing(t *testing.T, s *pgstore.Store, create func(context.
 			winner = i
 			continue
 		}
-		var be *store.BatchError
-		if !errors.As(err, &be) || !errors.Is(err, store.ErrRejected) {
+		var be *repository.BatchError
+		if !errors.As(err, &be) || !errors.Is(err, repository.ErrRejected) {
 			t.Fatalf("第 %d 批应报 BatchError(ErrRejected)，得到 %v", i+1, err)
 		}
 		ps := batchProblems(be)
@@ -95,7 +95,7 @@ func concurrentBatchesUsing(t *testing.T, s *pgstore.Store, create func(context.
 	if winner < 0 {
 		t.Fatal("一批都没成功")
 	}
-	wantItems(t, slices.Concat(taskPages(t, s, store.TaskQuery{Limit: 500})...), sortedTasks(results[winner]), "建出的任务只有成功的那一批")
+	wantItems(t, slices.Concat(taskPages(t, s, repository.TaskQuery{Limit: 500})...), sortedTasks(results[winner]), "建出的任务只有成功的那一批")
 	for _, task := range results[winner] {
 		got, found, err := s.FindOpenTask(t.Context(), task.HostSN)
 		must(t, err, "找 "+task.HostSN+" 未结束的任务")
@@ -120,16 +120,16 @@ func concurrentDisjointBatches(t *testing.T, s *pgstore.Store) {
 	for i, err := range errs {
 		must(t, err, fmt.Sprintf("第 %d 批", i+1))
 	}
-	wantEqual(t, len(slices.Concat(taskPages(t, s, store.TaskQuery{Limit: 500})...)), workers, "建出的任务数")
+	wantEqual(t, len(slices.Concat(taskPages(t, s, repository.TaskQuery{Limit: 500})...)), workers, "建出的任务数")
 }
 
 // 条件推进（C33）：同一个期望值只有一次生效，其余报 ErrConflict。事件与状态在同一个事务里写，所以只有成功那一次带的事件落库。
 func concurrentTransitions(t *testing.T, s *pgstore.Store) {
 	task := mustTask(t, s)
-	expect := store.TaskExpect{State: task.State, Rev: task.Rev}
+	expect := repository.TaskExpect{State: task.State, Rev: task.Rev}
 	errs := make([]error, workers)
 	together(workers, func(i int) {
-		events := []store.NewEvent{{At: at0, Kind: "task.boot", Key: "boot-" + strconv.Itoa(i)}}
+		events := []repository.NewEvent{{At: at0, Kind: "task.boot", Key: "boot-" + strconv.Itoa(i)}}
 		_, _, errs[i] = s.TransitionTask(t.Context(), task.ID, expect, model.TaskBooting, events)
 	})
 	winner := -1
@@ -141,7 +141,7 @@ func concurrentTransitions(t *testing.T, s *pgstore.Store) {
 			winner = i
 			continue
 		}
-		wantIs(t, err, store.ErrConflict, fmt.Sprintf("第 %d 次推进", i+1))
+		wantIs(t, err, repository.ErrConflict, fmt.Sprintf("第 %d 次推进", i+1))
 	}
 	if winner < 0 {
 		t.Fatal("一次都没成功")
@@ -149,8 +149,8 @@ func concurrentTransitions(t *testing.T, s *pgstore.Store) {
 	want := task
 	want.State, want.Rev = model.TaskBooting, task.Rev+1
 	wantEqual(t, mustGetTask(t, s, task.ID), want, "推进之后")
-	wantEqual(t, allEvents(t, s, task.ID), []store.Event{{TaskID: task.ID, Seq: 1,
-		NewEvent: store.NewEvent{At: at0, Kind: "task.boot", Key: "boot-" + strconv.Itoa(winner)}}}, "落库的事件")
+	wantEqual(t, allEvents(t, s, task.ID), []repository.Event{{TaskID: task.ID, Seq: 1,
+		NewEvent: repository.NewEvent{At: at0, Kind: "task.boot", Key: "boot-" + strconv.Itoa(winner)}}}, "落库的事件")
 }
 
 // 同一个任务同时追加：每个 goroutine 追加 rounds 批、每批两条。全部 Seq 从 1 起连续、不重、不缺，一批的两条相邻（一批在
@@ -158,11 +158,11 @@ func concurrentTransitions(t *testing.T, s *pgstore.Store) {
 func concurrentAppends(t *testing.T, s *pgstore.Store) {
 	const rounds = 20
 	id := mustTask(t, s).ID
-	got := make([][]store.Appended, workers)
+	got := make([][]repository.Appended, workers)
 	errs := make([]error, workers)
 	together(workers, func(i int) {
 		for r := range rounds {
-			es := []store.NewEvent{
+			es := []repository.NewEvent{
 				{At: at0, Kind: "slot.log", Fields: map[string]string{"by": strconv.Itoa(i), "n": strconv.Itoa(2 * r)}},
 				{At: at0, Kind: "slot.log", Fields: map[string]string{"by": strconv.Itoa(i), "n": strconv.Itoa(2*r + 1)}},
 			}
@@ -207,10 +207,10 @@ func concurrentAppends(t *testing.T, s *pgstore.Store) {
 // 同一个信号同时重发了几次：只落一条，恰好一次报告为新写的，其余报告 Duplicate，Seq 都是那一条的。
 func concurrentSameKey(t *testing.T, s *pgstore.Store) {
 	id := mustTask(t, s).ID
-	got := make([][]store.Appended, workers)
+	got := make([][]repository.Appended, workers)
 	errs := make([]error, workers)
 	together(workers, func(i int) {
-		es := []store.NewEvent{{At: at0, Kind: "signal.recv", Key: "sig-1", Fields: map[string]string{"by": strconv.Itoa(i)}}}
+		es := []repository.NewEvent{{At: at0, Kind: "signal.recv", Key: "sig-1", Fields: map[string]string{"by": strconv.Itoa(i)}}}
 		got[i], errs[i] = s.AppendEvents(t.Context(), id, es)
 	})
 	winner := -1
@@ -229,7 +229,7 @@ func concurrentSameKey(t *testing.T, s *pgstore.Store) {
 	if winner < 0 {
 		t.Fatal("没有一次报告为新写的")
 	}
-	wantEqual(t, allEvents(t, s, id), []store.Event{{TaskID: id, Seq: 1, NewEvent: store.NewEvent{
+	wantEqual(t, allEvents(t, s, id), []repository.Event{{TaskID: id, Seq: 1, NewEvent: repository.NewEvent{
 		At: at0, Kind: "signal.recv", Key: "sig-1", Fields: map[string]string{"by": strconv.Itoa(winner)},
 	}}}, "落库的事件")
 }
@@ -264,7 +264,7 @@ func Test写事务不随连接默认的隔离级别变(t *testing.T) {
 		_, err := s.UpdateHost(ctx, in, anAudit("host.update"))
 		return err
 	})
-	wantIs(t, err, store.ErrConflict, fmt.Sprintf("对方提交之后 Rev 已是 %d，带着 %d 修改", h.Rev+1, h.Rev))
+	wantIs(t, err, repository.ErrConflict, fmt.Sprintf("对方提交之后 Rev 已是 %d，带着 %d 修改", h.Rev+1, h.Rev))
 	want := h
 	want.Arch, want.Rev = "aarch64", h.Rev+1
 	got, err := s.GetHost(ctx, h.SN)
@@ -289,7 +289,7 @@ func withRuntimeParam(dsn, key, value string) (string, error) {
 }
 
 // 两路同时装载同一份内置内容（spec §6.2 第 11 条）：先到的一路还没提交时，后到的一路要等它提交，再看到它写下的版本，
-// 内容相同就什么都不做、返回 nil（store.Hooks 的 EnsureBuiltinHook）。所以 EnsureBuiltin* 先确定身份（INSERT … ON
+// 内容相同就什么都不做、返回 nil（repository.Hooks 的 EnsureBuiltinHook）。所以 EnsureBuiltin* 先确定身份（INSERT … ON
 // CONFLICT DO NOTHING 会等先到的一路提交），再锁住身份，锁住之后才查版本。要是先不加锁地查版本、查不到再锁身份，
 // 后到的一路看不到对方还没提交的版本：身份也是新的，就去建身份，撞上 hooks_pkey；身份已在，就等到锁之后直接写版本，
 // 撞上 hook_versions_pkey。两处都是没翻译的 23505，装配点只能拒绝启动。另开一个连接当先到的一路，照仓储的写法在没提交

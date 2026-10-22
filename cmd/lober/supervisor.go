@@ -8,14 +8,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/iso"
-	"github.com/lober/lober/internal/store"
 )
 
 type sourceSupervisor struct {
 	source          *iso.Sources
-	store           store.Store
+	store           repository.Store
 	journal         *deletionJournal
 	gate            *registrationGate
 	cfg             isoConfig
@@ -32,7 +32,7 @@ type sourceSupervisor struct {
 	wg              sync.WaitGroup
 }
 
-func newSourceSupervisor(ctx context.Context, src *iso.Sources, st store.Store, j *deletionJournal, gate *registrationGate, cfg isoConfig, logger *slog.Logger) *sourceSupervisor {
+func newSourceSupervisor(ctx context.Context, src *iso.Sources, st repository.Store, j *deletionJournal, gate *registrationGate, cfg isoConfig, logger *slog.Logger) *sourceSupervisor {
 	child, cancel := context.WithCancel(ctx)
 	return &sourceSupervisor{source: src, store: st, journal: j, gate: gate, cfg: cfg, logger: logger, ctx: child, cancel: cancel, wake: make(chan struct{}, 1), slots: make(chan struct{}, cfg.Workers), running: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{}}
 }
@@ -138,7 +138,7 @@ func (s *sourceSupervisor) reconcile() {
 		}
 		if w.Kind == iso.ResumeFetch {
 			src, exists, err := s.store.GetSource(s.ctx, w.ISOID, w.Role)
-			if err != nil || !exists || src.Kind == store.SourceUpload {
+			if err != nil || !exists || src.Kind == model.SourceUpload {
 				continue
 			}
 		}
@@ -188,7 +188,7 @@ func (s *sourceSupervisor) launch(w iso.ToResume, work func() error) bool {
 	}()
 	return true
 }
-func (s *sourceSupervisor) Register(ctx context.Context, item model.ISO, kind, addr, role string, size int64, digest string, a store.Audit) error {
+func (s *sourceSupervisor) Register(ctx context.Context, item model.ISO, kind, addr, role string, size int64, digest string, a repository.Audit) error {
 	s.gate.RLock()
 	defer s.gate.RUnlock()
 	if err := s.source.RegisterQueued(ctx, item, kind, addr, role, size, digest, a); err != nil {
@@ -197,24 +197,24 @@ func (s *sourceSupervisor) Register(ctx context.Context, item model.ISO, kind, a
 	s.Wake()
 	return nil
 }
-func (s *sourceSupervisor) Upload(ctx context.Context, id, role string, offset int64, r io.Reader, a store.Audit) error {
+func (s *sourceSupervisor) Upload(ctx context.Context, id, role string, offset int64, r io.Reader, a repository.Audit) error {
 	err := s.source.Upload(ctx, id, role, offset, r, a)
 	if err == nil {
 		s.Wake()
 	}
 	return err
 }
-func (s *sourceSupervisor) Cancel(ctx context.Context, id string, a store.Audit) error {
+func (s *sourceSupervisor) Cancel(ctx context.Context, id string, a repository.Audit) error {
 	return s.source.Cancel(ctx, id, a)
 }
-func (s *sourceSupervisor) Retry(ctx context.Context, id string, a store.Audit) error {
+func (s *sourceSupervisor) Retry(ctx context.Context, id string, a repository.Audit) error {
 	err := s.source.Retry(ctx, id, a)
 	if err == nil {
 		s.Wake()
 	}
 	return err
 }
-func (s *sourceSupervisor) Reimport(ctx context.Context, id string, a store.Audit) error {
+func (s *sourceSupervisor) Reimport(ctx context.Context, id string, a repository.Audit) error {
 	err := s.source.RequestReimport(ctx, id, a)
 	if err == nil {
 		s.Wake()

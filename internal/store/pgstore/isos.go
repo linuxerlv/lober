@@ -3,25 +3,26 @@ package pgstore
 import (
 	"context"
 	"errors"
+	"github.com/lober/lober/internal/infrastructure/identity"
 
 	"gorm.io/gorm"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // isoColumns 是系统更新写的列：族、系与名称不能经它改，其余整条替换，改回零值的也照写。
 var isoColumns = []string{"version", "arch", "state", "sha256", "artifacts", "offers", "rev"}
 
-// CreateISO 见 store.ISOs。
-func (s *Store) CreateISO(ctx context.Context, iso model.ISO, a store.Audit) (model.ISO, error) {
-	if err := store.CheckAudit(a); err != nil {
+// CreateISO 见 repository.ISOs。
+func (s *Store) CreateISO(ctx context.Context, iso model.ISO, a repository.Audit) (model.ISO, error) {
+	if err := repository.CheckAudit(a); err != nil {
 		return model.ISO{}, err
 	}
-	if err := store.CheckNewISO(iso); err != nil {
+	if err := repository.CheckNewISO(iso); err != nil {
 		return model.ISO{}, err
 	}
-	iso = model.ISO{ID: store.NewID(), Name: iso.Name, Family: iso.Family, Series: iso.Series, State: model.ISOAcquiring, Rev: 1}
+	iso = model.ISO{ID: identity.NewID(), Name: iso.Name, Family: iso.Family, Series: iso.Series, State: model.ISOAcquiring, Rev: 1}
 	row, err := toISORow(iso)
 	if err != nil {
 		return model.ISO{}, err
@@ -38,14 +39,14 @@ func (s *Store) CreateISO(ctx context.Context, iso model.ISO, a store.Audit) (mo
 	return row.iso()
 }
 
-// UpdateISO 见 store.ISOs。入参先过 store.CheckISOUpdate；锁住现有的记录之后，再过 store.CheckISOUpdateFrom：已废弃的报
+// UpdateISO 见 repository.ISOs。入参先过 repository.CheckISOUpdate；锁住现有的记录之后，再过 repository.CheckISOUpdateFrom：已废弃的报
 // ErrImmutable，改了族、系与名称报 ErrInvalid，置为 ready 的要过完整性判定，写进来的文本都要存得下。
 //
 // SHA256 先在事务里查有没有别的 ISO 占着（C4），好报出对方的 ID；两次更新同时写同一份内容时，部分唯一索引
 // idx_isos_sha256 兜底，撞上之后在事务外查出对方。对方在这期间刚好导入失败或删掉了、查不到时报 ErrConflict
 // （translate）：重读之后再更新，得到的必然是成功或 DuplicateError。
 func (s *Store) UpdateISO(ctx context.Context, iso model.ISO) (model.ISO, error) {
-	if err := store.CheckISOUpdate(iso); err != nil {
+	if err := repository.CheckISOUpdate(iso); err != nil {
 		return model.ISO{}, err
 	}
 	var row isoRow
@@ -58,7 +59,7 @@ func (s *Store) UpdateISO(ctx context.Context, iso model.ISO) (model.ISO, error)
 		if err != nil {
 			return err
 		}
-		if err := store.CheckISOUpdateFrom(old, iso); err != nil {
+		if err := repository.CheckISOUpdateFrom(old, iso); err != nil {
 			return err
 		}
 		other, err := sha256Holder(tx, iso)
@@ -66,7 +67,7 @@ func (s *Store) UpdateISO(ctx context.Context, iso model.ISO) (model.ISO, error)
 		case err != nil:
 			return err
 		case other != "":
-			return &store.DuplicateError{Field: "sha256", Existing: other}
+			return &repository.DuplicateError{Field: "sha256", Existing: other}
 		}
 		next := iso
 		next.Rev = cur.Rev + 1
@@ -84,12 +85,12 @@ func (s *Store) UpdateISO(ctx context.Context, iso model.ISO) (model.ISO, error)
 	return row.iso()
 }
 
-// DeprecateISO 见 store.ISOs。
-func (s *Store) DeprecateISO(ctx context.Context, id string, rev int64, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+// DeprecateISO 见 repository.ISOs。
+func (s *Store) DeprecateISO(ctx context.Context, id string, rev int64, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
-	if err := store.CheckID(id); err != nil {
+	if err := repository.CheckID(id); err != nil {
 		return err
 	}
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -97,7 +98,7 @@ func (s *Store) DeprecateISO(ctx context.Context, id string, rev int64, a store.
 		if err != nil {
 			return err
 		}
-		if err := store.CheckISODeprecation(id, model.ISOState(cur.State)); err != nil {
+		if err := repository.CheckISODeprecation(id, model.ISOState(cur.State)); err != nil {
 			return err
 		}
 		cur.State, cur.Rev = string(model.ISODeprecated), cur.Rev+1
@@ -109,12 +110,12 @@ func (s *Store) DeprecateISO(ctx context.Context, id string, rev int64, a store.
 	return translate(err, false, nil)
 }
 
-// DeleteISO 见 store.ISOs。被任务引用时由外键报出来（任务 9 加上 tasks 表之后），翻成 ErrReferenced。
-func (s *Store) DeleteISO(ctx context.Context, id string, rev int64, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+// DeleteISO 见 repository.ISOs。被任务引用时由外键报出来（任务 9 加上 tasks 表之后），翻成 ErrReferenced。
+func (s *Store) DeleteISO(ctx context.Context, id string, rev int64, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
-	if err := store.CheckID(id); err != nil {
+	if err := repository.CheckID(id); err != nil {
 		return err
 	}
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -132,9 +133,9 @@ func (s *Store) DeleteISO(ctx context.Context, id string, rev int64, a store.Aud
 	return translate(err, true, nil)
 }
 
-// GetISO 见 store.ISOs。
+// GetISO 见 repository.ISOs。
 func (s *Store) GetISO(ctx context.Context, id string) (model.ISO, error) {
-	if err := store.CheckID(id); err != nil {
+	if err := repository.CheckID(id); err != nil {
 		return model.ISO{}, err
 	}
 	var row isoRow
@@ -148,17 +149,17 @@ func (s *Store) GetISO(ctx context.Context, id string) (model.ISO, error) {
 	return row.iso()
 }
 
-// ListISOs 见 store.ISOs。ISO 的名称不规范化、可以重复，没有名字的 key，所以按名称的字节序、再按 ID 排；游标是上一页
+// ListISOs 见 repository.ISOs。ISO 的名称不规范化、可以重复，没有名字的 key，所以按名称的字节序、再按 ID 排；游标是上一页
 // 最后一个的名称与 ID。
-func (s *Store) ListISOs(ctx context.Context, q store.ISOQuery) (store.Page[model.ISO], error) {
-	limit, err := store.CheckQuery(q.Cursor, q.Limit)
+func (s *Store) ListISOs(ctx context.Context, q repository.ISOQuery) (repository.Page[model.ISO], error) {
+	limit, err := repository.CheckQuery(q.Cursor, q.Limit)
 	if err != nil {
-		return store.Page[model.ISO]{}, err
+		return repository.Page[model.ISO]{}, err
 	}
 	var afterName, afterID string
 	if q.Cursor != "" {
-		if err := store.DecodeCursor(q.Cursor, "isos", &afterName, &afterID); err != nil {
-			return store.Page[model.ISO]{}, err
+		if err := repository.DecodeCursor(q.Cursor, "isos", &afterName, &afterID); err != nil {
+			return repository.Page[model.ISO]{}, err
 		}
 	}
 	// 存不下的状态谁都不是，去掉；给了状态却一个都不剩，就什么都匹配不上
@@ -186,15 +187,15 @@ func (s *Store) ListISOs(ctx context.Context, q store.ISOQuery) (store.Page[mode
 	}
 	var rows []isoRow
 	if err := db.Order(`name COLLATE "C", id COLLATE "C"`).Limit(limit + 1).Find(&rows).Error; err != nil {
-		return store.Page[model.ISO]{}, err
+		return repository.Page[model.ISO]{}, err
 	}
-	return page(rows, limit, isoRow.iso, func(r isoRow) string { return store.EncodeCursor("isos", r.Name, r.ID) })
+	return page(rows, limit, isoRow.iso, func(r isoRow) string { return repository.EncodeCursor("isos", r.Name, r.ID) })
 }
 
 // sha256Holder 在 db 里查已经占着 iso 的 SHA256 的另一个 ISO，返回它的 ID，没有时返回空串（C4）。谁占着它见
-// store.HoldsSHA256：空的 SHA256 与导入失败的 ISO 都不占位，查询的条件与部分唯一索引 idx_isos_sha256 的谓词都是它。
+// repository.HoldsSHA256：空的 SHA256 与导入失败的 ISO 都不占位，查询的条件与部分唯一索引 idx_isos_sha256 的谓词都是它。
 func sha256Holder(db *gorm.DB, iso model.ISO) (string, error) {
-	if !store.HoldsSHA256(iso) {
+	if !repository.HoldsSHA256(iso) {
 		return "", nil
 	}
 	var ids []string
@@ -222,5 +223,5 @@ func lockISO(tx *gorm.DB, id string, rev int64) (isoRow, error) {
 }
 
 func isoNotFound(id string) error {
-	return errorf(store.ErrNotFound, "ISO %s 不存在", id)
+	return errorf(repository.ErrNotFound, "ISO %s 不存在", id)
 }

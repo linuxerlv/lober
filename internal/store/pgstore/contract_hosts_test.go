@@ -10,8 +10,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 )
 
@@ -84,9 +84,9 @@ func hostModelProblems(h model.Host) []model.Problem {
 }
 
 // hostPages 用查询 q 从头翻到尾，返回每一页；游标由它填。
-func hostPages(t *testing.T, s *pgstore.Store, q store.HostQuery) [][]model.Host {
+func hostPages(t *testing.T, s *pgstore.Store, q repository.HostQuery) [][]model.Host {
 	t.Helper()
-	return allPages(t, func(cursor string) (store.Page[model.Host], error) {
+	return allPages(t, func(cursor string) (repository.Page[model.Host], error) {
 		q.Cursor = cursor
 		return s.ListHosts(t.Context(), q)
 	})
@@ -139,7 +139,7 @@ func hostCreateInvalid(t *testing.T, s *pgstore.Store) {
 				t.Fatal("用例的记录应当不合法")
 			}
 			_, err := s.CreateHost(t.Context(), c.h, anAudit("host.create"))
-			wantProblems(t, err, store.ErrInvalid, want, "登记")
+			wantProblems(t, err, repository.ErrInvalid, want, "登记")
 		})
 	}
 	wantUnchanged(t, s, before, "记录不合法时")
@@ -150,7 +150,7 @@ func hostCreateNotNormalized(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	for _, sn := range []string{"sn-1", " SN-1", "SN-1\n"} {
 		_, err := s.CreateHost(t.Context(), model.Host{SN: sn}, anAudit("host.create"))
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("登记 SN %q", sn))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("登记 SN %q", sn))
 	}
 	wantUnchanged(t, s, before, "SN 没规范化时")
 }
@@ -210,10 +210,10 @@ func hostUpdateConflict(t *testing.T, s *pgstore.Store) {
 		in.Firmware = "bios"
 		in.Rev = rev
 		_, err := s.UpdateHost(t.Context(), in, anAudit("host.update"))
-		wantIs(t, err, store.ErrConflict, fmt.Sprintf("带着 Rev %d 修改", rev))
+		wantIs(t, err, repository.ErrConflict, fmt.Sprintf("带着 Rev %d 修改", rev))
 	}
 	_, err = s.UpdateHost(t.Context(), model.Host{SN: "SN-2", Rev: 1}, anAudit("host.update"))
-	wantIs(t, err, store.ErrNotFound, "修改没登记的主机")
+	wantIs(t, err, repository.ErrNotFound, "修改没登记的主机")
 	wantUnchanged(t, s, before, "修改被拒时")
 }
 
@@ -223,7 +223,7 @@ func hostUpdateInvalid(t *testing.T, s *pgstore.Store) {
 	in.Firmware = "EFI"
 	in.Attrs = map[string]string{"sn": "SN-1"}
 	_, err := s.UpdateHost(t.Context(), in, anAudit("host.update"))
-	wantProblems(t, err, store.ErrInvalid, hostModelProblems(in), "修改成不合法的记录")
+	wantProblems(t, err, repository.ErrInvalid, hostModelProblems(in), "修改成不合法的记录")
 	wantUnchanged(t, s, before, "记录不合法时")
 }
 
@@ -236,7 +236,7 @@ func hostUpdateNotNormalized(t *testing.T, s *pgstore.Store) {
 		in := h // 带着当前的 Rev
 		in.SN, in.Arch = sn, "aarch64"
 		_, err := s.UpdateHost(t.Context(), in, anAudit("host.update"))
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("修改 SN %q", sn))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("修改 SN %q", sn))
 	}
 	wantUnchanged(t, s, before, "SN 没规范化时")
 }
@@ -274,7 +274,7 @@ func hostImportInvalid(t *testing.T, s *pgstore.Store) {
 		want = append(want, hostModelProblems(h)...)
 	}
 	_, err := s.ImportHosts(t.Context(), in, anAudit("host.import"))
-	wantProblems(t, err, store.ErrInvalid, want, "导入有不合法记录的一批")
+	wantProblems(t, err, repository.ErrInvalid, want, "导入有不合法记录的一批")
 	wantUnchanged(t, s, before, "一条不合法时")
 }
 
@@ -291,7 +291,7 @@ func hostImportNotNormalized(t *testing.T, s *pgstore.Store) {
 		{{SN: "SN-2"}, {SN: "SN-3\n"}},
 	} {
 		_, err := s.ImportHosts(t.Context(), hs, anAudit("host.import"))
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("导入 %q", snsOf(hs)))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("导入 %q", snsOf(hs)))
 	}
 	wantUnchanged(t, s, before, "一台的 SN 没规范化时")
 }
@@ -304,11 +304,11 @@ func hostImportDuplicate(t *testing.T, s *pgstore.Store) {
 	// 每个重复的 SN 报一条，按它第一次出现的顺序
 	in := []model.Host{{SN: "SN-1"}, {SN: "SN-2"}, {SN: "SN-1"}, {SN: "SN-3"}, {SN: "SN-2"}, {SN: "SN-1"}}
 	_, err := s.ImportHosts(t.Context(), in, anAudit("host.import"))
-	wantProblems(t, err, store.ErrInvalid, []model.Problem{dup("SN-1"), dup("SN-2")}, "批内 SN 重复")
+	wantProblems(t, err, repository.ErrInvalid, []model.Problem{dup("SN-1"), dup("SN-2")}, "批内 SN 重复")
 	// 与记录本身的问题一起时，按入参的顺序：每台先报重复（只在这个 SN 第一次出现时报），再报它自己的问题
 	bad := model.Host{SN: "SN-1", Firmware: "efi"}
 	_, err = s.ImportHosts(t.Context(), []model.Host{{SN: "SN-1"}, {SN: "SN-2"}, bad}, anAudit("host.import"))
-	wantProblems(t, err, store.ErrInvalid, append([]model.Problem{dup("SN-1")}, bad.Validate()...), "重复与不合法一起")
+	wantProblems(t, err, repository.ErrInvalid, append([]model.Problem{dup("SN-1")}, bad.Validate()...), "重复与不合法一起")
 	wantUnchanged(t, s, before, "批内 SN 重复时")
 }
 
@@ -316,7 +316,7 @@ func hostImportEmpty(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	for _, hs := range [][]model.Host{nil, {}} {
 		_, err := s.ImportHosts(t.Context(), hs, anAudit("host.import"))
-		wantIs(t, err, store.ErrInvalid, "导入空的一批")
+		wantIs(t, err, repository.ErrInvalid, "导入空的一批")
 	}
 	wantUnchanged(t, s, before, "空的一批")
 }
@@ -371,7 +371,7 @@ func hostImportManyBatches(t *testing.T, s *pgstore.Store) {
 			t.Fatalf("GetHosts 取到的 %s 是 %+v，应为 %+v", sn, read[sn], h)
 		}
 	}
-	entries := slices.Concat(auditPages(t, s, store.AuditQuery{Action: "host.import", Limit: 500})...)
+	entries := slices.Concat(auditPages(t, s, repository.AuditQuery{Action: "host.import", Limit: 500})...)
 	var targets []string
 	for _, e := range slices.Backward(entries) { // 新的在前，倒过来就是写入的顺序
 		if e.TargetKind != "host" {
@@ -390,16 +390,16 @@ func hostDelete(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	for _, rev := range []int64{0, h.Rev + 1} {
 		err := s.DeleteHost(t.Context(), "SN-1", rev, anAudit("host.delete"))
-		wantIs(t, err, store.ErrConflict, fmt.Sprintf("带着 Rev %d 删除", rev))
+		wantIs(t, err, repository.ErrConflict, fmt.Sprintf("带着 Rev %d 删除", rev))
 	}
-	wantIs(t, s.DeleteHost(t.Context(), "SN-9", 1, anAudit("host.delete")), store.ErrNotFound, "删除没登记的")
+	wantIs(t, s.DeleteHost(t.Context(), "SN-9", 1, anAudit("host.delete")), repository.ErrNotFound, "删除没登记的")
 	wantUnchanged(t, s, before, "删除被拒时")
 
 	must(t, s.DeleteHost(t.Context(), "SN-1", h.Rev, anAudit("host.delete")), "删除")
 	_, err := s.GetHost(t.Context(), "SN-1")
-	wantIs(t, err, store.ErrNotFound, "读删掉的主机")
+	wantIs(t, err, repository.ErrNotFound, "读删掉的主机")
 	wantEqual(t, mustGetHost(t, s, "SN-2"), other, "别的主机")
-	wantIs(t, s.DeleteHost(t.Context(), "SN-1", h.Rev, anAudit("host.delete")), store.ErrNotFound, "再删一次")
+	wantIs(t, s.DeleteHost(t.Context(), "SN-1", h.Rev, anAudit("host.delete")), repository.ErrNotFound, "再删一次")
 	// 删掉之后，同一个 SN 能重新登记，Rev 从 1 起
 	wantEqual(t, mustCreateHost(t, s, model.Host{SN: "SN-1"}).Rev, 1, "重新登记的 Rev")
 }
@@ -412,11 +412,11 @@ func hostDeleteReferenced(t *testing.T, s *pgstore.Store) {
 	hs := mustTaskHosts(t, s, "SN-1", "SN-2")
 	task := f.mustCreate(t, s, hs[0])[0]
 	before := taskSnapshot(t, s)
-	wantIs(t, s.DeleteHost(ctx, "SN-1", hs[0].Rev, anAudit("host.delete")), store.ErrReferenced, "删除有未结束任务的主机")
+	wantIs(t, s.DeleteHost(ctx, "SN-1", hs[0].Rev, anAudit("host.delete")), repository.ErrReferenced, "删除有未结束任务的主机")
 	wantTasksUnchanged(t, s, before, "删除被拒时")
 	mustTransition(t, s, task, model.TaskDone)
 	before = taskSnapshot(t, s)
-	wantIs(t, s.DeleteHost(ctx, "SN-1", hs[0].Rev, anAudit("host.delete")), store.ErrReferenced, "删除任务都已结束的主机")
+	wantIs(t, s.DeleteHost(ctx, "SN-1", hs[0].Rev, anAudit("host.delete")), repository.ErrReferenced, "删除任务都已结束的主机")
 	wantTasksUnchanged(t, s, before, "删除被拒时")
 	must(t, s.DeleteHost(ctx, "SN-2", hs[1].Rev, anAudit("host.delete")), "删除没被引用的主机")
 }
@@ -436,12 +436,12 @@ func hostGetHosts(t *testing.T, s *pgstore.Store) {
 		}
 	}
 	_, err = s.GetHost(t.Context(), "SN-404")
-	wantIs(t, err, store.ErrNotFound, "取没登记的主机")
+	wantIs(t, err, repository.ErrNotFound, "取没登记的主机")
 }
 
 func hostListPaging(t *testing.T, s *pgstore.Store) {
 	// 这几个 SN 按字节序排，与常见的语言排序规则（忽略标点、不分大小写）排出来不同。顺序以字节序为准，不随
-	// 数据库的排序规则变（契约见 store.types.go）
+	// 数据库的排序规则变（契约见 repository.types.go）
 	var in []model.Host
 	for _, sn := range []string{"SN_1", "SN-9", "SN 1", "A-1", "SN.2", "SN-10", "SN1"} {
 		in = append(in, model.Host{SN: sn})
@@ -449,14 +449,14 @@ func hostListPaging(t *testing.T, s *pgstore.Store) {
 	want := mustImport(t, s, in)
 	slices.SortFunc(want, func(a, b model.Host) int { return strings.Compare(a.SN, b.SN) })
 
-	whole, err := s.ListHosts(t.Context(), store.HostQuery{Limit: len(want)})
+	whole, err := s.ListHosts(t.Context(), repository.HostQuery{Limit: len(want)})
 	must(t, err, "一次全取")
 	wantItems(t, whole.Items, want, "一次全取")
 	if whole.Next != "" {
 		t.Fatalf("恰好取完时 Next 应为空，得到 %q", whole.Next)
 	}
 	for _, limit := range []int{2, 3} {
-		wantPaged(t, hostPages(t, s, store.HostQuery{Limit: limit}), limit, want, fmt.Sprintf("每页 %d 条", limit))
+		wantPaged(t, hostPages(t, s, repository.HostQuery{Limit: limit}), limit, want, fmt.Sprintf("每页 %d 条", limit))
 	}
 }
 
@@ -466,12 +466,12 @@ func hostListDefaultLimit(t *testing.T, s *pgstore.Store) {
 		in = append(in, model.Host{SN: fmt.Sprintf("SN-%03d", i)})
 	}
 	mustImport(t, s, in)
-	first, err := s.ListHosts(t.Context(), store.HostQuery{})
+	first, err := s.ListHosts(t.Context(), repository.HostQuery{})
 	must(t, err, "取第 1 页")
 	if len(first.Items) != 100 || first.Next == "" {
 		t.Fatalf("Limit 为 0 时应取 100 条并给出下一页，得到 %d 条，Next %q", len(first.Items), first.Next)
 	}
-	rest, err := s.ListHosts(t.Context(), store.HostQuery{Cursor: first.Next})
+	rest, err := s.ListHosts(t.Context(), repository.HostQuery{Cursor: first.Next})
 	must(t, err, "取第 2 页")
 	if !slices.Equal(snsOf(rest.Items), []string{"SN-100"}) || rest.Next != "" {
 		t.Fatalf("第 2 页应只有 SN-100，得到 %v，Next %q", snsOf(rest.Items), rest.Next)
@@ -497,7 +497,7 @@ func hostListPrefix(t *testing.T, s *pgstore.Store) {
 		{"sn", nil},                  // 区分大小写：登记过的 SN 都是规范化之后的大写
 		{"", []string{"AB-1", "SN%B", "SN-1", "SNAZ", "SNXA1", "SNYB", `SN\Z`, "SN_A1"}},
 	} {
-		got := slices.Concat(hostPages(t, s, store.HostQuery{SNPrefix: c.prefix, Limit: 2})...)
+		got := slices.Concat(hostPages(t, s, repository.HostQuery{SNPrefix: c.prefix, Limit: 2})...)
 		wantItems(t, snsOf(got), c.want, fmt.Sprintf("前缀 %q", c.prefix))
 	}
 }
@@ -515,28 +515,28 @@ func hostListAttr(t *testing.T, s *pgstore.Store) {
 	})
 	for _, c := range []struct {
 		name string
-		q    store.HostQuery
+		q    repository.HostQuery
 		want []string
 	}{
-		{"值完全相等", store.HostQuery{AttrKey: "rack", AttrValue: "A1"}, []string{"SN-1", "SN-7"}},
-		{"值里的引号与反斜杠按原样比", store.HostQuery{AttrKey: "rack", AttrValue: `B"2\`}, []string{"SN-8"}},
-		{"与 SN 前缀同时给", store.HostQuery{SNPrefix: "SN-7", AttrKey: "rack", AttrValue: "A1"}, []string{"SN-7"}},
-		{"谁都没有这个属性", store.HostQuery{AttrKey: "nope", AttrValue: "A1"}, nil},
+		{"值完全相等", repository.HostQuery{AttrKey: "rack", AttrValue: "A1"}, []string{"SN-1", "SN-7"}},
+		{"值里的引号与反斜杠按原样比", repository.HostQuery{AttrKey: "rack", AttrValue: `B"2\`}, []string{"SN-8"}},
+		{"与 SN 前缀同时给", repository.HostQuery{SNPrefix: "SN-7", AttrKey: "rack", AttrValue: "A1"}, []string{"SN-7"}},
+		{"谁都没有这个属性", repository.HostQuery{AttrKey: "nope", AttrValue: "A1"}, nil},
 	} {
 		c.q.Limit = 1 // 一条一页：翻页时过滤也要对
 		wantItems(t, snsOf(slices.Concat(hostPages(t, s, c.q)...)), c.want, c.name)
 	}
-	for _, q := range []store.HostQuery{{AttrKey: "rack"}, {AttrValue: "A1"}} {
+	for _, q := range []repository.HostQuery{{AttrKey: "rack"}, {AttrValue: "A1"}} {
 		_, err := s.ListHosts(t.Context(), q)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("属性条件只给了一半：键 %q、值 %q", q.AttrKey, q.AttrValue))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("属性条件只给了一半：键 %q、值 %q", q.AttrKey, q.AttrValue))
 	}
 }
 
 func hostListInvalid(t *testing.T, s *pgstore.Store) {
 	mustCreateHost(t, s, fullHost("SN-1"))
-	for _, q := range []store.HostQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"}} {
+	for _, q := range []repository.HostQuery{{Limit: 501}, {Limit: -1}, {Cursor: "\xff"}, {Cursor: "这不是游标"}} {
 		_, err := s.ListHosts(t.Context(), q)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("Limit %d、Cursor %q", q.Limit, q.Cursor))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("Limit %d、Cursor %q", q.Limit, q.Cursor))
 	}
 }
 
@@ -552,13 +552,13 @@ func hostUnstorableKeys(t *testing.T, s *pgstore.Store) {
 	for _, bad := range []string{"\x00", "\xff"} {
 		for _, sn := range []string{"SN-1" + bad, bad} {
 			_, err := s.GetHost(ctx, sn)
-			wantIs(t, err, store.ErrNotFound, fmt.Sprintf("GetHost(%q)", sn))
-			wantIs(t, s.DeleteHost(ctx, sn, h.Rev, anAudit("host.delete")), store.ErrNotFound, fmt.Sprintf("DeleteHost(%q)", sn))
+			wantIs(t, err, repository.ErrNotFound, fmt.Sprintf("GetHost(%q)", sn))
+			wantIs(t, s.DeleteHost(ctx, sn, h.Rev, anAudit("host.delete")), repository.ErrNotFound, fmt.Sprintf("DeleteHost(%q)", sn))
 			got, err := s.GetHosts(ctx, []string{sn, "SN-1"})
 			must(t, err, fmt.Sprintf("GetHosts 带着 %q", sn))
 			wantEqual(t, got, map[string]model.Host{"SN-1": h}, fmt.Sprintf("GetHosts 带着 %q", sn))
 		}
-		for _, q := range []store.HostQuery{
+		for _, q := range []repository.HostQuery{
 			{SNPrefix: "SN" + bad}, {SNPrefix: bad},
 			{AttrKey: "rack", AttrValue: bad}, {AttrKey: "rack", AttrValue: "A1" + bad}, {AttrKey: "rack" + bad, AttrValue: "A1"},
 		} {
@@ -567,7 +567,7 @@ func hostUnstorableKeys(t *testing.T, s *pgstore.Store) {
 	}
 	wantUnchanged(t, s, before, "按存不下的键取、删与过滤之后")
 	// 属性值是 U+FFFD 的那一台照样按它自己的值选得中：上面选不中它，不是因为它没存下
-	wantItems(t, slices.Concat(hostPages(t, s, store.HostQuery{AttrKey: "rack", AttrValue: replacement})...), []model.Host{replaced},
+	wantItems(t, slices.Concat(hostPages(t, s, repository.HostQuery{AttrKey: "rack", AttrValue: replacement})...), []model.Host{replaced},
 		"按 U+FFFD 过滤")
 }
 
@@ -590,7 +590,7 @@ func hostCopies(t *testing.T, s *pgstore.Store) {
 	m, err := s.GetHosts(t.Context(), []string{"SN-1"})
 	must(t, err, "批量取")
 	mutate(m["SN-1"])
-	p, err := s.ListHosts(t.Context(), store.HostQuery{})
+	p, err := s.ListHosts(t.Context(), repository.HostQuery{})
 	must(t, err, "列出")
 	mutate(p.Items[0])
 	wantEqual(t, mustGetHost(t, s, "SN-1"), want, "改了读到的返回值之后")

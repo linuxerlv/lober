@@ -1,6 +1,6 @@
 package builtin
 
-import "github.com/lober/lober/internal/core/model"
+import "github.com/lober/lober/internal/domain/model"
 
 func accountHook() model.Hook {
 	h := hook("account", 1, "Native account provisioning; supply a target-compatible crypt hash or Windows password. Windows AutoLogon runs the ordered firstboot chain once.")

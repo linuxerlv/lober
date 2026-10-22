@@ -3,7 +3,8 @@ package console
 import (
 	"encoding/base64"
 	"encoding/json"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"strings"
 	"testing"
 )
@@ -49,13 +50,13 @@ func Test口令散列拒绝坏编码和无界工作量(t *testing.T) {
 		}
 	}
 }
-func seedAuthUser(t *testing.T, st store.Users, name string, role store.Role, pw string) store.User {
+func seedAuthUser(t *testing.T, st repository.Users, name string, role model.Role, pw string) model.User {
 	t.Helper()
 	hash, err := HashPassword(pw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	u, err := st.CreateUser(t.Context(), store.User{Username: name, DisplayName: name, Role: role, Password: hash, CreatedAt: fixedAt}, store.Audit{Actor: "seed", Action: "user.create", At: fixedAt})
+	u, err := st.CreateUser(t.Context(), model.User{Username: name, DisplayName: name, Role: role, Password: hash, CreatedAt: fixedAt}, repository.Audit{Actor: "seed", Action: "user.create", At: fixedAt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +79,7 @@ func loginHTTP(t *testing.T, s *Server, name, pw string) sessionResponse {
 }
 func Test登录退出与到期走真实HTTP(t *testing.T) {
 	s, st, now := newHTTPServer(t)
-	seedAuthUser(t, st, "alice", store.RoleOperator, "correct horse")
+	seedAuthUser(t, st, "alice", model.RoleOperator, "correct horse")
 	login := loginHTTP(t, s, "alice", "correct horse")
 	if len(login.Token) != 64 || login.ExpiresAt != fixedAt+12*3600 || login.User.Username != "alice" || len(login.User.Permissions) != 9 {
 		t.Fatal("wrong session metadata")
@@ -102,10 +103,10 @@ func Test登录退出与到期走真实HTTP(t *testing.T) {
 }
 func Test登录失败说明一致与请求前提(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
-	seedAuthUser(t, st, "alice", store.RoleViewer, "pw")
-	u := seedAuthUser(t, st, "disabled", store.RoleViewer, "pw")
+	seedAuthUser(t, st, "alice", model.RoleViewer, "pw")
+	u := seedAuthUser(t, st, "disabled", model.RoleViewer, "pw")
 	u.Disabled = true
-	_, err := st.UpdateUser(t.Context(), u, store.Audit{Actor: "seed", Action: "user.update", At: fixedAt})
+	_, err := st.UpdateUser(t.Context(), u, repository.Audit{Actor: "seed", Action: "user.update", At: fixedAt})
 	if err != nil {
 		t.Fatal(err)
 	}

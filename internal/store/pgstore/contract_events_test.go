@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 )
 
@@ -29,12 +29,12 @@ func Test契约事件(t *testing.T) {
 }
 
 // keyed 是一条带 Key 的事件。
-func keyed(key string) store.NewEvent {
-	return store.NewEvent{At: at0, Kind: "signal.recv", Key: key}
+func keyed(key string) repository.NewEvent {
+	return repository.NewEvent{At: at0, Kind: "signal.recv", Key: key}
 }
 
 // mustAppend 给任务 id 追加 es，返回每一条的结果。
-func mustAppend(t *testing.T, s *pgstore.Store, id string, es ...store.NewEvent) []store.Appended {
+func mustAppend(t *testing.T, s *pgstore.Store, id string, es ...repository.NewEvent) []repository.Appended {
 	t.Helper()
 	got, err := s.AppendEvents(t.Context(), id, es)
 	must(t, err, "给任务 "+id+" 追加事件")
@@ -51,17 +51,17 @@ func eventSeq(t *testing.T, s *pgstore.Store) {
 	ts := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1", "SN-2")...)
 	a, b := ts[0].ID, ts[1].ID
 	audits := auditEntries(t, s)
-	ev := func(i int) store.NewEvent {
-		return store.NewEvent{At: at0 + int64(i), Kind: "slot.exit", Fields: map[string]string{"n": strconv.Itoa(i)}}
+	ev := func(i int) repository.NewEvent {
+		return repository.NewEvent{At: at0 + int64(i), Kind: "slot.exit", Fields: map[string]string{"n": strconv.Itoa(i)}}
 	}
-	wantEqual(t, mustAppend(t, s, a, ev(1), ev(2), ev(3)), []store.Appended{{Seq: 1}, {Seq: 2}, {Seq: 3}}, "第一批")
-	wantEqual(t, mustAppend(t, s, b, ev(4), ev(5)), []store.Appended{{Seq: 1}, {Seq: 2}}, "另一个任务从 1 起")
-	wantEqual(t, mustAppend(t, s, a, ev(6)), []store.Appended{{Seq: 4}}, "接着这个任务的上一批")
-	wantEqual(t, allEvents(t, s, a), []store.Event{
+	wantEqual(t, mustAppend(t, s, a, ev(1), ev(2), ev(3)), []repository.Appended{{Seq: 1}, {Seq: 2}, {Seq: 3}}, "第一批")
+	wantEqual(t, mustAppend(t, s, b, ev(4), ev(5)), []repository.Appended{{Seq: 1}, {Seq: 2}}, "另一个任务从 1 起")
+	wantEqual(t, mustAppend(t, s, a, ev(6)), []repository.Appended{{Seq: 4}}, "接着这个任务的上一批")
+	wantEqual(t, allEvents(t, s, a), []repository.Event{
 		{TaskID: a, Seq: 1, NewEvent: ev(1)}, {TaskID: a, Seq: 2, NewEvent: ev(2)},
 		{TaskID: a, Seq: 3, NewEvent: ev(3)}, {TaskID: a, Seq: 4, NewEvent: ev(6)},
 	}, "读回来的事件")
-	wantEqual(t, allEvents(t, s, b), []store.Event{{TaskID: b, Seq: 1, NewEvent: ev(4)}, {TaskID: b, Seq: 2, NewEvent: ev(5)}}, "另一个任务的事件")
+	wantEqual(t, allEvents(t, s, b), []repository.Event{{TaskID: b, Seq: 1, NewEvent: ev(4)}, {TaskID: b, Seq: 2, NewEvent: ev(5)}}, "另一个任务的事件")
 	wantItems(t, auditEntries(t, s), audits, "事件不写审计")
 }
 
@@ -69,15 +69,15 @@ func eventSeq(t *testing.T, s *pgstore.Store) {
 // 同一批里新的照常写。同一批里 Key 重复，后一条按「Key 已存在」处理。没有 Key 的不去重；Key 区分大小写。
 func eventDuplicate(t *testing.T, s *pgstore.Store) {
 	id := mustTask(t, s).ID
-	first := store.NewEvent{At: at0, Kind: "signal.recv", Key: "sig-1", Fields: map[string]string{"slot": "分区"}}
-	wantEqual(t, mustAppend(t, s, id, first, anEvent("slot.exit", ""), keyed("sig-2")), []store.Appended{{Seq: 1}, {Seq: 2}, {Seq: 3}}, "第一批")
+	first := repository.NewEvent{At: at0, Kind: "signal.recv", Key: "sig-1", Fields: map[string]string{"slot": "分区"}}
+	wantEqual(t, mustAppend(t, s, id, first, anEvent("slot.exit", ""), keyed("sig-2")), []repository.Appended{{Seq: 1}, {Seq: 2}, {Seq: 3}}, "第一批")
 	again := first
 	again.At, again.Fields = at0+9, map[string]string{"slot": "重发"}
-	wantEqual(t, mustAppend(t, s, id, again, keyed("sig-3")), []store.Appended{{Seq: 1, Duplicate: true}, {Seq: 4}}, "重发的信号")
+	wantEqual(t, mustAppend(t, s, id, again, keyed("sig-3")), []repository.Appended{{Seq: 1, Duplicate: true}, {Seq: 4}}, "重发的信号")
 	wantEqual(t, mustAppend(t, s, id, keyed("sig-4"), keyed("sig-4"), keyed("sig-2")),
-		[]store.Appended{{Seq: 5}, {Seq: 5, Duplicate: true}, {Seq: 3, Duplicate: true}}, "同一批里 Key 重复")
-	wantEqual(t, mustAppend(t, s, id, anEvent("slot.exit", ""), anEvent("slot.exit", "")), []store.Appended{{Seq: 6}, {Seq: 7}}, "没有 Key 的")
-	wantEqual(t, mustAppend(t, s, id, keyed("SIG-1")), []store.Appended{{Seq: 8}}, "Key 区分大小写")
+		[]repository.Appended{{Seq: 5}, {Seq: 5, Duplicate: true}, {Seq: 3, Duplicate: true}}, "同一批里 Key 重复")
+	wantEqual(t, mustAppend(t, s, id, anEvent("slot.exit", ""), anEvent("slot.exit", "")), []repository.Appended{{Seq: 6}, {Seq: 7}}, "没有 Key 的")
+	wantEqual(t, mustAppend(t, s, id, keyed("SIG-1")), []repository.Appended{{Seq: 8}}, "Key 区分大小写")
 	got := allEvents(t, s, id)
 	if len(got) != 8 {
 		t.Fatalf("应有 8 条事件，得到 %d 条", len(got))
@@ -88,32 +88,32 @@ func eventDuplicate(t *testing.T, s *pgstore.Store) {
 func eventKeyPerTask(t *testing.T, s *pgstore.Store) {
 	ts := newFixture(t, s).mustCreate(t, s, mustTaskHosts(t, s, "SN-1", "SN-2")...)
 	for _, task := range ts {
-		wantEqual(t, mustAppend(t, s, task.ID, keyed("sig-1")), []store.Appended{{Seq: 1}}, "任务 "+task.ID+" 第一次用 sig-1")
+		wantEqual(t, mustAppend(t, s, task.ID, keyed("sig-1")), []repository.Appended{{Seq: 1}}, "任务 "+task.ID+" 第一次用 sig-1")
 	}
-	wantEqual(t, mustAppend(t, s, ts[0].ID, keyed("sig-1")), []store.Appended{{Seq: 1, Duplicate: true}}, "同一个任务再用一次")
+	wantEqual(t, mustAppend(t, s, ts[0].ID, keyed("sig-1")), []repository.Appended{{Seq: 1, Duplicate: true}}, "同一个任务再用一次")
 }
 
-// 一次追加的条数不设上限（store.CheckEvents 只查每一条），第 7 层一次补报的信号可能多于一条语句写得下的一批（batchSize）：
+// 一次追加的条数不设上限（repository.CheckEvents 只查每一条），第 7 层一次补报的信号可能多于一条语句写得下的一批（batchSize）：
 // 写入按入参的次序分批，查已有的 Key 按 Key 的字节序分批，这里多出的一条在两边都落在第二批（sig-1000 排在最后）。Seq 照样
 // 从 1 起连续；原样重发一次，每一条都报告为 Duplicate、Seq 是原来那条的，一条都不新增，计数也不动。
 func eventManyBatches(t *testing.T, s *pgstore.Store) {
 	id := mustTask(t, s).ID
 	n := pgstore.BatchSizeForTest + 1
-	in := make([]store.NewEvent, n)
-	first, again := make([]store.Appended, n), make([]store.Appended, n)
-	want := make([]store.Event, n)
+	in := make([]repository.NewEvent, n)
+	first, again := make([]repository.Appended, n), make([]repository.Appended, n)
+	want := make([]repository.Event, n)
 	for i := range n {
 		seq := int64(i + 1)
-		in[i] = store.NewEvent{At: at0 + seq, Kind: "signal.recv", Key: fmt.Sprintf("sig-%04d", i)}
-		first[i], again[i] = store.Appended{Seq: seq}, store.Appended{Seq: seq, Duplicate: true}
-		want[i] = store.Event{TaskID: id, Seq: seq, NewEvent: in[i]}
+		in[i] = repository.NewEvent{At: at0 + seq, Kind: "signal.recv", Key: fmt.Sprintf("sig-%04d", i)}
+		first[i], again[i] = repository.Appended{Seq: seq}, repository.Appended{Seq: seq, Duplicate: true}
+		want[i] = repository.Event{TaskID: id, Seq: seq, NewEvent: in[i]}
 	}
 	wantEqual(t, mustAppend(t, s, id, in...), first, "第一次追加")
 	wantEqual(t, allEvents(t, s, id), want, "读回来的事件")
 	wantEqual(t, mustAppend(t, s, id, in...), again, "原样重发")
 	wantSeqCounter(t, s, id, int64(n), "原样重发之后")
 	wantEqual(t, allEvents(t, s, id), want, "原样重发之后读回来的事件")
-	wantEqual(t, mustAppend(t, s, id, keyed("sig-new")), []store.Appended{{Seq: int64(n + 1)}}, "重发之后追加新的")
+	wantEqual(t, mustAppend(t, s, id, keyed("sig-new")), []repository.Appended{{Seq: int64(n + 1)}}, "重发之后追加新的")
 }
 
 // 推进时带的事件与 AppendEvents 是同一份日志：Seq 接着分配，Key 互相去重。带的事件里有已存在的 Key，照样推进，那条报告为
@@ -121,48 +121,48 @@ func eventManyBatches(t *testing.T, s *pgstore.Store) {
 func eventWithTransition(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	id := mustTask(t, s).ID
-	_, appended, err := s.TransitionTask(ctx, id, store.TaskExpect{State: model.TaskPending, Rev: 1}, model.TaskBooting,
-		[]store.NewEvent{keyed("boot-1"), anEvent("task.boot", "")})
+	_, appended, err := s.TransitionTask(ctx, id, repository.TaskExpect{State: model.TaskPending, Rev: 1}, model.TaskBooting,
+		[]repository.NewEvent{keyed("boot-1"), anEvent("task.boot", "")})
 	must(t, err, "推进")
-	wantEqual(t, appended, []store.Appended{{Seq: 1}, {Seq: 2}}, "推进时带的事件")
-	wantEqual(t, mustAppend(t, s, id, keyed("boot-1"), keyed("sig-1")), []store.Appended{{Seq: 1, Duplicate: true}, {Seq: 3}}, "之后追加的")
-	moved, appended, err := s.TransitionTaskByUser(ctx, id, store.TaskExpect{State: model.TaskBooting, Rev: 2}, model.TaskCancelled,
-		[]store.NewEvent{keyed("sig-1"), keyed("cancel-1")}, anAudit("task.cancel"))
+	wantEqual(t, appended, []repository.Appended{{Seq: 1}, {Seq: 2}}, "推进时带的事件")
+	wantEqual(t, mustAppend(t, s, id, keyed("boot-1"), keyed("sig-1")), []repository.Appended{{Seq: 1, Duplicate: true}, {Seq: 3}}, "之后追加的")
+	moved, appended, err := s.TransitionTaskByUser(ctx, id, repository.TaskExpect{State: model.TaskBooting, Rev: 2}, model.TaskCancelled,
+		[]repository.NewEvent{keyed("sig-1"), keyed("cancel-1")}, anAudit("task.cancel"))
 	must(t, err, "带着已存在的 Key 推进")
-	wantEqual(t, appended, []store.Appended{{Seq: 3, Duplicate: true}, {Seq: 4}}, "带着已存在的 Key 推进时的事件")
+	wantEqual(t, appended, []repository.Appended{{Seq: 3, Duplicate: true}, {Seq: 4}}, "带着已存在的 Key 推进时的事件")
 	wantEqual(t, moved.State, model.TaskCancelled, "带着已存在的 Key 推进之后的状态")
-	wantEqual(t, mustAppend(t, s, id, keyed("late-1")), []store.Appended{{Seq: 5}}, "给已结束的任务追加")
+	wantEqual(t, mustAppend(t, s, id, keyed("late-1")), []repository.Appended{{Seq: 5}}, "给已结束的任务追加")
 }
 
-// 一批里有一条不合规则（store.CheckEvents），整批都不写：同一批里合规则的那几条也不写。
+// 一批里有一条不合规则（repository.CheckEvents），整批都不写：同一批里合规则的那几条也不写。
 func eventInvalid(t *testing.T, s *pgstore.Store) {
 	id := mustTask(t, s).ID
 	mustAppend(t, s, id, keyed("sig-1"))
 	before := taskSnapshot(t, s)
-	at := func(e store.NewEvent) store.NewEvent { e.At = at0; return e }
+	at := func(e repository.NewEvent) repository.NewEvent { e.At = at0; return e }
 	for _, c := range []struct {
 		name string
-		e    store.NewEvent
+		e    repository.NewEvent
 	}{
-		{"没有时间", store.NewEvent{Kind: "slot.exit"}},
-		{"时间为负", store.NewEvent{At: -1, Kind: "slot.exit"}},
-		{"Kind 为空", at(store.NewEvent{})},
-		{"Kind 不到两段", at(store.NewEvent{Kind: "exit"})},
-		{"Kind 有大写", at(store.NewEvent{Kind: "Slot.exit"})},
-		{"Key 不是安全词", at(store.NewEvent{Kind: "slot.exit", Key: "sig 1"})},
-		{"Key 超过 128 字节", at(store.NewEvent{Kind: "slot.exit", Key: strings.Repeat("k", 129)})},
-		{"字段名不是标识符", at(store.NewEvent{Kind: "slot.exit", Fields: map[string]string{"Exit": "0"}})},
-		{"字段值含 NUL", at(store.NewEvent{Kind: "slot.log", Fields: map[string]string{"log": "a\x00b"}})},
-		{"字段值不是 UTF-8", at(store.NewEvent{Kind: "slot.log", Fields: map[string]string{"log": "\xff"}})},
-		{"字段合计超过 64 KiB", at(store.NewEvent{Kind: "slot.log", Fields: map[string]string{"log": strings.Repeat("x", 64<<10)}})},
+		{"没有时间", repository.NewEvent{Kind: "slot.exit"}},
+		{"时间为负", repository.NewEvent{At: -1, Kind: "slot.exit"}},
+		{"Kind 为空", at(repository.NewEvent{})},
+		{"Kind 不到两段", at(repository.NewEvent{Kind: "exit"})},
+		{"Kind 有大写", at(repository.NewEvent{Kind: "Slot.exit"})},
+		{"Key 不是安全词", at(repository.NewEvent{Kind: "slot.exit", Key: "sig 1"})},
+		{"Key 超过 128 字节", at(repository.NewEvent{Kind: "slot.exit", Key: strings.Repeat("k", 129)})},
+		{"字段名不是标识符", at(repository.NewEvent{Kind: "slot.exit", Fields: map[string]string{"Exit": "0"}})},
+		{"字段值含 NUL", at(repository.NewEvent{Kind: "slot.log", Fields: map[string]string{"log": "a\x00b"}})},
+		{"字段值不是 UTF-8", at(repository.NewEvent{Kind: "slot.log", Fields: map[string]string{"log": "\xff"}})},
+		{"字段合计超过 64 KiB", at(repository.NewEvent{Kind: "slot.log", Fields: map[string]string{"log": strings.Repeat("x", 64<<10)}})},
 	} {
-		_, err := s.AppendEvents(t.Context(), id, []store.NewEvent{keyed("sig-2"), c.e})
-		wantIs(t, err, store.ErrInvalid, c.name)
+		_, err := s.AppendEvents(t.Context(), id, []repository.NewEvent{keyed("sig-2"), c.e})
+		wantIs(t, err, repository.ErrInvalid, c.name)
 	}
 	wantTasksUnchanged(t, s, before, "事件不合法时")
 	// 键与值合计恰好 64 KiB 的能写
-	full := at(store.NewEvent{Kind: "slot.log", Fields: map[string]string{"log": strings.Repeat("x", 64<<10-len("log"))}})
-	wantEqual(t, mustAppend(t, s, id, full), []store.Appended{{Seq: 2}}, "合计恰好 64 KiB")
+	full := at(repository.NewEvent{Kind: "slot.log", Fields: map[string]string{"log": strings.Repeat("x", 64<<10-len("log"))}})
+	wantEqual(t, mustAppend(t, s, id, full), []repository.Appended{{Seq: 2}}, "合计恰好 64 KiB")
 }
 
 // 任务不存在报 ErrNotFound，空的一批也一样：调用方拿错了任务 ID，不能当成追加成功。
@@ -170,17 +170,17 @@ func eventMissingTask(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	mustTask(t, s) // 有任务，只是不是要找的那个
 	before := taskSnapshot(t, s)
-	for _, es := range [][]store.NewEvent{{keyed("sig-1")}, nil} {
+	for _, es := range [][]repository.NewEvent{{keyed("sig-1")}, nil} {
 		_, err := s.AppendEvents(ctx, "nosuchtask", es)
-		wantIs(t, err, store.ErrNotFound, fmt.Sprintf("给不存在的任务追加 %d 条", len(es)))
+		wantIs(t, err, repository.ErrNotFound, fmt.Sprintf("给不存在的任务追加 %d 条", len(es)))
 	}
 	_, err := s.ListEvents(ctx, "nosuchtask", 0, 0)
-	wantIs(t, err, store.ErrNotFound, "列出不存在的任务的事件")
+	wantIs(t, err, repository.ErrNotFound, "列出不存在的任务的事件")
 	for _, id := range []string{"", "Bad", "a@1", "-a", "a.b", "a/b"} {
-		_, err := s.AppendEvents(ctx, id, []store.NewEvent{keyed("sig-1")})
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("AppendEvents(%q)", id))
+		_, err := s.AppendEvents(ctx, id, []repository.NewEvent{keyed("sig-1")})
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("AppendEvents(%q)", id))
 		_, err = s.ListEvents(ctx, id, 0, 0)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("ListEvents(%q)", id))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("ListEvents(%q)", id))
 	}
 	wantTasksUnchanged(t, s, before, "找不到任务时")
 }
@@ -190,7 +190,7 @@ func eventEmpty(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	id := mustTask(t, s).ID
 	before := taskSnapshot(t, s)
-	for _, es := range [][]store.NewEvent{nil, {}} {
+	for _, es := range [][]repository.NewEvent{nil, {}} {
 		got, err := s.AppendEvents(ctx, id, es)
 		must(t, err, "追加空的一批")
 		if got == nil || len(got) != 0 {
@@ -210,16 +210,16 @@ func eventEmpty(t *testing.T, s *pgstore.Store) {
 func eventList(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	id := mustTask(t, s).ID
-	var in []store.NewEvent
+	var in []repository.NewEvent
 	for i := range 7 {
-		in = append(in, store.NewEvent{At: at0 + int64(i), Kind: "slot.exit", Key: fmt.Sprintf("sig-%d", i)})
+		in = append(in, repository.NewEvent{At: at0 + int64(i), Kind: "slot.exit", Key: fmt.Sprintf("sig-%d", i)})
 	}
 	mustAppend(t, s, id, in...)
 	all := allEvents(t, s, id)
 	for _, c := range []struct {
 		after int64
 		limit int
-		want  []store.Event
+		want  []repository.Event
 	}{
 		{0, 3, all[0:3]}, {3, 3, all[3:6]}, {6, 3, all[6:]}, {7, 3, nil}, {100, 0, nil}, {2, 0, all[2:]}, {0, 7, all},
 	} {
@@ -230,7 +230,7 @@ func eventList(t *testing.T, s *pgstore.Store) {
 		}
 		wantItems(t, got, c.want, fmt.Sprintf("afterSeq %d、limit %d", c.after, c.limit))
 	}
-	var more []store.NewEvent
+	var more []repository.NewEvent
 	for range 94 {
 		more = append(more, anEvent("slot.log", ""))
 	}
@@ -250,7 +250,7 @@ func eventList(t *testing.T, s *pgstore.Store) {
 		limit int
 	}{{0, 501}, {0, -1}, {-1, 0}} {
 		_, err := s.ListEvents(ctx, id, c.after, c.limit)
-		wantIs(t, err, store.ErrInvalid, fmt.Sprintf("afterSeq %d、limit %d", c.after, c.limit))
+		wantIs(t, err, repository.ErrInvalid, fmt.Sprintf("afterSeq %d、limit %d", c.after, c.limit))
 	}
 }
 
@@ -258,16 +258,16 @@ func eventList(t *testing.T, s *pgstore.Store) {
 func eventFields(t *testing.T, s *pgstore.Store) {
 	ctx := t.Context()
 	id := mustTask(t, s).ID
-	events := func() []store.NewEvent {
-		return []store.NewEvent{
+	events := func() []repository.NewEvent {
+		return []repository.NewEvent{
 			{At: at0, Kind: "slot.exit"},
 			{At: at0, Kind: "slot.exit", Fields: map[string]string{}},
 			{At: at0, Kind: "slot.log", Fields: map[string]string{"log": "第一行\n\t\"引号\" \\ 反斜杠\x01", "exit": "0"}},
 		}
 	}
-	var want []store.Event
+	var want []repository.Event
 	for i, e := range events() {
-		want = append(want, store.Event{TaskID: id, Seq: int64(i + 1), NewEvent: e})
+		want = append(want, repository.Event{TaskID: id, Seq: int64(i + 1), NewEvent: e})
 	}
 	in := events()
 	mustAppend(t, s, id, in...)
@@ -279,8 +279,8 @@ func eventFields(t *testing.T, s *pgstore.Store) {
 	got[2].Fields["log"] = "改了"
 	wantEqual(t, allEvents(t, s, id), want, "改了读到的返回值之后")
 
-	tr := []store.NewEvent{{At: at0, Kind: "task.boot", Fields: map[string]string{"by": "gateway"}}}
-	_, _, err := s.TransitionTask(ctx, id, store.TaskExpect{State: model.TaskPending, Rev: 1}, model.TaskBooting, tr)
+	tr := []repository.NewEvent{{At: at0, Kind: "task.boot", Fields: map[string]string{"by": "gateway"}}}
+	_, _, err := s.TransitionTask(ctx, id, repository.TaskExpect{State: model.TaskPending, Rev: 1}, model.TaskBooting, tr)
 	must(t, err, "带着事件推进")
 	tr[0].Fields["by"] = "改了"
 	wantEqual(t, allEvents(t, s, id)[3].Fields, map[string]string{"by": "gateway"}, "改了推进的入参之后")

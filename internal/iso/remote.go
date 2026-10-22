@@ -4,27 +4,28 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/domain/model"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // parseContentRange accepts a complete trailing range, not a loosely parsed
 // prefix. All lengths and offsets are bounded signed integers.
 func parseContentRange(value string) (start, end, total int64, err error) {
 	if !strings.HasPrefix(value, "bytes ") {
-		return 0, 0, 0, store.ErrInvalid
+		return 0, 0, 0, repository.ErrInvalid
 	}
 	parts := strings.Split(strings.TrimPrefix(value, "bytes "), "/")
 	if len(parts) != 2 {
-		return 0, 0, 0, store.ErrInvalid
+		return 0, 0, 0, repository.ErrInvalid
 	}
 	span := strings.Split(parts[0], "-")
 	if len(span) != 2 {
-		return 0, 0, 0, store.ErrInvalid
+		return 0, 0, 0, repository.ErrInvalid
 	}
 	start, err = rangeNumber(span[0])
 	if err != nil {
@@ -39,24 +40,24 @@ func parseContentRange(value string) (start, end, total int64, err error) {
 		return
 	}
 	if start < 0 || end < start || total <= end {
-		err = store.ErrInvalid
+		err = repository.ErrInvalid
 	}
 	return
 }
 
 func rangeNumber(value string) (int64, error) {
 	if value == "" {
-		return 0, store.ErrInvalid
+		return 0, repository.ErrInvalid
 	}
 	for _, c := range value {
 		if c < '0' || c > '9' {
-			return 0, store.ErrInvalid
+			return 0, repository.ErrInvalid
 		}
 	}
 	return strconv.ParseInt(value, 10, 64)
 }
 
-func (s *Sources) fetchRemote(ctx context.Context, src store.Source) error {
+func (s *Sources) fetchRemote(ctx context.Context, src model.Source) error {
 	src, offset, err := s.resumeOffset(ctx, src)
 	if err != nil {
 		return err
@@ -78,14 +79,14 @@ func (s *Sources) fetchRemote(ctx context.Context, src store.Source) error {
 	}
 	resp, err := s.httpClient().Do(req)
 	if err != nil {
-		var rejected *store.ProblemsError
+		var rejected *repository.ProblemsError
 		if errors.As(err, &rejected) {
 			removeErr := os.Remove(s.stagingPath(src.ISOID, src.Role))
 			if removeErr != nil && !os.IsNotExist(removeErr) {
 				return errors.Join(err, removeErr)
 			}
 			src.Fetched = 0
-			_, saveErr := s.store.SaveSource(ctx, src, store.Audit{})
+			_, saveErr := s.store.SaveSource(ctx, src, repository.Audit{})
 			return errors.Join(sourceRejected(src.ISOID, src.Role, isoSourceReasonURL), saveErr)
 		}
 		return err
@@ -105,7 +106,7 @@ func (s *Sources) fetchRemote(ctx context.Context, src store.Source) error {
 			return sourceRejected(src.ISOID, src.Role, isoSourceReasonChunk)
 		}
 		src.TotalSize = total
-		src, err = s.store.SaveSource(ctx, src, store.Audit{})
+		src, err = s.store.SaveSource(ctx, src, repository.Audit{})
 		if err != nil {
 			return err
 		}
@@ -144,7 +145,7 @@ func (s *Sources) fetchRemote(ctx context.Context, src store.Source) error {
 	if err = f.Sync(); err != nil {
 		return err
 	}
-	src, err = s.store.SaveSource(ctx, src, store.Audit{})
+	src, err = s.store.SaveSource(ctx, src, repository.Audit{})
 	if err != nil {
 		return err
 	}

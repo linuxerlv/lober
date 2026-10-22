@@ -1,48 +1,30 @@
 package console
 
 import (
-	"github.com/lober/lober/internal/store"
-	"slices"
+	"github.com/lober/lober/internal/domain/access"
+	"github.com/lober/lober/internal/domain/model"
 )
 
+// 旧控制台入口在身份阶段清除，权限规则统一由 access 提供。
 const (
-	PermAnyUser         = "@any"
-	PermHostRead        = "host:read"
-	PermISORead         = "iso:read"
-	PermHookRead        = "hook:read"
-	PermTemplateRead    = "template:read"
-	PermTaskRead        = "task:read"
-	PermHostWrite       = "host:write"
-	PermTaskCreate      = "task:create"
-	PermTaskCancel      = "task:cancel"
-	PermTaskRetry       = "task:retry"
-	PermHookWrite       = "hook:write"
-	PermTemplateWrite   = "template:write"
-	PermHookApprove     = "hook:approve"
-	PermTemplateApprove = "template:approve"
-	PermISOWrite        = "iso:write"
-	PermUserManage      = "user:manage"
-	PermAuditRead       = "audit:read"
+	PermAnyUser         = access.PermAnyUser
+	PermHostRead        = access.PermHostRead
+	PermISORead         = access.PermISORead
+	PermHookRead        = access.PermHookRead
+	PermTemplateRead    = access.PermTemplateRead
+	PermTaskRead        = access.PermTaskRead
+	PermHostWrite       = access.PermHostWrite
+	PermTaskCreate      = access.PermTaskCreate
+	PermTaskCancel      = access.PermTaskCancel
+	PermTaskRetry       = access.PermTaskRetry
+	PermHookWrite       = access.PermHookWrite
+	PermTemplateWrite   = access.PermTemplateWrite
+	PermHookApprove     = access.PermHookApprove
+	PermTemplateApprove = access.PermTemplateApprove
+	PermISOWrite        = access.PermISOWrite
+	PermUserManage      = access.PermUserManage
+	PermAuditRead       = access.PermAuditRead
 )
 
-var allPerms = []string{PermHostRead, PermISORead, PermHookRead, PermTemplateRead, PermTaskRead, PermHostWrite, PermTaskCreate, PermTaskCancel, PermTaskRetry, PermHookWrite, PermTemplateWrite, PermHookApprove, PermTemplateApprove, PermISOWrite, PermUserManage, PermAuditRead}
-
-func AllPerms() []string { return slices.Clone(allPerms) }
-func PermsOf(r store.Role) []string {
-	if !r.Valid() {
-		return []string{}
-	}
-	if r == store.RoleAdmin {
-		return AllPerms()
-	}
-	out := slices.Clone(allPerms[:5])
-	switch r {
-	case store.RoleOperator:
-		out = append(out, PermHostWrite, PermTaskCreate, PermTaskCancel, PermTaskRetry)
-	case store.RoleHookAuthor:
-		out = append(out, PermHookWrite, PermTemplateWrite)
-	case store.RoleHookApprover:
-		out = append(out, PermHookApprove, PermTemplateApprove)
-	}
-	return out
-}
+func AllPerms() []string            { return access.AllPerms() }
+func PermsOf(r model.Role) []string { return access.PermsOf(r) }

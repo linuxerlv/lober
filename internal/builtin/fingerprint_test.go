@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
@@ -187,24 +187,24 @@ func TestReleasedVersionsLoadAndUpgradeIdempotently(t *testing.T) {
 		changed := h
 		changed.Impls = append([]model.Impl(nil), h.Impls...)
 		changed.Impls[0].Body += "# changed\n"
-		if err := s.EnsureBuiltinHook(ctx, changed); !errors.Is(err, store.ErrBuiltinMismatch) {
+		if err := s.EnsureBuiltinHook(ctx, changed); !errors.Is(err, repository.ErrBuiltinMismatch) {
 			t.Fatalf("changed hook: %v", err)
 		}
 		h.Version++
 		h.Name += "-renamed"
-		if err := s.EnsureBuiltinHook(ctx, h); !errors.Is(err, store.ErrBuiltinMismatch) {
+		if err := s.EnsureBuiltinHook(ctx, h); !errors.Is(err, repository.ErrBuiltinMismatch) {
 			t.Fatalf("renamed hook: %v", err)
 		}
 	}
 	for _, tpl := range Templates() {
 		changed := tpl
 		changed.Body += "# changed\n"
-		if err := s.EnsureBuiltinTemplate(ctx, changed); !errors.Is(err, store.ErrBuiltinMismatch) {
+		if err := s.EnsureBuiltinTemplate(ctx, changed); !errors.Is(err, repository.ErrBuiltinMismatch) {
 			t.Fatalf("changed template: %v", err)
 		}
 		tpl.Version++
 		tpl.Name += "-renamed"
-		if err := s.EnsureBuiltinTemplate(ctx, tpl); !errors.Is(err, store.ErrBuiltinMismatch) {
+		if err := s.EnsureBuiltinTemplate(ctx, tpl); !errors.Is(err, repository.ErrBuiltinMismatch) {
 			t.Fatalf("renamed template: %v", err)
 		}
 	}

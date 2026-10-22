@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 type taskPage struct {
@@ -99,7 +99,7 @@ func (s *server) listTasks(c *gin.Context) {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return
 	}
-	q := store.TaskQuery{HostSN: c.Query("host_sn"), CreatedFrom: from, CreatedTo: to, Cursor: c.Query("cursor"), Limit: limit}
+	q := repository.TaskQuery{HostSN: c.Query("host_sn"), CreatedFrom: from, CreatedTo: to, Cursor: c.Query("cursor"), Limit: limit}
 	if q.HostSN != "" {
 		sn, err := model.NormalizeSN(q.HostSN)
 		if err != nil {
@@ -116,7 +116,7 @@ func (s *server) listTasks(c *gin.Context) {
 		}
 		q.States = []model.TaskState{state}
 	}
-	page, ok := Get(c, func() (store.Page[model.Task], error) { return s.deps.Tasks.ListTasks(c.Request.Context(), q) })
+	page, ok := Get(c, func() (repository.Page[model.Task], error) { return s.deps.Tasks.ListTasks(c.Request.Context(), q) })
 	if !ok {
 		return
 	}
@@ -132,7 +132,7 @@ func (s *server) getTask(c *gin.Context) {
 		Ok(c, s.taskResponse(t))
 	}
 }
-func toEventItem(e store.Event) eventItem {
+func toEventItem(e repository.Event) eventItem {
 	return eventItem{e.TaskID, e.Seq, e.At, e.Kind, e.Key, stringMap(e.Fields)}
 }
 func (s *server) listEvents(c *gin.Context) {
@@ -144,7 +144,7 @@ func (s *server) listEvents(c *gin.Context) {
 	if !ok {
 		return
 	}
-	events, ok := Get(c, func() ([]store.Event, error) {
+	events, ok := Get(c, func() ([]repository.Event, error) {
 		return s.deps.Events.ListEvents(c.Request.Context(), c.Param("id"), after, limit)
 	})
 	if !ok {
@@ -183,7 +183,9 @@ func (s *server) taskStream(c *gin.Context) {
 	}
 	hints, unsub := s.hub.Subscribe(id)
 	defer unsub()
-	events, ok := Get(c, func() ([]store.Event, error) { return s.deps.Events.ListEvents(c.Request.Context(), id, last, 200) })
+	events, ok := Get(c, func() ([]repository.Event, error) {
+		return s.deps.Events.ListEvents(c.Request.Context(), id, last, 200)
+	})
 	if !ok {
 		return
 	}
@@ -191,7 +193,7 @@ func (s *server) taskStream(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
 	c.Header("X-Accel-Buffering", "no")
 	token := bearerToken(c)
-	send := func(page []store.Event) bool {
+	send := func(page []repository.Event) bool {
 		for {
 			if c.Request.Context().Err() != nil || !s.streamAuthorized(c, token) {
 				return false

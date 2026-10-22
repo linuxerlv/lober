@@ -1,6 +1,6 @@
 package builtin
 
-import "github.com/lober/lober/internal/core/model"
+import "github.com/lober/lober/internal/domain/model"
 
 func packagesHook() model.Hook {
 	h := hook("packages", 2, "Additional native packages, Windows Server features, or qualified individual ESXi VIB URLs.")

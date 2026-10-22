@@ -5,9 +5,9 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/activation"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/activation"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 type hookRequest struct {
@@ -96,16 +96,16 @@ func queryBool(c *gin.Context, key string) (bool, bool) {
 	}
 	return raw == "true", true
 }
-func authoringQuery(c *gin.Context) (store.HookQuery, bool) {
+func authoringQuery(c *gin.Context) (repository.HookQuery, bool) {
 	limit, ok := queryLimit(c)
 	if !ok {
-		return store.HookQuery{}, false
+		return repository.HookQuery{}, false
 	}
 	approved, ok := queryBool(c, "approved")
 	if !ok {
-		return store.HookQuery{}, false
+		return repository.HookQuery{}, false
 	}
-	q := store.HookQuery{NamePrefix: c.Query("prefix"), ApprovedOnly: approved, Cursor: c.Query("cursor"), Limit: limit}
+	q := repository.HookQuery{NamePrefix: c.Query("prefix"), ApprovedOnly: approved, Cursor: c.Query("cursor"), Limit: limit}
 	if state := c.Query("state"); state != "" {
 		if !model.VersionState(state).Valid() {
 			Fail(c, 400, nil, model.ConsoleBadRequest)
@@ -120,7 +120,7 @@ func (s *server) listHooks(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, ok := Get(c, func() (store.Page[model.Hook], error) { return s.deps.Hooks.ListHooks(c.Request.Context(), q) })
+	page, ok := Get(c, func() (repository.Page[model.Hook], error) { return s.deps.Hooks.ListHooks(c.Request.Context(), q) })
 	if ok {
 		Ok(c, hookPage{hookResponses(page.Items), page.Next})
 	}
@@ -145,7 +145,7 @@ func hookKeyOf(c *gin.Context) (model.HookKey, bool) {
 		return model.HookKey{}, false
 	}
 	k := model.HookKey{ID: c.Param("id"), Version: version}
-	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
+	if err := repository.CheckVersionKey(k.ID, k.Version); err != nil {
 		RespondError(c, err)
 		return k, false
 	}

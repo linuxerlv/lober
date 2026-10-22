@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/domain/model"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
@@ -65,13 +66,13 @@ func Test主机HTTP登记替换版本删除与审计(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	responseData[any](t, httpCall(s, "DELETE", "/console/v1/hosts/sn-1?rev=2", "", token))
-	if _, err := st.GetHost(t.Context(), "SN-1"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.GetHost(t.Context(), "SN-1"); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatal(err)
 	}
 	if w := httpCall(s, "GET", "/console/v1/hosts/SN-1", "", token); w.Code != 404 {
 		t.Fatal(w.Code)
 	}
-	audit, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	audit, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func Test主机HTTP校验列表过滤分页(t *testing.T) {
 }
 func Test主机HTTP全部路由权限矩阵(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
-	for i, role := range store.Roles() {
+	for i, role := range model.Roles() {
 		name := fmt.Sprintf("u%d", i)
 		seedAuthUser(t, st, name, role, "pw")
 		token := loginHTTP(t, s, name, "pw").Token
@@ -136,7 +137,7 @@ func Test主机HTTP全部路由权限矩阵(t *testing.T) {
 			count++
 			path := strings.ReplaceAll(rt.Path, ":sn", "SN-1")
 			w := httpCall(s, rt.Method, path, `{}`, token)
-			allowed := rt.Perm == PermHostRead || role == store.RoleAdmin || role == store.RoleOperator
+			allowed := rt.Perm == PermHostRead || role == model.RoleAdmin || role == model.RoleOperator
 			if allowed && (w.Code == 401 || w.Code == 403) || !allowed && w.Code != 403 {
 				t.Fatal(role, rt, w.Code)
 			}
@@ -150,17 +151,17 @@ func TestCSV导入预演与原子提交(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	token := adminHTTP(t, s, st)
 	responseData[hostResponse](t, httpCall(s, "POST", "/console/v1/hosts", `{"sn":"SN-1","arch":"x86_64"}`, token))
-	before, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	data := "sn,arch,rack\r\nSN-1,aarch64, A02 \r\nSN-2,x86_64,A01\r\n"
 	p := responseData[csvPlan](t, csvHTTP(s, "/console/v1/hosts/import?dryRun=true", data, token))
 	if p.Rows[0].Action != "update" || p.Rows[1].Action != "create" {
 		t.Fatal(p)
 	}
-	after, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if len(before.Items) != len(after.Items) {
 		t.Fatal("preview audited")
 	}
-	if _, err := st.GetHost(t.Context(), "SN-2"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.GetHost(t.Context(), "SN-2"); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"sn,arch\nSN-1,x86_64\nSN-3,amd64\nSN-4,x86_64\n", "sn,arch\nSN-3,x86_64\nsn-3,x86_64\n"} {
@@ -173,13 +174,13 @@ func TestCSV导入预演与原子提交(t *testing.T) {
 			t.Fatal(w.Code, w.Body.String())
 		}
 		for _, sn := range []string{"SN-3", "SN-4"} {
-			if _, err := st.GetHost(t.Context(), sn); !errors.Is(err, store.ErrNotFound) {
+			if _, err := st.GetHost(t.Context(), sn); !errors.Is(err, repository.ErrNotFound) {
 				t.Fatal("partial import", sn, err)
 			}
 		}
 	}
 	h, _ := st.GetHost(t.Context(), "SN-1")
-	after, _ = st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	after, _ = st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if h.Rev != 1 || len(before.Items) != len(after.Items) {
 		t.Fatal("rejected batch changed records/audit")
 	}
@@ -191,7 +192,7 @@ func TestCSV导入预演与原子提交(t *testing.T) {
 	if err != nil || h.Arch != "aarch64" || h.Attrs["rack"] != " A02 " || h.Rev != 2 {
 		t.Fatal(h, err)
 	}
-	after, _ = st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	after, _ = st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	count := 0
 	for _, a := range after.Items {
 		if a.Action == "host.import" {

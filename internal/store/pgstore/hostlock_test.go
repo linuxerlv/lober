@@ -7,8 +7,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
@@ -81,8 +81,8 @@ func Test同时导入主机与建任务不会互相等死(t *testing.T) {
 				tasks = append(tasks, created[i]...)
 				continue
 			}
-			var be *store.BatchError
-			if !errors.As(err, &be) || !errors.Is(err, store.ErrRejected) {
+			var be *repository.BatchError
+			if !errors.As(err, &be) || !errors.Is(err, repository.ErrRejected) {
 				t.Fatalf("第 %d 轮的第 %d 批建任务应成功或报 BatchError（加锁的次序不一致时是 SQLSTATE 40P01），得到 %v", round+1, i+1, err)
 			}
 			ps := batchProblems(be)

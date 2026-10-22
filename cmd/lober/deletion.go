@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/domain/model"
 	"io"
 	"log/slog"
 	"os"
@@ -12,15 +13,15 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/iso"
-	"github.com/lober/lober/internal/store"
 )
 
 // Registration and snapshot capture share a gate. Source identity/path cannot
 // change after registration, so fetch counters need not block deletion.
 type registrationGate struct{ sync.RWMutex }
 type deletionJournal struct {
-	store  store.Store
+	store  repository.Store
 	source *iso.Sources
 	gate   *registrationGate
 	dir    string
@@ -28,7 +29,7 @@ type deletionJournal struct {
 	mu     sync.Mutex
 }
 
-func newDeletionJournal(st store.Store, src *iso.Sources, gate *registrationGate, cfg config, logger *slog.Logger) (*deletionJournal, error) {
+func newDeletionJournal(st repository.Store, src *iso.Sources, gate *registrationGate, cfg config, logger *slog.Logger) (*deletionJournal, error) {
 	dir := filepath.Join(cfg.ISO.Staging, "deletions")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
@@ -44,11 +45,11 @@ func syncDirectory(dir string) error {
 	return f.Sync()
 }
 func (j *deletionJournal) persist(s iso.DeletionSnapshot) error {
-	if err := store.CheckID(s.ISO.ID); err != nil {
+	if err := repository.CheckID(s.ISO.ID); err != nil {
 		return err
 	}
 	if s.Sources == nil {
-		return store.ErrInvalid
+		return repository.ErrInvalid
 	}
 	data, err := json.Marshal(s)
 	if err != nil {
@@ -98,7 +99,7 @@ func (j *deletionJournal) discard(id string) error {
 	}
 	return syncDirectory(j.dir)
 }
-func (j *deletionJournal) Delete(ctx context.Context, id string, rev int64, a store.Audit) error {
+func (j *deletionJournal) Delete(ctx context.Context, id string, rev int64, a repository.Audit) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.gate.Lock()
@@ -109,7 +110,7 @@ func (j *deletionJournal) Delete(ctx context.Context, id string, rev int64, a st
 	}
 	if item.Rev != rev {
 		j.gate.Unlock()
-		return store.ErrConflict
+		return repository.ErrConflict
 	}
 	sources, err := j.store.SourcesOf(ctx, id)
 	if err != nil {
@@ -117,7 +118,7 @@ func (j *deletionJournal) Delete(ctx context.Context, id string, rev int64, a st
 		return err
 	}
 	if sources == nil {
-		sources = []store.Source{}
+		sources = []model.Source{}
 	}
 	snapshot := iso.DeletionSnapshot{ISO: item, Sources: sources}
 	if err = j.persist(snapshot); err != nil {
@@ -166,7 +167,7 @@ func (j *deletionJournal) RetryAll(ctx context.Context) error {
 			continue
 		}
 		id := strings.TrimSuffix(entry.Name(), ".json")
-		if err := store.CheckID(id); err != nil {
+		if err := repository.CheckID(id); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -176,7 +177,7 @@ func (j *deletionJournal) RetryAll(ctx context.Context) error {
 			continue
 		}
 		if !info.Mode().IsRegular() {
-			errs = append(errs, store.ErrInvalid)
+			errs = append(errs, repository.ErrInvalid)
 			continue
 		}
 		f, err := root.Open(entry.Name())
@@ -191,7 +192,7 @@ func (j *deletionJournal) RetryAll(ctx context.Context) error {
 		var extra any
 		if err == nil {
 			if endErr := decoder.Decode(&extra); endErr != io.EOF {
-				err = store.ErrInvalid
+				err = repository.ErrInvalid
 			}
 		}
 		f.Close()
@@ -206,7 +207,7 @@ func (j *deletionJournal) RetryAll(ctx context.Context) error {
 			}
 			continue
 		}
-		if !errors.Is(err, store.ErrNotFound) {
+		if !errors.Is(err, repository.ErrNotFound) {
 			errs = append(errs, err)
 			continue
 		}

@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 type isoRequest struct {
@@ -57,7 +57,7 @@ type sourceProgress struct {
 	Kind      SourceKind        `json:"kind"`
 	TotalSize int64             `json:"totalSize"`
 	Fetched   int64             `json:"fetched"`
-	State     store.SourceState `json:"state"`
+	State     model.SourceState `json:"state"`
 	Error     string            `json:"error"`
 	Rev       int64             `json:"rev"`
 	Ranges    []sourceRange     `json:"ranges"`
@@ -117,7 +117,7 @@ func (s *server) listISOs(c *gin.Context) {
 	if !ok {
 		return
 	}
-	q := store.ISOQuery{Family: catalog.Family(c.Query("family")), Series: catalog.Series(c.Query("series")), Cursor: c.Query("cursor"), Limit: limit}
+	q := repository.ISOQuery{Family: catalog.Family(c.Query("family")), Series: catalog.Series(c.Query("series")), Cursor: c.Query("cursor"), Limit: limit}
 	if q.Family != "" && !q.Family.Valid() || q.Series != "" && !q.Series.Valid() {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return
@@ -129,7 +129,7 @@ func (s *server) listISOs(c *gin.Context) {
 		}
 		q.States = []model.ISOState{model.ISOState(state)}
 	}
-	page, ok := Get(c, func() (store.Page[model.ISO], error) { return s.deps.ISOs.ListISOs(c.Request.Context(), q) })
+	page, ok := Get(c, func() (repository.Page[model.ISO], error) { return s.deps.ISOs.ListISOs(c.Request.Context(), q) })
 	if !ok {
 		return
 	}
@@ -151,31 +151,31 @@ func (s *server) getISO(c *gin.Context) {
 // label; its persisted source has no address.
 func checkISOSource(series catalog.Series, req *isoSourceReq) error {
 	if !req.Kind.Valid() || req.Size < 0 {
-		return store.ErrInvalid
+		return repository.ErrInvalid
 	}
 	if req.Role != "" {
 		extra, ok := catalog.ExtraSourceOf(series)
 		if !ok || req.Role != extra.Role {
-			return store.ErrInvalid
+			return repository.ErrInvalid
 		}
 	}
-	kind := store.SourceRemote
-	source := store.Source{ISOID: "preflight", Role: req.Role, State: store.SourcePending, TotalSize: req.Size, ExpectedSHA256: req.SHA256}
+	kind := model.SourceRemote
+	source := model.Source{ISOID: "preflight", Role: req.Role, State: model.SourcePending, TotalSize: req.Size, ExpectedSHA256: req.SHA256}
 	switch req.Kind {
 	case SourceURL:
 		source.URL = req.Addr
 	case SourcePath:
-		kind = store.SourceLocal
+		kind = model.SourceLocal
 		source.Path = req.Addr
 	case SourceUpload:
-		kind = store.SourceUpload
+		kind = model.SourceUpload
 		req.Addr = ""
 		if req.Size <= 0 {
-			return store.ErrInvalid
+			return repository.ErrInvalid
 		}
 	}
 	source.Kind = kind
-	return store.CheckSource(source)
+	return repository.CheckSource(source)
 }
 func (s *server) checkSourceSpace(c *gin.Context, sources []isoSourceReq) bool {
 	var total int64
@@ -208,7 +208,7 @@ func (s *server) createISO(c *gin.Context) {
 		return
 	}
 	item := model.ISO{Name: req.Name, Family: req.Family, Series: req.Series}
-	if err := store.CheckNewISO(item); err != nil {
+	if err := repository.CheckNewISO(item); err != nil {
 		RespondError(c, err)
 		return
 	}
@@ -302,7 +302,7 @@ func (s *server) deprecateISO(c *gin.Context) {
 	}
 	Ok(c, nil)
 }
-func (s *server) sourceOperation(c *gin.Context, fn func(context.Context, string, store.Audit) error) {
+func (s *server) sourceOperation(c *gin.Context, fn func(context.Context, string, repository.Audit) error) {
 	if err := fn(c.Request.Context(), c.Param("id"), s.auditFrom(c, "")); err != nil {
 		RespondError(c, err)
 		return
@@ -371,7 +371,7 @@ func (r *exactChunkReader) Read(p []byte) (int, error) {
 		var probe [1]byte
 		n, err := r.r.Read(probe[:])
 		if n > 0 {
-			return 0, store.ErrInvalid
+			return 0, repository.ErrInvalid
 		}
 		return 0, err
 	}
@@ -381,7 +381,7 @@ func (r *exactChunkReader) Read(p []byte) (int, error) {
 	n, err := r.r.Read(p)
 	r.remaining -= int64(n)
 	if errors.Is(err, io.EOF) && r.remaining > 0 {
-		return n, store.ErrInvalid
+		return n, repository.ErrInvalid
 	}
 	return n, err
 }
@@ -392,7 +392,7 @@ func (s *server) uploadChunk(c *gin.Context) {
 		return
 	}
 	role, id := c.Query("role"), c.Param("id")
-	if err := store.CheckSourceKey(id, role); err != nil {
+	if err := repository.CheckSourceKey(id, role); err != nil {
 		RespondError(c, err)
 		return
 	}
@@ -402,11 +402,11 @@ func (s *server) uploadChunk(c *gin.Context) {
 		return
 	}
 	if !exists {
-		RespondError(c, store.ErrNotFound)
+		RespondError(c, repository.ErrNotFound)
 		return
 	}
-	if source.Kind != store.SourceUpload {
-		RespondError(c, store.ErrConflict)
+	if source.Kind != model.SourceUpload {
+		RespondError(c, repository.ErrConflict)
 		return
 	}
 	length := end - start + 1
@@ -426,7 +426,7 @@ func (s *server) isoProgress(c *gin.Context) {
 	if !ok {
 		return
 	}
-	sources, ok := Get(c, func() ([]store.Source, error) { return s.deps.Sources.SourcesOf(c.Request.Context(), item.ID) })
+	sources, ok := Get(c, func() ([]model.Source, error) { return s.deps.Sources.SourcesOf(c.Request.Context(), item.ID) })
 	if !ok {
 		return
 	}
@@ -440,7 +440,7 @@ func (s *server) isoProgress(c *gin.Context) {
 	}
 	Ok(c, out)
 }
-func (s *server) sourceProgress(ctx context.Context, source store.Source) (sourceProgress, error) {
+func (s *server) sourceProgress(ctx context.Context, source model.Source) (sourceProgress, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		ranges, err := s.deps.Sources.RangesOf(ctx, source.ISOID, source.Role)
 		if err != nil {
@@ -451,7 +451,7 @@ func (s *server) sourceProgress(ctx context.Context, source store.Source) (sourc
 			return sourceProgress{}, err
 		}
 		if !exists {
-			return sourceProgress{}, store.ErrNotFound
+			return sourceProgress{}, repository.ErrNotFound
 		}
 		if current.Rev != source.Rev {
 			source = current
@@ -463,12 +463,12 @@ func (s *server) sourceProgress(ctx context.Context, source store.Source) (sourc
 		}
 		kind := SourceUpload
 		switch source.Kind {
-		case store.SourceRemote:
+		case model.SourceRemote:
 			kind = SourceURL
-		case store.SourceLocal:
+		case model.SourceLocal:
 			kind = SourcePath
 		}
 		return sourceProgress{source.Role, kind, source.TotalSize, source.Fetched, source.State, source.Error, source.Rev, spans}, nil
 	}
-	return sourceProgress{}, store.ErrConflict
+	return sourceProgress{}, repository.ErrConflict
 }

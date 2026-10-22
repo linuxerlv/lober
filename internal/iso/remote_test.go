@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/lober/lober/internal/domain/model"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -11,8 +12,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/lober/lober/internal/store"
 )
 
 func TestRemoteTLSPinnedAddressRetainsSNIAndVerification(t *testing.T) {
@@ -64,7 +63,7 @@ func TestRemoteCompleteUnknownLengthAndExplicitRetryRestarts(t *testing.T) {
 	if err := s.FetchOne(t.Context(), item.ID, ""); err == nil {
 		t.Fatal("truncated response accepted")
 	}
-	if src := mustSource(t, s, item.ID, ""); src.State != store.SourceFailed || src.Fetched != 3 {
+	if src := mustSource(t, s, item.ID, ""); src.State != model.SourceFailed || src.Fetched != 3 {
 		t.Fatalf("interrupted progress: %+v", src)
 	}
 	if err := s.Retry(t.Context(), item.ID, sourceAudit()); err != nil {
@@ -73,7 +72,7 @@ func TestRemoteCompleteUnknownLengthAndExplicitRetryRestarts(t *testing.T) {
 	if err := s.FetchOne(t.Context(), item.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	if src := mustSource(t, s, item.ID, ""); src.State != store.SourceFetched || src.Fetched != 12 || src.TotalSize != 12 {
+	if src := mustSource(t, s, item.ID, ""); src.State != model.SourceFetched || src.Fetched != 12 || src.TotalSize != 12 {
 		t.Fatalf("%+v", src)
 	}
 }
@@ -112,7 +111,7 @@ func TestRemoteResumeUsesActualFileLength(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := mustSource(t, s, item.ID, "")
-	src.State = store.SourceFetching
+	src.State = model.SourceFetching
 	src = mustSourceSave(t, s, src)
 	src.TotalSize = 12
 	src.Fetched = 8
@@ -124,7 +123,7 @@ func TestRemoteResumeUsesActualFileLength(t *testing.T) {
 		t.Fatal(err)
 	}
 	src = mustSource(t, s, item.ID, "")
-	if src.State != store.SourceFetched || src.Fetched != 12 {
+	if src.State != model.SourceFetched || src.Fetched != 12 {
 		t.Fatalf("%+v", src)
 	}
 	got, err := os.ReadFile(s.sourcePath(src))
@@ -148,7 +147,7 @@ func TestRemoteWithoutDigestRestartsChangedEntity(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := mustSource(t, s, item.ID, "")
-	src.State = store.SourceFetching
+	src.State = model.SourceFetching
 	mustSourceSave(t, s, src)
 	if err := os.WriteFile(s.stagingPath(item.ID, ""), []byte("OLD"), 0600); err != nil {
 		t.Fatal(err)
@@ -169,7 +168,7 @@ func TestRemoteServerWithoutRangeTruncatesPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := mustSource(t, s, item.ID, "")
-	src.State = store.SourceFetching
+	src.State = model.SourceFetching
 	mustSourceSave(t, s, src)
 	if err := os.WriteFile(s.stagingPath(item.ID, ""), []byte("old-but-longer"), 0600); err != nil {
 		t.Fatal(err)
@@ -202,7 +201,7 @@ func TestRemoteRejectsInconsistentContentRangeAnd416(t *testing.T) {
 				t.Fatal(err)
 			}
 			src := mustSource(t, s, item.ID, "")
-			src.State = store.SourceFetching
+			src.State = model.SourceFetching
 			mustSourceSave(t, s, src)
 			if err := os.WriteFile(s.stagingPath(item.ID, ""), []byte("abc"), 0600); err != nil {
 				t.Fatal(err)
@@ -212,7 +211,7 @@ func TestRemoteRejectsInconsistentContentRangeAnd416(t *testing.T) {
 				t.Fatalf("ok=%v err=%v", tc.ok, err)
 			}
 			src = mustSource(t, s, item.ID, "")
-			if (src.State == store.SourceFetched) != tc.ok {
+			if (src.State == model.SourceFetched) != tc.ok {
 				t.Fatalf("%+v", src)
 			}
 		})
@@ -228,7 +227,7 @@ func TestRemoteRedirectToLoopbackDiscardsPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := mustSource(t, s, item.ID, "")
-	src.State = store.SourceFetching
+	src.State = model.SourceFetching
 	mustSourceSave(t, s, src)
 	if err := os.WriteFile(s.stagingPath(item.ID, ""), []byte("partial"), 0600); err != nil {
 		t.Fatal(err)
@@ -263,7 +262,7 @@ func TestRemoteCancelDoesNotWaitForDownloadAndProgressCannotOverwrite(t *testing
 	if err := <-done; err == nil {
 		t.Fatal("cancelled fetch succeeded")
 	}
-	if src := mustSource(t, s, item.ID, ""); src.State != store.SourceCancelled {
+	if src := mustSource(t, s, item.ID, ""); src.State != model.SourceCancelled {
 		t.Fatalf("cancel overwritten: %+v", src)
 	}
 }

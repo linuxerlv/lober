@@ -4,9 +4,9 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"slices"
@@ -38,20 +38,20 @@ type rangeRow struct {
 }
 
 func (rangeRow) TableName() string { return "iso_upload_ranges" }
-func (r sourceRow) source() store.Source {
-	return store.Source{ISOID: r.ISOID, Role: r.Role, Kind: store.SourceKind(r.Kind), URL: r.URL, Path: r.Path, TotalSize: r.TotalSize, ExpectedSHA256: r.ExpectedSHA256, Fetched: r.Fetched, State: store.SourceState(r.State), Error: r.Error, Rev: r.Rev}
+func (r sourceRow) source() model.Source {
+	return model.Source{ISOID: r.ISOID, Role: r.Role, Kind: model.SourceKind(r.Kind), URL: r.URL, Path: r.Path, TotalSize: r.TotalSize, ExpectedSHA256: r.ExpectedSHA256, Fetched: r.Fetched, State: model.SourceState(r.State), Error: r.Error, Rev: r.Rev}
 }
-func sourceToRow(s store.Source) sourceRow {
+func sourceToRow(s model.Source) sourceRow {
 	return sourceRow{ISOID: s.ISOID, Role: s.Role, Kind: string(s.Kind), URL: s.URL, Path: s.Path, TotalSize: s.TotalSize, ExpectedSHA256: s.ExpectedSHA256, Fetched: s.Fetched, State: string(s.State), Error: s.Error, Rev: s.Rev}
 }
-func optionalAudit(a store.Audit) error {
-	if a == (store.Audit{}) {
+func optionalAudit(a repository.Audit) error {
+	if a == (repository.Audit{}) {
 		return nil
 	}
-	return store.CheckAudit(a)
+	return repository.CheckAudit(a)
 }
-func addSourceAudit(tx *gorm.DB, a store.Audit, id string) error {
-	if a == (store.Audit{}) {
+func addSourceAudit(tx *gorm.DB, a repository.Audit, id string) error {
+	if a == (repository.Audit{}) {
 		return nil
 	}
 	return addAudits(tx, a, "iso", id)
@@ -65,26 +65,26 @@ func lockedSource(tx *gorm.DB, id, role string) (sourceRow, error) {
 	return r, err
 }
 
-func (s *Store) SaveSource(ctx context.Context, src store.Source, a store.Audit) (store.Source, error) {
+func (s *Store) SaveSource(ctx context.Context, src model.Source, a repository.Audit) (model.Source, error) {
 	return s.saveSource(ctx, src, a, 0)
 }
 
-func (s *Store) SaveSourceAndAcquire(ctx context.Context, src store.Source, isoRev int64, a store.Audit) (store.Source, error) {
+func (s *Store) SaveSourceAndAcquire(ctx context.Context, src model.Source, isoRev int64, a repository.Audit) (model.Source, error) {
 	if isoRev < 1 {
-		return store.Source{}, store.ErrInvalid
+		return model.Source{}, repository.ErrInvalid
 	}
-	if err := store.CheckAudit(a); err != nil {
-		return store.Source{}, err
+	if err := repository.CheckAudit(a); err != nil {
+		return model.Source{}, err
 	}
 	return s.saveSource(ctx, src, a, isoRev)
 }
 
-func (s *Store) saveSource(ctx context.Context, src store.Source, a store.Audit, acquireRev int64) (store.Source, error) {
-	if err := store.CheckSource(src); err != nil {
-		return store.Source{}, err
+func (s *Store) saveSource(ctx context.Context, src model.Source, a repository.Audit, acquireRev int64) (model.Source, error) {
+	if err := repository.CheckSource(src); err != nil {
+		return model.Source{}, err
 	}
 	if err := optionalAudit(a); err != nil {
-		return store.Source{}, err
+		return model.Source{}, err
 	}
 	var next sourceRow
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -92,16 +92,16 @@ func (s *Store) saveSource(ctx context.Context, src store.Source, a store.Audit,
 		var parent isoRow
 		if err := tx.Clauses(forUpdate).Where("id = ?", src.ISOID).Take(&parent).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return store.ErrNotFound
+				return repository.ErrNotFound
 			}
 			return err
 		}
 		if model.ISOState(parent.State) == model.ISODeprecated {
-			return store.ErrImmutable
+			return repository.ErrImmutable
 		}
 		if acquireRev != 0 {
 			if parent.Rev != acquireRev || model.ISOState(parent.State) != model.ISOFailed {
-				return store.ErrConflict
+				return repository.ErrConflict
 			}
 			sources, err := listSources(tx.Where("iso_id = ?", src.ISOID))
 			if err != nil {
@@ -110,31 +110,31 @@ func (s *Store) saveSource(ctx context.Context, src store.Source, a store.Audit,
 			mainFetched, extraFetched := false, false
 			extra, needsExtra := catalog.ExtraSourceOf(catalog.Series(parent.Series))
 			for _, other := range sources {
-				if other.Role == "" && other.State == store.SourceFetched {
+				if other.Role == "" && other.State == model.SourceFetched {
 					mainFetched = true
 				}
-				if needsExtra && other.Role == extra.Role && other.State == store.SourceFetched {
+				if needsExtra && other.Role == extra.Role && other.State == model.SourceFetched {
 					extraFetched = true
 				}
-				if src.Rev != 0 && other.State != store.SourceFetched {
-					return store.ErrConflict
+				if src.Rev != 0 && other.State != model.SourceFetched {
+					return repository.ErrConflict
 				}
 			}
 			if !mainFetched {
-				return store.ErrConflict
+				return repository.ErrConflict
 			}
 			if src.Rev == 0 {
 				if !needsExtra || src.Role != extra.Role {
-					return store.ErrInvalid
+					return repository.ErrInvalid
 				}
-			} else if src.Role != "" || src.State != store.SourceFetched || needsExtra && !extraFetched {
-				return store.ErrConflict
+			} else if src.Role != "" || src.State != model.SourceFetched || needsExtra && !extraFetched {
+				return repository.ErrConflict
 			}
 		}
 		old, err := lockedSource(tx, src.ISOID, src.Role)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			if src.Rev != 0 || src.State != store.SourcePending || src.Fetched != 0 || src.Error != "" {
-				return store.ErrConflict
+			if src.Rev != 0 || src.State != model.SourcePending || src.Fetched != 0 || src.Error != "" {
+				return repository.ErrConflict
 			}
 			src.Rev = 1
 			next = sourceToRow(src)
@@ -147,25 +147,25 @@ func (s *Store) saveSource(ctx context.Context, src store.Source, a store.Audit,
 			}
 			cur := old.source()
 			if cur.Rev != src.Rev {
-				return store.ErrConflict
+				return repository.ErrConflict
 			}
 			if cur.Kind != src.Kind || cur.URL != src.URL || cur.Path != src.Path || cur.ExpectedSHA256 != src.ExpectedSHA256 {
-				return store.ErrInvalid
+				return repository.ErrInvalid
 			}
-			if err := store.CheckSourceTransition(cur.State, src.State); err != nil {
+			if err := repository.CheckSourceTransition(cur.State, src.State); err != nil {
 				return err
 			}
-			retry := cur.State != store.SourcePending && cur.State != store.SourceFetching && src.State == store.SourcePending
+			retry := cur.State != model.SourcePending && cur.State != model.SourceFetching && src.State == model.SourcePending
 			if retry {
 				src.Fetched, src.Error = 0, ""
 				if err := sourceQuery(tx, src.ISOID, src.Role).Delete(&rangeRow{}).Error; err != nil {
 					return err
 				}
-			} else if cur.Fetched != src.Fetched && cur.State != store.SourceFetching {
-				return store.ErrConflict
+			} else if cur.Fetched != src.Fetched && cur.State != model.SourceFetching {
+				return repository.ErrConflict
 			}
-			if cur.TotalSize != src.TotalSize && cur.State != store.SourceFetching {
-				return store.ErrConflict
+			if cur.TotalSize != src.TotalSize && cur.State != model.SourceFetching {
+				return repository.ErrConflict
 			}
 			src.Rev = cur.Rev + 1
 			next = sourceToRow(src)
@@ -181,43 +181,43 @@ func (s *Store) saveSource(ctx context.Context, src store.Source, a store.Audit,
 		return addSourceAudit(tx, a, src.ISOID)
 	})
 	if err != nil {
-		return store.Source{}, translate(err, false, nil)
+		return model.Source{}, translate(err, false, nil)
 	}
 	return next.source(), nil
 }
-func (s *Store) GetSource(ctx context.Context, id, role string) (store.Source, bool, error) {
-	if err := store.CheckSourceKey(id, role); err != nil {
-		return store.Source{}, false, err
+func (s *Store) GetSource(ctx context.Context, id, role string) (model.Source, bool, error) {
+	if err := repository.CheckSourceKey(id, role); err != nil {
+		return model.Source{}, false, err
 	}
 	var r sourceRow
 	err := sourceQuery(s.read(ctx), id, role).Take(&r).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return store.Source{}, false, nil
+		return model.Source{}, false, nil
 	}
 	return r.source(), err == nil, err
 }
-func (s *Store) SourcesOf(ctx context.Context, id string) ([]store.Source, error) {
-	if err := store.CheckID(id); err != nil {
+func (s *Store) SourcesOf(ctx context.Context, id string) ([]model.Source, error) {
+	if err := repository.CheckID(id); err != nil {
 		return nil, err
 	}
 	return listSources(s.read(ctx).Where("iso_id = ?", id).Order(`role COLLATE "C"`))
 }
-func (s *Store) ListUnfinishedSources(ctx context.Context) ([]store.Source, error) {
+func (s *Store) ListUnfinishedSources(ctx context.Context) ([]model.Source, error) {
 	return listSources(s.read(ctx).Where("state IN ?", []string{"pending", "fetching"}).Order(`iso_id COLLATE "C", role COLLATE "C"`))
 }
-func listSources(db *gorm.DB) ([]store.Source, error) {
+func listSources(db *gorm.DB) ([]model.Source, error) {
 	var rows []sourceRow
 	if err := db.Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	out := make([]store.Source, 0, len(rows))
+	out := make([]model.Source, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, r.source())
 	}
 	return out, nil
 }
-func (s *Store) DeleteSource(ctx context.Context, id, role string, a store.Audit) error {
-	if err := store.CheckSourceKey(id, role); err != nil {
+func (s *Store) DeleteSource(ctx context.Context, id, role string, a repository.Audit) error {
+	if err := repository.CheckSourceKey(id, role); err != nil {
 		return err
 	}
 	if err := optionalAudit(a); err != nil {
@@ -226,7 +226,7 @@ func (s *Store) DeleteSource(ctx context.Context, id, role string, a store.Audit
 	return translate(s.write(ctx, func(tx *gorm.DB) error {
 		_, err := lockedSource(tx, id, role)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return store.ErrNotFound
+			return repository.ErrNotFound
 		}
 		if err != nil {
 			return err
@@ -238,25 +238,25 @@ func (s *Store) DeleteSource(ctx context.Context, id, role string, a store.Audit
 	}), true, nil)
 }
 func (s *Store) SaveRange(ctx context.Context, id, role string, start, length int64) error {
-	if err := store.CheckSourceKey(id, role); err != nil {
+	if err := repository.CheckSourceKey(id, role); err != nil {
 		return err
 	}
-	if err := store.CheckRange(start, length); err != nil {
+	if err := repository.CheckRange(start, length); err != nil {
 		return err
 	}
 	return translate(s.write(ctx, func(tx *gorm.DB) error {
 		src, err := lockedSource(tx, id, role)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return store.ErrNotFound
+			return repository.ErrNotFound
 		}
 		if err != nil {
 			return err
 		}
 		if src.State != "fetching" {
-			return store.ErrConflict
+			return repository.ErrConflict
 		}
 		if src.TotalSize > 0 && start+length > src.TotalSize {
-			return store.ErrInvalid
+			return repository.ErrInvalid
 		}
 		r := rangeRow{SourceISOID: id, SourceRole: role, Start: start, Length: length}
 		// 重传较短的分片不能撤销之前确认的后半段。
@@ -274,23 +274,23 @@ func (s *Store) SaveRange(ctx context.Context, id, role string, start, length in
 		return sourceQuery(tx.Model(&sourceRow{}), id, role).Updates(map[string]any{"fetched": total, "rev": src.Rev + 1}).Error
 	}), false, nil)
 }
-func (s *Store) RangesOf(ctx context.Context, id, role string) ([]store.Range, error) {
-	if err := store.CheckSourceKey(id, role); err != nil {
+func (s *Store) RangesOf(ctx context.Context, id, role string) ([]model.Range, error) {
+	if err := repository.CheckSourceKey(id, role); err != nil {
 		return nil, err
 	}
 	return readRanges(s.read(ctx), id, role)
 }
-func readRanges(db *gorm.DB, id, role string) ([]store.Range, error) {
+func readRanges(db *gorm.DB, id, role string) ([]model.Range, error) {
 	var rows []rangeRow
 	if err := sourceQuery(db, id, role).Order("start").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	ranges := make([]store.Range, 0, len(rows))
+	ranges := make([]model.Range, 0, len(rows))
 	for _, r := range rows {
-		ranges = append(ranges, store.Range{Start: r.Start, Length: r.Length})
+		ranges = append(ranges, model.Range{Start: r.Start, Length: r.Length})
 	}
-	slices.SortFunc(ranges, func(a, b store.Range) int { return cmp.Compare(a.Start, b.Start) })
-	out := make([]store.Range, 0, len(ranges))
+	slices.SortFunc(ranges, func(a, b model.Range) int { return cmp.Compare(a.Start, b.Start) })
+	out := make([]model.Range, 0, len(ranges))
 	for _, r := range ranges {
 		if len(out) > 0 && r.Start <= out[len(out)-1].Start+out[len(out)-1].Length {
 			last := &out[len(out)-1]

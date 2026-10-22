@@ -5,9 +5,9 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 type hostRequest struct {
@@ -64,8 +64,8 @@ func (s *server) listHosts(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, ok := Get(c, func() (store.Page[model.Host], error) {
-		return s.deps.Hosts.ListHosts(c.Request.Context(), store.HostQuery{SNPrefix: c.Query("prefix"), AttrKey: c.Query("attr_key"), AttrValue: c.Query("attr_value"), Cursor: c.Query("cursor"), Limit: limit})
+	page, ok := Get(c, func() (repository.Page[model.Host], error) {
+		return s.deps.Hosts.ListHosts(c.Request.Context(), repository.HostQuery{SNPrefix: c.Query("prefix"), AttrKey: c.Query("attr_key"), AttrValue: c.Query("attr_value"), Cursor: c.Query("cursor"), Limit: limit})
 	})
 	if !ok {
 		return

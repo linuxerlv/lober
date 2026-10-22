@@ -8,12 +8,12 @@ import (
 	"testing"
 
 	"github.com/lober/lober/internal/builtin"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
-func seedBuiltinContent(t *testing.T, st store.Store) {
+func seedBuiltinContent(t *testing.T, st repository.Store) {
 	t.Helper()
 	for _, h := range builtin.Hooks() {
 		if err := st.EnsureBuiltinHook(t.Context(), h); err != nil {
@@ -26,16 +26,16 @@ func seedBuiltinContent(t *testing.T, st store.Store) {
 		}
 	}
 }
-func approvedTestHook(t *testing.T, st store.Store, name string) model.Hook {
+func approvedTestHook(t *testing.T, st repository.Store, name string) model.Hook {
 	t.Helper()
 	h, err := st.CreateHook(t.Context(), model.Hook{Name: name, Author: "alice", Impls: []model.Impl{{Family: "linux", Series: []catalog.Series{"rocky"}, Kind: model.ImplFragment, Body: "# example\n"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SubmitHook(t.Context(), h.Key(), h.Rev, store.Audit{Actor: "alice", Action: "hook.submit", At: fixedAt}); err != nil {
+	if err := st.SubmitHook(t.Context(), h.Key(), h.Rev, repository.Audit{Actor: "alice", Action: "hook.submit", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.ApproveHook(t.Context(), h.Key(), h.Rev+1, "reviewer", store.Audit{Actor: "reviewer", Action: "hook.approve", At: fixedAt}); err != nil {
+	if err := st.ApproveHook(t.Context(), h.Key(), h.Rev+1, "reviewer", repository.Audit{Actor: "reviewer", Action: "hook.approve", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
 	h, err = st.GetHook(t.Context(), h.Key())
@@ -47,7 +47,7 @@ func approvedTestHook(t *testing.T, st store.Store, name string) model.Hook {
 func TestHook草稿可保存不完备内容并保留元数据(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	token := adminHTTP(t, s, st)
-	before, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	w := httpCall(s, "POST", "/console/v1/hooks", `{"name":" draft ","author":"spoof","state":"approved","builtin":true,"timeoutSec":0,"params":[{"name":"disk","type":"diskpath","label":"系统盘"}],"impls":[]}`, token)
 	h := responseData[hookResponse](t, w)
 	if h.Name != "draft" || h.State != model.VersionDraft || h.Author != "admin" || h.Builtin || h.Rev != 1 || h.Version != 1 || len(h.Problems) == 0 || h.Impls == nil {
@@ -74,7 +74,7 @@ func TestHook草稿可保存不完备内容并保留元数据(t *testing.T) {
 	if len(vs.Items) != 1 || vs.Items[0].Version != 1 {
 		t.Fatal(vs)
 	}
-	after, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if len(before.Items) != len(after.Items) {
 		t.Fatal("draft edit audited")
 	}
@@ -117,10 +117,10 @@ func TestHook名称文本校验列表分页改名与删除(t *testing.T) {
 	}
 	responseData[any](t, httpCall(s, "PUT", "/console/v1/hooks/"+last.ID+"/name", `{"name":"disks"}`, token))
 	responseData[any](t, httpCall(s, "DELETE", "/console/v1/hooks/"+last.ID+"/versions/1?rev=1", "", token))
-	if _, err := st.GetHook(t.Context(), model.HookKey{ID: last.ID, Version: 1}); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.GetHook(t.Context(), model.HookKey{ID: last.ID, Version: 1}); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatal(err)
 	}
-	audit, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	audit, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	count := 0
 	for _, a := range audit.Items {
 		if a.TargetKind == "hook" {
@@ -210,7 +210,7 @@ func Test内置Hook与模板只读且草稿操作不声明审计(t *testing.T) {
 }
 func Test作者对象全部路由权限矩阵(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
-	for i, role := range store.Roles() {
+	for i, role := range model.Roles() {
 		name := fmt.Sprintf("author%d", i)
 		seedAuthUser(t, st, name, role, "pw")
 		token := loginHTTP(t, s, name, "pw").Token
@@ -224,7 +224,7 @@ func Test作者对象全部路由权限矩阵(t *testing.T) {
 			count++
 			path := strings.ReplaceAll(strings.ReplaceAll(rt.Path, ":id", "missing"), ":version", "1")
 			w := httpCall(s, rt.Method, path, `{}`, token)
-			allowed := read || role == store.RoleAdmin || role == store.RoleHookAuthor
+			allowed := read || role == model.RoleAdmin || role == model.RoleHookAuthor
 			if allowed && (w.Code == 401 || w.Code == 403) || !allowed && w.Code != 403 {
 				t.Fatal(role, rt, w.Code)
 			}

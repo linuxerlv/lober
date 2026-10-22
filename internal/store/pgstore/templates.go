@@ -3,15 +3,16 @@ package pgstore
 import (
 	"context"
 	"errors"
+	"github.com/lober/lober/internal/infrastructure/identity"
 	"reflect"
 	"slices"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // 模板与 hook 一一对应，身份、名字与状态转换用 hooks.go 里共用的那几个函数；这里只写模板自己的：派生、审批时连同引用
@@ -20,14 +21,14 @@ import (
 // templateContentColumns 是保存草稿写的列：内容整条替换，改成零值的也照写。派生来源只由派生写，保存时不写。
 var templateContentColumns = []string{"family", "series", "body", "params", "bindings", "assembly", "rev"}
 
-// CreateTemplate 见 store.Templates。派生要记来源，只能走 DeriveTemplate，所以入参不能带 DerivedFrom。名字撞了由唯一
+// CreateTemplate 见 repository.Templates。派生要记来源，只能走 DeriveTemplate，所以入参不能带 DerivedFrom。名字撞了由唯一
 // 索引 idx_templates_name_key 报出来，理由同 CreateHook。
 func (s *Store) CreateTemplate(ctx context.Context, tpl model.Template) (model.Template, error) {
-	name, key, err := store.CheckNewTemplate(tpl)
+	name, key, err := repository.CheckNewTemplate(tpl)
 	if err != nil {
 		return model.Template{}, err
 	}
-	tpl.ID, tpl.Version, tpl.Name, tpl.State, tpl.Rev = store.NewID(), 1, name, model.VersionDraft, 1
+	tpl.ID, tpl.Version, tpl.Name, tpl.State, tpl.Rev = identity.NewID(), 1, name, model.VersionDraft, 1
 	var row templateVersionRow
 	err = s.write(ctx, func(tx *gorm.DB) error {
 		var err error
@@ -40,10 +41,10 @@ func (s *Store) CreateTemplate(ctx context.Context, tpl model.Template) (model.T
 	return row.template()
 }
 
-// SaveTemplateDraft 见 store.Templates。规则同 SaveHookDraft；派生来源只由派生写，保存时改了也报 ErrInvalid。这个版本
+// SaveTemplateDraft 见 repository.Templates。规则同 SaveHookDraft；派生来源只由派生写，保存时改了也报 ErrInvalid。这个版本
 // 引用的 hook 版本在同一个事务里重写。
 func (s *Store) SaveTemplateDraft(ctx context.Context, tpl model.Template) (model.Template, error) {
-	if err := store.CheckTemplateDraft(tpl); err != nil {
+	if err := repository.CheckTemplateDraft(tpl); err != nil {
 		return model.Template{}, err
 	}
 	k := model.TemplateKey{ID: tpl.ID, Version: tpl.Version}
@@ -53,18 +54,18 @@ func (s *Store) SaveTemplateDraft(ctx context.Context, tpl model.Template) (mode
 		if err != nil {
 			return err
 		}
-		what := "模板 " + store.VersionID(k.ID, k.Version)
-		if err := store.CheckDraft(what, old.meta()); err != nil {
+		what := "模板 " + repository.VersionID(k.ID, k.Version)
+		if err := repository.CheckDraft(what, old.meta()); err != nil {
 			return err
 		}
-		if err := store.CheckSameMeta(what, old.meta(), store.TemplateMeta(tpl)); err != nil {
+		if err := repository.CheckSameMeta(what, old.meta(), repository.TemplateMeta(tpl)); err != nil {
 			return err
 		}
 		cur, err := old.template()
 		if err != nil {
 			return err
 		}
-		if err := store.CheckSameDerivedFrom(what, cur.DerivedFrom, tpl.DerivedFrom); err != nil {
+		if err := repository.CheckSameDerivedFrom(what, cur.DerivedFrom, tpl.DerivedFrom); err != nil {
 			return err
 		}
 		tpl.Rev = old.Rev + 1
@@ -82,13 +83,13 @@ func (s *Store) SaveTemplateDraft(ctx context.Context, tpl model.Template) (mode
 	return row.template()
 }
 
-// NewTemplateVersion 见 store.Templates。规则同 NewHookVersion；派生来源跟着内容照抄：来源出了新版本时，派生模板的每个
+// NewTemplateVersion 见 repository.Templates。规则同 NewHookVersion；派生来源跟着内容照抄：来源出了新版本时，派生模板的每个
 // 版本都要能比出差异（C24）。
 func (s *Store) NewTemplateVersion(ctx context.Context, id string, from int, author string) (model.Template, error) {
-	if err := store.CheckVersionKey(id, from); err != nil {
+	if err := repository.CheckVersionKey(id, from); err != nil {
 		return model.Template{}, err
 	}
-	if err := store.CheckAuthor(author); err != nil {
+	if err := repository.CheckAuthor(author); err != nil {
 		return model.Template{}, err
 	}
 	var row templateVersionRow
@@ -102,7 +103,7 @@ func (s *Store) NewTemplateVersion(ctx context.Context, id string, from int, aut
 		case err != nil:
 			return err
 		case !ok:
-			return errorf(store.ErrNotFound, "模板 %s 没有版本 %d", id, from)
+			return errorf(repository.ErrNotFound, "模板 %s 没有版本 %d", id, from)
 		}
 		next, err := templateTables.allocVersion(tx, x)
 		if err != nil {
@@ -124,19 +125,19 @@ func (s *Store) NewTemplateVersion(ctx context.Context, id string, from int, aut
 	return row.template()
 }
 
-// DeriveTemplate 见 store.Templates。复制的是来源版本的族、系、正文、参数、取值来源与装配表；名字、作者与派生来源是新
+// DeriveTemplate 见 repository.Templates。复制的是来源版本的族、系、正文、参数、取值来源与装配表；名字、作者与派生来源是新
 // 身份自己的。来源只读不锁：派生出的是一份独立的副本，来源之后怎么改都与它无关（C24）。派生是用户的路径，名字走用户的
-// 入口（store.NormalizeName）：从内置模板派生时也不能沿用带保留前缀的名字。
+// 入口（repository.NormalizeName）：从内置模板派生时也不能沿用带保留前缀的名字。
 func (s *Store) DeriveTemplate(ctx context.Context, from model.TemplateKey, name, author string) (model.Template, error) {
-	if err := store.CheckVersionKey(from.ID, from.Version); err != nil {
+	if err := repository.CheckVersionKey(from.ID, from.Version); err != nil {
 		return model.Template{}, err
 	}
-	if err := store.CheckAuthor(author); err != nil {
+	if err := repository.CheckAuthor(author); err != nil {
 		return model.Template{}, err
 	}
-	display, key, ps := store.NormalizeName(name, model.Subject{Kind: "template"}) // 新身份还没有 ID
+	display, key, ps := repository.NormalizeName(name, model.Subject{Kind: "template"}) // 新身份还没有 ID
 	if len(ps) > 0 {
-		return model.Template{}, &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
+		return model.Template{}, &repository.ProblemsError{Kind: repository.ErrInvalid, Problems: ps}
 	}
 	var row templateVersionRow
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -152,7 +153,7 @@ func (s *Store) DeriveTemplate(ctx context.Context, from model.TemplateKey, name
 			return err
 		}
 		row, err = insertNewTemplate(tx, model.Template{
-			ID: store.NewID(), Version: 1, Name: display, State: model.VersionDraft, Author: author, DerivedFrom: &from,
+			ID: identity.NewID(), Version: 1, Name: display, State: model.VersionDraft, Author: author, DerivedFrom: &from,
 			Family: src.Family, Series: src.Series, Body: src.Body, Params: src.Params, Bindings: src.Bindings, Assembly: src.Assembly,
 			Rev: 1,
 		}, key)
@@ -164,27 +165,27 @@ func (s *Store) DeriveTemplate(ctx context.Context, from model.TemplateKey, name
 	return row.template()
 }
 
-// SubmitTemplate 见 store.Templates。
-func (s *Store) SubmitTemplate(ctx context.Context, k model.TemplateKey, rev int64, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+// SubmitTemplate 见 repository.Templates。
+func (s *Store) SubmitTemplate(ctx context.Context, k model.TemplateKey, rev int64, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
 	return s.templateStep(ctx, k, rev, a, model.VersionDraft, model.VersionReview, nil)
 }
 
-// ApproveTemplate 见 store.Templates。锁住模板版本之后，按 HookRefs 的顺序给它引用的 hook 版本加读锁再取出：hook 的废弃
+// ApproveTemplate 见 repository.Templates。锁住模板版本之后，按 HookRefs 的顺序给它引用的 hook 版本加读锁再取出：hook 的废弃
 // 要等这次审批提交；先提交的废弃，这里读到的就是废弃之后的，判定因此报 hook_ref_deprecated（C26）。引用的版本不存在的
 // 不放进判定的入参，由判定报 hook_ref_missing。
-func (s *Store) ApproveTemplate(ctx context.Context, k model.TemplateKey, rev int64, approver string, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+func (s *Store) ApproveTemplate(ctx context.Context, k model.TemplateKey, rev int64, approver string, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
-	if err := store.CheckApprover(approver); err != nil {
+	if err := repository.CheckApprover(approver); err != nil {
 		return err
 	}
 	return s.templateStep(ctx, k, rev, a, model.VersionReview, model.VersionApproved, func(tx *gorm.DB, tpl *model.Template) error {
 		hooks := map[model.HookKey]model.Hook{}
-		for chunk := range slices.Chunk(store.HookRefs(*tpl), batchSize) {
+		for chunk := range slices.Chunk(repository.HookRefs(*tpl), batchSize) {
 			rows, err := hookVersionsIn(tx, chunk, lockOf("SHARE", hookTables.versions))
 			if err != nil {
 				return err
@@ -197,7 +198,7 @@ func (s *Store) ApproveTemplate(ctx context.Context, k model.TemplateKey, rev in
 				hooks[h.Key()] = h
 			}
 		}
-		if err := store.ApproveTemplateProblems(*tpl, hooks, approver); err != nil {
+		if err := repository.ApproveTemplateProblems(*tpl, hooks, approver); err != nil {
 			return err
 		}
 		tpl.Approver = approver
@@ -205,26 +206,26 @@ func (s *Store) ApproveTemplate(ctx context.Context, k model.TemplateKey, rev in
 	})
 }
 
-// RejectTemplate 见 store.Templates。
-func (s *Store) RejectTemplate(ctx context.Context, k model.TemplateKey, rev int64, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+// RejectTemplate 见 repository.Templates。
+func (s *Store) RejectTemplate(ctx context.Context, k model.TemplateKey, rev int64, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
 	return s.templateStep(ctx, k, rev, a, model.VersionReview, model.VersionDraft, nil)
 }
 
-// DeprecateTemplate 见 store.Templates。内置的版本也不能废弃：内置内容只读（C25）。
-func (s *Store) DeprecateTemplate(ctx context.Context, k model.TemplateKey, rev int64, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+// DeprecateTemplate 见 repository.Templates。内置的版本也不能废弃：内置内容只读（C25）。
+func (s *Store) DeprecateTemplate(ctx context.Context, k model.TemplateKey, rev int64, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
 	return s.templateStep(ctx, k, rev, a, model.VersionApproved, model.VersionDeprecated, nil)
 }
 
 // templateStep 同 hookStep，转的是模板版本 k；apply 还拿得到这次写入的事务，审批要在里面给引用的 hook 版本加锁。
-func (s *Store) templateStep(ctx context.Context, k model.TemplateKey, rev int64, a store.Audit, from, to model.VersionState,
+func (s *Store) templateStep(ctx context.Context, k model.TemplateKey, rev int64, a repository.Audit, from, to model.VersionState,
 	apply func(tx *gorm.DB, tpl *model.Template) error) error {
-	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
+	if err := repository.CheckVersionKey(k.ID, k.Version); err != nil {
 		return err
 	}
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -239,8 +240,8 @@ func (s *Store) templateStep(ctx context.Context, k model.TemplateKey, rev int64
 		if err != nil {
 			return err
 		}
-		target := store.VersionID(k.ID, k.Version)
-		if err := store.CheckStep("模板 "+target, row.meta(), from); err != nil {
+		target := repository.VersionID(k.ID, k.Version)
+		if err := repository.CheckStep("模板 "+target, row.meta(), from); err != nil {
 			return err
 		}
 		if apply != nil {
@@ -262,25 +263,25 @@ func (s *Store) templateStep(ctx context.Context, k model.TemplateKey, rev int64
 	return translate(err, false, nil)
 }
 
-// RenameTemplate 见 store.Templates。名字走用户的入口，规则同 RenameHook。
-func (s *Store) RenameTemplate(ctx context.Context, id, name string, a store.Audit) error {
-	if err := store.CheckAudit(a); err != nil {
+// RenameTemplate 见 repository.Templates。名字走用户的入口，规则同 RenameHook。
+func (s *Store) RenameTemplate(ctx context.Context, id, name string, a repository.Audit) error {
+	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
-	if err := store.CheckID(id); err != nil {
+	if err := repository.CheckID(id); err != nil {
 		return err
 	}
-	display, key, ps := store.NormalizeName(name, model.Subject{Kind: "template", ID: id})
+	display, key, ps := repository.NormalizeName(name, model.Subject{Kind: "template", ID: id})
 	if len(ps) > 0 {
-		return &store.ProblemsError{Kind: store.ErrInvalid, Problems: ps}
+		return &repository.ProblemsError{Kind: repository.ErrInvalid, Problems: ps}
 	}
 	return s.rename(ctx, templateTables, id, display, key, a)
 }
 
-// DeleteTemplateDraft 见 store.Templates。加锁的次序同 DeleteHookDraft。它记着的 hook 引用由外键随它一起删掉
+// DeleteTemplateDraft 见 repository.Templates。加锁的次序同 DeleteHookDraft。它记着的 hook 引用由外键随它一起删掉
 // （CASCADE）；任务只引用已审批的版本，挡不着删草稿。
 func (s *Store) DeleteTemplateDraft(ctx context.Context, k model.TemplateKey, rev int64) error {
-	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
+	if err := repository.CheckVersionKey(k.ID, k.Version); err != nil {
 		return err
 	}
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -294,7 +295,7 @@ func (s *Store) DeleteTemplateDraft(ctx context.Context, k model.TemplateKey, re
 		if err != nil {
 			return err
 		}
-		if err := store.CheckDraft("模板 "+store.VersionID(k.ID, k.Version), row.meta()); err != nil {
+		if err := repository.CheckDraft("模板 "+repository.VersionID(k.ID, k.Version), row.meta()); err != nil {
 			return err
 		}
 		if err := tx.Delete(&templateVersionRow{TemplateID: k.ID, Version: k.Version}).Error; err != nil {
@@ -305,9 +306,9 @@ func (s *Store) DeleteTemplateDraft(ctx context.Context, k model.TemplateKey, re
 	return translate(err, true, nil)
 }
 
-// GetTemplate 见 store.Templates。
+// GetTemplate 见 repository.Templates。
 func (s *Store) GetTemplate(ctx context.Context, k model.TemplateKey) (model.Template, error) {
-	if err := store.CheckVersionKey(k.ID, k.Version); err != nil {
+	if err := repository.CheckVersionKey(k.ID, k.Version); err != nil {
 		return model.Template{}, err
 	}
 	row, ok, err := templateVersionAt(s.read(ctx), k)
@@ -320,9 +321,9 @@ func (s *Store) GetTemplate(ctx context.Context, k model.TemplateKey) (model.Tem
 	return row.template()
 }
 
-// ListTemplateVersions 见 store.Templates，规则同 ListHookVersions。
+// ListTemplateVersions 见 repository.Templates，规则同 ListHookVersions。
 func (s *Store) ListTemplateVersions(ctx context.Context, id string) ([]model.Template, error) {
-	if err := store.CheckID(id); err != nil {
+	if err := repository.CheckID(id); err != nil {
 		return nil, err
 	}
 	var rows []templateVersionRow
@@ -331,7 +332,7 @@ func (s *Store) ListTemplateVersions(ctx context.Context, id string) ([]model.Te
 		return nil, err
 	}
 	if len(rows) == 0 {
-		return nil, errorf(store.ErrNotFound, "模板 %s 不存在", id)
+		return nil, errorf(repository.ErrNotFound, "模板 %s 不存在", id)
 	}
 	out := make([]model.Template, len(rows))
 	for i, r := range rows {
@@ -344,39 +345,39 @@ func (s *Store) ListTemplateVersions(ctx context.Context, id string) ([]model.Te
 	return out, nil
 }
 
-// ListTemplates 见 store.Templates。按系过滤看的是选出的那一项，与状态的过滤一样；系存成 jsonb 数组，按包含关系比。
-func (s *Store) ListTemplates(ctx context.Context, q store.TemplateQuery) (store.Page[model.Template], error) {
+// ListTemplates 见 repository.Templates。按系过滤看的是选出的那一项，与状态的过滤一样；系存成 jsonb 数组，按包含关系比。
+func (s *Store) ListTemplates(ctx context.Context, q repository.TemplateQuery) (repository.Page[model.Template], error) {
 	db, limit, err := templateTables.listQuery(s.read(ctx), q.Cursor, q.Limit, q.NamePrefix, q.States, q.ApprovedOnly)
 	switch {
 	case err != nil:
-		return store.Page[model.Template]{}, err
+		return repository.Page[model.Template]{}, err
 	case db == nil, !storable(string(q.Series)):
 		return emptyPage[model.Template](), nil
 	}
 	if q.Series != "" {
 		series, err := encodeJSON([]catalog.Series{q.Series})
 		if err != nil {
-			return store.Page[model.Template]{}, err
+			return repository.Page[model.Template]{}, err
 		}
 		db = db.Where("template_versions.series @> CAST(? AS jsonb)", series)
 	}
 	var rows []templateVersionRow
 	if err := db.Find(&rows).Error; err != nil {
-		return store.Page[model.Template]{}, err
+		return repository.Page[model.Template]{}, err
 	}
 	return page(rows, limit, templateVersionRow.template, func(r templateVersionRow) string {
-		return store.EncodeCursor(templateTables.idents, r.NameKey, r.TemplateID)
+		return repository.EncodeCursor(templateTables.idents, r.NameKey, r.TemplateID)
 	})
 }
 
-// EnsureBuiltinTemplate 见 store.Templates，规则同 EnsureBuiltinHook：名字必须带保留前缀，随身份定下；先确定并锁住身份，
-// 锁住之后才查版本。内置模板不是派生来的，带了派生来源报 ErrInvalid（store.CheckBuiltinTemplate）。
+// EnsureBuiltinTemplate 见 repository.Templates，规则同 EnsureBuiltinHook：名字必须带保留前缀，随身份定下；先确定并锁住身份，
+// 锁住之后才查版本。内置模板不是派生来的，带了派生来源报 ErrInvalid（repository.CheckBuiltinTemplate）。
 func (s *Store) EnsureBuiltinTemplate(ctx context.Context, tpl model.Template) error {
-	key, err := store.CheckBuiltinTemplate(tpl)
+	key, err := repository.CheckBuiltinTemplate(tpl)
 	if err != nil {
 		return err
 	}
-	id := store.VersionID(tpl.ID, tpl.Version)
+	id := repository.VersionID(tpl.ID, tpl.Version)
 	tpl.Rev = 1
 	row, err := toTemplateVersionRow(tpl)
 	if err != nil {
@@ -398,7 +399,7 @@ func (s *Store) EnsureBuiltinTemplate(ctx context.Context, tpl model.Template) e
 			return err
 		}
 		if !reflect.DeepEqual(cur, tpl) {
-			return errorf(store.ErrBuiltinMismatch, "内置的模板 %s 与库里的同一版本不同：改了内置内容就要升版本号", id)
+			return errorf(repository.ErrBuiltinMismatch, "内置的模板 %s 与库里的同一版本不同：改了内置内容就要升版本号", id)
 		}
 		return nil
 	})
@@ -406,7 +407,7 @@ func (s *Store) EnsureBuiltinTemplate(ctx context.Context, tpl model.Template) e
 }
 
 // 下面是模板版本的写入与读取，规则同 hook 的那几个函数。引用随版本一起写：保存模板的任何一个版本时，它引用了哪些 hook
-// 版本都在同一个事务里记下，删 hook 草稿靠这份记录；审批模板与建任务不读它，用 store.HookRefs 现算。
+// 版本都在同一个事务里记下，删 hook 草稿靠这份记录；审批模板与建任务不读它，用 repository.HookRefs 现算。
 
 // insertNewTemplate 在事务 tx 里建新身份与它的版本 tpl，连同版本引用的 hook 版本。名字撞了由唯一索引报出来。
 func insertNewTemplate(tx *gorm.DB, tpl model.Template, key string) (templateVersionRow, error) {
@@ -470,11 +471,11 @@ func lockTemplateVersion(tx *gorm.DB, k model.TemplateKey, rev int64) (templateV
 	case err != nil:
 		return templateVersionRow{}, err
 	case row.Rev != rev:
-		return templateVersionRow{}, staleRev("模板 "+store.VersionID(k.ID, k.Version), row.Rev, rev)
+		return templateVersionRow{}, staleRev("模板 "+repository.VersionID(k.ID, k.Version), row.Rev, rev)
 	}
 	return row, nil
 }
 
 func templateNotFound(k model.TemplateKey) error {
-	return errorf(store.ErrNotFound, "模板 %s 不存在", store.VersionID(k.ID, k.Version))
+	return errorf(repository.ErrNotFound, "模板 %s 不存在", repository.VersionID(k.ID, k.Version))
 }

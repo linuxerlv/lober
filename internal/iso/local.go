@@ -2,11 +2,12 @@ package iso
 
 import (
 	"context"
+	"github.com/lober/lober/internal/domain/model"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // resolvedPath resolves even a not-yet-existing child, by resolving its nearest
@@ -64,7 +65,7 @@ func CheckLocalPath(roots []string, p string) error {
 	return nil
 }
 
-func (s *Sources) fetchLocal(ctx context.Context, src store.Source) error {
+func (s *Sources) fetchLocal(ctx context.Context, src model.Source) error {
 	root, rel, ok := localRoot(s.dirs.LocalRoots, src.Path)
 	if !ok {
 		return sourceRejected(src.ISOID, src.Role, isoSourceReasonLocal)
@@ -83,7 +84,7 @@ func (s *Sources) fetchLocal(ctx context.Context, src store.Source) error {
 		return sourceRejected(src.ISOID, src.Role, isoSourceReasonLocal)
 	}
 	src.TotalSize = st.Size()
-	src, err = s.store.SaveSource(ctx, src, store.Audit{})
+	src, err = s.store.SaveSource(ctx, src, repository.Audit{})
 	if err != nil {
 		return err
 	}

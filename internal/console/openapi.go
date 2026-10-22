@@ -3,8 +3,9 @@ package console
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+
 	"reflect"
 	"regexp"
 	"slices"
@@ -258,8 +259,8 @@ func (b *schemaBuilder) definition(t reflect.Type) map[string]any {
 		out := map[string]any{"type": "string"}
 		values := make([]string, 0)
 		switch t {
-		case reflect.TypeOf(store.Role("")):
-			for _, v := range store.Roles() {
+		case reflect.TypeOf(model.Role("")):
+			for _, v := range model.Roles() {
 				values = append(values, string(v))
 			}
 		case reflect.TypeOf(SourceKind("")):

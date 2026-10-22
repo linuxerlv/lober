@@ -10,8 +10,8 @@ import (
 	"strings"
 	"unicode/utf16"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
 )
 
 // WIMImage is one image from the WIM XML index. Version excludes BUILD as

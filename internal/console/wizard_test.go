@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/lober/lober/internal/builtin"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
@@ -32,10 +32,10 @@ func seedWizardFixture(t *testing.T, s *Server, st *pgstore.Store) (*Server, *pg
 		t.Fatal(err)
 	}
 	key := model.TemplateKey{ID: tpl.ID, Version: 1}
-	if err := st.SubmitTemplate(t.Context(), key, 1, store.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
+	if err := st.SubmitTemplate(t.Context(), key, 1, repository.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.ApproveTemplate(t.Context(), key, 2, "reviewer", store.Audit{Actor: "reviewer", Action: "template.approve", At: fixedAt}); err != nil {
+	if err := st.ApproveTemplate(t.Context(), key, 2, "reviewer", repository.Audit{Actor: "reviewer", Action: "template.approve", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
 	tpl, err = st.GetTemplate(t.Context(), key)
@@ -43,7 +43,7 @@ func seedWizardFixture(t *testing.T, s *Server, st *pgstore.Store) (*Server, *pg
 		t.Fatal(err)
 	}
 	for _, sn := range []string{"SN-1", "SN-2", "SN-3"} {
-		if _, err := st.CreateHost(t.Context(), model.Host{SN: sn, Arch: "x86_64", Firmware: "uefi", Attrs: map[string]string{"rack": "A01"}}, store.Audit{Actor: "seed", Action: "host.create", At: fixedAt}); err != nil {
+		if _, err := st.CreateHost(t.Context(), model.Host{SN: sn, Arch: "x86_64", Firmware: "uefi", Attrs: map[string]string{"rack": "A01"}}, repository.Audit{Actor: "seed", Action: "host.create", At: fixedAt}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -87,7 +87,7 @@ func Test向导完整五步与快照审计(t *testing.T) {
 	if strings.Contains(string(bytes), `"Snapshot"`) {
 		t.Fatal(string(bytes))
 	}
-	audit, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	audit, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	count := 0
 	for _, a := range audit.Items {
 		if a.Action == "task.create" {
@@ -113,10 +113,10 @@ func Test向导批量收集开放任务平台参数与缺失主机问题(t *test
 		t.Fatal(err)
 	}
 	host.Arch = "aarch64"
-	if _, err := st.UpdateHost(t.Context(), host, store.Audit{Actor: "seed", Action: "host.update", At: fixedAt}); err != nil {
+	if _, err := st.UpdateHost(t.Context(), host, repository.Audit{Actor: "seed", Action: "host.update", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	w := httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-1","entered":{"tpl/hostname":"bad host"}},{"sn":"SN-2","entered":{"tpl/locked":"override"}},{"sn":"SN-3","entered":{"tpl/hostname":"also bad"}},{"sn":"MISSING"}]`), token)
 	if w.Code != 422 {
 		t.Fatal(w.Code, w.Body.String())
@@ -139,8 +139,8 @@ func Test向导批量收集开放任务平台参数与缺失主机问题(t *test
 			}
 		}
 	}
-	tasks, _ := st.ListTasks(t.Context(), store.TaskQuery{})
-	after, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	tasks, _ := st.ListTasks(t.Context(), repository.TaskQuery{})
+	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if len(tasks.Items) != 1 || len(after.Items) != len(before.Items) {
 		t.Fatal("partial batch committed")
 	}
@@ -166,19 +166,19 @@ func Test向导当前已审批版本不会被新草稿取代(t *testing.T) {
 	}
 	responseData[wizardSubmitResult](t, httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-1"}]`), token))
 	key := model.TemplateKey{ID: next.ID, Version: next.Version}
-	if err := st.SubmitTemplate(t.Context(), key, 1, store.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
+	if err := st.SubmitTemplate(t.Context(), key, 1, repository.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.ApproveTemplate(t.Context(), key, 2, "reviewer", store.Audit{Actor: "reviewer", Action: "template.approve", At: fixedAt}); err != nil {
+	if err := st.ApproveTemplate(t.Context(), key, 2, "reviewer", repository.Audit{Actor: "reviewer", Action: "template.approve", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	w := httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-2"}]`), token)
 	if w.Code != 409 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	tasks, _ := st.ListTasks(t.Context(), store.TaskQuery{})
-	after, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	tasks, _ := st.ListTasks(t.Context(), repository.TaskQuery{})
+	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if len(tasks.Items) != 1 || len(after.Items) != len(before.Items) {
 		t.Fatal("stale selection committed")
 	}
@@ -191,10 +191,10 @@ func Test向导候选分页准备状态与缺失集合(t *testing.T) {
 		t.Fatal(err)
 	}
 	retired := readyISO(t, st, "retired", "rocky")
-	if err := st.DeprecateISO(t.Context(), retired.ID, retired.Rev, store.Audit{Actor: "seed", Action: "iso.deprecate", At: fixedAt}); err != nil {
+	if err := st.DeprecateISO(t.Context(), retired.ID, retired.Rev, repository.Audit{Actor: "seed", Action: "iso.deprecate", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateISO(t.Context(), model.ISO{Name: "pending", Family: "linux", Series: "rocky"}, store.Audit{Actor: "seed", Action: "iso.create", At: fixedAt}); err != nil {
+	if _, err := st.CreateISO(t.Context(), model.ISO{Name: "pending", Family: "linux", Series: "rocky"}, repository.Audit{Actor: "seed", Action: "iso.create", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
 	first := responseData[wizardISOResult](t, httpCall(s, "POST", "/console/v1/wizard/isos", `{"hostSNs":["SN-1"],"limit":1}`, token))
@@ -211,10 +211,10 @@ func Test向导候选分页准备状态与缺失集合(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := model.TemplateKey{ID: offered.ID, Version: 1}
-	if err := st.SubmitTemplate(t.Context(), key, 1, store.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
+	if err := st.SubmitTemplate(t.Context(), key, 1, repository.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.ApproveTemplate(t.Context(), key, 2, "reviewer", store.Audit{Actor: "reviewer", Action: "template.approve", At: fixedAt}); err != nil {
+	if err := st.ApproveTemplate(t.Context(), key, 2, "reviewer", repository.Audit{Actor: "reviewer", Action: "template.approve", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
 	candidates := responseData[wizardTemplateResult](t, httpCall(s, "POST", "/console/v1/wizard/templates", fmt.Sprintf(`{"isoID":%q}`, iso.ID), token))
@@ -242,11 +242,11 @@ func Test向导并发创建一批成功另一批全拒绝(t *testing.T) {
 	if count[200] != 1 || count[422] != 1 {
 		t.Fatal(count)
 	}
-	tasks, _ := st.ListTasks(t.Context(), store.TaskQuery{})
+	tasks, _ := st.ListTasks(t.Context(), repository.TaskQuery{})
 	if len(tasks.Items) != 2 {
 		t.Fatal(tasks)
 	}
-	audit, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	audit, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	creates := 0
 	for _, a := range audit.Items {
 		if a.Action == "task.create" {
@@ -265,7 +265,7 @@ func Test向导五路权限及空批非法字段(t *testing.T) {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
-	for i, role := range store.Roles() {
+	for i, role := range model.Roles() {
 		name := fmt.Sprintf("wizard%d", i)
 		seedAuthUser(t, st, name, role, "pw")
 		actor := loginHTTP(t, s, name, "pw").Token
@@ -276,7 +276,7 @@ func Test向导五路权限及空批非法字段(t *testing.T) {
 			}
 			count++
 			w := httpCall(s, r.Method, r.Path, `{}`, actor)
-			allowed := role == store.RoleAdmin || role == store.RoleOperator
+			allowed := role == model.RoleAdmin || role == model.RoleOperator
 			if allowed && (w.Code == 401 || w.Code == 403) || !allowed && w.Code != 403 {
 				t.Fatal(role, r, w.Code)
 			}
@@ -294,7 +294,7 @@ func Test向导参数输入按规范SN定位并拒绝未知行(t *testing.T) {
 	if len(form.Hosts) != 1 || len(form.Hosts[0].Problems) == 0 || form.Hosts[0].Problems[0].Code != "param_value_invalid" {
 		t.Fatal(form)
 	}
-	before, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,11 +304,11 @@ func Test向导参数输入按规范SN定位并拒绝未知行(t *testing.T) {
 		if w.Code != 400 {
 			t.Fatal(w.Code, w.Body.String())
 		}
-		tasks, err := st.ListTasks(t.Context(), store.TaskQuery{})
+		tasks, err := st.ListTasks(t.Context(), repository.TaskQuery{})
 		if err != nil || len(tasks.Items) != 0 {
 			t.Fatal("拒绝的输入产生了任务", tasks, err)
 		}
-		after, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+		after, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 		if err != nil || len(after.Items) != len(before.Items) {
 			t.Fatal("拒绝的输入产生了审计", after, err)
 		}
@@ -368,10 +368,10 @@ func Test向导只接受程序当前携带的内置身份及版本(t *testing.T)
 		t.Fatal(err)
 	}
 	key := model.TemplateKey{ID: custom.ID, Version: 1}
-	if err := st.SubmitTemplate(t.Context(), key, 1, store.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
+	if err := st.SubmitTemplate(t.Context(), key, 1, repository.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.ApproveTemplate(t.Context(), key, 2, "reviewer", store.Audit{Actor: "reviewer", Action: "template.approve", At: fixedAt}); err != nil {
+	if err := st.ApproveTemplate(t.Context(), key, 2, "reviewer", repository.Audit{Actor: "reviewer", Action: "template.approve", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
 	page := responseData[wizardTemplateResult](t, httpCall(s, "POST", "/console/v1/wizard/templates", fmt.Sprintf(`{"isoID":%q}`, iso.ID), token))
@@ -395,7 +395,7 @@ func Test向导只接受程序当前携带的内置身份及版本(t *testing.T)
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
-	pageTasks, err := st.ListTasks(t.Context(), store.TaskQuery{})
+	pageTasks, err := st.ListTasks(t.Context(), repository.TaskQuery{})
 	if err != nil || len(pageTasks.Items) != 0 {
 		t.Fatal(pageTasks, err)
 	}
@@ -411,7 +411,7 @@ func Test向导提交期间新版本审批必须等待任务提交(t *testing.T)
 		t.Fatal(err)
 	}
 	key := model.TemplateKey{ID: next.ID, Version: next.Version}
-	if err := st.SubmitTemplate(t.Context(), key, 1, store.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
+	if err := st.SubmitTemplate(t.Context(), key, 1, repository.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
 	conn, err := pgx.Connect(t.Context(), dsn)
@@ -474,7 +474,7 @@ func Test向导提交期间新版本审批必须等待任务提交(t *testing.T)
 	case <-time.After(5 * time.Second):
 		t.Fatal("approver did not finish")
 	}
-	tasks, err := st.ListTasks(t.Context(), store.TaskQuery{})
+	tasks, err := st.ListTasks(t.Context(), repository.TaskQuery{})
 	if err != nil || len(tasks.Items) != 1 || tasks.Items[0].TemplateVersion != 1 {
 		t.Fatal(tasks, err)
 	}
@@ -514,12 +514,12 @@ func Test任务提交与独立实例审批的契约(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := st.SubmitTemplate(t.Context(), model.TemplateKey{ID: next.ID, Version: next.Version}, next.Rev, store.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
+				if err := st.SubmitTemplate(t.Context(), model.TemplateKey{ID: next.ID, Version: next.Version}, next.Rev, repository.Audit{Actor: "author", Action: "template.submit", At: fixedAt}); err != nil {
 					t.Fatal(err)
 				}
 				version, rev = next.Version, next.Rev+1
 			}
-			before, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+			before, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -598,11 +598,11 @@ func Test任务提交与独立实例审批的契约(t *testing.T) {
 					t.Fatal("放行后状态变更失败")
 				}
 			}
-			tasks, err := st.ListTasks(t.Context(), store.TaskQuery{})
+			tasks, err := st.ListTasks(t.Context(), repository.TaskQuery{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			after, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+			after, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -698,12 +698,12 @@ func wizardAwaitCode(t *testing.T, done <-chan int) int {
 
 // 只暂停真正的写入入口，恢复后仍使用真实数据库事务。
 type wizardCurrentTaskGate struct {
-	store.CurrentTaskCreator
+	repository.CurrentTaskCreator
 	reached chan<- struct{}
 	release <-chan struct{}
 }
 
-func (g *wizardCurrentTaskGate) CreateCurrentTasks(ctx context.Context, tasks []model.Task, a store.Audit) ([]model.Task, error) {
+func (g *wizardCurrentTaskGate) CreateCurrentTasks(ctx context.Context, tasks []model.Task, a repository.Audit) ([]model.Task, error) {
 	close(g.reached)
 	select {
 	case <-g.release:
@@ -729,18 +729,18 @@ func Test向导事务内一般准入仍返回422(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("未到达事务前停顿点")
 	}
-	if err := st.DeprecateISO(t.Context(), iso.ID, iso.Rev, store.Audit{Actor: "seed", Action: "iso.deprecate", At: fixedAt}); err != nil {
+	if err := st.DeprecateISO(t.Context(), iso.ID, iso.Rev, repository.Audit{Actor: "seed", Action: "iso.deprecate", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
 	unblock()
 	if code := wizardAwaitCode(t, submitted); code != 422 {
 		t.Fatalf("镜像废弃应为422，得到%d", code)
 	}
-	tasks, err := st.ListTasks(t.Context(), store.TaskQuery{})
+	tasks, err := st.ListTasks(t.Context(), repository.TaskQuery{})
 	if err != nil || len(tasks.Items) != 0 {
 		t.Fatal(tasks, err)
 	}
-	audit, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	audit, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if err != nil {
 		t.Fatal(err)
 	}

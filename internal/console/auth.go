@@ -8,8 +8,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"strings"
 )
 
@@ -18,7 +18,7 @@ const dummyPasswordHash = "pbkdf2-sha256$600000$AAECAwQFBgcICQoLDA0ODw$NyjOjly17
 
 func HashPassword(pw string) (string, error) {
 	if pw == "" || !model.StorableText(pw) {
-		return "", store.ErrInvalid
+		return "", repository.ErrInvalid
 	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
@@ -73,7 +73,7 @@ func (s *server) login(c *gin.Context) {
 		return
 	}
 	u, err := s.deps.Users.GetUser(c.Request.Context(), req.Username)
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, repository.ErrNotFound) {
 		CheckPassword(req.Password, dummyPasswordHash)
 		Fail(c, 401, nil, model.ConsoleLoginFailed)
 		return
@@ -92,7 +92,7 @@ func (s *server) login(c *gin.Context) {
 	s.credentials.RLock()
 	defer s.credentials.RUnlock()
 	current, err := s.deps.Users.GetUser(c.Request.Context(), u.Username)
-	if errors.Is(err, store.ErrNotFound) || err == nil && (current.Password != u.Password || current.Disabled || !current.Role.Valid()) {
+	if errors.Is(err, repository.ErrNotFound) || err == nil && (current.Password != u.Password || current.Disabled || !current.Role.Valid()) {
 		Fail(c, 401, nil, model.ConsoleLoginFailed)
 		return
 	}

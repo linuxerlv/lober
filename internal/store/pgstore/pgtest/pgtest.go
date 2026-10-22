@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/infrastructure/identity"
 	"io/fs"
 	"net/url"
 	"os"
@@ -27,7 +28,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 )
 
@@ -118,7 +119,7 @@ func moduleRoot(t testing.TB) string {
 
 // Open 新建一个临时 schema、跑 AutoMigrate 与表结构断言、装上失败注入，返回连到这个 schema 的仓储。t.Cleanup 时连
 // schema 一起删掉。并发数由包内的信号量限住，见 spec §6.4：同时打开的仓储最多 maxOpen 个，每个最多 maxConns 个连接。
-func Open(t testing.TB) store.Store {
+func Open(t testing.TB) repository.Store {
 	t.Helper()
 	return OpenStore(t)
 }
@@ -175,7 +176,7 @@ func acquire(t testing.TB) {
 func newSchema(t testing.TB) (dsn, name string, admin *pgx.Conn) {
 	t.Helper()
 	base := DSN(t)
-	name = "lober_t_" + store.NewID()
+	name = "lober_t_" + identity.NewID()
 	ident := pgx.Identifier{name}.Sanitize()
 	admin, err := pgx.Connect(t.Context(), base)
 	if err != nil {

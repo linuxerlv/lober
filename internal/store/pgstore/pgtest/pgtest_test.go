@@ -12,8 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // fatalTB 记下 Fatal、Fatalf 的信息，再 panic 自己，中止被测函数。别的方法落到内嵌的 nil 接口上，调到就 panic：
@@ -115,13 +115,13 @@ func TestDSN找不到就失败(t *testing.T) {
 func TestOpen给一个装好失败注入的仓储(t *testing.T) {
 	s := Open(t)
 	ctx := t.Context()
-	if _, err := s.CreateHost(ctx, model.Host{SN: "SN-1"}, store.Audit{Actor: FaultActor, Action: "host.create", At: 1}); err == nil {
+	if _, err := s.CreateHost(ctx, model.Host{SN: "SN-1"}, repository.Audit{Actor: FaultActor, Action: "host.create", At: 1}); err == nil {
 		t.Fatal("Actor 为 FaultActor 时审计应写入失败")
 	}
-	if _, err := s.GetHost(ctx, "SN-1"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.GetHost(ctx, "SN-1"); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("审计写入失败时动作应一起回滚，GetHost 应报 ErrNotFound，得到 %v", err)
 	}
-	if _, err := s.CreateHost(ctx, model.Host{SN: "SN-1"}, store.Audit{Actor: "alice", Action: "host.create", At: 1}); err != nil {
+	if _, err := s.CreateHost(ctx, model.Host{SN: "SN-1"}, repository.Audit{Actor: "alice", Action: "host.create", At: 1}); err != nil {
 		t.Fatalf("别的操作者应照常写入：%v", err)
 	}
 }
@@ -130,10 +130,10 @@ func TestOpen给一个装好失败注入的仓储(t *testing.T) {
 func TestOpen的仓储互不干扰(t *testing.T) {
 	a, b := Open(t), Open(t)
 	ctx := t.Context()
-	if _, err := a.CreateHost(ctx, model.Host{SN: "SN-1"}, store.Audit{Actor: "alice", Action: "host.create", At: 1}); err != nil {
+	if _, err := a.CreateHost(ctx, model.Host{SN: "SN-1"}, repository.Audit{Actor: "alice", Action: "host.create", At: 1}); err != nil {
 		t.Fatalf("登记：%v", err)
 	}
-	if _, err := b.GetHost(ctx, "SN-1"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := b.GetHost(ctx, "SN-1"); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("另一个仓储不该看到 SN-1，GetHost 应报 ErrNotFound，得到 %v", err)
 	}
 }

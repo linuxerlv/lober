@@ -12,9 +12,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 )
 
@@ -23,7 +23,7 @@ type sourceCall struct {
 	Kind, Addr, Role, ID string
 	Size, Offset         int64
 	SHA256, Body         string
-	Audit                store.Audit
+	Audit                repository.Audit
 }
 type mockISOSource struct {
 	mu                 sync.Mutex
@@ -38,23 +38,23 @@ func (m *mockISOSource) record(method string, v sourceCall) error {
 	m.calls[method] = append(m.calls[method], v)
 	return m.err
 }
-func (m *mockISOSource) Register(_ context.Context, item model.ISO, kind, addr, role string, size int64, digest string, a store.Audit) error {
+func (m *mockISOSource) Register(_ context.Context, item model.ISO, kind, addr, role string, size int64, digest string, a repository.Audit) error {
 	return m.record("register", sourceCall{Item: item, Kind: kind, Addr: addr, Role: role, Size: size, SHA256: digest, Audit: a})
 }
-func (m *mockISOSource) Upload(_ context.Context, id, role string, offset int64, r io.Reader, a store.Audit) error {
+func (m *mockISOSource) Upload(_ context.Context, id, role string, offset int64, r io.Reader, a repository.Audit) error {
 	b, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
 	return m.record("upload", sourceCall{ID: id, Role: role, Offset: offset, Body: string(b), Audit: a})
 }
-func (m *mockISOSource) Cancel(_ context.Context, id string, a store.Audit) error {
+func (m *mockISOSource) Cancel(_ context.Context, id string, a repository.Audit) error {
 	return m.record("cancel", sourceCall{ID: id, Audit: a})
 }
-func (m *mockISOSource) Retry(_ context.Context, id string, a store.Audit) error {
+func (m *mockISOSource) Retry(_ context.Context, id string, a repository.Audit) error {
 	return m.record("retry", sourceCall{ID: id, Audit: a})
 }
-func (m *mockISOSource) Reimport(_ context.Context, id string, a store.Audit) error {
+func (m *mockISOSource) Reimport(_ context.Context, id string, a repository.Audit) error {
 	return m.record("reimport", sourceCall{ID: id, Audit: a})
 }
 func (m *mockISOSource) FreeSpace(context.Context) (int64, int64, error) {
@@ -63,17 +63,17 @@ func (m *mockISOSource) FreeSpace(context.Context) (int64, int64, error) {
 
 type deletionCall struct {
 	Item    model.ISO
-	Sources []store.Source
+	Sources []model.Source
 	Rev     int64
-	Audit   store.Audit
+	Audit   repository.Audit
 }
 type mockISODeletion struct {
-	st    store.Store
+	st    repository.Store
 	calls []deletionCall
 	err   error
 }
 
-func (m *mockISODeletion) Delete(ctx context.Context, id string, rev int64, a store.Audit) error {
+func (m *mockISODeletion) Delete(ctx context.Context, id string, rev int64, a repository.Audit) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -98,9 +98,9 @@ func newISOServer(t *testing.T) (*Server, *pgstore.Store, *mockISOSource, *mockI
 	s.server.deps.ISODeletion = deletion
 	return s, st, src, deletion, adminHTTP(t, s, st)
 }
-func readyISO(t *testing.T, st store.ISOs, name string, series catalog.Series) model.ISO {
+func readyISO(t *testing.T, st repository.ISOs, name string, series catalog.Series) model.ISO {
 	t.Helper()
-	item, err := st.CreateISO(t.Context(), model.ISO{Name: name, Family: series.Family(), Series: series}, store.Audit{Actor: "seed", Action: "iso.create", At: fixedAt})
+	item, err := st.CreateISO(t.Context(), model.ISO{Name: name, Family: series.Family(), Series: series}, repository.Audit{Actor: "seed", Action: "iso.create", At: fixedAt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestISO登记多来源与真实参数(t *testing.T) {
 			t.Fatal(c)
 		}
 	}
-	audits, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	audits, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestISO坏登记不产生记录(t *testing.T) {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
-	page, err := st.ListISOs(t.Context(), store.ISOQuery{})
+	page, err := st.ListISOs(t.Context(), repository.ISOQuery{})
 	if err != nil || len(page.Items) != 0 || len(src.calls["register"]) != 0 {
 		t.Fatal(page, err, src.calls)
 	}
@@ -172,7 +172,7 @@ func TestISO余量累加与错误分类(t *testing.T) {
 	if w.Code != 422 || !strings.Contains(w.Body.String(), "60") || !strings.Contains(w.Body.String(), "iso_space_insufficient") {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	page, _ := st.ListISOs(t.Context(), store.ISOQuery{})
+	page, _ := st.ListISOs(t.Context(), repository.ISOQuery{})
 	if len(page.Items) != 0 {
 		t.Fatal("space rejection wrote ISO")
 	}
@@ -186,7 +186,7 @@ func TestISO余量累加与错误分类(t *testing.T) {
 	if w := httpCall(s, "POST", "/console/v1/isos", body, token); w.Code != 400 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	src.err = &store.ProblemsError{Kind: store.ErrInvalid, Problems: []model.Problem{model.NewProblem("iso_source_rejected", model.Subject{Kind: model.KindISO}, model.ISOReasonURL)}}
+	src.err = &repository.ProblemsError{Kind: repository.ErrInvalid, Problems: []model.Problem{model.NewProblem("iso_source_rejected", model.Subject{Kind: model.KindISO}, model.ISOReasonURL)}}
 	w = httpCall(s, "POST", "/console/v1/isos", `{"name":"x","family":"linux","series":"rocky","sources":[{"kind":"url","addr":"http://127.0.0.1/x.iso"}]}`, token)
 	if w.Code != 422 || !strings.Contains(w.Body.String(), "iso_source_rejected") {
 		t.Fatal(w.Code, w.Body.String())
@@ -259,7 +259,7 @@ func TestISO操作委托与分片不审计(t *testing.T) {
 		}
 	}
 	// Source progress is persisted independently by layer4; the console only reads it.
-	saved, err := st.SaveSource(t.Context(), store.Source{ISOID: item.ID, Kind: store.SourceUpload, TotalSize: 19, State: store.SourcePending}, store.Audit{})
+	saved, err := st.SaveSource(t.Context(), model.Source{ISOID: item.ID, Kind: model.SourceUpload, TotalSize: 19, State: model.SourcePending}, repository.Audit{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,10 +272,10 @@ func TestISO操作委托与分片不审计(t *testing.T) {
 		s.Engine.ServeHTTP(w, req)
 		return w
 	}
-	before, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	responseData[any](t, upload("bytes 0-8/19", "前半段"))
 	cs := src.calls["upload"]
-	if len(cs) != 1 || cs[0].Offset != 0 || cs[0].Body != "前半段" || cs[0].Audit != (store.Audit{}) {
+	if len(cs) != 1 || cs[0].Offset != 0 || cs[0].Body != "前半段" || cs[0].Audit != (repository.Audit{}) {
 		t.Fatal(cs)
 	}
 	for _, pair := range [][2]string{{"bytes 0-8/19", "x"}, {"bytes 0-1/19", "xxx"}, {"bytes 0-8/20", "前半段"}, {"bytes 0-8", "前半段"}, {"", "x"}} {
@@ -286,11 +286,11 @@ func TestISO操作委托与分片不审计(t *testing.T) {
 	if len(src.calls["upload"]) != 1 {
 		t.Fatal("malformed range handed to source")
 	}
-	after, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if len(after.Items) != len(before.Items) {
 		t.Fatal("chunk audited")
 	}
-	src.err = store.ErrConflict
+	src.err = repository.ErrConflict
 	if w := httpCall(s, "POST", path+"/retry", "", token); w.Code != 409 {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -303,12 +303,12 @@ func TestISO操作委托与分片不审计(t *testing.T) {
 func TestISO来源进度包含已持久化区间(t *testing.T) {
 	s, st, _, _, token := newISOServer(t)
 	item := readyISO(t, st, "Rocky", catalog.SeriesRocky)
-	source, err := st.SaveSource(t.Context(), store.Source{ISOID: item.ID, Kind: store.SourceUpload, TotalSize: 20, State: store.SourcePending}, store.Audit{})
+	source, err := st.SaveSource(t.Context(), model.Source{ISOID: item.ID, Kind: model.SourceUpload, TotalSize: 20, State: model.SourcePending}, repository.Audit{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	source.State = store.SourceFetching
-	source, err = st.SaveSource(t.Context(), source, store.Audit{})
+	source.State = model.SourceFetching
+	source, err = st.SaveSource(t.Context(), source, repository.Audit{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestISO来源进度包含已持久化区间(t *testing.T) {
 }
 func TestISO所有接口五角色权限(t *testing.T) {
 	s, st, _, _, _ := newISOServer(t)
-	for i, role := range store.Roles() {
+	for i, role := range model.Roles() {
 		name := fmt.Sprintf("iso%d", i)
 		seedAuthUser(t, st, name, role, "pw")
 		token := loginHTTP(t, s, name, "pw").Token
@@ -335,7 +335,7 @@ func TestISO所有接口五角色权限(t *testing.T) {
 			count++
 			path := strings.ReplaceAll(rt.Path, ":id", "missing")
 			w := httpCall(s, rt.Method, path, `{}`, token)
-			allowed := rt.Perm == PermISORead || role == store.RoleAdmin
+			allowed := rt.Perm == PermISORead || role == model.RoleAdmin
 			if allowed && (w.Code == 401 || w.Code == 403) || !allowed && w.Code != 403 {
 				t.Fatal(role, rt, w.Code)
 			}
@@ -361,7 +361,7 @@ func Test解析ContentRange严格语法与边界(t *testing.T) {
 
 func TestISO补登记来源用于失败后的恢复(t *testing.T) {
 	s, st, src, _, token := newISOServer(t)
-	item, err := st.CreateISO(t.Context(), model.ISO{Name: "Debian", Family: catalog.FamilyLinux, Series: catalog.SeriesDebian}, store.Audit{Actor: "seed", Action: "iso.create", At: fixedAt})
+	item, err := st.CreateISO(t.Context(), model.ISO{Name: "Debian", Family: catalog.FamilyLinux, Series: catalog.SeriesDebian}, repository.Audit{Actor: "seed", Action: "iso.create", At: fixedAt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,11 +386,11 @@ func TestISO补登记来源用于失败后的恢复(t *testing.T) {
 
 type progressInterleave struct {
 	ISOSourceState
-	st   store.ISOSources
+	st   repository.ISOSources
 	once sync.Once
 }
 
-func (p *progressInterleave) RangesOf(ctx context.Context, id, role string) ([]store.Range, error) {
+func (p *progressInterleave) RangesOf(ctx context.Context, id, role string) ([]model.Range, error) {
 	var err error
 	p.once.Do(func() { err = p.st.SaveRange(ctx, id, role, 0, 9) })
 	if err != nil {
@@ -401,12 +401,12 @@ func (p *progressInterleave) RangesOf(ctx context.Context, id, role string) ([]s
 func TestISO读取进度时并发上传不混合计数与区间(t *testing.T) {
 	s, st, _, _, token := newISOServer(t)
 	item := readyISO(t, st, "Rocky", catalog.SeriesRocky)
-	source, err := st.SaveSource(t.Context(), store.Source{ISOID: item.ID, Kind: store.SourceUpload, TotalSize: 20, State: store.SourcePending}, store.Audit{})
+	source, err := st.SaveSource(t.Context(), model.Source{ISOID: item.ID, Kind: model.SourceUpload, TotalSize: 20, State: model.SourcePending}, repository.Audit{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	source.State = store.SourceFetching
-	if _, err := st.SaveSource(t.Context(), source, store.Audit{}); err != nil {
+	source.State = model.SourceFetching
+	if _, err := st.SaveSource(t.Context(), source, repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	s.server.deps.Sources = &progressInterleave{ISOSourceState: st, st: st}
@@ -418,7 +418,7 @@ func TestISO读取进度时并发上传不混合计数与区间(t *testing.T) {
 func TestISO分片未知长度仍拒绝错误字节数(t *testing.T) {
 	s, st, src, _, token := newISOServer(t)
 	item := readyISO(t, st, "Rocky", catalog.SeriesRocky)
-	_, err := st.SaveSource(t.Context(), store.Source{ISOID: item.ID, Kind: store.SourceUpload, TotalSize: 20, State: store.SourcePending}, store.Audit{})
+	_, err := st.SaveSource(t.Context(), model.Source{ISOID: item.ID, Kind: model.SourceUpload, TotalSize: 20, State: model.SourcePending}, repository.Audit{})
 	if err != nil {
 		t.Fatal(err)
 	}

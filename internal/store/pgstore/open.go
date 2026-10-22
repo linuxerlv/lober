@@ -10,8 +10,8 @@ import (
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // Store 是 PostgreSQL 仓储，用 Open 构造，可以被多个 goroutine 同时使用。
@@ -19,7 +19,7 @@ type Store struct {
 	db *gorm.DB
 }
 
-var _ store.Store = (*Store)(nil)
+var _ repository.Store = (*Store)(nil)
 
 // models 是本层的全部行类型，AutoMigrate 按它们建表；它们的表与 schema.go 的 tables 一一对应。
 var models = []any{
@@ -95,7 +95,7 @@ func (s *Store) start(ctx context.Context, o options) error {
 	return nil
 }
 
-// Close 见 store.Store：关闭连接池。
+// Close 见 repository.Store：关闭连接池。
 func (s *Store) Close() error {
 	sqlDB, err := s.db.DB()
 	if err != nil {
@@ -135,8 +135,8 @@ func storable(ss ...string) bool {
 
 // page 从多取了一条的 rows 里取一页，条目用 conv 转成 model 值。多取一条才知道还有没有下一页：恰好取完时 Next 为空，
 // 不多给一个空页。Items 不为 nil，第 5 层编成 JSON 是 []。
-func page[R, T any](rows []R, limit int, conv func(R) (T, error), cursorOf func(R) string) (store.Page[T], error) {
-	var p store.Page[T]
+func page[R, T any](rows []R, limit int, conv func(R) (T, error), cursorOf func(R) string) (repository.Page[T], error) {
+	var p repository.Page[T]
 	if len(rows) > limit {
 		rows = rows[:limit]
 		p.Next = cursorOf(rows[limit-1])
@@ -145,7 +145,7 @@ func page[R, T any](rows []R, limit int, conv func(R) (T, error), cursorOf func(
 	for _, r := range rows {
 		it, err := conv(r)
 		if err != nil {
-			return store.Page[T]{}, err
+			return repository.Page[T]{}, err
 		}
 		p.Items = append(p.Items, it)
 	}
@@ -153,9 +153,9 @@ func page[R, T any](rows []R, limit int, conv func(R) (T, error), cursorOf func(
 }
 
 // emptyPage 是没有条目的一页：过滤条件存不下时，什么都匹配不上。
-func emptyPage[T any]() store.Page[T] {
-	return store.Page[T]{Items: []T{}}
+func emptyPage[T any]() repository.Page[T] {
+	return repository.Page[T]{Items: []T{}}
 }
 
-// 游标由 store.EncodeCursor 编出、store.DecodeCursor 解开：排序键是上一页最后一条的。解出的串都存得下，拿去查询
+// 游标由 repository.EncodeCursor 编出、repository.DecodeCursor 解开：排序键是上一页最后一条的。解出的串都存得下，拿去查询
 // 不会让 PostgreSQL 报编码错误。

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"log/slog"
 	"runtime/debug"
 	"slices"
@@ -15,15 +15,15 @@ import (
 
 type Clock func() int64
 type Deps struct {
-	Hosts            store.Hosts
-	ISOs             store.ISOs
-	Hooks            store.Hooks
-	Templates        store.Templates
-	Tasks            store.Tasks
-	CurrentTasks     store.CurrentTaskCreator
-	Events           store.Events
-	Audit            store.AuditLog
-	Users            store.Users
+	Hosts            repository.Hosts
+	ISOs             repository.ISOs
+	Hooks            repository.Hooks
+	Templates        repository.Templates
+	Tasks            repository.Tasks
+	CurrentTasks     repository.CurrentTaskCreator
+	Events           repository.Events
+	Audit            repository.AuditLog
+	Users            repository.Users
 	ISOSource        ISOSource
 	Sources          ISOSourceState
 	ISODeletion      ISODeletion
@@ -79,7 +79,7 @@ func (s *server) clock() int64 { return s.deps.Clock() }
 const ctxUser = "console.user"
 const ctxStream = "console.stream"
 
-func userOf(c *gin.Context) *store.User { v, _ := c.Get(ctxUser); u, _ := v.(*store.User); return u }
+func userOf(c *gin.Context) *model.User { v, _ := c.Get(ctxUser); u, _ := v.(*model.User); return u }
 func (s *server) recoverPanic() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
@@ -132,7 +132,7 @@ func (s *server) authenticate() gin.HandlerFunc {
 			return
 		}
 		u, err := s.deps.Users.GetUser(c.Request.Context(), username)
-		if errors.Is(err, store.ErrNotFound) || err == nil && u.Disabled {
+		if errors.Is(err, repository.ErrNotFound) || err == nil && u.Disabled {
 			s.sessions.drop(token)
 			Fail(c, 401, nil, model.ConsoleUnauthorized)
 			return
@@ -167,11 +167,11 @@ func (s *server) authorize(perm string) gin.HandlerFunc {
 		c.Next()
 	}
 }
-func (s *server) auditFrom(c *gin.Context, detail string) store.Audit {
+func (s *server) auditFrom(c *gin.Context, detail string) repository.Audit {
 	r, ok := s.index[c.Request.Method+" "+c.FullPath()]
 	u := userOf(c)
 	if !ok || r.audit == "" || u == nil {
-		return store.Audit{}
+		return repository.Audit{}
 	}
-	return store.Audit{Actor: u.Username, Action: r.audit, Detail: detail, At: s.clock()}
+	return repository.Audit{Actor: u.Username, Action: r.audit, Detail: detail, At: s.clock()}
 }

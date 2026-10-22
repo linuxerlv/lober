@@ -4,17 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/domain/model"
 	"reflect"
 	"slices"
 	"testing"
 
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
-func aUser(name string) store.User {
-	return store.User{Username: name, DisplayName: "显示名", Role: store.RoleOperator, Password: "persisted-hash", CreatedAt: at0}
+func aUser(name string) model.User {
+	return model.User{Username: name, DisplayName: "显示名", Role: model.RoleOperator, Password: "persisted-hash", CreatedAt: at0}
 }
 
 func Test契约用户(t *testing.T) {
@@ -52,7 +53,7 @@ func userUpdateToZero(t *testing.T, s *pgstore.Store) {
 	u, err := s.CreateUser(t.Context(), aUser("alice"), anAudit("user.create"))
 	must(t, err, "create")
 	u.DisplayName = ""
-	u.Role = store.RoleViewer
+	u.Role = model.RoleViewer
 	u.Password = "replacement-hash"
 	u.Disabled = true
 	u.CreatedAt++
@@ -74,7 +75,7 @@ func userUpdateKeepsUsername(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	u.Username = "bob"
 	_, err = s.UpdateUser(t.Context(), u, anAudit("user.update"))
-	wantIs(t, err, store.ErrNotFound, "rename")
+	wantIs(t, err, repository.ErrNotFound, "rename")
 	wantUnchanged(t, s, before, "rename")
 }
 func userUpdateConflict(t *testing.T, s *pgstore.Store) {
@@ -83,35 +84,35 @@ func userUpdateConflict(t *testing.T, s *pgstore.Store) {
 	before := snapshot(t, s)
 	u.Rev = 99
 	_, err = s.UpdateUser(t.Context(), u, anAudit("user.update"))
-	wantIs(t, err, store.ErrConflict, "stale")
+	wantIs(t, err, repository.ErrConflict, "stale")
 	wantUnchanged(t, s, before, "stale")
 	u.Rev = 0
 	_, err = s.UpdateUser(t.Context(), u, anAudit("user.update"))
-	wantIs(t, err, store.ErrInvalid, "zero revision")
+	wantIs(t, err, repository.ErrInvalid, "zero revision")
 	u = aUser("nobody")
 	u.Rev = 1
 	_, err = s.UpdateUser(t.Context(), u, anAudit("user.update"))
-	wantIs(t, err, store.ErrNotFound, "missing")
+	wantIs(t, err, repository.ErrNotFound, "missing")
 }
 func userCreateInvalid(t *testing.T, s *pgstore.Store) {
-	for _, modify := range []func(*store.User){func(u *store.User) { u.Username = "Bad" }, func(u *store.User) { u.Role = "root" }, func(u *store.User) { u.DisplayName = "bad\x00" }, func(u *store.User) { u.Password = "" }, func(u *store.User) { u.CreatedAt = 0 }} {
+	for _, modify := range []func(*model.User){func(u *model.User) { u.Username = "Bad" }, func(u *model.User) { u.Role = "root" }, func(u *model.User) { u.DisplayName = "bad\x00" }, func(u *model.User) { u.Password = "" }, func(u *model.User) { u.CreatedAt = 0 }} {
 		u := aUser("alice")
 		modify(&u)
 		before := snapshot(t, s)
 		_, err := s.CreateUser(t.Context(), u, anAudit("user.create"))
-		wantIs(t, err, store.ErrInvalid, "invalid")
+		wantIs(t, err, repository.ErrInvalid, "invalid")
 		wantUnchanged(t, s, before, "invalid")
 	}
 	before := snapshot(t, s)
-	_, err := s.CreateUser(t.Context(), aUser("alice"), store.Audit{})
-	wantIs(t, err, store.ErrAuditRequired, "missing audit")
+	_, err := s.CreateUser(t.Context(), aUser("alice"), repository.Audit{})
+	wantIs(t, err, repository.ErrAuditRequired, "missing audit")
 	wantUnchanged(t, s, before, "missing audit")
 	u, err := s.CreateUser(t.Context(), aUser("alice"), anAudit("user.create"))
 	must(t, err, "seed")
 	before = snapshot(t, s)
 	u.Disabled = true
-	_, err = s.UpdateUser(t.Context(), u, store.Audit{})
-	wantIs(t, err, store.ErrAuditRequired, "update audit")
+	_, err = s.UpdateUser(t.Context(), u, repository.Audit{})
+	wantIs(t, err, repository.ErrAuditRequired, "update audit")
 	wantUnchanged(t, s, before, "update audit")
 }
 func userCreateDuplicate(t *testing.T, s *pgstore.Store) {
@@ -122,9 +123,9 @@ func userCreateDuplicate(t *testing.T, s *pgstore.Store) {
 	wantDuplicate(t, err, "username", "alice", "duplicate")
 	wantUnchanged(t, s, before, "duplicate")
 }
-func userPages(t *testing.T, s *pgstore.Store, q store.UserQuery) [][]store.User {
+func userPages(t *testing.T, s *pgstore.Store, q repository.UserQuery) [][]model.User {
 	t.Helper()
-	return pagesFrom(t, q.Cursor, func(cursor string) (store.Page[store.User], error) {
+	return pagesFrom(t, q.Cursor, func(cursor string) (repository.Page[model.User], error) {
 		q.Cursor = cursor
 		return s.ListUsers(t.Context(), q)
 	})
@@ -135,27 +136,27 @@ func userListPaging(t *testing.T, s *pgstore.Store) {
 		must(t, err, "seed")
 	}
 	var names []string
-	for _, u := range slices.Concat(userPages(t, s, store.UserQuery{Limit: 2})...) {
+	for _, u := range slices.Concat(userPages(t, s, repository.UserQuery{Limit: 2})...) {
 		names = append(names, u.Username)
 	}
 	if !reflect.DeepEqual(names, []string{"a0", "a_", "alice", "bob", "carol"}) {
 		t.Fatal(names)
 	}
-	all, err := s.ListUsers(t.Context(), store.UserQuery{Limit: 500})
+	all, err := s.ListUsers(t.Context(), repository.UserQuery{Limit: 500})
 	must(t, err, "all")
-	wantEqual(t, slices.Concat(userPages(t, s, store.UserQuery{Limit: 2})...), all.Items, "page equivalence")
+	wantEqual(t, slices.Concat(userPages(t, s, repository.UserQuery{Limit: 2})...), all.Items, "page equivalence")
 }
 func userListDefaultLimit(t *testing.T, s *pgstore.Store) {
 	for i := 0; i < 101; i++ {
 		_, err := s.CreateUser(t.Context(), aUser(fmt.Sprintf("u%03d", i)), anAudit("user.create"))
 		must(t, err, "seed")
 	}
-	first, err := s.ListUsers(t.Context(), store.UserQuery{})
+	first, err := s.ListUsers(t.Context(), repository.UserQuery{})
 	must(t, err, "first")
 	if len(first.Items) != 100 || first.Next == "" {
 		t.Fatal(len(first.Items), first.Next)
 	}
-	last, err := s.ListUsers(t.Context(), store.UserQuery{Cursor: first.Next})
+	last, err := s.ListUsers(t.Context(), repository.UserQuery{Cursor: first.Next})
 	must(t, err, "last")
 	if len(last.Items) != 1 || last.Next != "" {
 		t.Fatal(last)
@@ -211,7 +212,7 @@ func userConcurrentUpdates(t *testing.T, s *pgstore.Store) {
 		switch {
 		case err == nil:
 			success++
-		case errors.Is(err, store.ErrConflict):
+		case errors.Is(err, repository.ErrConflict):
 			conflict++
 		default:
 			t.Fatal(err)
@@ -224,20 +225,20 @@ func userConcurrentUpdates(t *testing.T, s *pgstore.Store) {
 	}
 }
 func userQueryInvalid(t *testing.T, s *pgstore.Store) {
-	for _, q := range []store.UserQuery{{Limit: -1}, {Limit: 501}, {Cursor: "not-a-cursor"}, {Cursor: store.EncodeCursor("hosts", "alice")}, {Cursor: store.EncodeCursor("users", "a\x00")}} {
+	for _, q := range []repository.UserQuery{{Limit: -1}, {Limit: 501}, {Cursor: "not-a-cursor"}, {Cursor: repository.EncodeCursor("hosts", "alice")}, {Cursor: repository.EncodeCursor("users", "a\x00")}} {
 		_, err := s.ListUsers(t.Context(), q)
-		wantIs(t, err, store.ErrInvalid, "query")
+		wantIs(t, err, repository.ErrInvalid, "query")
 	}
-	page, err := s.ListUsers(t.Context(), store.UserQuery{})
+	page, err := s.ListUsers(t.Context(), repository.UserQuery{})
 	must(t, err, "empty")
 	if page.Items == nil {
 		t.Fatal("nil page")
 	}
 	_, err = s.GetUser(t.Context(), "bad\x00")
-	wantIs(t, err, store.ErrNotFound, "unstorable key")
+	wantIs(t, err, repository.ErrNotFound, "unstorable key")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = s.ListUsers(ctx, store.UserQuery{})
+	_, err = s.ListUsers(ctx, repository.UserQuery{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
@@ -268,13 +269,13 @@ func userConcurrentCreate(t *testing.T, s *pgstore.Store) {
 		switch {
 		case err == nil:
 			success++
-		case errors.Is(err, store.ErrDuplicate):
+		case errors.Is(err, repository.ErrDuplicate):
 			duplicate++
 		default:
 			t.Fatal(err)
 		}
 	}
-	page, err := s.ListUsers(t.Context(), store.UserQuery{})
+	page, err := s.ListUsers(t.Context(), repository.UserQuery{})
 	must(t, err, "read")
 	if success != 1 || duplicate != 1 || len(page.Items) != 1 || len(auditEntries(t, s)) != 1 {
 		t.Fatal(success, duplicate, page)

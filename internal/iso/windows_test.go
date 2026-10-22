@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/iso/isotest"
 	"os"
 	"path/filepath"

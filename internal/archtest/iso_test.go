@@ -67,7 +67,7 @@ func Test新模块不能漏出守卫(t *testing.T) {
 	for _, d := range dirs {
 		first := strings.Split(d, "/")[0]
 		switch first {
-		case "core", "store", "iso", "archtest", "render", "builtin", "console":
+		case "domain", "infrastructure", "store", "iso", "archtest", "builtin", "console":
 		default:
 			t.Errorf("未登记层: internal/%s", d)
 		}
@@ -80,7 +80,7 @@ func TestISORules(t *testing.T) {
 		reject   bool
 	}{
 		{pkgISO, "os", false}, {pkgISO, "net/http", false}, {pkgISO, "path/filepath", false},
-		{pkgISO, pkgModel, false}, {pkgISO, pkgStore, false}, {pkgISO, modulePath + "/internal/render", true},
+		{pkgISO, pkgModel, false}, {pkgISO, pkgStore, false}, {pkgISO, modulePath + "/internal/domain/render", true},
 		{pkgISO, "example.com/parser", true}, {pkgISO, "C", true},
 		{pkgISO9660, "io/fs", false}, {pkgISO9660, pkgModel, true}, {pkgISO9660, pkgStore, true},
 	} {

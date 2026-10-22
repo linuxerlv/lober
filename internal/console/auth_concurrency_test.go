@@ -3,28 +3,29 @@ package console
 import (
 	"context"
 	"fmt"
+	"github.com/lober/lober/internal/domain/model"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 // Pause after a real database read, retaining its actual old revision.
 type pausedLoginUsers struct {
-	store.Users
+	repository.Users
 	paused       atomic.Bool
 	read, resume chan struct{}
 }
 
-func (p *pausedLoginUsers) GetUser(ctx context.Context, username string) (store.User, error) {
+func (p *pausedLoginUsers) GetUser(ctx context.Context, username string) (model.User, error) {
 	u, err := p.Users.GetUser(ctx, username)
 	if err == nil && username == "alice" && p.paused.CompareAndSwap(false, true) {
 		close(p.read)
 		select {
 		case <-p.resume:
 		case <-ctx.Done():
-			return store.User{}, ctx.Err()
+			return model.User{}, ctx.Err()
 		}
 	}
 	return u, err
@@ -32,8 +33,8 @@ func (p *pausedLoginUsers) GetUser(ctx context.Context, username string) (store.
 
 func Test并发改密不能让旧口令登录补发会话(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
-	u := seedAuthUser(t, st, "alice", store.RoleOperator, "old password")
-	admin := seedAuthUser(t, st, "administrator", store.RoleAdmin, "admin password")
+	u := seedAuthUser(t, st, "alice", model.RoleOperator, "old password")
+	admin := seedAuthUser(t, st, "administrator", model.RoleAdmin, "admin password")
 	token := loginHTTP(t, s, admin.Username, "admin password").Token
 	p := &pausedLoginUsers{Users: st, read: make(chan struct{}), resume: make(chan struct{})}
 	s.server.deps.Users = p

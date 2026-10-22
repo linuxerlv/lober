@@ -2,16 +2,17 @@ package pgstore_test
 
 import (
 	"errors"
+	"github.com/lober/lober/internal/domain/model"
 	"testing"
 
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/store/pgstore/pgtest"
 )
 
 func Test最后启用管理员不能禁用或降级(t *testing.T) {
 	s := pgtest.OpenStore(t)
 	in := aUser("administrator")
-	in.Role = store.RoleAdmin
+	in.Role = model.RoleAdmin
 	u, err := s.CreateUser(t.Context(), in, anAudit("user.create"))
 	if err != nil {
 		t.Fatal(err)
@@ -21,17 +22,17 @@ func Test最后启用管理员不能禁用或降级(t *testing.T) {
 		if disable {
 			changed.Disabled = true
 		} else {
-			changed.Role = store.RoleViewer
+			changed.Role = model.RoleViewer
 		}
-		if _, err := s.UpdateUser(t.Context(), changed, anAudit("user.remove.admin")); !errors.Is(err, store.ErrConflict) {
+		if _, err := s.UpdateUser(t.Context(), changed, anAudit("user.remove.admin")); !errors.Is(err, repository.ErrConflict) {
 			t.Fatal("last admin removed", err)
 		}
 	}
 	back, err := s.GetUser(t.Context(), u.Username)
-	if err != nil || back.Rev != u.Rev || back.Disabled || back.Role != store.RoleAdmin {
+	if err != nil || back.Rev != u.Rev || back.Disabled || back.Role != model.RoleAdmin {
 		t.Fatal(back, err)
 	}
-	entries, err := s.ListAudit(t.Context(), store.AuditQuery{Action: "user.remove.admin"})
+	entries, err := s.ListAudit(t.Context(), repository.AuditQuery{Action: "user.remove.admin"})
 	if err != nil || len(entries.Items) != 0 {
 		t.Fatal("rejected removal wrote audit", entries, err)
 	}
@@ -39,10 +40,10 @@ func Test最后启用管理员不能禁用或降级(t *testing.T) {
 
 func Test并发管理员移除必须保留一位(t *testing.T) {
 	s := pgtest.OpenStore(t)
-	users := make([]store.User, 2)
+	users := make([]model.User, 2)
 	for i, name := range []string{"admin_a", "admin_b"} {
 		u := aUser(name)
-		u.Role = store.RoleAdmin
+		u.Role = model.RoleAdmin
 		var err error
 		users[i], err = s.CreateUser(t.Context(), u, anAudit("user.create"))
 		if err != nil {
@@ -52,7 +53,7 @@ func Test并发管理员移除必须保留一位(t *testing.T) {
 	start := make(chan struct{})
 	results := make(chan error, 2)
 	for _, u := range users {
-		go func(u store.User) {
+		go func(u model.User) {
 			<-start
 			u.Disabled = true
 			_, err := s.UpdateUser(t.Context(), u, anAudit("user.cross.disable"))
@@ -64,20 +65,20 @@ func Test并发管理员移除必须保留一位(t *testing.T) {
 	for range 2 {
 		if err := <-results; err == nil {
 			succeeded++
-		} else if !errors.Is(err, store.ErrConflict) {
+		} else if !errors.Is(err, repository.ErrConflict) {
 			t.Fatal(err)
 		}
 	}
 	if succeeded != 1 {
 		t.Fatal("cross disable did not preserve administrator", succeeded)
 	}
-	page, err := s.ListUsers(t.Context(), store.UserQuery{})
+	page, err := s.ListUsers(t.Context(), repository.UserQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	enabled := 0
 	for _, u := range page.Items {
-		if u.Role == store.RoleAdmin && !u.Disabled {
+		if u.Role == model.RoleAdmin && !u.Disabled {
 			enabled++
 		}
 	}

@@ -7,18 +7,18 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
-// AppendEvents 见 store.Events。空的一批也要任务存在：调用方拿错了任务 ID，不能当成追加成功。
-func (s *Store) AppendEvents(ctx context.Context, taskID string, es []store.NewEvent) ([]store.Appended, error) {
-	if err := store.CheckID(taskID); err != nil {
+// AppendEvents 见 repository.Events。空的一批也要任务存在：调用方拿错了任务 ID，不能当成追加成功。
+func (s *Store) AppendEvents(ctx context.Context, taskID string, es []repository.NewEvent) ([]repository.Appended, error) {
+	if err := repository.CheckID(taskID); err != nil {
 		return nil, err
 	}
-	if err := store.CheckEvents(es); err != nil {
+	if err := repository.CheckEvents(es); err != nil {
 		return nil, err
 	}
-	var out []store.Appended
+	var out []repository.Appended
 	err := s.write(ctx, func(tx *gorm.DB) error {
 		row, err := lockTask(tx, taskID)
 		if err != nil {
@@ -36,9 +36,9 @@ func (s *Store) AppendEvents(ctx context.Context, taskID string, es []store.NewE
 	return out, nil
 }
 
-// ListEvents 见 store.Events。afterSeq 为负报 ErrInvalid（store.CheckEventQuery）；任务不存在报 ErrNotFound，同 AppendEvents。
-func (s *Store) ListEvents(ctx context.Context, taskID string, afterSeq int64, limit int) ([]store.Event, error) {
-	n, err := store.CheckEventQuery(taskID, afterSeq, limit)
+// ListEvents 见 repository.Events。afterSeq 为负报 ErrInvalid（repository.CheckEventQuery）；任务不存在报 ErrNotFound，同 AppendEvents。
+func (s *Store) ListEvents(ctx context.Context, taskID string, afterSeq int64, limit int) ([]repository.Event, error) {
+	n, err := repository.CheckEventQuery(taskID, afterSeq, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +55,7 @@ func (s *Store) ListEvents(ctx context.Context, taskID string, afterSeq int64, l
 			return nil, taskNotFound(taskID)
 		}
 	}
-	out := make([]store.Event, len(rows)) // 没有事件时也不是 nil，第 5 层编成 JSON 是 []
+	out := make([]repository.Event, len(rows)) // 没有事件时也不是 nil，第 5 层编成 JSON 是 []
 	for i, r := range rows {
 		if out[i], err = r.event(); err != nil {
 			return nil, err
@@ -64,11 +64,11 @@ func (s *Store) ListEvents(ctx context.Context, taskID string, afterSeq int64, l
 	return out, nil
 }
 
-// appendEvents 在事务 tx 里给锁住的任务 row 追加 es，事件已由调用方查过（store.CheckEvents）。Seq 接着 row.LastSeq 分配，
+// appendEvents 在事务 tx 里给锁住的任务 row 追加 es，事件已由调用方查过（repository.CheckEvents）。Seq 接着 row.LastSeq 分配，
 // row.LastSeq 随之加上去，由调用方连同别的列一起写回。Key 已存在的（包括同一批里排在前面的）跳过，报告为 Duplicate，Seq 是
 // 原来那一条的。调用方锁着任务行，同一个任务的另一次追加插不进来，这里查到的已有 Key 就是全部；idx_task_events_key 兜底。
-func appendEvents(tx *gorm.DB, row *taskRow, es []store.NewEvent) ([]store.Appended, error) {
-	out := make([]store.Appended, len(es)) // 不带事件的一批也不是 nil
+func appendEvents(tx *gorm.DB, row *taskRow, es []repository.NewEvent) ([]repository.Appended, error) {
+	out := make([]repository.Appended, len(es)) // 不带事件的一批也不是 nil
 	if len(es) == 0 {
 		return out, nil
 	}
@@ -79,7 +79,7 @@ func appendEvents(tx *gorm.DB, row *taskRow, es []store.NewEvent) ([]store.Appen
 	var rows []taskEventRow
 	for i, e := range es {
 		if seq, ok := seen[e.Key]; ok { // seen 里没有空的 Key：没有 Key 的不去重
-			out[i] = store.Appended{Seq: seq, Duplicate: true}
+			out[i] = repository.Appended{Seq: seq, Duplicate: true}
 			continue
 		}
 		row.LastSeq++
@@ -88,7 +88,7 @@ func appendEvents(tx *gorm.DB, row *taskRow, es []store.NewEvent) ([]store.Appen
 			return nil, err
 		}
 		rows = append(rows, r)
-		out[i] = store.Appended{Seq: row.LastSeq}
+		out[i] = repository.Appended{Seq: row.LastSeq}
 		if e.Key != "" {
 			seen[e.Key] = row.LastSeq
 		}
@@ -100,7 +100,7 @@ func appendEvents(tx *gorm.DB, row *taskRow, es []store.NewEvent) ([]store.Appen
 }
 
 // keySeqs 在事务 tx 里查 es 带的 Key 中，任务 id 已经有了的那些，给出 Key → Seq。
-func keySeqs(tx *gorm.DB, id string, es []store.NewEvent) (map[string]int64, error) {
+func keySeqs(tx *gorm.DB, id string, es []repository.NewEvent) (map[string]int64, error) {
 	var keys []string
 	for _, e := range es {
 		if e.Key != "" {

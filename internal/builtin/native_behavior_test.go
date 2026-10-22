@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/core/params"
-	"github.com/lober/lober/internal/core/snapshot"
-	"github.com/lober/lober/internal/render"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/params"
+	"github.com/lober/lober/internal/domain/render"
+	"github.com/lober/lober/internal/domain/snapshot"
 )
 
 func withInput(t *testing.T, r render.Request, in params.Input) render.Request {

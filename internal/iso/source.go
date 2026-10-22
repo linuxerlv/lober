@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 const (
@@ -20,7 +20,7 @@ const (
 )
 
 func sourceRejected(id, role, reason string) error {
-	return &store.ProblemsError{Kind: store.ErrInvalid, Problems: []model.Problem{model.NewProblem("iso_source_rejected", sourceSubject(id, role), reason)}}
+	return &repository.ProblemsError{Kind: repository.ErrInvalid, Problems: []model.Problem{model.NewProblem("iso_source_rejected", sourceSubject(id, role), reason)}}
 }
 
 func sourceSubject(id, role string) model.Subject {
@@ -32,16 +32,16 @@ func sourceSubject(id, role string) model.Subject {
 }
 
 func checkSourceKey(id, role string) error {
-	return store.CheckSourceKey(id, role)
+	return repository.CheckSourceKey(id, role)
 }
 
-func (s *Sources) getSource(ctx context.Context, id, role string) (store.Source, error) {
+func (s *Sources) getSource(ctx context.Context, id, role string) (model.Source, error) {
 	src, ok, err := s.store.GetSource(ctx, id, role)
 	if err != nil {
-		return store.Source{}, err
+		return model.Source{}, err
 	}
 	if !ok {
-		return store.Source{}, store.ErrNotFound
+		return model.Source{}, repository.ErrNotFound
 	}
 	return src, nil
 }
@@ -53,8 +53,8 @@ func (s *Sources) finalPath(id, role string) string {
 	}
 	return filepath.Join(s.dirs.Staging, id)
 }
-func (s *Sources) sourcePath(src store.Source) string {
-	if src.Kind == store.SourceLocal {
+func (s *Sources) sourcePath(src model.Source) string {
+	if src.Kind == model.SourceLocal {
 		return src.Path
 	}
 	return s.finalPath(src.ISOID, src.Role)
@@ -74,7 +74,7 @@ func (r contextReader) Read(p []byte) (int, error) {
 
 // resumeOffset treats the durable file as authoritative. A crash can leave the
 // file either shorter or longer than the last committed progress checkpoint.
-func (s *Sources) resumeOffset(ctx context.Context, src store.Source) (store.Source, int64, error) {
+func (s *Sources) resumeOffset(ctx context.Context, src model.Source) (model.Source, int64, error) {
 	if err := s.restorePublication(src); err != nil {
 		return src, 0, err
 	}
@@ -82,7 +82,7 @@ func (s *Sources) resumeOffset(ctx context.Context, src store.Source) (store.Sou
 	n := int64(0)
 	if err == nil {
 		if !st.Mode().IsRegular() {
-			return src, 0, store.ErrInvalid
+			return src, 0, repository.ErrInvalid
 		}
 		n = st.Size()
 	} else if !os.IsNotExist(err) {
@@ -90,7 +90,7 @@ func (s *Sources) resumeOffset(ctx context.Context, src store.Source) (store.Sou
 	}
 	if src.Fetched != n {
 		src.Fetched = n
-		src, err = s.store.SaveSource(ctx, src, store.Audit{})
+		src, err = s.store.SaveSource(ctx, src, repository.Audit{})
 		if err != nil {
 			return src, 0, err
 		}
@@ -101,8 +101,8 @@ func (s *Sources) resumeOffset(ctx context.Context, src store.Source) (store.Sou
 // A process can die after publishing the complete file but before committing
 // fetched. Restore it to the partial name so the ordinary checksum and state
 // transition remain the only path to completion. Called under the source lock.
-func (s *Sources) restorePublication(src store.Source) error {
-	if src.Kind == store.SourceLocal || src.State != store.SourceFetching {
+func (s *Sources) restorePublication(src model.Source) error {
+	if src.Kind == model.SourceLocal || src.State != model.SourceFetching {
 		return nil
 	}
 	part := s.stagingPath(src.ISOID, src.Role)
@@ -120,22 +120,22 @@ func (s *Sources) restorePublication(src store.Source) error {
 		return err
 	}
 	if !st.Mode().IsRegular() {
-		return store.ErrInvalid
+		return repository.ErrInvalid
 	}
 	return os.Rename(final, part)
 }
 
-func (s *Sources) finishFetch(ctx context.Context, src store.Source) error {
+func (s *Sources) finishFetch(ctx context.Context, src model.Source) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	path := s.stagingPath(src.ISOID, src.Role)
-	if src.Kind == store.SourceLocal {
+	if src.Kind == model.SourceLocal {
 		path = src.Path
 	}
 	var f *os.File
 	var err error
-	if src.Kind == store.SourceLocal {
+	if src.Kind == model.SourceLocal {
 		root, rel, ok := localRoot(s.dirs.LocalRoots, src.Path)
 		if !ok {
 			return sourceRejected(src.ISOID, src.Role, isoSourceReasonLocal)
@@ -174,33 +174,33 @@ func (s *Sources) finishFetch(ctx context.Context, src store.Source) error {
 	}
 	got := fmt.Sprintf("%x", hash.Sum(nil))
 	if src.ExpectedSHA256 != "" && got != src.ExpectedSHA256 {
-		return &store.ProblemsError{Kind: store.ErrRejected, Problems: []model.Problem{model.NewProblem("iso_content_mismatch", sourceSubject(src.ISOID, src.Role), src.ExpectedSHA256, got)}}
+		return &repository.ProblemsError{Kind: repository.ErrRejected, Problems: []model.Problem{model.NewProblem("iso_content_mismatch", sourceSubject(src.ISOID, src.Role), src.ExpectedSHA256, got)}}
 	}
 	// Refuse to publish after a concurrent cancellation/progress change.
 	current, err := s.getSource(ctx, src.ISOID, src.Role)
 	if err != nil {
 		return err
 	}
-	if current.State != store.SourceFetching || current.Rev != src.Rev {
-		return store.ErrConflict
+	if current.State != model.SourceFetching || current.Rev != src.Rev {
+		return repository.ErrConflict
 	}
 	final := s.sourcePath(src)
-	if src.Kind != store.SourceLocal {
+	if src.Kind != model.SourceLocal {
 		if err = os.Rename(path, final); err != nil {
 			return err
 		}
 	}
-	src.State = store.SourceFetched
+	src.State = model.SourceFetched
 	src.Error = ""
 	src.Fetched = st.Size()
 	if src.TotalSize == 0 {
 		src.TotalSize = st.Size()
 	}
-	if _, err = s.store.SaveSource(ctx, src, store.Audit{}); err != nil {
+	if _, err = s.store.SaveSource(ctx, src, repository.Audit{}); err != nil {
 		// A cancellation may win after rename. Keep bytes as a resumable partial
 		// rather than expose a final file with an unfetched database record.
 		var restoreErr error
-		if src.Kind != store.SourceLocal {
+		if src.Kind != model.SourceLocal {
 			restoreErr = os.Rename(final, path)
 		}
 		return errors.Join(err, restoreErr)
@@ -210,7 +210,7 @@ func (s *Sources) finishFetch(ctx context.Context, src store.Source) error {
 
 // failFetch reads current state instead of reusing the acquisition's stale Rev.
 // Cancellation wins over progress and must never become a download failure.
-func (s *Sources) failFetch(ctx context.Context, src store.Source, cause error) {
+func (s *Sources) failFetch(ctx context.Context, src model.Source, cause error) {
 	// Explicit Cancel has already persisted SourceCancelled. A worker context
 	// ending (shutdown/deadline) carries no user intent: keep its checkpoint
 	// fetching so a replacement worker can resume it.
@@ -219,17 +219,17 @@ func (s *Sources) failFetch(ctx context.Context, src store.Source, cause error) 
 	}
 	cleanupCtx := context.WithoutCancel(ctx)
 	current, err := s.getSource(cleanupCtx, src.ISOID, src.Role)
-	if err != nil || current.State != store.SourceFetching {
+	if err != nil || current.State != model.SourceFetching {
 		return
 	}
-	current.State = store.SourceFailed
+	current.State = model.SourceFailed
 	current.Error = cause.Error()
-	_, _ = s.store.SaveSource(cleanupCtx, current, store.Audit{})
+	_, _ = s.store.SaveSource(cleanupCtx, current, repository.Audit{})
 }
 
 // writeFetch checkpoints only bytes that have been synced to the staging file.
 // The source Rev prevents a late downloader from undoing Cancel.
-func (s *Sources) writeFetch(ctx context.Context, src store.Source, f *os.File, r io.Reader, offset int64) (store.Source, error) {
+func (s *Sources) writeFetch(ctx context.Context, src model.Source, f *os.File, r io.Reader, offset int64) (model.Source, error) {
 	buf := make([]byte, 256<<10)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -252,7 +252,7 @@ func (s *Sources) writeFetch(ctx context.Context, src store.Source, f *os.File, 
 				return src, err
 			}
 			src.Fetched = offset
-			src, err = s.store.SaveSource(ctx, src, store.Audit{})
+			src, err = s.store.SaveSource(ctx, src, repository.Audit{})
 			if err != nil {
 				return src, err
 			}

@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/iso/isotest"
-	"github.com/lober/lober/internal/store"
 )
 
 type mutateImportContext struct {
@@ -93,7 +93,7 @@ func TestImportRechecksEverySourceAfterAllCopies(t *testing.T) {
 }
 
 type lostImportAckStore struct {
-	store.Store
+	repository.Store
 	lost, unreadable bool
 }
 

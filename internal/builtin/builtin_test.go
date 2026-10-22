@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/core/activation"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/activation"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
 )
 
 // Every shipped object must pass activation: EnsureBuiltin* only validates storage metadata.

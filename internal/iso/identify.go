@@ -9,8 +9,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
 )
 
 // Identified is the metadata read from installation media, never from its filename.

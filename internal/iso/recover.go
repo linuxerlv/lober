@@ -4,9 +4,9 @@ import (
 	"context"
 	"sort"
 
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 type ResumeKind string
@@ -24,12 +24,12 @@ type ToResume struct {
 	Kind  ResumeKind
 }
 
-func allFetched(item model.ISO, sources []store.Source) bool {
+func allFetched(item model.ISO, sources []model.Source) bool {
 	main := false
 	extraFound := false
 	extra, needsExtra := catalog.ExtraSourceOf(item.Series)
 	for _, src := range sources {
-		if src.State != store.SourceFetched {
+		if src.State != model.SourceFetched {
 			return false
 		}
 		if src.Role == "" {
@@ -51,7 +51,7 @@ func (s *Sources) Recover(ctx context.Context) ([]ToResume, error) {
 	}
 	out := make([]ToResume, 0, len(unfinished))
 	for _, src := range unfinished {
-		if src.State != store.SourcePending && src.State != store.SourceFetching {
+		if src.State != model.SourcePending && src.State != model.SourceFetching {
 			continue
 		}
 		item, err := s.store.GetISO(ctx, src.ISOID)
@@ -62,7 +62,7 @@ func (s *Sources) Recover(ctx context.Context) ([]ToResume, error) {
 			out = append(out, ToResume{ISOID: src.ISOID, Role: src.Role, Kind: ResumeFetch})
 		}
 	}
-	q := store.ISOQuery{States: []model.ISOState{model.ISOAcquiring, model.ISOImporting}, Limit: 500}
+	q := repository.ISOQuery{States: []model.ISOState{model.ISOAcquiring, model.ISOImporting}, Limit: 500}
 	for {
 		page, err := s.store.ListISOs(ctx, q)
 		if err != nil {

@@ -5,10 +5,10 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/iso"
-	"github.com/lober/lober/internal/store"
 )
 
 func failedQueueISO(t *testing.T, a *app, series string) model.ISO {
@@ -20,7 +20,7 @@ func failedQueueISO(t *testing.T, a *app, series string) model.ISO {
 	if err := a.Native.Register(t.Context(), item, "upload", "", "", 4, "", assemblyAudit("iso.source")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Native.Upload(t.Context(), item.ID, "", 0, bytes.NewReader([]byte("data")), store.Audit{}); err != nil {
+	if err := a.Native.Upload(t.Context(), item.ID, "", 0, bytes.NewReader([]byte("data")), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	item.State = model.ISOFailed
@@ -59,7 +59,7 @@ func Test补来源调度失败必须回滚登记和审计(t *testing.T) {
 	if err != nil || exists {
 		t.Fatal("failed scheduling committed extra source", exists, err)
 	}
-	entries, err := a.Store.ListAudit(t.Context(), store.AuditQuery{Action: audit.Action, TargetID: item.ID})
+	entries, err := a.Store.ListAudit(t.Context(), repository.AuditQuery{Action: audit.Action, TargetID: item.ID})
 	if err != nil || len(entries.Items) != 0 {
 		t.Fatal("failed scheduling committed audit", entries, err)
 	}
@@ -101,7 +101,7 @@ func Test重新导入调度失败必须回滚审计和来源修订(t *testing.T)
 	if err != nil || after.Rev != before.Rev {
 		t.Fatal("failed queue changed source revision", before.Rev, after.Rev, err)
 	}
-	entries, err := a.Store.ListAudit(t.Context(), store.AuditQuery{Action: audit.Action, TargetID: item.ID})
+	entries, err := a.Store.ListAudit(t.Context(), repository.AuditQuery{Action: audit.Action, TargetID: item.ID})
 	if err != nil || len(entries.Items) != 0 {
 		t.Fatal("failed queue committed audit", entries, err)
 	}

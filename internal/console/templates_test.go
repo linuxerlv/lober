@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/lober/lober/internal/builtin"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 func Test模板草稿的嵌套内容与实际引用诊断(t *testing.T) {
@@ -73,7 +73,7 @@ func Test模板派生版本与副本独立(t *testing.T) {
 	}
 	responseData[any](t, httpCall(s, "PUT", base+"/name", `{"name":"renamed-copy"}`, token))
 	responseData[any](t, httpCall(s, "DELETE", base+"/versions/1?rev=2", "", token))
-	audit, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	audit, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	count := 0
 	for _, a := range audit.Items {
 		if a.TargetKind == "template" {
@@ -133,13 +133,13 @@ func Test模板新版本复制完整来源并不重发序号(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := model.TemplateKey{ID: tpl.ID, Version: 1}
-	if err := st.SubmitTemplate(t.Context(), key, 1, store.Audit{Actor: "alice", Action: "template.submit", At: fixedAt}); err != nil {
+	if err := st.SubmitTemplate(t.Context(), key, 1, repository.Audit{Actor: "alice", Action: "template.submit", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.ApproveTemplate(t.Context(), key, 2, "reviewer", store.Audit{Actor: "reviewer", Action: "template.approve", At: fixedAt}); err != nil {
+	if err := st.ApproveTemplate(t.Context(), key, 2, "reviewer", repository.Audit{Actor: "reviewer", Action: "template.approve", At: fixedAt}); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	base := "/console/v1/templates/" + tpl.ID
 	next := responseData[templateResponse](t, httpCall(s, "POST", base+"/versions?from=1", "", token))
 	if next.Version != 2 || next.Author != "admin" || next.Approver != "" || next.State != model.VersionDraft || next.Body != original.Body || len(next.Assembly) != len(original.Assembly) {
@@ -154,7 +154,7 @@ func Test模板新版本复制完整来源并不重发序号(t *testing.T) {
 	if len(versions.Items) != 2 || versions.Items[0].Version != 1 || versions.Items[1].Version != 3 {
 		t.Fatal(versions)
 	}
-	after, _ := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if len(before.Items) != len(after.Items) {
 		t.Fatal("version/delete draft audited")
 	}

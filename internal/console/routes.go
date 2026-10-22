@@ -2,7 +2,8 @@ package console
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+
 	"slices"
 	"strings"
 )
@@ -55,7 +56,7 @@ func (s *server) installRoutes(out *Server, rs []route) {
 type userResponse struct {
 	Username           string     `json:"username"`
 	DisplayName        string     `json:"displayName"`
-	Role               store.Role `json:"role"`
+	Role               model.Role `json:"role"`
 	Permissions        []string   `json:"permissions"`
 	Disabled           bool       `json:"disabled"`
 	CreatedAt          int64      `json:"createdAt"`
@@ -63,7 +64,7 @@ type userResponse struct {
 	MustChangePassword bool       `json:"passwordChangeRequired"`
 }
 
-func toUserResponse(u store.User) userResponse {
+func toUserResponse(u model.User) userResponse {
 	return userResponse{Username: u.Username, DisplayName: u.DisplayName, Role: u.Role, Permissions: PermsOf(u.Role), Disabled: u.Disabled, CreatedAt: u.CreatedAt, Rev: u.Rev, MustChangePassword: u.MustChangePassword}
 }
 func (s *server) userInfo(c *gin.Context) { Ok(c, toUserResponse(*userOf(c))) }

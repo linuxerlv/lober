@@ -26,25 +26,24 @@ import (
 // modulePath 是本模块的路径：模块里的包，导入路径就是它接上相对模块根的目录。
 const modulePath = "github.com/lober/lober"
 
-// layer1Dir 是层 1 相对模块根的目录，layer1 是它的导入路径：它自己和它下面的包都算层 1。
+// layer1Dir 是领域目录。仓储契约和渲染也属于领域，但保留各自的依赖方向检查。
 const (
-	layer1Dir = "internal/core"
+	layer1Dir = "internal/domain"
 	layer1    = modulePath + "/" + layer1Dir
 )
 
-// storeDir 是存储层（第 2 层）相对模块根的目录：它自己和它下面的包都算存储层。下面是存储层规则点名的三个包，
-// pkgStore 既是存储层的根，也是契约包；pkgPgtest 是给别的层的测试用的 PostgreSQL 夹具。
+// 仓储契约已迁入领域；数据库实现与测试夹具在任务 4 才移动。
 const (
-	storeDir   = "internal/store"
+	storeDir   = "internal/domain/repository"
 	pkgStore   = modulePath + "/" + storeDir
-	pkgPgstore = pkgStore + "/pgstore"
+	pkgPgstore = modulePath + "/internal/store/pgstore"
 	pkgPgtest  = pkgPgstore + "/pgtest"
 )
 
 // pkgRender 与 pkgBuiltin 是第 3 层的两个包：它们自己和它们下面的包分别算渲染、内置内容。内置内容按格式分子目录放正文，
 // 子目录里有 .go 文件时就是内置内容的子包，按内置内容的规则查；只放正文的子目录不是包。
 const (
-	pkgRender   = modulePath + "/internal/render"
+	pkgRender   = modulePath + "/internal/domain/render"
 	pkgBuiltin  = modulePath + "/internal/builtin"
 	pkgConsole  = modulePath + "/internal/console"
 	pkgAssembly = modulePath + "/cmd/lober"
@@ -71,14 +70,15 @@ const (
 	layerConsole  layer = "控制台"
 	layerAssembly layer = "装配点"
 	layerGuard    layer = "守卫"
+	layerIdentity layer = "随机编号"
 )
 
 // layers 是 layer 的全部取值，按日志里的先后排。
-var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerAssembly, layerGuard}
+var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerAssembly, layerGuard, layerIdentity}
 
 // minChecked 是 Test全模块依赖守卫 每层至少要查到的包数。删了某层的包就改这里；渲染与内置内容的包加进来以后，
 // 补上它们的下限——忘了补会由「查到了包的层都登记了下限」那一条报出来。
-var minChecked = map[layer]int{layerCore: 7, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1}
+var minChecked = map[layer]int{layerCore: 9, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1, layerIdentity: 1}
 
 // minDirs 是 moduleSourceDirs 至少要遍历到的目录数。目录遍历没有别的防线：sourceRoots 少了一项、或者
 // checkModule 收到空的 dirs，ruleListed（整包被构建约束排除的目录）与 go test 的缓存跟踪都会静默失效，
@@ -105,6 +105,7 @@ const (
 // bytes、sort、path 是任务 3 为渲染加的，都只在内存里算；path 只拼斜杠分隔的路径，随平台变的
 // path/filepath 不放。embed 不在这里：只有内置内容要带正文，在 layer3Rule 里另许。
 var stdAllowed = map[string]bool{
+	"context": true, "math": true, "reflect": true,
 	"bytes": true, "cmp": true, "errors": true, "fmt": true, "maps": true, "path": true, "slices": true, "sort": true,
 	"strconv": true, "strings": true, "unicode": true, "unicode/utf8": true,
 	"crypto/sha256": true, "encoding/base64": true, "encoding/binary": true, "encoding/hex": true,
@@ -139,20 +140,16 @@ const (
 	ruleListed   rule = "含非测试 .go 文件的目录都要出现在 go list ./... 里，否则守卫查不到它"
 
 	// 存储层的三条规则：前两条是第 2 层计划任务 2 的，第三条是修补计划任务 U4 的，都照计划「包与文件」表写成白名单。
-	ruleContract rule = "store 只依赖标准库、internal/core/... 和 internal/store：契约不依赖 pgstore，" +
-		"也不依赖第三方模块；存储层新加的包也按这一条查"
-	rulePgstore rule = "pgstore 只依赖标准库、internal/core/...、internal/store，以及 gorm.io/... 与 github.com/jackc/pgx/v5/...：" +
-		"第三方模块只有这两家"
-	rulePgtest rule = "pgtest 只依赖标准库、internal/store、internal/store/pgstore 与 github.com/jackc/pgx/v5/...：" +
-		"它是测试夹具，经 pgstore 起仓储，不直接用 gorm，也不依赖层 1"
+	ruleContract rule = "repository 及其子包只依赖纯标准库、领域规则和仓储契约，不依赖实现、随机数、文件、网络或时钟"
+	rulePgstore  rule = "pgstore 只依赖标准库、领域规则、仓储契约、gorm 与 pgx；编号另按精确调用清单检查"
+	rulePgtest   rule = "pgtest 只依赖标准库、仓储契约、pgstore 与 pgx；编号另按精确调用清单检查"
 
 	// 第 3 层的两条规则，照第 3 层计划「包与文件」表。
 	ruleLayer3 rule = "渲染与内置内容只依赖标准库与层 1（spec §6.1）：不 import 存储层与本模块的其他包，" +
 		"也不依赖第三方模块"
 	ruleLayer3Apart rule = "渲染与内置内容的非测试代码互不 import：内置内容的 golden 测试在测试文件里，可以 import 渲染"
 
-	ruleLayer rule = "每个包都要归到一层：internal/core、internal/store、internal/render、internal/builtin，" +
-		"以及守卫自己 internal/archtest。归不到的，要么是包放错了目录，要么是新的一层（比如 cmd/lober）还没在守卫里登记规则"
+	ruleLayer    rule = "包必须归入领域、旧数据库实现、内置内容、镜像、控制台、装配点、随机编号或守卫；新包不能漏出检查"
 	ruleGuard    rule = "守卫 internal/archtest 只放测试文件：有了非测试文件，它就成了能被 import、会进 go build 的包"
 	ruleConsole  rule = "控制台只依赖标准库、gin、core、存储契约、渲染与内置内容"
 	ruleAssembly rule = "装配点只依赖标准库、本模块、gin、yaml 与 wire"
@@ -277,6 +274,8 @@ func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[
 		case layerAssembly:
 			found = append(found, assemblyIgnoredFiles(fsys, p)...)
 			found = append(found, checkSources(fsys, p, checkAssemblyFile)...)
+		case layerIdentity:
+			found = append(found, checkPackage(fsys, p, checkIdentityFile)...)
 		case layerGuard:
 			found = append(found, checkGuardFiles(p)...)
 		default:
@@ -288,12 +287,12 @@ func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[
 	return found, checked
 }
 
-// layerOf 返回包 pkg 归哪一层，归不到时返回空串。按整段比对，internal/coreutils 不归层 1；守卫只认本包自己。
+// layerOf 返回包 pkg 归哪一层，归不到时返回空串。按整段比对，internal/domainutils 不归层 1；守卫只认本包自己。
 func layerOf(pkg string) layer {
 	switch {
 	case inLayer1(pkg):
 		return layerCore
-	case under(pkg, pkgStore):
+	case under(pkg, pkgStore), under(pkg, pkgPgstore):
 		return layerStore
 	case under(pkg, pkgRender):
 		return layerRender
@@ -305,6 +304,8 @@ func layerOf(pkg string) layer {
 		return layerConsole
 	case pkg == pkgAssembly:
 		return layerAssembly
+	case pkg == pkgIdentity:
+		return layerIdentity
 	case pkg == pkgGuard:
 		return layerGuard
 	}
@@ -357,13 +358,13 @@ func packagesUnder(t *testing.T, root, base string) []goPackage {
 	}
 }
 
-// under 报告 path 是不是 base 自己或它下面的包。按整段比对，internal/coreutils 不在 internal/core 下面。
+// under 报告 path 是不是 base 自己或它下面的包。按整段比对，internal/domainutils 不在 internal/domain 下面。
 func under(path, base string) bool {
 	return path == base || strings.HasPrefix(path, base+"/")
 }
 
 func inLayer1(path string) bool {
-	return under(path, layer1)
+	return under(path, layer1) && !under(path, pkgStore) && !under(path, pkgRender)
 }
 
 // isStd 沿用 go 命令的判断：路径第一段不含点的是标准库，cgo 的 C 也算在内。层 1 与第 3 层放行只看白名单，
@@ -482,7 +483,8 @@ func parseFile(fsys fs.FS, fset *token.FileSet, name string) (*ast.File, error) 
 	if err != nil {
 		return nil, err
 	}
-	return parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
+	// 保留局部声明绑定，区分包导入名与遮住它的局部变量。
+	return parser.ParseFile(fset, name, src, 0)
 }
 
 // checkBuildFiles 要求层 1 与第 3 层的包没有 cgo 文件，也没有被构建约束排除的文件（ignoredFiles）。族标识 linux、
@@ -513,7 +515,8 @@ func position(fset *token.FileSet, pos token.Pos) string {
 
 // checkFile 查层 1 一个非测试源文件的 import（layer1Rule）和读时钟的写法（checkClock）。
 func checkFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
-	return append(checkImports(fset, pkg, f, layer1Rule), checkClock(fset, pkg, f)...)
+	found := append(checkImports(fset, pkg, f, layer1Rule), checkClock(fset, pkg, f)...)
+	return append(found, checkContextEffects(fset, pkg, f)...)
 }
 
 // checkImports 把文件的每个 import 交给 ruleFor 判，ruleFor 返回空串的不报。三层的单文件检查都由它查 import，
@@ -589,6 +592,10 @@ func layer1Rule(pkg, imp string) rule {
 // 成环的依赖，admission 去 import params 这类越级依赖要靠这里。
 func layerDirection(pkg, imp string) rule {
 	switch {
+	case under(pkg, layer1+"/access"), under(pkg, layer1+"/selection"):
+		if imp != pkgModel {
+			return ruleDomainLeaf
+		}
 	case pkg == pkgCatalog:
 		return ruleCatalog
 	case pkg == pkgModel && imp != pkgCatalog:
@@ -602,7 +609,12 @@ func layerDirection(pkg, imp string) rule {
 // checkStoreFile 查存储层一个非测试源文件的 import（storeRule）和读时钟的写法（checkClock）：仓储不读时钟是
 // store 包说明里的全局约定。
 func checkStoreFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
-	return append(checkImports(fset, pkg, f, storeRule), checkClock(fset, pkg, f)...)
+	found := checkImports(fset, pkg, f, storeRule)
+	found = append(found, checkClock(fset, pkg, f)...)
+	if under(pkg, pkgStore) {
+		found = append(found, checkContextEffects(fset, pkg, f)...)
+	}
+	return append(found, checkIdentityUses(fset, pkg, f)...)
 }
 
 // storeRule 返回存储层的包 pkg import imp 违反的规则，不违反时返回空串。三条规则都是白名单，照计划「包与文件」表：
@@ -614,12 +626,17 @@ func checkStoreFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
 // 第三方模块只有这里放行的两处（S2-12）：每个包都要归到一层，别的层的规则都不放行第三方，所以「只有 pgstore 能用
 // gorm 与 pgx、pgtest 能用 pgx」对全模块成立，不另起一张第三方模块的表。
 //
-// 第 1 层的标准库白名单不套用到这里：仓储要用 context、sync、crypto/rand 这类包，夹具要用 testing。cgo 的 C 不是
-// 标准库，照样要报。
+// 仓储契约及其子包使用纯标准库白名单。旧数据库实现与夹具仍使用标准库规则，编号访问逐个检查。
 func storeRule(pkg, imp string) rule {
+	if under(pkg, pkgStore) {
+		if stdAllowed[imp] || inLayer1(imp) || under(imp, pkgStore) {
+			return ""
+		}
+		return ruleContract
+	}
 	std := isStd(imp) && imp != "C"
 	if pkg == pkgPgtest {
-		if std || imp == pkgStore || imp == pkgPgstore || under(imp, pgxV5) {
+		if std || imp == pkgStore || imp == pkgPgstore || under(imp, pgxV5) || imp == pkgIdentity {
 			return ""
 		}
 		return rulePgtest
@@ -629,7 +646,7 @@ func storeRule(pkg, imp string) rule {
 	}
 	switch pkg {
 	case pkgPgstore:
-		if pgDriver(imp) {
+		if pgDriver(imp) || imp == pkgIdentity {
 			return ""
 		}
 		return rulePgstore
@@ -645,7 +662,8 @@ func pgDriver(imp string) bool {
 
 // checkLayer3File 查渲染或内置内容一个非测试源文件的 import（layer3Rule）和读时钟的写法（checkClock）。
 func checkLayer3File(fset *token.FileSet, pkg string, f *ast.File) []violation {
-	return append(checkImports(fset, pkg, f, layer3Rule), checkClock(fset, pkg, f)...)
+	found := append(checkImports(fset, pkg, f, layer3Rule), checkClock(fset, pkg, f)...)
+	return append(found, checkContextEffects(fset, pkg, f)...)
 }
 
 // layer3Rule 返回渲染或内置内容的包 pkg import imp 违反的规则，不违反时返回空串，照第 3 层计划「包与文件」表：
@@ -658,6 +676,9 @@ func layer3Rule(pkg, imp string) rule {
 		own, other = pkgBuiltin, pkgRender
 	}
 	switch {
+	case imp == "context" && own == pkgBuiltin:
+		// 上下文类型只为领域契约放行，不扩大内置正文包原有的许可。
+		return ruleStd
 	case stdAllowed[imp], inLayer1(imp), under(imp, own):
 		return ""
 	case imp == "embed" && own == pkgBuiltin:
