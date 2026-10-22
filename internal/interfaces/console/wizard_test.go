@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/jackc/pgx/v5"
+	selectionguard "github.com/lober/lober/internal/infrastructure/selection"
 	"strings"
 	"sync"
 	"testing"
@@ -40,7 +41,8 @@ func Test向导只转换应用给出的诊断和完整任务(t *testing.T) {
 	d := s.server.deps
 	d.TaskCtl = &taskControlFixture{st: st, block: []model.Problem{problem}}
 	// 诊断在应用构造时注入，原任务控制入口的后置替换不参与向导。
-	s.server.deps.Wizard = wizardDeps(d, st).Wizard
+	assembled := wizardDeps(d, st)
+	s.server.deps.Wizard, s.server.deps.TemplateAuthoring = assembled.Wizard, assembled.TemplateAuthoring
 	result := responseData[wizardSubmitResult](t, httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-1","entered":{"tpl/hostname":"node-one"}}]`), token))
 	if len(result.Tasks) != 1 || len(result.Tasks[0].CanCancel) != 1 || len(result.Tasks[0].CanRetry) != 1 || result.Tasks[0].CanCancel[0].Code != problem.Code || result.Tasks[0].Snapshot.Template.Params["hostname"].Items[0] != "node-one" {
 		t.Fatal(result)
@@ -467,7 +469,8 @@ func Test向导只接受程序当前携带的内置身份及版本(t *testing.T)
 func Test向导提交期间新版本审批必须等待任务提交(t *testing.T) {
 	dsn := pgtest.Schema(t)
 	st := pgtest.OpenAt(t, dsn)
-	s := New(wizardDeps(Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Events: st, Audit: st, Users: st, RoleMenus: st, Clock: func() int64 { return fixedAt }}, st))
+	guard := &authoringWaitingGuard{SelectionGuard: selectionguard.NewGuard(), waiting: make(chan struct{}), entered: make(chan struct{})}
+	s := New(wizardDepsGuard(Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Events: st, Audit: st, Users: st, RoleMenus: st, Clock: func() int64 { return fixedAt }}, st, guard))
 	_, _, token, iso, tpl := seedWizardFixture(t, s, st)
 	next, err := st.NewTemplateVersion(t.Context(), tpl.ID, 1, "author")
 	if err != nil {
@@ -514,9 +517,16 @@ func Test向导提交期间新版本审批必须等待任务提交(t *testing.T)
 		approved <- httpCall(s, "POST", fmt.Sprintf("/console/v1/templates/%s/versions/2/approve?rev=2", tpl.ID), "", token).Code
 	}()
 	select {
+	case <-guard.waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("审批没有到达共用选择锁")
+	}
+	select {
+	case <-guard.entered:
+		t.Fatal("任务持读锁时审批取得了写锁")
 	case code := <-approved:
-		t.Fatalf("approval overtook in-flight current-version task creation: %d", code)
-	case <-time.After(150 * time.Millisecond):
+		t.Fatalf("审批越过任务提交: %d", code)
+	default:
 	}
 	if err := tx.Commit(t.Context()); err != nil {
 		t.Fatal(err)
@@ -610,7 +620,8 @@ func Test任务提交与独立实例审批的契约(t *testing.T) {
 				var once sync.Once
 				unblock := func() { once.Do(func() { close(release) }) }
 				defer unblock()
-				s.server.deps.Wizard = wizardDeps(s.server.deps, &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release}).Wizard
+				assembled := wizardDeps(s.server.deps, &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release})
+				s.server.deps.Wizard, s.server.deps.TemplateAuthoring = assembled.Wizard, assembled.TemplateAuthoring
 				submitted := make(chan int, 1)
 				go func() { submitted <- submit() }()
 				select {
@@ -782,7 +793,8 @@ func Test向导事务内一般准入仍返回422(t *testing.T) {
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	defer unblock()
-	s.server.deps.Wizard = wizardDeps(s.server.deps, &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release}).Wizard
+	assembled := wizardDeps(s.server.deps, &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release})
+	s.server.deps.Wizard, s.server.deps.TemplateAuthoring = assembled.Wizard, assembled.TemplateAuthoring
 	submitted := make(chan int, 1)
 	go func() {
 		submitted <- httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-1"}]`), token).Code

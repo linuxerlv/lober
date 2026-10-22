@@ -2,7 +2,9 @@ package console
 
 import (
 	"context"
+	"github.com/lober/lober/internal/application/authoring"
 	"slices"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/domain/activation"
@@ -90,13 +92,20 @@ func (s *server) templateResponses(ctx context.Context, templates []model.Templa
 	}
 	return items, nil
 }
-func (s *server) respondTemplate(c *gin.Context, t model.Template) {
-	items, ok := Get(c, func() ([]templateResponse, error) {
-		return s.templateResponses(c.Request.Context(), []model.Template{t})
-	})
-	if ok {
-		Ok(c, items[0])
+func templateViewResponse(v authoring.TemplateView) templateResponse {
+	return toTemplateResponseWithProblems(v.Template, v.Problems)
+}
+func templateViewResponses(vs []authoring.TemplateView) []templateResponse {
+	out := make([]templateResponse, len(vs))
+	for i, v := range vs {
+		out[i] = templateViewResponse(v)
 	}
+	return out
+}
+func templateRevisionOf(c *gin.Context) authoring.TemplateRevision {
+	rev, _ := strconv.ParseInt(c.Query("rev"), 10, 64)
+	version, _ := strconv.Atoi(c.Param("version"))
+	return authoring.TemplateRevision{Key: model.TemplateKey{ID: c.Param("id"), Version: version}, Rev: rev}
 }
 func (s *server) templateRoutes() []route {
 	return slices.Concat(s.templateBaseRoutes(), s.templateLifecycleRoutes())
@@ -120,37 +129,27 @@ func (s *server) templateBaseRoutes() []route {
 	}
 }
 func (s *server) listTemplates(c *gin.Context) {
-	common, ok := authoringQuery(c)
+	q, ok := authoringQuery(c)
 	if !ok {
 		return
 	}
-	series := catalog.Series(c.Query("series"))
-	if series != "" && !series.Valid() {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
-		return
+	req := authoring.TemplateListRequest{ListRequest: authoring.ListRequest{PageRequest: authoring.PageRequest{Page: q.Page, Limit: q.Limit, Cursor: q.Cursor}, Prefix: q.NamePrefix, Approved: q.ApprovedOnly}, Series: catalog.Series(c.Query("series"))}
+	if len(q.States) > 0 {
+		req.State = q.States[0]
 	}
-	q := repository.TemplateQuery{NamePrefix: common.NamePrefix, States: common.States, ApprovedOnly: common.ApprovedOnly, Cursor: common.Cursor, Limit: common.Limit, Page: common.Page, Series: series}
-	page, ok := Get(c, func() (repository.Page[model.Template], error) {
-		return s.deps.Templates.ListTemplates(c.Request.Context(), q)
+	page, ok := Get(c, func() (authoring.TemplatePage, error) {
+		return s.deps.TemplateAuthoring.List(c.Request.Context(), actorOf(c), req)
 	})
-	if !ok {
-		return
-	}
-	items, ok := Get(c, func() ([]templateResponse, error) { return s.templateResponses(c.Request.Context(), page.Items) })
 	if ok {
-		Ok(c, templatePage{items, page.Next, page.Total})
+		Ok(c, templatePage{templateViewResponses(page.Items), page.Next, page.Total})
 	}
 }
 func (s *server) listTemplateVersions(c *gin.Context) {
-	ts, ok := Get(c, func() ([]model.Template, error) {
-		return s.deps.Templates.ListTemplateVersions(c.Request.Context(), c.Param("id"))
+	vs, ok := Get(c, func() ([]authoring.TemplateView, error) {
+		return s.deps.TemplateAuthoring.Versions(c.Request.Context(), actorOf(c), c.Param("id"))
 	})
-	if !ok {
-		return
-	}
-	items, ok := Get(c, func() ([]templateResponse, error) { return s.templateResponses(c.Request.Context(), ts) })
 	if ok {
-		Ok(c, templateVersionPage{items})
+		Ok(c, templateVersionPage{templateViewResponses(vs)})
 	}
 }
 func templateKeyOf(c *gin.Context) (model.TemplateKey, bool) {
@@ -170,9 +169,11 @@ func (s *server) getTemplate(c *gin.Context) {
 	if !ok {
 		return
 	}
-	t, ok := Get(c, func() (model.Template, error) { return s.deps.Templates.GetTemplate(c.Request.Context(), k) })
+	v, ok := Get(c, func() (authoring.TemplateView, error) {
+		return s.deps.TemplateAuthoring.Get(c.Request.Context(), actorOf(c), k)
+	})
 	if ok {
-		s.respondTemplate(c, t)
+		Ok(c, templateViewResponse(v))
 	}
 }
 func templateOf(req templateRequest) model.Template {
@@ -183,11 +184,11 @@ func (s *server) createTemplate(c *gin.Context) {
 	if !Bind(c, &req) {
 		return
 	}
-	t := templateOf(req)
-	t.Author = userOf(c).Username
-	created, ok := Write(c, func() (model.Template, error) { return s.deps.Templates.CreateTemplate(c.Request.Context(), t) })
+	v, ok := Write(c, func() (authoring.TemplateView, error) {
+		return s.deps.TemplateAuthoring.Create(c.Request.Context(), actorOf(c), templateOf(req))
+	})
 	if ok {
-		s.respondTemplate(c, created)
+		Ok(c, templateViewResponse(v))
 	}
 }
 func (s *server) deriveTemplate(c *gin.Context) {
@@ -195,11 +196,11 @@ func (s *server) deriveTemplate(c *gin.Context) {
 	if !Bind(c, &req) {
 		return
 	}
-	created, ok := Write(c, func() (model.Template, error) {
-		return s.deps.Templates.DeriveTemplate(c.Request.Context(), model.TemplateKey{ID: c.Param("id"), Version: req.From}, req.Name, userOf(c).Username)
+	v, ok := Write(c, func() (authoring.TemplateView, error) {
+		return s.deps.TemplateAuthoring.Derive(c.Request.Context(), actorOf(c), authoring.DeriveRequest{From: model.TemplateKey{ID: c.Param("id"), Version: req.From}, Name: req.Name})
 	})
 	if ok {
-		s.respondTemplate(c, created)
+		Ok(c, templateViewResponse(v))
 	}
 }
 func (s *server) saveTemplateDraft(c *gin.Context) {
@@ -211,20 +212,13 @@ func (s *server) saveTemplateDraft(c *gin.Context) {
 	if !Bind(c, &req) {
 		return
 	}
-	current, ok := Get(c, func() (model.Template, error) { return s.deps.Templates.GetTemplate(c.Request.Context(), k) })
-	if !ok {
-		return
-	}
-	if req.Name != "" && req.Name != current.Name {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
-		return
-	}
 	t := templateOf(req.templateRequest)
-	t.ID, t.Version, t.Rev, t.Name = current.ID, current.Version, req.Rev, current.Name
-	t.Author, t.Approver, t.State, t.Builtin, t.DerivedFrom = current.Author, current.Approver, current.State, current.Builtin, current.DerivedFrom
-	saved, ok := Write(c, func() (model.Template, error) { return s.deps.Templates.SaveTemplateDraft(c.Request.Context(), t) })
+	t.ID, t.Version, t.Rev = k.ID, k.Version, req.Rev
+	v, ok := Write(c, func() (authoring.TemplateView, error) {
+		return s.deps.TemplateAuthoring.SaveDraft(c.Request.Context(), actorOf(c), t)
+	})
 	if ok {
-		s.respondTemplate(c, saved)
+		Ok(c, templateViewResponse(v))
 	}
 }
 func (s *server) newTemplateVersion(c *gin.Context) {
@@ -232,11 +226,11 @@ func (s *server) newTemplateVersion(c *gin.Context) {
 	if !ok {
 		return
 	}
-	t, ok := Write(c, func() (model.Template, error) {
-		return s.deps.Templates.NewTemplateVersion(c.Request.Context(), c.Param("id"), from, userOf(c).Username)
+	v, ok := Write(c, func() (authoring.TemplateView, error) {
+		return s.deps.TemplateAuthoring.NewVersion(c.Request.Context(), actorOf(c), authoring.VersionSource{ID: c.Param("id"), From: from})
 	})
 	if ok {
-		s.respondTemplate(c, t)
+		Ok(c, templateViewResponse(v))
 	}
 }
 func (s *server) deleteTemplateDraft(c *gin.Context) {
@@ -248,7 +242,7 @@ func (s *server) deleteTemplateDraft(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := s.deps.Templates.DeleteTemplateDraft(c.Request.Context(), k, rev); err != nil {
+	if err := s.deps.TemplateAuthoring.DeleteDraft(c.Request.Context(), actorOf(c), authoring.TemplateRevision{Key: k, Rev: rev}); err != nil {
 		RespondError(c, err)
 		return
 	}
@@ -259,7 +253,7 @@ func (s *server) renameTemplate(c *gin.Context) {
 	if !Bind(c, &req) {
 		return
 	}
-	if err := s.deps.Templates.RenameTemplate(c.Request.Context(), c.Param("id"), req.Name, s.auditFrom(c, "")); err != nil {
+	if err := s.deps.TemplateAuthoring.Rename(c.Request.Context(), actorOf(c), authoring.RenameRequest{ID: c.Param("id"), Name: req.Name}); err != nil {
 		RespondError(c, err)
 		return
 	}

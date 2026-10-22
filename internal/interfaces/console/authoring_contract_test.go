@@ -1,12 +1,20 @@
 package console
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
+	selectionguard "github.com/lober/lober/internal/infrastructure/selection"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
@@ -210,5 +218,211 @@ func Test编写页型与来源选择互不替代(t *testing.T) {
 	noSource := responseData[sourceDiffResponse](t, httpCall(s, "GET", fmt.Sprintf("/console/v1/templates/%s/versions/1/source-diff", source.ID), "", token))
 	if noSource.Original != nil || noSource.Current != nil || noSource.Changed {
 		t.Fatal(noSource)
+	}
+}
+
+func Test编写审计失败状态与审批人均回滚(t *testing.T) {
+	for _, kind := range []string{"hook", "template"} {
+		for _, cancelled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/cancel=%v", kind, cancelled), func(t *testing.T) {
+				s, st, _, _, baseTemplate := wizardFixture(t)
+				a := ports.Actor{Username: pgtest.FaultActor, Role: model.RoleHookApprover}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				var beforeHook model.Hook
+				var beforeTemplate model.Template
+				if kind == "hook" {
+					beforeHook = approvedTestHook(t, st, "rollback-hook")
+					next, e := st.NewHookVersion(t.Context(), beforeHook.ID, 1, "alice")
+					if e != nil {
+						t.Fatal(e)
+					}
+					if e = st.SubmitHook(t.Context(), next.Key(), next.Rev, repository.Audit{Actor: "alice", Action: "hook.submit", At: fixedAt}); e != nil {
+						t.Fatal(e)
+					}
+					beforeHook, e = st.GetHook(t.Context(), next.Key())
+					if e != nil {
+						t.Fatal(e)
+					}
+				} else {
+					beforeTemplate = baseTemplate
+					next, e := st.NewTemplateVersion(t.Context(), beforeTemplate.ID, 1, "alice")
+					if e != nil {
+						t.Fatal(e)
+					}
+					k := model.TemplateKey{ID: next.ID, Version: next.Version}
+					if e = st.SubmitTemplate(t.Context(), k, next.Rev, repository.Audit{Actor: "alice", Action: "template.submit", At: fixedAt}); e != nil {
+						t.Fatal(e)
+					}
+					beforeTemplate, e = st.GetTemplate(t.Context(), k)
+					if e != nil {
+						t.Fatal(e)
+					}
+				}
+				before, e := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+				if e != nil {
+					t.Fatal(e)
+				}
+				notified := &authoringNotificationProbe{Notifier: s.server.deps.Notifier}
+				s.server.deps.Notifier = notified
+				if cancelled {
+					cancel()
+				}
+				var err error
+				if kind == "hook" {
+					_, err = s.server.deps.HookAuthoring.Approve(ctx, a, authoring.HookRevision{Key: beforeHook.Key(), Rev: beforeHook.Rev})
+				} else {
+					_, err = s.server.deps.TemplateAuthoring.Approve(ctx, a, authoring.TemplateRevision{Key: model.TemplateKey{ID: beforeTemplate.ID, Version: beforeTemplate.Version}, Rev: beforeTemplate.Rev})
+				}
+				if err == nil || cancelled && !errors.Is(err, context.Canceled) {
+					t.Fatal("预期事务失败", err)
+				}
+				if !cancelled {
+					for _, sentinel := range []error{repository.ErrInvalid, repository.ErrConflict, repository.ErrRejected, repository.ErrNotFound, ports.ErrForbidden} {
+						if errors.Is(err, sentinel) {
+							t.Fatal("未到审计失败注入", err)
+						}
+					}
+				}
+				if kind == "hook" {
+					after, e := st.GetHook(t.Context(), beforeHook.Key())
+					if e != nil || !reflect.DeepEqual(beforeHook, after) {
+						t.Fatal("组件未回滚", after, e)
+					}
+				} else {
+					after, e := st.GetTemplate(t.Context(), model.TemplateKey{ID: beforeTemplate.ID, Version: beforeTemplate.Version})
+					if e != nil || !reflect.DeepEqual(beforeTemplate, after) {
+						t.Fatal("模板未回滚", after, e)
+					}
+					done := make(chan error, 1)
+					go func() {
+						_, e := s.server.deps.TemplateAuthoring.Approve(t.Context(), ports.Actor{Username: "reviewer", Role: model.RoleHookApprover}, authoring.TemplateRevision{Key: model.TemplateKey{ID: beforeTemplate.ID, Version: beforeTemplate.Version}, Rev: beforeTemplate.Rev})
+						done <- e
+					}()
+					select {
+					case e := <-done:
+						if e != nil {
+							t.Fatal("失败后选择锁未释放", e)
+						}
+					case <-time.After(5 * time.Second):
+						t.Fatal("失败后选择锁未释放")
+					}
+				}
+				// 模板重试成功新增一条；组件分支保持审计不变。
+				after, e := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+				if e != nil {
+					t.Fatal(e)
+				}
+				if kind == "hook" && !reflect.DeepEqual(before.Items, after.Items) || kind == "template" && (len(after.Items) != len(before.Items)+1 || !reflect.DeepEqual(after.Items[1:], before.Items)) {
+					t.Fatal("失败事务留下审计", before.Items, after.Items)
+				}
+				if notified.count.Load() != 0 {
+					t.Fatal("编写操作发送了通知")
+				}
+			})
+		}
+	}
+}
+
+type authoringNotificationProbe struct {
+	ports.Notifier
+	count atomic.Int64
+}
+
+func (n *authoringNotificationProbe) Publish(string) { n.count.Add(1) }
+
+type authoringWaitingGuard struct {
+	ports.SelectionGuard
+	waiting chan struct{}
+	entered chan struct{}
+}
+
+func (g *authoringWaitingGuard) WriteLock() func() {
+	close(g.waiting)
+	release := g.SelectionGuard.WriteLock()
+	close(g.entered)
+	return release
+}
+func Test模板取消等待选择锁后释放锁且不写入(t *testing.T) {
+	for _, op := range []string{"approve", "deprecate"} {
+		t.Run(op, func(t *testing.T) {
+			s, st, _, _, baseTemplate := wizardFixture(t)
+			tpl := baseTemplate
+			if op == "approve" {
+				next, e := st.NewTemplateVersion(t.Context(), tpl.ID, 1, "alice")
+				if e != nil {
+					t.Fatal(e)
+				}
+				k := model.TemplateKey{ID: next.ID, Version: next.Version}
+				if e = st.SubmitTemplate(t.Context(), k, next.Rev, repository.Audit{Actor: "alice", Action: "template.submit", At: fixedAt}); e != nil {
+					t.Fatal(e)
+				}
+				tpl, e = st.GetTemplate(t.Context(), k)
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
+			guard := &authoringWaitingGuard{SelectionGuard: selectionguard.NewGuard(), waiting: make(chan struct{}), entered: make(chan struct{})}
+			d := wizardDepsGuard(s.server.deps, st, guard)
+			before, e := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+			if e != nil {
+				t.Fatal(e)
+			}
+			release := guard.ReadLock()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				r := authoring.TemplateRevision{Key: model.TemplateKey{ID: tpl.ID, Version: tpl.Version}, Rev: tpl.Rev}
+				a := ports.Actor{Username: "reviewer", Role: model.RoleHookApprover}
+				var err error
+				if op == "approve" {
+					_, err = d.TemplateAuthoring.Approve(ctx, a, r)
+				} else {
+					_, err = d.TemplateAuthoring.Deprecate(ctx, a, r)
+				}
+				done <- err
+			}()
+			select {
+			case <-guard.waiting:
+			case <-time.After(5 * time.Second):
+				release()
+				t.Fatal("应用未等待选择锁")
+			}
+			cancel()
+			select {
+			case <-guard.entered:
+				release()
+				t.Fatal("读锁期间进入了写锁")
+			case err := <-done:
+				release()
+				t.Fatal("等待锁新增了立即取消", err)
+			default:
+			}
+			release()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("取消后未退出")
+			}
+			acquired := make(chan struct{})
+			go func() { r := guard.SelectionGuard.WriteLock(); r(); close(acquired) }()
+			select {
+			case <-acquired:
+			case <-time.After(5 * time.Second):
+				t.Fatal("取消后未释放写锁")
+			}
+			after, e := st.GetTemplate(t.Context(), model.TemplateKey{ID: tpl.ID, Version: tpl.Version})
+			if e != nil || !reflect.DeepEqual(tpl, after) {
+				t.Fatal(after, e)
+			}
+			audit, e := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+			if e != nil || !reflect.DeepEqual(before.Items, audit.Items) {
+				t.Fatal("取消后留下审计", audit, e)
+			}
+		})
 	}
 }

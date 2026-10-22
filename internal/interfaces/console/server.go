@@ -7,7 +7,6 @@ import (
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
-	"github.com/lober/lober/internal/application/tasks/port"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 	"log/slog"
@@ -19,28 +18,28 @@ import (
 
 type Clock = ports.Clock
 type Deps struct {
-	HookAuthoring    authoring.Hooks
-	Hosts            repository.Hosts
-	ISOs             repository.ISOs
-	Hooks            repository.Hooks
-	Templates        repository.Templates
-	Tasks            repository.Tasks
-	Wizard           tasks.Wizard
-	SelectionGuard   port.SelectionGuard
-	Events           repository.Events
-	Audit            repository.AuditLog
-	Users            repository.Users
-	RoleMenus        repository.RoleMenus
-	ISOSource        ISOSource
-	Sources          ISOSourceState
-	ISODeletion      ISODeletion
-	BootConfig       BootConfig
-	PreviewEndpoints PreviewEndpoints
-	TaskCtl          TaskControl
-	Notifier         Notifier
-	Clock            Clock
-	SessionTTL       int64
-	Logger           *slog.Logger
+	HookAuthoring     authoring.Hooks
+	TemplateAuthoring authoring.Templates
+	Hosts             repository.Hosts
+	ISOs              repository.ISOs
+	Hooks             repository.Hooks
+	Templates         repository.Templates
+	Tasks             repository.Tasks
+	Wizard            tasks.Wizard
+	Events            repository.Events
+	Audit             repository.AuditLog
+	Users             repository.Users
+	RoleMenus         repository.RoleMenus
+	ISOSource         ISOSource
+	Sources           ISOSourceState
+	ISODeletion       ISODeletion
+	BootConfig        BootConfig
+	PreviewEndpoints  PreviewEndpoints
+	TaskCtl           TaskControl
+	Notifier          Notifier
+	Clock             Clock
+	SessionTTL        int64
+	Logger            *slog.Logger
 }
 type Server struct {
 	Engine *gin.Engine
@@ -64,9 +63,6 @@ func New(d Deps) *Server {
 	}
 	if d.Notifier == nil {
 		d.Notifier = NewHub()
-	}
-	if d.SelectionGuard == nil {
-		d.SelectionGuard = NewSelectionGuard()
 	}
 	if d.Logger == nil {
 		d.Logger = slog.Default()
@@ -97,13 +93,6 @@ func actorOf(c *gin.Context) ports.Actor {
 	return ports.Actor{}
 }
 
-// NewSelectionGuard 在过渡期连接向导与旧模板入口，组装后双方必须使用同一实例。
-func NewSelectionGuard() port.SelectionGuard { return &selectionGuard{} }
-
-type selectionGuard struct{ sync.RWMutex }
-
-func (g *selectionGuard) ReadLock() func()  { g.RLock(); return g.RUnlock }
-func (g *selectionGuard) WriteLock() func() { g.Lock(); return g.Unlock }
 func (s *server) recoverPanic() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {

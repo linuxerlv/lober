@@ -117,6 +117,6 @@ type WizardDeps struct {
 	Manifest       selection.Manifest
 	Clock          ports.Clock
 	Notifier       ports.Notifier
-	SelectionGuard port.SelectionGuard
+	SelectionGuard ports.SelectionGuard
 	Diagnostics    port.TaskDiagnostics
 }

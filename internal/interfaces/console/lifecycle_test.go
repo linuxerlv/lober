@@ -200,6 +200,8 @@ func Test生命周期校验只读并计算OK(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.server.deps.Hooks = closed
+	// 编写应用在构造时接收引用读取器；失败注入也必须重新组装该能力。
+	s.server.deps.TemplateAuthoring = wizardDeps(s.server.deps, st).TemplateAuthoring
 	w := httpCall(s, "POST", lifecyclePath("templates", tpl.ID, "validate", 0), "", admin)
 	if w.Code != 500 || strings.Contains(w.Body.String(), "hook_ref_missing") || strings.Contains(w.Body.String(), "database is closed") {
 		t.Fatal(w.Code, w.Body.String())

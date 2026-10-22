@@ -10,6 +10,7 @@ const (
 	pkgPorts                 = modulePath + "/internal/application/ports"
 	pkgTasks                 = modulePath + "/internal/application/tasks"
 	pkgTasksPort             = pkgTasks + "/port"
+	pkgSelectionGuard        = modulePath + "/internal/infrastructure/selection"
 	pkgNotification          = modulePath + "/internal/infrastructure/notification"
 	ruleApplication     rule = "应用模块只依赖标准库、领域与自己的能力接口，不依赖网页、基础设施或其他应用服务"
 	ruleApplicationPort rule = "应用能力接口只依赖标准库、领域与共同能力接口"
@@ -54,5 +55,14 @@ func checkNotificationFile(fset *token.FileSet, pkg string, f *ast.File) []viola
 			return ""
 		}
 		return ruleNotification
+	})
+}
+
+func checkSelectionFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
+	return checkImports(fset, pkg, f, func(_, imp string) rule {
+		if imp == "sync" || imp == pkgPorts {
+			return ""
+		}
+		return rule("选择锁只依赖 sync 与共同能力契约")
 	})
 }

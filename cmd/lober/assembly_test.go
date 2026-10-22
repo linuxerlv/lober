@@ -312,7 +312,7 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 	}
 }
 
-func Test组件应用与旧模板入口同时组装(t *testing.T) {
+func Test组件和模板应用同时组装(t *testing.T) {
 	a, cfg := assembled(t)
 	request := func(method, path, body, token string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, bytes.NewBufferString(body))

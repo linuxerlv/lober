@@ -2,6 +2,7 @@ package console
 
 import (
 	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
@@ -9,6 +10,7 @@ import (
 	"github.com/lober/lober/internal/infrastructure/builtin"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
+	selectionguard "github.com/lober/lober/internal/infrastructure/selection"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -33,13 +35,13 @@ type wizardTaskRepository struct {
 	repository.CurrentTaskCreator
 }
 
-// 测试也显式组装，保证向导、旧模板入口和通知订阅使用相同实例。
+// 测试也显式组装，保证向导、模板编写和通知订阅使用相同实例。
 func wizardDeps(d Deps, current repository.CurrentTaskCreator) Deps {
+	return wizardDepsGuard(d, current, selectionguard.NewGuard())
+}
+func wizardDepsGuard(d Deps, current repository.CurrentTaskCreator, guard ports.SelectionGuard) Deps {
 	if d.Notifier == nil {
 		d.Notifier = NewHub()
-	}
-	if d.SelectionGuard == nil {
-		d.SelectionGuard = NewSelectionGuard()
 	}
 	manifest := selection.Manifest{}
 	for _, t := range builtin.Templates() {
@@ -48,8 +50,9 @@ func wizardDeps(d Deps, current repository.CurrentTaskCreator) Deps {
 	for _, h := range builtin.Hooks() {
 		manifest.Hooks = append(manifest.Hooks, model.HookKey{ID: h.ID, Version: h.Version})
 	}
+	d.TemplateAuthoring = authoring.NewTemplates(authoring.TemplateDeps{Templates: d.Templates, Hooks: d.Hooks, Clock: d.Clock, SelectionGuard: guard})
 	d.HookAuthoring = authoring.NewHooks(authoring.HookDeps{Hooks: d.Hooks, Clock: d.Clock})
-	d.Wizard = tasks.NewWizard(tasks.WizardDeps{Hosts: d.Hosts, ISOs: d.ISOs, Hooks: d.Hooks, Templates: d.Templates, Tasks: wizardTaskRepository{d.Tasks, current}, Manifest: manifest, Clock: d.Clock, Notifier: d.Notifier, SelectionGuard: d.SelectionGuard, Diagnostics: d.TaskCtl})
+	d.Wizard = tasks.NewWizard(tasks.WizardDeps{Hosts: d.Hosts, ISOs: d.ISOs, Hooks: d.Hooks, Templates: d.Templates, Tasks: wizardTaskRepository{d.Tasks, current}, Manifest: manifest, Clock: d.Clock, Notifier: d.Notifier, SelectionGuard: guard, Diagnostics: d.TaskCtl})
 	return d
 }
 func seedHTTPUser(t *testing.T, s *Server, st repository.Users, name string, role model.Role) (string, model.User) {
