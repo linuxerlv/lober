@@ -13,10 +13,15 @@ type Editor interface {
 	Slots(context.Context, ports.Actor, model.TemplateKey) (SlotResult, error)
 	Candidates(context.Context, ports.Actor, CandidateRequest) (CandidatePage, error)
 	SourceDiff(context.Context, ports.Actor, model.TemplateKey) (SourceDiffResult, error)
+	PreviewParams(context.Context, ports.Actor, PreviewRequest) (PreviewParamsResult, error)
+	Preview(context.Context, ports.Actor, PreviewRequest) (PreviewResult, error)
 }
 type EditorDeps struct {
 	Templates port.TemplateReader
 	Hooks     port.HookReader
+	Hosts     port.HostReader
+	ISOs      port.ISOReader
+	Renderer  ports.FrozenPreview
 }
 type CandidateRequest struct {
 	Key   model.TemplateKey

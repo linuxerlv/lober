@@ -17,7 +17,7 @@ import (
 type editor struct{ deps EditorDeps }
 
 func NewEditor(d EditorDeps) Editor {
-	if d.Templates == nil || d.Hooks == nil {
+	if d.Templates == nil || d.Hooks == nil || d.Hosts == nil || d.ISOs == nil || d.Renderer == nil {
 		panic("编辑辅助缺少必要能力")
 	}
 	return &editor{deps: d}

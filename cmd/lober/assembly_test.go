@@ -16,12 +16,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/params"
 	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/domain/snapshot"
 	"github.com/lober/lober/internal/infrastructure/media"
 	"github.com/lober/lober/internal/infrastructure/media/isotest"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 	"github.com/lober/lober/internal/interfaces/console"
+	"strings"
 )
 
 const assemblyAt int64 = 1790000000
@@ -359,5 +365,29 @@ func Test组件和模板应用同时组装(t *testing.T) {
 		if got.Data.Author != "admin" || got.Data.State != "draft" || len(got.Data.Problems) == 0 {
 			t.Fatal(kind, w.Body.String())
 		}
+	}
+}
+
+func Test预览组装共用地址且不提前读取配置(t *testing.T) {
+	cfg := config{ISO: isoConfig{Artifacts: filepath.Join(t.TempDir(), "missing")}, Preview: previewConfig{Gateway: "https://gateway.test", Artifacts: "https://artifacts.test", SMB: `\\smb.test\lober`, SyslogAddr: "udp://syslog.test:514"}}
+	renderer := previewRendererOf(cfg)
+	st := pgtest.OpenStore(t)
+	tpl, err := st.CreateTemplate(t.Context(), model.Template{Name: "assembly-preview", Author: "admin", Family: "linux", Series: []catalog.Series{"rocky"}, Body: "# {{sys:task}}\n{{lober:firstboot}}\n{{lober:cleanup}}\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	editor := authoringEditorOf(st, renderer)
+	result, err := editor.Preview(t.Context(), ports.Actor{Username: "reader", Role: model.RoleViewer}, authoring.PreviewRequest{Key: model.TemplateKey{ID: tpl.ID, Version: tpl.Version}})
+	if err != nil || len(result.Files) != 2 || !strings.Contains(result.Files[0].Body, "https://gateway.test") || !strings.Contains(result.Files[1].Body, "# sample-task") {
+		t.Fatal(result, err)
+	}
+	item := model.ISO{ID: "iso", Series: "rocky", Family: "linux", State: model.ISOReady, Version: "9", Arch: "x86_64", Artifacts: map[string]string{"kernel": "kernel", "initrd": "initrd", "stage2": "stage2", "repo": "repo"}}
+	frozen, ps := snapshot.Build(params.Input{Template: tpl, ISO: item, Host: model.Host{SN: "SN-1", Arch: "x86_64"}})
+	if len(ps) > 0 {
+		t.Fatal(ps)
+	}
+	files, _, ps, err := renderer.RenderFrozen(t.Context(), frozen, catalog.FirmwareUEFI, "task-old")
+	if err != nil || len(ps) > 0 || !strings.Contains(files[0].Body, "https://gateway.test") || !strings.Contains(files[1].Body, "# task-old") {
+		t.Fatal(files, ps, err)
 	}
 }

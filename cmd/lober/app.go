@@ -123,11 +123,14 @@ func hookAuthoringOf(st repository.Store, clock console.Clock) authoring.Hooks {
 func templateAuthoringOf(st repository.Store, clock console.Clock, guard ports.SelectionGuard) authoring.Templates {
 	return authoring.NewTemplates(authoring.TemplateDeps{Templates: st, Hooks: st, Clock: clock, SelectionGuard: guard})
 }
-func authoringEditorOf(st repository.Store) authoring.Editor {
-	return authoring.NewEditor(authoring.EditorDeps{Templates: st, Hooks: st})
+func previewRendererOf(cfg config) ports.FrozenPreview {
+	return authoring.NewPreviewRenderer(iso.NewBootConfigReader(cfg.ISO.Artifacts), ports.PreviewEndpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr})
 }
-func consoleDepsOf(st repository.Store, src *sourceSupervisor, j *deletionJournal, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, ctl console.TaskControl) console.Deps {
-	return console.Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, Audit: st, Users: st, RoleMenus: st, Sources: st, ISOSource: src, ISODeletion: j, BootConfig: bootConfigReader{root: cfg.ISO.Artifacts}, PreviewEndpoints: console.PreviewEndpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
+func authoringEditorOf(st repository.Store, renderer ports.FrozenPreview) authoring.Editor {
+	return authoring.NewEditor(authoring.EditorDeps{Templates: st, Hooks: st, Hosts: st, ISOs: st, Renderer: renderer})
+}
+func consoleDepsOf(st repository.Store, src *sourceSupervisor, j *deletionJournal, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, renderer ports.FrozenPreview, ctl console.TaskControl) console.Deps {
+	return console.Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, Audit: st, Users: st, RoleMenus: st, Sources: st, ISOSource: src, ISODeletion: j, FrozenPreview: renderer, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
 }
 func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, raw *iso.Sources, s *sourceSupervisor, j *deletionJournal, g *registrationGate, m *machineBundle) *app {
 	return &app{Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Native: raw, Supervisor: s, Deletion: j, Gate: g, Machine: m}

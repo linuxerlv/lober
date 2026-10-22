@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/infrastructure/builtin"
 	"os"
 	"path/filepath"
@@ -53,7 +55,7 @@ func Test预览真实渲染菜单运行脚本与原始Hook(t *testing.T) {
 	if files["menu"].Name != "menu.ipxe" || !strings.Contains(files["menu"].Body, "sample-token") || files["answer"].Name != "ks.cfg" || !strings.Contains(files["answer"].Body, "# hello") || files["script"].Name != "script-1.sh" || files["hook"].Body != h.Impls[0].Body {
 		t.Fatal(files)
 	}
-	in := params.Input{Template: tpl, Hooks: map[model.HookKey]model.Hook{h.Key(): h}, ISO: SampleISO("rocky"), Host: SampleHost(), Entered: map[params.FieldKey]string{"tpl/message": "hello", "execute/1/msg": "world"}}
+	in := params.Input{Template: tpl, Hooks: map[model.HookKey]model.Hook{h.Key(): h}, ISO: previewISOFixture("rocky"), Host: previewHostFixture(), Entered: map[params.FieldKey]string{"tpl/message": "hello", "execute/1/msg": "world"}}
 	frozen, problems := snapshot.Build(in)
 	if len(problems) != 0 {
 		t.Fatal(problems)
@@ -175,7 +177,8 @@ func Test预览ESXi使用真实原始配置且未知示例不可用(t *testing.T
 	if err := os.WriteFile(filepath.Join(root, "esxi", "boot.cfg"), []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
-	s.server.deps.BootConfig = diskBootConfig{root}
+	s.server.deps.FrozenPreview = authoring.NewPreviewRenderer(diskBootConfig{root}, ports.PreviewEndpoints{})
+	s.server.deps.AuthoringEditor = authoring.NewEditor(authoring.EditorDeps{Templates: st, Hooks: st, Hosts: st, ISOs: st, Renderer: s.server.deps.FrozenPreview})
 	p := responseData[previewResponse](t, httpCall(s, "POST", previewPath(tpl), fmt.Sprintf(`{"isoID":%q,"firmware":"uefi"}`, item.ID), token))
 	found := false
 	for _, f := range p.Files {
@@ -243,7 +246,7 @@ func Test预览实际内置模板的全部已声明系(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			form := params.Evaluate(params.Input{Template: tpl, Hooks: hooks, ISO: SampleISO(series), Host: SampleHost()})
+			form := params.Evaluate(params.Input{Template: tpl, Hooks: hooks, ISO: previewISOFixture(series), Host: previewHostFixture()})
 			entered := map[string]string{}
 			for _, field := range form.Fields {
 				if !field.Required || field.Prefill != "" || field.Locked {
@@ -298,4 +301,28 @@ func Test预览与插槽对五角色都是只读权限(t *testing.T) {
 		responseData[previewResponse](t, httpCall(s, "POST", previewPath(tpl), `{}`, token))
 		responseData[slotList](t, httpCall(s, "GET", fmt.Sprintf("/console/v1/templates/%s/versions/1/slots", tpl.ID), "", token))
 	}
+}
+
+func previewISOFixture(series catalog.Series) model.ISO {
+	artifacts := map[string]string{}
+	for _, role := range catalog.RequiredRoles(series) {
+		artifacts[role] = "sample/" + role
+	}
+	// 测试示例保留正文能够引用的制品角色。
+	for _, value := range series.Format().SystemValues() {
+		if value == catalog.SysRepo || value == catalog.SysISO {
+			artifacts[string(value)] = "sample/" + string(value)
+		}
+	}
+	offers := map[string][]model.Option{}
+	switch series.Format() {
+	case catalog.FormatAgama:
+		offers["products"] = []model.Option{{Value: "ExampleProduct", Label: "示例产品"}}
+	case catalog.FormatUnattend:
+		offers["editions"] = []model.Option{{Value: "ExampleEdition", Label: "示例版本"}}
+	}
+	return model.ISO{ID: "sample-iso", Name: model.ConsoleSampleISO, Family: series.Family(), Series: series, Version: "0.0", Arch: catalog.ArchX8664, State: model.ISOReady, Artifacts: artifacts, Offers: offers}
+}
+func previewHostFixture() model.Host {
+	return model.Host{SN: "SAMPLE-SN", Arch: catalog.ArchX8664, Firmware: catalog.FirmwareUEFI, Attrs: map[string]string{}}
 }

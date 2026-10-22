@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"github.com/lober/lober/internal/application/authoring"
 	"slices"
 	"strconv"
@@ -74,9 +73,6 @@ func toTemplateResponseWithProblems(t model.Template, problems []model.Problem) 
 	return templateResponse{ID: t.ID, Version: t.Version, Name: t.Name, State: t.State, Author: t.Author, Approver: t.Approver, Builtin: t.Builtin, DerivedFrom: from, Family: t.Family, Series: append([]catalog.Series{}, t.Series...), Body: t.Body, Params: declsToDTO(t.Params), Bindings: bindingsToDTO(t.Bindings), Assembly: assemblyToDTO(t.Assembly), Problems: jsonProblems(problems), Rev: t.Rev}
 }
 
-func (s *server) templateHooks(ctx context.Context, templates []model.Template) (map[model.HookKey]model.Hook, error) {
-	return s.deps.Hooks.GetHooks(ctx, repository.TemplateHookKeys(templates))
-}
 func templateViewResponse(v authoring.TemplateView) templateResponse {
 	return toTemplateResponseWithProblems(v.Template, v.Problems)
 }

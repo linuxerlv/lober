@@ -57,7 +57,7 @@ func editorFixture() (*editorReader, model.TemplateKey) {
 }
 func Test编辑辅助直调也检查模板读取权限(t *testing.T) {
 	r, k := editorFixture()
-	s := NewEditor(EditorDeps{Templates: r, Hooks: r})
+	s := NewEditor(editorTestDeps(r))
 	for _, a := range []ports.Actor{{}, {Username: "x", Role: "invalid"}, {Username: "x", Role: model.RoleAdmin, Disabled: true}, {Username: "x", Role: model.RoleAdmin, MustChangePassword: true}} {
 		want := ports.ErrUnauthenticated
 		if a.MustChangePassword {
@@ -96,7 +96,7 @@ func Test候选只采纳当前替换位置的问题(t *testing.T) {
 	h := model.Hook{ID: "candidate", Version: 1, State: model.VersionDraft, Params: []model.ParamDecl{{Name: "keep", Type: "word"}}, Impls: []model.Impl{{Family: "linux", Series: []catalog.Series{"rocky"}, Kind: model.ImplFragment, Body: "# test"}}}
 	r.page.Items = []model.Hook{h}
 	r.hookVersions = []model.Hook{h}
-	s := NewEditor(EditorDeps{Templates: r, Hooks: r})
+	s := NewEditor(editorTestDeps(r))
 	index := 2
 	got, err := s.Candidates(t.Context(), editorActor(), CandidateRequest{Key: k, Slot: "disk", Index: &index})
 	if err != nil || len(got.Items) != 1 {
@@ -157,7 +157,7 @@ func Test来源差异选择最新草稿但不改派生模板(t *testing.T) {
 	untouched, _ := editorFixture()
 	before := untouched.templates[k]
 	before.DerivedFrom = &model.TemplateKey{ID: "source", Version: 1}
-	s := NewEditor(EditorDeps{Templates: r, Hooks: r})
+	s := NewEditor(editorTestDeps(r))
 	got, err := s.SourceDiff(t.Context(), editorActor(), k)
 	if err != nil || !got.Changed || got.Original.Template.Version != 1 || got.Current.Template.Version != 3 || got.Current.Template.Body != "draft" {
 		t.Fatal(got, err)
@@ -179,7 +179,7 @@ func Test编辑插槽保留首次位置和重复诊断(t *testing.T) {
 	tpl := r.templates[k]
 	tpl.Body = "x {{slot:disk}}\n{{slot:other}}\n{{slot:disk}}"
 	r.templates[k] = tpl
-	s := NewEditor(EditorDeps{Templates: r, Hooks: r})
+	s := NewEditor(editorTestDeps(r))
 	got, err := s.Slots(t.Context(), editorActor(), k)
 	if err != nil || len(got.Slots) != 2 || got.Slots[0].Name != "disk" || got.Slots[0].Line != 1 || got.Slots[0].Col != 3 || got.Slots[1].Name != "other" || got.Slots[1].Line != 2 {
 		t.Fatal(got, err)
@@ -205,7 +205,7 @@ func Test编辑插槽保留首次位置和重复诊断(t *testing.T) {
 }
 func Test候选按模板插槽序号分页依次检查(t *testing.T) {
 	r, k := editorFixture()
-	s := NewEditor(EditorDeps{Templates: r, Hooks: r})
+	s := NewEditor(editorTestDeps(r))
 	zero := 0
 	cases := []struct {
 		req  CandidateRequest
@@ -231,7 +231,7 @@ func Test候选两种分页分别处理身份和版本(t *testing.T) {
 	two.Version = 2
 	r.page = repository.Page[model.Hook]{Items: []model.Hook{two}, Next: "next"}
 	r.hookVersions = []model.Hook{one, two}
-	s := NewEditor(EditorDeps{Templates: r, Hooks: r})
+	s := NewEditor(editorTestDeps(r))
 	got, err := s.Candidates(t.Context(), editorActor(), CandidateRequest{Key: k, Slot: "disk", PageRequest: PageRequest{Limit: 1}})
 	if err != nil || len(got.Items) != 2 || got.Items[0].Hook.Hook.Version != 1 || got.Items[1].Hook.Hook.Version != 2 || got.Next != "next" || r.query.AllVersions {
 		t.Fatal(got, err, r.query)
@@ -246,7 +246,12 @@ func Test候选两种分页分别处理身份和版本(t *testing.T) {
 
 func Test编辑辅助缺少依赖立即拒绝构造(t *testing.T) {
 	r, _ := editorFixture()
-	for _, d := range []EditorDeps{{}, {Templates: r}, {Hooks: r}} {
+	full := editorTestDeps(r)
+	missingHosts, missingISOs, missingRenderer := full, full, full
+	missingHosts.Hosts = nil
+	missingISOs.ISOs = nil
+	missingRenderer.Renderer = nil
+	for _, d := range []EditorDeps{{}, {Templates: r}, {Hooks: r}, missingHosts, missingISOs, missingRenderer} {
 		func() {
 			defer func() {
 				if recover() == nil {
@@ -256,4 +261,14 @@ func Test编辑辅助缺少依赖立即拒绝构造(t *testing.T) {
 			NewEditor(d)
 		}()
 	}
+}
+
+func (r *editorReader) GetHost(context.Context, string) (model.Host, error) {
+	return model.Host{}, repository.ErrNotFound
+}
+func (r *editorReader) GetISO(context.Context, string) (model.ISO, error) {
+	return model.ISO{}, repository.ErrNotFound
+}
+func editorTestDeps(r *editorReader) EditorDeps {
+	return EditorDeps{Templates: r, Hooks: r, Hosts: r, ISOs: r, Renderer: NewPreviewRenderer(nil, ports.PreviewEndpoints{})}
 }

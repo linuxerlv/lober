@@ -18,7 +18,9 @@ import (
 
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/params"
 	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/domain/snapshot"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 )
@@ -449,5 +451,66 @@ func Test任务SSE断线续读OpenAPI请求头(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("Last-Event-ID header absent", op["parameters"])
+	}
+}
+
+func Test任务预览只使用冻结快照(t *testing.T) {
+	s, st, token, item, _ := wizardFixture(t)
+	item.Artifacts = map[string]string{"kernel": "old/kernel", "initrd": "old/initrd", "stage2": "old/stage2", "repo": "old/repo"}
+	var err error
+	item, err = st.UpdateISO(t.Context(), item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl, h := previewFixture(t, st)
+	if err := st.SubmitHook(t.Context(), h.Key(), h.Rev, repository.Audit{Actor: "author", Action: "hook.submit", At: fixedAt}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ApproveHook(t.Context(), h.Key(), h.Rev+1, "reviewer", repository.Audit{Actor: "reviewer", Action: "hook.approve", At: fixedAt}); err != nil {
+		t.Fatal(err)
+	}
+	tpl.ID, tpl.Name, tpl.Version = "builtin-preview-frozen", "lober:preview-frozen", 1
+	tpl.Builtin, tpl.Author, tpl.Approver, tpl.Rev, tpl.State = true, "", "", 0, model.VersionApproved
+	tpl.Body = "# frozen {{sys:task}} {{param:message}}\n" + tpl.Body
+	if err := st.EnsureBuiltinTemplate(t.Context(), tpl); err != nil {
+		t.Fatal(err)
+	}
+	host, err := st.GetHost(t.Context(), "SN-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen, ps := snapshot.Build(params.Input{Template: tpl, Hooks: map[model.HookKey]model.Hook{h.Key(): h}, ISO: item, Host: host})
+	if len(ps) > 0 {
+		t.Fatal(ps)
+	}
+	created, err := st.CreateTasks(t.Context(), []model.Task{{HostSN: host.SN, ISOID: item.ID, TemplateID: tpl.ID, TemplateVersion: 1, Snapshot: frozen, CreatedBy: "admin", CreatedAt: fixedAt}}, repository.Audit{Actor: "admin", Action: "task.create", At: fixedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created[0].ID
+	path := "/console/v1/tasks/" + id + "/preview"
+	first := responseData[previewResponse](t, httpCall(s, "POST", path, `{}`, token))
+	tpl.Version = 2
+	tpl.Body = "# new release\n{{lober:firstboot}}\n{{lober:cleanup}}\n"
+	tpl.Params = nil
+	tpl.Assembly = nil
+	if err := st.EnsureBuiltinTemplate(t.Context(), tpl); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := st.NewHookVersion(t.Context(), h.ID, 1, "author")
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft.Impls[0].Body = "#!/bin/sh\necho changed\n"
+	if _, err := st.SaveHookDraft(t.Context(), draft); err != nil {
+		t.Fatal(err)
+	}
+	item.Artifacts["kernel"] = "new/kernel"
+	if _, err := st.UpdateISO(t.Context(), item); err != nil {
+		t.Fatal(err)
+	}
+	again := responseData[previewResponse](t, httpCall(s, "POST", path, `{"entered":{"tpl/message":"changed"}}`, token))
+	if !reflect.DeepEqual(first, again) || len(first.Files) != 4 || !strings.Contains(first.Files[0].Body, "old/kernel") || !strings.Contains(first.Files[1].Body, "# frozen "+id+" template-default") || first.Files[3].Body != h.Impls[0].Body || first.Files[3].Digest != h.Impls[0].Digest() || first.Files[3].Digest == "" {
+		t.Fatal(first, again)
 	}
 }

@@ -296,7 +296,7 @@ func (s *server) previewTask(c *gin.Context) {
 			labels = append(labels, "firmware")
 		}
 	}
-	files, sample, ps, err := s.renderPreview(c.Request.Context(), t.Snapshot, firmware, t.ID)
+	files, sample, ps, err := s.deps.FrozenPreview.RenderFrozen(c.Request.Context(), t.Snapshot, firmware, t.ID)
 	if err != nil {
 		RespondError(c, err)
 		return
@@ -308,5 +308,5 @@ func (s *server) previewTask(c *gin.Context) {
 	for i := range files {
 		files[i].Sample = len(sample) > 0
 	}
-	Ok(c, previewResponse{Files: files, Problems: jsonProblems(ps), Sample: sample})
+	Ok(c, previewResponse{Files: previewFiles(files), Problems: jsonProblems(ps), Sample: sample})
 }

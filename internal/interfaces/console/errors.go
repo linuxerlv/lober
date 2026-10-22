@@ -63,6 +63,11 @@ func RespondError(c *gin.Context, err error) {
 		Fail(c, 403, nil, model.ConsoleForbidden)
 		return
 	}
+	var previewProblems *authoring.ProblemsError
+	if errors.As(err, &previewProblems) {
+		Judge(c, previewProblems.Problems)
+		return
+	}
 	var applicationProblems *tasks.ProblemsError
 	if errors.As(err, &applicationProblems) {
 		Judge(c, applicationProblems.Problems)

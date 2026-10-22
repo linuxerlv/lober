@@ -34,8 +34,7 @@ type Deps struct {
 	ISOSource         ISOSource
 	Sources           ISOSourceState
 	ISODeletion       ISODeletion
-	BootConfig        BootConfig
-	PreviewEndpoints  PreviewEndpoints
+	FrozenPreview     ports.FrozenPreview
 	TaskCtl           TaskControl
 	Notifier          Notifier
 	Clock             Clock

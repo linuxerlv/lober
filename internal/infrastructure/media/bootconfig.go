@@ -1,4 +1,4 @@
-package main
+package iso
 
 import (
 	"context"
@@ -12,9 +12,11 @@ import (
 	"github.com/lober/lober/internal/domain/model"
 )
 
-type bootConfigReader struct{ root string }
+type BootConfigReader struct{ root string }
 
-func (b bootConfigReader) ReadESXiBootConfig(ctx context.Context, s model.SnapshotISO) (string, error) {
+func NewBootConfigReader(root string) *BootConfigReader { return &BootConfigReader{root: root} }
+
+func (b *BootConfigReader) ReadESXiBootConfig(ctx context.Context, s model.SnapshotISO) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
