@@ -15,7 +15,7 @@ func wizardTransitionFixture(t *testing.T, body string) []violation {
 	for _, src := range []struct{ name, text string }{
 		{"server.go", `package console; import (repo "` + pkgStore + `"; tp "` + pkgTasksPort + `"; p "` + pkgPorts + `"); type deps struct{Users repo.Users; TaskCtl TaskControl; Tasks tp.Tasks; Notifier p.Notifier}; type server struct{deps deps}; type TaskControl interface{CanCancel()}`},
 		{"auth.go", `package console; func(s *server) login(){s.deps.Users.GetUser()}`},
-		{"templates.go", `package console; func toTemplateResponse(){(&server{}).templateHooks()}; func(s *server) templateHooks(){s.login()}`},
+		{"legacy_templates.go", `package console; func toTemplateResponse(){(&server{}).templateHooks()}; func(s *server) templateHooks(){s.login()}`},
 		{"tasks.go", `package console; func(s *server) taskResponse(){s.deps.TaskCtl.CanCancel()}`},
 		{"bridge.go", `package console; func(s *server) bridge(){s.login()}; var alias=toTemplateResponse`},
 		{"wizard.go", `package console; import p "` + layer1 + `/params"; type Clock func()int64; func(s *server) wizardHosts(){` + body + `}; var _=p.FieldKey("")`},

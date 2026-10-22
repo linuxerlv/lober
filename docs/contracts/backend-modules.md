@@ -76,13 +76,13 @@
 | 总路线清除阶段 | 本次登记的现有代码 |
 | --- | --- |
 | `1` 四层基础与向导 | 五个操作已进入任务应用服务，全部向导临时放行已删除；网页只解析输入和转换结果 |
-| `2` 编写与预览 | `hooks.go`、`templates.go`、`lifecycle.go`、`preview.go`、`slots.go` 中逐条登记的仓储访问，以及对应依赖字段 |
+| `2` 编写与预览 | 32条入口已通过编写应用；阶段2许可已清零，组件和模板仓储不再注入网页 |
 | `3` 主机 | `hosts.go` 中逐条登记的查询、登记、编辑、删除、导入，以及主机依赖字段 |
 | `4` 镜像与后台作业 | `isos.go`、`isosource.go` 中逐条登记的旧仓储和来源读取符号，以及镜像依赖字段 |
 | `5` 身份权限与审计 | 登录、认证、用户管理、权限、审计查询和网页角色描述的精确符号 |
 | `6` 任务查询与收尾 | 任务查询、事件流、控制和共享错误转换中尚存的精确旧符号；最后全部清零 |
 
-共享 `templateHooks` 仍供未迁移的编写和预览入口使用，保留阶段 `2` 的精确条目。向导迁移后不得再用这个兼容入口。各阶段清理对应条目；新业务文件、函数和符号默认不在放行清单中。
+旧 `templateHooks`、`templateProblems`、`ProblemsOf`、`HookProblems` 和 `renderPreview` 生产桥已删除。向导和编写入口不得经同包辅助重回旧业务。剩余阶段继续逐项清理；新业务文件、函数和符号默认不在放行清单中。
 
 ## 已固定的验收例子
 
@@ -113,7 +113,7 @@
 
 `application/tasks.Wizard` 提供五个向导操作。每个操作先检查注入的 `ports.Actor`；权限仍由 `domain/access` 唯一规则决定。模板候选的 `Problems` 和提交结果的 `CanCancel/CanRetry` 在应用计算，网页只做字段转换。任务诊断只通过 `port.TaskDiagnostics` 注入；未提供时保持空诊断，不新增执行规则。
 
-生产组装创建一个 `SelectionGuard`，同时注入任务应用和旧模板审批、废弃入口。过渡实现仍位于 console，编写模块迁移时移出。它只负责同进程协调，数据库的当前版本事务保护继续独立生效。`console.Clock` 是 `ports.Clock` 别名；每个候选任务的创建时间和整批审计时间仍按原位置取时钟，成功提交后才逐任务通知。
+生产组装创建一个 `infrastructure/selection.NewGuard()`，经共同 `ports.SelectionGuard` 同时注入任务应用和模板应用。模板审批、废弃在写入与补读期间持写锁，任务提交持读锁。网页没有锁字段或默认锁。它只负责同进程协调，数据库的当前版本事务保护继续独立生效。`console.Clock` 是 `ports.Clock` 别名；每个候选任务的创建时间和整批审计时间仍按原位置取时钟，成功提交后才逐任务通知。
 
 `application/ports.Notifier` 是唯一共同通知契约，保持 `Publish(string)` 和 `Subscribe(string) (<-chan struct{}, func())`。实现位于 `infrastructure/notification`，使用锁与一次性退订保护，多次提示合并为一个；消费者收到提示后补读已提交事件。事务失败或取消不能发布。此次不改变原来的发布位置。
 
@@ -125,7 +125,7 @@
 
 ## 第一阶段收尾快照
 
-源码任务1至5已验收，五个向导操作进入任务应用，向导临时放行数为0。下表330条记录功能分支验收时的快照；合入dev后增加36项既有访问、删除6项旧许可，当前为360条，见[集成记录](../superpowers/reviews/2026-10-22-ddd-develop-integration.md)。这些是后续阶段的明确过渡职责，不能据此称整个后端已经拆完。
+源码任务1至5已验收，五个向导操作进入任务应用，向导临时放行数为0。下表330条记录功能分支验收时的快照；合入dev后增加36项既有访问、删除6项旧许可，集成时为360条，见[集成记录](../superpowers/reviews/2026-10-22-ddd-develop-integration.md)。这些是后续阶段的明确过渡职责，不能据此称整个后端已经拆完。
 正式编号能力仍限原六个函数，不计入过渡清单。以下数量只记录现状，不给新增函数授权；唯一执行规则仍在架构检查源码中。
 
 | 固定清单 | 条数 | 清除阶段和条数 |
@@ -137,3 +137,22 @@
 
 逐文件、函数和符号清单，以及提交历史、裁定、失败修复和保留独立并发修复的回退办法，见[第一阶段证据](../superpowers/reviews/2026-10-22-ddd-phase1-evidence.md)。
 Task6只补文档，不改数据库结构、网页字段、前端或生产行为。普通CreateTasks保存指定旧审批版本与当前选择原子创建的区别继续保留。
+
+## 第二阶段边界
+
+编写网页只依赖 `authoring.Hooks`、`authoring.Templates`、`authoring.Editor` 和共用 `ports.FrozenPreview`。请求解析与字段转换留在网页；权限、版本读取、诊断、审批和预览编排在应用。公开网页类型和JSON字段保持原样。
+
+`authoring/port` 的组件、模板、主机和镜像接口只声明实际所需的方法。应用不能借总仓储或其他应用的具体实现调用业务。`media.BootConfigReader` 实现冻结介质配置读取；`FrozenPreview.RenderFrozen` 只消费已保存的快照，不选最新模板，也不拿真实任务令牌构造示例。
+
+类型检查的根集合覆盖向导和编写的全部处理文件，并沿同包函数、方法值、局部与包级别名追踪。只允许已登记的应用方法和 `FrozenPreview.RenderFrozen`；小仓储接口、通知和任务诊断仍拒绝。错误转换只允许原 `StatusOfProblems` 调用 `Code.Category`，不能借错误转换回调仓储。
+
+阶段2累计删除83项精确许可：仓储清单55项，网页规则清单28项；其中78项由Task2–5逐步删除，本次收尾删最后5项。没有转移清除阶段或新增临时许可。向导和阶段2许可均为0，当前总数277。
+
+| 固定清单 | 当前条数 | 剩余清除阶段 |
+| --- | --- | --- |
+| migrationExceptions | 98 | 3：10；4：24；5：35；6：29 |
+| mediaMigrationExceptions | 125 | 4：125 |
+| consoleRuleMigrationExceptions | 53 | 3：6；4：5；5：30；6：12 |
+| notificationMigrationExceptions | 1 | 6：1，仍仅console.NewHub |
+
+六项正式编号能力不变。完整检查与独立审查状态见[第二阶段证据](../superpowers/reviews/2026-10-23-ddd-phase2-evidence.md)。本地候选提交不代表已合入develop或通过企业和人工验收。

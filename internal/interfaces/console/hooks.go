@@ -7,7 +7,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/repository"
 )
 
 type hookRequest struct {
@@ -99,23 +98,16 @@ func queryBool(c *gin.Context, key string) (bool, bool) {
 	}
 	return raw == "true", true
 }
-func authoringQuery(c *gin.Context) (repository.HookQuery, bool) {
-	number, limit, ok := queryPagination(c)
+func authoringQuery(c *gin.Context) (authoring.ListRequest, bool) {
+	number, limit, ok := parseQueryPagination(c)
 	if !ok {
-		return repository.HookQuery{}, false
+		return authoring.ListRequest{}, false
 	}
 	approved, ok := queryBool(c, "approved")
 	if !ok {
-		return repository.HookQuery{}, false
+		return authoring.ListRequest{}, false
 	}
-	q := repository.HookQuery{NamePrefix: c.Query("prefix"), ApprovedOnly: approved, Cursor: c.Query("cursor"), Limit: limit, Page: number}
-	if state := c.Query("state"); state != "" {
-		if !model.VersionState(state).Valid() {
-			Fail(c, 400, nil, model.ConsoleBadRequest)
-			return q, false
-		}
-		q.States = []model.VersionState{model.VersionState(state)}
-	}
+	q := authoring.ListRequest{PageRequest: authoring.PageRequest{Cursor: c.Query("cursor"), Limit: limit, Page: number}, Prefix: c.Query("prefix"), Approved: approved, State: model.VersionState(c.Query("state"))}
 	return q, true
 }
 func (s *server) listHooks(c *gin.Context) {
@@ -123,10 +115,7 @@ func (s *server) listHooks(c *gin.Context) {
 	if !ok {
 		return
 	}
-	req := authoring.ListRequest{PageRequest: authoring.PageRequest{Page: q.Page, Limit: q.Limit, Cursor: q.Cursor}, Prefix: q.NamePrefix, Approved: q.ApprovedOnly}
-	if len(q.States) > 0 {
-		req.State = q.States[0]
-	}
+	req := q
 	page, ok := Get(c, func() (authoring.HookPage, error) {
 		return s.deps.HookAuthoring.List(c.Request.Context(), actorOf(c), req)
 	})

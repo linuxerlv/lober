@@ -234,7 +234,10 @@ func Test任务预览只使用固化快照及引用删除保护(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s.server.deps.Hosts, s.server.deps.ISOs, s.server.deps.Hooks, s.server.deps.Templates = closed, closed, closed, closed
+	s.server.deps.Hosts, s.server.deps.ISOs = closed, closed
+	// 所有编写读口也注入关闭的仓储；任务预览仍应只读取已保存快照。
+	assembled := wizardDeps(s.server.deps, closed)
+	s.server.deps.HookAuthoring, s.server.deps.TemplateAuthoring, s.server.deps.AuthoringEditor = assembled.HookAuthoring, assembled.TemplateAuthoring, assembled.AuthoringEditor
 	frozen := responseData[previewResponse](t, httpCall(s, "POST", path, `{"firmware":"uefi"}`, token))
 	if !reflect.DeepEqual(first, frozen) {
 		t.Fatal("preview depended on live records", frozen)

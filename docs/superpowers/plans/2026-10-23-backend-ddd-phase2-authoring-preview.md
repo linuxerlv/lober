@@ -187,12 +187,12 @@ NewHooks/NewTemplates的必需仓储、Clock与后者的SelectionGuard缺失时�
 
 **Interfaces:** 输入是bdc6371的真实路由与repository契约；产出是逐路由基线表和兼容测试。本任务不增加空应用服务。
 
-- [ ] 将3.1分组展开成32条真实路由，记录请求字段、绑定必填、状态、响应字段、问题顺序、空值、五角色权限、审计及分页。逐项核对hooks.go/templates.go/lifecycle.go，而不是复制旧设计路径。
-- [ ] 添加 `Test编写预览路由契约基线`：精确断言路由集合与权限、审计动作；断言创建/保存/复制/派生/删除草稿及全部读取操作没有新增审计。
-- [ ] 添加 `Test编写输入多错时保留原先错误`：不存在模板+非法index为404；存在模板+不存在slot+非法index为400；空白驳回理由+非法版本仍先返回ConsoleRejectReason；草稿Name不符为400；显式不存在ISO/Host不得返回示例成功。断言原响应结构，不只断言状态码。
-- [ ] 添加 `Test编写页型与来源选择互不替代`：游标一身份两个版本仍能带next；页码不重复展开、total包含全部版本；source-diff最新草稿只用于对比；向导仍选当前已审批版本。
-- [ ] 在lober VM运行 `go test -count=1 ./internal/interfaces/console -run 'Test编写|Test作者对象|TestAuthoring|Test模板列表|Test预览|TestPreview|Test生命周期'`，并运行现有仓储编写契约测试。固定现有行为的测试应通过；若发现基线缺陷，保存失败并单列修复，不修改期望来伪造通过。
-- [ ] 仅提交本任务文件：`test(authoring): pin authoring and preview contracts`。
+- [x] 将3.1分组展开成32条真实路由，记录请求字段、绑定必填、状态、响应字段、问题顺序、空值、五角色权限、审计及分页。逐项核对hooks.go/templates.go/lifecycle.go，而不是复制旧设计路径。
+- [x] 添加 `Test编写预览路由契约基线`：精确断言路由集合与权限、审计动作；断言创建/保存/复制/派生/删除草稿及全部读取操作没有新增审计。
+- [x] 添加 `Test编写输入多错时保留原先错误`：不存在模板+非法index为404；存在模板+不存在slot+非法index为400；空白驳回理由+非法版本仍先返回ConsoleRejectReason；草稿Name不符为400；显式不存在ISO/Host不得返回示例成功。断言原响应结构，不只断言状态码。
+- [x] 添加 `Test编写页型与来源选择互不替代`：游标一身份两个版本仍能带next；页码不重复展开、total包含全部版本；source-diff最新草稿只用于对比；向导仍选当前已审批版本。
+- [x] 在lober VM运行 `go test -count=1 ./internal/interfaces/console -run 'Test编写|Test作者对象|TestAuthoring|Test模板列表|Test预览|TestPreview|Test生命周期'`，并运行现有仓储编写契约测试。固定现有行为的测试应通过；若发现基线缺陷，保存失败并单列修复，不修改期望来伪造通过。
+- [x] 仅提交本任务文件：`test(authoring): pin authoring and preview contracts`。
 
 ## Task 2: 组件编写与生命周期经应用入口
 
@@ -200,13 +200,13 @@ NewHooks/NewTemplates的必需仓储、Clock与后者的SelectionGuard缺失时�
 
 **Interfaces:** 实现4.1的Hooks/HookDeps/HookView及4.3的Actor.Authorize。此时只切换组件入口，模板和预览继续原行为；不提交未实现的模板服务。
 
-- [ ] 先写 `Test组件应用拒绝无权调用且不碰仓储`：五角色、无效身份、禁用、强制改密码、非法输入组合；未授权时仓储/时钟调用数均为0。初次执行因新应用入口缺失而失败，保存红灯。
-- [ ] 写 `Test组件草稿保存保留身份元数据` 与 `Test组件状态写后补读失败不重试`：伪造作者/状态被覆盖或拒绝；同名保存、空字段替换、旧Rev沿用仓储结果；Submit成功后GetHook失败仅写一次，错误可见，不能声称已撤销提交。
-- [ ] 实现全部13项Hooks操作。只调用原仓储和activation.Hook；不把审批判断复制到网页或重写成另一份条件。缺失的批量读取项仍由原诊断表达。
-- [ ] Actor检查在应用入口首先执行；动作名和审计时间在应用构造。保留路由审计元数据供接口描述使用，组件处理函数不再调用auditFrom。
-- [ ] 将组件转换改成只消费HookView.Problems；移除ProblemsOf/HookProblems的生产转发。对尚未迁移的候选处理临时在原位置调用同一个activation.Hook，并仅承接原精确许可，Task 4必须删除，不扩大到整个文件。
-- [ ] 在VM运行 `go test -count=1 ./internal/application/ports ./internal/application/tasks ./internal/application/authoring ./internal/interfaces/console ./cmd/lober -run 'Test组件|Test口令|Test作者对象|TestHook|Test生命周期|Test向导'`；再运行 `go test -count=1 ./internal/archtest`。确认新旧接口可同时组装，生成Wire后执行diff检查。
-- [ ] 通过后提交 `refactor(authoring): route hook operations through application`。
+- [x] 先写 `Test组件应用拒绝无权调用且不碰仓储`：五角色、无效身份、禁用、强制改密码、非法输入组合；未授权时仓储/时钟调用数均为0。初次执行因新应用入口缺失而失败，保存红灯。
+- [x] 写 `Test组件草稿保存保留身份元数据` 与 `Test组件状态写后补读失败不重试`：伪造作者/状态被覆盖或拒绝；同名保存、空字段替换、旧Rev沿用仓储结果；Submit成功后GetHook失败仅写一次，错误可见，不能声称已撤销提交。
+- [x] 实现全部13项Hooks操作。只调用原仓储和activation.Hook；不把审批判断复制到网页或重写成另一份条件。缺失的批量读取项仍由原诊断表达。
+- [x] Actor检查在应用入口首先执行；动作名和审计时间在应用构造。保留路由审计元数据供接口描述使用，组件处理函数不再调用auditFrom。
+- [x] 将组件转换改成只消费HookView.Problems；移除ProblemsOf/HookProblems的生产转发。对尚未迁移的候选处理临时在原位置调用同一个activation.Hook，并仅承接原精确许可，Task 4必须删除，不扩大到整个文件。
+- [x] 在VM运行 `go test -count=1 ./internal/application/ports ./internal/application/tasks ./internal/application/authoring ./internal/interfaces/console ./cmd/lober -run 'Test组件|Test口令|Test作者对象|TestHook|Test生命周期|Test向导'`；再运行 `go test -count=1 ./internal/archtest`。确认新旧接口可同时组装，生成Wire后执行diff检查。
+- [x] 通过后提交 `refactor(authoring): route hook operations through application`。
 
 ## Task 3: 模板编写、审批与选择锁统一
 
@@ -214,13 +214,13 @@ NewHooks/NewTemplates的必需仓储、Clock与后者的SelectionGuard缺失时�
 
 **Interfaces:** 实现4.1的Templates与TemplateDeps；使用4.3的共用SelectionGuard。保留Hooks已验收契约与原CurrentTaskCreator，不新增通用事务接口。
 
-- [ ] 先写 `Test模板应用审批使用同一个选择锁`：记录ReadLock/WriteLock进入、释放和补读顺序；审批、废弃覆盖错误和取消路径；测试开始应因旧网页持锁/应用入口缺失而失败。
-- [ ] 写 `Test模板应用派生和保存只覆盖内容`：来源任意状态可派生；不覆盖Name/作者/审批人/内置标记/DerivedFrom；深层map和slice不能因响应转换串改原值。创建或保存后加载引用失败，记录只写一次，不自动重试。
-- [ ] 实现模板14项编写操作，复用activation.Template与仓储引用提取。移除网页templateHooks/templateProblems/templateResponses中的业务；先让本任务处理函数直接转换TemplateView，未迁移编辑辅助在Task 4收尾。
-- [ ] 将锁契约与实现移出console。生产组装创建一次selection.NewGuard，传入任务与模板服务；删除console.NewSelectionGuard及其默认兜底，测试组装也显式共享同一对象。新锁包只允许sync与共同能力包，不能放宽所有基础设施依赖。
-- [ ] 在真实数据库保留并执行 `Test任务提交与独立实例审批的契约`、`Test向导提交期间新版本审批必须等待任务提交` 和仓储 `Test契约并发`。覆盖双方先提交顺序、template审批/废弃与当前任务创建、hook废弃与引用审批；沿用已有阻塞观察方法，不用固定sleep冒充已等待。
-- [ ] 在 `console/authoring_contract_test.go` 增加 `Test编写审计失败状态与审批人均回滚`：通过真实组装的应用服务调用，仓储失败注入后版本状态、Rev、Approver、审计均不变；取消时也不发通知、不漏锁。应用包单元测试只使用契约替身，不反向导入数据库实现。锁等待不支持立即取消的现状写入契约。
-- [ ] VM执行 `go test -count=1 ./internal/application/... ./internal/infrastructure/selection ./internal/interfaces/console ./internal/infrastructure/persistence/pgstore ./cmd/lober -run 'Test模板|Test编写|Test生命周期|Test契约|Test任务提交与独立实例|Test向导提交期间|Test选择锁'`，再检查架构与Wire。通过后提交 `refactor(authoring): move template lifecycle and shared selection guard`。
+- [x] 先写 `Test模板应用审批使用同一个选择锁`：记录ReadLock/WriteLock进入、释放和补读顺序；审批、废弃覆盖错误和取消路径；测试开始应因旧网页持锁/应用入口缺失而失败。
+- [x] 写 `Test模板应用派生和保存只覆盖内容`：来源任意状态可派生；不覆盖Name/作者/审批人/内置标记/DerivedFrom；深层map和slice不能因响应转换串改原值。创建或保存后加载引用失败，记录只写一次，不自动重试。
+- [x] 实现模板14项编写操作，复用activation.Template与仓储引用提取。移除网页templateHooks/templateProblems/templateResponses中的业务；先让本任务处理函数直接转换TemplateView，未迁移编辑辅助在Task 4收尾。
+- [x] 将锁契约与实现移出console。生产组装创建一次selection.NewGuard，传入任务与模板服务；删除console.NewSelectionGuard及其默认兜底，测试组装也显式共享同一对象。新锁包只允许sync与共同能力包，不能放宽所有基础设施依赖。
+- [x] 在真实数据库保留并执行 `Test任务提交与独立实例审批的契约`、`Test向导提交期间新版本审批必须等待任务提交` 和仓储 `Test契约并发`。覆盖双方先提交顺序、template审批/废弃与当前任务创建、hook废弃与引用审批；沿用已有阻塞观察方法，不用固定sleep冒充已等待。
+- [x] 在 `console/authoring_contract_test.go` 增加 `Test编写审计失败状态与审批人均回滚`：通过真实组装的应用服务调用，仓储失败注入后版本状态、Rev、Approver、审计均不变；取消时也不发通知、不漏锁。应用包单元测试只使用契约替身，不反向导入数据库实现。锁等待不支持立即取消的现状写入契约。
+- [x] VM执行 `go test -count=1 ./internal/application/... ./internal/infrastructure/selection ./internal/interfaces/console ./internal/infrastructure/persistence/pgstore ./cmd/lober -run 'Test模板|Test编写|Test生命周期|Test契约|Test任务提交与独立实例|Test向导提交期间|Test选择锁'`，再检查架构与Wire。通过后提交 `refactor(authoring): move template lifecycle and shared selection guard`。
 
 ## Task 4: 编辑辅助操作只消费应用结果
 
@@ -228,12 +228,12 @@ NewHooks/NewTemplates的必需仓储、Clock与后者的SelectionGuard缺失时�
 
 **Interfaces:** 实现Editor的Slots/Candidates/SourceDiff三个操作与4.2结果类型；Preview两个操作在Task 5加入，当前接口只声明已实现方法，避免空方法占位。
 
-- [ ] 先写 `Test编辑辅助直调也检查模板读取权限`、`Test候选只采纳当前替换位置的问题`、`Test来源差异选择最新草稿但不改派生模板`。断言字段、顺序、位置、问题归属及依赖对象不被修改；在新操作缺失时保存红灯。
-- [ ] 提取候选的装配副本、参数绑定交集、相关问题筛选和版本展开。只调用scan.Scan与activation.Template的原规则；槽不存在、index越界、无关草稿错误、未审批但可编辑的hook分别固定结果。
-- [ ] 在console/pagination.go提取 `parsePaginationValues(url.Values) (page,limit int,ok bool)`，不写响应；原parseQueryPagination包装它并保留失败响应。候选接口直接调用纯函数，转换为4.2规定的无效值后调用应用，不再借queryPagination调用仓储。应用在原检查位置验证数字、页型及查询条件；同时新增不存在模板+解析错误的404回归，防止拆层改变错误先后。
-- [ ] 版本列表保留仓储升序；source-diff取最大版本而不筛已审批；空来源返回两个nil指针与false。Slots保留首次出现和重复位置，空列表显式构造为空slice。
-- [ ] 改造直接挂载候选处理函数的单元测试：显式注入应用和可信测试Actor；不能为保留旧测试绕过应用鉴权。保留真实网页权限和数据库集成用例。
-- [ ] VM执行 `go test -count=1 ./internal/application/authoring ./internal/interfaces/console -run 'Test编辑|Test候选|Test来源|TestAuthoring|Test插槽|Test编写|TestSelection'`，及架构全包。通过后提交 `refactor(authoring): move editor queries behind contracts`。
+- [x] 先写 `Test编辑辅助直调也检查模板读取权限`、`Test候选只采纳当前替换位置的问题`、`Test来源差异选择最新草稿但不改派生模板`。断言字段、顺序、位置、问题归属及依赖对象不被修改；在新操作缺失时保存红灯。
+- [x] 提取候选的装配副本、参数绑定交集、相关问题筛选和版本展开。只调用scan.Scan与activation.Template的原规则；槽不存在、index越界、无关草稿错误、未审批但可编辑的hook分别固定结果。
+- [x] 在console/pagination.go提取 `parsePaginationValues(url.Values) (page,limit int,ok bool)`，不写响应；原parseQueryPagination包装它并保留失败响应。候选接口直接调用纯函数，转换为4.2规定的无效值后调用应用，不再借queryPagination调用仓储。应用在原检查位置验证数字、页型及查询条件；同时新增不存在模板+解析错误的404回归，防止拆层改变错误先后。
+- [x] 版本列表保留仓储升序；source-diff取最大版本而不筛已审批；空来源返回两个nil指针与false。Slots保留首次出现和重复位置，空列表显式构造为空slice。
+- [x] 改造直接挂载候选处理函数的单元测试：显式注入应用和可信测试Actor；不能为保留旧测试绕过应用鉴权。保留真实网页权限和数据库集成用例。
+- [x] VM执行 `go test -count=1 ./internal/application/authoring ./internal/interfaces/console -run 'Test编辑|Test候选|Test来源|TestAuthoring|Test插槽|Test编写|TestSelection'`，及架构全包。通过后提交 `refactor(authoring): move editor queries behind contracts`。
 
 ## Task 5: 两种编写预览与任务冻结预览共用实现
 
@@ -241,13 +241,13 @@ NewHooks/NewTemplates的必需仓储、Clock与后者的SelectionGuard缺失时�
 
 **Interfaces:** 实现4.2的两个Preview操作、4.3的FrozenPreview与BootConfig；console.Deps注入 `FrozenPreview ports.FrozenPreview`，供尚在第六阶段的previewTask使用，不导入authoring具体实现。
 
-- [ ] 先写 `Test参数预览问题仍以成功结果返回`、`Test文件预览失败丢弃全部文件`、`Test任务预览只使用冻结快照`。同时覆盖显式对象不存在、不兼容系列、缺失真实ESXi镜像、默认UEFI及sample标签精确次序；保存新应用入口缺失的红灯。
-- [ ] 将previewTemplateFacts、示例构造、entered规范类型、参数求值和快照编排移入authoring。SampleISO/Host仅为应用私有示例函数，不建立可供生产入口绕回网页的兼容桥。
-- [ ] 将renderPreview/previewValues移入NewPreviewRenderer；依原DeliveryFiles顺序生成，hook按原摘要/文件名去重，失败返回nil文件。调用方继续合并各自sample标签并统一标记文件，不让共用能力读取当前模板或当前发布清单。
-- [ ] previewTask保留现有任务读取、权限、固件回退和返回形状，只将原同包生成调用换成注入能力。增加真实路由回归：创建任务后变更模板/发布，再预览，正文、摘要、任务标识仍来自旧冻结数据。
-- [ ] 移动并运行 `TestESXi配置读取原文且不能逃离制品根`；新增已取消context返回context.Canceled且不返回内容的用例，应用替身覆盖读取取消/失败。读审原文件及目录的defer关闭均保留；禁止在模板预览里伪造boot.cfg。现有Test预览ESXi与全部内置系列仍实际执行。
-- [ ] console删除BootConfig/PreviewEndpoints字段和定义，任务/编写共同通过应用能力；组装从配置注入同一renderer，启动时不提前读取介质文件。
-- [ ] VM执行 `go test -count=1 ./internal/application/authoring ./internal/infrastructure/media ./internal/interfaces/console ./cmd/lober -run 'Test预览|TestPreview|Test任务预览|Test文件预览|Test参数预览|TestESXi配置|TestUbuntu|TestWindows'`，及领域render/builtin原测试、架构全包和Wire差异检查。通过后提交 `refactor(authoring): unify preview orchestration over frozen data`。
+- [x] 先写 `Test参数预览问题仍以成功结果返回`、`Test文件预览失败丢弃全部文件`、`Test任务预览只使用冻结快照`。同时覆盖显式对象不存在、不兼容系列、缺失真实ESXi镜像、默认UEFI及sample标签精确次序；保存新应用入口缺失的红灯。
+- [x] 将previewTemplateFacts、示例构造、entered规范类型、参数求值和快照编排移入authoring。SampleISO/Host仅为应用私有示例函数，不建立可供生产入口绕回网页的兼容桥。
+- [x] 将renderPreview/previewValues移入NewPreviewRenderer；依原DeliveryFiles顺序生成，hook按原摘要/文件名去重，失败返回nil文件。调用方继续合并各自sample标签并统一标记文件，不让共用能力读取当前模板或当前发布清单。
+- [x] previewTask保留现有任务读取、权限、固件回退和返回形状，只将原同包生成调用换成注入能力。增加真实路由回归：创建任务后变更模板/发布，再预览，正文、摘要、任务标识仍来自旧冻结数据。
+- [x] 移动并运行 `TestESXi配置读取原文且不能逃离制品根`；新增已取消context返回context.Canceled且不返回内容的用例，应用替身覆盖读取取消/失败。读审原文件及目录的defer关闭均保留；禁止在模板预览里伪造boot.cfg。现有Test预览ESXi与全部内置系列仍实际执行。
+- [x] console删除BootConfig/PreviewEndpoints字段和定义，任务/编写共同通过应用能力；组装从配置注入同一renderer，启动时不提前读取介质文件。
+- [x] VM执行 `go test -count=1 ./internal/application/authoring ./internal/infrastructure/media ./internal/interfaces/console ./cmd/lober -run 'Test预览|TestPreview|Test任务预览|Test文件预览|Test参数预览|TestESXi配置|TestUbuntu|TestWindows'`，及领域render/builtin原测试、架构全包和Wire差异检查。通过后提交 `refactor(authoring): unify preview orchestration over frozen data`。
 
 ## Task 6: 关闭第二阶段边界并验收
 
@@ -255,11 +255,11 @@ NewHooks/NewTemplates的必需仓储、Clock与后者的SelectionGuard缺失时�
 
 **Interfaces:** 网页最终只注入 `authoring.Hooks`、`authoring.Templates`、`authoring.Editor` 与共用FrozenPreview；删除console.Deps.Hooks/Templates/SelectionGuard及旧业务辅助。主机、镜像、身份、任务查询的剩余依赖按原阶段继续登记。
 
-- [ ] 先补类型有效的反例：编写处理函数直接取仓储、局部别名、方法值、两层同包转发、包级函数别名、旧响应转换重新计算规则、小接口直连仓储、调用领域渲染，全部必须被拒绝。纯字段转换与调用已登记应用入口应通过。
-- [ ] 扩展既有typedTransitionFindings/wizardHelperFindings的根集合覆盖本阶段处理文件，不只做字符串搜索。保留向导禁止调用TaskDiagnostics/Notifier等旧能力的原反例；只放行本阶段明确的应用服务和FrozenPreview方法，不泛许所有ports能力。
-- [ ] 逐项删除 `migrationExceptions` 的阶段2共55项、`consoleRuleMigrationExceptions` 的阶段2共28项；阶段2及向导许可均为0。原360项在无额外清理时降为277项。若连带移除其他已失效许可，逐条说明；不能把83项转移阶段、改符号名续用或自动扩容清单。
-- [ ] 删除模板/组件仓储字段和旧ProblemsOf/HookProblems/templateHooks/templateProblems/renderPreview等生产桥；harness_test中的Wizard从测试仓储独立取得Hooks/Templates，不再从已删除的console.Deps字段取值。确认错误转换共享函数仍只映射错误，不经它们回调仓储或领域业务；正式编号六项能力及唯一通知桥不扩大。
-- [ ] 在lober VM执行根目录 `make check`，包括强制全模块检查、普通与并发全包、Linux构建和Wire差异。再执行 `pnpm --dir web check:console-types`；生成文件应无差异，不以刷新它掩盖公开名称变化。没有前端业务修改时不重复全量前端构建；若实际修改前端，则按仓库要求补类型、相关测试与构建。
+- [x] 先补类型有效的反例：编写处理函数直接取仓储、局部别名、方法值、两层同包转发、包级函数别名、旧响应转换重新计算规则、小接口直连仓储、调用领域渲染，全部必须被拒绝。纯字段转换与调用已登记应用入口应通过。
+- [x] 扩展既有typedTransitionFindings/wizardHelperFindings的根集合覆盖本阶段处理文件，不只做字符串搜索。保留向导禁止调用TaskDiagnostics/Notifier等旧能力的原反例；只放行本阶段明确的应用服务和FrozenPreview方法，不泛许所有ports能力。
+- [x] 逐项删除 `migrationExceptions` 的阶段2共55项、`consoleRuleMigrationExceptions` 的阶段2共28项；阶段2及向导许可均为0。原360项在无额外清理时降为277项。若连带移除其他已失效许可，逐条说明；不能把83项转移阶段、改符号名续用或自动扩容清单。
+- [x] 删除模板/组件仓储字段和旧ProblemsOf/HookProblems/templateHooks/templateProblems/renderPreview等生产桥；harness_test中的Wizard从测试仓储独立取得Hooks/Templates，不再从已删除的console.Deps字段取值。确认错误转换共享函数仍只映射错误，不经它们回调仓储或领域业务；正式编号六项能力及唯一通知桥不扩大。
+- [x] 在lober VM执行根目录 `make check`，包括强制全模块检查、普通与并发全包、Linux构建和Wire差异。再执行 `pnpm --dir web check:console-types`；生成文件应无差异，不以刷新它掩盖公开名称变化。没有前端业务修改时不重复全量前端构建；若实际修改前端，则按仓库要求补类型、相关测试与构建。
 - [ ] 对冻结提交完成独立整分支审查，逐项对应32条路由、数据库契约和五个Review Focus。记录完整命令、退出码、跳过项、失败及修复、源码树和实际环境；未执行的检查不能记通过。
 - [ ] 仅在通过后提交 `refactor(authoring): enforce phase-two contract boundaries`，交付模块分支。合入develop前核对其实际新提交并对合并结果重新验证；发现缺陷按模块回退，保留第一阶段保护。
 

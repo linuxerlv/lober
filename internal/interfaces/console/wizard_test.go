@@ -470,7 +470,7 @@ func Test向导提交期间新版本审批必须等待任务提交(t *testing.T)
 	dsn := pgtest.Schema(t)
 	st := pgtest.OpenAt(t, dsn)
 	guard := &authoringWaitingGuard{SelectionGuard: selectionguard.NewGuard(), waiting: make(chan struct{}), entered: make(chan struct{})}
-	s := New(wizardDepsGuard(Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Events: st, Audit: st, Users: st, RoleMenus: st, Clock: func() int64 { return fixedAt }}, st, guard))
+	s := New(wizardDepsGuard(Deps{Hosts: st, ISOs: st, Tasks: st, Events: st, Audit: st, Users: st, RoleMenus: st, Clock: func() int64 { return fixedAt }}, st, guard))
 	_, _, token, iso, tpl := seedWizardFixture(t, s, st)
 	next, err := st.NewTemplateVersion(t.Context(), tpl.ID, 1, "author")
 	if err != nil {
@@ -576,7 +576,7 @@ func Test任务提交与独立实例审批的契约(t *testing.T) {
 			st := pgtest.OpenAt(t, dsn)
 			other := pgtest.OpenAt(t, dsn)
 			newServer := func(db *pgstore.Store) *Server {
-				return New(wizardDeps(Deps{Hosts: db, ISOs: db, Hooks: db, Templates: db, Tasks: db, Events: db, Audit: db, Users: db, RoleMenus: db, Clock: func() int64 { return fixedAt }}, db))
+				return New(wizardDeps(Deps{Hosts: db, ISOs: db, Tasks: db, Events: db, Audit: db, Users: db, RoleMenus: db, Clock: func() int64 { return fixedAt }}, db))
 			}
 			s, second := newServer(st), newServer(other)
 			_, _, token, iso, tpl := seedWizardFixture(t, s, st)
@@ -620,7 +620,7 @@ func Test任务提交与独立实例审批的契约(t *testing.T) {
 				var once sync.Once
 				unblock := func() { once.Do(func() { close(release) }) }
 				defer unblock()
-				assembled := wizardDeps(s.server.deps, &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release})
+				assembled := wizardDeps(s.server.deps, st, &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release})
 				s.server.deps.Wizard, s.server.deps.TemplateAuthoring = assembled.Wizard, assembled.TemplateAuthoring
 				submitted := make(chan int, 1)
 				go func() { submitted <- submit() }()
@@ -793,7 +793,7 @@ func Test向导事务内一般准入仍返回422(t *testing.T) {
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	defer unblock()
-	assembled := wizardDeps(s.server.deps, &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release})
+	assembled := wizardDeps(s.server.deps, st, &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release})
 	s.server.deps.Wizard, s.server.deps.TemplateAuthoring = assembled.Wizard, assembled.TemplateAuthoring
 	submitted := make(chan int, 1)
 	go func() {

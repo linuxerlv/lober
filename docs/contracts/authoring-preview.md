@@ -1,6 +1,6 @@
 # 编写与预览契约
 
-这份表固定第二阶段迁移前的真实行为。路由以 `hooks.go`、`templates.go`、`lifecycle.go` 为准，共 32 条：组件 13 条，模板 19 条。它是迁移验收记录，不替代现有路由描述和生成检查。
+这份表固定第二阶段迁移前后必须保持的真实行为。路由以 `hooks.go`、`templates.go`、`lifecycle.go` 为准，共 32 条：组件 13 条，模板 19 条。它是迁移验收记录，不替代现有路由描述和生成检查。
 
 ## 共同约定
 
@@ -138,3 +138,11 @@
 继续复用 `hooks_test.go`、`templates_test.go`、`lifecycle_test.go` 的元数据、状态、修订和审计；`authoring_helpers_test.go`、`slots_test.go`、`selection_pagination_test.go` 的位置和候选；`preview_test.go`、`preview_params_test.go`、`tasks_test.go` 的文件、示例和旧快照。
 
 仓储证据保留 `pgstore/contract_hooks_test.go`、`contract_templates_test.go`、`contract_hookrefs_test.go`、`contract_concurrency_test.go`、`contract_audit_test.go`、`contract_tasks_test.go`。向导当前模板保护继续由独立数据库连接验证，不能用进程锁测试代替。
+
+## 迁移后的职责
+
+组件13条入口由 `authoring.Hooks` 处理，模板14条编写入口由 `authoring.Templates` 处理，5条编辑和预览入口由 `authoring.Editor` 处理。网页保留原请求、响应类型，只解析输入并转换应用结果；版本键、状态、仓储查询及诊断由应用复用原检查。
+
+模板与向导共享一个显式注入的选择锁；数据库事务仍独立检查当前模板及引用。两种预览共同调用 `FrozenPreview.RenderFrozen`，任务预览继续消费已保存快照。没有新增数据库结构、配置、依赖、内置正文、审计动作或通知。
+
+编写处理函数不能经局部别名、方法值、两层同包转发、包级别名、旧响应转换或小接口绕回仓储与领域渲染。`authoring_rules_test.go` 用先通过类型检查的反例验证；纯转换、明确应用入口和冻结预览有正例。完整验证与待完成的独立审查见[阶段证据](../superpowers/reviews/2026-10-23-ddd-phase2-evidence.md)。

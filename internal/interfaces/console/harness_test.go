@@ -26,7 +26,7 @@ func newHTTPServer(t *testing.T) (*Server, *pgstore.Store, *atomic.Int64) {
 	st := pgtest.OpenStore(t)
 	now := new(atomic.Int64)
 	now.Store(fixedAt)
-	s := New(wizardDeps(Deps{Hosts: st, ISOs: st, Sources: st, Hooks: st, Templates: st, Tasks: st, Events: st, Audit: st, Users: st, RoleMenus: st, Clock: now.Load, Notifier: NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, st))
+	s := New(wizardDeps(Deps{Hosts: st, ISOs: st, Sources: st, Tasks: st, Events: st, Audit: st, Users: st, RoleMenus: st, Clock: now.Load, Notifier: NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, st))
 	return s, st, now
 }
 
@@ -36,10 +36,20 @@ type wizardTaskRepository struct {
 }
 
 // 测试也显式组装，保证向导、模板编写和通知订阅使用相同实例。
-func wizardDeps(d Deps, current repository.CurrentTaskCreator) Deps {
-	return wizardDepsGuard(d, current, selectionguard.NewGuard())
+type authoringTestStore interface {
+	repository.Hooks
+	repository.Templates
+	repository.CurrentTaskCreator
 }
-func wizardDepsGuard(d Deps, current repository.CurrentTaskCreator, guard ports.SelectionGuard) Deps {
+
+func wizardDeps(d Deps, store authoringTestStore, override ...repository.CurrentTaskCreator) Deps {
+	return wizardDepsGuard(d, store, selectionguard.NewGuard(), override...)
+}
+func wizardDepsGuard(d Deps, store authoringTestStore, guard ports.SelectionGuard, override ...repository.CurrentTaskCreator) Deps {
+	var current repository.CurrentTaskCreator = store
+	if len(override) > 0 {
+		current = override[0]
+	}
 	if d.Notifier == nil {
 		d.Notifier = NewHub()
 	}
@@ -50,13 +60,13 @@ func wizardDepsGuard(d Deps, current repository.CurrentTaskCreator, guard ports.
 	for _, h := range builtin.Hooks() {
 		manifest.Hooks = append(manifest.Hooks, model.HookKey{ID: h.ID, Version: h.Version})
 	}
-	d.TemplateAuthoring = authoring.NewTemplates(authoring.TemplateDeps{Templates: d.Templates, Hooks: d.Hooks, Clock: d.Clock, SelectionGuard: guard})
+	d.TemplateAuthoring = authoring.NewTemplates(authoring.TemplateDeps{Templates: store, Hooks: store, Clock: d.Clock, SelectionGuard: guard})
 	if d.FrozenPreview == nil {
 		d.FrozenPreview = authoring.NewPreviewRenderer(nil, ports.PreviewEndpoints{})
 	}
-	d.AuthoringEditor = authoring.NewEditor(authoring.EditorDeps{Templates: d.Templates, Hooks: d.Hooks, Hosts: d.Hosts, ISOs: d.ISOs, Renderer: d.FrozenPreview})
-	d.HookAuthoring = authoring.NewHooks(authoring.HookDeps{Hooks: d.Hooks, Clock: d.Clock})
-	d.Wizard = tasks.NewWizard(tasks.WizardDeps{Hosts: d.Hosts, ISOs: d.ISOs, Hooks: d.Hooks, Templates: d.Templates, Tasks: wizardTaskRepository{d.Tasks, current}, Manifest: manifest, Clock: d.Clock, Notifier: d.Notifier, SelectionGuard: guard, Diagnostics: d.TaskCtl})
+	d.AuthoringEditor = authoring.NewEditor(authoring.EditorDeps{Templates: store, Hooks: store, Hosts: d.Hosts, ISOs: d.ISOs, Renderer: d.FrozenPreview})
+	d.HookAuthoring = authoring.NewHooks(authoring.HookDeps{Hooks: store, Clock: d.Clock})
+	d.Wizard = tasks.NewWizard(tasks.WizardDeps{Hosts: d.Hosts, ISOs: d.ISOs, Hooks: store, Templates: store, Tasks: wizardTaskRepository{d.Tasks, current}, Manifest: manifest, Clock: d.Clock, Notifier: d.Notifier, SelectionGuard: guard, Diagnostics: d.TaskCtl})
 	return d
 }
 func seedHTTPUser(t *testing.T, s *Server, st repository.Users, name string, role model.Role) (string, model.User) {

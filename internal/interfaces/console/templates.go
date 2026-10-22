@@ -8,7 +8,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/repository"
 )
 
 type templateRequest struct {
@@ -120,10 +119,7 @@ func (s *server) listTemplates(c *gin.Context) {
 	if !ok {
 		return
 	}
-	req := authoring.TemplateListRequest{ListRequest: authoring.ListRequest{PageRequest: authoring.PageRequest{Page: q.Page, Limit: q.Limit, Cursor: q.Cursor}, Prefix: q.NamePrefix, Approved: q.ApprovedOnly}, Series: catalog.Series(c.Query("series"))}
-	if len(q.States) > 0 {
-		req.State = q.States[0]
-	}
+	req := authoring.TemplateListRequest{ListRequest: q, Series: catalog.Series(c.Query("series"))}
 	page, ok := Get(c, func() (authoring.TemplatePage, error) {
 		return s.deps.TemplateAuthoring.List(c.Request.Context(), actorOf(c), req)
 	})
@@ -145,10 +141,6 @@ func templateKeyOf(c *gin.Context) (model.TemplateKey, bool) {
 		return model.TemplateKey{}, false
 	}
 	k := model.TemplateKey{ID: c.Param("id"), Version: version}
-	if err := repository.CheckVersionKey(k.ID, k.Version); err != nil {
-		RespondError(c, err)
-		return k, false
-	}
 	return k, true
 }
 func (s *server) getTemplate(c *gin.Context) {

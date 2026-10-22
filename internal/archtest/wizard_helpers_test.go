@@ -23,7 +23,7 @@ func wizardHelperFindings(fset *token.FileSet, files []*ast.File, info *types.In
 			add := func(id *ast.Ident, body ast.Node) {
 				if obj := info.Defs[id]; obj != nil {
 					nodes[obj] = node{body, file, declarationName(decl)}
-					if file == "wizard.go" {
+					if migratedConsoleFile(file) {
 						roots = append(roots, obj)
 					}
 				}
@@ -66,7 +66,7 @@ func wizardHelperFindings(fset *token.FileSet, files []*ast.File, info *types.In
 				}
 				fn, function := ref.(*types.Func)
 				localCapability := false
-				externalCapability := function && fn.Pkg() != nil && (fn.Pkg().Path() == pkgTasksPort || fn.Pkg().Path() == pkgPorts)
+				externalCapability := function && fn.Pkg() != nil && under(fn.Pkg().Path(), modulePath+"/internal/application") && !migratedApplicationMethod(fn)
 				if function && fn.Pkg() != nil && fn.Pkg().Path() == pkgConsole {
 					if recv := fn.Type().(*types.Signature).Recv(); recv != nil {
 						_, localCapability = recv.Type().Underlying().(*types.Interface)
@@ -77,8 +77,8 @@ func wizardHelperFindings(fset *token.FileSet, files []*ast.File, info *types.In
 				if function && ref.Pkg() != nil && ref.Pkg().Path() == pkgModel && transitionSymbol(ref) == "Code.Category" && n.file == "errors.go" && n.name == "StatusOfProblems" {
 					business = false
 				}
-				if localCapability || externalCapability || business && obj != root {
-					found = append(found, violation{rule: ruleMigration, pkg: pkgConsole, subject: ref.Pkg().Path() + "." + transitionSymbol(ref), pos: position(fset, id.Pos()), detail: "向导经 " + nodes[root].name + " 到达旧业务函数 " + n.name})
+				if localCapability || externalCapability || business {
+					found = append(found, violation{rule: ruleMigration, pkg: pkgConsole, subject: ref.Pkg().Path() + "." + transitionSymbol(ref), pos: position(fset, id.Pos()), detail: "已迁移入口经 " + nodes[root].name + " 到达旧业务函数 " + n.name})
 					return true
 				}
 				visit(ref)
@@ -88,4 +88,36 @@ func wizardHelperFindings(fset *token.FileSet, files []*ast.File, info *types.In
 		visit(root)
 	}
 	return found
+}
+
+// 根集合包含本阶段全部处理文件，沿实际符号继续检查同包辅助。
+func migratedConsoleFile(file string) bool {
+	switch file {
+	case "wizard.go", "hooks.go", "templates.go", "lifecycle.go", "authoring_helpers.go", "slots.go", "preview.go":
+		return true
+	}
+	return false
+}
+
+// 只登记已交付的入口与方法。共同能力包新增方法不会自动获得许可。
+func migratedApplicationMethod(fn *types.Func) bool {
+	target, symbol := fn.Pkg().Path(), transitionSymbol(fn)
+	if target == pkgPorts {
+		return symbol == "FrozenPreview.RenderFrozen"
+	}
+	if target == pkgTasks {
+		switch symbol {
+		case "Wizard.Hosts", "Wizard.ISOs", "Wizard.Templates", "Wizard.Params", "Wizard.Submit":
+			return true
+		}
+	}
+	if target == modulePath+"/internal/application/authoring" {
+		switch symbol {
+		case "Hooks.List", "Hooks.Versions", "Hooks.Get", "Hooks.Create", "Hooks.SaveDraft", "Hooks.NewVersion", "Hooks.DeleteDraft", "Hooks.Rename", "Hooks.Submit", "Hooks.Approve", "Hooks.Reject", "Hooks.Deprecate", "Hooks.Validate",
+			"Templates.List", "Templates.Versions", "Templates.Get", "Templates.Create", "Templates.SaveDraft", "Templates.NewVersion", "Templates.DeleteDraft", "Templates.Rename", "Templates.Submit", "Templates.Approve", "Templates.Reject", "Templates.Deprecate", "Templates.Validate", "Templates.Derive",
+			"Editor.Slots", "Editor.Candidates", "Editor.SourceDiff", "Editor.PreviewParams", "Editor.Preview":
+			return true
+		}
+	}
+	return false
 }

@@ -23,8 +23,6 @@ type Deps struct {
 	AuthoringEditor   authoring.Editor
 	Hosts             repository.Hosts
 	ISOs              repository.ISOs
-	Hooks             repository.Hooks
-	Templates         repository.Templates
 	Tasks             repository.Tasks
 	Wizard            tasks.Wizard
 	Events            repository.Events

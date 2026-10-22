@@ -6,6 +6,7 @@ import (
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -50,12 +51,32 @@ func Test口令散列拒绝坏编码和无界工作量(t *testing.T) {
 		}
 	}
 }
-func seedAuthUser(t *testing.T, st repository.Users, name string, role model.Role, pw string) model.User {
+
+// 仅复用测试准备的结果，仍由生产函数用真实随机盐和600000轮计算生成。
+// 每个登录请求照常校验口令；随机盐与独立向量测试不经过这里。
+var seedPasswordHashes = struct {
+	sync.Mutex
+	values map[string]string
+}{values: make(map[string]string)}
+
+func seedPasswordHash(t *testing.T, pw string) string {
 	t.Helper()
+	seedPasswordHashes.Lock()
+	defer seedPasswordHashes.Unlock()
+	if hash, ok := seedPasswordHashes.values[pw]; ok {
+		return hash
+	}
 	hash, err := HashPassword(pw)
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedPasswordHashes.values[pw] = hash
+	return hash
+}
+
+func seedAuthUser(t *testing.T, st repository.Users, name string, role model.Role, pw string) model.User {
+	t.Helper()
+	hash := seedPasswordHash(t, pw)
 	u, err := st.CreateUser(t.Context(), model.User{Username: name, DisplayName: name, Role: role, Password: hash, CreatedAt: fixedAt}, repository.Audit{Actor: "seed", Action: "user.create", At: fixedAt})
 	if err != nil {
 		t.Fatal(err)
@@ -130,4 +151,46 @@ func Test登录失败说明一致与请求前提(t *testing.T) {
 			t.Fatal("missing/malformed input accepted")
 		}
 	}
+}
+
+// 测试账号可以复用同一完整散列，真实登录和随机盐测试仍走生产算法。
+func Test测试用户重复准备复用完整强度散列(t *testing.T) {
+	s, st, _ := newHTTPServer(t)
+	const password = "seed fixture reuse"
+	var users [4]model.User
+	t.Run("同时准备", func(t *testing.T) {
+		for i, name := range []string{"seeda", "seedb", "seedc", "seedd"} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				users[i] = seedAuthUser(t, st, name, model.RoleViewer, password)
+			})
+		}
+	})
+	for _, u := range users {
+		if u.Password != users[0].Password {
+			t.Fatal("同一口令的测试准备重复生成散列")
+		}
+	}
+	if !strings.HasPrefix(users[0].Password, "pbkdf2-sha256$600000$") || !CheckPassword(password, users[0].Password) {
+		t.Fatal("复用值不是完整强度的真实散列")
+	}
+	other := seedAuthUser(t, st, "seedother", model.RoleViewer, password+" ")
+	if other.Password == users[0].Password || !CheckPassword(password+" ", other.Password) {
+		t.Fatal("不同原文口令共用了错误散列")
+	}
+	first := loginHTTP(t, s, users[0].Username, password)
+	second := loginHTTP(t, s, users[1].Username, password)
+	body, _ := json.Marshal(map[string]string{"currentPassword": password, "newPassword": "replacement seed password"})
+	if w := httpCall(s, "POST", "/console/v1/auth/password", string(body), first.Token); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w := httpCall(s, "GET", "/console/v1/user/info", "", second.Token); w.Code != 200 {
+		t.Fatal("另一个账号的会话受到改密影响", w.Code)
+	}
+	oldLogin, _ := json.Marshal(map[string]string{"username": users[0].Username, "password": password})
+	if w := httpCall(s, "POST", "/console/v1/auth/login", string(oldLogin), ""); w.Code != 401 {
+		t.Fatal("改密后仍接受旧口令", w.Code)
+	}
+	loginHTTP(t, s, users[0].Username, "replacement seed password")
+	loginHTTP(t, s, users[1].Username, password)
 }

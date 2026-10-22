@@ -3,6 +3,8 @@ package console
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/lober/lober/internal/application/authoring"
+	selectionguard "github.com/lober/lober/internal/infrastructure/selection"
 	"reflect"
 	"strings"
 	"testing"
@@ -200,10 +202,8 @@ func Test生命周期校验只读并计算OK(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s.server.deps.Hooks = closed
-	// 编写应用在构造时接收引用读取器；失败注入也必须重新组装该能力。
-	assembled := wizardDeps(s.server.deps, st)
-	s.server.deps.Wizard, s.server.deps.TemplateAuthoring = assembled.Wizard, assembled.TemplateAuthoring
+	// 编写应用直接接收关闭的组件仓储，验证引用读取失败仍然可见。
+	s.server.deps.TemplateAuthoring = authoring.NewTemplates(authoring.TemplateDeps{Templates: st, Hooks: closed, Clock: s.server.deps.Clock, SelectionGuard: selectionguard.NewGuard()})
 	w := httpCall(s, "POST", lifecyclePath("templates", tpl.ID, "validate", 0), "", admin)
 	if w.Code != 500 || strings.Contains(w.Body.String(), "hook_ref_missing") || strings.Contains(w.Body.String(), "database is closed") {
 		t.Fatal(w.Code, w.Body.String())
