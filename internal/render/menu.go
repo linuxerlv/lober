@@ -41,19 +41,7 @@ func renderMenu(r Request) ([]byte, []model.Problem, error) {
 	if len(problems) != 0 {
 		return nil, problems, nil
 	}
-	roles := []string{"kernel", "initrd"}
-	if r.Snapshot.Format == "kickstart" {
-		roles = append(roles, "stage2")
-	}
-	if r.Snapshot.Format == "esxi-ks" {
-		roles = []string{"mboot"}
-	}
-	if r.Snapshot.Format == "agama" {
-		roles = append(roles, "live-root")
-	}
-	if r.Snapshot.Format == "unattend" {
-		roles = []string{"wimboot", "bcd", "boot-sdi", "boot-wim", "winpeshl", "winpe-busybox", "winpe-curl"}
-	}
+	roles := catalog.RequiredRoles(r.Snapshot.Series)
 	artifacts := map[string]string{}
 	for _, role := range roles {
 		value, p := artifactURL(r, values["artifacts"], role)

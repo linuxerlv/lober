@@ -212,9 +212,12 @@ func esxiKernelOptions(value, ks string) string {
 // availability is never assumed. setup /m copies the local $1 OEM tree only
 // after target partitioning; pre hooks run only from windowsPE answer commands.
 func renderWindowsAux(r Request) ([]byte, []model.Problem, error) {
+	if p := bootSnapshotProblems(r); len(p) != 0 {
+		return nil, p, nil
+	}
 	values, p := assemblerValues(r, "gateway", "task", "token", "finalize-token", "smb", "artifacts")
 	tools := map[string]string{}
-	for _, role := range []string{"winpe-busybox", "winpe-curl"} {
+	for _, role := range catalog.RequiredRoles(r.Snapshot.Series) {
 		value, problem := artifactURL(r, values["artifacts"], role)
 		tools[role] = value
 		if problem != nil {
@@ -235,10 +238,15 @@ func renderWindowsAux(r Request) ([]byte, []model.Problem, error) {
 	body.WriteString("#!/bin/sh\nset -eu\numask 077\nDIR=X:/lober\nOEM='X:/lober-oem/$1/ProgramData/lober'\nmkdir -p \"$DIR\" \"$OEM\"\n")
 
 	body.WriteString("curl() { \"$DIR/curl.exe\" \"$@\"; }\n")
-	for _, role := range []string{"winpe-busybox", "winpe-curl"} {
-		filename := "busybox.exe"
-		if role == "winpe-curl" {
+	for _, role := range catalog.RequiredRoles(r.Snapshot.Series) {
+		var filename string
+		switch role {
+		case "winpe-busybox":
+			filename = "busybox.exe"
+		case "winpe-curl":
 			filename = "curl.exe"
+		default:
+			continue
 		}
 		body.WriteString(download("unattend", tools[role], "$OEM/"+filename))
 	}
