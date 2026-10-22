@@ -20,6 +20,7 @@ type Clock = ports.Clock
 type Deps struct {
 	HookAuthoring     authoring.Hooks
 	TemplateAuthoring authoring.Templates
+	AuthoringEditor   authoring.Editor
 	Hosts             repository.Hosts
 	ISOs              repository.ISOs
 	Hooks             repository.Hooks

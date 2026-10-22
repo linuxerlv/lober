@@ -1,6 +1,7 @@
 package console
 
 import (
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -12,14 +13,29 @@ import (
 
 // parseQueryPagination 按字段是否出现选择分页方式，保留旧游标请求。
 func parseQueryPagination(c *gin.Context) (number, limit int, ok bool) {
-	values := c.Request.URL.Query()
+	number, limit, ok = parsePaginationValues(c.Request.URL.Query())
+	if !ok {
+		Fail(c, 400, nil, model.ConsoleBadRequest)
+	}
+	return
+}
+
+// parsePaginationValues 只解析数字和分页方式，不写网页响应。
+func parsePaginationValues(values url.Values) (number, limit int, ok bool) {
 	_, hasPage := values["page"]
 	_, hasSize := values["page_size"]
 	if !hasPage && !hasSize {
-		limit, ok = queryLimit(c)
-		return 0, limit, ok
+		raw := values.Get("limit")
+		if raw == "" {
+			return 0, 0, true
+		}
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 0 || limit > 500 {
+			return 0, 0, false
+		}
+		return 0, limit, true
 	}
-	bad := func() (int, int, bool) { Fail(c, 400, nil, model.ConsoleBadRequest); return 0, 0, false }
+	bad := func() (int, int, bool) { return 0, 0, false }
 	if _, exists := values["cursor"]; exists {
 		return bad()
 	}

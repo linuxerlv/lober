@@ -133,10 +133,6 @@ var mediaMigrationExceptions = []migrationException{
 // 非向导的旧领域判定、渲染及描述调用，按所属模块阶段逐条删除。
 var consoleRuleMigrationExceptions = []migrationException{
 	// 保留 dev 已有流程；逐项登记，向导不增加放行。
-	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).hookCandidates", "github.com/lober/lober/internal/domain/activation", "Template", "2"},
-	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).hookCandidates", "github.com/lober/lober/internal/domain/model", "Hook.Key", "2"},
-	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).hookCandidates", "github.com/lober/lober/internal/domain/model", "InstancePath", "2"},
-	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).hookCandidates", "github.com/lober/lober/internal/domain/scan", "Scan", "2"},
 	{pkgConsole, "internal/interfaces/console/menus.go", "(*server).listRoleMenus", "github.com/lober/lober/internal/domain/model", "Roles", "5"},
 	{pkgConsole, "internal/interfaces/console/menus.go", "(*server).saveRoleMenus", "github.com/lober/lober/internal/domain/model", "Role.Valid", "5"},
 	{pkgConsole, "internal/interfaces/console/password.go", "(*server).changePassword", "github.com/lober/lober/internal/domain/model", "Role.Valid", "5"},
@@ -154,7 +150,6 @@ var consoleRuleMigrationExceptions = []migrationException{
 	{pkgConsole, "internal/interfaces/console/csv.go", "parseHostCSV", "github.com/lober/lober/internal/domain/model", "ValidAttrKey", "3"},
 	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", "github.com/lober/lober/internal/domain/repository", "ErrTemplateNotCurrent", "6"},
 	{pkgConsole, "internal/interfaces/console/errors.go", "StatusOfProblems", "github.com/lober/lober/internal/domain/model", "Code.Category", "6"},
-	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).hookCandidates", "github.com/lober/lober/internal/domain/activation", "Hook", "2"},
 	{pkgConsole, "internal/interfaces/console/hooks.go", "authoringQuery", "github.com/lober/lober/internal/domain/model", "VersionState.Valid", "2"},
 	{pkgConsole, "internal/interfaces/console/hosts.go", "normalizedHostSN", "github.com/lober/lober/internal/domain/model", "NormalizeSN", "3"},
 	{pkgConsole, "internal/interfaces/console/isos.go", "(*server).listISOs", "github.com/lober/lober/internal/domain/catalog", "Family.Valid", "4"},
@@ -199,14 +194,10 @@ var consoleRuleMigrationExceptions = []migrationException{
 	{pkgConsole, "internal/interfaces/console/preview.go", "SampleISO", "github.com/lober/lober/internal/domain/catalog", "Series.Family", "2"},
 	{pkgConsole, "internal/interfaces/console/preview.go", "SampleISO", "github.com/lober/lober/internal/domain/catalog", "Series.Format", "2"},
 	{pkgConsole, "internal/interfaces/console/server.go", "(*server).authenticate", "github.com/lober/lober/internal/domain/model", "Role.Valid", "5"},
-	{pkgConsole, "internal/interfaces/console/slots.go", "(*server).slotsOf", "github.com/lober/lober/internal/domain/activation", "Template", "2"},
-	{pkgConsole, "internal/interfaces/console/slots.go", "(*server).slotsOf", "github.com/lober/lober/internal/domain/model", "TemplateKey.String", "2"},
-	{pkgConsole, "internal/interfaces/console/slots.go", "(*server).slotsOf", "github.com/lober/lober/internal/domain/scan", "Scan", "2"},
 	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", "github.com/lober/lober/internal/domain/model", "NormalizeSN", "6"},
 	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", "github.com/lober/lober/internal/domain/model", "TaskState.Valid", "6"},
 	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).streamAuthorized", "github.com/lober/lober/internal/domain/model", "Role.Valid", "6"},
 	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).previewTask", "github.com/lober/lober/internal/domain/catalog", "Firmware.Valid", "6"},
-	{pkgConsole, "internal/interfaces/console/templates.go", "toTemplateResponse", "github.com/lober/lober/internal/domain/activation", "Template", "2"},
 	{pkgConsole, "internal/interfaces/console/users.go", "(*server).createUser", "github.com/lober/lober/internal/domain/model", "Role.Valid", "5"},
 	{pkgConsole, "internal/interfaces/console/users.go", "(*server).createUser", "github.com/lober/lober/internal/domain/model", "StorableText", "5"},
 	{pkgConsole, "internal/interfaces/console/users.go", "(*server).createUser", "github.com/lober/lober/internal/domain/model", "ValidIdent", "5"},

@@ -147,6 +147,11 @@ func Test编写输入多错时保留原先错误(t *testing.T) {
 	base := fmt.Sprintf("/console/v1/templates/%s/versions/1", tpl.ID)
 	authoringErrorEnvelope(t, httpCall(s, "GET", "/console/v1/templates/aaaaaaaaaaaaaaaaaaaaaaaaaa/versions/1/hook-candidates?slot=missing&index=bad", "", token), 404, model.ConsoleNotFound)
 	authoringErrorEnvelope(t, httpCall(s, "GET", base+"/hook-candidates?slot=missing&index=bad", "", token), 400, model.ConsoleBadRequest)
+	for _, query := range []string{"page=bad", "page=999999999999999999999999999999999", "page=1&limit=1", "limit=999999999999999999999999999999999", "index=999999999999999999999999999999999"} {
+		authoringErrorEnvelope(t, httpCall(s, "GET", "/console/v1/templates/aaaaaaaaaaaaaaaaaaaaaaaaaa/versions/1/hook-candidates?slot=missing&"+query, "", token), 404, model.ConsoleNotFound)
+		authoringErrorEnvelope(t, httpCall(s, "GET", base+"/hook-candidates?slot=missing&"+query, "", token), 400, model.ConsoleBadRequest)
+	}
+
 	for _, kind := range []string{"hooks", "templates"} {
 		authoringErrorEnvelope(t, httpCall(s, "POST", "/console/v1/"+kind+"/missing/versions/bad/reject?rev=bad", `{"reason":" \t "}`, token), 400, model.ConsoleRejectReason)
 	}

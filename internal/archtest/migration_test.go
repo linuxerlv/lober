@@ -147,13 +147,6 @@ func Test迁移豁免必须精确且有清除阶段(t *testing.T) {
 // Symbol 的 接口.方法 表示经仓储接口调用；其余名称表示旧包的类型、函数或常量。
 var migrationExceptions = []migrationException{
 	// 保留 dev 已有流程；逐项登记，向导不增加放行。
-	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).hookCandidates", "github.com/lober/lober/internal/domain/repository", "HookQuery", "2"},
-	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).hookCandidates", "github.com/lober/lober/internal/domain/repository", "Hooks.ListHookVersions", "2"},
-	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).hookCandidates", "github.com/lober/lober/internal/domain/repository", "Hooks.ListHooks", "2"},
-	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).hookCandidates", "github.com/lober/lober/internal/domain/repository", "Page", "2"},
-	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).hookCandidates", "github.com/lober/lober/internal/domain/repository", "Templates.GetTemplate", "2"},
-	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).sourceDiff", "github.com/lober/lober/internal/domain/repository", "Templates.GetTemplate", "2"},
-	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).sourceDiff", "github.com/lober/lober/internal/domain/repository", "Templates.ListTemplateVersions", "2"},
 	{pkgConsole, "internal/interfaces/console/menus.go", "(*server).roleMenus", "github.com/lober/lober/internal/domain/repository", "RoleMenus.GetRoleMenus", "5"},
 	{pkgConsole, "internal/interfaces/console/menus.go", "(*server).saveRoleMenus", "github.com/lober/lober/internal/domain/repository", "CheckRoleMenus", "5"},
 	{pkgConsole, "internal/interfaces/console/menus.go", "(*server).saveRoleMenus", "github.com/lober/lober/internal/domain/repository", "RoleMenuSettings", "5"},
@@ -234,7 +227,6 @@ var migrationExceptions = []migrationException{
 	{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "Tasks", "6"},
 	{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "Templates", "2"},
 	{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "Users", "5"},
-	{pkgConsole, "internal/interfaces/console/slots.go", "(*server).slotsOf", pkgStore, "Templates.GetTemplate", "2"},
 	{pkgConsole, "internal/interfaces/console/taskcontrol.go", "Problems", pkgStore, "ErrRejected", "6"},
 	{pkgConsole, "internal/interfaces/console/taskcontrol.go", "Problems", pkgStore, "ProblemsError", "6"},
 	{pkgConsole, "internal/interfaces/console/taskcontrol.go", "package-init", pkgStore, "Audit", "6"},

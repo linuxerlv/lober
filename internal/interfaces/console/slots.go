@@ -2,10 +2,8 @@ package console
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/domain/activation"
+	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/domain/catalog"
-	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/scan"
 )
 
 type slotInfo struct {
@@ -25,30 +23,15 @@ func (s *server) slotsOf(c *gin.Context) {
 	if !ok {
 		return
 	}
-	tpl, ok := Get(c, func() (model.Template, error) { return s.deps.Templates.GetTemplate(c.Request.Context(), k) })
+	result, ok := Get(c, func() (authoring.SlotResult, error) {
+		return s.deps.AuthoringEditor.Slots(c.Request.Context(), actorOf(c), k)
+	})
 	if !ok {
 		return
 	}
-	result, problems := scan.Scan(tpl.Body)
-	for i := range problems {
-		problems[i].Subject.Kind = model.KindTemplate
-		problems[i].Subject.ID = k.String()
-	}
-	// Duplicate-slot rules remain in core. Return the editor's first occurrence
-	// plus the exact locations of later duplicates, without inventing a scanner.
-	for _, problem := range activation.Template(tpl, nil) {
-		if problem.Code == "slot_duplicate" {
-			problems = append(problems, problem)
-		}
-	}
 	slots := make([]slotInfo, 0, len(result.Slots))
-	seen := map[string]bool{}
-	for _, seg := range result.Segments {
-		if seg.Kind != scan.KindSlot || seen[seg.Slot.Name] {
-			continue
-		}
-		seen[seg.Slot.Name] = true
-		slots = append(slots, slotInfo{seg.Slot.Name, seg.Slot.Exec, seg.Slot.Timing, seg.Line, seg.Col})
+	for _, v := range result.Slots {
+		slots = append(slots, slotInfo{v.Name, v.Exec, v.Timing, v.Line, v.Col})
 	}
-	Ok(c, slotList{slots, jsonProblems(problems)})
+	Ok(c, slotList{slots, jsonProblems(result.Problems)})
 }

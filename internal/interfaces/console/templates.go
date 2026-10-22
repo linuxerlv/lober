@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/domain/activation"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
@@ -67,9 +66,6 @@ type templateListQuery struct {
 	Series   catalog.Series     `form:"series"`
 }
 
-func toTemplateResponse(t model.Template, hooks map[model.HookKey]model.Hook) templateResponse {
-	return toTemplateResponseWithProblems(t, activation.Template(t, hooks))
-}
 func toTemplateResponseWithProblems(t model.Template, problems []model.Problem) templateResponse {
 	var from *templateKeyResponse
 	if t.DerivedFrom != nil {
@@ -80,17 +76,6 @@ func toTemplateResponseWithProblems(t model.Template, problems []model.Problem) 
 
 func (s *server) templateHooks(ctx context.Context, templates []model.Template) (map[model.HookKey]model.Hook, error) {
 	return s.deps.Hooks.GetHooks(ctx, repository.TemplateHookKeys(templates))
-}
-func (s *server) templateResponses(ctx context.Context, templates []model.Template) ([]templateResponse, error) {
-	hooks, err := s.templateHooks(ctx, templates)
-	if err != nil {
-		return nil, err
-	}
-	items := make([]templateResponse, len(templates))
-	for i, t := range templates {
-		items[i] = toTemplateResponse(t, hooks)
-	}
-	return items, nil
 }
 func templateViewResponse(v authoring.TemplateView) templateResponse {
 	return toTemplateResponseWithProblems(v.Template, v.Problems)

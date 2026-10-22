@@ -51,6 +51,7 @@ func wizardDepsGuard(d Deps, current repository.CurrentTaskCreator, guard ports.
 		manifest.Hooks = append(manifest.Hooks, model.HookKey{ID: h.ID, Version: h.Version})
 	}
 	d.TemplateAuthoring = authoring.NewTemplates(authoring.TemplateDeps{Templates: d.Templates, Hooks: d.Hooks, Clock: d.Clock, SelectionGuard: guard})
+	d.AuthoringEditor = authoring.NewEditor(authoring.EditorDeps{Templates: d.Templates, Hooks: d.Hooks})
 	d.HookAuthoring = authoring.NewHooks(authoring.HookDeps{Hooks: d.Hooks, Clock: d.Clock})
 	d.Wizard = tasks.NewWizard(tasks.WizardDeps{Hosts: d.Hosts, ISOs: d.ISOs, Hooks: d.Hooks, Templates: d.Templates, Tasks: wizardTaskRepository{d.Tasks, current}, Manifest: manifest, Clock: d.Clock, Notifier: d.Notifier, SelectionGuard: guard, Diagnostics: d.TaskCtl})
 	return d
