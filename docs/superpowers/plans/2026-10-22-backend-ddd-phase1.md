@@ -115,7 +115,7 @@
 
 ## Task 5: 定义任务应用契约并抽取向导五个操作
 
-**Files:** 新建 `application/tasks/{contract.go,wizard.go,selection.go,params.go,submit.go,wizard_test.go,submit_test.go}`、`application/tasks/port/{repository.go,selection.go}`、`application/ports/{actor.go,clock.go}`；修改 `interfaces/console/{wizard.go,server.go,errors.go,wizard_test.go}`、`cmd/lober/{app.go,wire.go,wire_gen.go}`、`archtest/migration_test.go`。
+**Files:** 新建 `application/tasks/{contract.go,wizard.go,selection.go,params.go,submit.go,wizard_test.go,submit_test.go}`、`application/tasks/port/{repository.go,selection.go}`、`application/ports/{actor.go,clock.go}`；修改 `interfaces/console/{wizard.go,server.go,errors.go,wizard_test.go,harness_test.go,templates.go,tasks.go,task_dto.go,lifecycle.go}`、`cmd/lober/{app.go,wire.go,wire_gen.go}`及现有架构守卫。`lifecycle.go` 只替换模板审批、废弃的两处共享锁调用。
 
 **Interfaces:**
 
@@ -138,32 +138,39 @@ type HostChoice struct { Host model.Host; Problems []model.Problem }
 type HostPage struct { Items []HostChoice; Next string }
 type ISOChoice struct { ISO model.ISO; Problems []model.Problem }
 type ISOPage struct { Items []ISOChoice; Next string }
-type TemplateChoice struct { Template model.Template; Hooks map[model.HookKey]model.Hook }
+type TemplateChoice struct { Template model.Template; Hooks map[model.HookKey]model.Hook; Problems []model.Problem }
 type TemplatePage struct { Items []TemplateChoice; Next string }
 type HostParams struct { SN string; Fields []params.Field; Problems []model.Problem }
 type ParamsResult struct { Hosts []HostParams; Common []model.Problem }
+type TaskChoice struct { Task model.Task; CanCancel, CanRetry []model.Problem }
 
 type Wizard interface {
     Hosts(context.Context, ports.Actor, HostRequest) (HostPage, error)
     ISOs(context.Context, ports.Actor, ISORequest) (ISOPage, error)
     Templates(context.Context, ports.Actor, TemplateRequest) (TemplatePage, error)
     Params(context.Context, ports.Actor, ParamsRequest) (ParamsResult, error)
-    Submit(context.Context, ports.Actor, SubmitRequest) ([]model.Task, error)
+    Submit(context.Context, ports.Actor, SubmitRequest) ([]TaskChoice, error)
 }
 func NewWizard(d WizardDeps) Wizard
 ```
 
-`WizardDeps` 字段固定为 `Hosts port.Hosts; ISOs port.ISOs; Templates port.Templates; Hooks port.Hooks; Tasks port.Tasks; Manifest selection.Manifest; Clock ports.Clock; Notifier ports.Notifier; SelectionGuard port.SelectionGuard`。
+`WizardDeps` 字段固定为 `Hosts port.Hosts; ISOs port.ISOs; Templates port.Templates; Hooks port.Hooks; Tasks port.Tasks; Manifest selection.Manifest; Clock ports.Clock; Notifier ports.Notifier; SelectionGuard port.SelectionGuard; Diagnostics port.TaskDiagnostics`。
+
+`port.TaskDiagnostics` 只包含 `CanCancel(model.Task) []model.Problem`、`CanRetry(model.Task) []model.Problem`。注入现有任务控制对象的只读能力；为空时保持原空诊断。应用预先计算模板与任务诊断。接口层共用纯字段转换函数；未迁移入口仍可保留原计算包装，向导不得调用这些包装。
 
 `port.Hosts` 只包含原仓储的 ListHosts/GetHosts；`ISOs` 只包含 GetISO/ListISOs；`Templates` 只包含 GetTemplate/ListTemplates/ListTemplateVersions；`Hooks` 只包含 GetHooks；`Tasks` 只包含 FindOpenTask/CreateCurrentTasks。方法签名逐字沿用任务 3 后 repository 对应方法，不嵌入全量仓储接口。任务 2 已产生独立修复契约：CurrentTaskCreator.CreateCurrentTasks 在同一事务内保护当前模板选择，ErrTemplateNotCurrent 对外映射原有 409；普通 CreateTasks 仍接受固定的旧已审批版本。应用向导只消费前者。
 
 `port.SelectionGuard` 的方法为 `ReadLock() func()`、`WriteLock() func()`，返回释放函数。过渡实现封装现有 templateSelection 读写锁，所有向导、审批及废弃入口使用同一实例。它只能保留原进程内协调，不代替任务 2 中的数据库保护；编写模块迁移后移出旧接口层。
 
+由 `console.NewSelectionGuard()` 返回该小接口，组装只创建一次，并同时注入 console 和应用。`console.Clock` 是 `ports.Clock` 的类型别名。保留仅注入 Clock 的非向导测试构造，不从旧仓储自动拼装向导。真实数据库并发测试中的停顿点改接应用的 Tasks 依赖，不删除屏障。
+
 `tasks.ErrForbidden`、`tasks.ErrUnauthenticated`、`tasks.ErrPasswordChangeRequired` 为应用错误。接口层分别映射现有无权限、未登录、强制改密响应，复用现有状态和原因，不新增对外错误格式。
+
+`tasks.ProblemsError` 只携带 `[]model.Problem`，由接口层沿用现有首问题分类决定状态；不能使用固定返回 422 的仓储问题错误替代。保留全部已有错误优先级。
 
 - [ ] 先写上述契约与中文行为注释；列出输入规范化、空批、错误优先级、事务与通知约定，沿用任务 1 基线，不替换成执行者个人偏好。
 - [ ] 添加 `Test应用向导不能绕过权限`，五个操作分别覆盖空操作者、停用用户、须改密码用户、无创建权限角色；断言任何仓储方法都未调用。合法管理员和运维权限按现有矩阵保留。
-- [ ] 添加 `Test应用提交整批失败不写入不通知`、`Test应用提交成功后才通知`、`Test应用提交取消不提前通知`。假仓储在 CreateTasks 内阻塞，断言其返回前发布数为零；返回错误或取消后仍为零；成功后每个返回任务发布一次。
+- [ ] 添加 `Test应用提交整批失败不写入不通知`、`Test应用提交成功后才通知`、`Test应用提交取消不提前通知`。假仓储在 CreateCurrentTasks 内阻塞，断言其返回前发布数为零；返回错误或取消后仍为零；成功后每个返回任务发布一次。
 - [ ] 添加主机顺序、缺失主机、重复规范化编号、未知输入行、当前审批版本、新草稿和内置版本的应用测试。复用领域构造数据；不在应用测试中重新实现准入算法。
 - [ ] 运行 `go test ./internal/application/tasks -count=1`，确认因服务未实现而失败，再将原 wizard.go 中的数据获取和业务编排移入任务服务。领域规则继续调用已有实现。
 - [ ] 在应用入口检查可信 Actor 和 task:create 权限；审计动作固定 task.create，时间取注入 Clock，创建人来自 Actor。应用不接受浏览器传入的 createdBy/createdAt。
