@@ -155,7 +155,7 @@ func NewWizard(d WizardDeps) Wizard
 
 `WizardDeps` 字段固定为 `Hosts port.Hosts; ISOs port.ISOs; Templates port.Templates; Hooks port.Hooks; Tasks port.Tasks; Manifest selection.Manifest; Clock ports.Clock; Notifier ports.Notifier; SelectionGuard port.SelectionGuard`。
 
-`port.Hosts` 只包含原仓储的 ListHosts/GetHosts；`ISOs` 只包含 GetISO/ListISOs；`Templates` 只包含 GetTemplate/ListTemplates/ListTemplateVersions；`Hooks` 只包含 GetHooks；`Tasks` 只包含 FindOpenTask/CreateTasks。方法签名逐字沿用任务 3 后 repository 对应方法，不嵌入全量仓储接口。任务 2 若产生独立修复契约，先更新本接口块再执行。
+`port.Hosts` 只包含原仓储的 ListHosts/GetHosts；`ISOs` 只包含 GetISO/ListISOs；`Templates` 只包含 GetTemplate/ListTemplates/ListTemplateVersions；`Hooks` 只包含 GetHooks；`Tasks` 只包含 FindOpenTask/CreateCurrentTasks。方法签名逐字沿用任务 3 后 repository 对应方法，不嵌入全量仓储接口。任务 2 已产生独立修复契约：CurrentTaskCreator.CreateCurrentTasks 在同一事务内保护当前模板选择，ErrTemplateNotCurrent 对外映射原有 409；普通 CreateTasks 仍接受固定的旧已审批版本。应用向导只消费前者。
 
 `port.SelectionGuard` 的方法为 `ReadLock() func()`、`WriteLock() func()`，返回释放函数。过渡实现封装现有 templateSelection 读写锁，所有向导、审批及废弃入口使用同一实例。它只能保留原进程内协调，不代替任务 2 中的数据库保护；编写模块迁移后移出旧接口层。
 
