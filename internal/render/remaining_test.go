@@ -78,7 +78,7 @@ func TestWindowsAuxRequiresRealTools(t *testing.T) {
 	r.Kind = catalog.FileAux
 	r.Values["smb"] = "//server/install"
 	r.Values["finalize-token"] = "finalize-only"
-	for _, role := range []string{"winpe-busybox", "winpe-curl"} {
+	for _, role := range layer3MediaRoles["windows-server"] {
 		r.Snapshot.ISO.Artifacts[role] = "windows/" + role
 	}
 	b, p, e := Render(r)
@@ -152,11 +152,16 @@ func TestESXiNativeFirstbootOffline(t *testing.T) {
 
 func TestWindowsScriptRequiresToolRoles(t *testing.T) {
 	r := runtimeFixture("pre", runtimeInstance("exit /b 0\r\n", true, "cmd", 3))
-	r.Snapshot.Format = "unattend"
+	windowsRuntimeRoles(&r)
+	delete(r.Snapshot.ISO.Artifacts, "winpe-curl")
 	assertRenderProblem(t, r, "render_artifact_missing")
 }
 
 func windowsRuntimeRoles(r *Request) {
+	r.Snapshot.Family, r.Snapshot.Series, r.Snapshot.Format = "windows", "windows-server", "unattend"
+	for _, role := range layer3MediaRoles["windows-server"] {
+		r.Snapshot.ISO.Artifacts[role] = "windows/" + role
+	}
 	r.Snapshot.ISO.Artifacts["winpe-busybox"] = "windows/busybox64u.exe"
 	r.Snapshot.ISO.Artifacts["winpe-curl"] = "windows/curl.exe"
 }

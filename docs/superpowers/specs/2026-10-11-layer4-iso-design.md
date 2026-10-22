@@ -3,6 +3,8 @@
 日期：2026-10-11
 状态：已确认
 
+**2026-10-15 集成补充：** 第 3、4、5 层已进入本地 dev，任务 9 的 render 必需角色表统一已实现并通过专项测试；全量检查和独立审查进行中。menu、Windows aux/script 均读取 catalog.RequiredRoles，完整合法请求保持原 golden 字节；Windows 辅助与脚本同时校验快照族、系和格式，避免未知系绕过必需角色检查。既有真实介质与第 7 层安装资格边界继续保留，详见[集成记录](../reports/2026-10-15-layer4-integration.md)。
+
 **2026-10-14 实现现状：** 来源登记、下载/上传、本地原地读取、取消重试、恢复清单、识别、提取、Windows SMB 发布与删除后的文件清理接口已落地。**ESXi 首版明确不能导入为 ready**，因为没有经过验证的版本出处。第 3 层尚未合入此分支，render 的角色表改造留到合入之后；本次不把那部分记作完成。
 
 合成介质覆盖 kickstart、preseed、autoinstall、AutoYaST、Agama、unattend 的导入流程。真实 ISO9660 读取已验证 Kali 安装镜像（6580 个条目）与 VMware Tools 镜像（30 个条目）；它们不是六种受支持发行版的安装验收证据。Debian/OpenCloudOS/Windows 等实际识别，以及第 7 层真装仍待验证。

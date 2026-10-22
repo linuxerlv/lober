@@ -55,6 +55,11 @@ func fixtureInput(t *testing.T, tpl model.Template) params.Input {
 		}
 	}
 	iso := model.ISO{ID: "iso-9", Name: "fixture", Series: tpl.Series[0], Version: "fixture", Arch: "amd64", Artifacts: map[string]string{"repo": "media/repo/", "iso": "media/image.iso", "winpe-busybox": "media/busybox.exe", "winpe-curl": "media/curl.exe"}, Offers: map[string][]model.Option{"editions": {{Value: "4", Label: "Server Datacenter"}}, "products": {{Value: "SLES", Label: "SLES"}, {Value: "Leap", Label: "Leap"}}}}
+	for _, role := range catalog.RequiredRoles(iso.Series) {
+		if _, exists := iso.Artifacts[role]; !exists {
+			iso.Artifacts[role] = "media/" + role
+		}
+	}
 	return params.Input{Template: tpl, Hooks: hs, ISO: iso, Host: model.Host{SN: "TASK9-FIXTURE", Arch: "amd64"}, Entered: entered}
 }
 

@@ -30,8 +30,7 @@ func windowsAuxFixture() Request {
 	r.Kind = catalog.FileAux
 	r.Values["smb"] = "//server/install"
 	r.Values["finalize-token"] = "finalize-independent"
-	r.Snapshot.ISO.Artifacts["winpe-busybox"] = "windows/busybox64u.exe"
-	r.Snapshot.ISO.Artifacts["winpe-curl"] = "windows/curl.exe"
+	windowsRuntimeRoles(&r)
 	r.Snapshot.Slots = []model.SnapshotSlot{{Seq: 1, Name: "pre", Exec: true, Timing: "pre", Instances: []model.SnapshotInstance{runtimeInstance("@echo off\r\nexit /b 0\r\n", true, "cmd", 3)}}, {Seq: 2, Name: "firstboot", Exec: true, Timing: "firstboot", Instances: []model.SnapshotInstance{runtimeInstance("Write-Output 'firstboot'\r\n", true, "powershell", 3)}}}
 	return r
 }
