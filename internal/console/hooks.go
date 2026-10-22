@@ -41,11 +41,14 @@ type hookResponse struct {
 type hookPage struct {
 	Items []hookResponse `json:"items"`
 	Next  string         `json:"next"`
+	Total *int64         `json:"total,omitempty"`
 }
 type versionPage struct {
 	Items []hookResponse `json:"items"`
 }
 type hookListQuery struct {
+	Page     int                `form:"page"`
+	PageSize int                `form:"page_size"`
 	Prefix   string             `form:"prefix"`
 	State    model.VersionState `form:"state"`
 	Approved bool               `form:"approved"`
@@ -97,7 +100,7 @@ func queryBool(c *gin.Context, key string) (bool, bool) {
 	return raw == "true", true
 }
 func authoringQuery(c *gin.Context) (store.HookQuery, bool) {
-	limit, ok := queryLimit(c)
+	number, limit, ok := queryPagination(c)
 	if !ok {
 		return store.HookQuery{}, false
 	}
@@ -105,7 +108,7 @@ func authoringQuery(c *gin.Context) (store.HookQuery, bool) {
 	if !ok {
 		return store.HookQuery{}, false
 	}
-	q := store.HookQuery{NamePrefix: c.Query("prefix"), ApprovedOnly: approved, Cursor: c.Query("cursor"), Limit: limit}
+	q := store.HookQuery{NamePrefix: c.Query("prefix"), ApprovedOnly: approved, Cursor: c.Query("cursor"), Limit: limit, Page: number}
 	if state := c.Query("state"); state != "" {
 		if !model.VersionState(state).Valid() {
 			Fail(c, 400, nil, model.ConsoleBadRequest)
@@ -122,7 +125,7 @@ func (s *server) listHooks(c *gin.Context) {
 	}
 	page, ok := Get(c, func() (store.Page[model.Hook], error) { return s.deps.Hooks.ListHooks(c.Request.Context(), q) })
 	if ok {
-		Ok(c, hookPage{hookResponses(page.Items), page.Next})
+		Ok(c, hookPage{hookResponses(page.Items), page.Next, page.Total})
 	}
 }
 func (s *server) listHookVersions(c *gin.Context) {

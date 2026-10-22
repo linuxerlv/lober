@@ -11,16 +11,9 @@ sshkey --username='lober' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAA
 zerombr
 ignoredisk --only-use='sda'
 clearpart --all --initlabel --disklabel=gpt --drives='sda'
-%pre --interpreter=/bin/sh --erroronfail
-set -eu
-if test -d /sys/firmware/efi; then
-    printf '%s\n' 'part /boot/efi --fstype=efi --size=600 --ondisk=sda' > /tmp/lober-partition.ks
-else
-    printf '%s\n' 'part biosboot --fstype=biosboot --size=2 --ondisk=sda' > /tmp/lober-partition.ks
-fi
-printf '%s\n' 'part /boot --fstype=xfs --size=1024 --ondisk=sda' 'part / --fstype=xfs --size=8192 --grow --ondisk=sda' >> /tmp/lober-partition.ks
-%end
-%include /tmp/lober-partition.ks
+reqpart
+part /boot --fstype=xfs --size=1024 --ondisk=sda
+part / --fstype=xfs --size=8192 --grow --ondisk=sda
 %packages
 @core
 curl

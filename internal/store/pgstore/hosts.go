@@ -205,7 +205,7 @@ func (s *Store) ListHosts(ctx context.Context, q store.HostQuery) (store.Page[mo
 		}
 	}
 	if !storable(q.SNPrefix, q.AttrKey, q.AttrValue) {
-		return emptyPage[model.Host](), nil
+		return emptyPage[model.Host](q.Page), nil
 	}
 	db := s.read(ctx)
 	if q.Cursor != "" {
@@ -218,11 +218,15 @@ func (s *Store) ListHosts(ctx context.Context, q store.HostQuery) (store.Page[mo
 		// 没登记这个属性的主机取到 NULL，不会被选中
 		db = db.Where("attrs ->> ? = ?", q.AttrKey, q.AttrValue)
 	}
+	db, total, err := numberedQuery[hostRow](db, q.Page, limit)
+	if err != nil {
+		return store.Page[model.Host]{}, err
+	}
 	var rows []hostRow
 	if err := db.Order(`sn COLLATE "C"`).Limit(limit + 1).Find(&rows).Error; err != nil {
 		return store.Page[model.Host]{}, err
 	}
-	return page(rows, limit, hostRow.host, func(r hostRow) string { return store.EncodeCursor("hosts", r.SN) })
+	return page(rows, limit, hostRow.host, func(r hostRow) string { return store.EncodeCursor("hosts", r.SN) }, total)
 }
 
 // hostLockOrder 是给多台主机加锁的次序：按 SN 的字节序升序，与 SQL 里的 ORDER BY sn COLLATE "C" 相同。凡在一个事务里给

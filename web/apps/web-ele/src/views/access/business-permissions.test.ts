@@ -93,6 +93,7 @@ it('renders current paged read responses for a viewer without any write entry po
       },
     ],
     next: '',
+    total: 1,
   });
   const host = await mount(Hosts, 'viewer', ['host:read']);
   await vi.waitFor(() => expect(host.textContent).toContain('SN-1'));
@@ -113,6 +114,7 @@ it('renders current paged read responses for a viewer without any write entry po
       },
     ],
     next: '',
+    total: 1,
   });
   const tasks = await mount(Tasks, 'viewer', ['task:read']);
   await vi.waitFor(() => expect(tasks.textContent).toContain('Rocky ISO'));
@@ -132,6 +134,7 @@ it('renders current paged read responses for a viewer without any write entry po
       },
     ],
     next: '',
+    total: 1,
   });
   const iso = await mount(ISOs, 'viewer', ['iso:read']);
   await vi.waitFor(() => expect(iso.textContent).toContain('Rocky ISO'));

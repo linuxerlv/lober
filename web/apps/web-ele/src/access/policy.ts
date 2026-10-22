@@ -10,6 +10,7 @@ export const consoleMenus: Record<
   isos: { path: '/artifact-sets', permission: 'iso:read' },
   tools: { path: '/tools/disk-dryrun', permission: 'template:read' },
   reports: { path: '/reports', permission: 'audit:read' },
+  users: { path: '/access/users', permission: 'user:manage' },
   'role-menus': { path: '/access/role-menus', permission: 'user:manage' },
 };
 export function canOperate(

@@ -225,7 +225,7 @@ func (s *Store) FindOpenTask(ctx context.Context, sn string) (model.Task, bool, 
 
 // ListTasks 见 store.Tasks。按 CreatedAt 倒序、再按 ID 的字节序排，游标是上一页最后一个的这两样。
 func (s *Store) ListTasks(ctx context.Context, q store.TaskQuery) (store.Page[model.Task], error) {
-	limit, err := store.CheckQuery(q.Cursor, q.Limit)
+	limit, err := store.CheckPageQuery(q.Cursor, q.Limit, q.Page)
 	if err != nil {
 		return store.Page[model.Task]{}, err
 	}
@@ -244,7 +244,7 @@ func (s *Store) ListTasks(ctx context.Context, q store.TaskQuery) (store.Page[mo
 		}
 	}
 	if !storable(q.HostSN) || len(q.States) > 0 && len(states) == 0 {
-		return emptyPage[model.Task](), nil
+		return emptyPage[model.Task](q.Page), nil
 	}
 	db := s.read(ctx)
 	if q.Cursor != "" {
@@ -262,11 +262,15 @@ func (s *Store) ListTasks(ctx context.Context, q store.TaskQuery) (store.Page[mo
 	if q.CreatedTo != 0 {
 		db = db.Where("created_at <= ?", q.CreatedTo)
 	}
+	db, total, err := numberedQuery[taskRow](db, q.Page, limit)
+	if err != nil {
+		return store.Page[model.Task]{}, err
+	}
 	var rows []taskRow
 	if err := db.Order(`created_at DESC, id COLLATE "C"`).Limit(limit + 1).Find(&rows).Error; err != nil {
 		return store.Page[model.Task]{}, err
 	}
-	return page(rows, limit, taskRow.task, func(r taskRow) string { return store.EncodeCursor("tasks", r.CreatedAt, r.ID) })
+	return page(rows, limit, taskRow.task, func(r taskRow) string { return store.EncodeCursor("tasks", r.CreatedAt, r.ID) }, total)
 }
 
 // TransitionTask 见 store.Tasks。

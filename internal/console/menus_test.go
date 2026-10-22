@@ -3,6 +3,7 @@ package console
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -25,11 +26,54 @@ func Test菜单目录与五角色默认配置(t *testing.T) {
 		}
 		want := []string{"tasks", "hosts", "templates", "hooks", "isos", "tools"}
 		if role == store.RoleAdmin {
-			want = append(want, "reports", "role-menus")
+			want = append(want, "reports", "users", "role-menus")
 		}
 		if !reflect.DeepEqual(env.Data.MenuIDs, want) || env.Data.MenuRev != 0 {
 			t.Fatalf("%s: %+v", role, env.Data)
 		}
+	}
+}
+
+func Test二级菜单独立存储且目录不能授权(t *testing.T) {
+	s, st, _ := newHTTPServer(t)
+	admin, _ := seedHTTPUser(t, s, st, "admin", store.RoleAdmin)
+	list := responseData[roleMenuListResponse](t, httpCall(s, "GET", "/console/v1/roles/menus", "", admin))
+	// Read through JSON so the test also checks the public hierarchy contract.
+	data, _ := json.Marshal(list.Menus)
+	var catalog []struct {
+		ID       string `json:"id"`
+		ParentID string `json:"parentId"`
+	}
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	parents := map[string]string{}
+	for _, menu := range catalog {
+		parents[menu.ID] = menu.ParentID
+	}
+	if parents["users"] != "access" || parents["role-menus"] != "access" {
+		t.Fatalf("hierarchy: %+v", parents)
+	}
+	for _, body := range []string{`{"menuIds":["access","role-menus"],"rev":0}`, `{"menuIds":["hosts-group"],"rev":0}`} {
+		role := "admin"
+		if strings.Contains(body, "hosts-group") {
+			role = "viewer"
+		}
+		if w := httpCall(s, "PUT", "/console/v1/roles/"+role+"/menus", body, admin); w.Code != 400 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+	}
+	saved := responseData[roleMenuResponse](t, httpCall(s, "PUT", "/console/v1/roles/admin/menus", `{"menuIds":["role-menus"],"rev":0}`, admin))
+	if !reflect.DeepEqual(saved.MenuIDs, []string{"role-menus"}) {
+		t.Fatal(saved)
+	}
+	stored, found, err := st.GetRoleMenus(t.Context(), store.RoleAdmin)
+	if err != nil || !found || !reflect.DeepEqual(stored.MenuIDs, []string{"role-menus"}) {
+		t.Fatal(stored, found, err)
+	}
+	user := responseData[userResponse](t, httpCall(s, "GET", "/console/v1/user/info", "", admin))
+	if slices.Contains(user.MenuIDs, "users") || slices.Contains(user.MenuIDs, "access") {
+		t.Fatal(user.MenuIDs)
 	}
 }
 

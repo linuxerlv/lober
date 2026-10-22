@@ -2,7 +2,7 @@
 import type { Schemas } from '#/api/console/generated';
 import type { Task, TaskEvent } from '#/api/console/task';
 
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
@@ -23,6 +23,7 @@ import {
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { errorMessage, problemsOf } from '#/api/console/problem';
 import { taskAPI, taskStreamURL } from '#/api/console/task';
+import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
 
 import { eventDetails } from './event-details';
@@ -38,6 +39,8 @@ const task = ref<Task>();
 const error = ref('');
 const problems = ref<Schemas['ProblemJSON'][]>([]);
 const events = ref<TaskEvent[]>([]);
+const eventPage = ref(1);
+const eventPageSize = ref(20);
 const connected = ref(false);
 const preview = ref<Schemas['PreviewResponse']>();
 const showPreview = ref(false);
@@ -84,7 +87,14 @@ async function reload() {
 function append(incoming: TaskEvent[]) {
   if (!active) return;
   events.value = mergeEvents(events.value, incoming);
-  eventGrid.setGridOptions({ data: events.value });
+}
+watch([events, eventPage, eventPageSize], () => {
+  const start = (eventPage.value - 1) * eventPageSize.value;
+  eventGrid.setGridOptions({ data: events.value.slice(start, start + eventPageSize.value) });
+});
+function changeEventSize(size: number) {
+  eventPageSize.value = size;
+  eventPage.value = 1;
 }
 async function loadEvents() {
   try {
@@ -219,6 +229,13 @@ onBeforeUnmount(() => {
     </ElCard>
     <ElCard header="任务事件">
       <EventGrid />
+      <ListPagination
+        :current-page="eventPage"
+        :page-size="eventPageSize"
+        :total="events.length"
+        @page-change="eventPage = $event"
+        @size-change="changeEventSize"
+      />
       <ElButton @click="loadEvents">补读后续事件</ElButton>
     </ElCard>
     <ElCard v-if="task" class="mt-4" header="固化参数与 hook">

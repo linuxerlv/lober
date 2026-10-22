@@ -14,11 +14,13 @@ import (
 )
 
 type hookCandidateQuery struct {
-	Slot   string `form:"slot" binding:"required"`
-	Index  int    `form:"index"`
-	Prefix string `form:"prefix"`
-	Cursor string `form:"cursor"`
-	Limit  int    `form:"limit"`
+	Slot     string `form:"slot" binding:"required"`
+	Index    int    `form:"index"`
+	Prefix   string `form:"prefix"`
+	Cursor   string `form:"cursor"`
+	Limit    int    `form:"limit"`
+	Page     int    `form:"page"`
+	PageSize int    `form:"page_size"`
 }
 type hookCandidateResponse struct {
 	Hook     hookResponse  `json:"hook"`
@@ -28,6 +30,7 @@ type hookCandidateResponse struct {
 type hookCandidatePage struct {
 	Items []hookCandidateResponse `json:"items"`
 	Next  string                  `json:"next"`
+	Total *int64                  `json:"total,omitempty"`
 }
 type sourceDiffResponse struct {
 	Original *templateResponse `json:"original"`
@@ -62,12 +65,12 @@ func (s *server) hookCandidates(c *gin.Context) {
 		}
 		index = n
 	}
-	limit, ok := queryLimit(c)
+	pageNumber, limit, ok := queryPagination(c)
 	if !ok {
 		return
 	}
 	page, ok := Get(c, func() (store.Page[model.Hook], error) {
-		return s.deps.Hooks.ListHooks(c.Request.Context(), store.HookQuery{NamePrefix: c.Query("prefix"), Cursor: c.Query("cursor"), Limit: limit})
+		return s.deps.Hooks.ListHooks(c.Request.Context(), store.HookQuery{NamePrefix: c.Query("prefix"), Cursor: c.Query("cursor"), Limit: limit, Page: pageNumber, AllVersions: pageNumber > 0})
 	})
 	if !ok {
 		return
@@ -80,15 +83,18 @@ func (s *server) hookCandidates(c *gin.Context) {
 	}
 	// The cursor pages identities; each identity exposes all pinned versions so
 	// a new draft does not hide its still-approved predecessor from the editor.
-	var candidates []model.Hook
-	for _, identity := range page.Items {
-		versions, ok := Get(c, func() ([]model.Hook, error) {
-			return s.deps.Hooks.ListHookVersions(c.Request.Context(), identity.ID)
-		})
-		if !ok {
-			return
+	candidates := page.Items
+	if pageNumber == 0 {
+		candidates = []model.Hook{}
+		for _, identity := range page.Items {
+			versions, ok := Get(c, func() ([]model.Hook, error) {
+				return s.deps.Hooks.ListHookVersions(c.Request.Context(), identity.ID)
+			})
+			if !ok {
+				return
+			}
+			candidates = append(candidates, versions...)
 		}
-		candidates = append(candidates, versions...)
 	}
 	items := make([]hookCandidateResponse, 0, len(candidates))
 	for _, hook := range candidates {
@@ -138,7 +144,7 @@ func (s *server) hookCandidates(c *gin.Context) {
 		}
 		items = append(items, hookCandidateResponse{toHookResponse(hook), usable, jsonProblems(problems)})
 	}
-	Ok(c, hookCandidatePage{items, page.Next})
+	Ok(c, hookCandidatePage{Items: items, Next: page.Next, Total: page.Total})
 }
 
 func (s *server) sourceDiff(c *gin.Context) {

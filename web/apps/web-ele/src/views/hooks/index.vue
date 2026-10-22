@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Schemas } from '#/api/console/generated';
 
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 
 import { Page } from '@vben/common-ui';
 import { useAccessStore, useUserStore } from '@vben/stores';
@@ -25,7 +25,9 @@ import {
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import * as api from '#/api/console/hook';
 import { errorMessage, problemsOf } from '#/api/console/problem';
+import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { NumberedPage } from '#/composables/numbered-page';
 
 import { authoringRights, hookPayload } from '../templates/authoring';
 import ParamEditor from '../templates/ParamEditor.vue';
@@ -44,9 +46,8 @@ const visible = ref(false);
 const busy = ref(false);
 const prefix = ref('');
 const state = ref('');
-const next = ref('');
-const cursor = ref('');
-const history = ref<string[]>([]);
+const appliedFilters = { prefix: '', state: undefined as string | undefined };
+const pagination = reactive(new NumberedPage<Hook>());
 const errors = ref<Schemas['ProblemJSON'][]>([]);
 const versions = ref<Hook[]>([]);
 const reason = ref('');
@@ -66,6 +67,7 @@ const editable = computed(() =>
   !!selected.value && (selected.value.id ? !!rights.value?.edit : canWrite.value),
 );
 const [Grid, grid] = useVbenVxeGrid<Hook>({
+  class: 'h-auto',
   gridOptions: {
     columns: [
       { field: 'name', title: '名称', minWidth: 190 },
@@ -85,7 +87,7 @@ const [Grid, grid] = useVbenVxeGrid<Hook>({
         slots: { default: 'action' },
       },
     ],
-    height: 'auto',
+    maxHeight: 520,
     pagerConfig: { enabled: false },
     rowConfig: { keyField: 'id' },
     toolbarConfig: { refresh: false },
@@ -101,31 +103,25 @@ function currentEditor(token: number, row: Pick<Hook, 'id' | 'version'>) {
 async function load(reset = false) {
   const owner = editorToken;
   if (reset) {
-    cursor.value = '';
-    history.value = [];
+    Object.assign(appliedFilters, { prefix: prefix.value, state: state.value || undefined });
+    pagination.reset();
   }
   const token = ++sequence;
+  const filters = { ...appliedFilters };
   try {
-    const page = await api.getHookListApi({
-      prefix: prefix.value,
-      state: state.value || undefined,
-      cursor: cursor.value,
-      limit: 30,
-    });
+    const page = await pagination.load((params) => api.getHookListApi({ ...filters, ...params }));
     if (token !== sequence) return;
-    next.value = page.next;
-    grid.setGridOptions({ data: page.items ?? [] });
+    grid.setGridOptions({ data: page.items });
   } catch (error) {
     if (token === sequence && owner === editorToken) report(error);
   }
 }
-function pageForward() {
-  history.value.push(cursor.value);
-  cursor.value = next.value;
+function changePage(page: number) {
+  pagination.setPage(page);
   void load();
 }
-function pageBack() {
-  cursor.value = history.value.pop() ?? '';
+function changePageSize(size: number) {
+  pagination.setPageSize(size);
   void load();
 }
 function assign(row: Hook) {
@@ -298,7 +294,7 @@ const series: Schemas['CatalogSeries'][] = [
 ];
 onMounted(() => load());
 watch(visible, (open) => { if (!open) { ++editorToken; busy.value = false; errors.value = []; } }, { flush: 'sync' });
-onBeforeUnmount(() => { ++editorToken; ++sequence; });
+onBeforeUnmount(() => { ++editorToken; ++sequence; pagination.reset(); });
 </script>
 <template>
   <Page
@@ -323,7 +319,7 @@ onBeforeUnmount(() => { ++editorToken; ++sequence; });
           :value="s"
           :label="s"
 />
-</ElSelect><ElButton @click="load(true)">查询</ElButton>
+</ElSelect><ElButton :loading="pagination.loading" @click="load(true)">查询</ElButton>
     </div>
     <ProblemList v-if="!visible" :problems="errors" />
     <Grid>
@@ -335,9 +331,14 @@ onBeforeUnmount(() => { ++editorToken; ++sequence; });
 </ElButton>
 </template>
 </Grid>
-    <div class="mt-3 flex justify-end gap-2">
-      <ElButton :disabled="!history.length" @click="pageBack">上一页</ElButton><ElButton :disabled="!next" @click="pageForward">下一页</ElButton>
-    </div>
+    <ListPagination
+      :current-page="pagination.page"
+      :page-size="pagination.pageSize"
+      :total="pagination.total"
+      :disabled="pagination.loading"
+      @page-change="changePage"
+      @size-change="changePageSize"
+    />
     <ElDialog
       v-model="visible"
       :title="

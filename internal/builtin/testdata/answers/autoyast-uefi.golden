@@ -28,7 +28,6 @@
       <username>lober</username>
       <user_password>$6$fixture$notARealPasswordHash</user_password>
       <encrypted config:type="boolean">true</encrypted>
-      <create_home config:type="boolean">true</create_home>
       <shell>/bin/bash</shell>
       <authorized_keys config:type="list">
         <listentry>ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA fixture</listentry>

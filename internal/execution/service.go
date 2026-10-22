@@ -66,6 +66,26 @@ func (s *Service) Boot(ctx context.Context, sn string, arch catalog.Arch, firmwa
 	return model.Task{}, false, store.ErrConflict
 }
 
+// Preseed 按 SN 找可以经 DHCP bootfile 地址下发应答的任务：只有 iPXE 已引导过的
+// （booting/installing）才给；pending 的机器上还没有安装器在跑，发过去只会提前推
+// 状态机，boot 都进不去；已结束的按 FindOpenTask 的口径本来就不算开放任务。
+// Debian 的安装器在 auto 模式下会把 DHCP option 67 的 bootfile 地址当 preseed 下载，
+// 并覆盖内核命令行上的 preseed/url，所以网关需要按 SN 在这个阶段给出真实应答（D1）。
+func (s *Service) Preseed(ctx context.Context, sn string) (model.Task, bool, error) {
+	normalized, p := model.NormalizeSN(sn)
+	if p != nil {
+		return model.Task{}, false, nil
+	}
+	task, found, err := s.repo.FindOpenTask(ctx, normalized)
+	if err != nil || !found {
+		return model.Task{}, false, err
+	}
+	if task.State != model.TaskBooting && task.State != model.TaskInstalling {
+		return model.Task{}, false, nil
+	}
+	return task, true, nil
+}
+
 func (s *Service) GetAuthorized(ctx context.Context, id, token string, finalize bool) (model.Task, error) {
 	task, err := s.repo.GetTask(ctx, id)
 	if err != nil {

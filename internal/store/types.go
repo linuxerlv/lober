@@ -58,10 +58,12 @@ type Appended struct {
 type Page[T any] struct {
 	Items []T
 	Next  string
+	Total *int64 // Present only for numbered pagination, including zero matches.
 }
 
-// 下面是各查询类型。它们都带 Cursor 与 Limit，规则由 CheckQuery 查：Cursor 是上一页的 Next，空串表示从头取；
-// Limit 为 0 时取 100，1–500 照用，超过 500 报 ErrInvalid。过滤条件为零值表示不按它过滤；切片的过滤条件（States）
+// 下面是各查询类型。Page > 0 时使用页码分页，Limit 为 0 时取 20；Page = 0 时保留游标分页。
+// 页码与非空 Cursor 不可混用，规则由 CheckPageQuery 查。Cursor 是上一页的 Next，空串表示从头取；
+// 游标模式 Limit 为 0 时取 100，1–500 照用，超过 500 报 ErrInvalid。过滤条件为零值表示不按它过滤；切片的过滤条件（States）
 // 为 nil 与为空切片相同，都表示不按它过滤，不是「状态在空集合里」：第 5 层把 JSON 里的空数组解出来就是空切片。
 //
 // 顺序固定，翻页才不会漏也不会重。字符串一律按字节序比较，不随数据库的排序规则变（pgstore 用 COLLATE "C"）：
@@ -71,6 +73,7 @@ type Page[T any] struct {
 
 // HostQuery 查主机。
 type HostQuery struct {
+	Page     int // Zero preserves cursor pagination; positive values select a numbered page.
 	SNPrefix string
 	// AttrKey 与 AttrValue 要么都给，要么都不给；给了就要求这个属性的值完全相等。
 	AttrKey, AttrValue string
@@ -80,6 +83,7 @@ type HostQuery struct {
 
 // ISOQuery 查 ISO。
 type ISOQuery struct {
+	Page   int // Zero preserves cursor pagination; positive values select a numbered page.
 	Family catalog.Family
 	Series catalog.Series
 	States []model.ISOState
@@ -87,10 +91,12 @@ type ISOQuery struct {
 	Limit  int
 }
 
-// HookQuery 查 hook，每个身份一项。
+// HookQuery 查 hook，默认每个身份一项。AllVersions 按版本列出，每个身份按版本号升序。
 type HookQuery struct {
-	NamePrefix string
-	States     []model.VersionState
+	AllVersions bool // Return every version instead of one selected version per identity.
+	Page        int  // Zero preserves cursor pagination; positive values select a numbered page.
+	NamePrefix  string
+	States      []model.VersionState
 	// ApprovedOnly 时每个身份给当前的已审批版本（与 model.CurrentApproved 同一规则），没有就跳过；
 	// 否则给最新的版本。
 	ApprovedOnly bool
@@ -100,6 +106,8 @@ type HookQuery struct {
 
 // TemplateQuery 查模板，与 HookQuery 相同，另可按系过滤。
 type TemplateQuery struct {
+	Selection    *TemplateSelection // Optional wizard eligibility, applied before counting and paging.
+	Page         int                // Zero preserves cursor pagination; positive values select a numbered page.
 	NamePrefix   string
 	States       []model.VersionState
 	ApprovedOnly bool
@@ -108,8 +116,17 @@ type TemplateQuery struct {
 	Limit        int
 }
 
+// TemplateSelection supplies immutable facts needed to select wizard candidates.
+// Eligibility matches admission.TemplateUsable plus the current builtin manifest.
+type TemplateSelection struct {
+	ISO              model.ISO
+	BuiltinTemplates []model.TemplateKey
+	BuiltinHooks     []model.HookKey
+}
+
 // TaskQuery 查任务。
 type TaskQuery struct {
+	Page                   int // Zero preserves cursor pagination; positive values select a numbered page.
 	HostSN                 string
 	States                 []model.TaskState
 	CreatedFrom, CreatedTo int64 // CreatedAt 的范围，含两端
@@ -119,6 +136,7 @@ type TaskQuery struct {
 
 // AuditQuery 查审计。各过滤条件都是完全相等。
 type AuditQuery struct {
+	Page                 int // Zero preserves cursor pagination; positive values select a numbered page.
 	TargetKind, TargetID string
 	Actor, Action        string
 	From, To             int64 // At 的范围，含两端

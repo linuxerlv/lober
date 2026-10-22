@@ -48,7 +48,7 @@ func CheckHosts(hs []model.Host) error {
 // CheckHostQuery 查 ListHosts 的入参，返回实际要取的条数：分页的规则同 CheckQuery；AttrKey 与 AttrValue 要么都给，
 // 要么都不给，否则报 ErrInvalid。
 func CheckHostQuery(q HostQuery) (int, error) {
-	limit, err := CheckQuery(q.Cursor, q.Limit)
+	limit, err := CheckPageQuery(q.Cursor, q.Limit, q.Page)
 	if err != nil {
 		return 0, err
 	}

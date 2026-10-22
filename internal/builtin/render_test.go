@@ -165,7 +165,7 @@ func templateFor(t *testing.T, f catalog.Format) model.Template {
 
 func TestNativeInstallerContracts(t *testing.T) {
 	cases := map[catalog.Format][]string{
-		"kickstart":   {"%pre --interpreter=/bin/sh --erroronfail", "/sys/firmware/efi", "biosboot", "/boot/efi", "--disklabel=gpt", "%include /tmp/lober-partition.ks", "%post --nochroot", "systemd", "openssh-server", "sshkey --username="},
+		"kickstart":   {"reqpart", "part /boot --fstype=xfs --size=1024 --ondisk=sda", "part / --fstype=xfs --size=8192 --grow --ondisk=sda", "--disklabel=gpt", "%post --nochroot", "systemd", "openssh-server", "sshkey --username="},
 		"preseed":     {"partman-auto/choose_recipe select atomic", "partman-partitioning/default_label string gpt", "partman-auto/disk string /dev/sda", "pkgsel/include string curl systemd openssh-server", "preseed/late_command"},
 		"autoinstall": {"#cloud-config", "RAM must exceed the full ISO size", "name: direct", "path: '/dev/sda'", "ptable: gpt", "late-commands:", "install-server: true"},
 		"autoyast":    {"<device>/dev/sda</device>", "<disklabel>gpt</disklabel>", "<mount>/</mount>", "<chrooted config:type=\"boolean\">false</chrooted>", "<package>systemd</package>"},
@@ -276,12 +276,23 @@ func TestRecordCurrentRelease(t *testing.T) {
 	if os.Getenv("LOBER_RECORD_RELEASE") != "1" {
 		t.Skip("one-time immutable release recording")
 	}
-	r := release{Templates: Templates(), Hooks: Hooks()}
-	data := encode(r)
-	if _, err := os.Stat("testdata/releases/v2.json"); err == nil {
-		t.Fatal("refuse to overwrite release")
+	releases, err := filepath.Glob("testdata/releases/v*.json")
+	if err != nil || len(releases) == 0 {
+		t.Fatalf("no historical releases: %v", err)
 	}
-	if err := os.WriteFile("testdata/releases/v2.json", append(data, '\n'), 0644); err != nil {
+	next := 1
+	for _, file := range releases {
+		var n int
+		if _, err := fmt.Sscanf(filepath.Base(file), "v%d.json", &n); err != nil {
+			t.Fatalf("unreadable release fixture %s: %v", file, err)
+		}
+		if n >= next {
+			next = n + 1
+		}
+	}
+	file := fmt.Sprintf("testdata/releases/v%d.json", next)
+	r := release{Templates: Templates(), Hooks: Hooks()}
+	if err := os.WriteFile(file, append(encode(r), '\n'), 0644); err != nil {
 		t.Fatal(err)
 	}
 	for _, tpl := range r.Templates {
@@ -294,8 +305,11 @@ func TestRecordCurrentRelease(t *testing.T) {
 func recordHash(t *testing.T, kind, id string, version int, v any) {
 	t.Helper()
 	file := fmt.Sprintf("testdata/fingerprints/%s-%s-v%d.sha256", kind, id, version)
-	if _, err := os.Stat(file); err == nil {
-		t.Fatal("refuse to overwrite fingerprint")
+	if data, err := os.ReadFile(file); err == nil {
+		if want := Fingerprint(v) + "\n"; string(data) != want {
+			t.Fatalf("existing fingerprint %s differs: content changed without a version bump", file)
+		}
+		return
 	}
 	if err := os.WriteFile(file, []byte(Fingerprint(v)+"\n"), 0644); err != nil {
 		t.Fatal(err)

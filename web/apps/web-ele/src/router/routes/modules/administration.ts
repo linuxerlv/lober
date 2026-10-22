@@ -4,14 +4,26 @@ const routes: RouteRecordRaw[] = [
   {
     name: 'Users',
     path: '/users',
-    redirect:'/access/users',
-    meta: { title: '用户管理', hideInMenu:true, hideInTab:true, menuId:'role-menus', permission:'user:manage' },
+    redirect: '/access/users',
+    meta: {
+      title: '用户管理',
+      hideInMenu: true,
+      hideInTab: true,
+      menuId: 'users',
+      permission: 'user:manage',
+    },
   },
   {
     name: 'Audit',
     path: '/audit',
-    redirect:'/reports',
-    meta: { title: '审计', hideInMenu:true, hideInTab:true, menuId:'reports', permission:'audit:read' },
+    redirect: '/reports',
+    meta: {
+      title: '审计',
+      hideInMenu: true,
+      hideInTab: true,
+      menuId: 'reports',
+      permission: 'audit:read',
+    },
   },
   {
     name: 'LegacyAccountPassword',

@@ -25,8 +25,11 @@ type auditItem struct {
 type auditPage struct {
 	Items []auditItem `json:"items"`
 	Next  string      `json:"next"`
+	Total *int64      `json:"total,omitempty"`
 }
 type auditQuery struct {
+	Page       int    `form:"page"`
+	PageSize   int    `form:"page_size"`
 	TargetKind string `form:"target_kind"`
 	TargetID   string `form:"target_id"`
 	Actor      string `form:"actor"`
@@ -74,11 +77,11 @@ func (s *server) listAudit(c *gin.Context) {
 	if !ok {
 		return
 	}
-	limit, ok := queryLimit(c)
+	number, limit, ok := queryPagination(c)
 	if !ok {
 		return
 	}
-	q.Limit, q.Cursor = limit, c.Query("cursor")
+	q.Limit, q.Cursor, q.Page = limit, c.Query("cursor"), number
 	page, ok := Get(c, func() (store.Page[store.AuditEntry], error) { return s.deps.Audit.ListAudit(c.Request.Context(), q) })
 	if !ok {
 		return
@@ -87,7 +90,7 @@ func (s *server) listAudit(c *gin.Context) {
 	for i, e := range page.Items {
 		items[i] = toAuditItem(e)
 	}
-	Ok(c, auditPage{items, page.Next})
+	Ok(c, auditPage{items, page.Next, page.Total})
 }
 
 // CSV quoting protects separators, not spreadsheet formulas. This export is

@@ -136,8 +136,8 @@ func storable(ss ...string) bool {
 
 // page 从多取了一条的 rows 里取一页，条目用 conv 转成 model 值。多取一条才知道还有没有下一页：恰好取完时 Next 为空，
 // 不多给一个空页。Items 不为 nil，第 5 层编成 JSON 是 []。
-func page[R, T any](rows []R, limit int, conv func(R) (T, error), cursorOf func(R) string) (store.Page[T], error) {
-	var p store.Page[T]
+func page[R, T any](rows []R, limit int, conv func(R) (T, error), cursorOf func(R) string, total *int64) (store.Page[T], error) {
+	p := store.Page[T]{Total: total}
 	if len(rows) > limit {
 		rows = rows[:limit]
 		p.Next = cursorOf(rows[limit-1])
@@ -154,8 +154,13 @@ func page[R, T any](rows []R, limit int, conv func(R) (T, error), cursorOf func(
 }
 
 // emptyPage 是没有条目的一页：过滤条件存不下时，什么都匹配不上。
-func emptyPage[T any]() store.Page[T] {
-	return store.Page[T]{Items: []T{}}
+func emptyPage[T any](number int) store.Page[T] {
+	p := store.Page[T]{Items: []T{}}
+	if number > 0 {
+		total := int64(0)
+		p.Total = &total
+	}
+	return p
 }
 
 // 游标由 store.EncodeCursor 编出、store.DecodeCursor 解开：排序键是上一页最后一条的。解出的串都存得下，拿去查询

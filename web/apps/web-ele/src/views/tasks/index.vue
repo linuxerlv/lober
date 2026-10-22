@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Task } from '#/api/console/task';
 
-import { onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
@@ -12,20 +12,22 @@ import { ElAlert, ElButton, ElInput, ElOption, ElSelect, ElTag } from 'element-p
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { errorMessage } from '#/api/console/problem';
 import { taskAPI } from '#/api/console/task';
+import ListPagination from '#/components/console/ListPagination.vue';
+import { NumberedPage } from '#/composables/numbered-page';
 
 import { taskStateLabels } from './task-state';
-import { latestOnly } from './wizard-state';
 
 defineOptions({ name: 'TasksIndex' });
 const router = useRouter();
 const access = useAccessStore();
 const sn = ref('');
 const state = ref('');
-const cursor = ref('');
-const busy = ref(false);
+const appliedFilters = { host_sn: '', state: '' };
+const pagination = reactive(new NumberedPage<Task>());
 const error = ref('');
-const gate = latestOnly();
+let generation = 0;
 const [Grid, grid] = useVbenVxeGrid<Task>({
+  class: 'h-auto',
   gridOptions: {
     columns: [
       { field: 'hostSN', title: '主机 SN', minWidth: 170 },
@@ -46,37 +48,40 @@ const [Grid, grid] = useVbenVxeGrid<Task>({
     ],
     rowConfig: { keyField: 'id' },
     pagerConfig: { enabled: false },
-    height: 'auto',
+    maxHeight: 520,
   },
 });
-async function load(more = false) {
-  busy.value = true;
+async function load(reset = false) {
+  if (reset) {
+    Object.assign(appliedFilters, { host_sn: sn.value, state: state.value });
+    pagination.reset();
+  }
+  const run = ++generation;
   error.value = '';
-  await gate.run(
-    taskAPI.list({
-      host_sn: sn.value,
-      state: state.value,
-      cursor: more ? cursor.value : '',
-      limit: 100,
-    }),
-    (page) => {
-      cursor.value = page.next;
-      grid.setGridOptions({ data: page.items ?? [] });
-      busy.value = false;
-    },
-    (reason) => {
-      error.value = errorMessage(reason);
-      busy.value = false;
-    },
-  );
+  const filters = { ...appliedFilters };
+  try {
+    const page = await pagination.load((params) => taskAPI.list({ ...filters, ...params }));
+    if (run === generation) grid.setGridOptions({ data: page.items });
+  } catch (reason) {
+    if (run === generation) error.value = errorMessage(reason);
+  }
+}
+function changePage(page: number) {
+  pagination.setPage(page);
+  void load();
+}
+function changePageSize(size: number) {
+  pagination.setPageSize(size);
+  void load();
 }
 onMounted(() => load());
+onBeforeUnmount(() => { ++generation; pagination.reset(); });
 </script>
 
 <template>
   <Page title="任务" description="任务使用创建时固化的 ISO、模板版本和参数。">
     <div class="mb-4 flex flex-wrap gap-2">
-      <ElInput v-model="sn" placeholder="主机 SN（精确匹配）" class="!w-64" @keyup.enter="load()" />
+      <ElInput v-model="sn" placeholder="主机 SN（精确匹配）" class="!w-64" @keyup.enter="load(true)" />
       <ElSelect v-model="state" placeholder="全部状态" clearable class="!w-64">
         <ElOption
           v-for="(label, value) in taskStateLabels"
@@ -85,7 +90,7 @@ onMounted(() => load());
           :value="value"
         />
       </ElSelect>
-      <ElButton :loading="busy" @click="load()">查询</ElButton>
+      <ElButton :loading="pagination.loading" @click="load(true)">查询</ElButton>
       <ElButton
         v-if="access.accessCodes.includes('task:create')"
         type="primary"
@@ -109,9 +114,13 @@ onMounted(() => load());
         </ElButton>
       </template>
     </Grid>
-    <div class="mt-3 flex gap-2">
-      <ElButton :loading="busy" @click="load()">回到第一页</ElButton>
-      <ElButton v-if="cursor" :loading="busy" @click="load(true)">下一页</ElButton>
-    </div>
+    <ListPagination
+      :current-page="pagination.page"
+      :page-size="pagination.pageSize"
+      :total="pagination.total"
+      :disabled="pagination.loading"
+      @page-change="changePage"
+      @size-change="changePageSize"
+    />
   </Page>
 </template>

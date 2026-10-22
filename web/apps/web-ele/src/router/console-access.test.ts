@@ -14,6 +14,7 @@ import {
   firstConsolePath,
   replaceConsoleRoutes,
 } from './console-access';
+import accessRoutes from './routes/modules/access';
 const user: ConsoleSessionUser = {
   username: 'alice',
   displayName: 'Alice',
@@ -64,6 +65,31 @@ const routes: RouteRecordRaw[] = [
   },
 ];
 describe('current console routes', () => {
+  it('grants individual second-level pages without granting siblings or retaining empty folders', () => {
+    const admin = {
+      ...user,
+      role: 'admin' as const,
+      permissions: ['user:manage'],
+      menuIds: ['role-menus'],
+    };
+    const out = filterConsoleRoutes(accessRoutes, admin);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.children!.map((route) => route.name)).toEqual(['RoleMenus']);
+    expect(firstConsolePath(out)).toBe('/access/role-menus');
+    const accountsOnly = filterConsoleRoutes(accessRoutes, {
+      ...admin,
+      menuIds: ['users'],
+    });
+    expect(accountsOnly[0]!.children!.map((route) => route.name)).toEqual([
+      'Accounts',
+    ]);
+    expect(
+      filterConsoleRoutes(accessRoutes, { ...admin, menuIds: [] }),
+    ).toEqual([]);
+    expect(
+      filterConsoleRoutes(accessRoutes, { ...admin, permissions: [] }),
+    ).toEqual([]);
+  });
   it('inherits menu restrictions, checks operation permission and ignores obsolete role lists', () => {
     const out = filterConsoleRoutes(routes, user);
     expect(out.map((r) => r.name)).toEqual(['Tasks', 'Templates']);

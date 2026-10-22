@@ -113,7 +113,7 @@ func (s *Store) GetUser(ctx context.Context, username string) (store.User, error
 	return row.user(), nil
 }
 func (s *Store) ListUsers(ctx context.Context, q store.UserQuery) (store.Page[store.User], error) {
-	limit, err := store.CheckQuery(q.Cursor, q.Limit)
+	limit, err := store.CheckPageQuery(q.Cursor, q.Limit, q.Page)
 	if err != nil {
 		return store.Page[store.User]{}, err
 	}
@@ -127,9 +127,13 @@ func (s *Store) ListUsers(ctx context.Context, q store.UserQuery) (store.Page[st
 	if q.Cursor != "" {
 		db = db.Where(`username COLLATE "C" > ?`, after)
 	}
+	db, total, err := numberedQuery[userRow](db, q.Page, limit)
+	if err != nil {
+		return store.Page[store.User]{}, err
+	}
 	var rows []userRow
 	if err := db.Order(`username COLLATE "C"`).Limit(limit + 1).Find(&rows).Error; err != nil {
 		return store.Page[store.User]{}, err
 	}
-	return page(rows, limit, func(r userRow) (store.User, error) { return r.user(), nil }, func(r userRow) string { return store.EncodeCursor("users", r.Username) })
+	return page(rows, limit, func(r userRow) (store.User, error) { return r.user(), nil }, func(r userRow) string { return store.EncodeCursor("users", r.Username) }, total)
 }

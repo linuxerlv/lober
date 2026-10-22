@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import type { Schemas } from '#/api/console/generated';
 
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+} from 'vue';
 import { useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
@@ -28,29 +36,47 @@ import {
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { errorMessage, problemsOf } from '#/api/console/problem';
 import { wizardAPI } from '#/api/console/wizard';
+import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { NumberedPage } from '#/composables/numbered-page';
 
-import { collectEditable, latestOnly, selectionChanged } from './wizard-state';
+import {
+  collectEditable,
+  latestOnly,
+  mergeHostSelection,
+  selectionChanged,
+} from './wizard-state';
 
 defineOptions({ name: 'TasksNew' });
 type Host = Schemas['WizardHostItem'];
 const router = useRouter();
-const access=useAccessStore();
+const access = useAccessStore();
 const step = ref(0);
 const busy = ref(false);
 const error = ref('');
 const problems = ref<Schemas['ProblemJSON'][]>([]);
 const gate = latestOnly();
-const hosts = ref<Host[]>([]);
+const hostPage = reactive(new NumberedPage<Host>());
+const hosts = computed(() => hostPage.items);
 const selectedHosts = ref<Host[]>([]);
 const hostQuery = ref('');
 const attrKey = ref('');
 const attrValue = ref('');
-const hostNext = ref('');
-const isos = ref<Schemas['WizardISOItem'][]>([]);
-const isoNext = ref('');
-const templates = ref<Schemas['WizardTemplateItem'][]>([]);
-const templateNext = ref('');
+const hostFilters = reactive({ q: '', attr_key: '', attr_value: '' });
+const isoPage = reactive(new NumberedPage<Schemas['WizardISOItem']>());
+const isos = computed(() => isoPage.items);
+const templatePage = reactive(
+  new NumberedPage<Schemas['WizardTemplateItem']>(),
+);
+const templates = computed(() => templatePage.items);
+const working = computed(
+  () =>
+    busy.value || hostPage.loading || isoPage.loading || templatePage.loading,
+);
+const selectedISO = ref<Schemas['WizardISOItem']>();
+const selectedTemplate = ref<Schemas['WizardTemplateItem']>();
+let restoringHosts = false;
+let hostRender = 0;
 const state = ref({
   isoID: '',
   templateID: '',
@@ -73,12 +99,6 @@ const batchFields = computed(() => [
     ),
   ).values(),
 ]);
-const selectedISO = computed(() => isos.value.find((iso) => iso.id === state.value.isoID));
-const selectedTemplate = computed(() =>
-  templates.value.find(
-    (tpl) => tpl.id === state.value.templateID && tpl.version === state.value.templateVersion,
-  ),
-);
 const [HostGrid, hostGrid] = useVbenVxeGrid<Host>({
   gridOptions: {
     columns: [
@@ -98,7 +118,9 @@ const [HostGrid, hostGrid] = useVbenVxeGrid<Host>({
       { title: '选择限制', minWidth: 200, slots: { default: 'problems' } },
     ],
     rowConfig: { keyField: 'sn' },
-    checkboxConfig: { checkMethod: ({ row }: { row: Host }) => row.selectable },
+    checkboxConfig: {
+      checkMethod: ({ row }: { row: Host }) => row.selectable && !working.value,
+    },
     pagerConfig: { enabled: false },
     height: 330,
   },
@@ -123,54 +145,80 @@ function resetDownstream(kind: 'hosts' | 'iso', value = '') {
   state.value = selectionChanged(state.value, kind, value);
   forms.value = [];
   paramsProblems.value = [];
-  templates.value = [];
-  templateNext.value = '';
+  templatePage.reset();
+  templatePage.items = [];
+  templatePage.total = 0;
+  selectedTemplate.value = undefined;
   preview.value = undefined;
   if (kind === 'hosts') {
-    isos.value = [];
-    isoNext.value = '';
+    isoPage.reset();
+    isoPage.items = [];
+    isoPage.total = 0;
+    selectedISO.value = undefined;
   }
 }
 function updateHosts() {
-  selectedHosts.value = hostGrid.grid.getCheckboxRecords();
+  if (restoringHosts || working.value) return;
+  selectedHosts.value = mergeHostSelection(
+    selectedHosts.value,
+    hosts.value,
+    hostGrid.grid.getCheckboxRecords(),
+  );
   resetDownstream('hosts');
 }
-async function loadHosts(more = false) {
-  if (!more) {
-    selectedHosts.value = [];
-    resetDownstream('hosts');
+async function restoreHostChecks() {
+  const render = ++hostRender;
+  restoringHosts = true;
+  try {
+    await nextTick();
+    if (render !== hostRender || step.value !== 0) return;
+    await hostGrid.grid.clearCheckboxRow();
+    const selected = new Set(selectedHosts.value.map((host) => host.sn));
+    await hostGrid.grid.setCheckboxRow(
+      hosts.value.filter((host) => selected.has(host.sn) && host.selectable),
+      true,
+    );
+  } finally {
+    if (render === hostRender) restoringHosts = false;
   }
-  busy.value = true;
+}
+async function loadHosts() {
+  error.value = '';
+  problems.value = [];
+  const query = { ...hostFilters };
   await gate.run(
-    wizardAPI.hosts({
-      q: hostQuery.value,
-      attr_key: attrKey.value,
-      attr_value: attrValue.value,
-      cursor: more ? hostNext.value : '',
-      limit: 100,
-    }),
-    (page) => {
-      hosts.value = more ? [...hosts.value, ...(page.items ?? [])] : (page.items ?? []);
-      hostNext.value = page.next;
+    hostPage.load((pagination) => wizardAPI.hosts({ ...query, ...pagination })),
+    () => {
       hostGrid.setGridOptions({ data: hosts.value });
-      busy.value = false;
+      void restoreHostChecks();
     },
-    (reason) => {
-      fail(reason);
-      busy.value = false;
-    },
+    fail,
   );
 }
-async function loadISOs(more = false) {
+function searchHosts() {
+  Object.assign(hostFilters, {
+    q: hostQuery.value,
+    attr_key: attrKey.value,
+    attr_value: attrValue.value,
+  });
+  hostPage.reset();
+  void loadHosts();
+}
+function changeHostPage(value: number) {
+  hostPage.setPage(value);
+  void loadHosts();
+}
+function changeHostPageSize(value: number) {
+  hostPage.setPageSize(value);
+  void loadHosts();
+}
+async function loadISOs() {
+  error.value = '';
+  problems.value = [];
+  const hostSNs = selectedHosts.value.map((host) => host.sn);
   await gate.run(
-    wizardAPI.isos({
-      hostSNs: selectedHosts.value.map((host) => host.sn),
-      cursor: more ? isoNext.value : '',
-      limit: 100,
-    }),
-    (page) => {
-      isos.value = more ? [...isos.value, ...(page.items ?? [])] : (page.items ?? []);
-      isoNext.value = page.next;
+    isoPage.load((pagination) => wizardAPI.isos({ hostSNs, ...pagination })),
+    () => {
       step.value = 1;
     },
     fail,
@@ -178,28 +226,46 @@ async function loadISOs(more = false) {
 }
 function changeISO(value: unknown) {
   resetDownstream('iso', String(value));
+  selectedISO.value = isos.value.find((iso) => iso.id === String(value));
 }
-async function loadTemplates(more = false) {
+function changeISOPage(value: number) {
+  isoPage.setPage(value);
+  void loadISOs();
+}
+function changeISOPageSize(value: number) {
+  isoPage.setPageSize(value);
+  void loadISOs();
+}
+async function loadTemplates() {
+  error.value = '';
+  problems.value = [];
+  const isoID = state.value.isoID;
   await gate.run(
-    wizardAPI.templates({
-      isoID: state.value.isoID,
-      cursor: more ? templateNext.value : '',
-      limit: 100,
-    }),
-    (page) => {
-      templates.value = more ? [...templates.value, ...(page.items ?? [])] : (page.items ?? []);
-      templateNext.value = page.next;
+    templatePage.load((pagination) =>
+      wizardAPI.templates({ isoID, ...pagination }),
+    ),
+    () => {
       step.value = 2;
     },
     fail,
   );
 }
+function changeTemplatePage(value: number) {
+  templatePage.setPage(value);
+  void loadTemplates();
+}
+function changeTemplatePageSize(value: number) {
+  templatePage.setPageSize(value);
+  void loadTemplates();
+}
 function chooseTemplate(id: string) {
   invalidate();
   const tpl = templates.value.find((item) => item.id === id);
+  selectedTemplate.value = tpl;
   state.value.templateVersion = tpl?.version ?? 0;
   state.value.entered = {};
   forms.value = [];
+  paramsProblems.value = [];
   preview.value = undefined;
 }
 function selection() {
@@ -229,7 +295,10 @@ async function evaluate(confirm = false) {
           Object.fromEntries(
             (host.fields ?? [])
               .filter((field) => !field.locked)
-              .map((field) => [field.key, entered[host.sn]?.[field.key] ?? field.prefill]),
+              .map((field) => [
+                field.key,
+                entered[host.sn]?.[field.key] ?? field.prefill,
+              ]),
           ),
         ]),
       );
@@ -241,7 +310,11 @@ async function evaluate(confirm = false) {
 function fillColumn() {
   if (busy.value) return;
   for (const host of forms.value)
-    if ((host.fields ?? []).some((field) => field.key === batchKey.value && !field.locked)) {
+    if (
+      (host.fields ?? []).some(
+        (field) => field.key === batchKey.value && !field.locked,
+      )
+    ) {
       (state.value.entered[host.sn] ??= {})[batchKey.value] = batchValue.value;
     }
 }
@@ -250,12 +323,16 @@ async function showPreview(host: Host) {
   problems.value = [];
   busy.value = true;
   try {
-    preview.value = await wizardAPI.preview(state.value.templateID, state.value.templateVersion, {
-      isoID: state.value.isoID,
-      hostSN: host.sn,
-      firmware: host.firmware || undefined,
-      entered: collectEditable(forms.value, state.value.entered)[host.sn],
-    });
+    preview.value = await wizardAPI.preview(
+      state.value.templateID,
+      state.value.templateVersion,
+      {
+        isoID: state.value.isoID,
+        hostSN: host.sn,
+        firmware: host.firmware || undefined,
+        entered: collectEditable(forms.value, state.value.entered)[host.sn],
+      },
+    );
     previewOpen.value = true;
   } catch (reason) {
     fail(reason);
@@ -264,13 +341,14 @@ async function showPreview(host: Host) {
   }
 }
 async function next() {
-  if (busy.value) return;
+  if (working.value) return;
   error.value = '';
   problems.value = [];
   busy.value = true;
   try {
     if (step.value === 0) {
-      if (!selectedHosts.value.length) return void ElMessage.warning('请先选择主机');
+      if (!selectedHosts.value.length)
+        return void ElMessage.warning('请先选择主机');
       await loadISOs();
     } else if (step.value === 1) {
       if (!state.value.isoID) return void ElMessage.warning('请选择 ISO');
@@ -280,7 +358,7 @@ async function next() {
       await evaluate();
     } else if (step.value === 3) await evaluate(true);
     else if (step.value === 4) {
-      if(!access.accessCodes.includes('task:create')) return;
+      if (!access.accessCodes.includes('task:create')) return;
       const entered = collectEditable(forms.value, state.value.entered);
       const result = await wizardAPI.submit({
         ...selection(),
@@ -303,7 +381,16 @@ function back() {
   step.value = Math.max(0, step.value - 1);
 }
 onMounted(() => loadHosts());
-onBeforeUnmount(() => gate.invalidate());
+watch(step, (value) => {
+  if (value === 0) void restoreHostChecks();
+});
+onBeforeUnmount(() => {
+  gate.invalidate();
+  hostRender++;
+  hostPage.reset();
+  isoPage.reset();
+  templatePage.reset();
+});
 </script>
 
 <template>
@@ -319,7 +406,13 @@ onBeforeUnmount(() => gate.invalidate());
       <ElStep title="确认" />
       <ElStep title="已创建" />
     </ElSteps>
-    <ElAlert v-if="error" :title="error" type="error" :closable="false" class="mb-3" />
+    <ElAlert
+      v-if="error"
+      :title="error"
+      type="error"
+      :closable="false"
+      class="mb-3"
+    />
     <ProblemList :problems="problems" />
     <ElCard v-if="step === 0">
       <div class="mb-3 flex flex-wrap gap-2">
@@ -327,34 +420,51 @@ onBeforeUnmount(() => gate.invalidate());
           v-model="hostQuery"
           placeholder="按 SN 前缀搜索"
           class="!w-56"
-          @keyup.enter="loadHosts()"
+          @keyup.enter="searchHosts"
         />
         <ElInput v-model="attrKey" placeholder="属性名" class="!w-36" />
         <ElInput v-model="attrValue" placeholder="属性值" class="!w-44" />
-        <ElButton :loading="busy" @click="loadHosts()">搜索</ElButton>
+        <ElButton :loading="working" @click="searchHosts">搜索</ElButton>
         <ElTag>已选 {{ selectedHosts.length }} 台</ElTag>
       </div>
       <HostGrid>
-        <template #problems="{ row }"><ProblemList :problems="row.problems" /></template>
+        <template #problems="{ row }">
+          <ProblemList :problems="row.problems" />
+        </template>
       </HostGrid>
-      <ElButton v-if="hostNext" :loading="busy" @click="loadHosts(true)">加载更多主机</ElButton>
+      <ListPagination
+        :current-page="hostPage.page"
+        :page-size="hostPage.pageSize"
+        :total="hostPage.total"
+        :disabled="working"
+        @page-change="changeHostPage"
+        @size-change="changeHostPageSize"
+      />
     </ElCard>
     <ElCard v-if="step === 1" header="选择 ISO">
       <ElRadioGroup v-model="state.isoID" class="!block" @change="changeISO">
         <div v-for="iso in isos" :key="iso.id" class="mb-3 rounded border p-3">
-          <ElRadio :value="iso.id" :disabled="!iso.usable">
+          <ElRadio :value="iso.id" :disabled="!iso.usable || working">
             {{ iso.name }} · {{ iso.series }} {{ iso.version }} · {{ iso.arch }}
           </ElRadio>
           <ProblemList :problems="iso.problems" />
         </div>
       </ElRadioGroup>
+      <p v-if="selectedISO" class="mt-3">已选 ISO：{{ selectedISO.name }}</p>
       <ElAlert
         v-if="!isos.length"
         title="没有可用 ISO，请先在 ISO 页面完成导入。"
         type="info"
         :closable="false"
       />
-      <ElButton v-if="isoNext" @click="loadISOs(true)">加载更多 ISO</ElButton>
+      <ListPagination
+        :current-page="isoPage.page"
+        :page-size="isoPage.pageSize"
+        :total="isoPage.total"
+        :disabled="working"
+        @page-change="changeISOPage"
+        @size-change="changeISOPageSize"
+      />
     </ElCard>
     <ElCard v-if="step === 2" header="选择模板">
       <ElRadioGroup
@@ -367,26 +477,36 @@ onBeforeUnmount(() => gate.invalidate());
           :key="`${tpl.id}/${tpl.version}`"
           class="mb-3 rounded border p-3"
         >
-          <ElRadio :value="tpl.id" :disabled="!tpl.usable">
+          <ElRadio :value="tpl.id" :disabled="!tpl.usable || working">
             {{ tpl.name }} · v{{ tpl.version }}
             <ElTag v-if="tpl.builtin" size="small" class="ml-2">内置</ElTag>
           </ElRadio>
           <ProblemList :problems="tpl.problems" />
         </div>
       </ElRadioGroup>
+      <p v-if="selectedTemplate" class="mt-3">
+        已选模板：{{ selectedTemplate.name }} v{{ selectedTemplate.version }}
+      </p>
       <ElAlert
         v-if="!templates.length"
         title="没有匹配该 ISO 的已审批模板。"
         type="info"
         :closable="false"
       />
-      <ElButton v-if="templateNext" @click="loadTemplates(true)">加载更多模板</ElButton>
+      <ListPagination
+        :current-page="templatePage.page"
+        :page-size="templatePage.pageSize"
+        :total="templatePage.total"
+        :disabled="working"
+        @page-change="changeTemplatePage"
+        @size-change="changeTemplatePageSize"
+      />
     </ElCard>
     <ElCard v-if="step === 3" header="逐台参数">
       <div class="mb-4 flex flex-wrap gap-2">
         <ElSelect
           v-model="batchKey"
-          :disabled="busy"
+          :disabled="working"
           placeholder="选择批量填写的字段"
           class="!w-64"
         >
@@ -399,12 +519,14 @@ onBeforeUnmount(() => gate.invalidate());
         </ElSelect>
         <ElInput
           v-model="batchValue"
-          :disabled="busy"
+          :disabled="working"
           placeholder="整列值；列表每行一项"
           type="textarea"
           class="!w-72"
         />
-        <ElButton :disabled="busy || !batchKey" @click="fillColumn">填写整列</ElButton>
+        <ElButton :disabled="working || !batchKey" @click="fillColumn">
+          填写整列
+        </ElButton>
       </div>
       <ProblemList :problems="paramsProblems" />
       <div v-for="host in forms" :key="host.sn" class="mb-4 rounded border p-4">
@@ -433,7 +555,7 @@ onBeforeUnmount(() => gate.invalidate());
               v-else-if="field.options?.length && !field.list"
               :id="`${host.sn}:${field.key}`"
               v-model="state.entered[host.sn]![field.key]"
-              :disabled="busy"
+              :disabled="working"
               clearable
             >
               <ElOption
@@ -447,13 +569,15 @@ onBeforeUnmount(() => gate.invalidate());
               v-else
               :id="`${host.sn}:${field.key}`"
               v-model="state.entered[host.sn]![field.key]"
-              :disabled="busy"
+              :disabled="working"
               :type="field.list ? 'textarea' : 'text'"
               :placeholder="field.list ? '每行一项' : '请输入'"
             />
             <ProblemList
               :problems="
-                (host.problems ?? []).filter((problem) => problem.subject?.path === field.key)
+                (host.problems ?? []).filter(
+                  (problem) => problem.subject?.path === field.key,
+                )
               "
             />
           </div>
@@ -478,7 +602,10 @@ onBeforeUnmount(() => gate.invalidate());
         class="mb-2 flex flex-wrap items-center gap-3 rounded border p-3"
       >
         <strong>{{ host.sn }}</strong>
-        <span>{{ host.arch || '未登记架构' }} / {{ host.firmware || '未登记固件' }}</span>
+        <span>
+          {{ host.arch || '未登记架构' }} /
+          {{ host.firmware || '未登记固件' }}
+        </span>
         <span>
           {{
             Object.entries(host.attrs ?? {})
@@ -486,21 +613,29 @@ onBeforeUnmount(() => gate.invalidate());
               .join('；')
           }}
         </span>
-        <ElButton :loading="busy" @click="showPreview(host)">预览该主机全部文件</ElButton>
+        <ElButton :loading="working" @click="showPreview(host)">
+          预览该主机全部文件
+        </ElButton>
       </div>
     </ElCard>
     <ElCard v-if="step === 5" header="任务创建成功">
       <p class="mb-3">已原子创建 {{ created.length }} 个任务。</p>
       <div v-for="task in created" :key="task.id" class="mb-2">
-        <ElButton link type="primary" @click="router.push(`/tasks/${encodeURIComponent(task.id)}`)">
+        <ElButton
+          link
+          type="primary"
+          @click="router.push(`/tasks/${encodeURIComponent(task.id)}`)"
+        >
           {{ task.hostSN }} · {{ task.id }}
         </ElButton>
       </div>
       <ElButton @click="router.push('/tasks')">返回任务列表</ElButton>
     </ElCard>
     <div v-if="step < 5" class="mt-5 flex justify-end gap-3">
-      <ElButton :disabled="step === 0 || busy" @click="back">上一步</ElButton>
-      <ElButton type="primary" :loading="busy" @click="next">
+      <ElButton :disabled="step === 0 || working" @click="back">
+        上一步
+      </ElButton>
+      <ElButton type="primary" :loading="working" @click="next">
         {{ step === 4 ? '创建整批任务' : step === 3 ? '校验并确认' : '下一步' }}
       </ElButton>
     </div>

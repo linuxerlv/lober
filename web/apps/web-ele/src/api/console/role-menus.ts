@@ -4,6 +4,7 @@ import { requestClient } from '#/api/request';
 export interface MenuDefinition {
   id: string;
   title: string;
+  parentId: string;
   permission: string;
   required: boolean;
 }

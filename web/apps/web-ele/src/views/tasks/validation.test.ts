@@ -11,29 +11,47 @@ const flow = vi.hoisted(() => ({
   calls: 0,
 }));
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
-vi.mock('@vben/stores',()=>({useAccessStore:()=>({accessCodes:['task:create']})}));
+vi.mock('@vben/stores', () => ({
+  useAccessStore: () => ({ accessCodes: ['task:create'] }),
+}));
 vi.mock('@vben/common-ui', async () => {
   const { defineComponent, h } = await import('vue');
-  return { Page: defineComponent({ setup: (_, ctx) => () => h('main', ctx.slots.default?.()) }) };
+  return {
+    Page: defineComponent({
+      setup: (_, ctx) => () => h('main', ctx.slots.default?.()),
+    }),
+  };
 });
 vi.mock('#/adapter/vxe-table', async () => {
   const { defineComponent, h } = await import('vue');
   return {
-    useVbenVxeGrid: (options: { gridEvents: { checkboxChange: () => void } }) => [
+    useVbenVxeGrid: (options: {
+      gridEvents: { checkboxChange: () => void };
+    }) => [
       defineComponent({
         setup: () => () =>
-          h('button', { onClick: () => options.gridEvents.checkboxChange() }, '选择测试主机'),
+          h(
+            'button',
+            { onClick: () => options.gridEvents.checkboxChange() },
+            '选择测试主机',
+          ),
       }),
       {
         setGridOptions: vi.fn(),
-        grid: { getCheckboxRecords: () => [{ sn: 'H1', attrs: {}, selectable: true }] },
+        grid: {
+          getCheckboxRecords: () => [{ sn: 'H1', attrs: {}, selectable: true }],
+          clearCheckboxRow: vi.fn(),
+          setCheckboxRow: vi.fn(),
+        },
       },
     ],
   };
 });
 vi.mock('element-plus', async () => {
   const { defineComponent, h, provide, inject } = await import('vue');
-  const Container = defineComponent({ setup: (_, ctx) => () => h('div', ctx.slots.default?.()) });
+  const Container = defineComponent({
+    setup: (_, ctx) => () => h('div', ctx.slots.default?.()),
+  });
   const Input = defineComponent({
     props: { modelValue: { type: String, default: '' }, disabled: Boolean },
     emits: ['update:modelValue'],
@@ -42,7 +60,8 @@ vi.mock('element-plus', async () => {
         ...ctx.attrs,
         value: props.modelValue,
         disabled: props.disabled,
-        onInput: (e: Event) => ctx.emit('update:modelValue', (e.target as HTMLInputElement).value),
+        onInput: (e: Event) =>
+          ctx.emit('update:modelValue', (e.target as HTMLInputElement).value),
       }),
   });
   const RadioGroup = defineComponent({
@@ -63,7 +82,10 @@ vi.mock('element-plus', async () => {
       return () =>
         h(
           'button',
-          { disabled: props.disabled, onClick: () => choose(props.value ?? '') },
+          {
+            disabled: props.disabled,
+            onClick: () => choose(props.value ?? ''),
+          },
           ctx.slots.default?.(),
         );
     },
@@ -79,6 +101,7 @@ vi.mock('element-plus', async () => {
     ElInput: Input,
     ElMessage: { warning: vi.fn() },
     ElOption: Container,
+    ElPagination: Container,
     ElRadio: Radio,
     ElRadioGroup: RadioGroup,
     ElSelect: Input,
@@ -91,14 +114,28 @@ vi.mock('element-plus', async () => {
 });
 vi.mock('#/api/console/wizard', () => ({
   wizardAPI: {
-    hosts: async () => ({ items: [], next: '' }),
+    hosts: async () => ({
+      items: [{ sn: 'H1', attrs: {}, selectable: true }],
+      next: '',
+      total: 1,
+    }),
     isos: async () => ({
       items: [{ id: 'iso1', name: '选择测试 ISO', usable: true, problems: [] }],
       next: '',
+      total: 1,
     }),
     templates: async () => ({
-      items: [{ id: 'tpl1', version: 1, name: '选择测试模板', usable: true, problems: [] }],
+      items: [
+        {
+          id: 'tpl1',
+          version: 1,
+          name: '选择测试模板',
+          usable: true,
+          problems: [],
+        },
+      ],
       next: '',
+      total: 1,
     }),
     params: () => {
       flow.calls++;
@@ -143,7 +180,9 @@ async function settle() {
   await nextTick();
 }
 async function click(text: string) {
-  const element = [...document.querySelectorAll<HTMLElement>('button,div')].find(
+  const element = [
+    ...document.querySelectorAll<HTMLElement>('button,div'),
+  ].find(
     (el) =>
       el.textContent?.trim() === text ||
       (el.tagName === 'BUTTON' && !!el.textContent?.trim().startsWith(text)),
@@ -171,15 +210,25 @@ it('freezes parameter and column controls during server validation', async () =>
   expect(flow.pending).toBeTypeOf('function');
   expect(field.disabled).toBe(true);
   expect(
-    (document.querySelector('input[placeholder="整列值；列表每行一项"]') as HTMLInputElement)
-      .disabled,
+    (
+      document.querySelector(
+        'input[placeholder="整列值；列表每行一项"]',
+      ) as HTMLInputElement
+    ).disabled,
   ).toBe(true);
   flow.pending!({
     common: [],
     hosts: [
       {
         sn: 'H1',
-        fields: [{ key: 'tpl/name', label: '主机名', locked: false, prefill: 'original' }],
+        fields: [
+          {
+            key: 'tpl/name',
+            label: '主机名',
+            locked: false,
+            prefill: 'original',
+          },
+        ],
         problems: [],
       },
     ],
@@ -202,12 +251,21 @@ it('clears a failed preview diagnostic when retry succeeds', async () => {
   await click('选择测试模板');
   await click('下一步');
   await click('校验并确认');
-  flow.pending!({ common: [], hosts: [{ sn: 'H1', fields: [], problems: [] }] });
+  flow.pending!({
+    common: [],
+    hosts: [{ sn: 'H1', fields: [], problems: [] }],
+  });
   await settle();
-  vi.mocked(wizardAPI.preview).mockRejectedValueOnce({ message: 'fixture unavailable' });
+  vi.mocked(wizardAPI.preview).mockRejectedValueOnce({
+    message: 'fixture unavailable',
+  });
   await click('预览该主机全部文件');
   expect(document.body.textContent).toContain('fixture unavailable');
-  vi.mocked(wizardAPI.preview).mockResolvedValueOnce({ files: [], problems: [], sample: [] });
+  vi.mocked(wizardAPI.preview).mockResolvedValueOnce({
+    files: [],
+    problems: [],
+    sample: [],
+  });
   await click('预览该主机全部文件');
   expect(document.body.textContent).not.toContain('fixture unavailable');
 });

@@ -25,14 +25,17 @@ export function filterConsoleRoutes(
       (original.meta?.menuId as string | undefined) || inheritedMenu;
     const menu = menuId ? consoleMenus[menuId] : undefined;
     const permission = original.meta?.permission as string | undefined;
-    if (
-      !menuId ||
-      !menu ||
-      !user.menuIds.includes(menuId) ||
-      !canOperate(user, menu.permission) ||
-      (permission && !canOperate(user, permission))
-    )
-      continue;
+    if (permission && !canOperate(user, permission)) continue;
+    // A folder survives only while it contains an independently allowed page.
+    // Explicit menu restrictions still apply to routes that declare or inherit one.
+    if (menuId) {
+      if (
+        !menu ||
+        !user.menuIds.includes(menuId) ||
+        !canOperate(user, menu.permission)
+      )
+        continue;
+    } else if (!original.children?.length) continue;
     const meta = { ...original.meta, menuId };
     delete meta.authority;
     const node = { ...original, meta } as RouteRecordRaw;
@@ -167,12 +170,12 @@ export function createConsoleGuard(
       return to.path === '/account/password'
         ? true
         : { path: '/account/password', replace: true };
-    if (
-      to.path === '/account/password' ||
-      to.path === '/account/profile'
-    )
+    if (to.path === '/account/password' || to.path === '/account/profile')
       return true;
-    if(to.path==='/no-access') return sessionHome(user)==='/no-access' ? true : {path:sessionHome(user),replace:true};
+    if (to.path === '/no-access')
+      return sessionHome(user) === '/no-access'
+        ? true
+        : { path: sessionHome(user), replace: true };
     if (to.path === '/auth/login' || to.path === '/')
       return { path: sessionHome(user), replace: true };
     const resolved = options.router.resolve(to.fullPath);
@@ -191,14 +194,20 @@ export function createConsoleGuard(
           resolved.matched.some((route) => route.meta.menuId) ||
           current.path === '/account/profile' ||
           current.path === '/account/password' ||
-          (current.path === '/no-access' && sessionHome(state.user)==='/no-access');
+          (current.path === '/no-access' &&
+            sessionHome(state.user) === '/no-access');
         const path = state.user.passwordChangeRequired
           ? '/account/password'
           : allowed
             ? current.fullPath
             : sessionHome(state.user);
-        const matchedCurrent=resolved.matched.length===current.matched.length&&resolved.matched.every((route,index)=>route===current.matched[index]);
-        if(!state.changed&&path===current.fullPath&&matchedCurrent)return;
+        const matchedCurrent =
+          resolved.matched.length === current.matched.length &&
+          resolved.matched.every(
+            (route, index) => route === current.matched[index],
+          );
+        if (!state.changed && path === current.fullPath && matchedCurrent)
+          return;
         await options.router.replace({ path, force: true });
       } catch (error) {
         options.onError(error);

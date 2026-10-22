@@ -1,30 +1,38 @@
 <script setup lang="ts">
+import type { TreeInstance } from 'element-plus';
+
 import type { RoleMenuList } from '#/api/console/role-menus';
 import type { ConsoleRole } from '#/api/console/session';
 
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 
-import { ElAlert, ElButton, ElCard, ElEmpty } from 'element-plus';
+import {
+  ElAlert,
+  ElButton,
+  ElCard,
+  ElEmpty,
+  ElForm,
+  ElFormItem,
+  ElOption,
+  ElSelect,
+  ElTag,
+  ElTree,
+} from 'element-plus';
 
+import { roleLabels } from '#/api/console/accounts';
 import { getRoleMenusApi, saveRoleMenusApi } from '#/api/console/role-menus';
 import { useConsoleAccess } from '#/composables/use-console-access';
 import { useAuthStore } from '#/store';
 const { can, refresh } = useConsoleAccess();
 const auth = useAuthStore();
 const role = ref<ConsoleRole>('viewer');
-  const state = ref<null | RoleMenuList>(null);
+const state = ref<null | RoleMenuList>(null);
 const drafts = reactive<Record<string, string[]>>({});
 const error = ref('');
-  const loading = ref(false);
-  const notice = ref('');
-  const saving = ref(false);
-const labels: Record<ConsoleRole, string> = {
-  viewer: '只读用户',
-  operator: '运维操作员',
-  'hook-author': '脚本与模板作者',
-  'hook-approver': '脚本与模板审批人',
-  admin: '管理员',
-};
+const loading = ref(false);
+const notice = ref('');
+const saving = ref(false);
+const tree = ref<TreeInstance>();
 const current = computed(() =>
   state.value?.roles.find((item) => item.role === role.value),
 );
@@ -34,6 +42,34 @@ const menus = computed(
       current.value?.availableMenuIds.includes(menu.id),
     ) || [],
 );
+const treeData = computed(() =>
+  (state.value?.menus.filter((menu) => !menu.parentId) || []).flatMap(
+    (group) => {
+      const children = menus.value
+        .filter((menu) => menu.parentId === group.id)
+        .map((menu) => ({
+          ...menu,
+          disabled: menu.required || saving.value || loading.value,
+        }));
+      return children.length
+        ? [{ ...group, disabled: saving.value || loading.value, children }]
+        : [];
+    },
+  ),
+);
+const selectedIds = computed(() =>
+  menus.value
+    .filter((menu) => menu.required || drafts[role.value]?.includes(menu.id))
+    .map((menu) => menu.id),
+);
+watch(
+  [tree, selectedIds],
+  () => tree.value?.setCheckedKeys(selectedIds.value),
+  { flush: 'post' },
+);
+watch(role, () => {
+  notice.value = '';
+});
 async function load() {
   if (!can('user:manage')) return;
   loading.value = true;
@@ -50,12 +86,11 @@ async function load() {
     loading.value = false;
   }
 }
-function toggle(id: string, event: Event) {
-  const checked = (event.target as HTMLInputElement).checked;
-  const ids = new Set(drafts[role.value] || []);
-  if (checked) ids.add(id);
-  else ids.delete(id);
-  drafts[role.value] = [...ids];
+function updateDraft() {
+  const checked = new Set(tree.value?.getCheckedKeys(true) || []);
+  drafts[role.value] = menus.value
+    .filter((menu) => menu.required || checked.has(menu.id))
+    .map((menu) => menu.id);
   notice.value = '';
 }
 async function save() {
@@ -118,41 +153,45 @@ onMounted(load);
         :closable="false"
       />
       <template v-if="state">
-        <label class="mb-5 block font-medium">配置角色
-          <select
-            v-model="role"
-            aria-label="配置角色"
-            :disabled="saving || loading"
-            class="ml-4 rounded border bg-transparent p-2"
-          >
-            <option
-              v-for="item in state.roles"
-              :key="item.role"
-              :value="item.role"
+        <ElForm label-position="top" :disabled="saving || loading">
+          <ElFormItem label="配置角色">
+            <ElSelect
+              v-model="role"
+              aria-label="配置角色"
+              class="w-full max-w-sm"
             >
-              {{ labels[item.role] }}（{{ item.role }}）
-            </option>
-          </select>
-        </label>
-        <div class="mb-5 grid gap-3 sm:grid-cols-2">
-          <label
-            v-for="menu in menus"
-            :key="menu.id"
-            class="flex items-center gap-3 rounded border p-4"
-          >
-            <input
-              type="checkbox"
-              :value="menu.id"
-              :checked="drafts[role]?.includes(menu.id) || menu.required"
-              :disabled="menu.required || saving || loading"
-              @change="toggle(menu.id, $event)"
-            />
-            <span>{{ menu.title
-              }}<span v-if="menu.required" class="ml-2 text-xs text-gray-500">必留入口</span></span>
-          </label>
-        </div>
+              <ElOption
+                v-for="item in state.roles"
+                :key="item.role"
+                :value="item.role"
+                :label="`${roleLabels[item.role]}（${item.role}）`"
+              />
+            </ElSelect>
+          </ElFormItem>
+          <ElFormItem label="可见菜单（二级）">
+            <ElTree
+              ref="tree"
+              class="w-full rounded border p-3"
+              :data="treeData"
+              node-key="id"
+              :props="{ label: 'title', disabled: 'disabled' }"
+              show-checkbox
+              default-expand-all
+              :expand-on-click-node="false"
+              aria-label="可见菜单"
+              @check="updateDraft"
+            >
+              <template #default="{ data }">
+                <span class="flex items-center gap-2">
+                  {{ data.title }}
+                  <ElTag v-if="data.required" size="small" type="info">必留入口</ElTag>
+                </span>
+              </template>
+            </ElTree>
+          </ElFormItem>
+        </ElForm>
         <p class="mb-5 text-sm text-gray-500">
-          可保存空菜单列表，用户将进入“暂无可访问菜单”页面。管理员的权限管理入口必须保留。
+          勾选一级目录可批量选择二级菜单，部分选中时目录显示半选。仅保存勾选的二级菜单，空目录自动隐藏。可保存空菜单列表，管理员的“角色与菜单”入口必须保留。
         </p>
       </template>
       <ElEmpty v-else-if="!loading && !error" description="暂无配置" />
@@ -162,12 +201,12 @@ onMounted(load);
         :loading="saving"
         :disabled="!state || loading || saving"
         @click="save"
-        >
-保存配置
-</ElButton>
+      >
+        保存配置
+      </ElButton>
       <ElButton :disabled="saving || loading" :loading="loading" @click="load">
-重新读取
-</ElButton>
+        重新读取
+      </ElButton>
     </ElCard>
   </main>
 </template>

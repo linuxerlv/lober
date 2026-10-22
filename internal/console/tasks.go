@@ -17,6 +17,7 @@ import (
 type taskPage struct {
 	Items []taskItem `json:"items"`
 	Next  string     `json:"next"`
+	Total *int64     `json:"total,omitempty"`
 }
 type eventItem struct {
 	TaskID string            `json:"taskID"`
@@ -30,6 +31,8 @@ type eventPage struct {
 	Items []eventItem `json:"items"`
 }
 type taskQuery struct {
+	Page        int             `form:"page"`
+	PageSize    int             `form:"page_size"`
 	HostSN      string          `form:"host_sn"`
 	State       model.TaskState `form:"state"`
 	CreatedFrom int64           `form:"created_from"`
@@ -83,7 +86,7 @@ func (s *server) taskResponse(t model.Task) taskItem {
 	return out
 }
 func (s *server) listTasks(c *gin.Context) {
-	limit, ok := queryLimit(c)
+	number, limit, ok := queryPagination(c)
 	if !ok {
 		return
 	}
@@ -99,7 +102,7 @@ func (s *server) listTasks(c *gin.Context) {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return
 	}
-	q := store.TaskQuery{HostSN: c.Query("host_sn"), CreatedFrom: from, CreatedTo: to, Cursor: c.Query("cursor"), Limit: limit}
+	q := store.TaskQuery{HostSN: c.Query("host_sn"), CreatedFrom: from, CreatedTo: to, Cursor: c.Query("cursor"), Limit: limit, Page: number}
 	if q.HostSN != "" {
 		sn, err := model.NormalizeSN(q.HostSN)
 		if err != nil {
@@ -124,7 +127,7 @@ func (s *server) listTasks(c *gin.Context) {
 	for i, t := range page.Items {
 		items[i] = s.taskResponse(t)
 	}
-	Ok(c, taskPage{items, page.Next})
+	Ok(c, taskPage{items, page.Next, page.Total})
 }
 func (s *server) getTask(c *gin.Context) {
 	t, ok := Get(c, func() (model.Task, error) { return s.deps.Tasks.GetTask(c.Request.Context(), c.Param("id")) })

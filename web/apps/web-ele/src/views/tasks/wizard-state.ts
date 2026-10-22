@@ -1,5 +1,21 @@
 import type { Schemas } from '#/api/console/generated';
 
+export function mergeHostSelection<T extends { sn: string }>(
+  selected: T[],
+  visible: T[],
+  checked: T[],
+): T[] {
+  const visibleSNs = new Set(visible.map((host) => host.sn));
+  return [
+    ...new Map(
+      [
+        ...selected.filter((host) => !visibleSNs.has(host.sn)),
+        ...checked.filter((host) => visibleSNs.has(host.sn)),
+      ].map((host) => [host.sn, host]),
+    ).values(),
+  ];
+}
+
 export function collectEditable(
   forms: Pick<Schemas['WizardParamsHost'], 'fields' | 'sn'>[],
   values: Record<string, Record<string, string>>,
@@ -10,7 +26,10 @@ export function collectEditable(
       Object.fromEntries(
         (host.fields ?? [])
           .filter((field) => !field.locked)
-          .map((field) => [field.key, values[host.sn]?.[field.key] ?? field.prefill]),
+          .map((field) => [
+            field.key,
+            values[host.sn]?.[field.key] ?? field.prefill,
+          ]),
       ),
     ]),
   );
@@ -23,7 +42,11 @@ interface Selection {
   templateVersion: number;
 }
 
-export function selectionChanged(state: Selection, kind: 'hosts' | 'iso', value = ''): Selection {
+export function selectionChanged(
+  state: Selection,
+  kind: 'hosts' | 'iso',
+  value = '',
+): Selection {
   return {
     ...state,
     isoID: kind === 'iso' ? value : '',
@@ -39,7 +62,11 @@ export function latestOnly() {
     invalidate() {
       revision += 1;
     },
-    async run<T>(request: Promise<T>, apply: (result: T) => void, fail?: (error: unknown) => void) {
+    async run<T>(
+      request: Promise<T>,
+      apply: (result: T) => void,
+      fail?: (error: unknown) => void,
+    ) {
       const ticket = ++revision;
       try {
         const result = await request;

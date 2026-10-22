@@ -79,7 +79,7 @@ func Test装配初始管理员强制改密及内置内容(t *testing.T) {
 	if err != nil || !user.MustChangePassword || user.CreatedAt != assemblyAt {
 		t.Fatal("bootstrap missing", err)
 	}
-	tpl, err := a.Store.GetTemplate(t.Context(), model.TemplateKey{ID: "builtin-kickstart", Version: 2})
+	tpl, err := a.Store.GetTemplate(t.Context(), model.TemplateKey{ID: "builtin-kickstart", Version: 3})
 	if err != nil || !tpl.Builtin {
 		t.Fatal("builtin missing", err)
 	}

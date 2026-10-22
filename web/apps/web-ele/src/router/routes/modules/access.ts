@@ -7,7 +7,6 @@ const routes: RouteRecordRaw[] = [
     path: '/access',
     meta: {
       title: '权限管理',
-      menuId: 'role-menus',
       permission: 'user:manage',
       icon: Settings,
       order: 80,
@@ -19,7 +18,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/access/users.vue'),
         meta: {
           title: '账号管理',
-          menuId: 'role-menus',
+          menuId: 'users',
           permission: 'user:manage',
         },
       },

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Schemas } from '#/api/console/generated';
 
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 
 import { Page } from '@vben/common-ui';
 import { useAccessStore, useUserStore } from '@vben/stores';
@@ -25,7 +25,9 @@ import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { getHookApi } from '#/api/console/hook';
 import { errorMessage, problemsOf } from '#/api/console/problem';
 import * as api from '#/api/console/template';
+import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { NumberedPage } from '#/composables/numbered-page';
 
 import { authoringRights, replaceInSlot, templatePayload } from './authoring';
 import BindingEditor from './BindingEditor.vue';
@@ -55,9 +57,8 @@ const visible = ref(false);
 const busy = ref(false);
 const prefix = ref('');
 const state = ref('');
-const cursor = ref('');
-const next = ref('');
-const history = ref<string[]>([]);
+const appliedFilters = { prefix: '', state: undefined as string | undefined };
+const pagination = reactive(new NumberedPage<Template>());
 const errors = ref<Schemas['ProblemJSON'][]>([]);
 const versions = ref<Template[]>([]);
 const slots = ref<Schemas['SlotInfo'][]>([]);
@@ -69,9 +70,9 @@ const candidateDialog = ref(false);
 const candidateSlot = ref('');
 const candidateIndex = ref(0);
 const candidatePrefix = ref('');
-const candidateNext = ref('');
-const candidateRows = ref<Schemas['HookCandidateResponse'][]>([]);
-const candidateBusy = ref(false);
+const candidateFilters = { prefix: '' };
+const candidatePagination = reactive(new NumberedPage<Schemas['HookCandidateResponse']>());
+const candidateBusy = computed(() => candidatePagination.loading);
 const candidateProblems = ref<Schemas['ProblemJSON'][]>([]);
 const previewDialog = ref(false);
 const previewResult = ref<Schemas['PreviewResponse']>();
@@ -109,6 +110,7 @@ let listToken = 0;
 let editorToken = 0;
 let candidateToken = 0;
 const [Grid, grid] = useVbenVxeGrid<Template>({
+  class: 'h-auto',
   gridOptions: {
     columns: [
       { field: 'name', title: '名称', minWidth: 200 },
@@ -129,7 +131,7 @@ const [Grid, grid] = useVbenVxeGrid<Template>({
         slots: { default: 'action' },
       },
     ],
-    height: 'auto',
+    maxHeight: 520,
     pagerConfig: { enabled: false },
     rowConfig: { keyField: 'id' },
   },
@@ -144,31 +146,25 @@ function currentEditor(token: number, row: Pick<Template, 'id' | 'version'>) {
 async function load(reset = false) {
   const owner = editorToken;
   if (reset) {
-    cursor.value = '';
-    history.value = [];
+    Object.assign(appliedFilters, { prefix: prefix.value, state: state.value || undefined });
+    pagination.reset();
   }
   const token = ++listToken;
+  const filters = { ...appliedFilters };
   try {
-    const page = await api.getTemplateListApi({
-      prefix: prefix.value,
-      state: state.value || undefined,
-      cursor: cursor.value,
-      limit: 30,
-    });
+    const page = await pagination.load((params) => api.getTemplateListApi({ ...filters, ...params }));
     if (token !== listToken) return;
-    next.value = page.next;
-    grid.setGridOptions({ data: page.items ?? [] });
+    grid.setGridOptions({ data: page.items });
   } catch (error) {
     if (token === listToken && owner === editorToken) report(error);
   }
 }
-function forward() {
-  history.value.push(cursor.value);
-  cursor.value = next.value;
+function changePage(page: number) {
+  pagination.setPage(page);
   void load();
 }
-function back() {
-  cursor.value = history.value.pop() ?? '';
+function changePageSize(size: number) {
+  pagination.setPageSize(size);
   void load();
 }
 function normalize(row: Template): TemplateForm {
@@ -403,42 +399,50 @@ async function pickHook(slot: string, index: number) {
   candidateSlot.value = slot;
   candidateIndex.value = index;
   candidatePrefix.value = '';
-  candidateRows.value = [];
-  candidateNext.value = '';
+  candidatePagination.reset();
+  candidatePagination.items = [];
+  candidatePagination.total = 0;
   candidateProblems.value = [];
   if (editable.value && !(await save())) return;
   await nextTick();
   if (token !== editorToken) return;
   candidateDialog.value = true;
-  await candidates();
+  await candidates(true);
 }
-async function candidates(cursorValue = '') {
+async function candidates(reset = false) {
   const owner = editorToken;
   const row = selected.value;
   if (!row) return;
+  if (reset) {
+    candidateFilters.prefix = candidatePrefix.value;
+    candidatePagination.reset();
+  }
   const token = ++candidateToken;
-  candidateBusy.value = true;
+  const filters = {
+    slot: candidateSlot.value,
+    index: candidateIndex.value + 1,
+    prefix: candidateFilters.prefix,
+  };
+  candidateProblems.value = [];
   try {
-    const page = await api.getHookCandidatesApi(row.id, row.version, {
-      slot: candidateSlot.value,
-      index: candidateIndex.value + 1,
-      prefix: candidatePrefix.value,
-      cursor: cursorValue,
-      limit: 30,
-    });
-    if (token !== candidateToken || owner !== editorToken) return;
-    candidateRows.value = cursorValue
-      ? [...candidateRows.value, ...(page.items ?? [])]
-      : (page.items ?? []);
-    candidateNext.value = page.next;
+    await candidatePagination.load((params) => api.getHookCandidatesApi(row.id, row.version, {
+      ...filters,
+      ...params,
+    }));
   } catch (error) {
     if (token === candidateToken && owner === editorToken) {
       candidateProblems.value = problemsOf(error);
       ElMessage.error(errorMessage(error));
     }
-  } finally {
-    if (token === candidateToken && owner === editorToken) candidateBusy.value = false;
   }
+}
+function changeCandidatePage(page: number) {
+  candidatePagination.setPage(page);
+  void candidates();
+}
+function changeCandidatePageSize(size: number) {
+  candidatePagination.setPageSize(size);
+  void candidates();
 }
 function choose(candidate: Schemas['HookCandidateResponse']) {
   const row = selected.value;
@@ -528,7 +532,7 @@ const allSeries: Schemas['CatalogSeries'][] = [
 ];
 onMounted(() => load());
 watch(visible, (open) => { if (!open) { ++editorToken; busy.value = false; candidateDialog.value = false; previewDialog.value = false; errors.value = []; } }, { flush: 'sync' });
-watch(candidateDialog, (open) => { if (!open) { ++candidateToken; candidateBusy.value = false; } }, { flush: 'sync' });
+watch(candidateDialog, (open) => { if (!open) { ++candidateToken; candidatePagination.reset(); } }, { flush: 'sync' });
 watch(() => previewForm.value.isoID, () => { previewForm.value.series = undefined; }, { flush: 'sync' });
 watch(() => [previewDialog.value, previewForm.value.hostSN, previewForm.value.isoID, previewForm.value.series, previewForm.value.firmware, selected.value?.id, selected.value?.version], (_context, _old, cleanup) => {
   const token = ++previewToken;
@@ -540,7 +544,7 @@ watch(() => [previewDialog.value, previewForm.value.hostSN, previewForm.value.is
   const timer = setTimeout(() => { void loadPreviewParams(token, owner); }, 200);
   cleanup(() => clearTimeout(timer));
 }, { flush: 'sync' });
-onBeforeUnmount(() => { ++editorToken; ++listToken; ++candidateToken; ++previewToken; });
+onBeforeUnmount(() => { ++editorToken; ++listToken; ++candidateToken; ++previewToken; pagination.reset(); candidatePagination.reset(); });
 </script>
 <template>
   <Page
@@ -565,7 +569,7 @@ onBeforeUnmount(() => { ++editorToken; ++listToken; ++candidateToken; ++previewT
           :label="s"
           :value="s"
 />
-</ElSelect><ElButton @click="load(true)">查询</ElButton>
+</ElSelect><ElButton :loading="pagination.loading" @click="load(true)">查询</ElButton>
     </div>
     <ProblemList v-if="!visible" :problems="errors" />
     <Grid>
@@ -577,9 +581,14 @@ onBeforeUnmount(() => { ++editorToken; ++listToken; ++candidateToken; ++previewT
 </ElButton>
 </template>
 </Grid>
-    <div class="mt-3 flex justify-end gap-2">
-      <ElButton :disabled="!history.length" @click="back">上一页</ElButton><ElButton :disabled="!next" @click="forward">下一页</ElButton>
-    </div>
+    <ListPagination
+      :current-page="pagination.page"
+      :page-size="pagination.pageSize"
+      :total="pagination.total"
+      :disabled="pagination.loading"
+      @page-change="changePage"
+      @size-change="changePageSize"
+    />
     <ElDialog
       v-model="visible"
       :title="
@@ -912,14 +921,14 @@ onBeforeUnmount(() => { ++editorToken; ++listToken; ++candidateToken; ++previewT
         <ElInput
           v-model="candidatePrefix"
           placeholder="hook 名称前缀"
-          @keyup.enter="candidates()"
-        /><ElButton :loading="candidateBusy" @click="candidates()">
+          @keyup.enter="candidates(true)"
+        /><ElButton :loading="candidateBusy" @click="candidates(true)">
 查询
 </ElButton>
       </div>
       <ProblemList :problems="candidateProblems" />
       <article
-        v-for="candidate in candidateRows"
+        v-for="candidate in candidatePagination.items"
         :key="`${candidate.hook.id}@${candidate.hook.version}`"
         class="mb-3 rounded border p-3"
         :class="{ 'opacity-60': !candidate.usable }"
@@ -937,14 +946,15 @@ onBeforeUnmount(() => { ++editorToken; ++listToken; ++candidateToken; ++previewT
         <p>{{ candidate.hook.description }}</p>
         <ProblemList :problems="candidate.problems ?? []" />
       </article>
-      <ElButton
-        v-if="candidateNext"
-        :loading="candidateBusy"
-        @click="candidates(candidateNext)"
-        >
-加载更多
-</ElButton>
-      <p v-if="!candidateRows.length && !candidateBusy">
+      <ListPagination
+        :current-page="candidatePagination.page"
+        :page-size="candidatePagination.pageSize"
+        :total="candidatePagination.total"
+        :disabled="candidateBusy"
+        @page-change="changeCandidatePage"
+        @size-change="changeCandidatePageSize"
+      />
+      <p v-if="!candidatePagination.items.length && !candidateBusy">
         没有候选 hook，可先到 hook 管理页新建。
       </p>
     </ElDialog>

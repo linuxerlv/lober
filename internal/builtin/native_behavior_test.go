@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -28,53 +27,34 @@ func withInput(t *testing.T, r render.Request, in params.Input) render.Request {
 	return r
 }
 
-func TestKickstartExecutesFirmwarePartitionBranches(t *testing.T) {
+func TestKickstartPartitionIsInlinedAndFirmwareAgnostic(t *testing.T) {
 	tpl := templateFor(t, "kickstart")
 	in := fixtureInput(t, tpl)
 	in.Entered["partition/1/disk"] = "nvme0n1"
-	r := withInput(t, fixtureRequest(t, tpl, "bios"), in)
-	answer := renderFixture(t, r)
-	pre := strings.Split(strings.Split(answer, "%pre --interpreter=/bin/sh --erroronfail\n")[1], "%end")[0]
-	for _, uefi := range []bool{false, true} {
-		t.Run(strconv.FormatBool(uefi), func(t *testing.T) {
-			target := filepath.Join(t.TempDir(), "partition.ks")
-			code := strings.ReplaceAll(pre, "/tmp/lober-partition.ks", target)
-			// Replace only the firmware hardware probe with a shell function; execute
-			// the exact generated branch and writes with both supported Linux shells.
-			status := 1
-			if uefi {
-				status = 0
-			}
-			probe := fmt.Sprintf("test() { [ \"$1\" = -d ] && [ \"$2\" = /sys/firmware/efi ] || exit 99; return %d; }\n", status)
-			for _, env := range []string{"LOBER_TEST_BASH", "LOBER_TEST_BUSYBOX"} {
-				tool := os.Getenv(env)
-				if tool == "" {
-					t.Fatalf("%s required", env)
-				}
-				args := []string{}
-				if env == "LOBER_TEST_BUSYBOX" {
-					args = []string{"sh"}
-				}
-				cmd := exec.Command(tool, args...)
-				cmd.Stdin = strings.NewReader(probe + code)
-				if out, err := cmd.CombinedOutput(); err != nil {
-					t.Fatalf("partition branch: %v %s", err, out)
-				}
-				data, err := os.ReadFile(target)
-				if err != nil {
-					t.Fatal(err)
-				}
-				got := string(data)
-				want := "part biosboot --fstype=biosboot --size=2 --ondisk=nvme0n1\n"
-				if uefi {
-					want = "part /boot/efi --fstype=efi --size=600 --ondisk=nvme0n1\n"
-				}
-				want += "part /boot --fstype=xfs --size=1024 --ondisk=nvme0n1\npart / --fstype=xfs --size=8192 --grow --ondisk=nvme0n1\n"
-				if got != want {
-					t.Fatalf("native partition output %q, want %q", got, want)
-				}
-			}
-		})
+	// reqpart 让 anaconda 按实际固件建 biosboot（BIOS+GPT）或 /boot/efi（UEFI）；
+	// part 指令在渲染期直接内联。AlmaLinux 10 在 %pre 执行前就解析 %include，
+	// 安装期再生成 part 永远到不了 anaconda（D2），所以这里同时断言不再有安装期生成。
+	bios := renderFixture(t, withInput(t, fixtureRequest(t, tpl, "bios"), in))
+	uefi := renderFixture(t, withInput(t, fixtureRequest(t, tpl, "uefi"), in))
+	if bios != uefi {
+		t.Fatal("partition block depends on boot firmware")
+	}
+	for _, want := range []string{
+		"zerombr\n",
+		"ignoredisk --only-use='nvme0n1'\n",
+		"clearpart --all --initlabel --disklabel=gpt --drives='nvme0n1'\n",
+		"reqpart\n",
+		"part /boot --fstype=xfs --size=1024 --ondisk=nvme0n1\n",
+		"part / --fstype=xfs --size=8192 --grow --ondisk=nvme0n1\n",
+	} {
+		if !strings.Contains(bios, want) {
+			t.Errorf("missing native partition %q", want)
+		}
+	}
+	for _, banned := range []string{"%pre", "%include", "/sys/firmware/efi", "lober-partition.ks"} {
+		if strings.Contains(bios, banned) {
+			t.Errorf("partition is still generated at install time via %q", banned)
+		}
 	}
 }
 

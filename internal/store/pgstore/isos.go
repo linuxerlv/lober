@@ -151,7 +151,7 @@ func (s *Store) GetISO(ctx context.Context, id string) (model.ISO, error) {
 // ListISOs 见 store.ISOs。ISO 的名称不规范化、可以重复，没有名字的 key，所以按名称的字节序、再按 ID 排；游标是上一页
 // 最后一个的名称与 ID。
 func (s *Store) ListISOs(ctx context.Context, q store.ISOQuery) (store.Page[model.ISO], error) {
-	limit, err := store.CheckQuery(q.Cursor, q.Limit)
+	limit, err := store.CheckPageQuery(q.Cursor, q.Limit, q.Page)
 	if err != nil {
 		return store.Page[model.ISO]{}, err
 	}
@@ -169,7 +169,7 @@ func (s *Store) ListISOs(ctx context.Context, q store.ISOQuery) (store.Page[mode
 		}
 	}
 	if !storable(string(q.Family), string(q.Series)) || len(q.States) > 0 && len(states) == 0 {
-		return emptyPage[model.ISO](), nil
+		return emptyPage[model.ISO](q.Page), nil
 	}
 	db := s.read(ctx)
 	if q.Cursor != "" {
@@ -184,11 +184,15 @@ func (s *Store) ListISOs(ctx context.Context, q store.ISOQuery) (store.Page[mode
 	if len(states) > 0 {
 		db = db.Where("state IN ?", states)
 	}
+	db, total, err := numberedQuery[isoRow](db, q.Page, limit)
+	if err != nil {
+		return store.Page[model.ISO]{}, err
+	}
 	var rows []isoRow
 	if err := db.Order(`name COLLATE "C", id COLLATE "C"`).Limit(limit + 1).Find(&rows).Error; err != nil {
 		return store.Page[model.ISO]{}, err
 	}
-	return page(rows, limit, isoRow.iso, func(r isoRow) string { return store.EncodeCursor("isos", r.Name, r.ID) })
+	return page(rows, limit, isoRow.iso, func(r isoRow) string { return store.EncodeCursor("isos", r.Name, r.ID) }, total)
 }
 
 // sha256Holder 在 db 里查已经占着 iso 的 SHA256 的另一个 ISO，返回它的 ID，没有时返回空串（C4）。谁占着它见

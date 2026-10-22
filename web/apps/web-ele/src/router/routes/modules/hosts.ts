@@ -9,7 +9,6 @@ const routes: RouteRecordRaw[] = [
       icon: LayoutGrid,
       order: 20,
       title: '主机清单',
-      menuId: 'hosts',
     },
     name: 'Hosts',
     path: '/hosts',

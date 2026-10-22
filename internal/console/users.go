@@ -25,10 +25,13 @@ type userCreateRequest struct {
 type userPage struct {
 	Items []userResponse `json:"items"`
 	Next  string         `json:"next"`
+	Total *int64         `json:"total,omitempty"`
 }
 type pageQuery struct {
-	Cursor string `form:"cursor"`
-	Limit  int    `form:"limit"`
+	Page     int    `form:"page"`
+	PageSize int    `form:"page_size"`
+	Cursor   string `form:"cursor"`
+	Limit    int    `form:"limit"`
 }
 
 func (s *server) userRoutes() []route {
@@ -52,12 +55,12 @@ func queryLimit(c *gin.Context) (int, bool) {
 	return limit, true
 }
 func (s *server) listUsers(c *gin.Context) {
-	limit, ok := queryLimit(c)
+	number, limit, ok := queryPagination(c)
 	if !ok {
 		return
 	}
 	page, ok := Get(c, func() (store.Page[store.User], error) {
-		return s.deps.Users.ListUsers(c.Request.Context(), store.UserQuery{Cursor: c.Query("cursor"), Limit: limit})
+		return s.deps.Users.ListUsers(c.Request.Context(), store.UserQuery{Cursor: c.Query("cursor"), Limit: limit, Page: number})
 	})
 	if !ok {
 		return
@@ -66,7 +69,7 @@ func (s *server) listUsers(c *gin.Context) {
 	for i, u := range page.Items {
 		items[i] = toUserResponse(u)
 	}
-	Ok(c, userPage{items, page.Next})
+	Ok(c, userPage{items, page.Next, page.Total})
 }
 func (s *server) createUser(c *gin.Context) {
 	var req userCreateRequest

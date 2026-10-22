@@ -6,14 +6,66 @@ import { createApp, h, nextTick, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { afterEach, expect, it, vi } from 'vitest';
 
+import AuditPage from '../audit/index.vue';
+import TasksPage from '../tasks/index.vue';
 import TemplatesPage from '../templates/index.vue';
 import PreviewFields from '../templates/PreviewFields.vue';
+import UsersPage from '../users/index.vue';
 import HooksPage from './index.vue';
 
 const fixtures = vi.hoisted(() => ({
   pending: new Map<string, (value: unknown) => void>(),
   previewRequests: [] as Schemas['PreviewRequest'][],
+  hookQueries: [] as Record<string, unknown>[],
+  templateQueries: [] as Record<string, unknown>[],
+  otherQueries: [] as Record<string, unknown>[],
+  candidateQueries: [] as Record<string, unknown>[],
+  slots: [] as Schemas['SlotInfo'][],
 }));
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('#/api/console/task', () => ({
+  taskAPI: {
+    list: async (query: Record<string, unknown>) => {
+      fixtures.otherQueries.push(query);
+      return { items: [{ id: `task-${query.page}`, state: 'done' }], total: 42 };
+    },
+  },
+}));
+vi.mock('#/api/console/audit', () => ({
+  listAudit: async (query: Record<string, unknown>) => {
+    fixtures.otherQueries.push(query);
+    return { items: [{ id: `audit-${query.page}` }], total: 42 };
+  },
+  exportAudit: vi.fn(),
+}));
+vi.mock('#/api/console/user', () => ({
+  listUsers: async (query: Record<string, unknown>) => {
+    fixtures.otherQueries.push(query);
+    return { items: [{ username: `user-${query.page}`, rev: 1, role: 'viewer', disabled: false }], total: 42 };
+  },
+  createUser: vi.fn(),
+  updateUser: vi.fn(),
+  disableUser: vi.fn(),
+}));
+vi.mock('#/components/console/ListPagination.vue', async () => {
+  const { defineComponent, h } = await import('vue');
+  return {
+    default: defineComponent({
+      props: {
+        currentPage: { type: Number, default: 1 },
+        pageSize: { type: Number, default: 20 },
+        total: { type: Number, default: 0 },
+        disabled: Boolean,
+      },
+      emits: ['page-change', 'size-change'],
+      setup: (props, { emit }) => () => h('nav', [
+        h('span', `第 ${props.currentPage} 页 / 共 ${props.total} 条`),
+        h('button', { disabled: props.disabled, onClick: () => emit('page-change', 2) }, '跳到第 2 页'),
+        h('button', { disabled: props.disabled, onClick: () => emit('size-change', 50) }, '每页 50 条'),
+      ]),
+    }),
+  };
+});
 vi.mock('@vben/stores', () => ({
   useAccessStore: () => ({
     accessCodes: [
@@ -23,6 +75,7 @@ vi.mock('@vben/stores', () => ({
       'template:read',
       'template:write',
       'template:approve',
+      'user:manage',
     ],
   }),
   useUserStore: () => ({ userInfo: { username: 'reviewer' } }),
@@ -50,7 +103,10 @@ vi.mock('#/adapter/vxe-table', async () => {
             () =>
               h(
                 'div',
-                rows.value.map((row) => slots.action?.({ row })),
+                rows.value.map((row) => h('div', [
+                  h('span', { 'data-testid': 'row-id' }, (row as { id?: string; username?: string }).id ?? (row as { username?: string }).username),
+                  slots.action?.({ row }),
+                ])),
               ),
         }),
         {
@@ -155,13 +211,16 @@ vi.mock('element-plus', async () => {
   };
 });
 vi.mock('#/api/console/hook', () => ({
-  getHookListApi: async () => ({
+  getHookListApi: async (query: Record<string, unknown>) => {
+    fixtures.hookQueries.push(query);
+    return ({
     items: [
-      { id: 'first', version: 1, name: 'first' },
+      { id: query.page === 2 ? 'page2' : 'first', version: 1, name: 'first' },
       { id: 'second', version: 1, name: 'second' },
     ],
     next: '',
-  }),
+    total: 42,
+  }); },
   getHookApi: (id: string) =>
     new Promise((resolve) => fixtures.pending.set(id, resolve)),
   getHookVersionsApi: async () => ({ items: [] }),
@@ -176,6 +235,11 @@ afterEach(() => {
   document.body.innerHTML = '';
   fixtures.pending.clear();
   fixtures.previewRequests.length = 0;
+  fixtures.hookQueries.length = 0;
+  fixtures.templateQueries.length = 0;
+  fixtures.otherQueries.length = 0;
+  fixtures.candidateQueries.length = 0;
+  fixtures.slots.length = 0;
   vi.clearAllMocks();
 });
 async function settle() {
@@ -259,14 +323,22 @@ it.each(['save', 'approve'] as const)(
 );
 
 vi.mock('#/api/console/template', () => ({
-  getTemplateListApi: async () => ({
+  getTemplateListApi: async (query: Record<string, unknown>) => {
+    fixtures.templateQueries.push(query);
+    return ({
     items: [{ id: 'first', version: 1 }],
     next: '',
-  }),
+    total: 42,
+  }); },
   getTemplateApi: () =>
     new Promise((resolve) => fixtures.pending.set('template:get', resolve)),
   getTemplateVersionsApi: async () => ({ items: [] }),
-  getTemplateSlotsApi: async () => ({ slots: [], problems: [] }),
+  getTemplateSlotsApi: async () => ({ slots: fixtures.slots, problems: [] }),
+  getHookCandidatesApi: async (_id: string, _version: number, query: Record<string, unknown>) => {
+    fixtures.candidateQueries.push(query);
+    const name = query.page === 2 ? 'candidate-second-page' : 'candidate-first-page';
+    return { items: [{ hook: { ...hook(name), description: name }, usable: true, problems: [] }], total: 42 };
+  },
   getSourceDiffApi: async () => ({
     original: null,
     current: null,
@@ -315,6 +387,96 @@ function template(): Schemas['TemplateResponse'] {
     problems: [],
   };
 }
+it.each(['hook', 'template'] as const)(
+  'requests numbered %s pages, resets search/page size, and displays the server total',
+  async (kind) => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    const app = createApp(kind === 'hook' ? HooksPage : TemplatesPage);
+    app.mount(root);
+    unmount = () => app.unmount();
+    const queries = kind === 'hook' ? fixtures.hookQueries : fixtures.templateQueries;
+    const click = (text: string) => [...root.querySelectorAll('button')]
+      .find((button) => button.textContent?.trim() === text)!.click();
+    await settle();
+    expect(queries.at(-1)).toMatchObject({ page: 1, page_size: 20 });
+    expect(queries.at(-1)).not.toHaveProperty('cursor');
+    expect(root.querySelector('nav')?.textContent).toContain('共 42 条');
+    const prefixInput = root.querySelector<HTMLInputElement>('input')!;
+    prefixInput.value = 'filtered';
+    prefixInput.dispatchEvent(new Event('input'));
+    await nextTick();
+    click('跳到第 2 页');
+    await settle();
+    expect(queries.at(-1)).toMatchObject({ page: 2, page_size: 20, prefix: '' });
+    click('查询');
+    await settle();
+    expect(queries.at(-1)).toMatchObject({ page: 1, page_size: 20, prefix: 'filtered' });
+    click('跳到第 2 页');
+    await settle();
+    click('每页 50 条');
+    await settle();
+    expect(queries.at(-1)).toMatchObject({ page: 1, page_size: 50 });
+  },
+);
+it.each([
+  ['tasks', TasksPage, 'task'],
+  ['audit', AuditPage, 'audit'],
+  ['users', UsersPage, 'user'],
+] as const)('loads numbered %s pages and replaces the visible rows', async (_kind, component, id) => {
+  const root = document.createElement('div');
+  document.body.append(root);
+  const app = createApp(component);
+  app.mount(root);
+  unmount = () => app.unmount();
+  await settle();
+  expect(fixtures.otherQueries.at(-1)).toMatchObject({ page: 1, page_size: 20 });
+  expect(fixtures.otherQueries.at(-1)).not.toHaveProperty('cursor');
+  expect(root.querySelector('nav')?.textContent).toContain('共 42 条');
+  [...root.querySelectorAll('button')].find((button) => button.textContent === '跳到第 2 页')!.click();
+  await settle();
+  expect(fixtures.otherQueries.at(-1)).toMatchObject({ page: 2, page_size: 20 });
+  expect([...root.querySelectorAll('[data-testid="row-id"]')].map((row) => row.textContent)).toEqual([`${id}-2`]);
+  if (id === 'user') {
+    [...root.querySelectorAll('button')].find((button) => button.textContent === '刷新')!.click();
+    await settle();
+    expect(fixtures.otherQueries.at(-1)).toMatchObject({ page: 2, page_size: 20 });
+  }
+  [...root.querySelectorAll('button')].find((button) => button.textContent === '每页 50 条')!.click();
+  await settle();
+  expect(fixtures.otherQueries.at(-1)).toMatchObject({ page: 1, page_size: 50 });
+});
+it('pages hook candidates without accumulating older pages and resets candidate search', async () => {
+  fixtures.slots.push({ name: 'post', line: 1, col: 1, exec: false, timing: 'post-target' });
+  const root = document.createElement('div');
+  document.body.append(root);
+  const app = createApp(TemplatesPage);
+  app.mount(root);
+  unmount = () => app.unmount();
+  await settle();
+  const click = (text: string, container: ParentNode = root) => [...container.querySelectorAll('button')]
+    .find((button) => button.textContent?.trim() === text)!.click();
+  click('查看 / 编辑');
+  fixtures.pending.get('template:get')!(template());
+  await settle();
+  click('添加 hook');
+  fixtures.pending.get('mutation')!(template());
+  await settle();
+  const dialog = [...root.querySelectorAll('section')].find((section) => section.querySelector('h2')?.textContent?.startsWith('选择 hook'))!;
+  expect(fixtures.candidateQueries.at(-1)).toMatchObject({ slot: 'post', index: 1, page: 1, page_size: 20 });
+  expect(dialog.textContent).toContain('candidate-first-page');
+  click('跳到第 2 页', dialog);
+  await settle();
+  expect(fixtures.candidateQueries.at(-1)).toMatchObject({ page: 2, page_size: 20 });
+  expect(dialog.textContent).toContain('candidate-second-page');
+  expect(dialog.textContent).not.toContain('candidate-first-page');
+  click('查询', dialog);
+  await settle();
+  expect(fixtures.candidateQueries.at(-1)).toMatchObject({ page: 1, page_size: 20 });
+  click('选用', dialog);
+  await settle();
+  expect(root.textContent).toContain('candidate-first-page v1');
+});
 it.each(['save', 'approve', 'derive'] as const)(
   'does not apply a late template %s to a newly created editor',
   async (action) => {

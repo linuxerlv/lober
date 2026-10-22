@@ -9,7 +9,6 @@ const routes: RouteRecordRaw[] = [
       icon: InspectionPanel,
       order: 40,
       title: 'hook',
-      menuId: 'hooks',
     },
     name: 'Hooks',
     path: '/hooks',
