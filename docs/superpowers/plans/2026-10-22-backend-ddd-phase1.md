@@ -53,7 +53,7 @@
 
 本阶段不把未迁移的镜像流程标成终态基础设施。对应豁免注明将在镜像阶段移出应用流程。不得通过重命名声称已完成全项目重构。
 
-## 任务 1：固定现有契约与迁移边界
+## Task 1: 固定现有契约与迁移边界
 
 **Files:** 新建 `docs/contracts/backend-modules.md`、`internal/archtest/migration_test.go`；修改 `internal/console/wizard_test.go`、`internal/archtest/deps_test.go`。
 
@@ -67,7 +67,7 @@
 - [ ] 运行现有向导、仓储契约及 `make check` 获取迁移前基线。失败必须记录并归因；缺测试数据库时停止数据库相关验收，不打印连接信息。
 - [ ] 只提交本任务文件：`test(arch): pin migration contracts and exceptions`。
 
-## 任务 2：验证事务契约的实际保护范围
+## Task 2: 验证事务契约的实际保护范围
 
 **Files:** 修改 `internal/store/pgstore/contract_tasks_test.go`、`contract_concurrency_test.go`、`internal/console/wizard_test.go`；更新 `docs/contracts/backend-modules.md`。
 
@@ -82,7 +82,7 @@
 
 任务 2 的缺陷分支是明确的停止条件：涉及改变提交保护时应单列修复，而非由搬迁执行者自行猜测新仓储接口。后续任务只有在此项解决后才能宣称契约完整。
 
-## 任务 3：迁移领域及契约，先清理会越界的辅助函数
+## Task 3: 迁移领域及契约，先清理会越界的辅助函数
 
 **Files:** 按文件表迁移 core、render 和 store 根文件；新建 `domain/model/user.go`、`source.go`，`domain/access/permissions.go`、`domain/selection/builtin.go`、`infrastructure/identity/id.go`；修改全部 Go 导入与 `internal/archtest`。
 
@@ -99,7 +99,7 @@
 - [ ] 更新 `cmd/lober` 和全仓导入。仓储路径暂从旧目录实现域接口，不创建第二套模型或复制规则实现。
 - [ ] 运行 `go test ./internal/domain/... ./internal/archtest` 和 `make check`，期望均通过。提交 `refactor(domain): separate rules and repository contracts`。
 
-## 任务 4：搬迁外部实现与网页目录，接通新的组装
+## Task 4: 搬迁外部实现与网页目录，接通新的组装
 
 **Files:** 按文件表搬迁 pgstore、builtin、iso、console；新建 `application/ports/notification.go`、`infrastructure/notification/hub.go`；修改 `cmd/lober/{app.go,wire.go,wire_gen.go,logging.go,supervisor.go,deletion.go,bootconfig.go}` 及相关测试、`internal/archtest`。
 
@@ -113,7 +113,7 @@
 - [ ] 更新 pgstore 的测试导入、archtest 路径常量及 Wire 检查；执行 `go tool wire ./cmd/lober` 生成组装代码，不手改生成内容。
 - [ ] 运行 `go test ./internal/archtest ./internal/infrastructure/... ./internal/interfaces/console ./cmd/lober` 和 `make check`。提交 `refactor(backend): establish four-layer package boundaries`。
 
-## 任务 5：定义任务应用契约并抽取向导五个操作
+## Task 5: 定义任务应用契约并抽取向导五个操作
 
 **Files:** 新建 `application/tasks/{contract.go,wizard.go,selection.go,params.go,submit.go,wizard_test.go,submit_test.go}`、`application/tasks/port/{repository.go,selection.go}`、`application/ports/{actor.go,clock.go}`；修改 `interfaces/console/{wizard.go,server.go,errors.go,wizard_test.go}`、`cmd/lober/{app.go,wire.go,wire_gen.go}`、`archtest/migration_test.go`。
 
@@ -172,7 +172,7 @@ func NewWizard(d WizardDeps) Wizard
 - [ ] 守卫增加符号级反例：即使与其他旧处理函数同包，wizard.go 调用仓储、领域判定或旧业务辅助函数也必须失败。反例包含通过 s.deps、局部变量和函数转发调用的写法；使用 go/types 解析引用，禁止只按文本查找。
 - [ ] 撤销全部向导豁免；运行 `go test ./internal/application/... ./internal/interfaces/console ./internal/archtest ./cmd/lober` 与 `make check`。提交 `refactor(tasks): route wizard through application contracts`。
 
-## 任务 6：真实链路验收与阶段交付
+## Task 6: 真实链路验收与阶段交付
 
 **Files:** 新建 `docs/superpowers/reviews/2026-10-22-ddd-phase1-evidence.md`；更新 `docs/contracts/backend-modules.md`、迁移清单与本计划检查框。
 
