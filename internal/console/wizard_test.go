@@ -288,21 +288,61 @@ func Test向导五路权限及空批非法字段(t *testing.T) {
 }
 
 func Test向导参数输入按规范SN定位并拒绝未知行(t *testing.T) {
-	s, _, token, iso, tpl := wizardFixture(t)
+	s, st, token, iso, tpl := wizardFixture(t)
 	body := fmt.Sprintf(`{"isoID":%q,"templateID":%q,"templateVersion":1,"hostSNs":["sn-1"],"entered":{"sn-1":{"tpl/hostname":"bad host"}}}`, iso.ID, tpl.ID)
 	form := responseData[wizardParamsResult](t, httpCall(s, "POST", "/console/v1/wizard/params", body, token))
 	if len(form.Hosts) != 1 || len(form.Hosts[0].Problems) == 0 || form.Hosts[0].Problems[0].Code != "param_value_invalid" {
 		t.Fatal(form)
 	}
-	body = fmt.Sprintf(`{"isoID":%q,"templateID":%q,"templateVersion":1,"hostSNs":["SN-1"],"entered":{"MISSING":{"tpl/hostname":"node"}}}`, iso.ID, tpl.ID)
-	w := httpCall(s, "POST", "/console/v1/wizard/params", body, token)
-	if w.Code != 400 {
-		t.Fatal(w.Code, w.Body.String())
+	before, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+	if err != nil {
+		t.Fatal(err)
 	}
-	body = fmt.Sprintf(`{"isoID":%q,"templateID":%q,"templateVersion":1,"hostSNs":["SN-1"],"entered":{"SN-1":{},"sn-1":{}}}`, iso.ID, tpl.ID)
-	w = httpCall(s, "POST", "/console/v1/wizard/params", body, token)
-	if w.Code != 400 {
-		t.Fatal(w.Code, w.Body.String())
+	for _, entered := range []string{`{"MISSING":{"tpl/hostname":"node"}}`, `{"SN-1":{},"sn-1":{}}`} {
+		body = fmt.Sprintf(`{"isoID":%q,"templateID":%q,"templateVersion":1,"hostSNs":["SN-1"],"entered":%s}`, iso.ID, tpl.ID, entered)
+		w := httpCall(s, "POST", "/console/v1/wizard/params", body, token)
+		if w.Code != 400 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		tasks, err := st.ListTasks(t.Context(), store.TaskQuery{})
+		if err != nil || len(tasks.Items) != 0 {
+			t.Fatal("拒绝的输入产生了任务", tasks, err)
+		}
+		after, err := st.ListAudit(t.Context(), store.AuditQuery{Limit: 500})
+		if err != nil || len(after.Items) != len(before.Items) {
+			t.Fatal("拒绝的输入产生了审计", after, err)
+		}
+	}
+}
+
+func Test向导参数输入顺序不串主机(t *testing.T) {
+	s, st, token, iso, tpl := wizardFixture(t)
+	body := fmt.Sprintf(`{"isoID":%q,"templateID":%q,"templateVersion":1,"hostSNs":["sn-2","SN-1"],"entered":{"SN-1":{"tpl/hostname":"node-one"},"sn-2":{"tpl/hostname":"node-two"}}}`, iso.ID, tpl.ID)
+	form := responseData[wizardParamsResult](t, httpCall(s, "POST", "/console/v1/wizard/params", body, token))
+	if len(form.Hosts) != 2 || form.Hosts[0].SN != "SN-2" || form.Hosts[1].SN != "SN-1" || len(form.Common) != 0 {
+		t.Fatal(form)
+	}
+	for _, h := range form.Hosts {
+		if len(h.Problems) != 0 {
+			t.Fatal(h)
+		}
+	}
+	result := responseData[wizardSubmitResult](t, httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"sn-2","entered":{"tpl/hostname":"node-two"}},{"sn":"SN-1","entered":{"tpl/hostname":"node-one"}}]`), token))
+	if len(result.Tasks) != 2 || result.Tasks[0].HostSN != "SN-2" || result.Tasks[1].HostSN != "SN-1" {
+		t.Fatal(result)
+	}
+	for i, expected := range []struct{ sn, hostname string }{{"SN-2", "node-two"}, {"SN-1", "node-one"}} {
+		got := result.Tasks[i]
+		if got.Snapshot.Host.SN != expected.sn || len(got.Snapshot.Template.Params["hostname"].Items) != 1 || got.Snapshot.Template.Params["hostname"].Items[0] != expected.hostname {
+			t.Fatal("响应快照串到了另一台主机", got)
+		}
+		back, err := st.GetTask(t.Context(), got.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if back.HostSN != expected.sn || back.Snapshot.Host.SN != expected.sn || len(back.Snapshot.Template.Params["hostname"].Items) != 1 || back.Snapshot.Template.Params["hostname"].Items[0] != expected.hostname {
+			t.Fatal("保存的快照串到了另一台主机", back)
+		}
 	}
 }
 

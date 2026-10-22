@@ -1,0 +1,312 @@
+package archtest
+
+import (
+	"go/token"
+	"path"
+	"strings"
+	"testing"
+)
+
+// migrationException 只放行一个文件中一个函数对一个旧符号的访问。
+type migrationException struct {
+	Caller, File, Function, Target, Symbol, RemoveIn string
+}
+
+const ruleMigration rule = "迁移豁免必须精确到调用包、文件、函数、目标包和符号，并写明总路线的清除阶段"
+
+func checkMigrationExceptions(exceptions []migrationException) []violation {
+	var found []violation
+	seen := map[migrationException]bool{}
+	for _, e := range exceptions {
+		var reasons []string
+		for _, p := range []string{e.Caller, e.Target} {
+			if !strings.HasPrefix(p, modulePath+"/") || path.Clean(p) != p || strings.ContainsAny(p, "*?[]\\ \t\n\r") || strings.Contains(p, "...") {
+				reasons = append(reasons, "调用包和目标包必须是本模块的完整包路径，不能通配")
+			}
+		}
+		if path.Dir(e.File) != strings.TrimPrefix(e.Caller, modulePath+"/") || path.Clean(e.File) != e.File || !strings.HasSuffix(e.File, ".go") || strings.HasSuffix(e.File, "_test.go") || strings.ContainsAny(e.File, "*?[]\\ \t\n\r") {
+			reasons = append(reasons, "文件必须是调用包中的模块相对源文件路径")
+		}
+		function := e.Function
+		if strings.HasPrefix(function, "(") {
+			receiver, name, ok := strings.Cut(function, ").")
+			if !ok || !token.IsIdentifier(strings.TrimPrefix(strings.TrimPrefix(receiver, "("), "*")) {
+				function = ""
+			} else {
+				function = name
+			}
+		}
+		if e.Function != "package-init" && !token.IsIdentifier(function) {
+			reasons = append(reasons, "函数必须是具体名称；方法使用 (类型).方法 或 (*类型).方法")
+		}
+		for _, symbol := range strings.Split(e.Symbol, ".") {
+			if !token.IsIdentifier(symbol) {
+				reasons = append(reasons, "符号必须是具体名称或 接口.方法，不能通配")
+				break
+			}
+		}
+		if len(e.RemoveIn) != 1 || e.RemoveIn < "1" || e.RemoveIn > "6" {
+			reasons = append(reasons, "清除阶段只能是总路线中的 1 至 6")
+		}
+		if seen[e] {
+			reasons = append(reasons, "重复登记了同一条豁免")
+		}
+		seen[e] = true
+		if len(reasons) != 0 {
+			found = append(found, violation{rule: ruleMigration, pkg: e.Caller, subject: e.File + ":" + e.Function + " -> " + e.Target + "." + e.Symbol, detail: strings.Join(reasons, "；")})
+		}
+	}
+	return found
+}
+
+// migrationAllows 不按包或文件整批放行；清除阶段是登记信息，不是访问身份。
+func migrationAllows(exceptions []migrationException, use migrationException) bool {
+	if len(checkMigrationExceptions(exceptions)) != 0 {
+		return false
+	}
+	for _, e := range exceptions {
+		if e.Caller == use.Caller && e.File == use.File && e.Function == use.Function && e.Target == use.Target && e.Symbol == use.Symbol {
+			return true
+		}
+	}
+	return false
+}
+
+func Test迁移豁免必须精确且有清除阶段(t *testing.T) {
+	valid := migrationException{pkgConsole, "internal/console/hosts.go", "(*server).listHosts", pkgStore, "Hosts.ListHosts", "3"}
+	for _, tc := range []struct {
+		name   string
+		change func(*migrationException)
+	}{
+		{"空调用方", func(e *migrationException) { e.Caller = "" }},
+		{"调用方非完整路径", func(e *migrationException) { e.Caller = "console" }},
+		{"空文件", func(e *migrationException) { e.File = "" }},
+		{"文件越出模块", func(e *migrationException) { e.File = "../hosts.go" }},
+		{"文件不属于调用方", func(e *migrationException) { e.File = "internal/other/hosts.go" }},
+		{"文件通配", func(e *migrationException) { e.File = "internal/console/*.go" }},
+		{"空函数", func(e *migrationException) { e.Function = "" }},
+		{"函数通配", func(e *migrationException) { e.Function = "(*server).*" }},
+		{"空目标", func(e *migrationException) { e.Target = "" }},
+		{"目标非完整路径", func(e *migrationException) { e.Target = "store" }},
+		{"通配目标", func(e *migrationException) { e.Target += "/..." }},
+		{"星号目标", func(e *migrationException) { e.Target += "/*" }},
+		{"空符号", func(e *migrationException) { e.Symbol = "" }},
+		{"符号通配", func(e *migrationException) { e.Symbol = "Hosts.*" }},
+		{"空阶段", func(e *migrationException) { e.RemoveIn = "" }},
+		{"无效阶段", func(e *migrationException) { e.RemoveIn = "7" }},
+		{"非阶段编号", func(e *migrationException) { e.RemoveIn = "阶段3" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := valid
+			tc.change(&e)
+			if got := checkMigrationExceptions([]migrationException{e}); len(got) == 0 {
+				t.Fatal("不精确或没有清除阶段的豁免被接受")
+			}
+		})
+	}
+	if got := checkMigrationExceptions([]migrationException{valid, valid}); len(got) == 0 {
+		t.Error("重复豁免被接受")
+	}
+	for _, phase := range []string{"1", "2", "3", "4", "5", "6"} {
+		e := valid
+		e.RemoveIn = phase
+		if got := checkMigrationExceptions([]migrationException{e}); len(got) != 0 {
+			t.Errorf("总路线阶段 %s 被拒绝：%v", phase, got)
+		}
+	}
+	decl := valid
+	decl.Function = "package-init"
+	decl.Symbol = "Hosts"
+	if got := checkMigrationExceptions([]migrationException{valid, decl}); len(got) != 0 {
+		t.Errorf("精确条目被拒绝：%v", got)
+	}
+	if !migrationAllows([]migrationException{valid}, valid) {
+		t.Error("完全匹配的访问没有放行")
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*migrationException)
+	}{
+		{"同包另一处理函数", func(e *migrationException) { e.Function = "(*server).createHost" }},
+		{"新业务文件", func(e *migrationException) { e.File = "internal/console/new.go" }},
+		{"另一调用方", func(e *migrationException) { e.Caller = pkgConsole + "/other" }},
+		{"另一目标", func(e *migrationException) { e.Target = pkgStore + "/other" }},
+		{"另一符号", func(e *migrationException) { e.Symbol = "Hosts.CreateHost" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			use := valid
+			tc.change(&use)
+			if migrationAllows([]migrationException{valid}, use) {
+				t.Fatal("其他访问借用了豁免")
+			}
+		})
+	}
+}
+
+// migrationExceptions 是当前非向导代码的固定清单；新增文件和函数不会自动获得豁免。
+// Symbol 的 接口.方法 表示经仓储接口调用；其余名称表示旧包的类型、函数或常量。
+var migrationExceptions = []migrationException{
+	{pkgConsole, "internal/console/audit.go", "(*server).exportAudit", pkgStore, "AuditEntry", "5"},
+	{pkgConsole, "internal/console/audit.go", "(*server).exportAudit", pkgStore, "AuditLog.ListAudit", "5"},
+	{pkgConsole, "internal/console/audit.go", "(*server).exportAudit", pkgStore, "Page", "5"},
+	{pkgConsole, "internal/console/audit.go", "(*server).listAudit", pkgStore, "AuditEntry", "5"},
+	{pkgConsole, "internal/console/audit.go", "(*server).listAudit", pkgStore, "AuditLog.ListAudit", "5"},
+	{pkgConsole, "internal/console/audit.go", "(*server).listAudit", pkgStore, "Page", "5"},
+	{pkgConsole, "internal/console/audit.go", "auditFilters", pkgStore, "AuditQuery", "5"},
+	{pkgConsole, "internal/console/audit.go", "toAuditItem", pkgStore, "AuditEntry", "5"},
+	{pkgConsole, "internal/console/auth.go", "(*server).login", pkgStore, "ErrNotFound", "5"},
+	{pkgConsole, "internal/console/auth.go", "(*server).login", pkgStore, "Users.GetUser", "5"},
+	{pkgConsole, "internal/console/auth.go", "HashPassword", pkgStore, "ErrInvalid", "5"},
+	{pkgConsole, "internal/console/errors.go", "RespondError", pkgStore, "BatchError", "6"},
+	{pkgConsole, "internal/console/errors.go", "RespondError", pkgStore, "ErrConflict", "6"},
+	{pkgConsole, "internal/console/errors.go", "RespondError", pkgStore, "ErrDuplicate", "6"},
+	{pkgConsole, "internal/console/errors.go", "RespondError", pkgStore, "ErrImmutable", "6"},
+	{pkgConsole, "internal/console/errors.go", "RespondError", pkgStore, "ErrInvalid", "6"},
+	{pkgConsole, "internal/console/errors.go", "RespondError", pkgStore, "ErrLastAdmin", "6"},
+	{pkgConsole, "internal/console/errors.go", "RespondError", pkgStore, "ErrNotFound", "6"},
+	{pkgConsole, "internal/console/errors.go", "RespondError", pkgStore, "ErrReferenced", "6"},
+	{pkgConsole, "internal/console/errors.go", "RespondError", pkgStore, "ProblemsError", "6"},
+	{pkgConsole, "internal/console/errors.go", "RespondError", pkgStore, "ReferencedError", "6"},
+	{pkgConsole, "internal/console/hooks.go", "(*server).createHook", pkgStore, "Hooks.CreateHook", "2"},
+	{pkgConsole, "internal/console/hooks.go", "(*server).deleteHookDraft", pkgStore, "Hooks.DeleteHookDraft", "2"},
+	{pkgConsole, "internal/console/hooks.go", "(*server).getHook", pkgStore, "Hooks.GetHook", "2"},
+	{pkgConsole, "internal/console/hooks.go", "(*server).listHookVersions", pkgStore, "Hooks.ListHookVersions", "2"},
+	{pkgConsole, "internal/console/hooks.go", "(*server).listHooks", pkgStore, "Hooks.ListHooks", "2"},
+	{pkgConsole, "internal/console/hooks.go", "(*server).listHooks", pkgStore, "Page", "2"},
+	{pkgConsole, "internal/console/hooks.go", "(*server).newHookVersion", pkgStore, "Hooks.NewHookVersion", "2"},
+	{pkgConsole, "internal/console/hooks.go", "(*server).renameHook", pkgStore, "Hooks.RenameHook", "2"},
+	{pkgConsole, "internal/console/hooks.go", "(*server).saveHookDraft", pkgStore, "Hooks.GetHook", "2"},
+	{pkgConsole, "internal/console/hooks.go", "(*server).saveHookDraft", pkgStore, "Hooks.SaveHookDraft", "2"},
+	{pkgConsole, "internal/console/hooks.go", "authoringQuery", pkgStore, "HookQuery", "2"},
+	{pkgConsole, "internal/console/hooks.go", "hookKeyOf", pkgStore, "CheckVersionKey", "2"},
+	{pkgConsole, "internal/console/hosts.go", "(*server).createHost", pkgStore, "Hosts.CreateHost", "3"},
+	{pkgConsole, "internal/console/hosts.go", "(*server).deleteHost", pkgStore, "Hosts.DeleteHost", "3"},
+	{pkgConsole, "internal/console/hosts.go", "(*server).getHost", pkgStore, "Hosts.GetHost", "3"},
+	{pkgConsole, "internal/console/hosts.go", "(*server).importHosts", pkgStore, "Hosts.GetHosts", "3"},
+	{pkgConsole, "internal/console/hosts.go", "(*server).importHosts", pkgStore, "Hosts.ImportHosts", "3"},
+	{pkgConsole, "internal/console/hosts.go", "(*server).listHosts", pkgStore, "HostQuery", "3"},
+	{pkgConsole, "internal/console/hosts.go", "(*server).listHosts", pkgStore, "Hosts.ListHosts", "3"},
+	{pkgConsole, "internal/console/hosts.go", "(*server).listHosts", pkgStore, "Page", "3"},
+	{pkgConsole, "internal/console/hosts.go", "(*server).updateHost", pkgStore, "Hosts.UpdateHost", "3"},
+	{pkgConsole, "internal/console/isos.go", "(*exactChunkReader).Read", pkgStore, "ErrInvalid", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).createISO", pkgStore, "CheckNewISO", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).createISO", pkgStore, "ISOs.CreateISO", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).deprecateISO", pkgStore, "ISOs.DeprecateISO", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).getISO", pkgStore, "ISOs.GetISO", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).isoProgress", pkgConsole, "ISOSourceState.SourcesOf", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).isoProgress", pkgStore, "ISOs.GetISO", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).isoProgress", pkgStore, "Source", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).listISOs", pkgStore, "ISOQuery", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).listISOs", pkgStore, "ISOs.ListISOs", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).listISOs", pkgStore, "Page", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).registerISOSource", pkgStore, "ISOs.GetISO", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).sourceOperation", pkgStore, "Audit", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).sourceProgress", pkgStore, "ErrConflict", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).sourceProgress", pkgStore, "ErrNotFound", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).sourceProgress", pkgConsole, "ISOSourceState.GetSource", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).sourceProgress", pkgConsole, "ISOSourceState.RangesOf", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).sourceProgress", pkgStore, "Source", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).sourceProgress", pkgStore, "SourceLocal", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).sourceProgress", pkgStore, "SourceRemote", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).uploadChunk", pkgStore, "CheckSourceKey", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).uploadChunk", pkgStore, "ErrConflict", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).uploadChunk", pkgStore, "ErrNotFound", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).uploadChunk", pkgConsole, "ISOSourceState.GetSource", "4"},
+	{pkgConsole, "internal/console/isos.go", "(*server).uploadChunk", pkgStore, "SourceUpload", "4"},
+	{pkgConsole, "internal/console/isos.go", "checkISOSource", pkgStore, "CheckSource", "4"},
+	{pkgConsole, "internal/console/isos.go", "checkISOSource", pkgStore, "ErrInvalid", "4"},
+	{pkgConsole, "internal/console/isos.go", "checkISOSource", pkgStore, "Source", "4"},
+	{pkgConsole, "internal/console/isos.go", "checkISOSource", pkgStore, "SourceLocal", "4"},
+	{pkgConsole, "internal/console/isos.go", "checkISOSource", pkgStore, "SourcePending", "4"},
+	{pkgConsole, "internal/console/isos.go", "checkISOSource", pkgStore, "SourceRemote", "4"},
+	{pkgConsole, "internal/console/isos.go", "checkISOSource", pkgStore, "SourceUpload", "4"},
+	{pkgConsole, "internal/console/isos.go", "package-init", pkgStore, "SourceState", "4"},
+	{pkgConsole, "internal/console/isosource.go", "package-init", pkgStore, "Audit", "4"},
+	{pkgConsole, "internal/console/isosource.go", "package-init", pkgStore, "Range", "4"},
+	{pkgConsole, "internal/console/isosource.go", "package-init", pkgStore, "Source", "4"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).approveHook", pkgStore, "Audit", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).approveHook", pkgStore, "Hooks.ApproveHook", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).approveTemplate", pkgStore, "Audit", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).approveTemplate", pkgStore, "Templates.ApproveTemplate", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).deprecateHook", pkgStore, "Hooks.DeprecateHook", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).deprecateTemplate", pkgStore, "Templates.DeprecateTemplate", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).rejectHook", pkgStore, "Hooks.RejectHook", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).rejectTemplate", pkgStore, "Templates.RejectTemplate", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).reloadHook", pkgStore, "Hooks.GetHook", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).reloadTemplate", pkgStore, "Templates.GetTemplate", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).submitHook", pkgStore, "Hooks.SubmitHook", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).submitTemplate", pkgStore, "Templates.SubmitTemplate", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).validateHook", pkgStore, "Hooks.GetHook", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "(*server).validateTemplate", pkgStore, "Templates.GetTemplate", "2"},
+	{pkgConsole, "internal/console/lifecycle.go", "package-init", pkgStore, "Audit", "2"},
+	{pkgConsole, "internal/console/openapi.go", "(*schemaBuilder).definition", pkgStore, "Role", "5"},
+	{pkgConsole, "internal/console/openapi.go", "(*schemaBuilder).definition", pkgStore, "Roles", "5"},
+	{pkgConsole, "internal/console/perm.go", "PermsOf", pkgStore, "Role", "5"},
+	{pkgConsole, "internal/console/perm.go", "PermsOf", pkgStore, "RoleAdmin", "5"},
+	{pkgConsole, "internal/console/perm.go", "PermsOf", pkgStore, "RoleHookApprover", "5"},
+	{pkgConsole, "internal/console/perm.go", "PermsOf", pkgStore, "RoleHookAuthor", "5"},
+	{pkgConsole, "internal/console/perm.go", "PermsOf", pkgStore, "RoleOperator", "5"},
+	{pkgConsole, "internal/console/preview.go", "(*server).previewTemplate", pkgStore, "Hosts.GetHost", "2"},
+	{pkgConsole, "internal/console/preview.go", "(*server).previewTemplate", pkgStore, "ISOs.GetISO", "2"},
+	{pkgConsole, "internal/console/preview.go", "(*server).previewTemplate", pkgStore, "Templates.GetTemplate", "2"},
+	{pkgConsole, "internal/console/routes.go", "package-init", pkgStore, "Role", "5"},
+	{pkgConsole, "internal/console/routes.go", "toUserResponse", pkgStore, "User", "5"},
+	{pkgConsole, "internal/console/server.go", "(*server).auditFrom", pkgStore, "Audit", "5"},
+	{pkgConsole, "internal/console/server.go", "(*server).authenticate", pkgStore, "ErrNotFound", "5"},
+	{pkgConsole, "internal/console/server.go", "(*server).authenticate", pkgStore, "Users.GetUser", "5"},
+	{pkgConsole, "internal/console/server.go", "package-init", pkgStore, "AuditLog", "5"},
+	{pkgConsole, "internal/console/server.go", "package-init", pkgStore, "Events", "6"},
+	{pkgConsole, "internal/console/server.go", "package-init", pkgStore, "Hooks", "2"},
+	{pkgConsole, "internal/console/server.go", "package-init", pkgStore, "Hosts", "3"},
+	{pkgConsole, "internal/console/server.go", "package-init", pkgStore, "ISOs", "4"},
+	{pkgConsole, "internal/console/server.go", "package-init", pkgStore, "Tasks", "6"},
+	{pkgConsole, "internal/console/server.go", "package-init", pkgStore, "Templates", "2"},
+	{pkgConsole, "internal/console/server.go", "package-init", pkgStore, "Users", "5"},
+	{pkgConsole, "internal/console/server.go", "userOf", pkgStore, "User", "5"},
+	{pkgConsole, "internal/console/slots.go", "(*server).slotsOf", pkgStore, "Templates.GetTemplate", "2"},
+	{pkgConsole, "internal/console/taskcontrol.go", "Problems", pkgStore, "ErrRejected", "6"},
+	{pkgConsole, "internal/console/taskcontrol.go", "Problems", pkgStore, "ProblemsError", "6"},
+	{pkgConsole, "internal/console/taskcontrol.go", "package-init", pkgStore, "Audit", "6"},
+	{pkgConsole, "internal/console/tasks.go", "(*server).controlTask", pkgStore, "Tasks.GetTask", "6"},
+	{pkgConsole, "internal/console/tasks.go", "(*server).getTask", pkgStore, "Tasks.GetTask", "6"},
+	{pkgConsole, "internal/console/tasks.go", "(*server).listEvents", pkgStore, "Event", "6"},
+	{pkgConsole, "internal/console/tasks.go", "(*server).listEvents", pkgStore, "Events.ListEvents", "6"},
+	{pkgConsole, "internal/console/tasks.go", "(*server).listTasks", pkgStore, "Page", "6"},
+	{pkgConsole, "internal/console/tasks.go", "(*server).listTasks", pkgStore, "TaskQuery", "6"},
+	{pkgConsole, "internal/console/tasks.go", "(*server).listTasks", pkgStore, "Tasks.ListTasks", "6"},
+	{pkgConsole, "internal/console/tasks.go", "(*server).previewTask", pkgStore, "Tasks.GetTask", "6"},
+	{pkgConsole, "internal/console/tasks.go", "(*server).streamAuthorized", pkgStore, "Users.GetUser", "6"},
+	{pkgConsole, "internal/console/tasks.go", "(*server).taskStream", pkgStore, "Event", "6"},
+	{pkgConsole, "internal/console/tasks.go", "(*server).taskStream", pkgStore, "Events.ListEvents", "6"},
+	{pkgConsole, "internal/console/tasks.go", "(*server).taskStream", pkgStore, "Tasks.GetTask", "6"},
+	{pkgConsole, "internal/console/tasks.go", "toEventItem", pkgStore, "Event", "6"},
+	{pkgConsole, "internal/console/templates.go", "(*server).createTemplate", pkgStore, "Templates.CreateTemplate", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).deleteTemplateDraft", pkgStore, "Templates.DeleteTemplateDraft", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).deriveTemplate", pkgStore, "Templates.DeriveTemplate", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).getTemplate", pkgStore, "Templates.GetTemplate", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).listTemplateVersions", pkgStore, "Templates.ListTemplateVersions", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).listTemplates", pkgStore, "Page", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).listTemplates", pkgStore, "TemplateQuery", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).listTemplates", pkgStore, "Templates.ListTemplates", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).newTemplateVersion", pkgStore, "Templates.NewTemplateVersion", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).renameTemplate", pkgStore, "Templates.RenameTemplate", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).saveTemplateDraft", pkgStore, "Templates.GetTemplate", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).saveTemplateDraft", pkgStore, "Templates.SaveTemplateDraft", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).templateHooks", pkgStore, "CheckVersionKey", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).templateHooks", pkgStore, "HookRefs", "2"},
+	{pkgConsole, "internal/console/templates.go", "(*server).templateHooks", pkgStore, "Hooks.GetHooks", "2"},
+	{pkgConsole, "internal/console/templates.go", "templateKeyOf", pkgStore, "CheckVersionKey", "2"},
+	{pkgConsole, "internal/console/users.go", "(*server).createUser", pkgStore, "User", "5"},
+	{pkgConsole, "internal/console/users.go", "(*server).createUser", pkgStore, "Users.CreateUser", "5"},
+	{pkgConsole, "internal/console/users.go", "(*server).disableUser", pkgStore, "User", "5"},
+	{pkgConsole, "internal/console/users.go", "(*server).disableUser", pkgStore, "Users.GetUser", "5"},
+	{pkgConsole, "internal/console/users.go", "(*server).disableUser", pkgStore, "Users.UpdateUser", "5"},
+	{pkgConsole, "internal/console/users.go", "(*server).listUsers", pkgStore, "Page", "5"},
+	{pkgConsole, "internal/console/users.go", "(*server).listUsers", pkgStore, "User", "5"},
+	{pkgConsole, "internal/console/users.go", "(*server).listUsers", pkgStore, "UserQuery", "5"},
+	{pkgConsole, "internal/console/users.go", "(*server).listUsers", pkgStore, "Users.ListUsers", "5"},
+	{pkgConsole, "internal/console/users.go", "(*server).updateUser", pkgStore, "User", "5"},
+	{pkgConsole, "internal/console/users.go", "(*server).updateUser", pkgStore, "Users.GetUser", "5"},
+	{pkgConsole, "internal/console/users.go", "(*server).updateUser", pkgStore, "Users.UpdateUser", "5"},
+	{pkgConsole, "internal/console/users.go", "package-init", pkgStore, "Role", "5"},
+}

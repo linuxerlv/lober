@@ -256,6 +256,7 @@ func Test全模块依赖守卫(t *testing.T) {
 // 守卫只查文件构成（checkGuardFiles）。归不到一层的包整个报 ruleLayer，不再解析它的文件，也不算进任何一层。
 func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[layer]int) {
 	found := unlistedDirs(dirs, pkgs)
+	found = append(found, checkMigrationExceptions(migrationExceptions)...)
 	checked := map[layer]int{}
 	for _, p := range pkgs {
 		l := layerOf(p.ImportPath)
