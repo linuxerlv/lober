@@ -12,14 +12,14 @@ const (
 	ruleDomainLeaf rule = "权限与选择规则只依赖 model，不依赖仓储契约或其他流程"
 )
 
-// 旧实现将在第一阶段任务 4 搬迁，届时删除这六条旧路径。
-var identityMigrationExceptions = []migrationException{
-	{pkgPgstore, "internal/store/pgstore/hooks.go", "(*Store).CreateHook", pkgIdentity, "NewID", "1"},
-	{pkgPgstore, "internal/store/pgstore/isos.go", "(*Store).CreateISO", pkgIdentity, "NewID", "1"},
-	{pkgPgstore, "internal/store/pgstore/templates.go", "(*Store).CreateTemplate", pkgIdentity, "NewID", "1"},
-	{pkgPgstore, "internal/store/pgstore/templates.go", "(*Store).DeriveTemplate", pkgIdentity, "NewID", "1"},
-	{pkgPgstore, "internal/store/pgstore/tasks.go", "(*Store).createTasks", pkgIdentity, "NewID", "1"},
-	{pkgPgtest, "internal/store/pgstore/pgtest/pgtest.go", "newSchema", pkgIdentity, "NewID", "1"},
+// 编号是没有业务依赖的叶子能力；只有这六个实际写入位置可以使用。
+var identityCapabilities = []symbolCapability{
+	{pkgPgstore, "internal/infrastructure/persistence/pgstore/hooks.go", "(*Store).CreateHook", pkgIdentity, "NewID"},
+	{pkgPgstore, "internal/infrastructure/persistence/pgstore/isos.go", "(*Store).CreateISO", pkgIdentity, "NewID"},
+	{pkgPgstore, "internal/infrastructure/persistence/pgstore/templates.go", "(*Store).CreateTemplate", pkgIdentity, "NewID"},
+	{pkgPgstore, "internal/infrastructure/persistence/pgstore/templates.go", "(*Store).DeriveTemplate", pkgIdentity, "NewID"},
+	{pkgPgstore, "internal/infrastructure/persistence/pgstore/tasks.go", "(*Store).createTasks", pkgIdentity, "NewID"},
+	{pkgPgtest, "internal/infrastructure/persistence/pgstore/pgtest/pgtest.go", "newSchema", pkgIdentity, "NewID"},
 }
 
 func checkIdentityFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
@@ -36,7 +36,7 @@ func checkIdentityUses(fset *token.FileSet, pkg string, f *ast.File) []violation
 	var found []violation
 	aliases := map[string]bool{}
 	report := func(subject string, pos token.Pos) {
-		found = append(found, violation{rule: ruleMigration, pkg: pkg, subject: subject, pos: position(fset, pos)})
+		found = append(found, violation{rule: ruleCapability, pkg: pkg, subject: subject, pos: position(fset, pos)})
 	}
 	for _, imp := range f.Imports {
 		name, _ := strconv.Unquote(imp.Path.Value)
@@ -56,7 +56,7 @@ func checkIdentityUses(fset *token.FileSet, pkg string, f *ast.File) []violation
 	if len(aliases) == 0 {
 		return found
 	}
-	found = append(found, checkMigrationExceptions(identityMigrationExceptions)...)
+	found = append(found, checkCapabilities(identityCapabilities)...)
 	for _, decl := range f.Decls {
 		function := "package-init"
 		if fn, ok := decl.(*ast.FuncDecl); ok {
@@ -79,11 +79,11 @@ func checkIdentityUses(fset *token.FileSet, pkg string, f *ast.File) []violation
 				return true
 			}
 			name, ok := sel.X.(*ast.Ident)
-			if !ok || !aliases[name.Name] {
+			if !ok || !aliases[name.Name] || name.Obj != nil {
 				return true
 			}
-			use := migrationException{Caller: pkg, File: fset.Position(sel.Pos()).Filename, Function: function, Target: pkgIdentity, Symbol: sel.Sel.Name}
-			if !migrationAllows(identityMigrationExceptions, use) {
+			use := symbolCapability{Caller: pkg, File: fset.Position(sel.Pos()).Filename, Function: function, Target: pkgIdentity, Symbol: sel.Sel.Name}
+			if !capabilityAllows(identityCapabilities, use) {
 				report(pkgIdentity+"."+sel.Sel.Name, sel.Pos())
 			}
 			return true

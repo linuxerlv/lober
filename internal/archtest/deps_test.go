@@ -32,11 +32,11 @@ const (
 	layer1    = modulePath + "/" + layer1Dir
 )
 
-// 仓储契约已迁入领域；数据库实现与测试夹具在任务 4 才移动。
+// 仓储契约属于领域；数据库实现与测试夹具属于基础设施。
 const (
 	storeDir   = "internal/domain/repository"
 	pkgStore   = modulePath + "/" + storeDir
-	pkgPgstore = modulePath + "/internal/store/pgstore"
+	pkgPgstore = modulePath + "/internal/infrastructure/persistence/pgstore"
 	pkgPgtest  = pkgPgstore + "/pgtest"
 )
 
@@ -44,8 +44,8 @@ const (
 // 子目录里有 .go 文件时就是内置内容的子包，按内置内容的规则查；只放正文的子目录不是包。
 const (
 	pkgRender   = modulePath + "/internal/domain/render"
-	pkgBuiltin  = modulePath + "/internal/builtin"
-	pkgConsole  = modulePath + "/internal/console"
+	pkgBuiltin  = modulePath + "/internal/infrastructure/builtin"
+	pkgConsole  = modulePath + "/internal/interfaces/console"
 	pkgAssembly = modulePath + "/cmd/lober"
 	gin         = "github.com/gin-gonic/gin"
 	yamlV3      = "gopkg.in/yaml.v3"
@@ -62,23 +62,25 @@ var sourceRoots = []string{"internal", "cmd"}
 type layer string
 
 const (
-	layerCore     layer = "层 1"
-	layerStore    layer = "存储层"
-	layerRender   layer = "渲染"
-	layerBuiltin  layer = "内置内容"
-	layerISO      layer = "ISO"
-	layerConsole  layer = "控制台"
-	layerAssembly layer = "装配点"
-	layerGuard    layer = "守卫"
-	layerIdentity layer = "随机编号"
+	layerCore         layer = "层 1"
+	layerStore        layer = "存储层"
+	layerRender       layer = "渲染"
+	layerBuiltin      layer = "内置内容"
+	layerISO          layer = "ISO"
+	layerConsole      layer = "控制台"
+	layerAssembly     layer = "装配点"
+	layerGuard        layer = "守卫"
+	layerIdentity     layer = "随机编号"
+	layerApplication  layer = "应用层"
+	layerNotification layer = "通知实现"
 )
 
 // layers 是 layer 的全部取值，按日志里的先后排。
-var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerAssembly, layerGuard, layerIdentity}
+var layers = []layer{layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerAssembly, layerGuard, layerIdentity, layerApplication, layerNotification}
 
 // minChecked 是 Test全模块依赖守卫 每层至少要查到的包数。删了某层的包就改这里；渲染与内置内容的包加进来以后，
 // 补上它们的下限——忘了补会由「查到了包的层都登记了下限」那一条报出来。
-var minChecked = map[layer]int{layerCore: 9, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1, layerIdentity: 1}
+var minChecked = map[layer]int{layerCore: 9, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1, layerIdentity: 1, layerApplication: 1, layerNotification: 1}
 
 // minDirs 是 moduleSourceDirs 至少要遍历到的目录数。目录遍历没有别的防线：sourceRoots 少了一项、或者
 // checkModule 收到空的 dirs，ruleListed（整包被构建约束排除的目录）与 go test 的缓存跟踪都会静默失效，
@@ -149,7 +151,7 @@ const (
 		"也不依赖第三方模块"
 	ruleLayer3Apart rule = "渲染与内置内容的非测试代码互不 import：内置内容的 golden 测试在测试文件里，可以 import 渲染"
 
-	ruleLayer    rule = "包必须归入领域、旧数据库实现、内置内容、镜像、控制台、装配点、随机编号或守卫；新包不能漏出检查"
+	ruleLayer    rule = "包必须归入已登记的四层模块、装配点或守卫；未知包不能漏出检查"
 	ruleGuard    rule = "守卫 internal/archtest 只放测试文件：有了非测试文件，它就成了能被 import、会进 go build 的包"
 	ruleConsole  rule = "控制台只依赖标准库、gin、core、存储契约、渲染与内置内容"
 	ruleAssembly rule = "装配点只依赖标准库、本模块、gin、yaml 与 wire"
@@ -209,6 +211,7 @@ func Test全模块依赖守卫(t *testing.T) {
 	pkgs := packagesUnder(t, root, modulePath)
 	dirs := moduleSourceDirs(t, gomod, root)
 	found, checked := checkModule(os.DirFS(root), dirs, pkgs)
+	found = append(found, checkTypedTransitions(root, pkgs)...)
 	for _, v := range found {
 		t.Error(v)
 	}
@@ -254,6 +257,11 @@ func Test全模块依赖守卫(t *testing.T) {
 func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[layer]int) {
 	found := unlistedDirs(dirs, pkgs)
 	found = append(found, checkMigrationExceptions(migrationExceptions)...)
+	found = append(found, checkMigrationExceptions(wizardMigrationExceptions)...)
+	found = append(found, checkMigrationExceptions(mediaMigrationExceptions)...)
+	found = append(found, checkMigrationExceptions(consoleRuleMigrationExceptions)...)
+	found = append(found, checkMigrationExceptions(notificationMigrationExceptions)...)
+	found = append(found, checkCapabilities(identityCapabilities)...)
 	checked := map[layer]int{}
 	for _, p := range pkgs {
 		l := layerOf(p.ImportPath)
@@ -274,6 +282,11 @@ func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[
 		case layerAssembly:
 			found = append(found, assemblyIgnoredFiles(fsys, p)...)
 			found = append(found, checkSources(fsys, p, checkAssemblyFile)...)
+		case layerApplication:
+			found = append(found, ignoredFiles(p)...)
+			found = append(found, checkSources(fsys, p, checkApplicationFile)...)
+		case layerNotification:
+			found = append(found, checkPackage(fsys, p, checkNotificationFile)...)
 		case layerIdentity:
 			found = append(found, checkPackage(fsys, p, checkIdentityFile)...)
 		case layerGuard:
@@ -306,6 +319,10 @@ func layerOf(pkg string) layer {
 		return layerAssembly
 	case pkg == pkgIdentity:
 		return layerIdentity
+	case applicationModule(pkg) != "":
+		return layerApplication
+	case pkg == pkgNotification:
+		return layerNotification
 	case pkg == pkgGuard:
 		return layerGuard
 	}
@@ -626,13 +643,16 @@ func checkStoreFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
 // 第三方模块只有这里放行的两处（S2-12）：每个包都要归到一层，别的层的规则都不放行第三方，所以「只有 pgstore 能用
 // gorm 与 pgx、pgtest 能用 pgx」对全模块成立，不另起一张第三方模块的表。
 //
-// 仓储契约及其子包使用纯标准库白名单。旧数据库实现与夹具仍使用标准库规则，编号访问逐个检查。
+// 仓储契约及其子包使用纯标准库白名单。数据库实现与夹具的编号访问逐个检查。
 func storeRule(pkg, imp string) rule {
 	if under(pkg, pkgStore) {
 		if stdAllowed[imp] || inLayer1(imp) || under(imp, pkgStore) {
 			return ""
 		}
 		return ruleContract
+	}
+	if imp == "crypto/rand" || under(imp, "math/rand") {
+		return ruleCapability
 	}
 	std := isStd(imp) && imp != "C"
 	if pkg == pkgPgtest {

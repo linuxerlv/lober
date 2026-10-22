@@ -14,7 +14,7 @@ import (
 	"sync"
 
 	"github.com/lober/lober/internal/domain/repository"
-	"github.com/lober/lober/internal/iso"
+	"github.com/lober/lober/internal/infrastructure/media"
 )
 
 // Registration and snapshot capture share a gate. Source identity/path cannot

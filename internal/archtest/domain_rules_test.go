@@ -33,10 +33,10 @@ func Test领域拒绝随机数和外部操作(t *testing.T) {
 
 func Test领域总检查包含仓储子目录和编号调用(t *testing.T) {
 	fsys := fstest.MapFS{
-		"internal/domain/repository/nested/x.go": {Data: []byte(importing("crypto/rand", "os", "net/http"))},
-		"internal/domain/selection/x.go":         {Data: []byte(importing(pkgStore))},
-		"internal/domain/render/x.go":            {Data: []byte(importing(pkgStore))},
-		"internal/store/pgstore/extra.go":        {Data: []byte(withImport(`id "`+pkgIdentity+`"`, "func (s *Store) createTasks() { _ = id.NewID() }"))},
+		"internal/domain/repository/nested/x.go":               {Data: []byte(importing("crypto/rand", "os", "net/http"))},
+		"internal/domain/selection/x.go":                       {Data: []byte(importing(pkgStore))},
+		"internal/domain/render/x.go":                          {Data: []byte(importing(pkgStore))},
+		"internal/infrastructure/persistence/pgstore/extra.go": {Data: []byte(withImport(`id "`+pkgIdentity+`"`, "func (s *Store) createTasks() { _ = id.NewID() }"))},
 	}
 	got, counts := checkModule(fsys, nil, []goPackage{
 		{ImportPath: pkgStore + "/nested", GoFiles: []string{"x.go"}},
@@ -44,25 +44,25 @@ func Test领域总检查包含仓储子目录和编号调用(t *testing.T) {
 		{ImportPath: pkgRender, GoFiles: []string{"x.go"}},
 		{ImportPath: pkgPgstore, GoFiles: []string{"extra.go"}},
 	})
-	assertFindings(t, got, "", []finding{{ruleContract, "crypto/rand"}, {ruleContract, "os"}, {ruleContract, "net/http"}, {ruleOutside, pkgStore}, {ruleLayer3, pkgStore}, {ruleMigration, pkgIdentity + ".NewID"}})
+	assertFindings(t, got, "", []finding{{ruleContract, "crypto/rand"}, {ruleContract, "os"}, {ruleContract, "net/http"}, {ruleOutside, pkgStore}, {ruleLayer3, pkgStore}, {ruleCapability, pkgIdentity + ".NewID"}})
 	if counts[layerStore] != 2 || counts[layerCore] != 1 || counts[layerRender] != 1 {
 		t.Fatal("领域分类遗漏", counts)
 	}
 }
 
-func Test编号临时入口必须精确到实际调用(t *testing.T) {
+func Test编号正式能力必须精确到实际调用(t *testing.T) {
 	const target = "github.com/lober/lober/internal/infrastructure/identity"
 	for _, tc := range []struct {
 		name, file, body string
 		allowed          bool
 	}{
-		{"指定方法", "internal/store/pgstore/tasks.go", "func (s *Store) createTasks() { _ = id.NewID() }", true},
-		{"方法中的函数值", "internal/store/pgstore/tasks.go", "func (s *Store) createTasks() { next := id.NewID; _ = next }", true},
-		{"同文件其他方法", "internal/store/pgstore/tasks.go", "func (s *Store) extra() { _ = id.NewID() }", false},
-		{"同方法其他文件", "internal/store/pgstore/extra.go", "func (s *Store) createTasks() { _ = id.NewID() }", false},
-		{"同方法其他符号", "internal/store/pgstore/tasks.go", "func (s *Store) createTasks() { _ = id.Other() }", false},
-		{"包级函数值", "internal/store/pgstore/tasks.go", "var next = id.NewID", false},
-		{"点导入", "internal/store/pgstore/tasks.go", "func (s *Store) createTasks() { _ = NewID() }", false},
+		{"指定方法", "internal/infrastructure/persistence/pgstore/tasks.go", "func (s *Store) createTasks() { _ = id.NewID() }", true},
+		{"方法中的函数值", "internal/infrastructure/persistence/pgstore/tasks.go", "func (s *Store) createTasks() { next := id.NewID; _ = next }", true},
+		{"同文件其他方法", "internal/infrastructure/persistence/pgstore/tasks.go", "func (s *Store) extra() { _ = id.NewID() }", false},
+		{"同方法其他文件", "internal/infrastructure/persistence/pgstore/extra.go", "func (s *Store) createTasks() { _ = id.NewID() }", false},
+		{"同方法其他符号", "internal/infrastructure/persistence/pgstore/tasks.go", "func (s *Store) createTasks() { _ = id.Other() }", false},
+		{"包级函数值", "internal/infrastructure/persistence/pgstore/tasks.go", "var next = id.NewID", false},
+		{"点导入", "internal/infrastructure/persistence/pgstore/tasks.go", "func (s *Store) createTasks() { _ = NewID() }", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			alias := "id"

@@ -387,18 +387,18 @@ func Test存储层总检查接上了每一项(t *testing.T) {
 	fsys := fstest.MapFS{ // 以模块根为根
 		"internal/domain/repository/repository.go": {Data: []byte(importing(pkgPgstore))},
 		// gorm 只有 pgstore 能用：pg.go 要是被当成别的包，gorm 也会报。
-		"internal/store/pgstore/pg.go":      {Data: []byte(importing("gorm.io/gorm", "github.com/lib/pq"))},
-		"internal/store/pgstore/cgo.go":     {Data: []byte(importing("C"))},
-		"internal/store/pgstore/x_linux.go": {Data: []byte(importing("github.com/jackc/pgx/v4"))},
+		"internal/infrastructure/persistence/pgstore/pg.go":      {Data: []byte(importing("gorm.io/gorm", "github.com/lib/pq"))},
+		"internal/infrastructure/persistence/pgstore/cgo.go":     {Data: []byte(importing("C"))},
+		"internal/infrastructure/persistence/pgstore/x_linux.go": {Data: []byte(importing("github.com/jackc/pgx/v4"))},
 		// 测试文件不查：测试 import 的包，生产代码不许用的也不报。
-		"internal/store/pgstore/x_windows_test.go": {Data: []byte(importing("github.com/lib/pq"))},
+		"internal/infrastructure/persistence/pgstore/x_windows_test.go": {Data: []byte(importing("github.com/lib/pq"))},
 	}
 	pkgs := []goPackage{
 		{ImportPath: pkgStore, GoFiles: []string{"repository.go"}},
 		{ImportPath: pkgPgstore, GoFiles: []string{"pg.go"}, CgoFiles: []string{"cgo.go"},
 			IgnoredGoFiles: []string{"x_linux.go", "x_windows_test.go"}},
 	}
-	got, _ := checkModule(fsys, []string{"internal/domain/repository", "internal/store/pgstore", "internal/domain/repository/probeonly"}, pkgs)
+	got, _ := checkModule(fsys, []string{"internal/domain/repository", "internal/infrastructure/persistence/pgstore", "internal/domain/repository/probeonly"}, pkgs)
 	// 依次是目录覆盖，再逐个包：先报被构建约束排除的文件（测试文件也算：*_linux_test.go 在 Windows 上静默不跑，契约测试
 	// 就零覆盖了），再是 import。repository.go 按契约的规则报、pg.go 按 pgstore 的规则报，说明包名接对了；cgo 文件与被排除的
 	// 非测试文件也解析了，在本平台不编译的文件躲不过守卫。cgo 不另报：C 不算标准库，import 那一条已经挡住它。
@@ -471,15 +471,15 @@ func Test第3层的依赖规则(t *testing.T) {
 // 真实的树里还没有第 3 层的包，第 3 层的总检查漏接了哪一项，Test全模块依赖守卫 照样通过，所以组合也要有反例。
 func Test第3层总检查接上了每一项(t *testing.T) {
 	fsys := fstest.MapFS{ // 以模块根为根
-		"internal/builtin/builtin.go": {Data: []byte(importing("embed", pkgModel, pkgRender))},
+		"internal/infrastructure/builtin/builtin.go": {Data: []byte(importing("embed", pkgModel, pkgRender))},
 		// golden 测试在测试文件里，可以 import 渲染（第 3 层计划「包与文件」）：测试文件不查，import 存储层也不报。
-		"internal/builtin/golden_test.go": {Data: []byte(importing(pkgRender, pkgStore))},
-		"internal/builtin/x_test.go":      {Data: []byte(importing(pkgRender, "gorm.io/gorm"))},
+		"internal/infrastructure/builtin/golden_test.go": {Data: []byte(importing(pkgRender, pkgStore))},
+		"internal/infrastructure/builtin/x_test.go":      {Data: []byte(importing(pkgRender, "gorm.io/gorm"))},
 		// 按格式分的子包：embed 与父包不报，越过层边界要报；只放正文的子目录不是包，也不在 dirs 里。
-		"internal/builtin/kickstart/embed.go": {Data: []byte(importing("embed", pkgBuiltin, pkgPgstore))},
-		"internal/domain/render/render.go":    {Data: []byte(importing(pkgStore, pkgBuiltin, "embed"))},
-		"internal/domain/render/cgo.go":       {Data: []byte(importing("C"))},
-		"internal/domain/render/x_linux.go":   {Data: []byte(importing("os"))},
+		"internal/infrastructure/builtin/kickstart/embed.go": {Data: []byte(importing("embed", pkgBuiltin, pkgPgstore))},
+		"internal/domain/render/render.go":                   {Data: []byte(importing(pkgStore, pkgBuiltin, "embed"))},
+		"internal/domain/render/cgo.go":                      {Data: []byte(importing("C"))},
+		"internal/domain/render/x_linux.go":                  {Data: []byte(importing("os"))},
 	}
 	pkgs := []goPackage{
 		{ImportPath: pkgBuiltin, GoFiles: []string{"builtin.go"}, TestGoFiles: []string{"golden_test.go"},
@@ -487,7 +487,7 @@ func Test第3层总检查接上了每一项(t *testing.T) {
 		{ImportPath: pkgBuiltin + "/kickstart", GoFiles: []string{"embed.go"}},
 		{ImportPath: pkgRender, GoFiles: []string{"render.go"}, CgoFiles: []string{"cgo.go"}, IgnoredGoFiles: []string{"x_linux.go"}},
 	}
-	got, _ := checkModule(fsys, []string{"internal/builtin", "internal/builtin/kickstart", "internal/domain/render",
+	got, _ := checkModule(fsys, []string{"internal/infrastructure/builtin", "internal/infrastructure/builtin/kickstart", "internal/domain/render",
 		"internal/domain/render/probeonly"}, pkgs)
 	// 依次是目录覆盖，再逐个包。builtin.go 的 embed 不报、render.go 的要报，说明包名接对了；渲染照第 1 层的样子先报文件构成，
 	// cgo 文件与被排除的文件也解析了。
@@ -537,7 +537,7 @@ func Test每个包都要归到一层(t *testing.T) {
 	for _, p := range []string{
 		modulePath, modulePath + "/internal", modulePath + "/cmd/loberx", modulePath + "/tools/gen",
 		modulePath + "/internal/domainutils", modulePath + "/internal/storex", modulePath + "/internal/renderer",
-		modulePath + "/internal/builtins", pkgGuard + "/fixture",
+		modulePath + "/internal/infrastructure/builtins", pkgGuard + "/fixture",
 	} {
 		pkgs = append(pkgs, goPackage{ImportPath: p, GoFiles: []string{"x.go"}})
 		want = append(want, finding{ruleLayer, p})

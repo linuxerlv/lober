@@ -7,11 +7,12 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/lober/lober/internal/builtin"
-	"github.com/lober/lober/internal/console"
+	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/domain/repository"
-	"github.com/lober/lober/internal/iso"
-	"github.com/lober/lober/internal/store/pgstore"
+	"github.com/lober/lober/internal/infrastructure/builtin"
+	"github.com/lober/lober/internal/infrastructure/media"
+	"github.com/lober/lober/internal/infrastructure/persistence/pgstore"
+	"github.com/lober/lober/internal/interfaces/console"
 )
 
 type app struct {
@@ -96,7 +97,7 @@ func supervisorOf(ctx context.Context, raw *iso.Sources, st repository.Store, j 
 	s := newSourceSupervisor(ctx, raw, st, j, g, cfg.ISO, logger)
 	return s, s.Close
 }
-func consoleDepsOf(st repository.Store, src *sourceSupervisor, j *deletionJournal, hub console.Notifier, cfg config, clock console.Clock, logger *slog.Logger) console.Deps {
+func consoleDepsOf(st repository.Store, src *sourceSupervisor, j *deletionJournal, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger) console.Deps {
 	return console.Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, CurrentTasks: st, Events: st, Audit: st, Users: st, Sources: st, ISOSource: src, ISODeletion: j, BootConfig: bootConfigReader{root: cfg.ISO.Artifacts}, PreviewEndpoints: console.PreviewEndpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, TaskCtl: taskControlStub{}, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
 }
 func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, raw *iso.Sources, s *sourceSupervisor, j *deletionJournal, g *registrationGate) *app {

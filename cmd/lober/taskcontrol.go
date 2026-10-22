@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
-	"github.com/lober/lober/internal/console"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/interfaces/console"
 )
 
 // Layer 7 supplies the safety rules and execution state machine.

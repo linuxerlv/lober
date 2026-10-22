@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lober/lober/internal/console"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
-	"github.com/lober/lober/internal/iso"
-	"github.com/lober/lober/internal/iso/isotest"
-	"github.com/lober/lober/internal/store/pgstore/pgtest"
+	"github.com/lober/lober/internal/infrastructure/media"
+	"github.com/lober/lober/internal/infrastructure/media/isotest"
+	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
+	"github.com/lober/lober/internal/interfaces/console"
 )
 
 const assemblyAt int64 = 1790000000
@@ -244,7 +244,22 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	// Real PBKDF2 runs under the race detector while other packages are also
 	// consuming CPU. The socket test must allow that work to finish.
-	client := http.Client{Timeout: 30 * time.Second}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	defer transport.CloseIdleConnections()
+	client := http.Client{Transport: transport, Timeout: 30 * time.Second}
+	// 每个响应先读到结尾，再关闭，避免旧连接还在后台回收时触发额外拨号。
+	readResponse := func(body io.ReadCloser) []byte {
+		t.Helper()
+		data, readErr := io.ReadAll(body)
+		closeErr := body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		return data
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -254,8 +269,7 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 			Token string `json:"token"`
 		} `json:"data"`
 	}
-	decodeErr := json.NewDecoder(response.Body).Decode(&signedIn)
-	response.Body.Close()
+	decodeErr := json.NewDecoder(bytes.NewReader(readResponse(response.Body))).Decode(&signedIn)
 	if response.StatusCode != 200 {
 		t.Fatal("real listener login failed", response.StatusCode)
 	}
@@ -274,7 +288,7 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got.Body.Close()
+		readResponse(got.Body)
 		want := http.StatusUnauthorized
 		if token != "" {
 			want = http.StatusOK

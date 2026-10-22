@@ -8,7 +8,7 @@ import (
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
-	"github.com/lober/lober/internal/iso"
+	"github.com/lober/lober/internal/infrastructure/media"
 )
 
 func failedQueueISO(t *testing.T, a *app, series string) model.ISO {

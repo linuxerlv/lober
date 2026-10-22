@@ -1,6 +1,6 @@
 # 后端模块与向导接口约定
 
-本文固定第一阶段迁移前的现有行为。依据为 `internal/console/wizard.go`、`wizard_test.go`、网页返回类型及 `internal/store/pgstore` 的查询实现。迁移不能改变下面的字段、权限、问题归属、排序或写入结果。
+本文固定第一阶段迁移前的现有行为。依据为 `internal/interfaces/console/wizard.go`、`wizard_test.go`、网页返回类型及 `internal/infrastructure/persistence/pgstore` 的查询实现。迁移不能改变下面的字段、权限、问题归属、排序或写入结果。
 
 ## 五个向导入口
 
@@ -67,13 +67,13 @@
 
 未迁移控制台的临时放行清单是 `internal/archtest/migration_test.go` 中的 `migrationExceptions`。每条同时写 `Caller`、`File`、`Function`、`Target`、`Symbol`、`RemoveIn`。调用包与目标包用完整导入路径；文件相对模块根；方法写作 `(*server).listHosts`；包级类型声明固定写 `package-init`。经仓储接口调用的方法写作 `Hosts.ListHosts`，普通符号写作 `Page`。来源读取使用的是控制台自有的 `ISOSourceState` 接口，登记其真实目标，不能冒充 `repository.ISOSources` 调用。
 
-例如，`internal/console/hosts.go` 的 `(*server).listHosts` 仅允许访问 `github.com/lober/lober/internal/domain/repository` 的 `Hosts.ListHosts`、`HostQuery`、`Page`，清除阶段为 `3`。同包的 `createHost`、新文件或另一符号不能借用这条放行。清单为固定条目，不从待检查的代码自动生成许可。
+例如，`internal/interfaces/console/hosts.go` 的 `(*server).listHosts` 仅允许访问 `github.com/lober/lober/internal/domain/repository` 的 `Hosts.ListHosts`、`HostQuery`、`Page`，清除阶段为 `3`。同包的 `createHost`、新文件或另一符号不能借用这条放行。清单为固定条目，不从待检查的代码自动生成许可。
 
-控制台清单目前验证登记格式、精确匹配和清单重复。领域目录、领域依赖方向与编号的精确调用限制已接入全模块检查。其余四层限制由后续任务落地。目录迁移时必须逐条更新清单中的路径和已经迁移的类型，不能给整个旧目录或控制台包加通配许可。
+控制台与镜像清单已接入全模块检查。检查先确定四层依赖，再用实际类型识别每一次仓储方法和领域判定访问。局部变量别名、保存成方法值、同包新函数和同名新文件都不能借旧许可；装载失败和类型错误直接失败。许可只来自源文件中的固定条目，不根据被检查代码自动生成。
 
 | 总路线清除阶段 | 本次登记的现有代码 |
 | --- | --- |
-| `1` 四层基础与向导 | 五个向导处理函数及其专有辅助函数不列入继续使用旧仓储的清单；它们本阶段迁入应用层 |
+| `1` 四层基础与向导 | 五个向导处理函数及其专有辅助函数只在目录搬迁期间列入单独 wizardMigrationExceptions；任务5抽出应用服务后全部删除 |
 | `2` 编写与预览 | `hooks.go`、`templates.go`、`lifecycle.go`、`preview.go`、`slots.go` 中逐条登记的仓储访问，以及对应依赖字段 |
 | `3` 主机 | `hosts.go` 中逐条登记的查询、登记、编辑、删除、导入，以及主机依赖字段 |
 | `4` 镜像与后台作业 | `isos.go`、`isosource.go` 中逐条登记的旧仓储和来源读取符号，以及镜像依赖字段 |
@@ -96,4 +96,21 @@
 
 权限的唯一规则在 `domain/access`，控制台旧权限名字只精确转发，身份阶段清除。`domain/selection.CurrentBuiltin` 只消费显式 `Manifest` 和模型数据；旧发布不能新选，已存任务仍读取冻结快照。组件引用提取只有 `model.HookRefs` 一份实现，`repository.HookRefs` 暂时委托兼容。
 
-随机编号只有 `infrastructure/identity.NewID` 一份实现，仍为 128 位随机数编码的 26 字符小写 base32。旧数据库路径暂留，`internal/archtest/identity_rules_test.go` 的 `identityMigrationExceptions` 精确登记以下六处调用：`CreateHook`、`CreateISO`、`CreateTemplate`、`DeriveTemplate`、`createTasks`、测试夹具 `newSchema`。实际语法树访问必须逐条匹配包、文件、函数和 `NewID` 符号。点导入、包级函数值、同文件其他函数和同函数其他文件都不能借用。清除阶段为总路线第 1 阶段，任务 4 搬迁时删除旧路径条目。
+随机编号只有 `infrastructure/identity.NewID` 一份实现，仍为 128 位随机数编码的 26 字符小写 base32。它是没有业务依赖的叶子工具，公开函数就是这一项小能力契约。旧路径的六条临时豁免已删除；`internal/archtest/identity_rules_test.go` 的正式 `identityCapabilities` 只允许新路径中 `CreateHook`、`CreateISO`、`CreateTemplate`、`DeriveTemplate`、`createTasks`、测试夹具 `newSchema` 调用 `NewID`。正式能力没有清除阶段，不扩大为整个数据库包许可。点导入、包级函数值、其他函数和其他文件都不能借用；数据库不能另用随机数库，领域继续禁止随机操作。
+
+
+## 外部实现搬迁后的边界
+
+`pgstore` 位于 `internal/infrastructure/persistence/pgstore`，`pgtest` 仍是其测试子包。原数据库记录、事务、表结构和测试一起搬迁。普通 `Tasks.CreateTasks` 仍能保存指定的旧审批版本；`CurrentTaskCreator.CreateCurrentTasks` 保留独立事务保护。目录变化不修改数据库名称、约束或错误优先级。
+
+内置正文位于 `internal/infrastructure/builtin`，七种格式、共享正文、发布清单、指纹、样例和验证工具完整保留。它仍只做纯内容构建；允许嵌入正文，不允许文件、网络、时钟、随机数或上下文异步能力。纯渲染仍在 `domain/render`。
+
+镜像目录是 `internal/infrastructure/media`，包名仍为 `iso`，其 `iso9660` 与 `isotest` 子包一起搬迁。旧 `Sources` 仍承担获取、导入、状态和恢复流程；这不是已完成的终态拆分。固定 `mediaMigrationExceptions` 精确列出文件、函数和目标符号，清除阶段为总路线第4阶段。新函数不能使用这张旧清单，也不能导入应用具体服务。
+
+网页入口位于 `internal/interfaces/console`。原非向导仓储调用仍由 `migrationExceptions` 逐条登记；旧领域判定和渲染在 `consoleRuleMigrationExceptions` 中按所属模块的清除阶段登记。向导只暂留于独立的 `wizardMigrationExceptions`，任务5结束必须全部撤销。当前搬迁保持网页字段、权限和处理行为。
+
+`application/ports.Notifier` 是唯一共同通知契约，保持 `Publish(string)` 和 `Subscribe(string) (<-chan struct{}, func())`。实现位于 `infrastructure/notification`，使用锁与一次性退订保护，多次提示合并为一个；消费者收到提示后补读已提交事件。事务失败或取消不能发布。此次不改变原来的发布位置。
+
+生产组装直接调用 `notification.NewHub`。为保留旧构造时未传通知的默认行为，`console.Notifier` 暂作契约别名，`console.NewHub` 仅精确转发；这一条基础设施访问单列 `notificationMigrationExceptions`，第6阶段删除。网页层其他函数和文件不能借此导入通知实现。
+
+全模块自动检查只登记明确的四层模块。应用模块只导入领域、共同能力和自己的接口子包；基础设施只导入实现所需的明确能力接口，不能导入网页层或应用具体服务。接口名字类似 `ports`、接口目录中的未知子包、新的未登记实现都不能绕过。`cmd/lober` 继续负责组装，Wire 生成文件由工具生成。

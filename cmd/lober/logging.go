@@ -7,7 +7,7 @@ import (
 
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
-	"github.com/lober/lober/internal/store/pgstore"
+	"github.com/lober/lober/internal/infrastructure/persistence/pgstore"
 )
 
 type loggingStore struct {

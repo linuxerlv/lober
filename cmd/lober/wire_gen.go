@@ -8,7 +8,8 @@ package main
 
 import (
 	"context"
-	"github.com/lober/lober/internal/console"
+	"github.com/lober/lober/internal/infrastructure/notification"
+	"github.com/lober/lober/internal/interfaces/console"
 	"log/slog"
 )
 
@@ -32,7 +33,7 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 		return nil, nil, err
 	}
 	mainSourceSupervisor, cleanup2 := supervisorOf(ctx, sources, mainLoggingStore, mainDeletionJournal, mainRegistrationGate, cfg, logger)
-	notifier := console.NewHub()
+	notifier := notification.NewHub()
 	deps := consoleDepsOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, notifier, cfg, clock, logger)
 	server := console.New(deps)
 	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, mainSourceSupervisor, mainDeletionJournal, mainRegistrationGate)

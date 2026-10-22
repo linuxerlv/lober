@@ -7,9 +7,9 @@ import (
 
 func Test内置内容不扩大上下文许可(t *testing.T) {
 	fsys := fstest.MapFS{
-		"internal/builtin/x.go":        {Data: []byte(importing("context"))},
-		"internal/builtin/nested/x.go": {Data: []byte(importing("context"))},
-		"internal/domain/render/x.go":  {Data: []byte(withImport(`"context"`, "type Reader interface { Read(context.Context) error }"))},
+		"internal/infrastructure/builtin/x.go":        {Data: []byte(importing("context"))},
+		"internal/infrastructure/builtin/nested/x.go": {Data: []byte(importing("context"))},
+		"internal/domain/render/x.go":                 {Data: []byte(withImport(`"context"`, "type Reader interface { Read(context.Context) error }"))},
 	}
 	got, counts := checkModule(fsys, nil, []goPackage{
 		{ImportPath: pkgBuiltin, GoFiles: []string{"x.go"}},

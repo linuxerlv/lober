@@ -51,10 +51,12 @@ func assemblyIgnoredFiles(fsys fs.FS, p goPackage) []violation {
 }
 
 func checkConsoleFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
-	return checkHTTPImports(fset, pkg, f, false)
+	found := checkHTTPImports(fset, pkg, f, false)
+	return append(found, checkNotificationForwarder(fset, pkg, f)...)
 }
 func checkAssemblyFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
-	return checkHTTPImports(fset, pkg, f, true)
+	found := checkHTTPImports(fset, pkg, f, true)
+	return append(found, checkIdentityUses(fset, pkg, f)...)
 }
 func checkHTTPImports(fset *token.FileSet, pkg string, f *ast.File, assembly bool) []violation {
 	var found []violation
@@ -66,7 +68,7 @@ func checkHTTPImports(fset *token.FileSet, pkg string, f *ast.File, assembly boo
 			r = ruleAssembly
 			allowed = allowed || under(name, modulePath) || name == yamlV3 || name == "github.com/goforj/wire"
 		} else {
-			allowed = allowed || inLayer1(name) || name == pkgStore || under(name, pkgRender) || under(name, pkgBuiltin) || under(name, pkgConsole)
+			allowed = allowed || inLayer1(name) || name == pkgStore || under(name, pkgRender) || under(name, pkgBuiltin) || under(name, pkgConsole) || applicationModule(name) != "" || name == pkgNotification
 		}
 		if !allowed {
 			found = append(found, violation{rule: r, pkg: pkg, subject: name, pos: position(fset, imp.Pos())})
