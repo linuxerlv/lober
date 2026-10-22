@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
+	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 	"io"
@@ -46,6 +47,22 @@ func jsonProblems(ps []model.Problem) []problemJSON {
 	return out
 }
 func RespondError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, tasks.ErrUnauthenticated):
+		Fail(c, 401, nil, model.ConsoleUnauthorized)
+		return
+	case errors.Is(err, tasks.ErrPasswordChangeRequired):
+		Fail(c, 403, nil, model.ConsolePasswordChangeRequired)
+		return
+	case errors.Is(err, tasks.ErrForbidden):
+		Fail(c, 403, nil, model.ConsoleForbidden)
+		return
+	}
+	var applicationProblems *tasks.ProblemsError
+	if errors.As(err, &applicationProblems) {
+		Judge(c, applicationProblems.Problems)
+		return
+	}
 	if errors.Is(err, repository.ErrTemplateNotCurrent) {
 		Fail(c, 409, nil, model.ConsoleTemplateCurrent)
 		return

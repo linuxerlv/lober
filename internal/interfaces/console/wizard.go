@@ -1,15 +1,10 @@
 package console
 
 import (
-	"errors"
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/domain/admission"
+	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/params"
-	"github.com/lober/lober/internal/domain/repository"
-	"github.com/lober/lober/internal/domain/selection"
-	"github.com/lober/lober/internal/domain/snapshot"
-	"github.com/lober/lober/internal/infrastructure/builtin"
 )
 
 type wizardHostItem struct {
@@ -110,115 +105,32 @@ func (s *server) wizardHosts(c *gin.Context) {
 	if !ok {
 		return
 	}
-	prefix := c.Query("q")
-	if normalized, err := model.NormalizeSN(prefix); err == nil {
-		prefix = normalized
-	}
-	page, ok := Get(c, func() (repository.Page[model.Host], error) {
-		return s.deps.Hosts.ListHosts(c.Request.Context(), repository.HostQuery{SNPrefix: prefix, AttrKey: c.Query("attr_key"), AttrValue: c.Query("attr_value"), Cursor: c.Query("cursor"), Limit: limit})
+	page, ok := Get(c, func() (tasks.HostPage, error) {
+		return s.deps.Wizard.Hosts(c.Request.Context(), actorOf(c), tasks.HostRequest{PageRequest: tasks.PageRequest{Cursor: c.Query("cursor"), Limit: limit}, Q: c.Query("q"), AttrKey: c.Query("attr_key"), AttrValue: c.Query("attr_value")})
 	})
 	if !ok {
 		return
 	}
 	items := make([]wizardHostItem, len(page.Items))
-	for i, h := range page.Items {
-		_, open, err := s.deps.Tasks.FindOpenTask(c.Request.Context(), h.SN)
-		if err != nil {
-			RespondError(c, err)
-			return
-		}
-		ps := admission.HostSelectable(h, open)
-		items[i] = wizardHostItem{toHostResponse(h), len(ps) == 0, jsonProblems(ps)}
+	for i, item := range page.Items {
+		items[i] = wizardHostItem{toHostResponse(item.Host), len(item.Problems) == 0, jsonProblems(item.Problems)}
 	}
 	Ok(c, wizardHostPage{items, page.Next})
-}
-func wizardSNs(c *gin.Context, raw []string) ([]string, bool) {
-	out := make([]string, len(raw))
-	var ps []model.Problem
-	for i, value := range raw {
-		sn, err := model.NormalizeSN(value)
-		if err != nil {
-			var p model.Problem
-			if errors.As(err, &p) {
-				ps = append(ps, p)
-			} else {
-				RespondError(c, err)
-				return nil, false
-			}
-		} else {
-			out[i] = sn
-		}
-	}
-	if !Judge(c, ps) {
-		return nil, false
-	}
-	return out, true
-}
-func (s *server) wizardHostRecords(c *gin.Context, sns []string) ([]model.Host, []string, bool) {
-	records, ok := Get(c, func() (map[string]model.Host, error) { return s.deps.Hosts.GetHosts(c.Request.Context(), sns) })
-	if !ok {
-		return nil, nil, false
-	}
-	hosts := make([]model.Host, len(sns))
-	missing := []string{}
-	for i, sn := range sns {
-		h, exists := records[sn]
-		if !exists {
-			h = model.Host{SN: sn}
-			missing = append(missing, sn)
-		}
-		hosts[i] = h
-	}
-	return hosts, missing, true
-}
-func missingWizardHosts(c *gin.Context, hosts []model.Host, missing []string) bool {
-	byHost := map[string][]model.Problem{}
-	seen := map[string]bool{}
-	for _, h := range hosts {
-		if seen[h.SN] {
-			byHost[h.SN] = []model.Problem{model.NewProblem("host_duplicate_in_batch", model.Subject{Kind: model.KindHost, ID: h.SN})}
-		}
-		seen[h.SN] = true
-	}
-	for _, sn := range missing {
-		byHost[sn] = append(byHost[sn], model.NewProblem("host_not_registered", model.Subject{Kind: model.KindHost, ID: sn}))
-	}
-	return respondWizardBatch(c, admission.BatchResult{Common: []model.Problem{}, ByHost: byHost})
-}
-func respondWizardBatch(c *gin.Context, result admission.BatchResult) bool {
-	bad := len(result.Common) > 0
-	for _, ps := range result.ByHost {
-		bad = bad || len(ps) > 0
-	}
-	if !bad {
-		return true
-	}
-	RespondError(c, &repository.BatchError{Result: result})
-	return false
 }
 func (s *server) wizardISOs(c *gin.Context) {
 	var req wizardISORequest
 	if !Bind(c, &req) {
 		return
 	}
-	sns, ok := wizardSNs(c, req.HostSNs)
-	if !ok {
-		return
-	}
-	hosts, missing, ok := s.wizardHostRecords(c, sns)
-	if !ok || !missingWizardHosts(c, hosts, missing) {
-		return
-	}
-	page, ok := Get(c, func() (repository.Page[model.ISO], error) {
-		return s.deps.ISOs.ListISOs(c.Request.Context(), repository.ISOQuery{States: []model.ISOState{model.ISOReady}, Cursor: req.Cursor, Limit: req.Limit})
+	page, ok := Get(c, func() (tasks.ISOPage, error) {
+		return s.deps.Wizard.ISOs(c.Request.Context(), actorOf(c), tasks.ISORequest{PageRequest: tasks.PageRequest{Cursor: req.Cursor, Limit: req.Limit}, HostSNs: req.HostSNs})
 	})
 	if !ok {
 		return
 	}
 	items := make([]wizardISOItem, len(page.Items))
 	for i, item := range page.Items {
-		ps := admission.ISOUsable(item, hosts)
-		items[i] = wizardISOItem{toISOResponse(item), len(ps) == 0, jsonProblems(ps)}
+		items[i] = wizardISOItem{toISOResponse(item.ISO), len(item.Problems) == 0, jsonProblems(item.Problems)}
 	}
 	Ok(c, wizardISOResult{items, page.Next})
 }
@@ -227,97 +139,17 @@ func (s *server) wizardTemplates(c *gin.Context) {
 	if !Bind(c, &req) {
 		return
 	}
-	iso, ok := Get(c, func() (model.ISO, error) { return s.deps.ISOs.GetISO(c.Request.Context(), req.ISOID) })
-	if !ok || !Judge(c, iso.Unusable()) {
-		return
-	}
-	page, ok := Get(c, func() (repository.Page[model.Template], error) {
-		return s.deps.Templates.ListTemplates(c.Request.Context(), repository.TemplateQuery{ApprovedOnly: true, Series: iso.Series, Cursor: req.Cursor, Limit: req.Limit})
+	page, ok := Get(c, func() (tasks.TemplatePage, error) {
+		return s.deps.Wizard.Templates(c.Request.Context(), actorOf(c), tasks.TemplateRequest{PageRequest: tasks.PageRequest{Cursor: req.Cursor, Limit: req.Limit}, ISOID: req.ISOID})
 	})
 	if !ok {
 		return
 	}
-	hooks, ok := Get(c, func() (map[model.HookKey]model.Hook, error) { return s.templateHooks(c.Request.Context(), page.Items) })
-	if !ok {
-		return
-	}
-	items := make([]wizardTemplateItem, 0, len(page.Items))
-	for _, t := range page.Items {
-		if !currentBuiltinSelection(t, hooks) {
-			continue
-		}
-		ps := admission.TemplateUsable(t, hooks, iso)
-		if len(ps) != 0 {
-			continue
-		}
-		items = append(items, wizardTemplateItem{toTemplateResponse(t, hooks), true})
+	items := make([]wizardTemplateItem, len(page.Items))
+	for i, item := range page.Items {
+		items[i] = wizardTemplateItem{toTemplateResponseWithProblems(item.Template, item.Problems), true}
 	}
 	Ok(c, wizardTemplateResult{items, page.Next})
-}
-
-// 内置清单由入口提供，领域规则只消费模板和组件版本键。
-func currentBuiltinSelection(t model.Template, hooks map[model.HookKey]model.Hook) bool {
-	manifest := selection.Manifest{}
-	for _, shipped := range builtin.Templates() {
-		manifest.Templates = append(manifest.Templates, model.TemplateKey{ID: shipped.ID, Version: shipped.Version})
-	}
-	for _, shipped := range builtin.Hooks() {
-		manifest.Hooks = append(manifest.Hooks, model.HookKey{ID: shipped.ID, Version: shipped.Version})
-	}
-	return selection.CurrentBuiltin(t, hooks, manifest)
-}
-func (s *server) wizardSelectionFacts(c *gin.Context, req wizardSelection) (model.Template, model.ISO, map[model.HookKey]model.Hook, bool) {
-	key := model.TemplateKey{ID: req.TemplateID, Version: req.TemplateVersion}
-	t, ok := Get(c, func() (model.Template, error) { return s.deps.Templates.GetTemplate(c.Request.Context(), key) })
-	if !ok {
-		return model.Template{}, model.ISO{}, nil, false
-	}
-	versions, ok := Get(c, func() ([]model.Template, error) {
-		return s.deps.Templates.ListTemplateVersions(c.Request.Context(), t.ID)
-	})
-	if !ok {
-		return model.Template{}, model.ISO{}, nil, false
-	}
-	current, exists := model.CurrentApproved(versions)
-	if !exists || current.Version != t.Version {
-		Fail(c, 409, nil, model.ConsoleTemplateCurrent)
-		return model.Template{}, model.ISO{}, nil, false
-	}
-	iso, ok := Get(c, func() (model.ISO, error) { return s.deps.ISOs.GetISO(c.Request.Context(), req.ISOID) })
-	if !ok {
-		return model.Template{}, model.ISO{}, nil, false
-	}
-	hooks, ok := Get(c, func() (map[model.HookKey]model.Hook, error) {
-		return s.templateHooks(c.Request.Context(), []model.Template{t})
-	})
-	if ok && !currentBuiltinSelection(t, hooks) {
-		Fail(c, 409, nil, model.ConsoleTemplateCurrent)
-		return model.Template{}, model.ISO{}, nil, false
-	}
-	return t, iso, hooks, ok
-}
-func (s *server) wizardBatch(c *gin.Context, t model.Template, iso model.ISO, hooks map[model.HookKey]model.Hook, hosts []model.Host, missing []string) (admission.BatchResult, bool) {
-	open := map[string]bool{}
-	for _, h := range hosts {
-		if _, done := open[h.SN]; done {
-			continue
-		}
-		_, has, err := s.deps.Tasks.FindOpenTask(c.Request.Context(), h.SN)
-		if err != nil {
-			RespondError(c, err)
-			return admission.BatchResult{}, false
-		}
-		open[h.SN] = has
-	}
-	result := admission.Batch(admission.BatchInput{Hosts: hosts, OpenTask: open, ISO: iso, Template: t, Hooks: hooks})
-	seen := map[string]bool{}
-	for _, sn := range missing {
-		if !seen[sn] {
-			result.ByHost[sn] = append(result.ByHost[sn], model.NewProblem("host_not_registered", model.Subject{Kind: model.KindHost, ID: sn}))
-			seen[sn] = true
-		}
-	}
-	return result, true
 }
 func paramFields(fields []params.Field) []paramFieldDTO {
 	out := make([]paramFieldDTO, len(fields))
@@ -330,126 +162,44 @@ func paramFields(fields []params.Field) []paramFieldDTO {
 	}
 	return out
 }
-func wizardEntered(c *gin.Context, sns []string, raw map[string]map[string]string) (map[string]map[string]string, bool) {
-	selected := make(map[string]bool, len(sns))
-	for _, sn := range sns {
-		selected[sn] = true
-	}
-	out := make(map[string]map[string]string, len(raw))
-	for key, values := range raw {
-		sn, err := model.NormalizeSN(key)
-		_, duplicate := out[sn]
-		if err != nil || !selected[sn] || duplicate {
-			Fail(c, 400, nil, model.ConsoleBadRequest)
-			return nil, false
-		}
-		out[sn] = values
-	}
-	return out, true
+func (r wizardSelection) applicationSelection() tasks.Selection {
+	return tasks.Selection{ISOID: r.ISOID, TemplateID: r.TemplateID, TemplateVersion: r.TemplateVersion}
 }
 func (s *server) wizardParams(c *gin.Context) {
 	var req wizardParamsRequest
 	if !Bind(c, &req) {
 		return
 	}
-	s.templateSelection.RLock()
-	defer s.templateSelection.RUnlock()
-	t, iso, hooks, ok := s.wizardSelectionFacts(c, req.wizardSelection)
+	result, ok := Get(c, func() (tasks.ParamsResult, error) {
+		return s.deps.Wizard.Params(c.Request.Context(), actorOf(c), tasks.ParamsRequest{Selection: req.applicationSelection(), HostSNs: req.HostSNs, Entered: req.Entered})
+	})
 	if !ok {
 		return
 	}
-	sns, ok := wizardSNs(c, req.HostSNs)
-	if !ok {
-		return
+	hosts := make([]wizardParamsHost, len(result.Hosts))
+	for i, h := range result.Hosts {
+		hosts[i] = wizardParamsHost{h.SN, paramFields(h.Fields), jsonProblems(h.Problems)}
 	}
-	entered, ok := wizardEntered(c, sns, req.Entered)
-	if !ok {
-		return
-	}
-	hosts, missing, ok := s.wizardHostRecords(c, sns)
-	if !ok {
-		return
-	}
-	result, ok := s.wizardBatch(c, t, iso, hooks, hosts, missing)
-	if !ok {
-		return
-	}
-	absent := map[string]bool{}
-	for _, sn := range missing {
-		absent[sn] = true
-	}
-	out := make([]wizardParamsHost, len(hosts))
-	for i, h := range hosts {
-		fields := []paramFieldDTO{}
-		ps := append([]model.Problem{}, result.ByHost[h.SN]...)
-		if !absent[h.SN] && len(result.Common) == 0 {
-			res := params.Evaluate(params.Input{Template: t, Hooks: hooks, ISO: iso, Host: h, Entered: enteredOf(entered[h.SN])})
-			fields = paramFields(res.Fields)
-			ps = append(ps, res.Problems...)
-		}
-		out[i] = wizardParamsHost{h.SN, fields, jsonProblems(ps)}
-	}
-	Ok(c, wizardParamsResult{out, jsonProblems(result.Common)})
+	Ok(c, wizardParamsResult{hosts, jsonProblems(result.Common)})
 }
 func (s *server) wizardSubmit(c *gin.Context) {
 	var req wizardSubmitRequest
 	if !Bind(c, &req) {
 		return
 	}
-	// Current-approved is a console-owned rule. Serialize console approvals and
-	// deprecations with this fresh DB read through the atomic task transaction.
-	s.templateSelection.RLock()
-	defer s.templateSelection.RUnlock()
-	t, iso, hooks, ok := s.wizardSelectionFacts(c, req.wizardSelection)
-	if !ok {
-		return
-	}
-	raw := make([]string, len(req.Hosts))
+	hosts := make([]tasks.SubmitHost, len(req.Hosts))
 	for i, h := range req.Hosts {
-		raw[i] = h.SN
+		hosts[i] = tasks.SubmitHost{SN: h.SN, Entered: h.Entered}
 	}
-	sns, ok := wizardSNs(c, raw)
-	if !ok {
-		return
-	}
-	hosts, missing, ok := s.wizardHostRecords(c, sns)
-	if !ok {
-		return
-	}
-	result, ok := s.wizardBatch(c, t, iso, hooks, hosts, missing)
-	if !ok {
-		return
-	}
-	absent := map[string]bool{}
-	for _, sn := range missing {
-		absent[sn] = true
-	}
-	tasks := make([]model.Task, 0, len(hosts))
-	seen := map[string]bool{}
-	for i, h := range hosts {
-		if seen[h.SN] || absent[h.SN] || len(result.Common) > 0 {
-			continue
-		}
-		seen[h.SN] = true
-		frozen, ps := snapshot.Build(params.Input{Template: t, Hooks: hooks, ISO: iso, Host: h, Entered: enteredOf(req.Hosts[i].Entered)})
-		result.ByHost[h.SN] = append(result.ByHost[h.SN], ps...)
-		if len(ps) == 0 {
-			tasks = append(tasks, model.Task{HostSN: h.SN, ISOID: iso.ID, TemplateID: t.ID, TemplateVersion: t.Version, Snapshot: frozen, CreatedBy: userOf(c).Username, CreatedAt: s.clock()})
-		}
-	}
-	if !respondWizardBatch(c, result) {
-		return
-	}
-	created, ok := Write(c, func() ([]model.Task, error) {
-		return s.deps.CurrentTasks.CreateCurrentTasks(c.Request.Context(), tasks, s.auditFrom(c, ""))
+	created, ok := Get(c, func() ([]tasks.TaskChoice, error) {
+		return s.deps.Wizard.Submit(c.Request.Context(), actorOf(c), tasks.SubmitRequest{Selection: req.applicationSelection(), Hosts: hosts})
 	})
 	if !ok {
 		return
 	}
 	items := make([]taskItem, len(created))
-	for i, task := range created {
-		items[i] = s.taskResponse(task)
-		s.hub.Publish(task.ID)
+	for i, item := range created {
+		items[i] = toTaskChoiceItem(item)
 	}
 	Ok(c, wizardSubmitResult{items})
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
@@ -75,12 +76,12 @@ func queryNonnegative(c *gin.Context, key string) (int64, bool) {
 	return value, true
 }
 func (s *server) taskResponse(t model.Task) taskItem {
-	out := toTaskItem(t)
+	out := tasks.TaskChoice{Task: t}
 	if s.deps.TaskCtl != nil {
-		out.CanCancel = jsonProblems(s.deps.TaskCtl.CanCancel(t))
-		out.CanRetry = jsonProblems(s.deps.TaskCtl.CanRetry(t))
+		out.CanCancel = s.deps.TaskCtl.CanCancel(t)
+		out.CanRetry = s.deps.TaskCtl.CanRetry(t)
 	}
-	return out
+	return toTaskChoiceItem(out)
 }
 func (s *server) listTasks(c *gin.Context) {
 	limit, ok := queryLimit(c)

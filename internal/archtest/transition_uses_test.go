@@ -84,6 +84,9 @@ func typedTransitionFindings(root, caller string, fset *token.FileSet, files []*
 			})
 		}
 	}
+	if caller == pkgConsole {
+		found = append(found, wizardHelperFindings(fset, files, info)...)
+	}
 	return found
 }
 
@@ -124,7 +127,7 @@ func transitionSymbol(obj types.Object) string {
 }
 
 func transitionAllows(use migrationException) bool {
-	for _, entries := range [][]migrationException{migrationExceptions, wizardMigrationExceptions, mediaMigrationExceptions, consoleRuleMigrationExceptions, notificationMigrationExceptions} {
+	for _, entries := range [][]migrationException{migrationExceptions, mediaMigrationExceptions, consoleRuleMigrationExceptions, notificationMigrationExceptions} {
 		if migrationAllows(entries, use) {
 			return true
 		}

@@ -34,7 +34,10 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 	}
 	mainSourceSupervisor, cleanup2 := supervisorOf(ctx, sources, mainLoggingStore, mainDeletionJournal, mainRegistrationGate, cfg, logger)
 	notifier := notification.NewHub()
-	deps := consoleDepsOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, notifier, cfg, clock, logger)
+	selectionGuard := console.NewSelectionGuard()
+	taskControl := taskControlOf()
+	wizard := wizardOf(mainLoggingStore, notifier, clock, selectionGuard, taskControl)
+	deps := consoleDepsOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, notifier, cfg, clock, logger, wizard, selectionGuard, taskControl)
 	server := console.New(deps)
 	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, mainSourceSupervisor, mainDeletionJournal, mainRegistrationGate)
 	return mainApp, func() {

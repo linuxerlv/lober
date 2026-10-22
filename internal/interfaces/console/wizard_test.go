@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
@@ -17,6 +19,67 @@ import (
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 )
+
+type wizardResultFixture struct {
+	tasks.Wizard
+	templates tasks.TemplatePage
+	created   []tasks.TaskChoice
+	err       error
+}
+
+func (f wizardResultFixture) Templates(context.Context, ports.Actor, tasks.TemplateRequest) (tasks.TemplatePage, error) {
+	return f.templates, f.err
+}
+func (f wizardResultFixture) Submit(context.Context, ports.Actor, tasks.SubmitRequest) ([]tasks.TaskChoice, error) {
+	return f.created, f.err
+}
+
+func Test向导只转换应用给出的诊断和完整任务(t *testing.T) {
+	s, st, token, iso, tpl := wizardFixture(t)
+	problem := model.NewProblem("host_has_open_task", model.Subject{Kind: model.KindHost, ID: "SN-1"})
+	d := s.server.deps
+	d.TaskCtl = &taskControlFixture{st: st, block: []model.Problem{problem}}
+	// 诊断在应用构造时注入，原任务控制入口的后置替换不参与向导。
+	s.server.deps.Wizard = wizardDeps(d, st).Wizard
+	result := responseData[wizardSubmitResult](t, httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-1","entered":{"tpl/hostname":"node-one"}}]`), token))
+	if len(result.Tasks) != 1 || len(result.Tasks[0].CanCancel) != 1 || len(result.Tasks[0].CanRetry) != 1 || result.Tasks[0].CanCancel[0].Code != problem.Code || result.Tasks[0].Snapshot.Template.Params["hostname"].Items[0] != "node-one" {
+		t.Fatal(result)
+	}
+	// 直接给已计算问题。网页不能重算后把这项抹掉，模板其余字段也必须保留。
+	s.server.deps.Wizard = wizardResultFixture{templates: tasks.TemplatePage{Items: []tasks.TemplateChoice{{Template: tpl, Problems: []model.Problem{problem}}}, Next: "next"}}
+	page := responseData[wizardTemplateResult](t, httpCall(s, "POST", "/console/v1/wizard/templates", fmt.Sprintf(`{"isoID":%q}`, iso.ID), token))
+	if page.Next != "next" || len(page.Items) != 1 || len(page.Items[0].Problems) != 1 || page.Items[0].Problems[0].Code != problem.Code || page.Items[0].Body != tpl.Body || len(page.Items[0].Params) != len(tpl.Params) {
+		t.Fatal(page)
+	}
+}
+
+func Test向导应用错误沿用网页状态与问题明细(t *testing.T) {
+	s, _, token, iso, tpl := wizardFixture(t)
+	for _, tc := range []struct {
+		err     error
+		status  int
+		message string
+	}{
+		{tasks.ErrUnauthenticated, 401, model.ConsoleUnauthorized},
+		{tasks.ErrPasswordChangeRequired, 403, model.ConsolePasswordChangeRequired},
+		{tasks.ErrForbidden, 403, model.ConsoleForbidden},
+		{repository.ErrTemplateNotCurrent, 409, model.ConsoleTemplateCurrent},
+	} {
+		s.server.deps.Wizard = wizardResultFixture{err: tc.err}
+		w := httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-1"}]`), token)
+		var got envelope
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != tc.status || got.Message != tc.message || got.Data != nil {
+			t.Fatal(w.Code, w.Body.String(), err)
+		}
+	}
+	for _, p := range []model.Problem{model.NewProblem("arch_mismatch", model.Subject{Kind: model.KindHost, ID: "SN-1"}, "aarch64", "x86_64"), model.NewProblem("sn_invalid", model.Subject{Kind: model.KindHost}, "空编号")} {
+		s.server.deps.Wizard = wizardResultFixture{err: &tasks.ProblemsError{Problems: []model.Problem{p}}}
+		w := httpCall(s, "POST", "/console/v1/wizard/templates", fmt.Sprintf(`{"isoID":%q}`, iso.ID), token)
+		if w.Code != StatusOfProblems([]model.Problem{p}) || !strings.Contains(w.Body.String(), string(p.Code)) {
+			t.Fatal(w.Code, w.Body.String())
+		}
+	}
+}
 
 func wizardFixture(t *testing.T) (*Server, *pgstore.Store, string, model.ISO, model.Template) {
 	t.Helper()
@@ -404,7 +467,7 @@ func Test向导只接受程序当前携带的内置身份及版本(t *testing.T)
 func Test向导提交期间新版本审批必须等待任务提交(t *testing.T) {
 	dsn := pgtest.Schema(t)
 	st := pgtest.OpenAt(t, dsn)
-	s := New(Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, CurrentTasks: st, Events: st, Audit: st, Users: st, Clock: func() int64 { return fixedAt }})
+	s := New(wizardDeps(Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Events: st, Audit: st, Users: st, Clock: func() int64 { return fixedAt }}, st))
 	_, _, token, iso, tpl := seedWizardFixture(t, s, st)
 	next, err := st.NewTemplateVersion(t.Context(), tpl.ID, 1, "author")
 	if err != nil {
@@ -503,7 +566,7 @@ func Test任务提交与独立实例审批的契约(t *testing.T) {
 			st := pgtest.OpenAt(t, dsn)
 			other := pgtest.OpenAt(t, dsn)
 			newServer := func(db *pgstore.Store) *Server {
-				return New(Deps{Hosts: db, ISOs: db, Hooks: db, Templates: db, Tasks: db, CurrentTasks: db, Events: db, Audit: db, Users: db, Clock: func() int64 { return fixedAt }})
+				return New(wizardDeps(Deps{Hosts: db, ISOs: db, Hooks: db, Templates: db, Tasks: db, Events: db, Audit: db, Users: db, Clock: func() int64 { return fixedAt }}, db))
 			}
 			s, second := newServer(st), newServer(other)
 			_, _, token, iso, tpl := seedWizardFixture(t, s, st)
@@ -547,7 +610,7 @@ func Test任务提交与独立实例审批的契约(t *testing.T) {
 				var once sync.Once
 				unblock := func() { once.Do(func() { close(release) }) }
 				defer unblock()
-				s.server.deps.CurrentTasks = &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release}
+				s.server.deps.Wizard = wizardDeps(s.server.deps, &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release}).Wizard
 				submitted := make(chan int, 1)
 				go func() { submitted <- submit() }()
 				select {
@@ -719,7 +782,7 @@ func Test向导事务内一般准入仍返回422(t *testing.T) {
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	defer unblock()
-	s.server.deps.CurrentTasks = &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release}
+	s.server.deps.Wizard = wizardDeps(s.server.deps, &wizardCurrentTaskGate{CurrentTaskCreator: st, reached: reached, release: release}).Wizard
 	submitted := make(chan int, 1)
 	go func() {
 		submitted <- httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-1"}]`), token).Code

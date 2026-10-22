@@ -8,7 +8,10 @@ import (
 	"os"
 
 	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/application/tasks"
+	"github.com/lober/lober/internal/application/tasks/port"
 	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/domain/selection"
 	"github.com/lober/lober/internal/infrastructure/builtin"
 	"github.com/lober/lober/internal/infrastructure/media"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore"
@@ -97,8 +100,19 @@ func supervisorOf(ctx context.Context, raw *iso.Sources, st repository.Store, j 
 	s := newSourceSupervisor(ctx, raw, st, j, g, cfg.ISO, logger)
 	return s, s.Close
 }
-func consoleDepsOf(st repository.Store, src *sourceSupervisor, j *deletionJournal, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger) console.Deps {
-	return console.Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, CurrentTasks: st, Events: st, Audit: st, Users: st, Sources: st, ISOSource: src, ISODeletion: j, BootConfig: bootConfigReader{root: cfg.ISO.Artifacts}, PreviewEndpoints: console.PreviewEndpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, TaskCtl: taskControlStub{}, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
+func taskControlOf() console.TaskControl { return taskControlStub{} }
+func wizardOf(st repository.Store, hub ports.Notifier, clock console.Clock, guard port.SelectionGuard, ctl console.TaskControl) tasks.Wizard {
+	manifest := selection.Manifest{}
+	for _, t := range builtin.Templates() {
+		manifest.Templates = append(manifest.Templates, model.TemplateKey{ID: t.ID, Version: t.Version})
+	}
+	for _, h := range builtin.Hooks() {
+		manifest.Hooks = append(manifest.Hooks, model.HookKey{ID: h.ID, Version: h.Version})
+	}
+	return tasks.NewWizard(tasks.WizardDeps{Hosts: st, ISOs: st, Templates: st, Hooks: st, Tasks: st, Manifest: manifest, Clock: clock, Notifier: hub, SelectionGuard: guard, Diagnostics: ctl})
+}
+func consoleDepsOf(st repository.Store, src *sourceSupervisor, j *deletionJournal, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, guard port.SelectionGuard, ctl console.TaskControl) console.Deps {
+	return console.Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Wizard: wizard, SelectionGuard: guard, Events: st, Audit: st, Users: st, Sources: st, ISOSource: src, ISODeletion: j, BootConfig: bootConfigReader{root: cfg.ISO.Artifacts}, PreviewEndpoints: console.PreviewEndpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
 }
 func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, raw *iso.Sources, s *sourceSupervisor, j *deletionJournal, g *registrationGate) *app {
 	return &app{Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Native: raw, Supervisor: s, Deletion: j, Gate: g}

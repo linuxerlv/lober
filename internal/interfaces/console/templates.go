@@ -1,10 +1,8 @@
 package console
 
 import (
-	"cmp"
 	"context"
 	"slices"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/domain/activation"
@@ -65,32 +63,18 @@ type templateListQuery struct {
 }
 
 func toTemplateResponse(t model.Template, hooks map[model.HookKey]model.Hook) templateResponse {
+	return toTemplateResponseWithProblems(t, activation.Template(t, hooks))
+}
+func toTemplateResponseWithProblems(t model.Template, problems []model.Problem) templateResponse {
 	var from *templateKeyResponse
 	if t.DerivedFrom != nil {
 		from = &templateKeyResponse{t.DerivedFrom.ID, t.DerivedFrom.Version}
 	}
-	return templateResponse{ID: t.ID, Version: t.Version, Name: t.Name, State: t.State, Author: t.Author, Approver: t.Approver, Builtin: t.Builtin, DerivedFrom: from, Family: t.Family, Series: append([]catalog.Series{}, t.Series...), Body: t.Body, Params: declsToDTO(t.Params), Bindings: bindingsToDTO(t.Bindings), Assembly: assemblyToDTO(t.Assembly), Problems: jsonProblems(activation.Template(t, hooks)), Rev: t.Rev}
+	return templateResponse{ID: t.ID, Version: t.Version, Name: t.Name, State: t.State, Author: t.Author, Approver: t.Approver, Builtin: t.Builtin, DerivedFrom: from, Family: t.Family, Series: append([]catalog.Series{}, t.Series...), Body: t.Body, Params: declsToDTO(t.Params), Bindings: bindingsToDTO(t.Bindings), Assembly: assemblyToDTO(t.Assembly), Problems: jsonProblems(problems), Rev: t.Rev}
 }
 
-// Batch referenced keys across a page. Malformed draft keys remain missing in
-// the activation input, where core diagnoses them instead of rejecting a read.
 func (s *server) templateHooks(ctx context.Context, templates []model.Template) (map[model.HookKey]model.Hook, error) {
-	unique := map[model.HookKey]bool{}
-	for _, t := range templates {
-		for _, k := range repository.HookRefs(t) {
-			if repository.CheckVersionKey(k.ID, k.Version) == nil {
-				unique[k] = true
-			}
-		}
-	}
-	keys := make([]model.HookKey, 0, len(unique))
-	for k := range unique {
-		keys = append(keys, k)
-	}
-	slices.SortFunc(keys, func(a, b model.HookKey) int {
-		return cmp.Or(strings.Compare(a.ID, b.ID), cmp.Compare(a.Version, b.Version))
-	})
-	return s.deps.Hooks.GetHooks(ctx, keys)
+	return s.deps.Hooks.GetHooks(ctx, repository.TemplateHookKeys(templates))
 }
 func (s *server) templateResponses(ctx context.Context, templates []model.Template) ([]templateResponse, error) {
 	hooks, err := s.templateHooks(ctx, templates)

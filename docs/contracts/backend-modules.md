@@ -51,7 +51,7 @@
 
 重复主机仍是整批错误，不允许“第一台成功，重复项失败”。参数预览用规范化序列号找输入行；提交用每个 `hosts[]` 项自身的参数生成快照。`SN-2,SN-1` 必须各自保留 `node-two,node-one`，响应和数据库中的快照都要一致。
 
-当前版本选择通过 `CurrentTaskCreator.CreateCurrentTasks` 在同一个数据库事务内确认。`console.Deps.CurrentTasks` 必须显式注入，向导不退回普通 `Tasks.CreateTasks`。后者继续允许明确指定旧的已审批版本。
+当前版本选择通过 `CurrentTaskCreator.CreateCurrentTasks` 在同一个数据库事务内确认。任务应用的 `port.Tasks` 只提供 `FindOpenTask/CreateCurrentTasks`，由组装显式注入；网页通过 `console.Deps.Wizard` 调用应用，不退回普通 `Tasks.CreateTasks`。后者继续允许明确指定旧的已审批版本。
 
 向导事务依次锁定：模板身份（读锁）→ 按序列号字节序排列的主机（写锁）→ 镜像（读锁）→ 所选模板版本（读锁）→ 排序后的引用组件版本（读锁）→ 插入任务和审计。模板状态变更先锁身份（写锁），再锁目标版本，审批时再锁引用组件。保护一直持有到提交或回滚。
 
@@ -73,7 +73,7 @@
 
 | 总路线清除阶段 | 本次登记的现有代码 |
 | --- | --- |
-| `1` 四层基础与向导 | 五个向导处理函数及其专有辅助函数只在目录搬迁期间列入单独 wizardMigrationExceptions；任务5抽出应用服务后全部删除 |
+| `1` 四层基础与向导 | 五个操作已进入任务应用服务，全部向导临时放行已删除；网页只解析输入和转换结果 |
 | `2` 编写与预览 | `hooks.go`、`templates.go`、`lifecycle.go`、`preview.go`、`slots.go` 中逐条登记的仓储访问，以及对应依赖字段 |
 | `3` 主机 | `hosts.go` 中逐条登记的查询、登记、编辑、删除、导入，以及主机依赖字段 |
 | `4` 镜像与后台作业 | `isos.go`、`isosource.go` 中逐条登记的旧仓储和来源读取符号，以及镜像依赖字段 |
@@ -107,7 +107,11 @@
 
 镜像目录是 `internal/infrastructure/media`，包名仍为 `iso`，其 `iso9660` 与 `isotest` 子包一起搬迁。旧 `Sources` 仍承担获取、导入、状态和恢复流程；这不是已完成的终态拆分。固定 `mediaMigrationExceptions` 精确列出文件、函数和目标符号，清除阶段为总路线第4阶段。新函数不能使用这张旧清单，也不能导入应用具体服务。
 
-网页入口位于 `internal/interfaces/console`。原非向导仓储调用仍由 `migrationExceptions` 逐条登记；旧领域判定和渲染在 `consoleRuleMigrationExceptions` 中按所属模块的清除阶段登记。向导只暂留于独立的 `wizardMigrationExceptions`，任务5结束必须全部撤销。当前搬迁保持网页字段、权限和处理行为。
+网页入口位于 `internal/interfaces/console`。原非向导仓储调用仍由 `migrationExceptions` 逐条登记；旧领域判定和渲染在 `consoleRuleMigrationExceptions` 中按所属模块的清除阶段登记。任务5已撤销全部向导豁免；实际符号检查同时追踪同包辅助函数、方法值和包级函数别名，不能经旧转换函数重新执行业务规则。
+
+`application/tasks.Wizard` 提供五个向导操作。每个操作先检查注入的 `ports.Actor`；权限仍由 `domain/access` 唯一规则决定。模板候选的 `Problems` 和提交结果的 `CanCancel/CanRetry` 在应用计算，网页只做字段转换。任务诊断只通过 `port.TaskDiagnostics` 注入；未提供时保持空诊断，不新增执行规则。
+
+生产组装创建一个 `SelectionGuard`，同时注入任务应用和旧模板审批、废弃入口。过渡实现仍位于 console，编写模块迁移时移出。它只负责同进程协调，数据库的当前版本事务保护继续独立生效。`console.Clock` 是 `ports.Clock` 别名；每个候选任务的创建时间和整批审计时间仍按原位置取时钟，成功提交后才逐任务通知。
 
 `application/ports.Notifier` 是唯一共同通知契约，保持 `Publish(string)` 和 `Subscribe(string) (<-chan struct{}, func())`。实现位于 `infrastructure/notification`，使用锁与一次性退订保护，多次提示合并为一个；消费者收到提示后补读已提交事件。事务失败或取消不能发布。此次不改变原来的发布位置。
 

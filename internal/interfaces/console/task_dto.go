@@ -1,6 +1,7 @@
 package console
 
 import (
+	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"maps"
@@ -102,4 +103,11 @@ func snapshotToDTO(s model.Snapshot) snapshotDTO {
 }
 func toTaskItem(t model.Task) taskItem {
 	return taskItem{t.ID, t.HostSN, t.ISOID, t.TemplateID, t.TemplateVersion, t.State, snapshotToDTO(t.Snapshot), t.CreatedBy, t.CreatedAt, t.Rev, []problemJSON{}, []problemJSON{}}
+}
+
+func toTaskChoiceItem(choice tasks.TaskChoice) taskItem {
+	out := toTaskItem(choice.Task)
+	out.CanCancel = jsonProblems(choice.CanCancel)
+	out.CanRetry = jsonProblems(choice.CanRetry)
+	return out
 }

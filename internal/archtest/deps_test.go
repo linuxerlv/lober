@@ -257,7 +257,6 @@ func Test全模块依赖守卫(t *testing.T) {
 func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[layer]int) {
 	found := unlistedDirs(dirs, pkgs)
 	found = append(found, checkMigrationExceptions(migrationExceptions)...)
-	found = append(found, checkMigrationExceptions(wizardMigrationExceptions)...)
 	found = append(found, checkMigrationExceptions(mediaMigrationExceptions)...)
 	found = append(found, checkMigrationExceptions(consoleRuleMigrationExceptions)...)
 	found = append(found, checkMigrationExceptions(notificationMigrationExceptions)...)

@@ -1,44 +1,5 @@
 package archtest
 
-// 向导只在任务4搬迁期间保留；任务5抽取应用服务时全部删除。
-var wizardMigrationExceptions = []migrationException{
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardHosts", "github.com/lober/lober/internal/domain/admission", "HostSelectable", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardHosts", "github.com/lober/lober/internal/domain/model", "NormalizeSN", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardHosts", "github.com/lober/lober/internal/domain/repository", "HostQuery", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardHosts", "github.com/lober/lober/internal/domain/repository", "Hosts.ListHosts", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardHosts", "github.com/lober/lober/internal/domain/repository", "Page", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardHosts", "github.com/lober/lober/internal/domain/repository", "Tasks.FindOpenTask", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "wizardSNs", "github.com/lober/lober/internal/domain/model", "NormalizeSN", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardHostRecords", "github.com/lober/lober/internal/domain/repository", "Hosts.GetHosts", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "missingWizardHosts", "github.com/lober/lober/internal/domain/model", "NewProblem", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "respondWizardBatch", "github.com/lober/lober/internal/domain/repository", "BatchError", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardISOs", "github.com/lober/lober/internal/domain/admission", "ISOUsable", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardISOs", "github.com/lober/lober/internal/domain/repository", "ISOQuery", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardISOs", "github.com/lober/lober/internal/domain/repository", "ISOs.ListISOs", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardISOs", "github.com/lober/lober/internal/domain/repository", "Page", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardTemplates", "github.com/lober/lober/internal/domain/admission", "TemplateUsable", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardTemplates", "github.com/lober/lober/internal/domain/model", "ISO.Unusable", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardTemplates", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardTemplates", "github.com/lober/lober/internal/domain/repository", "Page", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardTemplates", "github.com/lober/lober/internal/domain/repository", "TemplateQuery", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardTemplates", "github.com/lober/lober/internal/domain/repository", "Templates.ListTemplates", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "currentBuiltinSelection", "github.com/lober/lober/internal/domain/selection", "CurrentBuiltin", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "currentBuiltinSelection", "github.com/lober/lober/internal/infrastructure/builtin", "Hooks", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "currentBuiltinSelection", "github.com/lober/lober/internal/infrastructure/builtin", "Templates", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardSelectionFacts", "github.com/lober/lober/internal/domain/model", "CurrentApproved", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardSelectionFacts", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardSelectionFacts", "github.com/lober/lober/internal/domain/repository", "Templates.GetTemplate", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardSelectionFacts", "github.com/lober/lober/internal/domain/repository", "Templates.ListTemplateVersions", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardBatch", "github.com/lober/lober/internal/domain/admission", "Batch", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardBatch", "github.com/lober/lober/internal/domain/model", "NewProblem", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardBatch", "github.com/lober/lober/internal/domain/repository", "Tasks.FindOpenTask", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "wizardEntered", "github.com/lober/lober/internal/domain/model", "NormalizeSN", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardParams", "github.com/lober/lober/internal/domain/params", "Evaluate", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardSubmit", "github.com/lober/lober/internal/domain/repository", "CurrentTaskCreator.CreateCurrentTasks", "1"},
-	{pkgConsole, "internal/interfaces/console/wizard.go", "(*server).wizardSubmit", "github.com/lober/lober/internal/domain/snapshot", "Build", "1"},
-	{pkgConsole, "internal/interfaces/console/server.go", "package-init", "github.com/lober/lober/internal/domain/repository", "CurrentTaskCreator", "1"},
-}
-
 // 旧镜像实现仍组织获取、状态、事务和恢复流程，总路线镜像阶段逐条迁出；不是终态基础设施。
 var mediaMigrationExceptions = []migrationException{
 	{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).CleanupDeleted", "github.com/lober/lober/internal/domain/model", "ISO.Validate", "4"},
