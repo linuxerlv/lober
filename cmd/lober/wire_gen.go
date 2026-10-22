@@ -43,7 +43,8 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 	}
 	taskControl := taskControlOf(mainMachineBundle)
 	wizard := wizardOf(mainLoggingStore, notifier, clock, selectionGuard, taskControl)
-	deps := consoleDepsOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, notifier, cfg, clock, logger, wizard, selectionGuard, taskControl)
+	hooks := hookAuthoringOf(mainLoggingStore, clock)
+	deps := consoleDepsOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, notifier, cfg, clock, logger, wizard, hooks, selectionGuard, taskControl)
 	server := console.New(deps)
 	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, mainSourceSupervisor, mainDeletionJournal, mainRegistrationGate, mainMachineBundle)
 	return mainApp, func() {

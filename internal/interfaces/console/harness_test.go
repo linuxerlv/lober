@@ -1,6 +1,7 @@
 package console
 
 import (
+	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
@@ -47,6 +48,7 @@ func wizardDeps(d Deps, current repository.CurrentTaskCreator) Deps {
 	for _, h := range builtin.Hooks() {
 		manifest.Hooks = append(manifest.Hooks, model.HookKey{ID: h.ID, Version: h.Version})
 	}
+	d.HookAuthoring = authoring.NewHooks(authoring.HookDeps{Hooks: d.Hooks, Clock: d.Clock})
 	d.Wizard = tasks.NewWizard(tasks.WizardDeps{Hosts: d.Hosts, ISOs: d.ISOs, Hooks: d.Hooks, Templates: d.Templates, Tasks: wizardTaskRepository{d.Tasks, current}, Manifest: manifest, Clock: d.Clock, Notifier: d.Notifier, SelectionGuard: d.SelectionGuard, Diagnostics: d.TaskCtl})
 	return d
 }

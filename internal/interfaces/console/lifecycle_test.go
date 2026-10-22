@@ -1,6 +1,7 @@
 package console
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -248,6 +249,32 @@ func Test生命周期十个端点权限与内置保护(t *testing.T) {
 						t.Fatal(item, op, w.Code, w.Body.String())
 					}
 				}
+			}
+		}
+	}
+}
+
+func Test组件驳回理由错误不被坏版本和修订盖掉(t *testing.T) {
+	s, st, _ := newHTTPServer(t)
+	reviewer := reviewerHTTP(t, s, st)
+	for _, version := range []string{"bad", "0", "999999999999999999999999999"} {
+		for _, rev := range []string{"bad", "0", "999999999999999999999999999"} {
+			path := "/console/v1/hooks/missing/versions/" + version + "/reject?rev=" + rev
+			for _, body := range []string{`{"reason":"  "}`, `{"reason":"\u0000"}`} {
+				w := httpCall(s, "POST", path, body, reviewer)
+				var got struct {
+					Message string `json:"message"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+					t.Fatal(err)
+				}
+				if w.Code != 400 || got.Message != model.ConsoleRejectReason {
+					t.Fatal(version, rev, w.Code, w.Body.String())
+				}
+			}
+			w := httpCall(s, "POST", path, `{"reason":"修正内容"}`, reviewer)
+			if w.Code != 400 || strings.Contains(w.Body.String(), model.ConsoleRejectReason) {
+				t.Fatal(w.Code, w.Body.String())
 			}
 		}
 	}

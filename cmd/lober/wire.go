@@ -12,6 +12,6 @@ import (
 )
 
 func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger) (*app, func(), error) {
-	wire.Build(openStore, loggingStoreOf, wire.Bind(new(repository.Store), new(*loggingStore)), nativeSourcesOf, gateOf, newDeletionJournal, supervisorOf, notification.NewHub, machineOf, console.NewSelectionGuard, taskControlOf, wizardOf, consoleDepsOf, console.New, appOf)
+	wire.Build(openStore, loggingStoreOf, wire.Bind(new(repository.Store), new(*loggingStore)), nativeSourcesOf, gateOf, newDeletionJournal, supervisorOf, notification.NewHub, machineOf, console.NewSelectionGuard, taskControlOf, wizardOf, hookAuthoringOf, consoleDepsOf, console.New, appOf)
 	return nil, nil, nil
 }

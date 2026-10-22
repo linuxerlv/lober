@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/domain/activation"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
@@ -142,7 +143,7 @@ func (s *server) hookCandidates(c *gin.Context) {
 				usable = false
 			}
 		}
-		items = append(items, hookCandidateResponse{toHookResponse(hook), usable, jsonProblems(problems)})
+		items = append(items, hookCandidateResponse{toHookResponse(authoring.HookView{Hook: hook, Problems: activation.Hook(hook)}), usable, jsonProblems(problems)})
 	}
 	Ok(c, hookCandidatePage{Items: items, Next: page.Next, Total: page.Total})
 }

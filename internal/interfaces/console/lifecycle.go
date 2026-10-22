@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/domain/activation"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
@@ -18,7 +20,6 @@ type validateResponse struct {
 	Problems []problemJSON `json:"problems"`
 }
 
-func HookProblems(h model.Hook) []model.Problem { return ProblemsOf(h) }
 func (s *server) templateProblems(ctx context.Context, t model.Template) ([]model.Problem, error) {
 	hooks, err := s.templateHooks(ctx, []model.Template{t})
 	if err != nil {
@@ -48,23 +49,14 @@ func (s *server) templateLifecycleRoutes() []route {
 	}
 }
 
-type hookStateStep func(context.Context, model.HookKey, int64, repository.Audit) error
+type hookStateStep func(context.Context, ports.Actor, authoring.HookRevision) (authoring.HookView, error)
 type templateStateStep func(context.Context, model.TemplateKey, int64, repository.Audit) error
 
-func (s *server) stepHook(c *gin.Context, step hookStateStep, detail string) {
-	k, ok := hookKeyOf(c)
-	if !ok {
-		return
+func (s *server) stepHook(c *gin.Context, step hookStateStep) {
+	h, ok := Write(c, func() (authoring.HookView, error) { return step(c.Request.Context(), actorOf(c), hookRevisionOf(c)) })
+	if ok {
+		Ok(c, toHookResponse(h))
 	}
-	rev, ok := queryRev(c)
-	if !ok {
-		return
-	}
-	if err := step(c.Request.Context(), k, rev, s.auditFrom(c, detail)); err != nil {
-		RespondError(c, err)
-		return
-	}
-	s.reloadHook(c, k)
 }
 func (s *server) stepTemplate(c *gin.Context, step templateStateStep, detail string) {
 	k, ok := templateKeyOf(c)
@@ -92,35 +84,27 @@ func rejectReason(c *gin.Context) (string, bool) {
 	}
 	return req.Reason, true
 }
-func (s *server) submitHook(c *gin.Context) { s.stepHook(c, s.deps.Hooks.SubmitHook, "") }
-func (s *server) approveHook(c *gin.Context) {
-	s.stepHook(c, func(ctx context.Context, k model.HookKey, rev int64, a repository.Audit) error {
-		return s.deps.Hooks.ApproveHook(ctx, k, rev, userOf(c).Username, a)
-	}, "")
-}
+func (s *server) submitHook(c *gin.Context)  { s.stepHook(c, s.deps.HookAuthoring.Submit) }
+func (s *server) approveHook(c *gin.Context) { s.stepHook(c, s.deps.HookAuthoring.Approve) }
 func (s *server) rejectHook(c *gin.Context) {
-	reason, ok := rejectReason(c)
-	if ok {
-		s.stepHook(c, s.deps.Hooks.RejectHook, reason)
-	}
-}
-func (s *server) deprecateHook(c *gin.Context) { s.stepHook(c, s.deps.Hooks.DeprecateHook, "") }
-func (s *server) validateHook(c *gin.Context) {
-	k, ok := hookKeyOf(c)
-	if !ok {
+	var req rejectRequest
+	if !Bind(c, &req) {
 		return
 	}
-	h, ok := Get(c, func() (model.Hook, error) { return s.deps.Hooks.GetHook(c.Request.Context(), k) })
-	if !ok {
-		return
-	}
-	ps := HookProblems(h)
-	Ok(c, validateResponse{OK: len(ps) == 0, Problems: jsonProblems(ps)})
-}
-func (s *server) reloadHook(c *gin.Context, k model.HookKey) {
-	h, ok := Get(c, func() (model.Hook, error) { return s.deps.Hooks.GetHook(c.Request.Context(), k) })
+	h, ok := Write(c, func() (authoring.HookView, error) {
+		return s.deps.HookAuthoring.Reject(c.Request.Context(), actorOf(c), authoring.HookRejection{HookRevision: hookRevisionOf(c), Reason: req.Reason})
+	})
 	if ok {
 		Ok(c, toHookResponse(h))
+	}
+}
+func (s *server) deprecateHook(c *gin.Context) { s.stepHook(c, s.deps.HookAuthoring.Deprecate) }
+func (s *server) validateHook(c *gin.Context) {
+	ps, ok := Get(c, func() ([]model.Problem, error) {
+		return s.deps.HookAuthoring.Validate(c.Request.Context(), actorOf(c), hookKeyOf(c))
+	})
+	if ok {
+		Ok(c, validateResponse{OK: len(ps) == 0, Problems: jsonProblems(ps)})
 	}
 }
 func (s *server) submitTemplate(c *gin.Context) {

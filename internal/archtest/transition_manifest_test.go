@@ -154,7 +154,7 @@ var consoleRuleMigrationExceptions = []migrationException{
 	{pkgConsole, "internal/interfaces/console/csv.go", "parseHostCSV", "github.com/lober/lober/internal/domain/model", "ValidAttrKey", "3"},
 	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", "github.com/lober/lober/internal/domain/repository", "ErrTemplateNotCurrent", "6"},
 	{pkgConsole, "internal/interfaces/console/errors.go", "StatusOfProblems", "github.com/lober/lober/internal/domain/model", "Code.Category", "6"},
-	{pkgConsole, "internal/interfaces/console/hooks.go", "ProblemsOf", "github.com/lober/lober/internal/domain/activation", "Hook", "2"},
+	{pkgConsole, "internal/interfaces/console/authoring_helpers.go", "(*server).hookCandidates", "github.com/lober/lober/internal/domain/activation", "Hook", "2"},
 	{pkgConsole, "internal/interfaces/console/hooks.go", "authoringQuery", "github.com/lober/lober/internal/domain/model", "VersionState.Valid", "2"},
 	{pkgConsole, "internal/interfaces/console/hosts.go", "normalizedHostSN", "github.com/lober/lober/internal/domain/model", "NormalizeSN", "3"},
 	{pkgConsole, "internal/interfaces/console/isos.go", "(*server).listISOs", "github.com/lober/lober/internal/domain/catalog", "Family.Valid", "4"},

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/application/tasks/port"
@@ -117,8 +118,11 @@ func wizardOf(st repository.Store, hub ports.Notifier, clock console.Clock, guar
 	}
 	return tasks.NewWizard(tasks.WizardDeps{Hosts: st, ISOs: st, Templates: st, Hooks: st, Tasks: st, Manifest: manifest, Clock: clock, Notifier: hub, SelectionGuard: guard, Diagnostics: ctl})
 }
-func consoleDepsOf(st repository.Store, src *sourceSupervisor, j *deletionJournal, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, guard port.SelectionGuard, ctl console.TaskControl) console.Deps {
-	return console.Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Wizard: wizard, SelectionGuard: guard, Events: st, Audit: st, Users: st, RoleMenus: st, Sources: st, ISOSource: src, ISODeletion: j, BootConfig: bootConfigReader{root: cfg.ISO.Artifacts}, PreviewEndpoints: console.PreviewEndpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
+func hookAuthoringOf(st repository.Store, clock console.Clock) authoring.Hooks {
+	return authoring.NewHooks(authoring.HookDeps{Hooks: st, Clock: clock})
+}
+func consoleDepsOf(st repository.Store, src *sourceSupervisor, j *deletionJournal, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, guard port.SelectionGuard, ctl console.TaskControl) console.Deps {
+	return console.Deps{Hosts: st, ISOs: st, Hooks: st, Templates: st, Tasks: st, Wizard: wizard, HookAuthoring: hooks, SelectionGuard: guard, Events: st, Audit: st, Users: st, RoleMenus: st, Sources: st, ISOSource: src, ISODeletion: j, BootConfig: bootConfigReader{root: cfg.ISO.Artifacts}, PreviewEndpoints: console.PreviewEndpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
 }
 func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, raw *iso.Sources, s *sourceSupervisor, j *deletionJournal, g *registrationGate, m *machineBundle) *app {
 	return &app{Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Native: raw, Supervisor: s, Deletion: j, Gate: g, Machine: m}

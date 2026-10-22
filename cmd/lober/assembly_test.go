@@ -311,3 +311,53 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 		t.Fatal("HTTP service did not stop")
 	}
 }
+
+func Test组件应用与旧模板入口同时组装(t *testing.T) {
+	a, cfg := assembled(t)
+	request := func(method, path, body, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		a.Console.Engine.ServeHTTP(w, req)
+		return w
+	}
+	login := request("POST", "/console/v1/auth/login", `{"username":"admin","password":"`+cfg.SeedAdmin+`"}`, "")
+	var auth struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(login.Body.Bytes(), &auth); err != nil || login.Code != 200 || auth.Data.Token == "" {
+		t.Fatal(login.Code, err)
+	}
+	token := auth.Data.Token
+	changed := request("PUT", "/console/v1/users/admin", `{"role":"admin","password":"changed password","rev":1}`, token)
+	if changed.Code != 200 {
+		t.Fatal(changed.Code, changed.Body.String())
+	}
+	// 改密会退出旧会话，后续操作先用新密码登录。
+	login = request("POST", "/console/v1/auth/login", `{"username":"admin","password":"changed password"}`, "")
+	if err := json.Unmarshal(login.Body.Bytes(), &auth); err != nil || login.Code != 200 || auth.Data.Token == "" {
+		t.Fatal(login.Code, err)
+	}
+	token = auth.Data.Token
+	for _, kind := range []string{"hooks", "templates"} {
+		w := request("POST", "/console/v1/"+kind, `{"name":"assembled-draft"}`, token)
+		var got struct {
+			Data struct {
+				Author   string            `json:"author"`
+				State    string            `json:"state"`
+				Problems []json.RawMessage `json:"problems"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 {
+			t.Fatal(kind, w.Code, err, w.Body.String())
+		}
+		if got.Data.Author != "admin" || got.Data.State != "draft" || len(got.Data.Problems) == 0 {
+			t.Fatal(kind, w.Body.String())
+		}
+	}
+}
