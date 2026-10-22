@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/lober/lober/internal/console"
+	"github.com/lober/lober/internal/interfaces/console"
 )
 
 func Test装配角色菜单及改密重启保留(t *testing.T) {

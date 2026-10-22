@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lober/lober/internal/iso"
+	"github.com/lober/lober/internal/infrastructure/media"
 )
 
 func awaitJobRelease(t *testing.T, s *sourceSupervisor, key string) {

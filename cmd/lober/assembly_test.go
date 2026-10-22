@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lober/lober/internal/console"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/iso"
-	"github.com/lober/lober/internal/iso/isotest"
-	"github.com/lober/lober/internal/store"
-	"github.com/lober/lober/internal/store/pgstore/pgtest"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/infrastructure/media"
+	"github.com/lober/lober/internal/infrastructure/media/isotest"
+	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
+	"github.com/lober/lober/internal/interfaces/console"
 )
 
 const assemblyAt int64 = 1790000000
@@ -50,10 +50,10 @@ func rockyImage() []byte {
 		"images/pxeboot/vmlinuz": []byte("kernel"), "images/pxeboot/initrd.img": []byte("initrd"), "images/install.img": []byte("stage2"), "media/BaseOS/repodata/repomd.xml": []byte("base"), "media/AppStream/repodata/repomd.xml": []byte("app"), "media/Packages/sample.rpm": []byte("rpm"),
 	})
 }
-func assemblyAudit(action string) store.Audit {
-	return store.Audit{Actor: "operator", Action: action, At: assemblyAt}
+func assemblyAudit(action string) repository.Audit {
+	return repository.Audit{Actor: "operator", Action: action, At: assemblyAt}
 }
-func waitISO(t *testing.T, st store.ISOs, id string, state model.ISOState) model.ISO {
+func waitISO(t *testing.T, st repository.ISOs, id string, state model.ISOState) model.ISO {
 	t.Helper()
 	deadline := time.Now().Add(8 * time.Second)
 	for {
@@ -174,7 +174,7 @@ func Test装配后台获取导入及启动恢复(t *testing.T) {
 	if err := a.Deletion.Delete(t.Context(), failed.ID, waitISO(t, a.Store, failed.ID, model.ISOReady).Rev, assemblyAudit("iso.delete")); err != nil {
 		t.Fatal(err)
 	}
-	if err := restarted.Upload(t.Context(), upload.ID, "", 0, bytes.NewReader(otherImage), store.Audit{}); err != nil {
+	if err := restarted.Upload(t.Context(), upload.ID, "", 0, bytes.NewReader(otherImage), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	waitISO(t, a.Store, upload.ID, model.ISOReady)
@@ -188,7 +188,7 @@ func Test持久化删除快照先于删除及重启重试(t *testing.T) {
 	if err := a.Supervisor.Register(t.Context(), item, "upload", "", "", 4, "", assemblyAudit("iso.source.register")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Supervisor.Upload(t.Context(), item.ID, "", 0, bytes.NewReader([]byte("data")), store.Audit{}); err != nil {
+	if err := a.Supervisor.Upload(t.Context(), item.ID, "", 0, bytes.NewReader([]byte("data")), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	sources, err := a.Store.SourcesOf(t.Context(), item.ID)
@@ -244,8 +244,22 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	// Real PBKDF2 runs under the race detector while other packages are also
 	// consuming CPU. The socket test must allow that work to finish.
-	client := http.Client{Timeout: 30 * time.Second, Transport: http.DefaultTransport.(*http.Transport).Clone()}
-	defer client.CloseIdleConnections()
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	defer transport.CloseIdleConnections()
+	client := http.Client{Transport: transport, Timeout: 30 * time.Second}
+	// 每个响应先读到结尾，再关闭，避免旧连接还在后台回收时触发额外拨号。
+	readResponse := func(body io.ReadCloser) []byte {
+		t.Helper()
+		data, readErr := io.ReadAll(body)
+		closeErr := body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		return data
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -255,11 +269,7 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 			Token string `json:"token"`
 		} `json:"data"`
 	}
-	decodeErr := json.NewDecoder(response.Body).Decode(&signedIn)
-	if decodeErr == nil {
-		_, decodeErr = io.Copy(io.Discard, response.Body)
-	}
-	response.Body.Close()
+	decodeErr := json.NewDecoder(bytes.NewReader(readResponse(response.Body))).Decode(&signedIn)
 	if response.StatusCode != 200 {
 		t.Fatal("real listener login failed", response.StatusCode)
 	}
@@ -278,11 +288,7 @@ func TestHTTP真实监听登录及取消退出(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := io.Copy(io.Discard, got.Body); err != nil {
-			got.Body.Close()
-			t.Fatal(err)
-		}
-		got.Body.Close()
+		readResponse(got.Body)
 		want := http.StatusUnauthorized
 		if token != "" {
 			want = http.StatusOK

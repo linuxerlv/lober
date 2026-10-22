@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	pkgISO           = modulePath + "/internal/iso"
+	pkgISO           = modulePath + "/internal/infrastructure/media"
 	pkgISO9660       = pkgISO + "/iso9660"
 	ruleISO     rule = "ISO 层只依赖标准库、core 与存储契约"
 	ruleISO9660 rule = "ISO9660 只依赖标准库"
@@ -26,7 +26,7 @@ func TestISO依赖守卫(t *testing.T) {
 	}
 	var dirs []string
 	for _, d := range moduleSourceDirs(t, filepath.Join(root, "go.mod"), root) {
-		if under(d, "internal/iso") {
+		if under(d, "internal/infrastructure/media") {
 			dirs = append(dirs, d)
 		}
 	}
@@ -67,7 +67,7 @@ func Test新模块不能漏出守卫(t *testing.T) {
 	for _, d := range dirs {
 		first := strings.Split(d, "/")[0]
 		switch first {
-		case "core", "store", "iso", "archtest", "render", "builtin", "console", "execution", "machine", "events":
+		case "domain", "infrastructure", "application", "interfaces", "archtest":
 		default:
 			t.Errorf("未登记层: internal/%s", d)
 		}
@@ -80,7 +80,7 @@ func TestISORules(t *testing.T) {
 		reject   bool
 	}{
 		{pkgISO, "os", false}, {pkgISO, "net/http", false}, {pkgISO, "path/filepath", false},
-		{pkgISO, pkgModel, false}, {pkgISO, pkgStore, false}, {pkgISO, modulePath + "/internal/render", true},
+		{pkgISO, pkgModel, false}, {pkgISO, pkgStore, false}, {pkgISO, modulePath + "/internal/domain/render", true},
 		{pkgISO, "example.com/parser", true}, {pkgISO, "C", true},
 		{pkgISO9660, "io/fs", false}, {pkgISO9660, pkgModel, true}, {pkgISO9660, pkgStore, true},
 	} {

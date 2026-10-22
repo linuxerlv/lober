@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 func Test空库必须显式初始口令已有用户不再要求(t *testing.T) {
@@ -25,7 +25,7 @@ func Test空库必须显式初始口令已有用户不再要求(t *testing.T) {
 	if err := b.Initialise(); err == nil {
 		t.Fatal("missing bootstrap secret enabled a known account")
 	}
-	users, err := b.Store.ListUsers(t.Context(), store.UserQuery{})
+	users, err := b.Store.ListUsers(t.Context(), repository.UserQuery{})
 	if err != nil || len(users.Items) != 0 {
 		t.Fatal("failed bootstrap persisted user", len(users.Items), err)
 	}

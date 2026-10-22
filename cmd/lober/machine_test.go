@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lober/lober/internal/console"
+	"github.com/lober/lober/internal/interfaces/console"
 )
 
 func TestEnabledMachineAssemblyPersistsProtectedKeyAndServesCanonicalRoute(t *testing.T) {

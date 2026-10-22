@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/console"
+	"github.com/lober/lober/internal/interfaces/console"
 )
 
 func main() {

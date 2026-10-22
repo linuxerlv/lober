@@ -2,18 +2,18 @@ package main
 
 import (
 	"context"
-	"github.com/lober/lober/internal/console"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/interfaces/console"
 )
 
 // Layer 7 supplies the safety rules and execution state machine.
 type taskControlStub struct{}
 
-func (taskControlStub) Cancel(context.Context, model.Task, store.Audit) error {
+func (taskControlStub) Cancel(context.Context, model.Task, repository.Audit) error {
 	return console.ErrTaskControlUnavailable
 }
-func (taskControlStub) Retry(context.Context, model.Task, store.Audit) error {
+func (taskControlStub) Retry(context.Context, model.Task, repository.Audit) error {
 	return console.ErrTaskControlUnavailable
 }
 func (taskControlStub) CanCancel(model.Task) []model.Problem { return nil }

@@ -1,0 +1,402 @@
+package pgstore
+
+import (
+	"context"
+	"errors"
+	"github.com/lober/lober/internal/infrastructure/identity"
+	"slices"
+
+	"github.com/jackc/pgx/v5/pgconn"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"github.com/lober/lober/internal/domain/admission"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
+)
+
+// finishedStates 是结束了的任务的状态：查「这台主机有没有未结束的任务」时用它（openTasksOf、FindOpenTask）。它由
+// model.TaskStates 按 Finished 算出，不另抄（S9-1）；idx_tasks_open 的谓词是写死的，由 Test任务状态的CHECK与C31的索引都与model一致
+// 钉在 model 上。
+var finishedStates = func() []string {
+	var out []string
+	for _, st := range model.TaskStates() {
+		if st.Finished() {
+			out = append(out, string(st))
+		}
+	}
+	return out
+}()
+
+// forShare 是读锁：别的事务照样能读、能同样加读锁，但改不了、删不掉这一行，要等本事务结束。
+var forShare = clause.Locking{Strength: "SHARE"}
+
+// CreateTasks 见 repository.Tasks。快照里的串都存得下，由 repository.CheckNewTasks 查过：jsonb 不收 NUL，encoding/json 还会把非法的
+// UTF-8 换成 U+FFFD。任务逐个插入：撞上 idx_tasks_open 时，才知道撞上的是哪一台。
+func (s *Store) CreateTasks(ctx context.Context, ts []model.Task, a repository.Audit) ([]model.Task, error) {
+	return s.createTasks(ctx, ts, a, false)
+}
+
+// CreateCurrentTasks 见 repository.CurrentTaskCreator。身份读锁先于其他准入锁，直到任务与审计一起提交才释放。
+func (s *Store) CreateCurrentTasks(ctx context.Context, ts []model.Task, a repository.Audit) ([]model.Task, error) {
+	return s.createTasks(ctx, ts, a, true)
+}
+
+func (s *Store) createTasks(ctx context.Context, ts []model.Task, a repository.Audit, current bool) ([]model.Task, error) {
+	if err := repository.CheckAudit(a); err != nil {
+		return nil, err
+	}
+	if err := repository.CheckNewTasks(ts); err != nil {
+		return nil, err
+	}
+	rows := make([]taskRow, len(ts))
+	ids := make([]string, len(ts))
+	for i, t := range ts {
+		t.ID, t.State, t.Rev = identity.NewID(), model.TaskPending, 1
+		row, err := toTaskRow(t)
+		if err != nil {
+			return nil, err
+		}
+		rows[i], ids[i] = row, t.ID
+	}
+	err := s.write(ctx, func(tx *gorm.DB) error {
+		if current {
+			if err := lockCurrentTemplate(tx, model.TemplateKey{ID: ts[0].TemplateID, Version: ts[0].TemplateVersion}); err != nil {
+				return err
+			}
+		}
+		in, err := admit(tx, ts)
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			err := tx.Omit(clause.Associations).Create(&r).Error
+			if err == nil {
+				continue
+			}
+			// 第 4 步的兜底：失败的任务正在重试、还没提交时，准入看不到它（推进不锁主机），插入要等它提交才撞上。结果按准入
+			// 看得到它时的给，与第 3 步报的同形
+			if openTaskTaken(err) {
+				in.OpenTask[r.HostSN] = true
+				if be := repository.BatchProblems(in, nil); be != nil {
+					return be
+				}
+			}
+			return err
+		}
+		return addAudits(tx, a, "task", ids...)
+	})
+	if err != nil {
+		return nil, translate(err, false, nil)
+	}
+	out := make([]model.Task, len(rows))
+	for i, r := range rows {
+		if out[i], err = r.task(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// lockCurrentTemplate 先锁身份，再用下一条查询读取最新版本事实；等审批提交后也能读到它的新状态。
+// 这里只取 CurrentApproved 所需的版本号和状态，完整所选版本仍由 admit 加锁读取。
+func lockCurrentTemplate(tx *gorm.DB, k model.TemplateKey) error {
+	var owner ident
+	switch err := tx.Table(templateTables.idents).Clauses(forShare).Where("id = ?", k.ID).Take(&owner).Error; {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return templateNotFound(k)
+	case err != nil:
+		return err
+	}
+	var facts []struct {
+		Version int
+		State   model.VersionState
+	}
+	if err := tx.Table(templateTables.versions).Select("version", "state").Where("template_id = ?", k.ID).Scan(&facts).Error; err != nil {
+		return err
+	}
+	versions := make([]model.Template, len(facts))
+	for i, f := range facts {
+		versions[i] = model.Template{ID: k.ID, Version: f.Version, State: f.State}
+	}
+	if !slices.ContainsFunc(versions, func(t model.Template) bool { return t.Version == k.Version }) {
+		return templateNotFound(k)
+	}
+	cur, ok := model.CurrentApproved(versions)
+	if !ok || cur.Version != k.Version {
+		return repository.ErrTemplateNotCurrent
+	}
+	return nil
+}
+
+// admit 是批量建任务的第 2、3 步：在事务 tx 里按固定的顺序加锁，再用锁住之后读到的数据重跑准入（repository.BatchProblems）。
+// 主机按 SN 的字节序加写锁（lockHosts）；ISO、模板版本与它引用的 hook 版本加读锁，废弃与删除都要等这一批提交。ISO 或模板
+// 版本不存在报 ErrNotFound：按键找不到，准入无从判起。同一批的 ISO 与模板版本都相同（CheckNewTasks 查过），看第一个任务
+// 就够了。通过时返回判定的入参，插入时撞上 idx_tasks_open 还要拿它重判。
+func admit(tx *gorm.DB, batch []model.Task) (admission.BatchInput, error) {
+	first := batch[0]
+	sns := make([]string, len(batch))
+	for i, t := range batch {
+		sns[i] = t.HostSN
+	}
+	hosts, err := lockHosts(tx, sns)
+	if err != nil {
+		return admission.BatchInput{}, err
+	}
+	in := admission.BatchInput{OpenTask: map[string]bool{}, Hooks: map[model.HookKey]model.Hook{}}
+	var iso isoRow
+	switch err := tx.Clauses(forShare).Where("id = ?", first.ISOID).Take(&iso).Error; {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return admission.BatchInput{}, isoNotFound(first.ISOID)
+	case err != nil:
+		return admission.BatchInput{}, err
+	}
+	if in.ISO, err = iso.iso(); err != nil {
+		return admission.BatchInput{}, err
+	}
+	// 读锁只加在版本行上，连上的身份行不锁，理由同 lockTemplateVersion
+	k := model.TemplateKey{ID: first.TemplateID, Version: first.TemplateVersion}
+	tpl, ok, err := templateVersionAt(tx.Clauses(lockOf("SHARE", templateTables.versions)), k)
+	switch {
+	case err != nil:
+		return admission.BatchInput{}, err
+	case !ok:
+		return admission.BatchInput{}, templateNotFound(k)
+	}
+	if in.Template, err = tpl.template(); err != nil {
+		return admission.BatchInput{}, err
+	}
+	// 引用的 hook 版本按 HookRefs 的顺序加锁，与审批模板时相同；不存在的不放进入参，由准入当作没废弃
+	for chunk := range slices.Chunk(repository.HookRefs(in.Template), batchSize) {
+		rows, err := hookVersionsIn(tx, chunk, lockOf("SHARE", hookTables.versions))
+		if err != nil {
+			return admission.BatchInput{}, err
+		}
+		for _, r := range rows {
+			h, err := r.hook()
+			if err != nil {
+				return admission.BatchInput{}, err
+			}
+			in.Hooks[h.Key()] = h
+		}
+	}
+	open, err := openTasksOf(tx, sns)
+	if err != nil {
+		return admission.BatchInput{}, err
+	}
+	var missing []string // 从没登记过，或者在向导里选中之后被删了
+	for _, t := range batch {
+		row, ok := hosts[t.HostSN]
+		if !ok {
+			missing = append(missing, t.HostSN)
+			continue
+		}
+		h, err := row.host()
+		if err != nil {
+			return admission.BatchInput{}, err
+		}
+		in.Hosts, in.OpenTask[h.SN] = append(in.Hosts, h), open[h.SN]
+	}
+	return in, repository.BatchProblems(in, missing)
+}
+
+// lockHosts 在事务 tx 里给 sns 这几台主机加写锁并取出，没登记的不在结果里。按 hostLockOrder 的次序加锁（LockRows 在排序
+// 之后，行按 ORDER BY 的顺序上锁，ORDER BY 与 hostLockOrder 是同一个次序），与 ImportHosts 写主机的次序相同：两批同时提交、
+// 或者导入同时在写其中几台时，等待不会成环。分块也按这个次序取。
+func lockHosts(tx *gorm.DB, sns []string) (map[string]hostRow, error) {
+	sorted := hostLockOrder(sns, func(sn string) string { return sn })
+	out := make(map[string]hostRow, len(sorted))
+	for chunk := range slices.Chunk(sorted, batchSize) {
+		var rows []hostRow
+		if err := tx.Clauses(forUpdate).Where("sn IN ?", chunk).Order(`sn COLLATE "C"`).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			out[r.SN] = r
+		}
+	}
+	return out, nil
+}
+
+// openTasksOf 在事务 tx 里查 sns 这几台主机里哪些已有未结束的任务。调用方锁着这几台主机，同时给它们建任务的另一批要等本
+// 事务结束，提交了的这里都看得到；失败任务的重试不锁主机，没提交的看不到，由 idx_tasks_open 兜底。
+func openTasksOf(tx *gorm.DB, sns []string) (map[string]bool, error) {
+	open := map[string]bool{}
+	for chunk := range slices.Chunk(sns, batchSize) {
+		var got []string
+		err := tx.Model(&taskRow{}).Where("host_sn IN ? AND state NOT IN ?", chunk, finishedStates).Pluck("host_sn", &got).Error
+		if err != nil {
+			return nil, err
+		}
+		for _, sn := range got {
+			open[sn] = true
+		}
+	}
+	return open, nil
+}
+
+// GetTask 见 repository.Tasks。
+func (s *Store) GetTask(ctx context.Context, id string) (model.Task, error) {
+	if err := repository.CheckID(id); err != nil {
+		return model.Task{}, err
+	}
+	var row taskRow
+	switch err := s.read(ctx).Where("id = ?", id).Take(&row).Error; {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return model.Task{}, taskNotFound(id)
+	case err != nil:
+		return model.Task{}, err
+	}
+	return row.task()
+}
+
+// FindOpenTask 见 repository.Tasks。SN 不是规范化之后的写法报 ErrInvalid（repository.CheckSN）。
+func (s *Store) FindOpenTask(ctx context.Context, sn string) (model.Task, bool, error) {
+	if err := repository.CheckSN(sn); err != nil {
+		return model.Task{}, false, err
+	}
+	var row taskRow
+	switch err := s.read(ctx).Where("host_sn = ? AND state NOT IN ?", sn, finishedStates).Take(&row).Error; {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return model.Task{}, false, nil
+	case err != nil:
+		return model.Task{}, false, err
+	}
+	t, err := row.task()
+	if err != nil {
+		return model.Task{}, false, err
+	}
+	return t, true, nil
+}
+
+// ListTasks 见 repository.Tasks。按 CreatedAt 倒序、再按 ID 的字节序排，游标是上一页最后一个的这两样。
+func (s *Store) ListTasks(ctx context.Context, q repository.TaskQuery) (repository.Page[model.Task], error) {
+	limit, err := repository.CheckPageQuery(q.Cursor, q.Limit, q.Page)
+	if err != nil {
+		return repository.Page[model.Task]{}, err
+	}
+	var afterAt int64
+	var afterID string
+	if q.Cursor != "" {
+		if err := repository.DecodeCursor(q.Cursor, "tasks", &afterAt, &afterID); err != nil {
+			return repository.Page[model.Task]{}, err
+		}
+	}
+	// 存不下的状态谁都不是，去掉；给了状态却一个都不剩，就什么都匹配不上
+	var states []string
+	for _, st := range q.States {
+		if storable(string(st)) {
+			states = append(states, string(st))
+		}
+	}
+	if !storable(q.HostSN) || len(q.States) > 0 && len(states) == 0 {
+		return emptyPage[model.Task](q.Page), nil
+	}
+	db := s.read(ctx)
+	if q.Cursor != "" {
+		db = db.Where(`(created_at < ? OR (created_at = ? AND id COLLATE "C" > ?))`, afterAt, afterAt, afterID)
+	}
+	if q.HostSN != "" {
+		db = db.Where("host_sn = ?", q.HostSN)
+	}
+	if len(states) > 0 {
+		db = db.Where("state IN ?", states)
+	}
+	if q.CreatedFrom != 0 {
+		db = db.Where("created_at >= ?", q.CreatedFrom)
+	}
+	if q.CreatedTo != 0 {
+		db = db.Where("created_at <= ?", q.CreatedTo)
+	}
+	db, total, err := numberedQuery[taskRow](db, q.Page, limit)
+	if err != nil {
+		return repository.Page[model.Task]{}, err
+	}
+	var rows []taskRow
+	if err := db.Order(`created_at DESC, id COLLATE "C"`).Limit(limit + 1).Find(&rows).Error; err != nil {
+		return repository.Page[model.Task]{}, err
+	}
+	return page(rows, limit, taskRow.task, func(r taskRow) string { return repository.EncodeCursor("tasks", r.CreatedAt, r.ID) }, total)
+}
+
+// TransitionTask 见 repository.Tasks。
+func (s *Store) TransitionTask(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState, events []repository.NewEvent) (model.Task, []repository.Appended, error) {
+	return s.transition(ctx, id, expect, to, events, nil)
+}
+
+// TransitionTaskByUser 见 repository.Tasks。
+func (s *Store) TransitionTaskByUser(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState, events []repository.NewEvent, a repository.Audit) (model.Task, []repository.Appended, error) {
+	if err := repository.CheckAudit(a); err != nil {
+		return model.Task{}, nil, err
+	}
+	return s.transition(ctx, id, expect, to, events, &a)
+}
+
+// transition 是两种推进共用的部分，a 为 nil 时不写审计（系统发起的推进）。先查 ID、目标状态与事件（repository.CheckTransition）；
+// 再给任务行加写锁、比对期望值，追加事件，用一条 UPDATE 写下状态、Rev 与事件的计数，最后写审计。一步推进合不合规矩不在这里
+// 判断，那是第 7 层状态机的事。
+//
+// C31 不先查：推进不锁主机，先查的话，别人刚建、还没提交的任务查不到，两边就都落了库。推进到未结束的状态时由 idx_tasks_open
+// 挡住，撞上时整个推进回滚，问题与准入判定报的相同（repository.OpenTaskProblems）。
+func (s *Store) transition(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState, events []repository.NewEvent, a *repository.Audit) (model.Task, []repository.Appended, error) {
+	if err := repository.CheckTransition(id, to, events); err != nil {
+		return model.Task{}, nil, err
+	}
+	var row taskRow
+	var appended []repository.Appended
+	err := s.write(ctx, func(tx *gorm.DB) error {
+		var err error
+		if row, err = lockTask(tx, id); err != nil {
+			return err
+		}
+		if row.State != string(expect.State) || row.Rev != expect.Rev {
+			return errorf(repository.ErrConflict, "任务 %s 现为 %s、Rev %d，期望的是 %s、Rev %d：重读之后再判断",
+				id, row.State, row.Rev, expect.State, expect.Rev)
+		}
+		if appended, err = appendEvents(tx, &row, events); err != nil {
+			return err
+		}
+		row.State, row.Rev = string(to), row.Rev+1
+		if err := tx.Model(&taskRow{ID: id}).Select("state", "rev", "last_seq").Updates(&row).Error; err != nil {
+			if openTaskTaken(err) {
+				return repository.OpenTaskProblems(row.HostSN)
+			}
+			return err
+		}
+		if a != nil {
+			return addAudits(tx, *a, "task", id)
+		}
+		return nil
+	})
+	if err != nil {
+		return model.Task{}, nil, translate(err, false, nil)
+	}
+	t, err := row.task()
+	if err != nil {
+		return model.Task{}, nil, err
+	}
+	return t, appended, nil
+}
+
+// lockTask 在事务 tx 里给任务 id 加写锁并取出它，不存在报 ErrNotFound。推进与追加事件都先锁它：同一个任务上的这两种写入因此
+// 排队，比对期望值、分配事件的 Seq 时都看得到前一次写下的。
+func lockTask(tx *gorm.DB, id string) (taskRow, error) {
+	var row taskRow
+	switch err := tx.Clauses(forUpdate).Where("id = ?", id).Take(&row).Error; {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return taskRow{}, taskNotFound(id)
+	case err != nil:
+		return taskRow{}, err
+	}
+	return row, nil
+}
+
+// openTaskTaken 报告 err 是不是撞上了 idx_tasks_open：这台主机已有另一个未结束的任务（C31）。
+func openTaskTaken(err error) bool {
+	var pe *pgconn.PgError
+	return errors.As(err, &pe) && pe.Code == codeUnique && pe.ConstraintName == openTaskIndex
+}
+
+func taskNotFound(id string) error {
+	return errorf(repository.ErrNotFound, "任务 %s 不存在", id)
+}

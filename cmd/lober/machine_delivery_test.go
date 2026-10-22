@@ -15,13 +15,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lober/lober/internal/builtin"
-	"github.com/lober/lober/internal/console"
-	"github.com/lober/lober/internal/core/catalog"
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/core/params"
-	"github.com/lober/lober/internal/core/snapshot"
-	"github.com/lober/lober/internal/execution"
+	"github.com/lober/lober/internal/application/execution"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/params"
+	"github.com/lober/lober/internal/domain/snapshot"
+	"github.com/lober/lober/internal/infrastructure/builtin"
+	"github.com/lober/lober/internal/interfaces/console"
 )
 
 // These are real HTTP/PostgreSQL contract tests. Synthetic media records here
