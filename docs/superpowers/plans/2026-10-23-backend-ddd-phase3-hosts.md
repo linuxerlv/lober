@@ -10,7 +10,7 @@
 
 **Spec:** [已批准四层设计](../specs/2026-10-22-backend-ddd-four-layer-design.md)、[阶段路线](2026-10-22-backend-ddd-roadmap.md)、[模块契约](../../contracts/backend-modules.md)。
 
-状态：用户批准后的四项任务、逐项独立审查及整分支审查均通过。交付 `codex/ddd-hosts` 模块分支，保留工作区；develop 合并及后续环境另按仓库流程推进。实际结果见[第三阶段证据](../reviews/2026-10-23-ddd-phase3-evidence.md)。
+状态：用户批准后的四项任务、逐项独立审查及整分支审查均通过。保留 `codex/ddd-hosts` 模块分支及工作区；用户随后明确集成目标为 `dev`，已完成本地合并，合并后原完整命令与独立合并审查均通过。计划下文保留制定时的 `develop` 基线；最新结果见[dev 集成记录](../reviews/2026-10-23-ddd-phase3-dev-integration.md)，模块验收见[第三阶段证据](../reviews/2026-10-23-ddd-phase3-evidence.md)。
 
 ## Global Constraints
 
