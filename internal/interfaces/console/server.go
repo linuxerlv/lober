@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
@@ -18,6 +19,7 @@ import (
 
 type Clock = ports.Clock
 type Deps struct {
+	HostRegistry      hosts.Registry
 	HookAuthoring     authoring.Hooks
 	TemplateAuthoring authoring.Templates
 	AuthoringEditor   authoring.Editor

@@ -5,9 +5,9 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/repository"
 )
 
 type hostRequest struct {
@@ -63,32 +63,22 @@ func (s *server) hostRoutes() []route {
 	}
 }
 func (s *server) listHosts(c *gin.Context) {
-	number, limit, ok := queryPagination(c)
+	number, limit, ok := parseQueryPagination(c)
 	if !ok {
 		return
 	}
-	page, ok := Get(c, func() (repository.Page[model.Host], error) {
-		return s.deps.Hosts.ListHosts(c.Request.Context(), repository.HostQuery{SNPrefix: c.Query("prefix"), AttrKey: c.Query("attr_key"), AttrValue: c.Query("attr_value"), Cursor: c.Query("cursor"), Limit: limit, Page: number})
+	page, ok := Get(c, func() (hosts.HostPage, error) {
+		return s.deps.HostRegistry.List(c.Request.Context(), actorOf(c), hosts.ListRequest{Prefix: c.Query("prefix"), AttrKey: c.Query("attr_key"), AttrValue: c.Query("attr_value"), Cursor: c.Query("cursor"), Limit: limit, Page: number})
 	})
 	if !ok {
 		return
 	}
 	Ok(c, hostsPage(page.Items, page.Next, page.Total))
 }
-func normalizedHostSN(c *gin.Context, raw string) (string, bool) {
-	sn, err := model.NormalizeSN(raw)
-	if err != nil {
-		RespondError(c, err)
-		return "", false
-	}
-	return sn, true
-}
 func (s *server) getHost(c *gin.Context) {
-	sn, ok := normalizedHostSN(c, c.Param("sn"))
-	if !ok {
-		return
-	}
-	h, ok := Get(c, func() (model.Host, error) { return s.deps.Hosts.GetHost(c.Request.Context(), sn) })
+	h, ok := Get(c, func() (model.Host, error) {
+		return s.deps.HostRegistry.Get(c.Request.Context(), actorOf(c), c.Param("sn"))
+	})
 	if ok {
 		Ok(c, toHostResponse(h))
 	}
@@ -101,13 +91,8 @@ func (s *server) createHost(c *gin.Context) {
 	if !Bind(c, &req) {
 		return
 	}
-	sn, ok := normalizedHostSN(c, req.SN)
-	if !ok {
-		return
-	}
-	req.SN = sn
 	h, ok := Write(c, func() (model.Host, error) {
-		return s.deps.Hosts.CreateHost(c.Request.Context(), hostOf(req), s.auditFrom(c, ""))
+		return s.deps.HostRegistry.Create(c.Request.Context(), actorOf(c), hostOf(req))
 	})
 	if ok {
 		Ok(c, toHostResponse(h))
@@ -118,27 +103,8 @@ func (s *server) updateHost(c *gin.Context) {
 	if !Bind(c, &req) {
 		return
 	}
-	if req.Rev < 1 {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
-		return
-	}
-	sn, ok := normalizedHostSN(c, c.Param("sn"))
-	if !ok {
-		return
-	}
-	if req.SN != "" {
-		bodySN, ok := normalizedHostSN(c, req.SN)
-		if !ok {
-			return
-		}
-		if bodySN != sn {
-			Fail(c, 400, nil, model.ConsoleBadRequest)
-			return
-		}
-	}
-	req.SN = sn
 	h, ok := Write(c, func() (model.Host, error) {
-		return s.deps.Hosts.UpdateHost(c.Request.Context(), hostOf(req), s.auditFrom(c, ""))
+		return s.deps.HostRegistry.Update(c.Request.Context(), actorOf(c), hosts.UpdateRequest{PathSN: c.Param("sn"), Host: hostOf(req)})
 	})
 	if ok {
 		Ok(c, toHostResponse(h))
@@ -157,11 +123,7 @@ func (s *server) deleteHost(c *gin.Context) {
 	if !ok {
 		return
 	}
-	sn, ok := normalizedHostSN(c, c.Param("sn"))
-	if !ok {
-		return
-	}
-	if err := s.deps.Hosts.DeleteHost(c.Request.Context(), sn, rev, s.auditFrom(c, "")); err != nil {
+	if err := s.deps.HostRegistry.Delete(c.Request.Context(), actorOf(c), hosts.DeleteRequest{SN: c.Param("sn"), Rev: rev}); err != nil {
 		RespondError(c, err)
 		return
 	}

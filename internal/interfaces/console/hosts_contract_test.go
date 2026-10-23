@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
@@ -282,4 +284,98 @@ func Test主机CSV预演与失败优先级(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(before.Items, after.Items) {
 		t.Fatal("预演或拒绝修改了审计", err)
 	}
+}
+
+// 与改密测试相同，只在仓储边界把审计操作者换成夹具的失败标记。
+type failingHostAudit struct{ repository.Hosts }
+
+func (p failingHostAudit) CreateHost(ctx context.Context, h model.Host, a repository.Audit) (model.Host, error) {
+	a.Actor = pgtest.FaultActor
+	return p.Hosts.CreateHost(ctx, h, a)
+}
+func (p failingHostAudit) UpdateHost(ctx context.Context, h model.Host, a repository.Audit) (model.Host, error) {
+	a.Actor = pgtest.FaultActor
+	return p.Hosts.UpdateHost(ctx, h, a)
+}
+func (p failingHostAudit) DeleteHost(ctx context.Context, sn string, rev int64, a repository.Audit) error {
+	a.Actor = pgtest.FaultActor
+	return p.Hosts.DeleteHost(ctx, sn, rev, a)
+}
+
+// 经真实网页与应用调用，让测试库的审计失败注入验证同一事务的回滚。
+func Test主机应用审计失败与删除引用保护(t *testing.T) {
+	t.Run("审计失败回滚整条主机", func(t *testing.T) {
+		s, st, _ := newHTTPServer(t)
+		token, _ := seedHTTPUser(t, s, st, "host_rollback", model.RoleAdmin)
+		s.server.deps.HostRegistry = hosts.NewRegistry(hosts.Deps{Hosts: failingHostAudit{st}, Clock: s.server.deps.Clock})
+		beforeHost, err := st.CreateHost(t.Context(), model.Host{SN: "ROLLBACK-1", Arch: "x86_64", Firmware: "uefi", Attrs: map[string]string{"rack": " A01 ", "owner": "old"}}, repository.Audit{Actor: "test", Action: "host.create", At: fixedAt})
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeAudit, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range []struct{ method, path, body string }{
+			{"POST", "/console/v1/hosts", `{"sn":"ROLLBACK-NEW","arch":"aarch64","firmware":"uefi","attrs":{"rack":"new"}}`},
+			{"PUT", "/console/v1/hosts/ROLLBACK-1", `{"rev":1,"attrs":{"rack":"changed"}}`},
+			{"DELETE", "/console/v1/hosts/ROLLBACK-1?rev=1", ""},
+		} {
+			hostContractError(t, httpCall(s, r.method, r.path, r.body, token), 500, "")
+			afterHost, err := st.GetHost(t.Context(), "ROLLBACK-1")
+			if err != nil || !reflect.DeepEqual(beforeHost, afterHost) {
+				t.Fatal("审计失败后主机或版本改变", afterHost, err)
+			}
+			if _, err := st.GetHost(t.Context(), "ROLLBACK-NEW"); !errors.Is(err, repository.ErrNotFound) {
+				t.Fatal("失败创建留下记录", err)
+			}
+			afterAudit, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+			if err != nil || !reflect.DeepEqual(beforeAudit, afterAudit) {
+				t.Fatal("失败操作留下审计", err)
+			}
+			got := responseData[hostResponse](t, httpCall(s, "GET", "/console/v1/hosts/ROLLBACK-1", "", token))
+			if !reflect.DeepEqual(got, toHostResponse(beforeHost)) {
+				t.Fatal(got)
+			}
+		}
+	})
+	t.Run("所有任务状态均阻止删除", func(t *testing.T) {
+		s, st, token, task, _ := taskFixture(t)
+		beforeHost, err := st.GetHost(t.Context(), task.HostSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeAudit, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, state := range model.TaskStates() {
+			if state != task.State {
+				task, _, err = st.TransitionTask(t.Context(), task.ID, repository.TaskExpect{State: task.State, Rev: task.Rev}, state, nil)
+				if err != nil {
+					t.Fatal(state, err)
+				}
+			}
+			w := httpCall(s, "DELETE", fmt.Sprintf("/console/v1/hosts/%s?rev=%d", task.HostSN, beforeHost.Rev), "", token)
+			var out struct {
+				Code    int             `json:"code"`
+				Data    referenceDetail `json:"data"`
+				Message string          `json:"message"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != 409 || out.Code != 409 || out.Message != model.ConsoleReferenced || len(out.Data.References) != 1 || out.Data.References[0].Kind != "task" || out.Data.References[0].ID != task.ID {
+				t.Fatal(state, w.Code, w.Body.String())
+			}
+			afterHost, err := st.GetHost(t.Context(), task.HostSN)
+			if err != nil || !reflect.DeepEqual(beforeHost, afterHost) {
+				t.Fatal(state, afterHost, err)
+			}
+			afterAudit, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+			if err != nil || !reflect.DeepEqual(beforeAudit, afterAudit) {
+				t.Fatal("删除拒绝后留下审计", state, err)
+			}
+		}
+	})
 }

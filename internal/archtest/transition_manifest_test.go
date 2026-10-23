@@ -146,7 +146,6 @@ var consoleRuleMigrationExceptions = []migrationException{
 	{pkgConsole, "internal/interfaces/console/csv.go", "parseHostCSV", "github.com/lober/lober/internal/domain/model", "ValidAttrKey", "3"},
 	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", "github.com/lober/lober/internal/domain/repository", "ErrTemplateNotCurrent", "6"},
 	{pkgConsole, "internal/interfaces/console/errors.go", "StatusOfProblems", "github.com/lober/lober/internal/domain/model", "Code.Category", "6"},
-	{pkgConsole, "internal/interfaces/console/hosts.go", "normalizedHostSN", "github.com/lober/lober/internal/domain/model", "NormalizeSN", "3"},
 	{pkgConsole, "internal/interfaces/console/isos.go", "(*server).listISOs", "github.com/lober/lober/internal/domain/catalog", "Family.Valid", "4"},
 	{pkgConsole, "internal/interfaces/console/isos.go", "(*server).listISOs", "github.com/lober/lober/internal/domain/catalog", "Series.Valid", "4"},
 	{pkgConsole, "internal/interfaces/console/isos.go", "(*server).listISOs", "github.com/lober/lober/internal/domain/model", "ISOState.Valid", "4"},

@@ -2,6 +2,7 @@ package console
 
 import (
 	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
@@ -65,6 +66,7 @@ func wizardDepsGuard(d Deps, store authoringTestStore, guard ports.SelectionGuar
 		d.FrozenPreview = authoring.NewPreviewRenderer(nil, ports.PreviewEndpoints{})
 	}
 	d.AuthoringEditor = authoring.NewEditor(authoring.EditorDeps{Templates: store, Hooks: store, Hosts: d.Hosts, ISOs: d.ISOs, Renderer: d.FrozenPreview})
+	d.HostRegistry = hosts.NewRegistry(hosts.Deps{Hosts: d.Hosts, Clock: d.Clock})
 	d.HookAuthoring = authoring.NewHooks(authoring.HookDeps{Hooks: store, Clock: d.Clock})
 	d.Wizard = tasks.NewWizard(tasks.WizardDeps{Hosts: d.Hosts, ISOs: d.ISOs, Hooks: store, Templates: store, Tasks: wizardTaskRepository{d.Tasks, current}, Manifest: manifest, Clock: d.Clock, Notifier: d.Notifier, SelectionGuard: guard, Diagnostics: d.TaskCtl})
 	return d

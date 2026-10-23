@@ -13,10 +13,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
@@ -389,5 +391,97 @@ func Test预览组装共用地址且不提前读取配置(t *testing.T) {
 	files, _, ps, err := renderer.RenderFrozen(t.Context(), frozen, catalog.FirmwareUEFI, "task-old")
 	if err != nil || len(ps) > 0 || !strings.Contains(files[0].Body, "https://gateway.test") || !strings.Contains(files[1].Body, "# task-old") {
 		t.Fatal(files, ps, err)
+	}
+}
+
+// 只提供主机应用需要的五个方法；其他Store能力被调用就会失败。
+type hostRegistryAssemblyStore struct {
+	repository.Store
+	calls            []string
+	contexts         []context.Context
+	audits           []repository.Audit
+	created, updated model.Host
+	deletedSN        string
+	deletedRev       int64
+}
+
+func (s *hostRegistryAssemblyStore) record(ctx context.Context, action string) {
+	s.calls = append(s.calls, action)
+	s.contexts = append(s.contexts, ctx)
+}
+func (s *hostRegistryAssemblyStore) ListHosts(ctx context.Context, q repository.HostQuery) (repository.Page[model.Host], error) {
+	s.record(ctx, "list")
+	return repository.Page[model.Host]{Items: []model.Host{{SN: "ASSEMBLY-1", Rev: 1}}}, nil
+}
+func (s *hostRegistryAssemblyStore) GetHost(ctx context.Context, sn string) (model.Host, error) {
+	s.record(ctx, "get")
+	return model.Host{SN: sn, Rev: 1}, nil
+}
+func (s *hostRegistryAssemblyStore) CreateHost(ctx context.Context, h model.Host, a repository.Audit) (model.Host, error) {
+	s.record(ctx, "create")
+	s.created = h
+	s.audits = append(s.audits, a)
+	h.Rev = 1
+	return h, nil
+}
+func (s *hostRegistryAssemblyStore) UpdateHost(ctx context.Context, h model.Host, a repository.Audit) (model.Host, error) {
+	s.record(ctx, "update")
+	s.updated = h
+	s.audits = append(s.audits, a)
+	h.Rev = 2
+	return h, nil
+}
+func (s *hostRegistryAssemblyStore) DeleteHost(ctx context.Context, sn string, rev int64, a repository.Audit) error {
+	s.record(ctx, "delete")
+	s.deletedSN, s.deletedRev = sn, rev
+	s.audits = append(s.audits, a)
+	return nil
+}
+
+func Test主机应用组装传递仓储和时钟(t *testing.T) {
+	st := &hostRegistryAssemblyStore{}
+	clockCalls := 0
+	registry := hostRegistryOf(st, func() int64 { clockCalls++; return assemblyAt + int64(clockCalls) })
+	if clockCalls != 0 || len(st.calls) != 0 {
+		t.Fatal("组装时提前访问依赖")
+	}
+	ctx := t.Context()
+	actor := ports.Actor{Username: "operator", Role: model.RoleOperator}
+	page, err := registry.List(ctx, actor, hosts.ListRequest{})
+	if err != nil || len(page.Items) != 1 || page.Items[0].SN != "ASSEMBLY-1" {
+		t.Fatal(page, err)
+	}
+	if _, err := registry.Get(ctx, actor, "ASSEMBLY-1"); err != nil {
+		t.Fatal(err)
+	}
+	if clockCalls != 0 {
+		t.Fatal("查询读取了时钟", clockCalls)
+	}
+	if _, err := registry.Create(ctx, actor, model.Host{SN: " assembly-1 "}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Update(ctx, actor, hosts.UpdateRequest{PathSN: "ASSEMBLY-1", Host: model.Host{Rev: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Delete(ctx, actor, hosts.DeleteRequest{SN: "ASSEMBLY-1", Rev: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(st.calls, []string{"list", "get", "create", "update", "delete"}) || clockCalls != 3 {
+		t.Fatal(st.calls, clockCalls)
+	}
+	if st.created.SN != "ASSEMBLY-1" || st.updated.SN != "ASSEMBLY-1" || st.updated.Rev != 1 || st.deletedSN != "ASSEMBLY-1" || st.deletedRev != 2 {
+		t.Fatal(st.created, st.updated, st.deletedSN, st.deletedRev)
+	}
+	for _, got := range st.contexts {
+		if got != ctx {
+			t.Fatal("请求上下文被替换")
+		}
+	}
+	if !reflect.DeepEqual(st.audits, []repository.Audit{
+		{Actor: "operator", Action: "host.create", At: assemblyAt + 1},
+		{Actor: "operator", Action: "host.update", At: assemblyAt + 2},
+		{Actor: "operator", Action: "host.delete", At: assemblyAt + 3},
+	}) {
+		t.Fatal(st.audits)
 	}
 }
