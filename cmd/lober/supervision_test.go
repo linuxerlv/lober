@@ -38,8 +38,9 @@ func Test后台工作panic释放资源退避后重试(t *testing.T) {
 	}
 	s.mu.Lock()
 	next := s.retryAt[key]
+	failures := s.failures[key]
 	s.mu.Unlock()
-	if !next.After(time.Now()) {
+	if !next.After(time.Now()) || failures != 1 {
 		t.Fatal("panic did not schedule backoff")
 	}
 	if s.launch(w, func() error { return nil }) {
@@ -52,9 +53,21 @@ func Test后台工作panic释放资源退避后重试(t *testing.T) {
 	awaitJobRelease(t, s, key)
 	s.mu.Lock()
 	_, stillRetrying := s.retryAt[key]
+	_, stillFailed := s.failures[key]
 	s.mu.Unlock()
-	if stillRetrying {
+	if stillRetrying || stillFailed || len(s.slots) != 0 {
 		t.Fatal("successful job kept failed retry state")
+	}
+}
+
+func Test后台退避沿用原先间隔与上限(t *testing.T) {
+	for _, tc := range []struct {
+		attempt int
+		want    time.Duration
+	}{{0, 100 * time.Millisecond}, {1, 100 * time.Millisecond}, {2, 200 * time.Millisecond}, {9, 25600 * time.Millisecond}, {10, 25600 * time.Millisecond}, {100, 25600 * time.Millisecond}} {
+		if got := supervisorBackoff(tc.attempt); got != tc.want {
+			t.Fatal(tc.attempt, got, tc.want)
+		}
 	}
 }
 

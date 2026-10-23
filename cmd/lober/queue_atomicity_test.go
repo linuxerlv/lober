@@ -59,6 +59,10 @@ func Test补来源调度失败必须回滚登记和审计(t *testing.T) {
 	if err != nil || exists {
 		t.Fatal("failed scheduling committed extra source", exists, err)
 	}
+	unchanged, err := a.Store.GetISO(t.Context(), item.ID)
+	if err != nil || unchanged.State != model.ISOFailed || unchanged.Rev != item.Rev {
+		t.Fatal("排队失败改变了镜像", unchanged, err)
+	}
 	entries, err := a.Store.ListAudit(t.Context(), repository.AuditQuery{Action: audit.Action, TargetID: item.ID})
 	if err != nil || len(entries.Items) != 0 {
 		t.Fatal("failed scheduling committed audit", entries, err)
@@ -68,6 +72,14 @@ func Test补来源调度失败必须回滚登记和审计(t *testing.T) {
 	}
 	if err := a.Supervisor.Register(t.Context(), item, "upload", "", "netboot", 4, "", audit); err != nil {
 		t.Fatal(err)
+	}
+	queued, err := a.Store.GetISO(t.Context(), item.ID)
+	if err != nil || queued.State != model.ISOAcquiring || queued.Rev != item.Rev+1 {
+		t.Fatal("来源与排队没有一起保存", queued, err)
+	}
+	entries, err = a.Store.ListAudit(t.Context(), repository.AuditQuery{Action: audit.Action, TargetID: item.ID})
+	if err != nil || len(entries.Items) != 1 {
+		t.Fatal("成功排队应恰好记录一条审计", entries, err)
 	}
 	restarted := iso.New(a.Store, iso.Dirs{Staging: cfg.ISO.Staging, Artifacts: cfg.ISO.Artifacts, SMB: cfg.ISO.SMB, Tools: cfg.ISO.Tools, LocalRoots: cfg.ISO.LocalRoots})
 	work, err := restarted.Recover(t.Context())
@@ -100,6 +112,10 @@ func Test重新导入调度失败必须回滚审计和来源修订(t *testing.T)
 	after, _, err := a.Store.GetSource(t.Context(), item.ID, "")
 	if err != nil || after.Rev != before.Rev {
 		t.Fatal("failed queue changed source revision", before.Rev, after.Rev, err)
+	}
+	unchanged, err := a.Store.GetISO(t.Context(), item.ID)
+	if err != nil || unchanged.State != model.ISOFailed || unchanged.Rev != item.Rev {
+		t.Fatal("重新导入失败改变了镜像", unchanged, err)
 	}
 	entries, err := a.Store.ListAudit(t.Context(), repository.AuditQuery{Action: audit.Action, TargetID: item.ID})
 	if err != nil || len(entries.Items) != 0 {

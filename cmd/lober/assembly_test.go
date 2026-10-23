@@ -143,6 +143,9 @@ func Test装配后台获取导入及启动恢复(t *testing.T) {
 	if err := a.Supervisor.Start(); err != nil {
 		t.Fatal(err)
 	}
+	if err := a.Supervisor.Start(); err != nil {
+		t.Fatal("重复启动应成功", err)
+	}
 	ready := waitISO(t, a.Store, item.ID, model.ISOReady)
 	if ready.Version != "9.6" || len(ready.Artifacts) == 0 {
 		t.Fatal(ready)
@@ -160,6 +163,10 @@ func Test装配后台获取导入及启动恢复(t *testing.T) {
 	}
 	if err := a.Native.RequestReimport(t.Context(), failed.ID, assemblyAudit("iso.reimport")); err != nil {
 		t.Fatal(err)
+	}
+	queued, err := a.Store.GetISO(t.Context(), failed.ID)
+	if err != nil || queued.State != model.ISOAcquiring || queued.Rev != failed.Rev+1 {
+		t.Fatal("重启前必须已保存排队事实", queued, err)
 	}
 	restarted := newSourceSupervisor(t.Context(), a.Native, a.Store, a.Deletion, a.Gate, cfg.ISO, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer restarted.Close()

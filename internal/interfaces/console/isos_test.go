@@ -15,6 +15,7 @@ import (
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
+	iso "github.com/lober/lober/internal/infrastructure/media"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore"
 )
 
@@ -143,6 +144,37 @@ func TestISO登记多来源与真实参数(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("missing create audit")
+	}
+}
+
+func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T) {
+	s, st, _, _, token := newISOServer(t)
+	s.server.deps.ISOSource = iso.New(st, iso.Dirs{Staging: t.TempDir(), Artifacts: t.TempDir()})
+	w := httpCall(s, "POST", "/console/v1/isos", `{"name":"partial","family":"linux","series":"debian","sources":[{"kind":"upload","size":4},{"kind":"path","addr":"/outside/netboot.iso","role":"netboot"}]}`, token)
+	id := strings.TrimPrefix(w.Header().Get("Location"), "/console/v1/isos/")
+	if w.Code != 422 || id == "" || id == w.Header().Get("Location") || !strings.Contains(w.Body.String(), "iso_source_rejected") {
+		t.Fatal(w.Code, w.Body.String(), w.Header().Get("Location"))
+	}
+	item, err := st.GetISO(t.Context(), id)
+	if err != nil || item.State != model.ISOAcquiring || item.Rev != 1 {
+		t.Fatal(item, err)
+	}
+	src, exists, err := st.GetSource(t.Context(), id, "")
+	if err != nil || !exists || src.State != model.SourcePending || src.Kind != model.SourceUpload || src.TotalSize != 4 || src.Rev != 1 {
+		t.Fatal(src, exists, err)
+	}
+	_, exists, err = st.GetSource(t.Context(), id, "netboot")
+	if err != nil || exists {
+		t.Fatal(exists, err)
+	}
+	audits, err := st.ListAudit(t.Context(), repository.AuditQuery{TargetKind: "iso", TargetID: id, Action: "iso.create"})
+	if err != nil || len(audits.Items) != 2 {
+		t.Fatal(audits, err)
+	}
+	for _, a := range audits.Items {
+		if a.Actor != "admin" || a.At != fixedAt {
+			t.Fatal(a)
+		}
 	}
 }
 func TestISO坏登记不产生记录(t *testing.T) {

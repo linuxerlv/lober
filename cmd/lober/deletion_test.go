@@ -73,6 +73,10 @@ func Test删除快照写失败保留数据及清理失败可重启重试(t *test
 	if _, err := a.Store.GetISO(t.Context(), item.ID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatal("delete not committed", err)
 	}
+	after, err = a.Store.ListAudit(t.Context(), repository.AuditQuery{TargetKind: "iso", TargetID: item.ID, Action: "iso.delete"})
+	if err != nil || len(after.Items) != len(before.Items)+1 {
+		t.Fatal("清理失败仍须保留已提交的删除审计", after, err)
+	}
 	if _, err := os.Stat(filepath.Join(actualDir, item.ID+".json")); err != nil {
 		t.Fatal("failed cleanup lost durable journal", err)
 	}
@@ -100,5 +104,9 @@ func Test删除快照写失败保留数据及清理失败可重启重试(t *test
 	}
 	if _, err := os.Stat(sentinel); err != nil {
 		t.Fatal("outside bytes changed", err)
+	}
+	afterRetry, err := a.Store.ListAudit(t.Context(), repository.AuditQuery{TargetKind: "iso", TargetID: item.ID, Action: "iso.delete"})
+	if err != nil || len(afterRetry.Items) != len(after.Items) {
+		t.Fatal("重试清理不能重复记录删除审计", afterRetry, err)
 	}
 }

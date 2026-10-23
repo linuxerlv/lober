@@ -66,6 +66,7 @@ func TestUploadRejectedDoesNotOverwriteConfirmedBytes(t *testing.T) {
 	if err := s.Upload(t.Context(), item.ID, "", 0, strings.NewReader("abcd"), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
+	before := mustSource(t, s, item.ID, "")
 	for _, chunk := range []struct {
 		offset int64
 		data   string
@@ -74,8 +75,12 @@ func TestUploadRejectedDoesNotOverwriteConfirmedBytes(t *testing.T) {
 			t.Fatalf("accepted %+v", chunk)
 		}
 		src := mustSource(t, s, item.ID, "")
-		if src.Fetched != 4 {
+		if src.Fetched != 4 || src.State != before.State || src.Rev != before.Rev {
 			t.Fatalf("rejected chunk changes progress: %+v", src)
+		}
+		ranges, err := s.store.RangesOf(t.Context(), item.ID, "")
+		if err != nil || !reflect.DeepEqual(ranges, []model.Range{{Start: 0, Length: 4}}) {
+			t.Fatal("拒绝分片改变了已确认区间", ranges, err)
 		}
 		got, err := os.ReadFile(s.stagingPath(item.ID, ""))
 		if err != nil || string(got) != "abcd" {
