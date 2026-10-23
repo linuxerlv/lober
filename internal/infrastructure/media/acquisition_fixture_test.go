@@ -3,16 +3,21 @@ package iso
 import (
 	"context"
 	appmedia "github.com/lober/lober/internal/application/media"
+	"github.com/lober/lober/internal/application/media/port"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 	"io"
+	"log/slog"
 	"path/filepath"
 )
 
 // 原有真实库测试复用同一组来源能力、导入能力和协调锁。
 type acquisitionFixture struct {
-	*Sources
+	store       repository.Store
+	dirs        Dirs
+	locks       port.SourceLocks
+	gate        port.RegistrationGate
 	acquisition *appmedia.Sources
 	transfer    *Transfer
 }
@@ -20,7 +25,7 @@ type acquisitionFixture struct {
 func newAcquisitionFixture(st repository.Store, d Dirs) *acquisitionFixture {
 	locks, gate := NewSourceLocks(), NewRegistrationGate()
 	transfer := NewTransfer(d)
-	return &acquisitionFixture{Sources: New(st, d, locks, gate), transfer: transfer, acquisition: appmedia.NewSources(appmedia.SourceDeps{ISOs: st, Sources: st, Transfer: transfer, Import: NewImportFiles(d), Locks: locks, Gate: gate})}
+	return &acquisitionFixture{store: st, dirs: d, locks: locks, gate: gate, transfer: transfer, acquisition: appmedia.NewSources(appmedia.SourceDeps{ISOs: st, Sources: st, Transfer: transfer, Import: NewImportFiles(d), Locks: locks, Gate: gate})}
 }
 func (s *acquisitionFixture) Register(ctx context.Context, i model.ISO, k, a, r string, n int64, d string, audit repository.Audit) error {
 	return s.acquisition.Register(ctx, i, k, a, r, n, d, audit)
@@ -75,4 +80,22 @@ func (s *acquisitionFixture) sourcePath(src model.Source) string {
 		return src.Path
 	}
 	return s.finalPath(src.ISOID, src.Role)
+}
+
+func (s *acquisitionFixture) finalPath(id, role string) string {
+	if role != "" {
+		id += "." + role
+	}
+	return filepath.Join(s.dirs.Staging, id)
+}
+func (s *acquisitionFixture) CleanupDeleted(ctx context.Context, snapshot port.DeletionSnapshot) error {
+	journal, err := NewDeletionJournal(s.dirs.Staging)
+	if err != nil {
+		return err
+	}
+	if err = journal.Persist(ctx, snapshot); err != nil {
+		return err
+	}
+	service := appmedia.NewDeletion(appmedia.DeletionDeps{ISOs: s.store, Sources: s.store, Journal: journal, Files: NewDeletedFiles(s.dirs), Locks: s.locks, Gate: s.gate, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	return service.RetryAll(ctx)
 }

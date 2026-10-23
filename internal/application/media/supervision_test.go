@@ -1,13 +1,14 @@
-package main
+package media
 
 import (
 	"testing"
 	"time"
 
-	appmedia "github.com/lober/lober/internal/application/media"
+	"io"
+	"log/slog"
 )
 
-func awaitJobRelease(t *testing.T, s *sourceSupervisor, key string) {
+func awaitJobRelease(t *testing.T, s *Supervisor, key string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -25,9 +26,9 @@ func awaitJobRelease(t *testing.T, s *sourceSupervisor, key string) {
 }
 
 func Test后台工作panic释放资源退避后重试(t *testing.T) {
-	a, _ := assembled(t)
-	s := a.Supervisor
-	w := appmedia.ResumeWork{ISOID: "fault", Kind: appmedia.ResumeFetch}
+	s := NewSupervisor(t.Context(), SupervisorDeps{Workers: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	t.Cleanup(s.Close)
+	w := ResumeWork{ISOID: "fault", Kind: ResumeFetch}
 	key := "fault//fetch"
 	if !s.launch(w, func() error { panic("private failure payload") }) {
 		t.Fatal("job did not start")
@@ -72,8 +73,8 @@ func Test后台退避沿用原先间隔与上限(t *testing.T) {
 }
 
 func Test后台协调panic退避且取消立即退出(t *testing.T) {
-	a, _ := assembled(t)
-	s := a.Supervisor
+	s := NewSupervisor(t.Context(), SupervisorDeps{Workers: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	t.Cleanup(s.Close)
 	started := time.Now()
 	done := make(chan struct{})
 	calls := 0

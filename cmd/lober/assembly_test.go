@@ -19,13 +19,13 @@ import (
 
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/hosts"
+	appmedia "github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/params"
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/domain/snapshot"
-	"github.com/lober/lober/internal/infrastructure/media"
 	"github.com/lober/lober/internal/infrastructure/media/isotest"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 	"github.com/lober/lober/internal/interfaces/console"
@@ -137,7 +137,7 @@ func Test装配后台获取导入及启动恢复(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Supervisor.Register(t.Context(), item, "path", path, "", int64(len(image)), hex.EncodeToString(sum[:]), assemblyAudit("iso.source.register")); err != nil {
+	if err := a.Control.Register(t.Context(), item, "path", path, "", int64(len(image)), hex.EncodeToString(sum[:]), assemblyAudit("iso.source.register")); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Supervisor.Start(); err != nil {
@@ -161,14 +161,15 @@ func Test装配后台获取导入及启动恢复(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Supervisor.source.RequestReimport(t.Context(), failed.ID, assemblyAudit("iso.reimport")); err != nil {
+	if err := a.Sources.RequestReimport(t.Context(), failed.ID, assemblyAudit("iso.reimport")); err != nil {
 		t.Fatal(err)
 	}
 	queued, err := a.Store.GetISO(t.Context(), failed.ID)
 	if err != nil || queued.State != model.ISOAcquiring || queued.Rev != failed.Rev+1 {
 		t.Fatal("重启前必须已保存排队事实", queued, err)
 	}
-	restarted := newSourceSupervisor(t.Context(), a.Supervisor.source, a.Supervisor.source, a.Store, a.Deletion, a.Gate, cfg.ISO, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted, _ := supervisorOf(t.Context(), a.Sources, a.Store, a.Deletion, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restartedControl := appmedia.NewControl(a.Sources, restarted)
 	defer restarted.Close()
 	if err := restarted.Start(); err != nil {
 		t.Fatal(err)
@@ -182,66 +183,18 @@ func Test装配后台获取导入及启动恢复(t *testing.T) {
 	otherImage := append([]byte{}, image...)
 	otherImage[7] = 1
 	otherSum := sha256.Sum256(otherImage)
-	if err := restarted.Register(t.Context(), upload, "upload", "", "", int64(len(otherImage)), hex.EncodeToString(otherSum[:]), assemblyAudit("iso.source.register")); err != nil {
+	if err := restartedControl.Register(t.Context(), upload, "upload", "", "", int64(len(otherImage)), hex.EncodeToString(otherSum[:]), assemblyAudit("iso.source.register")); err != nil {
 		t.Fatal(err)
 	}
 	// Remove the first platform before publishing another ISO on that platform.
 	if err := a.Deletion.Delete(t.Context(), failed.ID, waitISO(t, a.Store, failed.ID, model.ISOReady).Rev, assemblyAudit("iso.delete")); err != nil {
 		t.Fatal(err)
 	}
-	if err := restarted.Upload(t.Context(), upload.ID, "", 0, bytes.NewReader(otherImage), repository.Audit{}); err != nil {
+	if err := restartedControl.Upload(t.Context(), upload.ID, "", 0, bytes.NewReader(otherImage), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	waitISO(t, a.Store, upload.ID, model.ISOReady)
 }
-func Test持久化删除快照先于删除及重启重试(t *testing.T) {
-	a, cfg := assembled(t)
-	item, err := a.Store.CreateISO(t.Context(), model.ISO{Name: "delete-upload", Family: "linux", Series: "rocky"}, assemblyAudit("iso.create"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Supervisor.Register(t.Context(), item, "upload", "", "", 4, "", assemblyAudit("iso.source.register")); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Supervisor.Upload(t.Context(), item.ID, "", 0, bytes.NewReader([]byte("data")), repository.Audit{}); err != nil {
-		t.Fatal(err)
-	}
-	sources, err := a.Store.SourcesOf(t.Context(), item.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot := iso.DeletionSnapshot{ISO: item, Sources: sources}
-	if err := a.Deletion.persist(snapshot); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Deletion.RetryAll(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(cfg.ISO.Staging, item.ID)); err != nil {
-		t.Fatal("cleanup ran before committed deletion", err)
-	}
-	// Simulate the crash boundary: journal persisted, DB deletion committed.
-	if err := a.Deletion.persist(snapshot); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Store.DeleteISO(t.Context(), item.ID, item.Rev, assemblyAudit("iso.delete")); err != nil {
-		t.Fatal(err)
-	}
-	restarted, err := newDeletionJournal(a.Store, a.Native, a.Gate, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := restarted.RetryAll(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(cfg.ISO.Staging, item.ID)); !os.IsNotExist(err) {
-		t.Fatal("bytes remained", err)
-	}
-	if err := restarted.RetryAll(t.Context()); err != nil {
-		t.Fatal("cleanup is not idempotent", err)
-	}
-}
-
 func TestHTTP真实监听登录及取消退出(t *testing.T) {
 	a, cfg := assembled(t)
 	ctx, cancel := context.WithCancel(t.Context())

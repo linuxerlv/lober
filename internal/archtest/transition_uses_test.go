@@ -101,6 +101,14 @@ func transitionRestricted(caller string, obj types.Object) bool {
 		return false
 	}
 	target := obj.Pkg().Path()
+	if under(caller, layer1+"/media") && target == pkgStore {
+		// 镜像规则只复用这三个纯校验符号；仓储类型和方法仍全部拒绝。
+		switch transitionSymbol(obj) {
+		case "CheckID", "CheckSource", "ErrInvalid":
+			return false
+		}
+		return true
+	}
 	_, function := obj.(*types.Func)
 	if under(caller, pkgConsole) {
 		return target == pkgStore || under(target, pkgBuiltin) || under(target, pkgRender) || target == pkgNotification || target == layer1+"/access" || function && under(target, layer1) || target == pkgConsole && strings.HasPrefix(transitionSymbol(obj), "ISOSourceState.")

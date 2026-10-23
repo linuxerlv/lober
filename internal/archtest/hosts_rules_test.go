@@ -126,7 +126,18 @@ func Test主机许可已清零(t *testing.T) {
 			{pkgConsole, "internal/interfaces/console/isosource.go", "package-init", pkgStore, "Audit", "4"},
 			{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "ISOs", "4"},
 		}},
-		{"mediaMigrationExceptions", mediaMigrationExceptions, 11, "4e93eaf8a62876bfa694042b348843f41709e729f45b4354708802cfe5df19db", []migrationException{
+		{"mediaMigrationExceptions", mediaMigrationExceptions, 0, "4e93eaf8a62876bfa694042b348843f41709e729f45b4354708802cfe5df19db", []migrationException{
+			{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).CleanupDeleted", "github.com/lober/lober/internal/domain/model", "ISO.Validate", "4"},
+			{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).CleanupDeleted", "github.com/lober/lober/internal/domain/repository", "CheckID", "4"},
+			{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).CleanupDeleted", "github.com/lober/lober/internal/domain/repository", "CheckSource", "4"},
+			{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).CleanupDeleted", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).CleanupDeleted", "github.com/lober/lober/internal/domain/repository", "ErrInvalid", "4"},
+			{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).confirmDeleted", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).confirmDeleted", "github.com/lober/lober/internal/domain/repository", "ErrNotFound", "4"},
+			{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).confirmDeleted", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "4"},
+			{pkgISO, "internal/infrastructure/media/delete.go", "cleanupOwnedTree", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/iso.go", "package-init", "github.com/lober/lober/internal/domain/repository", "Store", "4"},
+			{pkgISO, "internal/infrastructure/media/iso.go", "New", "github.com/lober/lober/internal/domain/repository", "Store", "4"},
 			{pkgISO, "internal/infrastructure/media/suse.go", "identifySUSELayout", "github.com/lober/lober/internal/domain/catalog", "Arch.Valid", "4"},
 			{pkgISO, "internal/infrastructure/media/suse.go", "identifySUSELayout", "github.com/lober/lober/internal/domain/catalog", "RepoPaths", "4"},
 			{pkgISO, "internal/infrastructure/media/extract.go", "(*Sources).extract", "github.com/lober/lober/internal/domain/catalog", "RepoPaths", "4"},
@@ -264,7 +275,7 @@ func Test主机许可已清零(t *testing.T) {
 		total += len(tc.entries)
 		expectedRemoved := 0
 		if tc.name == "mediaMigrationExceptions" {
-			expectedRemoved = 114
+			expectedRemoved = 125
 		}
 		if tc.name == "migrationExceptions" {
 			expectedRemoved = 34
@@ -293,7 +304,7 @@ func Test主机许可已清零(t *testing.T) {
 			t.Errorf("%s changed beyond the exact phase-three removals: %s", tc.name, got)
 		}
 	}
-	if total != 118 {
-		t.Fatalf("total=%d want 118", total)
+	if total != 107 {
+		t.Fatalf("total=%d want 107", total)
 	}
 }

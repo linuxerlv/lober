@@ -1,20 +1,7 @@
 package archtest
 
-// 旧镜像实现仍组织获取、状态、事务和恢复流程，总路线镜像阶段逐条迁出；不是终态基础设施。
-var mediaMigrationExceptions = []migrationException{
-	// 保留 dev 已有流程；逐项登记，向导不增加放行。
-	{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).CleanupDeleted", "github.com/lober/lober/internal/domain/model", "ISO.Validate", "4"},
-	{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).CleanupDeleted", "github.com/lober/lober/internal/domain/repository", "CheckID", "4"},
-	{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).CleanupDeleted", "github.com/lober/lober/internal/domain/repository", "CheckSource", "4"},
-	{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).CleanupDeleted", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
-	{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).CleanupDeleted", "github.com/lober/lober/internal/domain/repository", "ErrInvalid", "4"},
-	{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).confirmDeleted", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
-	{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).confirmDeleted", "github.com/lober/lober/internal/domain/repository", "ErrNotFound", "4"},
-	{pkgISO, "internal/infrastructure/media/delete.go", "(*Sources).confirmDeleted", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "4"},
-	{pkgISO, "internal/infrastructure/media/delete.go", "cleanupOwnedTree", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
-	{pkgISO, "internal/infrastructure/media/iso.go", "package-init", "github.com/lober/lober/internal/domain/repository", "Store", "4"},
-	{pkgISO, "internal/infrastructure/media/iso.go", "New", "github.com/lober/lober/internal/domain/repository", "Store", "4"},
-}
+// 镜像业务已迁入应用，基础设施不再持有旧流程许可。
+var mediaMigrationExceptions = []migrationException{}
 
 // 非向导的旧领域判定、渲染及描述调用，按所属模块阶段逐条删除。
 var consoleRuleMigrationExceptions = []migrationException{

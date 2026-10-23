@@ -3,15 +3,7 @@ package iso
 import (
 	"context"
 	"io"
-	"path/filepath"
 )
-
-func (s *Sources) finalPath(id, role string) string {
-	if role != "" {
-		id += "." + role
-	}
-	return filepath.Join(s.dirs.Staging, id)
-}
 
 type contextReader struct {
 	ctx context.Context

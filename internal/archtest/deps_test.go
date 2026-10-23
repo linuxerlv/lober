@@ -621,6 +621,9 @@ func checkClock(fset *token.FileSet, pkg string, f *ast.File) []violation {
 // 层 1 里按方向规则（layerDirection），此外一律不许。
 func layer1Rule(pkg, imp string) rule {
 	switch {
+	case pkg == layer1+"/media" && imp == pkgStore:
+		// 只复用纯校验；类型检查继续拦截仓储对象和方法。
+		return ""
 	case stdAllowed[imp]:
 		return ""
 	case imp == "C":

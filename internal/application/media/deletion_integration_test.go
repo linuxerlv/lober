@@ -1,10 +1,9 @@
-package main
+package media_test
 
 import (
 	"bytes"
 	"errors"
-	"io"
-	"log/slog"
+	"github.com/lober/lober/internal/application/media/port"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,19 +13,19 @@ import (
 )
 
 func Test删除快照写失败保留数据及清理失败可重启重试(t *testing.T) {
-	a, cfg := assembled(t)
+	a, cfg := assembledDeletion(t)
 	item, err := a.Store.CreateISO(t.Context(), model.ISO{Name: "cleanup-failure", Family: "linux", Series: "rocky"}, assemblyAudit("iso.create"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	image := rockyImage()
-	if err := a.Supervisor.Register(t.Context(), item, "upload", "", "", int64(len(image)), "", assemblyAudit("iso.source.register")); err != nil {
+	if err := a.Control.Register(t.Context(), item, "upload", "", "", int64(len(image)), "", assemblyAudit("iso.source.register")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Supervisor.Upload(t.Context(), item.ID, "", 0, bytes.NewReader(image), repository.Audit{}); err != nil {
+	if err := a.Control.Upload(t.Context(), item.ID, "", 0, bytes.NewReader(image), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Supervisor.source.Import(t.Context(), item.ID); err != nil {
+	if err := a.Sources.Import(t.Context(), item.ID); err != nil {
 		t.Fatal(err)
 	}
 	item, err = a.Store.GetISO(t.Context(), item.ID)
@@ -37,16 +36,23 @@ func Test删除快照写失败保留数据及清理失败可重启重试(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	actualDir := a.Deletion.dir
-	blocked := filepath.Join(t.TempDir(), "not-a-directory")
-	if err := os.WriteFile(blocked, []byte("blocked"), 0600); err != nil {
+	actualDir := filepath.Join(cfg.ISO.Staging, "deletions")
+	savedJournal := actualDir + ".saved"
+	if err := os.Rename(actualDir, savedJournal); err != nil {
 		t.Fatal(err)
 	}
-	a.Deletion.dir = blocked
+	if err := os.WriteFile(actualDir, []byte("blocked"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := a.Deletion.Delete(t.Context(), item.ID, item.Rev, assemblyAudit("iso.delete")); err == nil {
 		t.Fatal("snapshot write failure accepted")
 	}
-	a.Deletion.dir = actualDir
+	if err := os.Remove(actualDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(savedJournal, actualDir); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := a.Store.GetISO(t.Context(), item.ID); err != nil {
 		t.Fatal("snapshot failure removed row", err)
 	}
@@ -89,10 +95,7 @@ func Test删除快照写失败保留数据及清理失败可重启重试(t *test
 	if err := os.Rename(saved, tree); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := newDeletionJournal(a.Store, a.Native, a.Gate, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	restarted := a.newDeletion(a.Journal)
 	if err := restarted.RetryAll(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -108,5 +111,50 @@ func Test删除快照写失败保留数据及清理失败可重启重试(t *test
 	afterRetry, err := a.Store.ListAudit(t.Context(), repository.AuditQuery{TargetKind: "iso", TargetID: item.ID, Action: "iso.delete"})
 	if err != nil || len(afterRetry.Items) != len(after.Items) {
 		t.Fatal("重试清理不能重复记录删除审计", afterRetry, err)
+	}
+}
+
+func Test持久化删除快照先于删除及重启重试(t *testing.T) {
+	a, cfg := assembledDeletion(t)
+	item, err := a.Store.CreateISO(t.Context(), model.ISO{Name: "delete-upload", Family: "linux", Series: "rocky"}, assemblyAudit("iso.create"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Control.Register(t.Context(), item, "upload", "", "", 4, "", assemblyAudit("iso.source.register")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Control.Upload(t.Context(), item.ID, "", 0, bytes.NewReader([]byte("data")), repository.Audit{}); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := a.Store.SourcesOf(t.Context(), item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := port.DeletionSnapshot{ISO: item, Sources: sources}
+	if err := a.Journal.Persist(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Deletion.RetryAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.ISO.Staging, item.ID)); err != nil {
+		t.Fatal("cleanup ran before committed deletion", err)
+	}
+	// Simulate the crash boundary: journal persisted, DB deletion committed.
+	if err := a.Journal.Persist(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Store.DeleteISO(t.Context(), item.ID, item.Rev, assemblyAudit("iso.delete")); err != nil {
+		t.Fatal(err)
+	}
+	restarted := a.newDeletion(a.Journal)
+	if err := restarted.RetryAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.ISO.Staging, item.ID)); !os.IsNotExist(err) {
+		t.Fatal("bytes remained", err)
+	}
+	if err := restarted.RetryAll(t.Context()); err != nil {
+		t.Fatal("cleanup is not idempotent", err)
 	}
 }

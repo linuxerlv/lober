@@ -22,21 +22,23 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 		return nil, nil, err
 	}
 	mainLoggingStore := loggingStoreOf(store, logger)
+	dirs, err := mediaDirsOf(cfg)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 	sourceLocks := sourceLocksOf()
-	v := gateOf()
-	sources := acquisitionOf(mainLoggingStore, cfg, sourceLocks, v)
-	isoSources, err := nativeSourcesOf(mainLoggingStore, cfg, sourceLocks, v)
+	registrationGate := gateOf()
+	sources := acquisitionOf(mainLoggingStore, dirs, sourceLocks, registrationGate)
+	deletionJournal, err := deletionJournalOf(dirs)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	mainDeletionJournal, err := newDeletionJournal(mainLoggingStore, isoSources, v, cfg, logger)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	mainSourceSupervisor, cleanup2 := supervisorOf(ctx, sources, mainLoggingStore, mainDeletionJournal, v, cfg, logger)
-	registry := mediaRegistryOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, clock)
+	deletion := deletionOf(mainLoggingStore, dirs, deletionJournal, sourceLocks, registrationGate, logger)
+	supervisor, cleanup2 := supervisorOf(ctx, sources, mainLoggingStore, deletion, cfg, logger)
+	sourceControl := mediaControlOf(sources, supervisor)
+	registry := mediaRegistryOf(mainLoggingStore, sourceControl, deletion, clock)
 	notifier := notification.NewHub()
 	selectionGuard := selection.NewGuard()
 	mainMachineBundle, err := machineOf(mainLoggingStore, notifier, cfg, clock, logger)
@@ -54,7 +56,7 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 	hostsRegistry := hostRegistryOf(mainLoggingStore, clock)
 	deps := consoleDepsOf(mainLoggingStore, registry, notifier, cfg, clock, logger, wizard, hooks, templates, editor, frozenPreview, taskControl, hostsRegistry)
 	server := console.New(deps)
-	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, isoSources, mainSourceSupervisor, mainDeletionJournal, v, mainMachineBundle)
+	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, sourceControl, supervisor, deletion, mainMachineBundle)
 	return mainApp, func() {
 		cleanup2()
 		cleanup()
