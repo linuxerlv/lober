@@ -129,7 +129,7 @@ Delete(ctx, actor, RevisionRequest) error
 `port/transfer.go` 以可关闭会话隔离外部操作：`Transfer`含 `ValidateSource(context.Context,model.Source)(model.Source,error)`、`BeginFetch(context.Context,model.Source)(FetchSession,error)`、`BeginPublish(context.Context,model.Source)(FetchSession,error)`、`BeginUpload(context.Context,model.Source,int64,io.Reader)(UploadSession,error)`、`ParkRetry(context.Context,model.Source)(RetryFiles,error)`、`FreeSpace(context.Context)(int64,int64,error)`。验证仅归一化经过允许根检查的local路径，url逐次解析和连接保护仍由网络实现保证。
 
 - FetchSession：`Resume(context.Context)(int64,error)`恢复发布中断并报告真实持久化长度；应用先保存修正的Fetched。`Open(context.Context)(FetchInfo,error)`开始受保护网络/本地读取；FetchInfo为`Offset,TotalSize int64; Complete, Reset bool`，包括服务器拒绝断点后的归零。应用按旧顺序保存新计数，再循环`Step(context.Context)(offset int64, done bool, err error)`；只报告已经同步的绝对字节位置。err与新offset同时返回时，仍先尝试保存已同步进度，不能吞掉读错误。Open遇到URL安全拒绝时沿用旧行为删除托管part，并返回Reset=true的零进度事实及错误，应用保存计数后再返回原问题；不能只删文件不修正持久化进度。`Verify(context.Context)(VerifiedContent,error)`报告普通文件的实际大小及摘要并检查读取前后稳定，VerifiedContent为`Size int64; SHA256 string`；应用比对预期、重读来源仍fetching且Rev相同后，才调用`Publish(context.Context) error`重命名。`Restore(context.Context) error`在来源最终保存失败时恢复part；`Close() error`释放句柄及网络响应，不删除有效断点。
-- UploadSession：BeginUpload只写受大小限制的临时片，错误不得触碰确认文件；`CheckOverlap(context.Context,[]model.Range) error`检查真实字节；`Write(context.Context) error`写入并同步；`VerifyReplay(context.Context) error`核对完成后重放；`Close() error`关闭并移除本次临时片。应用负责调用SaveSource、SaveRange、重读来源及全片齐备后的最终发布；完成发布复用FetchSession的本地发布能力，构造入口为`Transfer.BeginPublish(context.Context,model.Source)(FetchSession,error)`，不得发网络请求。
+- UploadSession：BeginUpload只写受大小限制的临时片，错误不得触碰确认文件；`Size() int64`返回完整暂存并校验后的实际片长，成功后固定；应用用该值保存区间，不用声明长度替代；`CheckOverlap(context.Context,[]model.Range) error`检查真实字节；`Write(context.Context) error`写入并同步；`VerifyReplay(context.Context) error`核对完成后重放；`Close() error`关闭并移除本次临时片。应用负责调用SaveSource、SaveRange、重读来源及全片齐备后的最终发布；完成发布复用FetchSession的本地发布能力，构造入口为`Transfer.BeginPublish(context.Context,model.Source)(FetchSession,error)`，不得发网络请求。
 - RetryFiles：`Restore() error`恢复临时停放字节；`Commit() error`在重置持久化成功后移除停放文件；只有非local来源参与。原始文件、区间和审计失败行为按现有测试保留。
 - `port.Fault`是外部失败事实，字段`Kind FaultKind; Role, Expected, Actual string; Cause error`，有Error/Unwrap；Kind精确列为URLRejected、PathRejected、ChunkRejected、ContentMismatch、PublicationConflict、InvalidFile。应用将其转换为原ProblemsError/稳定错误；基础设施不导入repository、不自己设ISO/Source状态、不创建业务Problem。
 
@@ -212,14 +212,14 @@ func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T)
 
 **Interfaces:** 消费Task2 SourceControl的既有签名；实现NewSources和FetchOne/Recover/RequestReimport及Transfer会话协议。过渡期间Import和CleanupDeleted仍由旧实现承担，root把相同SourceLocks/Gate注入两者；旧supervisor的source字段改为应用Sources，增加`importer interface{ Import(context.Context,string) error }`字段接现有iso.Sources，launch参数使用media.ResumeWork。只调用新来源恢复与旧Import，不复制恢复规则。Task4把importer改接新应用Import，Task5再迁走整个supervisor。Reimport控制适配器调用RequestReimport然后Wake，不能同步导入。
 
-- [ ] VM先跑新契约测试，预期新构造或能力不存在而失败。为Transfer建立真文件/受控HTTP测试；为应用使用可阻断的会话替身验证顺序，不用假替身代替最终真实数据库和文件组合测试。
-- [ ] 迁出登记、状态转换、cancel的16次冲突重读、retry逐来源重置、allFetched恢复选择及扫描分页排序。失败镜像补来源与RequestReimport继续调用SaveSourceAndAcquire，禁止拆成两次提交；恢复只列持久化工作，不发下载或导入。
-- [ ] 实现会话并用于生产流程；网络每次请求/重定向重新校验全部地址、固定拨号地址且保留TLS验证，不启代理或透明解压。保留无摘要断点归零、服务器200重来、206/416精确范围及实际part长度优先；复制缓冲与旧256KiB同步点保持。
-- [ ] 守卫只允许`internal/infrastructure/media`实现精确`internal/application/media/port`，不放行整个application或其服务，也不把此能力扩给iso9660子包；以正反例验证后再用于会话实现。旧路径仍有的仓储调用只受已有逐项许可约束，不增加通配。
-- [ ] 保留upload乱序/重复/重叠、先完整暂存验证再写确认文件、SaveRange原子区间合并。先发布取消函数再重读状态；服务退出/超时保留fetching断点，显式Cancel才置cancelled。重试只移走托管字节，审计失败恢复文件与数据库事实。
-- [ ] 补`Test镜像取消与最后片发布两方向竞争`、`Test镜像关闭后从真实断点恢复`、`Test镜像获取会话每条退出路径关闭`；断言旧Rev不能覆盖cancelled、已fetched重放不改字节、非法片不写ranges、关闭次数为1。使用通道/受控数据库等待确认竞争，不以固定sleep当竞争证明。
-- [ ] VM运行`go test ./internal/application/media ./internal/infrastructure/media ./cmd/lober ./internal/infrastructure/persistence/pgstore -count=1`及相同包`-race -timeout=20m`。保留原Upload/Remote/RetryAuditFailure/WorkerShutdown/QueueAtomicity测试，只有消费者路径变化，不弱化断言。
-- [ ] 删除本项实际已迁出的media许可，逐条登记而不预填中间数量；旧Import/Delete还使用的许可保留到所属项。核对其他阶段无改动；先提交候选`refactor(media): separate acquisition state from byte operations`供独立审查，通过后才标记本项完成。
+- [x] VM先跑新契约测试，预期新构造或能力不存在而失败。为Transfer建立真文件/受控HTTP测试；为应用使用可阻断的会话替身验证顺序，不用假替身代替最终真实数据库和文件组合测试。
+- [x] 迁出登记、状态转换、cancel的16次冲突重读、retry逐来源重置、allFetched恢复选择及扫描分页排序。失败镜像补来源与RequestReimport继续调用SaveSourceAndAcquire，禁止拆成两次提交；恢复只列持久化工作，不发下载或导入。
+- [x] 实现会话并用于生产流程；网络每次请求/重定向重新校验全部地址、固定拨号地址且保留TLS验证，不启代理或透明解压。保留无摘要断点归零、服务器200重来、206/416精确范围及实际part长度优先；复制缓冲与旧256KiB同步点保持。
+- [x] 守卫只允许`internal/infrastructure/media`实现精确`internal/application/media/port`，不放行整个application或其服务，也不把此能力扩给iso9660子包；以正反例验证后再用于会话实现。旧路径仍有的仓储调用只受已有逐项许可约束，不增加通配。
+- [x] 保留upload乱序/重复/重叠、先完整暂存验证再写确认文件、SaveRange原子区间合并。先发布取消函数再重读状态；服务退出/超时保留fetching断点，显式Cancel才置cancelled。重试只移走托管字节，审计失败恢复文件与数据库事实。
+- [x] 补`Test镜像取消与最后片发布两方向竞争`、`Test镜像关闭后从真实断点恢复`、`Test镜像获取会话每条退出路径关闭`；断言旧Rev不能覆盖cancelled、已fetched重放不改字节、非法片不写ranges、关闭次数为1。使用通道/受控数据库等待确认竞争，不以固定sleep当竞争证明。
+- [x] VM运行`go test ./internal/application/media ./internal/infrastructure/media ./cmd/lober ./internal/infrastructure/persistence/pgstore -count=1`及相同包`-race -timeout=20m`。保留原Upload/Remote/RetryAuditFailure/WorkerShutdown/QueueAtomicity测试，只有消费者路径变化，不弱化断言。
+- [x] 删除本项实际已迁出的media许可，逐条登记而不预填中间数量；旧Import/Delete还使用的许可保留到所属项。核对其他阶段无改动；先提交候选`refactor(media): separate acquisition state from byte operations`供独立审查，通过后才标记本项完成。
 
 ### Task 4：导入、识别与恢复只走明确能力
 
