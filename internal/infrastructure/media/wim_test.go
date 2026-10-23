@@ -3,6 +3,8 @@ package iso
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"github.com/lober/lober/internal/application/media/port"
 	"strconv"
 	"strings"
 	"testing"
@@ -197,7 +199,9 @@ func TestWIMRejectsUnsupportedAndCorruptResources(t *testing.T) {
 	xml := []byte(`<WIM><IMAGE INDEX="1"><NAME>Windows</NAME><FLAGS>Core</FLAGS></IMAGE></WIM>`)
 	lzx := makeWIM(xml, 0x40002, true, 32768, len(xml))
 	_, err := WIMImages(bytes.NewReader(lzx), int64(len(lzx)))
-	identifyCode(t, err, "iso_wim_compressed")
+	if !errors.Is(err, port.ErrWIMCompressed) {
+		t.Fatal(err)
+	}
 	valid := makeWIM(xml, 0, false, 32768, len(xml))
 	for _, mutate := range []func([]byte){
 		func(b []byte) { b[0] = 'x' }, func(b []byte) { binary.LittleEndian.PutUint64(b[80:], ^uint64(0)) },
@@ -214,5 +218,14 @@ func TestWIMRejectsUnsupportedAndCorruptResources(t *testing.T) {
 		if _, err := WIMImages(bytes.NewReader(valid[:i]), int64(i)); err == nil {
 			t.Fatalf("accepted truncation %d", i)
 		}
+	}
+}
+
+func TestWIM不把三十二位映射成六十四位(t *testing.T) {
+	xml := `<WIM><IMAGE INDEX="1"><NAME>Windows 10 Home x86</NAME><FLAGS>Core</FLAGS><WINDOWS><ARCH>0</ARCH><VERSION><MAJOR>10</MAJOR><MINOR>0</MINOR></VERSION></WINDOWS></IMAGE></WIM>`
+	b := makeWIM([]byte(xml), 0, false, 32768, len(xml))
+	images, err := WIMImages(bytes.NewReader(b), int64(len(b)))
+	if err != nil || len(images) != 1 || images[0].Arch != "" {
+		t.Fatalf("32-bit WIM incorrectly mapped: %+v, %v", images, err)
 	}
 }

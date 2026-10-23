@@ -168,7 +168,7 @@ func Test装配后台获取导入及启动恢复(t *testing.T) {
 	if err != nil || queued.State != model.ISOAcquiring || queued.Rev != failed.Rev+1 {
 		t.Fatal("重启前必须已保存排队事实", queued, err)
 	}
-	restarted := newSourceSupervisor(t.Context(), a.Supervisor.source, a.Native, a.Store, a.Deletion, a.Gate, cfg.ISO, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted := newSourceSupervisor(t.Context(), a.Supervisor.source, a.Supervisor.source, a.Store, a.Deletion, a.Gate, cfg.ISO, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer restarted.Close()
 	if err := restarted.Start(); err != nil {
 		t.Fatal(err)

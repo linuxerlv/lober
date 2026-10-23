@@ -1,4 +1,4 @@
-package iso
+package media_test
 
 import (
 	"context"

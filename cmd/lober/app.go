@@ -101,11 +101,12 @@ func nativeSourcesOf(st repository.Store, cfg config, locks *iso.SourceLocks, ga
 func gateOf() *registrationGate       { return iso.NewRegistrationGate() }
 func sourceLocksOf() *iso.SourceLocks { return iso.NewSourceLocks() }
 func acquisitionOf(st repository.Store, cfg config, locks *iso.SourceLocks, gate *registrationGate) *appmedia.Sources {
-	transfer := iso.NewTransfer(iso.Dirs{Staging: cfg.ISO.Staging, Artifacts: cfg.ISO.Artifacts, SMB: cfg.ISO.SMB, Tools: cfg.ISO.Tools, LocalRoots: cfg.ISO.LocalRoots})
-	return appmedia.NewSources(appmedia.SourceDeps{ISOs: st, Sources: st, Transfer: transfer, Locks: locks, Gate: gate})
+	dirs := iso.Dirs{Staging: cfg.ISO.Staging, Artifacts: cfg.ISO.Artifacts, SMB: cfg.ISO.SMB, Tools: cfg.ISO.Tools, LocalRoots: cfg.ISO.LocalRoots}
+	transfer := iso.NewTransfer(dirs)
+	return appmedia.NewSources(appmedia.SourceDeps{ISOs: st, Sources: st, Transfer: transfer, Import: iso.NewImportFiles(dirs), Locks: locks, Gate: gate})
 }
-func supervisorOf(ctx context.Context, src *appmedia.Sources, raw *iso.Sources, st repository.Store, j *deletionJournal, g *registrationGate, cfg config, logger *slog.Logger) (*sourceSupervisor, func()) {
-	s := newSourceSupervisor(ctx, src, raw, st, j, g, cfg.ISO, logger)
+func supervisorOf(ctx context.Context, src *appmedia.Sources, st repository.Store, j *deletionJournal, g *registrationGate, cfg config, logger *slog.Logger) (*sourceSupervisor, func()) {
+	s := newSourceSupervisor(ctx, src, src, st, j, g, cfg.ISO, logger)
 	return s, s.Close
 }
 func taskControlOf(m *machineBundle) console.TaskControl {

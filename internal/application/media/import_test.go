@@ -1,4 +1,4 @@
-package iso
+package media_test
 
 import (
 	"bytes"
@@ -9,6 +9,7 @@ import (
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
+	iso "github.com/lober/lober/internal/infrastructure/media"
 	"github.com/lober/lober/internal/infrastructure/media/isotest"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 	"io/fs"
@@ -22,7 +23,7 @@ func importSetup(t *testing.T) (*acquisitionFixture, repository.Store) {
 	t.Helper()
 	db := pgtest.Open(t)
 	root := t.TempDir()
-	d := Dirs{Staging: filepath.Join(root, "staging"), Artifacts: filepath.Join(root, "artifacts"), SMB: filepath.Join(root, "smb"), Tools: filepath.Join(root, "tools")}
+	d := iso.Dirs{Staging: filepath.Join(root, "staging"), Artifacts: filepath.Join(root, "artifacts"), SMB: filepath.Join(root, "smb"), Tools: filepath.Join(root, "tools")}
 	for _, dir := range []string{d.Staging, d.Artifacts, d.Tools} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)

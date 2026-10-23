@@ -3,12 +3,14 @@ package iso
 import (
 	"context"
 	appmedia "github.com/lober/lober/internal/application/media"
+	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 	"io"
+	"path/filepath"
 )
 
-// 只供原有真实库测试组装新来源能力与尚未迁移的导入能力。
+// 原有真实库测试复用同一组来源能力、导入能力和协调锁。
 type acquisitionFixture struct {
 	*Sources
 	acquisition *appmedia.Sources
@@ -18,7 +20,7 @@ type acquisitionFixture struct {
 func newAcquisitionFixture(st repository.Store, d Dirs) *acquisitionFixture {
 	locks, gate := NewSourceLocks(), NewRegistrationGate()
 	transfer := NewTransfer(d)
-	return &acquisitionFixture{Sources: New(st, d, locks, gate), transfer: transfer, acquisition: appmedia.NewSources(appmedia.SourceDeps{ISOs: st, Sources: st, Transfer: transfer, Locks: locks, Gate: gate})}
+	return &acquisitionFixture{Sources: New(st, d, locks, gate), transfer: transfer, acquisition: appmedia.NewSources(appmedia.SourceDeps{ISOs: st, Sources: st, Transfer: transfer, Import: NewImportFiles(d), Locks: locks, Gate: gate})}
 }
 func (s *acquisitionFixture) Register(ctx context.Context, i model.ISO, k, a, r string, n int64, d string, audit repository.Audit) error {
 	return s.acquisition.Register(ctx, i, k, a, r, n, d, audit)
@@ -55,4 +57,22 @@ func (s *acquisitionFixture) FreeSpace(ctx context.Context) (int64, int64, error
 }
 func (s *acquisitionFixture) Progress(ctx context.Context, id string) (appmedia.AcquisitionProgress, error) {
 	return s.acquisition.Progress(ctx, id)
+}
+
+func (s *acquisitionFixture) Import(ctx context.Context, id string) error {
+	service := appmedia.NewSources(appmedia.SourceDeps{ISOs: s.store, Sources: s.store, Transfer: s.transfer, Import: NewImportFiles(s.dirs), Locks: s.locks, Gate: s.gate})
+	return service.Import(ctx, id)
+}
+
+func (s *acquisitionFixture) artifactRoot(series catalog.Series, version string, arch catalog.Arch) string {
+	return filepath.Join(s.dirs.Artifacts, string(series), version, string(arch))
+}
+func (s *acquisitionFixture) stagingPath(id, role string) string {
+	return s.finalPath(id, role) + ".part"
+}
+func (s *acquisitionFixture) sourcePath(src model.Source) string {
+	if src.Kind == model.SourceLocal {
+		return src.Path
+	}
+	return s.finalPath(src.ISOID, src.Role)
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"sort"
 
-	"github.com/lober/lober/internal/domain/catalog"
+	mediarules "github.com/lober/lober/internal/domain/media"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 )
@@ -21,24 +21,6 @@ type ResumeWork struct {
 	ISOID string
 	Role  string
 	Kind  ResumeKind
-}
-
-func allFetched(item model.ISO, sources []model.Source) bool {
-	main := false
-	extraFound := false
-	extra, needsExtra := catalog.ExtraSourceOf(item.Series)
-	for _, src := range sources {
-		if src.State != model.SourceFetched {
-			return false
-		}
-		if src.Role == "" {
-			main = true
-		}
-		if needsExtra && src.Role == extra.Role {
-			extraFound = true
-		}
-	}
-	return main && (!needsExtra || extraFound)
 }
 
 // Recover 只按编号、角色和种类列出持久化待办，不开始下载、导入或清理。
@@ -71,7 +53,7 @@ func (s *Sources) Recover(ctx context.Context) ([]ResumeWork, error) {
 			if err != nil {
 				return nil, err
 			}
-			if allFetched(item, sources) {
+			if mediarules.AllFetched(item, sources) {
 				out = append(out, ResumeWork{ISOID: item.ID, Kind: ResumeImport})
 			}
 		}

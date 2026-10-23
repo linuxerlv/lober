@@ -126,7 +126,48 @@ func Test主机许可已清零(t *testing.T) {
 			{pkgConsole, "internal/interfaces/console/isosource.go", "package-init", pkgStore, "Audit", "4"},
 			{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "ISOs", "4"},
 		}},
-		{"mediaMigrationExceptions", mediaMigrationExceptions, 51, "4e93eaf8a62876bfa694042b348843f41709e729f45b4354708802cfe5df19db", []migrationException{
+		{"mediaMigrationExceptions", mediaMigrationExceptions, 11, "4e93eaf8a62876bfa694042b348843f41709e729f45b4354708802cfe5df19db", []migrationException{
+			{pkgISO, "internal/infrastructure/media/suse.go", "identifySUSELayout", "github.com/lober/lober/internal/domain/catalog", "Arch.Valid", "4"},
+			{pkgISO, "internal/infrastructure/media/suse.go", "identifySUSELayout", "github.com/lober/lober/internal/domain/catalog", "RepoPaths", "4"},
+			{pkgISO, "internal/infrastructure/media/extract.go", "(*Sources).extract", "github.com/lober/lober/internal/domain/catalog", "RepoPaths", "4"},
+			{pkgISO, "internal/infrastructure/media/identify.go", "identifyProblem", "github.com/lober/lober/internal/domain/model", "NewProblem", "4"},
+			{pkgISO, "internal/infrastructure/media/identify.go", "Identify", "github.com/lober/lober/internal/domain/catalog", "Arch.Valid", "4"},
+			{pkgISO, "internal/infrastructure/media/identify.go", "Identify", "github.com/lober/lober/internal/domain/catalog", "FormatMedia", "4"},
+			{pkgISO, "internal/infrastructure/media/identify.go", "Identify", "github.com/lober/lober/internal/domain/catalog", "Formats", "4"},
+			{pkgISO, "internal/infrastructure/media/identify.go", "Identify", "github.com/lober/lober/internal/domain/catalog", "SeriesByEdition", "4"},
+			{pkgISO, "internal/infrastructure/media/identify.go", "Identify", "github.com/lober/lober/internal/domain/catalog", "SeriesMedia", "4"},
+			{pkgISO, "internal/infrastructure/media/identify.go", "Identify", "github.com/lober/lober/internal/domain/catalog", "SeriesOfFormat", "4"},
+			{pkgISO, "internal/infrastructure/media/identify.go", "Identify", "github.com/lober/lober/internal/domain/model", "IsSafeWord", "4"},
+			{pkgISO, "internal/infrastructure/media/identify.go", "Identify", "github.com/lober/lober/internal/domain/model", "ValidLabel", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "importProblem", "github.com/lober/lober/internal/domain/model", "NewProblem", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).Import", "github.com/lober/lober/internal/domain/catalog", "ExtraSourceOf", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).Import", "github.com/lober/lober/internal/domain/catalog", "RequiredRoles", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).Import", "github.com/lober/lober/internal/domain/model", "ISO.Validate", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).Import", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).Import", "github.com/lober/lober/internal/domain/repository", "CheckID", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).Import", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).Import", "github.com/lober/lober/internal/domain/repository", "ErrImmutable", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).Import", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).Import", "github.com/lober/lober/internal/domain/repository", "ISOSources.SourcesOf", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).Import", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).Import", "github.com/lober/lober/internal/domain/repository", "ISOs.UpdateISO", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).readImportOutcome", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).openMedia", "github.com/lober/lober/internal/domain/repository", "ErrInvalid", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).failImport", "github.com/lober/lober/internal/domain/model", "StorableText", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).failImport", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).failImport", "github.com/lober/lober/internal/domain/repository", "ISOSources.GetSource", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).failImport", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).failImport", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "(*Sources).failImport", "github.com/lober/lober/internal/domain/repository", "ISOs.UpdateISO", "4"},
+			{pkgISO, "internal/infrastructure/media/import.go", "publishImportTree", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/netboot.go", "identifyNetboot", "github.com/lober/lober/internal/domain/catalog", "Arch.Valid", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "sourceRejected", "github.com/lober/lober/internal/domain/model", "NewProblem", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "sourceRejected", "github.com/lober/lober/internal/domain/repository", "ErrInvalid", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "sourceRejected", "github.com/lober/lober/internal/domain/repository", "ProblemsError", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).getSource", "github.com/lober/lober/internal/domain/repository", "ErrNotFound", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).getSource", "github.com/lober/lober/internal/domain/repository", "ISOSources.GetSource", "4"},
+			{pkgISO, "internal/infrastructure/media/windows.go", "(*Sources).extractWindows", "github.com/lober/lober/internal/domain/repository", "ErrInvalid", "4"},
+
 			{pkgISO, "internal/infrastructure/media/iso.go", "(*Sources).FetchOne", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
 			{pkgISO, "internal/infrastructure/media/iso.go", "(*Sources).FetchOne", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
 			{pkgISO, "internal/infrastructure/media/iso.go", "(*Sources).FetchOne", "github.com/lober/lober/internal/domain/repository", "ErrInvalid", "4"},
@@ -223,7 +264,7 @@ func Test主机许可已清零(t *testing.T) {
 		total += len(tc.entries)
 		expectedRemoved := 0
 		if tc.name == "mediaMigrationExceptions" {
-			expectedRemoved = 74
+			expectedRemoved = 114
 		}
 		if tc.name == "migrationExceptions" {
 			expectedRemoved = 34
@@ -252,7 +293,7 @@ func Test主机许可已清零(t *testing.T) {
 			t.Errorf("%s changed beyond the exact phase-three removals: %s", tc.name, got)
 		}
 	}
-	if total != 158 {
-		t.Fatalf("total=%d want 158", total)
+	if total != 118 {
+		t.Fatalf("total=%d want 118", total)
 	}
 }

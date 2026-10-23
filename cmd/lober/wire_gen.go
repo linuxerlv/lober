@@ -35,7 +35,7 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 		cleanup()
 		return nil, nil, err
 	}
-	mainSourceSupervisor, cleanup2 := supervisorOf(ctx, sources, isoSources, mainLoggingStore, mainDeletionJournal, v, cfg, logger)
+	mainSourceSupervisor, cleanup2 := supervisorOf(ctx, sources, mainLoggingStore, mainDeletionJournal, v, cfg, logger)
 	registry := mediaRegistryOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, clock)
 	notifier := notification.NewHub()
 	selectionGuard := selection.NewGuard()

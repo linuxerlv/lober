@@ -1,9 +1,7 @@
-package iso
+package media
 
 import (
-	"context"
 	"fmt"
-	"io/fs"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,11 +19,7 @@ var netbootInfo = regexp.MustCompile(`^Debian GNU/Linux ([0-9A-Za-z][0-9A-Za-z._
 var trixieNetbootInfo = regexp.MustCompile(`^Debian GNU/Linux 13 \(trixie\) (amd64|arm64) - netboot mini\.iso 20250803(?:\+deb13u([1-9][0-9]*))?$`)
 var netbootUpdate = regexp.MustCompile(`\+deb([1-9][0-9]*)u([1-9][0-9]*)$`)
 
-func identifyNetboot(ctx context.Context, tree fs.FS) (Identified, error) {
-	text, err := identifyText(ctx, tree, ".disk/info")
-	if err != nil {
-		return Identified{}, err
-	}
+func Netboot(text string) (Identified, error) {
 	m := netbootInfo.FindStringSubmatch(strings.TrimSpace(text))
 	if len(m) != 2 || !strings.Contains(strings.ToLower(text), "netboot") {
 		return Identified{}, fmt.Errorf("missing Debian netboot media metadata")
@@ -53,7 +47,7 @@ func identifyNetboot(ctx context.Context, tree fs.FS) (Identified, error) {
 	}
 	out := Identified{Format: "preseed", Series: "debian", Version: version}
 	for _, field := range strings.Fields(text) {
-		arch := identifyArch(field)
+		arch := Arch(field)
 		if arch != "" {
 			if out.Arch != "" && out.Arch != arch {
 				return Identified{}, fmt.Errorf("mixed netboot architectures")

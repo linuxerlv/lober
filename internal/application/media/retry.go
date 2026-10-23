@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/lober/lober/internal/application/media/port"
+	mediarules "github.com/lober/lober/internal/domain/media"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 )
@@ -88,7 +89,7 @@ func (s *Sources) RequestReimport(ctx context.Context, id string, a repository.A
 	if err != nil {
 		return err
 	}
-	if !allFetched(item, sources) {
+	if !mediarules.AllFetched(item, sources) {
 		return repository.ErrConflict
 	}
 	// 用主来源承载排队请求，版本、镜像状态和审计在同一事务提交。

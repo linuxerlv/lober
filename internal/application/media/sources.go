@@ -13,19 +13,21 @@ type SourceDeps struct {
 	ISOs     port.ISOs
 	Sources  port.Sources
 	Transfer port.Transfer
+	Import   port.ImportFiles
 	Locks    port.SourceLocks
 	Gate     port.RegistrationGate
 }
 type Sources struct {
-	isos     port.ISOs
-	sources  port.Sources
-	transfer port.Transfer
-	locks    port.SourceLocks
-	gate     port.RegistrationGate
+	isos        port.ISOs
+	sources     port.Sources
+	transfer    port.Transfer
+	importFiles port.ImportFiles
+	locks       port.SourceLocks
+	gate        port.RegistrationGate
 }
 
 func NewSources(d SourceDeps) *Sources {
-	return &Sources{isos: d.ISOs, sources: d.Sources, transfer: d.Transfer, locks: d.Locks, gate: d.Gate}
+	return &Sources{isos: d.ISOs, sources: d.Sources, transfer: d.Transfer, importFiles: d.Import, locks: d.Locks, gate: d.Gate}
 }
 func (s *Sources) FreeSpace(ctx context.Context) (int64, int64, error) {
 	return s.transfer.FreeSpace(ctx)

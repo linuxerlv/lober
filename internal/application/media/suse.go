@@ -1,22 +1,21 @@
-package iso
+package media
 
 import (
 	"context"
 	"errors"
+	"github.com/lober/lober/internal/application/media/port"
+	mediarules "github.com/lober/lober/internal/domain/media"
 	"io/fs"
 	"path"
-	"regexp"
 	"strings"
 
 	"github.com/lober/lober/internal/domain/catalog"
 )
 
-var leapProduct = regexp.MustCompile(`^/ (openSUSE-Leap|Leap) ([0-9]+\.[0-9]+)-[0-9]+$`)
-
 // identifySUSELayout handles the two verified official Leap DVD layouts. The
 // historical root layout without .treeinfo still follows catalog markers.
 // Repository metadata stays separate from the boot/live filesystem at ISO root.
-func identifySUSELayout(ctx context.Context, tree fs.FS) (Identified, bool, error) {
+func identifySUSELayout(ctx context.Context, tree port.MediaView) (Identified, bool, error) {
 	var out Identified
 	repo := "."
 	general, err := identifyGeneral(ctx, tree)
@@ -40,7 +39,7 @@ func identifySUSELayout(ctx context.Context, tree fs.FS) (Identified, bool, erro
 		return out, true, identifyProblem("iso_media_unrecognized", "media")
 	}
 	version := general["version"]
-	if !identifyVersion.MatchString(version) || general["family"] != "openSUSE Leap" || general["name"] != "openSUSE Leap "+version {
+	if !mediarules.SUSEHeader(general) {
 		return invalid()
 	}
 	products, err := identifyText(ctx, tree, path.Join(repo, "media.1/products"))
@@ -50,45 +49,41 @@ func identifySUSELayout(ctx context.Context, tree fs.FS) (Identified, bool, erro
 		}
 		return out, true, err
 	}
-	product := leapProduct.FindStringSubmatch(strings.TrimSpace(products))
-	if product == nil || product[2] != version {
+	product, ok := mediarules.SUSEProduct(products, version)
+	if !ok {
 		return invalid()
 	}
-	arch := identifyArch(general["arch"])
+	arch := mediarules.Arch(general["arch"])
 	if !arch.Valid() {
 		return invalid()
 	}
 	for _, candidate := range []catalog.Arch{"x86_64", "aarch64"} {
-		st, err := fs.Stat(tree, "boot/"+string(candidate)+"/loader")
+		st, err := tree.Stat(ctx, "boot/"+string(candidate)+"/loader")
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return out, true, err
 		}
-		if candidate == arch && (err != nil || !st.IsDir()) || candidate != arch && err == nil {
+		if candidate == arch && (err != nil || !st.IsDir) || candidate != arch && err == nil {
 			return invalid()
 		}
 	}
-	st, err := fs.Stat(tree, "LiveOS/squashfs.img")
+	st, err := tree.Stat(ctx, "LiveOS/squashfs.img")
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return out, true, err
 	}
-	live := err == nil && st.Mode().IsRegular() && st.Size() > 0
-	switch {
-	case strings.HasPrefix(version, "15.") && repo == "." && !live && product[1] == "openSUSE-Leap":
-		out.Format, out.Series = "autoyast", "leap15"
-	case strings.HasPrefix(version, "16.") && live:
-		out.Format, out.Series = "agama", "leap16"
-	default:
+	live := err == nil && st.IsRegular && st.Size > 0
+	out.Format, out.Series, ok = mediarules.SUSEFormat(version, repo, live, product)
+	if !ok {
 		return invalid()
 	}
 	for _, required := range catalog.RepoPaths(out.Series) {
-		st, err := fs.Stat(tree, path.Join(repo, required))
+		st, err := tree.Stat(ctx, path.Join(repo, required))
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return out, true, err
 		}
-		if err != nil || !st.Mode().IsRegular() || st.Size() == 0 {
+		if err != nil || !st.IsRegular || st.Size == 0 {
 			return invalid()
 		}
 	}
-	out.Version, out.Arch, out.repoRoot = version, arch, repo
+	out.Version, out.Arch, out.RepoRoot = version, arch, repo
 	return out, true, nil
 }

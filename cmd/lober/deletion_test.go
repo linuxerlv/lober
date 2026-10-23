@@ -26,7 +26,7 @@ func Test删除快照写失败保留数据及清理失败可重启重试(t *test
 	if err := a.Supervisor.Upload(t.Context(), item.ID, "", 0, bytes.NewReader(image), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Native.Import(t.Context(), item.ID); err != nil {
+	if err := a.Supervisor.source.Import(t.Context(), item.ID); err != nil {
 		t.Fatal(err)
 	}
 	item, err = a.Store.GetISO(t.Context(), item.ID)

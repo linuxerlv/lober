@@ -39,7 +39,7 @@ func Test未知包不能绕过四层检查(t *testing.T) {
 			t.Errorf("未知包没有直接失败：%s，%v，%v", pkg, got, counts)
 		}
 	}
-	for _, suffix := range []string{"domain/model", "domain/repository/nested", "domain/render", "application/ports", "application/tasks", "application/tasks/port", "application/execution", "infrastructure/persistence/pgstore", "infrastructure/media", "infrastructure/notification", "infrastructure/selection", "infrastructure/events", "interfaces/console", "interfaces/machine"} {
+	for _, suffix := range []string{"domain/media", "domain/model", "domain/repository/nested", "domain/render", "application/ports", "application/tasks", "application/tasks/port", "application/execution", "infrastructure/persistence/pgstore", "infrastructure/media", "infrastructure/notification", "infrastructure/selection", "infrastructure/events", "interfaces/console", "interfaces/machine"} {
 		pkg := modulePath + "/internal/" + suffix
 		got, counts := checkModule(fstest.MapFS{}, nil, []goPackage{{ImportPath: pkg}})
 		if len(got) != 0 || len(counts) != 1 {
