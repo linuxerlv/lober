@@ -191,7 +191,7 @@ func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T)
 
 - [x] 补`Test镜像多错仍按原先顺序返回`：坏rev先于删除读取；补来源先查ISO再查来源字段；上传先范围语法再来源键、存在性、kind和边界。给出具体400/404/409或问题代码断言，禁止只测“有错”。
 - [x] 在VM运行既有与新增点名测试：`go test ./internal/interfaces/console ./cmd/lober ./internal/infrastructure/media ./internal/infrastructure/persistence/pgstore -run 'Test(ISO|镜像|Source|ISOSources|契约ISO|契约审计|删除快照|补来源|重新导入|后台|Import|Upload|Remote|Worker|Recover)' -count=1`。预期当前行为全通过；纯兼容补测无需人为制造红灯。若发现原缺陷，先保留失败事实，单列修复后再继续。
-- [x] 独立审查契约、测试断言及范围；提交`test(media): pin media and job compatibility contracts`，只暂存本项文件。
+- [x] 只暂存本项文件，先提交候选`test(media): pin media and job compatibility contracts`；由独立代理审查契约、测试断言及范围，通过后才标记本项完成。
 
 ### Task 2：十一网页入口改用镜像应用契约
 
@@ -199,12 +199,12 @@ func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T)
 
 **Interfaces:** 消费Task1固定的外部行为；实现上文十一方法及类型。SourceControl与Deletion暂接现有supervisor/journal，仓储通过6+7显式方法注入。产出所有网页流量的唯一媒体入口，后续任务只替换内部能力，不再改网页业务行为。
 
-- [ ] 先写新应用接口测试并在VM运行，预期缺少media.Registry而编译失败。覆盖五角色，拒绝后仓储、时钟、FreeSpace与Body读取均零调用；覆盖CreateResult与错误同时返回、余量累加溢出、进度3次重读耗尽和流式确长检查。
-- [ ] 实现Registry，中文旁注写清每个操作的错误顺序、时钟/审计、取消与持久化范围。创建和来源登记审计保持原action和空TargetID传入方式，由原仓储补目标；分片传零Audit。CreateResult不能因error而被通用Get/Write丢弃。
-- [ ] 网页只保留JSON/查询/Content-Range语法解析、媒体类型描述、actorOf及响应转换；`exactChunkReader`、状态预检、余量和进度循环迁入应用。保持ParseContentRange现有行为；新增RangeError转换只覆盖旧预检条件，正文实际长度不符仍保留原ErrInvalid消息，不让其他ErrInvalid误报范围消息。
-- [ ] 组装显式构造NewRegistry；新依赖为空不得回退直连仓储。删除console.Deps的ISOs、Sources、ISOSource和ISODeletion四项；保留网页SourceKind值/响应类型，移除旧调用接口，不靠同名别名留下仓储访问。
-- [ ] 同步迁移调用侧测试夹具，真实数据库与网页权限测试保留。VM运行`go test ./internal/application/media ./internal/interfaces/console ./cmd/lober ./internal/archtest -count=1`、网页类型生成检查；Wire在VM生成并取回单个文件，VM执行Wire diff。预期无响应或类型差异。
-- [ ] 实际删除网页仓储24项、规则5项，261→232，四清单变64/125/42/1；更新前阶段统计断言的实际数量，原阶段清零断言不动。独立审查后提交`refactor(media): route console through media contracts`。
+- [x] 先写新应用接口测试并在VM运行，预期缺少media.Registry而编译失败。覆盖五角色，拒绝后仓储、时钟、FreeSpace与Body读取均零调用；覆盖CreateResult与错误同时返回、余量累加溢出、进度3次重读耗尽和流式确长检查。
+- [x] 实现Registry，中文旁注写清每个操作的错误顺序、时钟/审计、取消与持久化范围。创建和来源登记审计保持原action和空Detail，目标由原仓储绑定ISO；repository.Audit没有TargetID字段，不新增它。分片传零Audit。CreateResult不能因error而被通用Get/Write丢弃。
+- [x] 网页只保留JSON/查询/Content-Range语法解析、媒体类型描述、actorOf及响应转换；`exactChunkReader`、状态预检、余量和进度循环迁入应用。保持ParseContentRange现有行为；新增RangeError转换只覆盖旧预检条件，正文实际长度不符仍保留原ErrInvalid消息，不让其他ErrInvalid误报范围消息。
+- [x] 组装显式构造NewRegistry；新依赖为空不得回退直连仓储。删除console.Deps的ISOs、Sources、ISOSource和ISODeletion四项；保留网页SourceKind值/响应类型，移除旧调用接口，不靠同名别名留下仓储访问。
+- [x] 同步迁移调用侧测试夹具，真实数据库与网页权限测试保留。VM运行`go test ./internal/application/media ./internal/interfaces/console ./cmd/lober ./internal/archtest -count=1`、网页类型生成检查；Wire在VM生成并取回单个文件，VM执行Wire diff。预期无响应或类型差异。
+- [x] 实际删除网页仓储24项、规则5项，261→232，四清单变64/125/42/1；更新前阶段统计断言的实际数量，原阶段清零断言不动。先提交候选`refactor(media): route console through media contracts`供独立审查，通过后才标记本项完成。
 
 ### Task 3：拆开来源状态与字节操作
 
@@ -219,7 +219,7 @@ func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T)
 - [ ] 保留upload乱序/重复/重叠、先完整暂存验证再写确认文件、SaveRange原子区间合并。先发布取消函数再重读状态；服务退出/超时保留fetching断点，显式Cancel才置cancelled。重试只移走托管字节，审计失败恢复文件与数据库事实。
 - [ ] 补`Test镜像取消与最后片发布两方向竞争`、`Test镜像关闭后从真实断点恢复`、`Test镜像获取会话每条退出路径关闭`；断言旧Rev不能覆盖cancelled、已fetched重放不改字节、非法片不写ranges、关闭次数为1。使用通道/受控数据库等待确认竞争，不以固定sleep当竞争证明。
 - [ ] VM运行`go test ./internal/application/media ./internal/infrastructure/media ./cmd/lober ./internal/infrastructure/persistence/pgstore -count=1`及相同包`-race -timeout=20m`。保留原Upload/Remote/RetryAuditFailure/WorkerShutdown/QueueAtomicity测试，只有消费者路径变化，不弱化断言。
-- [ ] 删除本项实际已迁出的media许可，逐条登记而不预填中间数量；旧Import/Delete还使用的许可保留到所属项。核对其他阶段无改动；独立审查后提交`refactor(media): separate acquisition state from byte operations`。
+- [ ] 删除本项实际已迁出的media许可，逐条登记而不预填中间数量；旧Import/Delete还使用的许可保留到所属项。核对其他阶段无改动；先提交候选`refactor(media): separate acquisition state from byte operations`供独立审查，通过后才标记本项完成。
 
 ### Task 4：导入、识别与恢复只走明确能力
 
@@ -233,7 +233,7 @@ func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T)
 - [ ] 提取前由应用传入RepoPaths/RequiredRoles和识别结果，基础设施不再自行选平台政策。保留跨盘临时兄弟目录、owner文件、同内容完整树复用、其他内容拒绝覆盖、临时树与Windows副本清理。
 - [ ] ready保存失败后按原 `context.WithTimeout(context.WithoutCancel(ctx),5*time.Second)`重读：同摘要、同Artifacts且ready则成功；不确定则保留。只在确定同摘要且非ready/deprecated时允许回滚本次新树。普通锁竞争、废弃与请求取消不能记成导入失败；真正内容错误保留原错误截断和落库行为。
 - [ ] 补`Test镜像导入提交未知不删已发布内容`、`Test镜像多源完成复制后才复核`、`Test镜像导入中废弃不能被失败标记覆盖`：以可控制的数据库/文件步骤验证，不依赖随机时间。VM跑领域、应用、基础设施、cmd和pgstore相关测试及race；实际工具缺失、实物ISO未给出时明确记录，不能报完整实机兼容通过。
-- [ ] 删除本项对应旧media许可，不为原125项建立永久替代表。更新Wire并核对；独立审查后提交`refactor(media): move import decisions into media application`。
+- [ ] 删除本项对应旧media许可，不为原125项建立永久替代表。更新Wire并核对；先提交候选`refactor(media): move import decisions into media application`供独立审查，通过后才标记本项完成。
 
 ### Task 5：迁出删除流程与后台调度，收紧启停
 
@@ -247,7 +247,7 @@ func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T)
 - [ ] 清理应用先调用领域CheckDeletion核对快照，再保留两次确认：先确认记录不存在→取同一import锁→取消活动获取并取各来源锁→再次确认不存在→字节清理。文件实现保护owner、根目录和符号链接。本地来源即使与staging允许根重合也不删，其他ISO/owner及未知结果不删；重复清理安全。
 - [ ] 调度保留Workers/PollMS配置及原校验：默认2个工作名额、1000ms轮询，分别至少1，轮询转换不得溢出；工作键id/role/kind去重、非阻塞Wake、原100ms起步/上限30s/attempt最多9的退避公式、异常隔离及日志脱敏。Start先验证恢复读取再确认启动；Close可重复，停止且等待所有工作结束；upload恢复只等待客户端。
 - [ ] 补Review Focus第4/5项：真实库竞争检查删除/补来源两种顺序；旧快照恢复、坏快照旁有效快照继续、错误owner、共享本地根、丢提交确认；另测Close与launch/Start竞争、满名额、异常后释放与取消立即退出。检查磁盘哨兵、快照、审计和活动数，不能只断言error。
-- [ ] VM执行`go test ./internal/application/media ./internal/infrastructure/media ./cmd/lober ./internal/interfaces/console ./internal/infrastructure/persistence/pgstore -count=1`及对应race；Wire生成、网页类型检查。独立审查后提交`refactor(media): own durable cleanup and background lifecycle`。
+- [ ] VM执行`go test ./internal/application/media ./internal/infrastructure/media ./cmd/lober ./internal/interfaces/console ./internal/infrastructure/persistence/pgstore -count=1`及对应race；Wire生成、网页类型检查。先提交候选`refactor(media): own durable cleanup and background lifecycle`供独立审查，通过后才标记本项完成。
 
 ### Task 6：第四阶段边界守卫、完整验收与整分支审查
 
