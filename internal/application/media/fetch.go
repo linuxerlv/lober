@@ -36,25 +36,52 @@ func (s *Sources) getSource(ctx context.Context, id, role string) (model.Source,
 	return src, nil
 }
 func (s *Sources) problem(src model.Source, err error) error {
+	mapped, _ := s.problemTree(src, err)
+	return mapped
+}
+func (s *Sources) problemTree(src model.Source, err error) (error, bool) {
 	var f *port.Fault
 	if !errors.As(err, &f) {
-		return err
+		return err, false
+	}
+	// 故障本身整体替换并隐藏内部细节；合并的其他错误分支仍保留原对象。
+	if _, direct := err.(*port.Fault); !direct {
+		switch wrapped := err.(type) {
+		case interface{ Unwrap() []error }:
+			causes := wrapped.Unwrap()
+			mapped := make([]error, len(causes))
+			changed := false
+			for i, cause := range causes {
+				var replaced bool
+				mapped[i], replaced = s.problemTree(src, cause)
+				changed = changed || replaced
+			}
+			if changed {
+				return errors.Join(mapped...), true
+			}
+			return err, false
+		case interface{ Unwrap() error }:
+			if mapped, changed := s.problemTree(src, wrapped.Unwrap()); changed {
+				return mapped, true
+			}
+			return err, false
+		}
 	}
 	switch f.Kind {
 	case port.URLRejected:
-		return sourceRejected(src.ISOID, src.Role, isoSourceReasonURL)
+		return sourceRejected(src.ISOID, src.Role, isoSourceReasonURL), true
 	case port.PathRejected:
-		return sourceRejected(src.ISOID, src.Role, isoSourceReasonLocal)
+		return sourceRejected(src.ISOID, src.Role, isoSourceReasonLocal), true
 	case port.ChunkRejected:
-		return sourceRejected(src.ISOID, src.Role, isoSourceReasonChunk)
+		return sourceRejected(src.ISOID, src.Role, isoSourceReasonChunk), true
 	case port.ContentMismatch:
-		return &repository.ProblemsError{Kind: repository.ErrRejected, Problems: []model.Problem{model.NewProblem("iso_content_mismatch", sourceSubject(src.ISOID, src.Role), f.Expected, f.Actual)}}
+		return &repository.ProblemsError{Kind: repository.ErrRejected, Problems: []model.Problem{model.NewProblem("iso_content_mismatch", sourceSubject(src.ISOID, src.Role), f.Expected, f.Actual)}}, true
 	case port.PublicationConflict:
-		return repository.ErrConflict
+		return repository.ErrConflict, true
 	case port.InvalidFile:
-		return repository.ErrInvalid
+		return repository.ErrInvalid, true
 	}
-	return err
+	return err, false
 }
 func (s *Sources) FetchOne(ctx context.Context, id, role string) (err error) {
 	if err = ctx.Err(); err != nil {

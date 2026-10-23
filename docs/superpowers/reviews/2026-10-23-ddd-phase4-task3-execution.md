@@ -398,3 +398,58 @@ WIRE_LOADER_MODE=fallback WIRE_LOADER_ARTIFACTS=0 go tool wire diff ./cmd/lober
 test -z "$(gofmt -l internal/infrastructure/media/import_review_test.go internal/infrastructure/media/delete_test.go cmd/lober/app.go cmd/lober/assembly_test.go cmd/lober/deletion.go cmd/lober/queue_atomicity_test.go cmd/lober/supervision_test.go cmd/lober/supervisor.go cmd/lober/wire.go cmd/lober/wire_gen.go internal/application/media/port/control.go internal/archtest/authoring_rules_test.go internal/archtest/four_layer_test.go internal/archtest/hosts_rules_test.go internal/archtest/iso_test.go internal/archtest/transition_manifest_test.go internal/archtest/transition_rules_test.go internal/infrastructure/media/delete.go internal/infrastructure/media/import_test.go internal/infrastructure/media/iso.go internal/infrastructure/media/local.go internal/infrastructure/media/recover_test.go internal/infrastructure/media/reimport_request_test.go internal/infrastructure/media/remote.go internal/infrastructure/media/remote_test.go internal/infrastructure/media/shutdown_resume_test.go internal/infrastructure/media/source.go internal/infrastructure/media/source_test.go internal/infrastructure/media/sources.go internal/infrastructure/media/ssrf.go internal/infrastructure/media/upload.go internal/infrastructure/media/upload_test.go internal/interfaces/console/isos_test.go internal/interfaces/console/media_contract_test.go internal/application/media/acquisition_order_test.go internal/application/media/control.go internal/application/media/fetch.go internal/application/media/port/coordination.go internal/application/media/port/transfer.go internal/application/media/recover.go internal/application/media/retry.go internal/application/media/sources.go internal/application/media/sources_integration_test.go internal/application/media/upload.go internal/application/media/upload_close_order_test.go internal/infrastructure/media/acquisition_fixture_test.go internal/infrastructure/media/checkpoint_order_test.go internal/infrastructure/media/coordination.go internal/infrastructure/media/fetch_session.go internal/infrastructure/media/retry_files.go internal/infrastructure/media/transfer.go internal/infrastructure/media/transfer_test.go internal/interfaces/console/media_acquisition_test.go)"
 git diff --exit-code
 ```
+
+## 审查修复第1轮：保留合并错误中的恢复失败
+
+固定修复起点：`9b88bd20c024772d92be33a4f6a128cffa928c82`。仅处理独立审查Important 1；未处理已延期的日志噪声。
+
+`Sources.problem` 之前找到一个Fault后替换整棵错误树，导致 `ParkRetry` 返回的文件错误与恢复失败只剩前者。现在递归转换单层包装和合并分支：已知Fault仍整体替换，隐藏其Cause及外层包装中的内部信息；独立无Fault分支保留原对象，`errors.Is` 和 `errors.As` 仍能找到恢复失败与底层原因。没有可转换故障时保留原错误，包括未知Fault。业务错误种类、问题字段和公开接口没有变化。
+
+本轮源码范围：
+
+- `internal/application/media/fetch.go`：仅错误转换及其私有递归助手。
+- `internal/application/media/retry_error_test.go`：真实Retry、真实数据库及实际部分上传文件；failed/cancelled两状态下，ParkRetry受控返回Join(InvalidFile, *os.LinkError)。同时检查ErrInvalid、恢复错误对象、底层原因与错误类型可识别，来源完整记录、确认区间、实际字节及重试审计均未重置。
+- `internal/application/media/source_error_test.go`：并列、嵌套、多Fault、嵌套第三原因、普通/空/未知错误，以及六种已知Fault直接/包装/合并形式的安全提示。Fault内部Cause不能通过Is/As或错误文本重新暴露。
+- 公共执行记录只追加本节。未改其他生产代码、装配、许可、缓存、测试强度或原20分钟竞态超时。
+
+### 红绿与实际结果
+
+缺陷red在两个真实重试子例和三种错误树子例准确失败：返回值只有 `store：入参不合法`，恢复原因及类型丢失。六种单Fault安全提示测试原本通过。修复green全部通过；VM格式化只改两个新增测试文件，已按明确路径拉回。随后补强嵌套第三分支断言并在最终无写入轮验证。
+
+最终范围为应用媒体全包，以及基础设施获取、上传、重试、关闭恢复、来源校验相关用例。普通耗时9.376s/12.063s，并发耗时12.114s/16.441s；150条PASS包含子例，无FAIL、SKIP、cached或数据竞争记录。三文件gofmt及git diff检查均通过，最终changes/untracked证明为空。按根要求没有重复上一轮整套检查；全库验收仍留Task6。
+
+本轮没有意外测试失败；唯一非零VM结果是预期缺陷red。一次只读rg通配路径不被PowerShell接受，改用目录加-g继续读取，无源码或验证影响。
+
+| 标签 | 候选树 | UTC开始 | UTC结束 | 退出 |
+|---|---|---|---|---|
+| t3-fix1-red-1 | `ce5e3d019c43a1a51c64e0495f3803b9fb4258e0` | 2026-10-23T17:32:30Z | 2026-10-23T17:32:33Z | 1 |
+| t3-fix1-green-1 | `077bea00cf071b61a0da232fea62eac8629a1456` | 2026-10-23T17:34:29Z | 2026-10-23T17:34:32Z | 0 |
+| t3-fix1-final-1 | `1ebbfa3b4e2f79e529c322fb261aa087aa56e177` | 2026-10-23T17:35:59Z | 2026-10-23T17:37:03Z | 0 |
+
+提交前已显式暂存三个源码/测试文件，并与最终测试树比较，差异仅为根拥有的计划Markdown；追加本节后再次只允许Markdown差异。源码、测试和设置与最终测试树相同。修复候选标题：`fix(media): preserve joined acquisition errors`，本节随该提交保存；提交编号在私有报告及回报中给出。根计划仍未暂存。自查未发现本项剩余问题，等待固定修复范围独立复审。
+
+### 本轮原始VM命令
+
+#### t3-fix1-red-1
+
+```sh
+go test ./internal/application/media -run 'Test(镜像重试保留文件恢复失败|来源错误转换)' -count=1 -v
+```
+
+#### t3-fix1-green-1
+
+```sh
+gofmt -w internal/application/media/fetch.go internal/application/media/retry_error_test.go internal/application/media/source_error_test.go
+go test ./internal/application/media -run 'Test(镜像重试保留文件恢复失败|来源错误转换)' -count=1 -v
+```
+
+#### t3-fix1-final-1
+
+```sh
+go test ./internal/application/media -count=1 -v
+go test ./internal/infrastructure/media -run 'Test(Upload|Remote|Retry|CancelRetry|WorkerShutdown|Source|Local|镜像)' -count=1 -v
+go test ./internal/application/media -race -timeout=20m -count=1 -v
+go test ./internal/infrastructure/media -run 'Test(Upload|Remote|Retry|CancelRetry|WorkerShutdown|Source|Local|镜像)' -race -timeout=20m -count=1 -v
+test -z "$(gofmt -l internal/application/media/fetch.go internal/application/media/retry_error_test.go internal/application/media/source_error_test.go)"
+git diff --exit-code
+```
