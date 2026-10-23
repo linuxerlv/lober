@@ -133,9 +133,9 @@ Delete(ctx, actor, RevisionRequest) error
 - RetryFiles：`Restore() error`恢复临时停放字节；`Commit() error`在重置持久化成功后移除停放文件；只有非local来源参与。原始文件、区间和审计失败行为按现有测试保留。
 - `port.Fault`是外部失败事实，字段`Kind FaultKind; Role, Expected, Actual string; Cause error`，有Error/Unwrap；Kind精确列为URLRejected、PathRejected、ChunkRejected、ContentMismatch、PublicationConflict、InvalidFile。应用将其转换为原ProblemsError/稳定错误；基础设施不导入repository、不自己设ISO/Source状态、不创建业务Problem。
 
-`port/import.go` 定义 `ImportFiles.Open(context.Context,model.ISO)(ImportSession,error)`，会话的`OpenSource(context.Context,model.Source)(MediaView,error)`按应用指定顺序打开主源和额外源；MediaView提供`Stat(context.Context,string)(Entry,error)`、`Text(context.Context,string,int64)(string,error)`、`WIM(context.Context,string)([]mediarules.EditionFact,error)`、`Digest(context.Context)(string,error)`。Entry只有`Size int64; IsDir bool`，不存在用标准fs.ErrNotExist表示；不把fs.FS、os.File、绝对路径或工具句柄交给应用/领域。
+`port/import.go` 定义 `ImportFiles.Open(context.Context,model.ISO)(ImportSession,error)`，会话的`OpenSource(context.Context,model.Source)(MediaView,error)`按应用指定顺序打开主源和额外源；MediaView提供`Entries(context.Context,string)([]Entry,error)`（指定目录直接子项，沿用fs.ReadDir字典序）、`Stat(context.Context,string)(Entry,error)`、`Text(context.Context,string,int64)(string,error)`、`WIM(context.Context,string)([]mediarules.EditionFact,error)`、`Digest(context.Context)(string,error)`。Entry只有`Name string; Size int64; IsDir,IsRegular bool`，不存在用标准fs.ErrNotExist表示；不把fs.FS、os.File、绝对路径或工具句柄交给应用/领域。
 
-ImportSession还含`Prepare(context.Context,ExtractionPlan)(map[string]string,error)`、`Verify(context.Context) error`、`Publish(context.Context)(Publication,error)`、`Rollback(context.Context,Publication) error`、`Close() error`。ExtractionPlan含`ISO model.ISO; Identified mediarules.Identified; RepoPaths []string; RequiredRoles []string`；Publication含`Artifacts map[string]string; MadeArtifacts,MadeSMB bool`，会话内部保留具体根路径和owner。Prepare只提取/复制临时树；Verify在所有消费者完成后重核全部已打开来源；Publish保持SMB先于制品的顺序；Rollback只撤销本会话新发布的树。Close释放媒体与临时树，不能代替应用决定删除已发布内容。发布部分成功再失败时也必须返回Publication，使应用能按数据库事实处理。
+ImportSession还含`BeginPrepare(context.Context,ExtractionPlan) error`（只创建/确认本次制品临时根）、`Prepare(context.Context,ExtractionPlan)(map[string]string,error)`、`Verify(context.Context) error`、`Publish(context.Context)(Publication,error)`、`Rollback(context.Context,Publication) error`、`Close() error`。ExtractionPlan含`ISO model.ISO; Identified mediarules.Identified; RepoPaths []string; RequiredRoles []string`；Publication含`Artifacts map[string]string; MadeArtifacts,MadeSMB bool`，会话内部保留具体根路径和owner。应用保存importing后先BeginPrepare，Debian目录校验在其成功后、Prepare前；其他格式直接Prepare。Prepare只提取/复制已准备的临时树，不重新删除或建立根；SMB临时树仍在提取及必需制品核对后创建；Verify在所有消费者完成后重核全部已打开来源；Publish保持SMB先于制品的顺序；Rollback只撤销本会话新发布的树。Close释放媒体与临时树，不能代替应用决定删除已发布内容。发布部分成功再失败时也必须返回Publication，使应用能按数据库事实处理。
 
 `domain/media`（别名mediarules）新增纯规则：`Identified{Format catalog.Format; Series catalog.Series; Version string; Arch catalog.Arch; Editions []model.Option; RepoRoot string}`、`EditionFact{Name,Flags,Version string; Arch catalog.Arch}`；`CheckIdentified(Identified) error`复用原版本模式与标签规则，`CheckImport(model.ISO,Identified,[]model.Source) error`复用来源和平台条件，`AllFetched(model.ISO,[]model.Source) bool`复用当前必需角色规则，`CheckDeletion(model.ISO,[]model.Source) error`复用旧CleanupDeleted的ID/路径组件、来源归属与角色唯一检查。后者仍允许acquiring/failed缺Version/Arch，校验时沿用pending/x86_64临时值，不把这些值写回对象。目录/文本读取顺序保留在应用识别编排，事实解析和条件在领域，不能把fs.FS搬进领域。catalog已有规则继续调用唯一实现。
 
@@ -227,13 +227,13 @@ func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T)
 
 **Interfaces:** 消费Task3 Sources、协调锁和恢复工作，提供同模块`Import(context.Context,string) error`给后台。使用ImportSession/MediaView顺序协议；替换原Sources.Import及其旧仓储依赖，不增加应用到基础设施的导入。
 
-- [ ] 先在VM跑新ImportFiles实现检查和领域纯规则测试，预期目标能力不存在失败。逐项迁移原ImportFormats、OfficialSUSE/OfficialDebian、RechecksEverySource、PreservesPublicationAfterLostCommitAcknowledgment、ExistingDestinationNeverOverwritten测试到正确归属；原文件读取/解析测试继续留在基础设施。
-- [ ] 应用保留原锁与错误顺序：校验ID/ctx→取import锁→ISO状态→来源齐备→打开主源/摘要→识别/系匹配→额外源与netboot检查→保存importing和摘要→提取/复制→全部来源复核→先SMB后制品发布→清旧错误→ready保存。不能提前打开无关媒体改变原失败顺序。Import方法加入同一应用Sources，supervisor的importer接此对象；不保留第二份导入业务。
-- [ ] 识别编排经MediaView按原顺序取事实；SUSE优先于通用.treeinfo，保留Agama嵌套目录、Debian仓库与额外netboot绑定、WIM版本/架构/edition检查和ESXi没有可靠版本就拒绝的行为。文本仍限制1MiB；WIM继续只读元数据，不把整张镜像缓存进内存。纯条件只保留一份领域实现，基础设施只解析格式及提供事实。
-- [ ] 提取前由应用传入RepoPaths/RequiredRoles和识别结果，基础设施不再自行选平台政策。保留跨盘临时兄弟目录、owner文件、同内容完整树复用、其他内容拒绝覆盖、临时树与Windows副本清理。
-- [ ] ready保存失败后按原 `context.WithTimeout(context.WithoutCancel(ctx),5*time.Second)`重读：同摘要、同Artifacts且ready则成功；不确定则保留。只在确定同摘要且非ready/deprecated时允许回滚本次新树。普通锁竞争、废弃与请求取消不能记成导入失败；真正内容错误保留原错误截断和落库行为。
-- [ ] 补`Test镜像导入提交未知不删已发布内容`、`Test镜像多源完成复制后才复核`、`Test镜像导入中废弃不能被失败标记覆盖`：以可控制的数据库/文件步骤验证，不依赖随机时间。VM跑领域、应用、基础设施、cmd和pgstore相关测试及race；实际工具缺失、实物ISO未给出时明确记录，不能报完整实机兼容通过。
-- [ ] 删除本项对应旧media许可，不为原125项建立永久替代表。更新Wire并核对；先提交候选`refactor(media): move import decisions into media application`供独立审查，通过后才标记本项完成。
+- [x] 先在VM跑新ImportFiles实现检查和领域纯规则测试，预期目标能力不存在失败。逐项迁移原ImportFormats、OfficialSUSE/OfficialDebian、RechecksEverySource、PreservesPublicationAfterLostCommitAcknowledgment、ExistingDestinationNeverOverwritten测试到正确归属；原文件读取/解析测试继续留在基础设施。
+- [x] 应用保留原锁与错误顺序：校验ID/ctx→取import锁→ISO状态→来源齐备→打开主源/摘要→识别/系匹配→额外源与netboot检查→保存importing和摘要→提取/复制→全部来源复核→先SMB后制品发布→清旧错误→ready保存。不能提前打开无关媒体改变原失败顺序。Import方法加入同一应用Sources，supervisor的importer接此对象；不保留第二份导入业务。
+- [x] 识别编排经MediaView按原顺序取事实；SUSE优先于通用.treeinfo，保留Agama嵌套目录、Debian仓库与额外netboot绑定、WIM版本/架构/edition检查和ESXi没有可靠版本就拒绝的行为。文本仍限制1MiB；WIM继续只读元数据，不把整张镜像缓存进内存。纯条件只保留一份领域实现，基础设施只解析格式及提供事实。
+- [x] 提取前由应用传入RepoPaths/RequiredRoles和识别结果，基础设施不再自行选平台政策。保留跨盘临时兄弟目录、owner文件、同内容完整树复用、其他内容拒绝覆盖、临时树与Windows副本清理。
+- [x] ready保存失败后按原 `context.WithTimeout(context.WithoutCancel(ctx),5*time.Second)`重读：同摘要、同Artifacts且ready则成功；不确定则保留。只在确定同摘要且非ready/deprecated时允许回滚本次新树。普通锁竞争、废弃与请求取消不能记成导入失败；真正内容错误保留原错误截断和落库行为。
+- [x] 补`Test镜像导入提交未知不删已发布内容`、`Test镜像多源完成复制后才复核`、`Test镜像导入中废弃不能被失败标记覆盖`：以可控制的数据库/文件步骤验证，不依赖随机时间。VM跑领域、应用、基础设施、cmd和pgstore相关测试及race；实际工具缺失、实物ISO未给出时明确记录，不能报完整实机兼容通过。
+- [x] 删除本项对应旧media许可，不为原125项建立永久替代表。更新Wire并核对；先提交候选`refactor(media): move import decisions into media application`供独立审查，通过后才标记本项完成。
 
 ### Task 5：迁出删除流程与后台调度，收紧启停
 
