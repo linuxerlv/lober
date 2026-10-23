@@ -7,11 +7,11 @@ import (
 )
 
 func TestMachineAndExecutionStayBehindDeclaredInterfaces(t *testing.T) {
-	for _, pkg := range []string{modulePath + "/internal/execution", modulePath + "/internal/machine", modulePath + "/internal/events"} {
+	for _, pkg := range []string{pkgExecution, pkgMachine, pkgEvents} {
 		if layerOf(pkg) == "" {
 			t.Errorf("unclassified execution package %s", pkg)
 		}
-		for _, dependency := range []string{pkgConsole, pkgRender, pkgPgstore, modulePath + "/internal/machine", modulePath + "/internal/execution", modulePath + "/internal/events", "github.com/gin-gonic/gin"} {
+		for _, dependency := range []string{pkgConsole, pkgRender, pkgPgstore, pkgMachine, pkgExecution, pkgEvents, "github.com/gin-gonic/gin"} {
 			if dependency == pkg {
 				continue
 			}

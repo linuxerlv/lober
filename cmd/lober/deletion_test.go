@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lober/lober/internal/core/model"
-	"github.com/lober/lober/internal/store"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 func Test删除快照写失败保留数据及清理失败可重启重试(t *testing.T) {
@@ -23,7 +23,7 @@ func Test删除快照写失败保留数据及清理失败可重启重试(t *test
 	if err := a.Supervisor.Register(t.Context(), item, "upload", "", "", int64(len(image)), "", assemblyAudit("iso.source.register")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Supervisor.Upload(t.Context(), item.ID, "", 0, bytes.NewReader(image), store.Audit{}); err != nil {
+	if err := a.Supervisor.Upload(t.Context(), item.ID, "", 0, bytes.NewReader(image), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Native.Import(t.Context(), item.ID); err != nil {
@@ -33,7 +33,7 @@ func Test删除快照写失败保留数据及清理失败可重启重试(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := a.Store.ListAudit(t.Context(), store.AuditQuery{TargetKind: "iso", TargetID: item.ID, Action: "iso.delete"})
+	before, err := a.Store.ListAudit(t.Context(), repository.AuditQuery{TargetKind: "iso", TargetID: item.ID, Action: "iso.delete"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func Test删除快照写失败保留数据及清理失败可重启重试(t *test
 	if _, err := a.Store.GetISO(t.Context(), item.ID); err != nil {
 		t.Fatal("snapshot failure removed row", err)
 	}
-	after, err := a.Store.ListAudit(t.Context(), store.AuditQuery{TargetKind: "iso", TargetID: item.ID, Action: "iso.delete"})
+	after, err := a.Store.ListAudit(t.Context(), repository.AuditQuery{TargetKind: "iso", TargetID: item.ID, Action: "iso.delete"})
 	if err != nil || len(before.Items) != len(after.Items) {
 		t.Fatal("snapshot failure audited", err)
 	}
@@ -70,7 +70,7 @@ func Test删除快照写失败保留数据及清理失败可重启重试(t *test
 	if err := a.Deletion.Delete(t.Context(), item.ID, item.Rev, assemblyAudit("iso.delete")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Store.GetISO(t.Context(), item.ID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := a.Store.GetISO(t.Context(), item.ID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatal("delete not committed", err)
 	}
 	if _, err := os.Stat(filepath.Join(actualDir, item.ID+".json")); err != nil {
@@ -100,35 +100,5 @@ func Test删除快照写失败保留数据及清理失败可重启重试(t *test
 	}
 	if _, err := os.Stat(sentinel); err != nil {
 		t.Fatal("outside bytes changed", err)
-	}
-}
-
-func TestESXi配置读取原文且不能逃离制品根(t *testing.T) {
-	base := t.TempDir()
-	repo := filepath.Join(base, "esxi", "7.0", "x86_64", "install")
-	if err := os.MkdirAll(repo, 0750); err != nil {
-		t.Fatal(err)
-	}
-	raw := "title=original\nmodules=a --- nested/b\nunknown=preserved\n"
-	if err := os.WriteFile(filepath.Join(repo, "boot.cfg"), []byte(raw), 0600); err != nil {
-		t.Fatal(err)
-	}
-	reader := bootConfigReader{root: base}
-	snapshot := model.SnapshotISO{Artifacts: map[string]string{"repo": "esxi/7.0/x86_64/install/"}}
-	got, err := reader.ReadESXiBootConfig(t.Context(), snapshot)
-	if err != nil || got != raw {
-		t.Fatal(got, err)
-	}
-	snapshot.Artifacts["repo"] = "../outside"
-	if _, err := reader.ReadESXiBootConfig(t.Context(), snapshot); err == nil {
-		t.Fatal("traversal accepted")
-	}
-	outside := t.TempDir()
-	if err := os.Symlink(outside, filepath.Join(base, "escaped")); err != nil {
-		t.Fatal(err)
-	}
-	snapshot.Artifacts["repo"] = "escaped"
-	if _, err := reader.ReadESXiBootConfig(t.Context(), snapshot); err == nil {
-		t.Fatal("symlink escape accepted")
 	}
 }

@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lober/lober/internal/console"
+	"github.com/lober/lober/internal/interfaces/console"
 )
 
 func main() {

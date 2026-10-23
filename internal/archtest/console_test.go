@@ -35,10 +35,10 @@ func Test控制台与装配点的依赖规则(t *testing.T) {
 
 func Test总检查接上了控制台与装配点(t *testing.T) {
 	fsys := fstest.MapFS{
-		"internal/console/x.go": {Data: []byte(importing(pkgAssembly))},
-		"cmd/lober/y.go":        {Data: []byte(importing("github.com/lib/pq"))},
+		"internal/interfaces/console/x.go": {Data: []byte(importing(pkgAssembly))},
+		"cmd/lober/y.go":                   {Data: []byte(importing("github.com/lib/pq"))},
 	}
-	got, counts := checkModule(fsys, []string{"internal/console", "cmd/lober"}, []goPackage{
+	got, counts := checkModule(fsys, []string{"internal/interfaces/console", "cmd/lober"}, []goPackage{
 		{ImportPath: pkgConsole, GoFiles: []string{"x.go"}}, {ImportPath: pkgAssembly, GoFiles: []string{"y.go"}},
 	})
 	assertFindings(t, got, "", []finding{{ruleConsole, pkgAssembly}, {ruleAssembly, "github.com/lib/pq"}})
