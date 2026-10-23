@@ -745,3 +745,313 @@ github.com/lober/lober/internal/interfaces/console	internal/interfaces/console/n
 报告/计划等Markdown可在验收后补写；以上完整路径集合核对确认非Markdown内容仍等于被测树。
 
 完整本地证明目录：`.superpowers/sdd/2026-10-23-backend-ddd-phase4-media-jobs`。所有轮次的 snapshot、tree、exit、started、finished、changes、untracked、safe.log均保留；不提交私有原日志。
+
+## Task6 独立审查修复 I1
+
+固定修复基线为 `604e61f055c232ad48e7e3eb8b9010094fec8b61`。首轮Task6门禁未通过，以下是补丁及新的验收证据；前文各轮记录仍是历史事实，不能替代本轮反例。独立局部复审和整分支审查仍待根执行者，未将模块标记为可交付。
+
+### 问题、最小修正与覆盖
+
+- I1是架构守卫漏检，不是产品行为缺陷。新网页文件不在旧的固定入口文件名单中，自行声明的 `reader.GetISO` 又不来自外部仓储包，两个条件组合让其漏过检查。
+- `internal/archtest/transition_uses_test.go` 的console全局分支增加8行：实际对象为函数、声明包等于调用包、名字属于既有镜像仓储方法清单，并且接收者底层类型为接口时拒绝。遍历覆盖所有已发现文件，不依赖文件名；没有扩大旧业务许可或禁止所有本地接口。
+- `internal/archtest/media_rules_test.go` 的指定测试保留原3个外部能力反例，新增4个本地接口反例：最小直接调用、最小方法值、真实 `GetISO(context.Context,string)(model.ISO,error)` 签名的直接调用和方法值。新增GetTask与GetUser本地接口正例，每个均实际包含直接调用和方法值，防止误伤第五、六阶段。
+- 所有9个分项都在内存依赖夹具中先通过Go类型检查，再调用生产源码所用的检查遍历。Context夹具保留Deadline、Done、Err、Value四个方法；真实签名反例与实际port.GetISO的参数/返回类型一致。类型检查失败不会被当作成功拦截。
+- 没有改产品、权限、数据库、依赖、生成代码、缓存、超时或前端。只改上述两个Go测试文件与本公开证据。根单独负责M2计划去向说明，提交为 `bf6020b`；本修复未修改或暂存计划。M1既有日志噪声继续留给整分支审查，不改设置压制输出。
+
+### 先失败，再修正
+
+`t6-i1-red01` 的4个新增反例都出现 `allowed=false findings=[]`；原3个外部反例和2个后续阶段正例通过。退出1由实际漏报导致，没有语法或未定义符号错误。`t6-i1-green01` 修正后9个分项全部通过，退出0；该轮只产生media_rules_test.go格式差异，取回并等待完成后才冻结最终树。
+
+原Task6命令文件逐字复制，没有增加全仓-count=1或清除成功缓存。原make本身覆盖完整arch普通/race，不额外重复一套。所有Go/gofmt/Wire/Node和构建仍只在lober VM；沿用GOMAXPROCS=2、GOFLAGS=-p=2、GOPROXY=off、原20分钟竞态超时及已有Bash/busybox。准备核实无竞争Go，lober_test未恢复，启动时间仍2026-10-23 06:23:06.383579+00；Go1.27.1、Node24.16.0、pnpm11.16.0，2111MiB内存、31GiB可用盘。未读取或输出私有连接值。
+
+所有时间为UTC，逐轮命令和原结果如下。
+
+| 作业 | 树 | 开始 | 结束 | 退出 | 远端修改 | 新增未跟踪 |
+| --- | --- | --- | --- | --- | --- | --- |
+| t6-i1-red01 | `1250f60a9e7b33ebb3408fc61a482194cda65f9d` | 2026-10-23T20:43:11Z | 2026-10-23T20:43:12Z | 1 | 无 | 无 |
+| t6-i1-green01 | `00c69c0f24da51135edc8a48c944b6faf168bbef` | 2026-10-23T20:43:54Z | 2026-10-23T20:43:55Z | 0 | internal/archtest/media_rules_test.go | 无 |
+| t6-i1-final01 | `7b41519dc07097f2c6880d77f95cbf129124edd3` | 2026-10-23T20:44:45Z | 2026-10-23T20:51:15Z | 0 | 无 | 无 |
+
+### t6-i1-red01 命令
+
+```sh
+go test ./internal/archtest -run '^Test镜像新网页文件不能调用内部能力$' -count=1 -v
+```
+
+实际输出：
+
+```text
+=== RUN   Test镜像新网页文件不能调用内部能力
+=== RUN   Test镜像新网页文件不能调用内部能力/自己的仓储接口
+=== RUN   Test镜像新网页文件不能调用内部能力/内部来源控制
+=== RUN   Test镜像新网页文件不能调用内部能力/内部恢复流程
+=== RUN   Test镜像新网页文件不能调用内部能力/本地接口最小方法值
+    media_rules_test.go:215: allowed=false findings=[]
+=== RUN   Test镜像新网页文件不能调用内部能力/本地接口最小直接调用
+    media_rules_test.go:215: allowed=false findings=[]
+=== RUN   Test镜像新网页文件不能调用内部能力/本地接口真实签名直接调用
+    media_rules_test.go:215: allowed=false findings=[]
+=== RUN   Test镜像新网页文件不能调用内部能力/本地接口真实签名方法值
+    media_rules_test.go:215: allowed=false findings=[]
+=== RUN   Test镜像新网页文件不能调用内部能力/后续任务接口正常调用
+=== RUN   Test镜像新网页文件不能调用内部能力/后续身份接口正常调用
+--- FAIL: Test镜像新网页文件不能调用内部能力 (0.01s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/自己的仓储接口 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/内部来源控制 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/内部恢复流程 (0.00s)
+    --- FAIL: Test镜像新网页文件不能调用内部能力/本地接口最小方法值 (0.00s)
+    --- FAIL: Test镜像新网页文件不能调用内部能力/本地接口最小直接调用 (0.00s)
+    --- FAIL: Test镜像新网页文件不能调用内部能力/本地接口真实签名直接调用 (0.00s)
+    --- FAIL: Test镜像新网页文件不能调用内部能力/本地接口真实签名方法值 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/后续任务接口正常调用 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/后续身份接口正常调用 (0.00s)
+FAIL
+FAIL	github.com/lober/lober/internal/archtest	0.010s
+FAIL
+```
+
+### t6-i1-green01 命令
+
+```sh
+gofmt -w internal/archtest/media_rules_test.go internal/archtest/transition_uses_test.go
+go test ./internal/archtest -run '^Test镜像新网页文件不能调用内部能力$' -count=1 -v
+```
+
+实际输出：
+
+```text
+=== RUN   Test镜像新网页文件不能调用内部能力
+=== RUN   Test镜像新网页文件不能调用内部能力/自己的仓储接口
+=== RUN   Test镜像新网页文件不能调用内部能力/内部来源控制
+=== RUN   Test镜像新网页文件不能调用内部能力/内部恢复流程
+=== RUN   Test镜像新网页文件不能调用内部能力/本地接口最小方法值
+=== RUN   Test镜像新网页文件不能调用内部能力/本地接口最小直接调用
+=== RUN   Test镜像新网页文件不能调用内部能力/本地接口真实签名直接调用
+=== RUN   Test镜像新网页文件不能调用内部能力/本地接口真实签名方法值
+=== RUN   Test镜像新网页文件不能调用内部能力/后续任务接口正常调用
+=== RUN   Test镜像新网页文件不能调用内部能力/后续身份接口正常调用
+--- PASS: Test镜像新网页文件不能调用内部能力 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/自己的仓储接口 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/内部来源控制 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/内部恢复流程 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/本地接口最小方法值 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/本地接口最小直接调用 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/本地接口真实签名直接调用 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/本地接口真实签名方法值 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/后续任务接口正常调用 (0.00s)
+    --- PASS: Test镜像新网页文件不能调用内部能力/后续身份接口正常调用 (0.00s)
+PASS
+ok  	github.com/lober/lober/internal/archtest	0.008s
+```
+
+### t6-i1-final01 命令
+
+```sh
+echo 'TASK6 make check START'
+date -u +%FT%TZ
+make check
+echo 'TASK6 make check EXIT=0'
+date -u +%FT%TZ
+echo 'TASK6 console types START'
+pnpm --dir web check:console-types
+echo 'TASK6 console types EXIT=0'
+date -u +%FT%TZ
+echo 'TASK6 original focused START'
+go test ./internal/application/media ./internal/infrastructure/media ./internal/interfaces/console ./cmd/lober ./internal/infrastructure/persistence/pgstore -run 'Test(镜像|ISO|Source|ISOSources|契约ISO|契约审计|Import|Upload|Remote|Recover|Worker|删除快照|补来源|重新导入|后台)' -count=1
+echo 'TASK6 original focused EXIT=0'
+date -u +%FT%TZ
+echo 'TASK6 original optional START'
+go test ./internal/infrastructure/builtin ./internal/infrastructure/media ./internal/infrastructure/media/iso9660 -run '^(TestRecordCurrentRelease|TestPreseedMirrorSelectionsAreSeenAndAuthenticated|TestIdentifyRealISO|TestRealISO)$' -v -count=1
+echo 'TASK6 original optional EXIT=0'
+date -u +%FT%TZ
+git diff --exit-code
+echo 'TASK6 original diff EXIT=0'
+echo 'TASK6 moved real ISO and admin START'
+date -u +%FT%TZ
+go test ./internal/application/media -run '^(TestIdentifyRealISO|Test镜像管理员八个写入口传递有效输入)$' -v -count=1
+echo 'TASK6 moved real ISO and admin EXIT=0'
+date -u +%FT%TZ
+echo 'TASK6 actual assembly START'
+go test ./cmd/lober -run '^Test装配后台获取导入及启动恢复$' -v -count=1
+echo 'TASK6 actual assembly EXIT=0'
+date -u +%FT%TZ
+echo 'TASK6 optional shell START'
+go test ./internal/domain/render -run '^TestPreseedCleanupRedactsInstallerAuthenticationURLs$' -v -count=1
+echo 'TASK6 optional shell EXIT=0'
+date -u +%FT%TZ
+git diff --exit-code
+echo 'TASK6 final diff EXIT=0'
+```
+
+### 本轮完整验收、缓存与限制
+
+强制全模块发现6.850秒，完整架构普通139.958秒、竞态170.847秒，均实际执行通过。
+
+普通：26包缓存、5包实际运行、6包无测试文件。逐包实际输出：
+
+```text
+?   	github.com/lober/lober/cmd/console-openapi	[no test files]
+ok  	github.com/lober/lober/cmd/lober	(cached)
+ok  	github.com/lober/lober/internal/application/authoring	(cached)
+?   	github.com/lober/lober/internal/application/authoring/port	[no test files]
+ok  	github.com/lober/lober/internal/application/execution	(cached)
+ok  	github.com/lober/lober/internal/application/hosts	(cached)
+?   	github.com/lober/lober/internal/application/hosts/port	[no test files]
+ok  	github.com/lober/lober/internal/application/media	(cached)
+?   	github.com/lober/lober/internal/application/media/port	[no test files]
+?   	github.com/lober/lober/internal/application/ports	[no test files]
+ok  	github.com/lober/lober/internal/application/tasks	(cached)
+?   	github.com/lober/lober/internal/application/tasks/port	[no test files]
+ok  	github.com/lober/lober/internal/archtest	139.958s
+ok  	github.com/lober/lober/internal/domain/access	(cached)
+ok  	github.com/lober/lober/internal/domain/activation	(cached)
+ok  	github.com/lober/lober/internal/domain/admission	(cached)
+ok  	github.com/lober/lober/internal/domain/catalog	(cached)
+ok  	github.com/lober/lober/internal/domain/media	(cached)
+ok  	github.com/lober/lober/internal/domain/model	0.032s
+ok  	github.com/lober/lober/internal/domain/params	(cached)
+ok  	github.com/lober/lober/internal/domain/render	8.675s
+ok  	github.com/lober/lober/internal/domain/repository	(cached)
+ok  	github.com/lober/lober/internal/domain/scan	0.011s
+ok  	github.com/lober/lober/internal/domain/selection	(cached)
+ok  	github.com/lober/lober/internal/domain/snapshot	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/builtin	2.568s
+ok  	github.com/lober/lober/internal/infrastructure/events	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/identity	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/media	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/media/iso9660	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/media/isotest	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/notification	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/persistence/pgstore	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/selection	(cached)
+ok  	github.com/lober/lober/internal/interfaces/console	(cached)
+ok  	github.com/lober/lober/internal/interfaces/machine	(cached)
+```
+
+竞态：26包缓存、5包实际运行、6包无测试文件。逐包实际输出：
+
+```text
+?   	github.com/lober/lober/cmd/console-openapi	[no test files]
+ok  	github.com/lober/lober/cmd/lober	(cached)
+ok  	github.com/lober/lober/internal/application/authoring	(cached)
+?   	github.com/lober/lober/internal/application/authoring/port	[no test files]
+ok  	github.com/lober/lober/internal/application/execution	(cached)
+ok  	github.com/lober/lober/internal/application/hosts	(cached)
+?   	github.com/lober/lober/internal/application/hosts/port	[no test files]
+ok  	github.com/lober/lober/internal/application/media	(cached)
+?   	github.com/lober/lober/internal/application/media/port	[no test files]
+?   	github.com/lober/lober/internal/application/ports	[no test files]
+ok  	github.com/lober/lober/internal/application/tasks	(cached)
+?   	github.com/lober/lober/internal/application/tasks/port	[no test files]
+ok  	github.com/lober/lober/internal/archtest	170.847s
+ok  	github.com/lober/lober/internal/domain/access	(cached)
+ok  	github.com/lober/lober/internal/domain/activation	(cached)
+ok  	github.com/lober/lober/internal/domain/admission	(cached)
+ok  	github.com/lober/lober/internal/domain/catalog	(cached)
+ok  	github.com/lober/lober/internal/domain/media	(cached)
+ok  	github.com/lober/lober/internal/domain/model	1.195s
+ok  	github.com/lober/lober/internal/domain/params	(cached)
+ok  	github.com/lober/lober/internal/domain/render	10.852s
+ok  	github.com/lober/lober/internal/domain/repository	(cached)
+ok  	github.com/lober/lober/internal/domain/scan	1.036s
+ok  	github.com/lober/lober/internal/domain/selection	(cached)
+ok  	github.com/lober/lober/internal/domain/snapshot	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/builtin	6.144s
+ok  	github.com/lober/lober/internal/infrastructure/events	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/identity	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/media	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/media/iso9660	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/media/isotest	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/notification	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/persistence/pgstore	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest	(cached)
+ok  	github.com/lober/lober/internal/infrastructure/selection	(cached)
+ok  	github.com/lober/lober/internal/interfaces/console	(cached)
+ok  	github.com/lober/lober/internal/interfaces/machine	(cached)
+```
+
+格式、vet、强制发现、Linux amd64构建、Wire差异、契约类型、两条原点名命令及补充实际组装/管理员/Bash全部完成；整轮退出0，changes/untracked空，源码未变。执行标记：
+
+```text
+TASK6 make check START
+GOOS=linux GOARCH=amd64 go build ./...
+WIRE_LOADER_MODE=fallback WIRE_LOADER_ARTIFACTS=0 go tool wire diff ./cmd/lober
+TASK6 make check EXIT=0
+TASK6 console types START
+$ node scripts/generate-console-types.mjs --check
+TASK6 console types EXIT=0
+TASK6 original focused START
+TASK6 original focused EXIT=0
+TASK6 original optional START
+TASK6 original optional EXIT=0
+TASK6 original diff EXIT=0
+TASK6 moved real ISO and admin START
+TASK6 moved real ISO and admin EXIT=0
+TASK6 actual assembly START
+TASK6 actual assembly EXIT=0
+TASK6 optional shell START
+TASK6 optional shell EXIT=0
+TASK6 final diff EXIT=0
+```
+
+原点名与补充测试的实际通过、未匹配、跳过：
+
+```text
+ok  	github.com/lober/lober/internal/application/media	33.703s
+ok  	github.com/lober/lober/internal/infrastructure/media	11.913s
+ok  	github.com/lober/lober/internal/interfaces/console	14.077s
+ok  	github.com/lober/lober/cmd/lober	0.015s [no tests to run]
+ok  	github.com/lober/lober/internal/infrastructure/persistence/pgstore	12.983s
+--- PASS: TestPreseedMirrorSelectionsAreSeenAndAuthenticated (1.01s)
+    --- PASS: TestPreseedMirrorSelectionsAreSeenAndAuthenticated/official (0.53s)
+    --- PASS: TestPreseedMirrorSelectionsAreSeenAndAuthenticated/internal-signed (0.48s)
+    render_test.go:284: one-time immutable release recording
+--- SKIP: TestRecordCurrentRelease (0.00s)
+ok  	github.com/lober/lober/internal/infrastructure/builtin	1.020s
+testing: warning: no tests to run
+ok  	github.com/lober/lober/internal/infrastructure/media	0.010s [no tests to run]
+    realiso_test.go:15: LOBER_TEST_REAL_ISO is unset; real ISO coverage is opt-in
+--- SKIP: TestRealISO (0.00s)
+ok  	github.com/lober/lober/internal/infrastructure/media/iso9660	0.004s
+--- PASS: Test镜像管理员八个写入口传递有效输入 (0.00s)
+    --- PASS: Test镜像管理员八个写入口传递有效输入/create (0.00s)
+    --- PASS: Test镜像管理员八个写入口传递有效输入/register (0.00s)
+    --- PASS: Test镜像管理员八个写入口传递有效输入/upload (0.00s)
+    --- PASS: Test镜像管理员八个写入口传递有效输入/cancel (0.00s)
+    --- PASS: Test镜像管理员八个写入口传递有效输入/retry (0.00s)
+    --- PASS: Test镜像管理员八个写入口传递有效输入/reimport (0.00s)
+    --- PASS: Test镜像管理员八个写入口传递有效输入/deprecate (0.00s)
+    --- PASS: Test镜像管理员八个写入口传递有效输入/delete (0.00s)
+    identify_real_test.go:17: LOBER_TEST_REAL_ISO is unset; real ISO coverage is opt-in
+--- SKIP: TestIdentifyRealISO (0.00s)
+ok  	github.com/lober/lober/internal/application/media	0.009s
+--- PASS: Test装配后台获取导入及启动恢复 (1.18s)
+ok  	github.com/lober/lober/cmd/lober	1.199s
+--- PASS: TestPreseedCleanupRedactsInstallerAuthenticationURLs (0.09s)
+    --- PASS: TestPreseedCleanupRedactsInstallerAuthenticationURLs/bash (0.09s)
+ok  	github.com/lober/lober/internal/domain/render	0.093s
+```
+
+显式3项跳过：RecordCurrentRelease的一次性记录、未设置LOBER_TEST_REAL_ISO的两个实物ISO测试。原focused的cmd和原optional的infrastructure/media无匹配；额外实际组装测试和已移动的实际ISO测试均被点名。不能将跳过写成实物/安装覆盖。普通和竞态不是逐例verbose，隐式跳过总数未知。没有安装Vue依赖或声称全量Vue检查通过。
+
+本轮可见GIN输出76行，TLS handshake error 0行；只报告该组合实际可见输出，不宣称全部测试无噪声。M1继续deferred。
+
+### 同树与自查
+
+修改只封住I1实际漏报；保留同包辅助遍历、外部能力规则、精确清单、领域纯符号与状态判断。最终完整arch测试覆盖新增规则及旧规则组合；第五、六阶段许可没有删除或改写。源码冻结后只补Markdown。
+
+```json
+{
+  "tested_tree": "7b41519dc07097f2c6880d77f95cbf129124edd3",
+  "candidate_tree_before_report_write": "f6bb05a99bdc4da795e98801e402c6230fa0ea6f",
+  "complete_union_paths": 2036,
+  "non_markdown_paths": 1870,
+  "non_markdown_differences": [],
+  "markdown_differences": [
+    "docs/superpowers/reviews/2026-10-23-ddd-phase4-evidence.md"
+  ]
+}
+```
+
+本轮证明均保留在同计划目录：t6-i1-* snapshot、commands、tree、started、finished、exit、changes、untracked与safe.log。门禁和整分支结论由根执行者后续裁定。

@@ -129,6 +129,14 @@ func transitionRestricted(caller string, obj types.Object) bool {
 	}
 	_, function := obj.(*types.Func)
 	if under(caller, pkgConsole) {
+		// 新文件也不能借本地接口查镜像；身份和任务接口仍按原阶段规则检查。
+		if function && target == caller && mediaRepositoryMethod(obj.Name()) {
+			if recv := obj.Type().(*types.Signature).Recv(); recv != nil {
+				if _, ok := recv.Type().Underlying().(*types.Interface); ok {
+					return true
+				}
+			}
+		}
 		if target == modulePath+"/internal/application/media/port" {
 			return true
 		}

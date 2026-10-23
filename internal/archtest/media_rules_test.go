@@ -29,6 +29,8 @@ func mediaTypedFixture(t *testing.T, caller string, sources map[string]string) [
 		files = append(files, f)
 	}
 	imports := transitionFixtureImporter{
+		"time":              `package time;type Time struct{}`,
+		"context":           `package context;import "time";type Context interface{Deadline()(time.Time,bool);Done()<-chan struct{};Err()error;Value(any)any}`,
 		"io/fs":             `package fs;var ErrNotExist error;var SkipAll error;type FS interface{Open()};func ReadFile(){};func WalkDir(){}`,
 		pkgStore:            `package repository; type ISOs interface{GetISO();UpdateISO()}; type ISOSources interface{SaveSource()}; type Users interface{GetUser()}; type Store interface{ISOs;ISOSources;Users}; func CheckID(){};func CheckSource(){};var ErrInvalid error`,
 		fixtureMediaPort:    `package port; type ISOs interface{GetISO();UpdateISO()}; type Sources interface{SaveSource()};type SourceControl interface{Register();Upload()};type Deletion interface{Delete()};type Transfer interface{BeginFetch()};type FetchSession interface{Open();Close()};type ImportSession interface{OpenSource();Publish()};type DeletionJournal interface{Persist();List();Discard()};type Entry struct{Size int64};type Fault struct{};func(*Fault)Error()string{return "file"}`,
@@ -193,15 +195,26 @@ func Test镜像应用只接受两个文件错误值(t *testing.T) {
 }
 
 func Test镜像新网页文件不能调用内部能力(t *testing.T) {
-	for _, body := range []string{
-		`import p "` + fixtureMediaPort + `";func f(s p.ISOs){s.GetISO()}`,
-		`import p "` + fixtureMediaPort + `";var _ p.SourceControl`,
-		`import m "` + fixtureMedia + `";func f(s *m.Sources){s.Recover()}`,
+	for _, tc := range []struct {
+		name, body string
+		allowed    bool
+	}{
+		{"自己的仓储接口", `import p "` + fixtureMediaPort + `";func f(s p.ISOs){s.GetISO()}`, false},
+		{"内部来源控制", `import p "` + fixtureMediaPort + `";var _ p.SourceControl`, false},
+		{"内部恢复流程", `import m "` + fixtureMedia + `";func f(s *m.Sources){s.Recover()}`, false},
+		{"本地接口最小方法值", `type reader interface{GetISO()};func newMediaHandler(r reader){read:=r.GetISO;read()}`, false},
+		{"本地接口最小直接调用", `type reader interface{GetISO()};func newMediaHandler(r reader){r.GetISO()}`, false},
+		{"本地接口真实签名直接调用", `import("context";m "` + pkgModel + `");type reader interface{GetISO(context.Context,string)(m.ISO,error)};func newMediaHandler(ctx context.Context,r reader)(m.ISO,error){return r.GetISO(ctx,"image")}`, false},
+		{"本地接口真实签名方法值", `import("context";m "` + pkgModel + `");type reader interface{GetISO(context.Context,string)(m.ISO,error)};func newMediaHandler(ctx context.Context,r reader)(m.ISO,error){read:=r.GetISO;return read(ctx,"image")}`, false},
+		{"后续任务接口正常调用", `import("context";m "` + pkgModel + `");type reader interface{GetTask(context.Context,string)(m.Task,error)};func newTaskHandler(ctx context.Context,r reader)(m.Task,error){if _,err:=r.GetTask(ctx,"task");err!=nil{return m.Task{},err};read:=r.GetTask;return read(ctx,"task")}`, true},
+		{"后续身份接口正常调用", `type reader interface{GetUser()};func newUserHandler(r reader){r.GetUser();read:=r.GetUser;read()}`, true},
 	} {
-		got := mediaTypedFixture(t, pkgConsole, map[string]string{"new.go": "package console;" + body})
-		if len(got) == 0 {
-			t.Fatalf("新文件绕过镜像边界: %s", body)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			got := mediaTypedFixture(t, pkgConsole, map[string]string{"new.go": "package console;" + tc.body})
+			if (len(got) == 0) != tc.allowed {
+				t.Fatalf("allowed=%v findings=%v", tc.allowed, got)
+			}
+		})
 	}
 }
 
