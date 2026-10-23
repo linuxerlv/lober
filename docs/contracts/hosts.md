@@ -1,6 +1,6 @@
 # 主机登记与 CSV 契约
 
-这份约定固定第三阶段迁移前的主机行为。六条真实路由仍以 `internal/interfaces/console/hosts.go` 为准。迁移不增加字段、分页方式或导入规则。
+这份约定固定第三阶段搬迁前后保持的主机行为。六条真实路由仍以 `internal/interfaces/console/hosts.go` 为准。迁移不增加字段、分页方式或导入规则。
 
 ## 六条入口
 
@@ -68,6 +68,10 @@
 
 ## 验证位置
 
-`hosts_contract_test.go` 固定六入口、五角色实际网页权限、多个错误的先后、两种分页、原文过滤，以及 CSV 预演和失败优先级。原 `hosts_test.go` 中真实登录与口令测试、`csv_test.go` 的物理行号及重复定位、`selection_pagination_test.go` 和主机、审计、并发仓储契约测试继续保留。
+`hosts_contract_test.go` 固定六入口、五角色实际网页权限、多个错误的先后、两种分页、原文过滤，以及 CSV 预演和失败优先级。原 `hosts_test.go` 中真实登录与口令测试、`selection_pagination_test.go` 和主机、审计、并发仓储契约测试继续保留。CSV 的物理行号、重复定位和问题顺序在 `application/hosts/csv_test.go`、`import_test.go` 继续覆盖；网页 `csv_test.go` 核对空数组转换。
 
-这份文件描述兼容要求，不代表第三阶段搬迁或完整验收已经完成。
+六个网页入口现经 `application/hosts.Registry` 执行。网页只解析请求并转换旧响应；应用检查权限、编号和 CSV，原仓储保留版本、引用保护、同序加锁和原子审计。任务向导与编写预览仍使用各自的主机读取接口。
+
+`internal/archtest/hosts_rules_test.go` 对 `hosts.go`、`csv.go` 做类型检查，追踪同包函数、方法值和包级别名。仅允许 Registry 的 List/Get/Create/Update/Delete/Import 六方法；纯 HostResponse/CsvPlan 转换保留。直接仓储、小接口、旧规则、通知和任务诊断均拒绝。
+
+当前是本地候选；完整检查及两道独立审查的实际状态见[第三阶段证据](../superpowers/reviews/2026-10-23-ddd-phase3-evidence.md)。

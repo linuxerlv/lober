@@ -158,3 +158,21 @@ Task6只补文档，不改数据库结构、网页字段、前端或生产行为
 | notificationMigrationExceptions | 1 | 6：1，仍仅console.NewHub |
 
 六项正式编号能力不变。完整检查与独立审查状态见[第二阶段证据](../superpowers/reviews/2026-10-23-ddd-phase2-evidence.md)。本地候选提交不代表已合入develop或通过企业和人工验收。
+
+
+## 第三阶段主机边界
+
+`application/hosts.Registry` 只提供 List/Get/Create/Update/Delete/Import 六方法。网页的 `hosts.go` 和 `csv.go` 加入既有类型追踪根；纯请求、响应转换留在网页。错误转换只读取 CSVFileError/ImportRejectedError 的字段，不增加 Error 方法许可。
+
+`hosts/port.Hosts` 明确声明原仓储七个方法。主机写入仍由原数据库事务检查版本、引用和审计；整批导入不逐条提交。任务与编写的主机读口保持独立，不转调主机服务。
+
+阶段3累计删除仓储许可10项、网页规则许可6项，277降为261。阶段1、2、3与向导剩余均为0。架构测试对真实四清单固定数量，并用起点逐项内容摘要核对：补回精确删除的16项后，必须等于起点，其他阶段不能改动。
+
+| 固定清单 | 当前条数 | 剩余清除阶段 |
+| --- | --- | --- |
+| migrationExceptions | 88 | 4：24；5：35；6：29 |
+| mediaMigrationExceptions | 125 | 4：125 |
+| consoleRuleMigrationExceptions | 47 | 4：5；5：30；6：12 |
+| notificationMigrationExceptions | 1 | 6：1，仍仅console.NewHub |
+
+六项正式编号能力和唯一通知转发的原检查保持。当前候选的完整验证及独立审查状态见[第三阶段证据](../superpowers/reviews/2026-10-23-ddd-phase3-evidence.md)；不代表已经合入develop或通过后续企业、人工验收。

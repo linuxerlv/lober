@@ -10,7 +10,7 @@
 
 **Spec:** [已批准四层设计](../specs/2026-10-22-backend-ddd-four-layer-design.md)、[阶段路线](2026-10-22-backend-ddd-roadmap.md)、[模块契约](../../contracts/backend-modules.md)。
 
-状态：待用户审阅。本轮只编写计划；业务实现、测试和第三阶段验收尚未开始。后续沿用逐任务实施、独立审查的方式。
+状态：用户已于2026-10-23批准实施。任务1至3已实现并各自独立审查通过；任务4实现与完整检查已通过，本地候选待独立Task4审查、整分支审查，模块交付仍待完成。
 
 ## Global Constraints
 
@@ -128,10 +128,10 @@ type Registry interface {
 
 **Interfaces:** 产出第2节的6条固定路由、权限、审计、请求响应与错误顺序基线；没有新应用接口。
 
-- [ ] 写`Test主机六入口契约`：手写六条method/path/perm/audit集合，逐条核对；五角色实际经过网页权限检查，读均允许、写仅admin/operator。验证成功内容或稳定错误，不能只断言“不是403”。可复用seedHTTPUser；原真实登录及口令测试完整保留。
-- [ ] 写`Test主机输入多错保持原顺序`：PUT坏Rev+非法路径SN为400/ConsoleBadRequest；Rev=1+非法路径SN为422/sn_invalid；DELETE溢出Rev+非法SN先400。再覆盖正文与路径不一致、创建空SN422及创建Rev任意仍置1。
-- [ ] 写`Test主机列表保留两种分页与原文过滤`：SN-1/SN-10/SN-2排序、空items=[]、page的total、游标无total、混用空字段/数字溢出；小写prefix不规范化，属性空白原样精确过滤。
-- [ ] 写`Test主机CSV预演与失败优先级`：坏dryRun优先于坏CSV；后段列数错误400/null；有效+无效行并关闭读取仓储时500；读取正常时预演200计划、提交422同计划且无记录/审计变化。检查空dryRun及重复参数首值规则。
+- [x] 写`Test主机六入口契约`：手写六条method/path/perm/audit集合，逐条核对；五角色实际经过网页权限检查，读均允许、写仅admin/operator。验证成功内容或稳定错误，不能只断言“不是403”。可复用seedHTTPUser；原真实登录及口令测试完整保留。
+- [x] 写`Test主机输入多错保持原顺序`：PUT坏Rev+非法路径SN为400/ConsoleBadRequest；Rev=1+非法路径SN为422/sn_invalid；DELETE溢出Rev+非法SN先400。再覆盖正文与路径不一致、创建空SN422及创建Rev任意仍置1。
+- [x] 写`Test主机列表保留两种分页与原文过滤`：SN-1/SN-10/SN-2排序、空items=[]、page的total、游标无total、混用空字段/数字溢出；小写prefix不规范化，属性空白原样精确过滤。
+- [x] 写`Test主机CSV预演与失败优先级`：坏dryRun优先于坏CSV；后段列数错误400/null；有效+无效行并关闭读取仓储时500；读取正常时预演200计划、提交422同计划且无记录/审计变化。检查空dryRun及重复参数首值规则。
 上述多错用例的固定测试数据至少包含：
 
 ```go
@@ -141,8 +141,8 @@ cases := []struct { rev int64; path string; wantHTTP int; wantProblem string }{
 }
 ```
 
-- [ ] 这是旧行为刻画，先取得基线真实通过，不为制造红灯改旧实现。在lober VM运行：`go test ./internal/interfaces/console -run 'Test主机|TestCSV|TestOpenAPIOptionalHostArchitectureAndFirmware' -count=1`；`go test ./internal/infrastructure/persistence/pgstore -run 'Test契约主机|Test契约审计|Test契约并发' -count=1`。数据库用例必须实际运行。
-- [ ] 提交`test(hosts): pin registry and CSV contracts`，独立核对基线与原代码；发现现有缺陷保留失败，单列兼容修复，不顺手改变迁移范围。
+- [x] 这是旧行为刻画，先取得基线真实通过，不为制造红灯改旧实现。在lober VM运行：`go test ./internal/interfaces/console -run 'Test主机|TestCSV|TestOpenAPIOptionalHostArchitectureAndFirmware' -count=1`；`go test ./internal/infrastructure/persistence/pgstore -run 'Test契约主机|Test契约审计|Test契约并发' -count=1`。数据库用例必须实际运行。
+- [x] 提交`test(hosts): pin registry and CSV contracts`，独立核对基线与原代码；发现现有缺陷保留失败，单列兼容修复，不顺手改变迁移范围。
 
 ### Task 2: 主机查询与单条写入进入应用
 
@@ -150,18 +150,18 @@ cases := []struct { rev int64; path string; wantHTTP int; wantProblem string }{
 
 **Interfaces:** 交付第3节Registry的List/Get/Create/Update/Delete、NewRegistry/Deps和对应port五方法；生产显式注入HostRegistry。旧Deps.Hosts在生产HTTP中仅供CSV使用；现有测试读取口保持，Task3删除字段时统一改为显式store。
 
-- [ ] 新增应用测试先红：`Test主机应用权限先于输入`覆盖空Username、无效Role、Disabled、MustChangePassword及五角色组合，坏输入也先授权；测试替身记录仓储和Clock调用数，无权时都为0。`Test主机应用编号版本与整份替换`固定第2.2节先后、空字段清空、创建Rev忽略和错误透传；无新记录校验副本。
+- [x] 新增应用测试先红：`Test主机应用权限先于输入`覆盖空Username、无效Role、Disabled、MustChangePassword及五角色组合，坏输入也先授权；测试替身记录仓储和Clock调用数，无权时都为0。`Test主机应用编号版本与整份替换`固定第2.2节先后、空字段清空、创建Rev忽略和错误透传；无新记录校验副本。
 权限测试的替身计数名为repoCalls、clockCalls，拒绝后的共同断言为：
 
 ```go
 if repoCalls != 0 || clockCalls != 0 { t.Fatal(repoCalls, clockCalls) }
 ```
 
-- [ ] 实现五方法，复用NormalizeSN、CheckHostQuery和原仓储。只在原写入位置取Clock，固定host.create/update/delete及空Detail。SN/Rev等前置失败不碰写仓储；记录内容合法性仍由原仓储保证，不把“所有非法记录都不进仓储”误作新契约。
-- [ ] 五个网页入口改为actorOf→HostRegistry→旧响应转换。列表改用纯parseQueryPagination，不经仍调用仓储校验的queryPagination；应用保持原检查。移除normalizedHostSN生产辅助，queryRev继续只做数字解析/错误响应。CSV入口暂留原路径，不添加许可。
-- [ ] 补`Test主机应用审计失败与删除引用保护`，经真实HTTP/应用与数据库验证创建、替换、删除审计失败均回滚完整对象/Rev/审计；任何任务状态的引用均409。新增用例放hosts_contract_test.go，复用既有审计失败注入方式。保留Test契约主机、Test契约审计、Test契约并发及默认隔离级别用例。
-- [ ] 明确组装HostRegistry；test helper显式构造，不在console.New补默认服务。Wire在VM生成并取回具体文件。阶段3删除CRUD仓储7项和normalizedHostSN规则1项，总数277→269；原阶段2与向导清零断言不动，只更新实际固定总数。
-- [ ] VM先运行新增应用测试证明缺入口/行为的真实红灯，再运行`go test ./internal/application/hosts -count=1`；`go test ./internal/interfaces/console ./cmd/lober -run 'Test主机|TestCSV|Test向导|Test任务预览|TestOpenAPIOptionalHostArchitectureAndFirmware'`；`go test ./internal/archtest`及上述数据库聚焦。格式、Wire gen/diff均在VM，成功后提交`refactor(hosts): extract registry application`并独立审查。
+- [x] 实现五方法，复用NormalizeSN、CheckHostQuery和原仓储。只在原写入位置取Clock，固定host.create/update/delete及空Detail。SN/Rev等前置失败不碰写仓储；记录内容合法性仍由原仓储保证，不把“所有非法记录都不进仓储”误作新契约。
+- [x] 五个网页入口改为actorOf→HostRegistry→旧响应转换。列表改用纯parseQueryPagination，不经仍调用仓储校验的queryPagination；应用保持原检查。移除normalizedHostSN生产辅助，queryRev继续只做数字解析/错误响应。CSV入口暂留原路径，不添加许可。
+- [x] 补`Test主机应用审计失败与删除引用保护`，经真实HTTP/应用与数据库验证创建、替换、删除审计失败均回滚完整对象/Rev/审计；任何任务状态的引用均409。新增用例放hosts_contract_test.go，复用既有审计失败注入方式。保留Test契约主机、Test契约审计、Test契约并发及默认隔离级别用例。
+- [x] 明确组装HostRegistry；test helper显式构造，不在console.New补默认服务。Wire在VM生成并取回具体文件。阶段3删除CRUD仓储7项和normalizedHostSN规则1项，总数277→269；原阶段2与向导清零断言不动，只更新实际固定总数。
+- [x] VM先运行新增应用测试证明缺入口/行为的真实红灯，再运行`go test ./internal/application/hosts -count=1`；`go test ./internal/interfaces/console ./cmd/lober -run 'Test主机|TestCSV|Test向导|Test任务预览|TestOpenAPIOptionalHostArchitectureAndFirmware'`；`go test ./internal/archtest`及上述数据库聚焦。格式、Wire gen/diff均在VM，成功后提交`refactor(hosts): extract registry application`并独立审查。
 
 ### Task 3: CSV预演与整批导入进入应用
 
@@ -169,9 +169,9 @@ if repoCalls != 0 || clockCalls != 0 { t.Fatal(repoCalls, clockCalls) }
 
 **Interfaces:** 增加Registry.Import和port的GetHosts/ImportHosts两方法，完整交付第3节导入值与错误。删除console.Deps.Hosts，所有主机HTTP只依赖HostRegistry。
 
-- [ ] 新增Import应用测试先红：授权先于CSV；格式错误不查库；GetHosts在dryRun/行拒绝之前，且空集合仍调用一次；预演/拒绝时Clock和写入调用均0。正式只调用ImportHosts一次，操作者/动作/At可信，返回原输入顺序。
-- [ ] CSV解析搬入hosts/csv.go，使用原encoding/csv和领域方法。原csv_test.go三组解析断言迁入应用测试；“已存在则update”的断言通过Import预演与可记录GetHosts的替身验证，不能删掉。保留字节BOM、物理行2/4、属性` A01 `和含真实换行的note值、全部重复行及六种问题顺序。
-- [ ] `Test主机CSV重复与首错次序`固定输入SN-1、sn-1、占位编号、坏平台、坏文本；所有重复位置首问题host_duplicate_in_batch，后续问题顺序不变。`Test主机导入预演后覆盖最新版本`：预演create后由第二连接先创建，正式导入返回Rev=2及本次内容；再次导入继续加Rev，不增加CSV旧版本拒绝。
+- [x] 新增Import应用测试先红：授权先于CSV；格式错误不查库；GetHosts在dryRun/行拒绝之前，且空集合仍调用一次；预演/拒绝时Clock和写入调用均0。正式只调用ImportHosts一次，操作者/动作/At可信，返回原输入顺序。
+- [x] CSV解析搬入hosts/csv.go，使用原encoding/csv和领域方法。原csv_test.go三组解析断言迁入应用测试；“已存在则update”的断言通过Import预演与可记录GetHosts的替身验证，不能删掉。保留字节BOM、物理行2/4、属性` A01 `和含真实换行的note值、全部重复行及六种问题顺序。
+- [x] `Test主机CSV重复与首错次序`固定输入SN-1、sn-1、占位编号、坏平台、坏文本；所有重复位置首问题host_duplicate_in_batch，后续问题顺序不变。`Test主机导入预演后覆盖最新版本`：预演create后由第二连接先创建，正式导入返回Rev=2及本次内容；再次导入继续加Rev，不增加CSV旧版本拒绝。
 原逐行样例的前六行首问题固定为：
 
 ```go
@@ -180,11 +180,11 @@ wantRows := []int{2, 4} // BOM与引号内换行样例的物理行
 wantNote := "line1\nline2"
 ```
 
-- [ ] 实现解析→有效编号GetHosts→标记计划→dryRun/拒绝→原子ImportHosts，遵守第2.3节。网页仍解析dryRun、读字节，转换旧CsvPlan/HostPage；CSVFileError/ImportRejectedError在RespondError只读字段映射。删除旧parseHostCSV生产桥，console/csv.go仅保留原公开类型及纯转换。
-- [ ] `Test主机导入审计取消整批回滚`用真实数据库在中间行/审计失败、锁等待取消后比较整批原记录、Rev和审计不变；成功批次按SN-2/SN-1输入返回并审计。补`Test主机变更与向导提交按数据库事实交错`两子例：①主机应用先将SN-1从x86_64改为aarch64，在事务审计处用测试schema的SQL门闩暂缓提交；向导按旧事实预读后等待主机锁，放行主机提交后，任务创建应422、byHost[SN-1]首项arch_mismatch，任务与task.create审计均0。②向导先持主机锁并暂缓任务审计提交，主机应用导入在行锁等待；先放行任务，再导入aarch64，任务成功且快照Host.Arch仍x86_64，登记主机已为aarch64。用独立连接、进入信号、数据库阻塞证据和审计触发器门闩建立先后，不用sleep或进程锁冒充阻塞。
-- [ ] 删除Deps.Hosts并调整harness：测试store接口显式包含repository.Hosts，Registry、Wizard与AuthoringEditor各自从store取得所需读口，不借主机服务或恢复网页仓储。CurrentTaskCreator覆盖及唯一模板选择锁仍保持；主机模块不新增进程锁。关闭读取仓储的CSV失败测试改注入真实HostRegistry；任务冻结预览测试也把新主机入口及编写读口指向关闭store，完整结果比较不减。
-- [ ] 删除导入两项仓储、Deps字段一项及CSV五项规则，269→261。两类阶段3累计正好10+6=16；不删除其他阶段项。同步阶段2固定总数检查，继续保证阶段2/向导为0。
-- [ ] VM执行`go test ./internal/application/hosts -count=1`、`go test ./internal/interfaces/console ./cmd/lober -run 'Test主机|TestCSV|Test向导|Test任务预览|TestOpenAPIOptionalHostArchitectureAndFirmware'`、`go test ./internal/archtest`；数据库执行`go test ./internal/infrastructure/persistence/pgstore -run 'Test契约主机|Test契约审计|Test同时导入主机与建任务不会互相等死|Test同时导入同一组主机不会互相等死|Test写事务不随连接默认的隔离级别变' -count=1`。成功后提交`refactor(hosts): move CSV import behind contract`，独立审查事务、错误先后和测试注入。
+- [x] 实现解析→有效编号GetHosts→标记计划→dryRun/拒绝→原子ImportHosts，遵守第2.3节。网页仍解析dryRun、读字节，转换旧CsvPlan/HostPage；CSVFileError/ImportRejectedError在RespondError只读字段映射。删除旧parseHostCSV生产桥，console/csv.go仅保留原公开类型及纯转换。
+- [x] `Test主机导入审计取消整批回滚`用真实数据库在中间行/审计失败、锁等待取消后比较整批原记录、Rev和审计不变；成功批次按SN-2/SN-1输入返回并审计。补`Test主机变更与向导提交按数据库事实交错`两子例：①主机应用先将SN-1从x86_64改为aarch64，在事务审计处用测试schema的SQL门闩暂缓提交；向导按旧事实预读后等待主机锁，放行主机提交后，任务创建应422、byHost[SN-1]首项arch_mismatch，任务与task.create审计均0。②向导先持主机锁并暂缓任务审计提交，主机应用导入在行锁等待；先放行任务，再导入aarch64，任务成功且快照Host.Arch仍x86_64，登记主机已为aarch64。用独立连接、进入信号、数据库阻塞证据和审计触发器门闩建立先后，不用sleep或进程锁冒充阻塞。
+- [x] 删除Deps.Hosts并调整harness：测试store接口显式包含repository.Hosts，Registry、Wizard与AuthoringEditor各自从store取得所需读口，不借主机服务或恢复网页仓储。CurrentTaskCreator覆盖及唯一模板选择锁仍保持；主机模块不新增进程锁。关闭读取仓储的CSV失败测试改注入真实HostRegistry；任务冻结预览测试也把新主机入口及编写读口指向关闭store，完整结果比较不减。
+- [x] 删除导入两项仓储、Deps字段一项及CSV五项规则，269→261。两类阶段3累计正好10+6=16；不删除其他阶段项。同步阶段2固定总数检查，继续保证阶段2/向导为0。
+- [x] VM执行`go test ./internal/application/hosts -count=1`、`go test ./internal/interfaces/console ./cmd/lober -run 'Test主机|TestCSV|Test向导|Test任务预览|TestOpenAPIOptionalHostArchitectureAndFirmware'`、`go test ./internal/archtest`；数据库执行`go test ./internal/infrastructure/persistence/pgstore -run 'Test契约主机|Test契约审计|Test同时导入主机与建任务不会互相等死|Test同时导入同一组主机不会互相等死|Test写事务不随连接默认的隔离级别变' -count=1`。成功后提交`refactor(hosts): move CSV import behind contract`，独立审查事务、错误先后和测试注入。
 
 ### Task 4: 关闭主机边界并完整验收
 
@@ -192,11 +192,11 @@ wantNote := "line1\nline2"
 
 **Interfaces:** 迁移根增加hosts.go、csv.go，仅登记hosts.Registry的六方法；向导/编写与正式六项编号能力、唯一通知桥都不扩容。
 
-- [ ] 先写类型有效的反例并在VM证明红灯：两个主机文件各覆盖直接仓储、局部别名、方法值、包级别名、两层旧辅助、旧响应转发、局部小接口、Host.Validate/NormalizeSN调用、错误转换夹带业务、通知/任务诊断、相似应用接口和未登记Registry方法。每例先通过Go类型检查，再进入既有typedTransitionFindings/wizardHelperFindings。
-- [ ] 扩展原根集合与精确方法允许表，沿同包真实符号追踪；纯HostResponse/CsvPlan转换和Registry六方法为正例。保留向导12反例、编写六文件正反例，夹具不能因新增常驻违规使“允许例”变失败，不能以取消原断言处理。
-- [ ] 新增`Test主机许可已清零`：阶段3为0；原阶段1/2、向导继续0。固定四清单88/125/47/1，总数261；统计真实清单变量，不误删migration_test.go用于格式/匹配检查的合成阶段样例；逐行比较起点只删10项仓储和6项规则，其他阶段新增/删除均0。保留正式能力与唯一通知转发的原检查。
-- [ ] 在VM执行根目录`make check`，原`go test -race -timeout=20m ./...`不改；再执行`pnpm --dir web check:console-types`，公开名称/生成结果无差异。没有前端业务修改时不重复全量前端构建；有实际改动才补相应验证。
-- [ ] 保存真实环境、精确树、命令、退出码、耗时、缓存/跳过项及失败修复。真实数据库必须执行；realISO、一次性发布记录及整机验收未执行就明确写出。不把前阶段成功或工具准备错误当成本阶段通过。
+- [x] 先写类型有效的反例并在VM证明红灯：两个主机文件各覆盖直接仓储、局部别名、方法值、包级别名、两层旧辅助、旧响应转发、局部小接口、Host.Validate/NormalizeSN调用、错误转换夹带业务、通知/任务诊断、相似应用接口和未登记Registry方法。每例先通过Go类型检查，再进入既有typedTransitionFindings/wizardHelperFindings。
+- [x] 扩展原根集合与精确方法允许表，沿同包真实符号追踪；纯HostResponse/CsvPlan转换和Registry六方法为正例。保留向导12反例、编写六文件正反例，夹具不能因新增常驻违规使“允许例”变失败，不能以取消原断言处理。
+- [x] 新增`Test主机许可已清零`：阶段3为0；原阶段1/2、向导继续0。固定四清单88/125/47/1，总数261；统计真实清单变量，不误删migration_test.go用于格式/匹配检查的合成阶段样例；逐行比较起点只删10项仓储和6项规则，其他阶段新增/删除均0。保留正式能力与唯一通知转发的原检查。
+- [x] 在VM执行根目录`make check`，原`go test -race -timeout=20m ./...`不改；再执行`pnpm --dir web check:console-types`，公开名称/生成结果无差异。没有前端业务修改时不重复全量前端构建；有实际改动才补相应验证。
+- [x] 保存真实环境、精确树、命令、退出码、耗时、缓存/跳过项及失败修复。真实数据库必须执行；realISO、一次性发布记录及整机验收未执行就明确写出。不把前阶段成功或工具准备错误当成本阶段通过。
 - [ ] 完整验证通过后形成本地候选`refactor(hosts): enforce phase-three boundaries`，供独立Task4与整分支审查核对固定范围；两道审查通过才标记模块交付。计划状态补记只改文档时，用精确差异证明源码仍等于被测树，无需重复相同全套。
 - [ ] 整分支审查逐项关闭六入口、CSV两种结果、数据库契约及五项Review Focus。先修阻塞问题，日志等非阻塞项明确留存。交付codex/ddd-hosts；develop及后续环境按仓库流程另行推进。
 
@@ -218,4 +218,4 @@ wantNote := "line1\nline2"
 - 已核对接口接力：Task2五方法可独立交付，Task3才增加真实Import与两读写方法；最后消费者迁完再删Deps.Hosts，无空服务或新增临时许可。
 - 已核对公开类型与错误转换：网页仍使用原DTO，应用不携带网页标签；typed错误映射只读字段，不能因新错误类型泛许应用方法。
 - 已逐项核对阶段3为10+6项，277→261；阶段2原总数断言随每项实际删除同步调整，不能把历史快照当成不许继续清理的固定终态。
-- 本次计划编写没有运行测试、构建、gofmt或Wire；当前结果仅为源码与契约核对，不是第三阶段验收。
+- 初次编写计划时未运行测试、构建、gofmt或Wire。用户批准后的实际实施与验收见[第三阶段证据](../reviews/2026-10-23-ddd-phase3-evidence.md)；独立Task4审查、整分支审查和模块交付仍待完成。

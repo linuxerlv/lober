@@ -93,7 +93,7 @@ func wizardHelperFindings(fset *token.FileSet, files []*ast.File, info *types.In
 // 根集合包含本阶段全部处理文件，沿实际符号继续检查同包辅助。
 func migratedConsoleFile(file string) bool {
 	switch file {
-	case "wizard.go", "hooks.go", "templates.go", "lifecycle.go", "authoring_helpers.go", "slots.go", "preview.go":
+	case "wizard.go", "hooks.go", "templates.go", "lifecycle.go", "authoring_helpers.go", "slots.go", "preview.go", "hosts.go", "csv.go":
 		return true
 	}
 	return false
@@ -104,6 +104,12 @@ func migratedApplicationMethod(fn *types.Func) bool {
 	target, symbol := fn.Pkg().Path(), transitionSymbol(fn)
 	if target == pkgPorts {
 		return symbol == "FrozenPreview.RenderFrozen"
+	}
+	if target == modulePath+"/internal/application/hosts" {
+		switch symbol {
+		case "Registry.List", "Registry.Get", "Registry.Create", "Registry.Update", "Registry.Delete", "Registry.Import":
+			return true
+		}
 	}
 	if target == pkgTasks {
 		switch symbol {
