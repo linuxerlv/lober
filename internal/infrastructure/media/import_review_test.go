@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/lober/lober/internal/domain/catalog"
@@ -16,17 +17,26 @@ import (
 
 type mutateImportContext struct {
 	context.Context
+	mu     sync.Mutex
 	when   func() bool
 	mutate func()
 	done   bool
 }
 
 func (c *mutateImportContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.done && c.when() {
 		c.done = true
 		c.mutate()
 	}
 	return c.Context.Err()
+}
+
+func (c *mutateImportContext) didMutate() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.done
 }
 
 func TestImportRechecksEverySourceAfterAllCopies(t *testing.T) {
@@ -71,7 +81,7 @@ func TestImportRechecksEverySourceAfterAllCopies(t *testing.T) {
 				}
 			}}
 			err = s.Import(ctx, i.ID)
-			if !ctx.done {
+			if !ctx.didMutate() {
 				t.Fatal("mutation did not run")
 			}
 			var problem model.Problem
