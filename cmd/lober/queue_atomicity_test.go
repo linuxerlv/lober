@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	appmedia "github.com/lober/lober/internal/application/media"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -17,10 +18,10 @@ func failedQueueISO(t *testing.T, a *app, series string) model.ISO {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Native.Register(t.Context(), item, "upload", "", "", 4, "", assemblyAudit("iso.source")); err != nil {
+	if err := a.Supervisor.source.Register(t.Context(), item, "upload", "", "", 4, "", assemblyAudit("iso.source")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Native.Upload(t.Context(), item.ID, "", 0, bytes.NewReader([]byte("data")), repository.Audit{}); err != nil {
+	if err := a.Supervisor.source.Upload(t.Context(), item.ID, "", 0, bytes.NewReader([]byte("data")), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
 	item.State = model.ISOFailed
@@ -81,14 +82,14 @@ func Test补来源调度失败必须回滚登记和审计(t *testing.T) {
 	if err != nil || len(entries.Items) != 1 {
 		t.Fatal("成功排队应恰好记录一条审计", entries, err)
 	}
-	restarted := iso.New(a.Store, iso.Dirs{Staging: cfg.ISO.Staging, Artifacts: cfg.ISO.Artifacts, SMB: cfg.ISO.SMB, Tools: cfg.ISO.Tools, LocalRoots: cfg.ISO.LocalRoots})
+	restarted := acquisitionOf(a.Store, cfg, iso.NewSourceLocks(), iso.NewRegistrationGate())
 	work, err := restarted.Recover(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	found := false
 	for _, w := range work {
-		if w.ISOID == item.ID && w.Role == "netboot" && w.Kind == iso.ResumeFetch {
+		if w.ISOID == item.ID && w.Role == "netboot" && w.Kind == appmedia.ResumeFetch {
 			found = true
 		}
 	}
@@ -106,7 +107,7 @@ func Test重新导入调度失败必须回滚审计和来源修订(t *testing.T)
 		t.Fatal(err)
 	}
 	audit := assemblyAudit("iso.reimport.queue")
-	if err := a.Native.RequestReimport(t.Context(), item.ID, audit); err == nil {
+	if err := a.Supervisor.source.RequestReimport(t.Context(), item.ID, audit); err == nil {
 		t.Fatal("failed queue accepted")
 	}
 	after, _, err := a.Store.GetSource(t.Context(), item.ID, "")

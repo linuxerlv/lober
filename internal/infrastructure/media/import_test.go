@@ -18,7 +18,7 @@ import (
 	"testing"
 )
 
-func importSetup(t *testing.T) (*Sources, repository.Store) {
+func importSetup(t *testing.T) (*acquisitionFixture, repository.Store) {
 	t.Helper()
 	db := pgtest.Open(t)
 	root := t.TempDir()
@@ -33,12 +33,12 @@ func importSetup(t *testing.T) (*Sources, repository.Store) {
 			t.Fatal(err)
 		}
 	}
-	return New(db, d), db
+	return newAcquisitionFixture(db, d), db
 }
 func importAudit() repository.Audit {
 	return repository.Audit{Actor: "alice", Action: "iso.source", At: 1790000000}
 }
-func importUpload(t *testing.T, s *Sources, i model.ISO, role string, b []byte) {
+func importUpload(t *testing.T, s *acquisitionFixture, i model.ISO, role string, b []byte) {
 	t.Helper()
 	sum := sha256.Sum256(b)
 	if err := s.Register(t.Context(), i, "upload", "", role, int64(len(b)), hex.EncodeToString(sum[:]), importAudit()); err != nil {
@@ -299,7 +299,7 @@ func TestImportRollbackAndRecovery(t *testing.T) {
 		t.Fatal("failed publication remained", err)
 	}
 	fault.fail = false
-	s = New(db, s.dirs)
+	s = newAcquisitionFixture(db, s.dirs)
 	if err = s.Import(t.Context(), i.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestImportCrashAfterRenameAndResidualTemp(t *testing.T) {
 	if e = os.WriteFile(filepath.Join(tmp, "partial"), []byte("incomplete"), 0644); e != nil {
 		t.Fatal(e)
 	}
-	s = New(db, s.dirs)
+	s = newAcquisitionFixture(db, s.dirs)
 	if e = s.Import(t.Context(), i.ID); e != nil {
 		t.Fatal(e)
 	}

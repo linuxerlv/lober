@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lober/lober/internal/infrastructure/media"
+	appmedia "github.com/lober/lober/internal/application/media"
 )
 
 func awaitJobRelease(t *testing.T, s *sourceSupervisor, key string) {
@@ -27,7 +27,7 @@ func awaitJobRelease(t *testing.T, s *sourceSupervisor, key string) {
 func Test后台工作panic释放资源退避后重试(t *testing.T) {
 	a, _ := assembled(t)
 	s := a.Supervisor
-	w := iso.ToResume{ISOID: "fault", Kind: iso.ResumeFetch}
+	w := appmedia.ResumeWork{ISOID: "fault", Kind: appmedia.ResumeFetch}
 	key := "fault//fetch"
 	if !s.launch(w, func() error { panic("private failure payload") }) {
 		t.Fatal("job did not start")

@@ -21,3 +21,6 @@ type SourceControl interface {
 type Deletion interface {
 	Delete(context.Context, string, int64, repository.Audit) error
 }
+
+// Waker 只提示后台重读持久化待办。
+type Waker interface{ Wake() }

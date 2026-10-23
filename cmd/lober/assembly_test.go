@@ -161,14 +161,14 @@ func Test装配后台获取导入及启动恢复(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Native.RequestReimport(t.Context(), failed.ID, assemblyAudit("iso.reimport")); err != nil {
+	if err := a.Supervisor.source.RequestReimport(t.Context(), failed.ID, assemblyAudit("iso.reimport")); err != nil {
 		t.Fatal(err)
 	}
 	queued, err := a.Store.GetISO(t.Context(), failed.ID)
 	if err != nil || queued.State != model.ISOAcquiring || queued.Rev != failed.Rev+1 {
 		t.Fatal("重启前必须已保存排队事实", queued, err)
 	}
-	restarted := newSourceSupervisor(t.Context(), a.Native, a.Store, a.Deletion, a.Gate, cfg.ISO, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted := newSourceSupervisor(t.Context(), a.Supervisor.source, a.Native, a.Store, a.Deletion, a.Gate, cfg.ISO, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer restarted.Close()
 	if err := restarted.Start(); err != nil {
 		t.Fatal(err)

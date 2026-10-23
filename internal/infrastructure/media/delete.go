@@ -60,9 +60,7 @@ func (s *Sources) CleanupDeleted(ctx context.Context, snapshot DeletionSnapshot)
 	unlock := s.lockSource(item.ID, "@import")
 	defer unlock()
 	for _, source := range snapshot.Sources {
-		if cancel, ok := s.active.Load(item.ID + "/" + source.Role); ok {
-			cancel.(context.CancelFunc)()
-		}
+		s.locks.Cancel(item.ID, source.Role)
 		unlock := s.lockSource(item.ID, source.Role)
 		defer unlock()
 	}

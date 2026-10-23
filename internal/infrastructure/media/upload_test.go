@@ -36,7 +36,7 @@ func TestUploadOutOfOrderDuplicateMissingAndAutomaticFinish(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	// Refresh reconstructs progress from PostgreSQL, not instance memory.
-	s = New(s.store, s.dirs)
+	s = newAcquisitionFixture(s.store, s.dirs)
 	for _, chunk := range []struct {
 		offset int64
 		data   string
@@ -173,7 +173,7 @@ func TestUploadPublicationCrashRestoresFinalAsPartial(t *testing.T) {
 	if err := os.Rename(s.stagingPath(item.ID, ""), s.sourcePath(mustSource(t, s, item.ID, ""))); err != nil {
 		t.Fatal(err)
 	}
-	s = New(s.store, s.dirs)
+	s = newAcquisitionFixture(s.store, s.dirs)
 	if err := s.Upload(t.Context(), item.ID, "", 2, strings.NewReader("cd"), repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}

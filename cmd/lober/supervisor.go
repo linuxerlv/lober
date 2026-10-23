@@ -3,18 +3,22 @@ package main
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/lober/lober/internal/application/media"
+	"github.com/lober/lober/internal/application/media/port"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
-	"github.com/lober/lober/internal/infrastructure/media"
 )
 
 type sourceSupervisor struct {
-	source          *iso.Sources
+	source   *media.Sources
+	importer interface {
+		Import(context.Context, string) error
+	}
+	port.SourceControl
 	store           repository.Store
 	journal         *deletionJournal
 	gate            *registrationGate
@@ -32,9 +36,13 @@ type sourceSupervisor struct {
 	wg              sync.WaitGroup
 }
 
-func newSourceSupervisor(ctx context.Context, src *iso.Sources, st repository.Store, j *deletionJournal, gate *registrationGate, cfg isoConfig, logger *slog.Logger) *sourceSupervisor {
+func newSourceSupervisor(ctx context.Context, src *media.Sources, importer interface {
+	Import(context.Context, string) error
+}, st repository.Store, j *deletionJournal, gate *registrationGate, cfg isoConfig, logger *slog.Logger) *sourceSupervisor {
 	child, cancel := context.WithCancel(ctx)
-	return &sourceSupervisor{source: src, store: st, journal: j, gate: gate, cfg: cfg, logger: logger, ctx: child, cancel: cancel, wake: make(chan struct{}, 1), slots: make(chan struct{}, cfg.Workers), running: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{}}
+	s := &sourceSupervisor{source: src, importer: importer, store: st, journal: j, gate: gate, cfg: cfg, logger: logger, ctx: child, cancel: cancel, wake: make(chan struct{}, 1), slots: make(chan struct{}, cfg.Workers), running: map[string]bool{}, retryAt: map[string]time.Time{}, failures: map[string]int{}}
+	s.SourceControl = media.NewControl(src, s)
+	return s
 }
 func (s *sourceSupervisor) Wake() {
 	select {
@@ -136,22 +144,22 @@ func (s *sourceSupervisor) reconcile() {
 		if s.ctx.Err() != nil {
 			return
 		}
-		if w.Kind == iso.ResumeFetch {
+		if w.Kind == media.ResumeFetch {
 			src, exists, err := s.store.GetSource(s.ctx, w.ISOID, w.Role)
 			if err != nil || !exists || src.Kind == model.SourceUpload {
 				continue
 			}
 		}
 		s.launch(w, func() error {
-			if w.Kind == iso.ResumeFetch {
+			if w.Kind == media.ResumeFetch {
 				return s.source.FetchOne(s.ctx, w.ISOID, w.Role)
 			}
-			return s.source.Import(s.ctx, w.ISOID)
+			return s.importer.Import(s.ctx, w.ISOID)
 		})
 	}
 }
 
-func (s *sourceSupervisor) launch(w iso.ToResume, work func() error) bool {
+func (s *sourceSupervisor) launch(w media.ResumeWork, work func() error) bool {
 	key := w.ISOID + "/" + w.Role + "/" + string(w.Kind)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -187,40 +195,4 @@ func (s *sourceSupervisor) launch(w iso.ToResume, work func() error) bool {
 		}
 	}()
 	return true
-}
-func (s *sourceSupervisor) Register(ctx context.Context, item model.ISO, kind, addr, role string, size int64, digest string, a repository.Audit) error {
-	s.gate.RLock()
-	defer s.gate.RUnlock()
-	if err := s.source.RegisterQueued(ctx, item, kind, addr, role, size, digest, a); err != nil {
-		return err
-	}
-	s.Wake()
-	return nil
-}
-func (s *sourceSupervisor) Upload(ctx context.Context, id, role string, offset int64, r io.Reader, a repository.Audit) error {
-	err := s.source.Upload(ctx, id, role, offset, r, a)
-	if err == nil {
-		s.Wake()
-	}
-	return err
-}
-func (s *sourceSupervisor) Cancel(ctx context.Context, id string, a repository.Audit) error {
-	return s.source.Cancel(ctx, id, a)
-}
-func (s *sourceSupervisor) Retry(ctx context.Context, id string, a repository.Audit) error {
-	err := s.source.Retry(ctx, id, a)
-	if err == nil {
-		s.Wake()
-	}
-	return err
-}
-func (s *sourceSupervisor) Reimport(ctx context.Context, id string, a repository.Audit) error {
-	err := s.source.RequestReimport(ctx, id, a)
-	if err == nil {
-		s.Wake()
-	}
-	return err
-}
-func (s *sourceSupervisor) FreeSpace(ctx context.Context) (int64, int64, error) {
-	return s.source.FreeSpace(ctx)
 }

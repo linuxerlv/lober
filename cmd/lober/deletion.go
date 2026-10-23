@@ -19,7 +19,7 @@ import (
 
 // Registration and snapshot capture share a gate. Source identity/path cannot
 // change after registration, so fetch counters need not block deletion.
-type registrationGate struct{ sync.RWMutex }
+type registrationGate = iso.RegistrationGate
 type deletionJournal struct {
 	store  repository.Store
 	source *iso.Sources

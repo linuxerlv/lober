@@ -94,7 +94,7 @@ func Test第二阶段与向导许可已清零(t *testing.T) {
 			}
 		}
 	}
-	if total != 232 {
-		t.Fatalf("固定许可总数=%d，期望232", total)
+	if total != 158 {
+		t.Fatalf("固定许可总数=%d，期望158", total)
 	}
 }

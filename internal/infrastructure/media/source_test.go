@@ -18,7 +18,7 @@ import (
 func sourceAudit() repository.Audit {
 	return repository.Audit{Actor: "source-test", Action: "iso.source", At: 1}
 }
-func sourceFixture(t *testing.T, series string) (*Sources, model.ISO) {
+func sourceFixture(t *testing.T, series string) (*acquisitionFixture, model.ISO) {
 	t.Helper()
 	db := pgtest.Open(t)
 	item, err := db.CreateISO(t.Context(), model.ISO{Name: "source", Family: "linux", Series: catalog.Series(series)}, sourceAudit())
@@ -26,10 +26,10 @@ func sourceFixture(t *testing.T, series string) (*Sources, model.ISO) {
 		t.Fatal(err)
 	}
 	dirs := Dirs{Staging: t.TempDir(), Artifacts: t.TempDir(), SMB: t.TempDir(), Tools: t.TempDir(), LocalRoots: []string{t.TempDir()}}
-	return New(db, dirs), item
+	return newAcquisitionFixture(db, dirs), item
 }
 
-func mustSource(t *testing.T, s *Sources, id, role string) model.Source {
+func mustSource(t *testing.T, s *acquisitionFixture, id, role string) model.Source {
 	t.Helper()
 	src, ok, err := s.store.GetSource(t.Context(), id, role)
 	if err != nil || !ok {
@@ -37,7 +37,7 @@ func mustSource(t *testing.T, s *Sources, id, role string) model.Source {
 	}
 	return src
 }
-func mustSourceSave(t *testing.T, s *Sources, src model.Source) model.Source {
+func mustSourceSave(t *testing.T, s *acquisitionFixture, src model.Source) model.Source {
 	t.Helper()
 	src, err := s.store.SaveSource(t.Context(), src, repository.Audit{})
 	if err != nil {
@@ -147,8 +147,8 @@ func TestSourceFreeSpaceAndMissingDirectory(t *testing.T) {
 	if err != nil || stage <= 0 || art <= 0 {
 		t.Fatalf("%d %d %v", stage, art, err)
 	}
-	s.dirs.Artifacts = filepath.Join(t.TempDir(), "absent")
-	if _, _, err := s.FreeSpace(t.Context()); err == nil || !strings.Contains(err.Error(), s.dirs.Artifacts) {
+	s.transfer.dirs.Artifacts = filepath.Join(t.TempDir(), "absent")
+	if _, _, err := s.FreeSpace(t.Context()); err == nil || !strings.Contains(err.Error(), s.transfer.dirs.Artifacts) {
 		t.Fatalf("missing artifacts: %v", err)
 	}
 }

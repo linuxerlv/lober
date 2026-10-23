@@ -58,3 +58,16 @@ func Test选择锁只接受共同能力和同步库(t *testing.T) {
 		}
 	}
 }
+
+func Test镜像文件能力只向精确接口开放(t *testing.T) {
+	for _, caller := range []string{pkgISO, pkgISO9660, pkgISO + "/hidden", pkgNotification} {
+		for _, imp := range []string{modulePath + "/internal/application/media/port", modulePath + "/internal/application/media", modulePath + "/internal/application/media/port/hidden"} {
+			dir := strings.TrimPrefix(caller, modulePath+"/")
+			got, _ := checkModule(fstest.MapFS{dir + "/x.go": {Data: []byte(importing(imp))}}, nil, []goPackage{{ImportPath: caller, GoFiles: []string{"x.go"}}})
+			allowed := caller == pkgISO && imp == modulePath+"/internal/application/media/port"
+			if (len(got) == 0) != allowed {
+				t.Fatalf("%s -> %s: %v", caller, imp, got)
+			}
+		}
+	}
+}

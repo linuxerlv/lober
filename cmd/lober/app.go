@@ -90,17 +90,22 @@ func openStore(ctx context.Context, cfg config, logger *slog.Logger) (*pgstore.S
 		}
 	}, nil
 }
-func nativeSourcesOf(st repository.Store, cfg config) (*iso.Sources, error) {
+func nativeSourcesOf(st repository.Store, cfg config, locks *iso.SourceLocks, gate *registrationGate) (*iso.Sources, error) {
 	for _, dir := range []string{cfg.ISO.Staging, cfg.ISO.Artifacts, cfg.ISO.SMB} {
 		if err := os.MkdirAll(dir, 0750); err != nil {
 			return nil, err
 		}
 	}
-	return iso.New(st, iso.Dirs{Staging: cfg.ISO.Staging, Artifacts: cfg.ISO.Artifacts, SMB: cfg.ISO.SMB, Tools: cfg.ISO.Tools, LocalRoots: cfg.ISO.LocalRoots}), nil
+	return iso.New(st, iso.Dirs{Staging: cfg.ISO.Staging, Artifacts: cfg.ISO.Artifacts, SMB: cfg.ISO.SMB, Tools: cfg.ISO.Tools, LocalRoots: cfg.ISO.LocalRoots}, locks, gate), nil
 }
-func gateOf() *registrationGate { return &registrationGate{} }
-func supervisorOf(ctx context.Context, raw *iso.Sources, st repository.Store, j *deletionJournal, g *registrationGate, cfg config, logger *slog.Logger) (*sourceSupervisor, func()) {
-	s := newSourceSupervisor(ctx, raw, st, j, g, cfg.ISO, logger)
+func gateOf() *registrationGate       { return iso.NewRegistrationGate() }
+func sourceLocksOf() *iso.SourceLocks { return iso.NewSourceLocks() }
+func acquisitionOf(st repository.Store, cfg config, locks *iso.SourceLocks, gate *registrationGate) *appmedia.Sources {
+	transfer := iso.NewTransfer(iso.Dirs{Staging: cfg.ISO.Staging, Artifacts: cfg.ISO.Artifacts, SMB: cfg.ISO.SMB, Tools: cfg.ISO.Tools, LocalRoots: cfg.ISO.LocalRoots})
+	return appmedia.NewSources(appmedia.SourceDeps{ISOs: st, Sources: st, Transfer: transfer, Locks: locks, Gate: gate})
+}
+func supervisorOf(ctx context.Context, src *appmedia.Sources, raw *iso.Sources, st repository.Store, j *deletionJournal, g *registrationGate, cfg config, logger *slog.Logger) (*sourceSupervisor, func()) {
+	s := newSourceSupervisor(ctx, src, raw, st, j, g, cfg.ISO, logger)
 	return s, s.Close
 }
 func taskControlOf(m *machineBundle) console.TaskControl {

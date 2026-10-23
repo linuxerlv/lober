@@ -3,11 +3,10 @@ package iso
 import (
 	"bytes"
 	"context"
+	"github.com/lober/lober/internal/application/media/port"
 	"github.com/lober/lober/internal/domain/model"
 	"io"
 	"os"
-
-	"github.com/lober/lober/internal/domain/repository"
 )
 
 // compareRange compares persisted bytes, not a caller-provided chunk digest.
@@ -21,7 +20,7 @@ func compareRange(ctx context.Context, left, right io.Reader) error {
 		n, e := io.ReadFull(left, a)
 		m, f := io.ReadFull(right, b)
 		if m != n || !bytes.Equal(a[:n], b[:m]) {
-			return repository.ErrConflict
+			return fault(port.ChunkRejected)
 		}
 		if f != nil && f != io.EOF && f != io.ErrUnexpectedEOF {
 			return f
@@ -35,40 +34,29 @@ func compareRange(ctx context.Context, left, right io.Reader) error {
 	}
 }
 
-func (s *Sources) Upload(ctx context.Context, id, role string, offset int64, r io.Reader, a repository.Audit) (err error) {
-	if err = ctx.Err(); err != nil {
-		return err
+type uploadSession struct {
+	transfer         *Transfer
+	src              model.Source
+	offset, size     int64
+	chunk, confirmed *os.File
+	closed           bool
+}
+
+func (t *Transfer) BeginUpload(ctx context.Context, src model.Source, offset int64, r io.Reader) (port.UploadSession, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if err = checkSourceKey(id, role); err != nil {
-		return err
+	if offset < 0 || offset >= src.TotalSize || r == nil {
+		return nil, fault(port.ChunkRejected)
 	}
-	if a != (repository.Audit{}) {
-		if err = repository.CheckAudit(a); err != nil {
-			return err
-		}
+	if err := os.MkdirAll(t.dirs.Staging, 0700); err != nil {
+		return nil, err
 	}
-	unlock := s.lockSource(id, role)
-	defer unlock()
-	src, err := s.getSource(ctx, id, role)
+	chunk, err := os.CreateTemp(t.dirs.Staging, ".chunk-"+src.ISOID+"-")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if src.Kind != model.SourceUpload || src.State != model.SourcePending && src.State != model.SourceFetching && src.State != model.SourceFetched {
-		return repository.ErrConflict
-	}
-	if offset < 0 || offset >= src.TotalSize || src.TotalSize <= 0 || r == nil {
-		return sourceRejected(id, role, isoSourceReasonChunk)
-	}
-	if err = os.MkdirAll(s.dirs.Staging, 0700); err != nil {
-		return err
-	}
-	// Spool at most the remaining space plus one sentinel byte before touching
-	// confirmed content; an overlong body can never overwrite existing bytes.
-	chunk, err := os.CreateTemp(s.dirs.Staging, ".chunk-"+id+"-")
-	if err != nil {
-		return err
-	}
-	defer func() { chunk.Close(); os.Remove(chunk.Name()) }()
+	session := &uploadSession{transfer: t, src: src, offset: offset, chunk: chunk}
 	remaining := src.TotalSize - offset
 	limit := remaining
 	if limit < 1<<63-1 {
@@ -76,89 +64,77 @@ func (s *Sources) Upload(ctx context.Context, id, role string, offset int64, r i
 	}
 	n, err := io.Copy(chunk, io.LimitReader(contextReader{ctx: ctx, r: r}, limit))
 	if err != nil {
-		return err
+		session.Close()
+		return nil, err
 	}
 	if n <= 0 || n > remaining {
-		return sourceRejected(id, role, isoSourceReasonChunk)
+		session.Close()
+		return nil, fault(port.ChunkRejected)
 	}
-	ranges, err := s.store.RangesOf(ctx, id, role)
-	if err != nil {
+	session.size = n
+	return session, nil
+}
+func (s *uploadSession) Size() int64 { return s.size }
+func (s *uploadSession) CheckOverlap(ctx context.Context, ranges []model.Range) error {
+	if err := s.transfer.restorePublication(s.src); err != nil {
 		return err
 	}
-	path := s.stagingPath(id, role)
-	if err = s.restorePublication(src); err != nil {
-		return err
-	}
+	path := s.transfer.stagingPath(s.src.ISOID, s.src.Role)
 	flags := os.O_CREATE | os.O_RDWR
-	if src.State == model.SourceFetched {
-		path = s.sourcePath(src)
+	if s.src.State == model.SourceFetched {
+		path = s.transfer.sourcePath(s.src)
 		flags = os.O_RDONLY
 	}
 	f, err := os.OpenFile(path, flags, 0600)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	s.confirmed = f
 	for _, span := range ranges {
-		start := max(offset, span.Start)
-		end := min(offset+n, span.Start+span.Length)
+		start := max(s.offset, span.Start)
+		end := min(s.offset+s.size, span.Start+span.Length)
 		if start >= end {
 			continue
 		}
-		err = compareRange(ctx, io.NewSectionReader(f, start, end-start), io.NewSectionReader(chunk, start-offset, end-start))
-		if err != nil {
-			return sourceRejected(id, role, isoSourceReasonChunk)
+		if err = compareRange(ctx, io.NewSectionReader(f, start, end-start), io.NewSectionReader(s.chunk, start-s.offset, end-start)); err != nil {
+			return fault(port.ChunkRejected)
 		}
 	}
-	if src.State == model.SourceFetched {
-		if err = compareRange(ctx, io.NewSectionReader(f, offset, n), io.NewSectionReader(chunk, 0, n)); err != nil {
-			return sourceRejected(id, role, isoSourceReasonChunk)
-		}
-		if a != (repository.Audit{}) {
-			_, err = s.store.SaveSource(ctx, src, a)
-		}
+	return nil
+}
+func (s *uploadSession) VerifyReplay(ctx context.Context) error {
+	if err := compareRange(ctx, io.NewSectionReader(s.confirmed, s.offset, s.size), io.NewSectionReader(s.chunk, 0, s.size)); err != nil {
+		return fault(port.ChunkRejected)
+	}
+	return nil
+}
+func (s *uploadSession) Write(ctx context.Context) error {
+	if _, err := s.confirmed.Seek(s.offset, io.SeekStart); err != nil {
 		return err
 	}
-	if src.State == model.SourcePending {
-		src.State = model.SourceFetching
-	}
-	// Persist the transition/audit only after the chunk bounds and all overlap
-	// bytes pass. SaveRange below atomically updates union progress and Rev.
-	src, err = s.store.SaveSource(ctx, src, a)
-	if err != nil {
+	if _, err := io.Copy(s.confirmed, contextReader{ctx: ctx, r: io.NewSectionReader(s.chunk, 0, s.size)}); err != nil {
 		return err
 	}
-	if _, err = f.Seek(offset, io.SeekStart); err != nil {
+	if err := s.confirmed.Sync(); err != nil {
 		return err
 	}
-	if _, err = io.Copy(f, contextReader{ctx: ctx, r: io.NewSectionReader(chunk, 0, n)}); err != nil {
-		return err
+	return nil
+}
+func (s *uploadSession) Close() error {
+	if s.closed {
+		return nil
 	}
-	if err = f.Sync(); err != nil {
-		return err
+	s.closed = true
+	var err error
+	if s.confirmed != nil {
+		err = s.confirmed.Close()
+		s.confirmed = nil
 	}
-	if err = s.store.SaveRange(ctx, id, role, offset, n); err != nil {
-		return err
-	}
-	src, err = s.getSource(ctx, id, role)
-	if err != nil {
-		return err
-	}
-	if src.State != model.SourceFetching {
-		return repository.ErrConflict
-	}
-	ranges, err = s.store.RangesOf(ctx, id, role)
-	if err != nil {
-		return err
-	}
-	if len(ranges) == 1 && ranges[0].Start == 0 && ranges[0].Length == src.TotalSize {
-		if err = f.Close(); err != nil {
-			return err
-		}
-		err = s.finishFetch(ctx, src)
-		if err != nil {
-			s.failFetch(ctx, src, err)
-		}
+	// 临时片是本次调用的清理工作，沿用原行为，不把清理错误当成发布失败。
+	if s.chunk != nil {
+		s.chunk.Close()
+		os.Remove(s.chunk.Name())
+		s.chunk = nil
 	}
 	return err
 }

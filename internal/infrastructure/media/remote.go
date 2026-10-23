@@ -4,28 +4,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/application/media/port"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
-
-	"github.com/lober/lober/internal/domain/repository"
 )
 
 // parseContentRange accepts a complete trailing range, not a loosely parsed
 // prefix. All lengths and offsets are bounded signed integers.
 func parseContentRange(value string) (start, end, total int64, err error) {
 	if !strings.HasPrefix(value, "bytes ") {
-		return 0, 0, 0, repository.ErrInvalid
+		return 0, 0, 0, fault(port.InvalidFile)
 	}
 	parts := strings.Split(strings.TrimPrefix(value, "bytes "), "/")
 	if len(parts) != 2 {
-		return 0, 0, 0, repository.ErrInvalid
+		return 0, 0, 0, fault(port.InvalidFile)
 	}
 	span := strings.Split(parts[0], "-")
 	if len(span) != 2 {
-		return 0, 0, 0, repository.ErrInvalid
+		return 0, 0, 0, fault(port.InvalidFile)
 	}
 	start, err = rangeNumber(span[0])
 	if err != nil {
@@ -40,124 +38,95 @@ func parseContentRange(value string) (start, end, total int64, err error) {
 		return
 	}
 	if start < 0 || end < start || total <= end {
-		err = repository.ErrInvalid
+		err = fault(port.InvalidFile)
 	}
 	return
 }
 
 func rangeNumber(value string) (int64, error) {
 	if value == "" {
-		return 0, repository.ErrInvalid
+		return 0, fault(port.InvalidFile)
 	}
 	for _, c := range value {
 		if c < '0' || c > '9' {
-			return 0, repository.ErrInvalid
+			return 0, fault(port.InvalidFile)
 		}
 	}
 	return strconv.ParseInt(value, 10, 64)
 }
 
-func (s *Sources) fetchRemote(ctx context.Context, src model.Source) error {
-	src, offset, err := s.resumeOffset(ctx, src)
+func (s *fetchSession) openRemote(ctx context.Context) (port.FetchInfo, error) {
+	offset := s.offset
+	if offset > 0 && s.src.ExpectedSHA256 == "" {
+		offset = 0
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.src.URL, nil)
 	if err != nil {
-		return err
+		return port.FetchInfo{}, err
 	}
-	// A byte range alone does not identify the remote entity. Without a supplied
-	// content digest, restart rather than combine a stale prefix with a new tail.
-	// Digest-bound resumes are verified again before publication.
-	if offset > 0 && src.ExpectedSHA256 == "" {
-		offset, src.Fetched = 0, 0
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.URL, nil)
-	if err != nil {
-		return err
-	}
-	// Disable transparent decompression: byte offsets refer to the media itself.
 	req.Header.Set("Accept-Encoding", "identity")
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
-	resp, err := s.httpClient().Do(req)
+	resp, err := s.transfer.httpClient().Do(req)
 	if err != nil {
-		var rejected *repository.ProblemsError
-		if errors.As(err, &rejected) {
-			removeErr := os.Remove(s.stagingPath(src.ISOID, src.Role))
+		var f *port.Fault
+		if errors.As(err, &f) && f.Kind == port.URLRejected {
+			removeErr := os.Remove(s.transfer.stagingPath(s.src.ISOID, s.src.Role))
 			if removeErr != nil && !os.IsNotExist(removeErr) {
-				return errors.Join(err, removeErr)
+				return port.FetchInfo{}, errors.Join(err, removeErr)
 			}
-			src.Fetched = 0
-			_, saveErr := s.store.SaveSource(ctx, src, repository.Audit{})
-			return errors.Join(sourceRejected(src.ISOID, src.Role, isoSourceReasonURL), saveErr)
+			s.offset = 0
+			return port.FetchInfo{Offset: 0, TotalSize: s.total, Reset: true}, fault(port.URLRejected)
 		}
-		return err
+		return port.FetchInfo{}, err
 	}
-	defer resp.Body.Close()
+	s.body = resp.Body
 	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && encoding != "identity" {
-		return sourceRejected(src.ISOID, src.Role, isoSourceReasonChunk)
+		return port.FetchInfo{}, fault(port.ChunkRejected)
 	}
 	switch resp.StatusCode {
 	case http.StatusRequestedRangeNotSatisfiable:
 		value := resp.Header.Get("Content-Range")
 		if !strings.HasPrefix(value, "bytes */") {
-			return sourceRejected(src.ISOID, src.Role, isoSourceReasonChunk)
+			return port.FetchInfo{}, fault(port.ChunkRejected)
 		}
 		total, e := rangeNumber(strings.TrimPrefix(value, "bytes */"))
-		if e != nil || total <= 0 || total != offset || src.TotalSize > 0 && total != src.TotalSize {
-			return sourceRejected(src.ISOID, src.Role, isoSourceReasonChunk)
+		if e != nil || total <= 0 || total != offset || s.total > 0 && total != s.total {
+			return port.FetchInfo{}, fault(port.ChunkRejected)
 		}
-		src.TotalSize = total
-		src, err = s.store.SaveSource(ctx, src, repository.Audit{})
-		if err != nil {
-			return err
-		}
-		return s.finishFetch(ctx, src)
+		s.offset = offset
+		s.total = total
+		return port.FetchInfo{Offset: offset, TotalSize: total, Complete: true}, nil
 	case http.StatusPartialContent:
 		start, end, total, e := parseContentRange(resp.Header.Get("Content-Range"))
-		if e != nil || start != offset || end != total-1 || resp.ContentLength >= 0 && resp.ContentLength != end-start+1 || src.TotalSize > 0 && src.TotalSize != total {
-			return sourceRejected(src.ISOID, src.Role, isoSourceReasonChunk)
+		if e != nil || start != offset || end != total-1 || resp.ContentLength >= 0 && resp.ContentLength != end-start+1 || s.total > 0 && s.total != total {
+			return port.FetchInfo{}, fault(port.ChunkRejected)
 		}
-		src.TotalSize = total
+		s.total = total
 	case http.StatusOK:
 		offset = 0
-		src.Fetched = 0
-		src.TotalSize = resp.ContentLength
-		if src.TotalSize < 0 {
-			src.TotalSize = 0
-		}
+		s.total = max(resp.ContentLength, 0)
 	default:
-		return fmt.Errorf("fetch source: HTTP %d", resp.StatusCode)
+		return port.FetchInfo{}, fmt.Errorf("fetch source: HTTP %d", resp.StatusCode)
 	}
-	if err = os.MkdirAll(s.dirs.Staging, 0700); err != nil {
-		return err
+	if err = os.MkdirAll(s.transfer.dirs.Staging, 0700); err != nil {
+		return port.FetchInfo{}, err
 	}
 	flags := os.O_CREATE | os.O_WRONLY
 	if offset == 0 {
 		flags |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(s.stagingPath(src.ISOID, src.Role), flags, 0600)
+	s.output, err = os.OpenFile(s.transfer.stagingPath(s.src.ISOID, s.src.Role), flags, 0600)
 	if err != nil {
-		return err
+		return port.FetchInfo{}, err
 	}
-	defer f.Close()
-	if _, err = f.Seek(offset, 0); err != nil {
-		return err
+	if _, err = s.output.Seek(offset, 0); err != nil {
+		return port.FetchInfo{}, err
 	}
-	if err = f.Sync(); err != nil {
-		return err
+	if err = s.output.Sync(); err != nil {
+		return port.FetchInfo{}, err
 	}
-	src, err = s.store.SaveSource(ctx, src, repository.Audit{})
-	if err != nil {
-		return err
-	}
-	src, err = s.writeFetch(ctx, src, f, resp.Body, offset)
-	if err != nil {
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	if src.TotalSize > 0 && src.Fetched != src.TotalSize {
-		return sourceRejected(src.ISOID, src.Role, isoSourceReasonChunk)
-	}
-	return s.finishFetch(ctx, src)
+	s.offset = offset
+	return port.FetchInfo{Offset: offset, TotalSize: s.total, Reset: offset == 0}, nil
 }

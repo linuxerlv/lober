@@ -126,7 +126,82 @@ func Test主机许可已清零(t *testing.T) {
 			{pkgConsole, "internal/interfaces/console/isosource.go", "package-init", pkgStore, "Audit", "4"},
 			{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "ISOs", "4"},
 		}},
-		{"mediaMigrationExceptions", mediaMigrationExceptions, 125, "4e93eaf8a62876bfa694042b348843f41709e729f45b4354708802cfe5df19db", []migrationException{}},
+		{"mediaMigrationExceptions", mediaMigrationExceptions, 51, "4e93eaf8a62876bfa694042b348843f41709e729f45b4354708802cfe5df19db", []migrationException{
+			{pkgISO, "internal/infrastructure/media/iso.go", "(*Sources).FetchOne", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/iso.go", "(*Sources).FetchOne", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/iso.go", "(*Sources).FetchOne", "github.com/lober/lober/internal/domain/repository", "ErrInvalid", "4"},
+			{pkgISO, "internal/infrastructure/media/iso.go", "(*Sources).FetchOne", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+			{pkgISO, "internal/infrastructure/media/local.go", "(*Sources).fetchLocal", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/local.go", "(*Sources).fetchLocal", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+			{pkgISO, "internal/infrastructure/media/recover.go", "allFetched", "github.com/lober/lober/internal/domain/catalog", "ExtraSourceOf", "4"},
+			{pkgISO, "internal/infrastructure/media/recover.go", "(*Sources).Recover", "github.com/lober/lober/internal/domain/repository", "ISOQuery", "4"},
+			{pkgISO, "internal/infrastructure/media/recover.go", "(*Sources).Recover", "github.com/lober/lober/internal/domain/repository", "ISOSources.ListUnfinishedSources", "4"},
+			{pkgISO, "internal/infrastructure/media/recover.go", "(*Sources).Recover", "github.com/lober/lober/internal/domain/repository", "ISOSources.SourcesOf", "4"},
+			{pkgISO, "internal/infrastructure/media/recover.go", "(*Sources).Recover", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "4"},
+			{pkgISO, "internal/infrastructure/media/recover.go", "(*Sources).Recover", "github.com/lober/lober/internal/domain/repository", "ISOs.ListISOs", "4"},
+			{pkgISO, "internal/infrastructure/media/remote.go", "parseContentRange", "github.com/lober/lober/internal/domain/repository", "ErrInvalid", "4"},
+			{pkgISO, "internal/infrastructure/media/remote.go", "rangeNumber", "github.com/lober/lober/internal/domain/repository", "ErrInvalid", "4"},
+			{pkgISO, "internal/infrastructure/media/remote.go", "(*Sources).fetchRemote", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/remote.go", "(*Sources).fetchRemote", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+			{pkgISO, "internal/infrastructure/media/remote.go", "(*Sources).fetchRemote", "github.com/lober/lober/internal/domain/repository", "ProblemsError", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "checkSourceKey", "github.com/lober/lober/internal/domain/repository", "CheckSourceKey", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).resumeOffset", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).resumeOffset", "github.com/lober/lober/internal/domain/repository", "ErrInvalid", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).resumeOffset", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).restorePublication", "github.com/lober/lober/internal/domain/repository", "ErrInvalid", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).finishFetch", "github.com/lober/lober/internal/domain/model", "NewProblem", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).finishFetch", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).finishFetch", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).finishFetch", "github.com/lober/lober/internal/domain/repository", "ErrRejected", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).finishFetch", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).finishFetch", "github.com/lober/lober/internal/domain/repository", "ProblemsError", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).failFetch", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).failFetch", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).writeFetch", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/source.go", "(*Sources).writeFetch", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Register", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).RegisterQueued", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).register", "github.com/lober/lober/internal/domain/catalog", "ExtraSourceOf", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).register", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).register", "github.com/lober/lober/internal/domain/repository", "CheckAudit", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).register", "github.com/lober/lober/internal/domain/repository", "CheckSource", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).register", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).register", "github.com/lober/lober/internal/domain/repository", "ISOSources.GetSource", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).register", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).register", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSourceAndAcquire", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).register", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Cancel", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Cancel", "github.com/lober/lober/internal/domain/repository", "CheckAudit", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Cancel", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Cancel", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Cancel", "github.com/lober/lober/internal/domain/repository", "ISOSources.SourcesOf", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Cancel", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Retry", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Retry", "github.com/lober/lober/internal/domain/repository", "CheckAudit", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Retry", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Retry", "github.com/lober/lober/internal/domain/repository", "ISOSources.SourcesOf", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Retry", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).retrySource", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).retrySource", "github.com/lober/lober/internal/domain/repository", "ErrInvalid", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).retrySource", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Reimport", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).RequestReimport", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).RequestReimport", "github.com/lober/lober/internal/domain/repository", "CheckAudit", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).RequestReimport", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).RequestReimport", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSourceAndAcquire", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).RequestReimport", "github.com/lober/lober/internal/domain/repository", "ISOSources.SourcesOf", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).RequestReimport", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Progress", "github.com/lober/lober/internal/domain/repository", "ISOSources.RangesOf", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Progress", "github.com/lober/lober/internal/domain/repository", "ISOSources.SourcesOf", "4"},
+			{pkgISO, "internal/infrastructure/media/sources.go", "(*Sources).Progress", "github.com/lober/lober/internal/domain/repository", "ISOs.GetISO", "4"},
+			{pkgISO, "internal/infrastructure/media/upload.go", "compareRange", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/upload.go", "(*Sources).Upload", "github.com/lober/lober/internal/domain/repository", "Audit", "4"},
+			{pkgISO, "internal/infrastructure/media/upload.go", "(*Sources).Upload", "github.com/lober/lober/internal/domain/repository", "CheckAudit", "4"},
+			{pkgISO, "internal/infrastructure/media/upload.go", "(*Sources).Upload", "github.com/lober/lober/internal/domain/repository", "ErrConflict", "4"},
+			{pkgISO, "internal/infrastructure/media/upload.go", "(*Sources).Upload", "github.com/lober/lober/internal/domain/repository", "ISOSources.RangesOf", "4"},
+			{pkgISO, "internal/infrastructure/media/upload.go", "(*Sources).Upload", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveRange", "4"},
+			{pkgISO, "internal/infrastructure/media/upload.go", "(*Sources).Upload", "github.com/lober/lober/internal/domain/repository", "ISOSources.SaveSource", "4"},
+		}},
 		{"consoleRuleMigrationExceptions", consoleRuleMigrationExceptions, 42, "e0e7825d6c0d7450d4a9fb8b9bfe883e90f8fa43107494b48260afe800631708", []migrationException{
 			{pkgConsole, "internal/interfaces/console/csv.go", "parseHostCSV", "github.com/lober/lober/internal/domain/model", "Host.Validate", "3"},
 			{pkgConsole, "internal/interfaces/console/csv.go", "parseHostCSV", "github.com/lober/lober/internal/domain/model", "HostReservedAttrs", "3"},
@@ -147,6 +222,9 @@ func Test主机许可已清零(t *testing.T) {
 		}
 		total += len(tc.entries)
 		expectedRemoved := 0
+		if tc.name == "mediaMigrationExceptions" {
+			expectedRemoved = 74
+		}
 		if tc.name == "migrationExceptions" {
 			expectedRemoved = 34
 		}
@@ -164,7 +242,7 @@ func Test主机许可已清零(t *testing.T) {
 			lines = append(lines, strings.Join([]string{e.Caller, e.File, e.Function, e.Target, e.Symbol, e.RemoveIn}, "\t")+"\n")
 		}
 		for _, e := range tc.removed {
-			if !(e.RemoveIn == "3" && (e.File == "internal/interfaces/console/hosts.go" || e.File == "internal/interfaces/console/csv.go" || e.File == "internal/interfaces/console/server.go") || e.RemoveIn == "4" && (e.File == "internal/interfaces/console/isos.go" || e.File == "internal/interfaces/console/isosource.go" || e.File == "internal/interfaces/console/server.go")) {
+			if !(tc.name == "mediaMigrationExceptions" && e.RemoveIn == "4" && e.Caller == pkgISO || e.RemoveIn == "3" && (e.File == "internal/interfaces/console/hosts.go" || e.File == "internal/interfaces/console/csv.go" || e.File == "internal/interfaces/console/server.go") || e.RemoveIn == "4" && (e.File == "internal/interfaces/console/isos.go" || e.File == "internal/interfaces/console/isosource.go" || e.File == "internal/interfaces/console/server.go")) {
 				t.Fatalf("unexpected removal: %+v", e)
 			}
 			lines = append(lines, strings.Join([]string{e.Caller, e.File, e.Function, e.Target, e.Symbol, e.RemoveIn}, "\t")+"\n")
@@ -174,7 +252,7 @@ func Test主机许可已清零(t *testing.T) {
 			t.Errorf("%s changed beyond the exact phase-three removals: %s", tc.name, got)
 		}
 	}
-	if total != 232 {
-		t.Fatalf("total=%d want 232", total)
+	if total != 158 {
+		t.Fatalf("total=%d want 158", total)
 	}
 }

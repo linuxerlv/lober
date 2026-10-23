@@ -117,6 +117,7 @@ func TestCleanupDeletedCancelsActiveAcquisition(t *testing.T) {
 func TestCleanupDeletedPreservesLocalOriginalAndForeignPublication(t *testing.T) {
 	s, db := importSetup(t)
 	s.dirs.LocalRoots = []string{s.dirs.Staging}
+	s.transfer.dirs.LocalRoots = append([]string(nil), s.dirs.LocalRoots...)
 	i, err := db.CreateISO(t.Context(), model.ISO{Name: "local ownership", Family: "linux", Series: "ubuntu"}, importAudit())
 	if err != nil {
 		t.Fatal(err)

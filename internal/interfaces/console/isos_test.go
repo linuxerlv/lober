@@ -152,7 +152,7 @@ func TestISO登记多来源与真实参数(t *testing.T) {
 
 func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T) {
 	s, st, _, _, token := newISOServer(t)
-	setMedia(s, st, st, iso.New(st, iso.Dirs{Staging: t.TempDir(), Artifacts: t.TempDir()}), &mockISODeletion{st: st})
+	setMedia(s, st, st, newRealMediaControl(st, iso.Dirs{Staging: t.TempDir(), Artifacts: t.TempDir()}), &mockISODeletion{st: st})
 	w := httpCall(s, "POST", "/console/v1/isos", `{"name":"partial","family":"linux","series":"debian","sources":[{"kind":"upload","size":4},{"kind":"path","addr":"/outside/netboot.iso","role":"netboot"}]}`, token)
 	id := strings.TrimPrefix(w.Header().Get("Location"), "/console/v1/isos/")
 	if w.Code != 422 || id == "" || id == w.Header().Get("Location") || !strings.Contains(w.Body.String(), "iso_source_rejected") {

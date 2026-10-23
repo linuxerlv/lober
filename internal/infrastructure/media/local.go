@@ -1,13 +1,11 @@
 package iso
 
 import (
-	"context"
-	"github.com/lober/lober/internal/domain/model"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/application/media/port"
 )
 
 // resolvedPath resolves even a not-yet-existing child, by resolving its nearest
@@ -60,35 +58,7 @@ func localRoot(roots []string, p string) (string, string, bool) {
 // resolving symlinked ancestors; lexical prefix matches alone are insufficient.
 func CheckLocalPath(roots []string, p string) error {
 	if _, _, ok := localRoot(roots, p); !ok {
-		return sourceRejected("", "", isoSourceReasonLocal)
+		return fault(port.PathRejected)
 	}
 	return nil
-}
-
-func (s *Sources) fetchLocal(ctx context.Context, src model.Source) error {
-	root, rel, ok := localRoot(s.dirs.LocalRoots, src.Path)
-	if !ok {
-		return sourceRejected(src.ISOID, src.Role, isoSourceReasonLocal)
-	}
-	// OpenInRoot prevents a concurrent symlink change from escaping the root.
-	f, err := os.OpenInRoot(root, rel)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	if !st.Mode().IsRegular() || st.Size() <= 0 {
-		return sourceRejected(src.ISOID, src.Role, isoSourceReasonLocal)
-	}
-	src.TotalSize = st.Size()
-	src, err = s.store.SaveSource(ctx, src, repository.Audit{})
-	if err != nil {
-		return err
-	}
-	// finishFetch revalidates the path and hashes in place. Original local files
-	// remain operator-owned: cancellation and retry never remove them.
-	return s.finishFetch(ctx, src)
 }

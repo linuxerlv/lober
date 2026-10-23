@@ -22,18 +22,20 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 		return nil, nil, err
 	}
 	mainLoggingStore := loggingStoreOf(store, logger)
-	sources, err := nativeSourcesOf(mainLoggingStore, cfg)
+	sourceLocks := sourceLocksOf()
+	v := gateOf()
+	sources := acquisitionOf(mainLoggingStore, cfg, sourceLocks, v)
+	isoSources, err := nativeSourcesOf(mainLoggingStore, cfg, sourceLocks, v)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	mainRegistrationGate := gateOf()
-	mainDeletionJournal, err := newDeletionJournal(mainLoggingStore, sources, mainRegistrationGate, cfg, logger)
+	mainDeletionJournal, err := newDeletionJournal(mainLoggingStore, isoSources, v, cfg, logger)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	mainSourceSupervisor, cleanup2 := supervisorOf(ctx, sources, mainLoggingStore, mainDeletionJournal, mainRegistrationGate, cfg, logger)
+	mainSourceSupervisor, cleanup2 := supervisorOf(ctx, sources, isoSources, mainLoggingStore, mainDeletionJournal, v, cfg, logger)
 	registry := mediaRegistryOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, clock)
 	notifier := notification.NewHub()
 	selectionGuard := selection.NewGuard()
@@ -52,7 +54,7 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 	hostsRegistry := hostRegistryOf(mainLoggingStore, clock)
 	deps := consoleDepsOf(mainLoggingStore, registry, notifier, cfg, clock, logger, wizard, hooks, templates, editor, frozenPreview, taskControl, hostsRegistry)
 	server := console.New(deps)
-	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, mainSourceSupervisor, mainDeletionJournal, mainRegistrationGate, mainMachineBundle)
+	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, isoSources, mainSourceSupervisor, mainDeletionJournal, v, mainMachineBundle)
 	return mainApp, func() {
 		cleanup2()
 		cleanup()

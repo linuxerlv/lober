@@ -21,10 +21,10 @@ func TestRemoteTLSPinnedAddressRetainsSNIAndVerification(t *testing.T) {
 	server.TLS = &tls.Config{GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) { names <- hello.ServerName; return nil, nil }}
 	server.StartTLS()
 	defer server.Close()
-	s.resolver = func(ctx context.Context, host string) ([]netip.Addr, error) {
+	s.transfer.resolver = func(ctx context.Context, host string) ([]netip.Addr, error) {
 		return []netip.Addr{netip.MustParseAddr("10.0.0.2")}, nil
 	}
-	s.dialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	s.transfer.dialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if !strings.HasPrefix(addr, "10.0.0.2:") {
 			t.Errorf("hostname dialed: %s", addr)
 		}
@@ -77,17 +77,17 @@ func TestRemoteCompleteUnknownLengthAndExplicitRetryRestarts(t *testing.T) {
 	}
 }
 
-func sourceHTTP(t *testing.T, s *Sources, h http.HandlerFunc) string {
+func sourceHTTP(t *testing.T, s *acquisitionFixture, h http.HandlerFunc) string {
 	t.Helper()
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)
-	s.resolver = func(ctx context.Context, host string) ([]netip.Addr, error) {
+	s.transfer.resolver = func(ctx context.Context, host string) ([]netip.Addr, error) {
 		if host == "blocked.example" {
 			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
 		}
 		return []netip.Addr{netip.MustParseAddr("10.0.0.2")}, nil
 	}
-	s.dialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	s.transfer.dialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if !strings.HasPrefix(addr, "10.0.0.2:") {
 			t.Errorf("did not dial pinned IP: %s", addr)
 		}

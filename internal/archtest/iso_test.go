@@ -49,7 +49,7 @@ func checkISOFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
 		if under(pkg, pkgISO9660) {
 			r = ruleISO9660
 		} else {
-			allowed = allowed || inLayer1(name) || name == pkgStore || under(name, pkgISO)
+			allowed = allowed || inLayer1(name) || name == pkgStore || under(name, pkgISO) || pkg == pkgISO && name == modulePath+"/internal/application/media/port"
 		}
 		if !allowed {
 			found = append(found, violation{rule: r, pkg: pkg, subject: name, pos: position(fset, imp.Pos())})
