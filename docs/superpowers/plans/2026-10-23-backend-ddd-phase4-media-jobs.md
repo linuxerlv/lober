@@ -10,7 +10,7 @@
 
 **Spec:** [已批准四层设计](../specs/2026-10-22-backend-ddd-four-layer-design.md)、[阶段路线](2026-10-22-backend-ddd-roadmap.md)、[模块契约](../../contracts/backend-modules.md)。
 
-状态：待用户审阅。本文是实施计划，没有开始产品实现、测试、构建、格式化或生成代码。沿用此前“逐项实施、逐项独立审查、最终整分支审查”的方式；本计划确认后才执行。
+状态：用户已确认，第四阶段按“逐项实施、逐项独立审查、最终整分支审查”开始执行。Task1核对源码发现下文原写“admin/operator可写”有误，已更正为现有的“仅admin可写”；不修改实际权限。任务完成状态与真实验证结果另记，不能把本计划当作验收完成。
 
 ## Global Constraints
 
@@ -56,7 +56,7 @@
 
 ### 网页入口和兼容要求
 
-前缀 `/console/v1/isos`。五角色可读；admin/operator可写，其他三角色写操作403。原会话、禁用账号、无效角色和必须改密检查保持。应用入口再次使用 `ports.Actor.Authorize` 和现有 `access.PermISORead/PermISOWrite`，拒绝后不读库、不取时钟、不读请求流。
+前缀 `/console/v1/isos`。五角色可读；仅admin可写，operator及其余三角色写操作403，依据为现有access.PermsOf与TestISO所有接口五角色权限。原会话、禁用账号、无效角色和必须改密检查保持。应用入口再次使用 `ports.Actor.Authorize` 和现有 `access.PermISORead/PermISOWrite`，拒绝后不读库、不取时钟、不读请求流。
 
 | 入口 | 迁移后应用方法 | 保持的结果、失败与审计 |
 | --- | --- | --- |
