@@ -162,8 +162,8 @@ ImportSession还含`Prepare(context.Context,ExtractionPlan)(map[string]string,er
 
 **Interfaces:** 消费现有十一入口、repository.ISOs/ISOSources、iso.Sources和启动组装；产出行为契约与基线测试，不先建立未使用的应用骨架。
 
-- [ ] 逐条记录上文八类契约和十一入口；核对真实源代码、路由描述及数据库实现。区分网页sourceProgress的已确认ranges与旧Sources.Progress的missing，明确审计和多来源非原子边界。
-- [ ] 补`Test镜像创建后来源失败保留位置及已提交事实`：第二来源失败时非200、Location为已创建ID；镜像与第一来源仍在，失败来源不存在，审计只包含已提交操作。补非法输入与有效但被网络安全拒绝的来源之错误优先顺序。
+- [x] 逐条记录上文八类契约和十一入口；核对真实源代码、路由描述及数据库实现。区分网页sourceProgress的已确认ranges与旧Sources.Progress的missing，明确审计和多来源非原子边界。
+- [x] 补`Test镜像创建后来源失败保留位置及已提交事实`：第二来源失败时非200、Location为已创建ID；镜像与第一来源仍在，失败来源不存在，审计只包含已提交操作。补非法输入与有效但被网络安全拒绝的来源之错误优先顺序。
 
 本例在Task1用真实来源实现，不用只记录调用的mock来证明保存结果。给现有测试文件加入媒体包别名iso；临时目录无允许本地根，所以第二来源会在实际登记时被拒绝：
 
@@ -189,9 +189,9 @@ func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T)
 
 两条审计分别来自创建与主来源登记。第二来源没有成功写入，不能额外记一条。Task2改为通过Registry接入同一真实能力，Task3再迁移构造位置；保留这些断言。
 
-- [ ] 补`Test镜像多错仍按原先顺序返回`：坏rev先于删除读取；补来源先查ISO再查来源字段；上传先范围语法再来源键、存在性、kind和边界。给出具体400/404/409或问题代码断言，禁止只测“有错”。
-- [ ] 在VM运行既有与新增点名测试：`go test ./internal/interfaces/console ./cmd/lober ./internal/infrastructure/media ./internal/infrastructure/persistence/pgstore -run 'Test(ISO|镜像|Source|ISOSources|契约ISO|契约审计|删除快照|补来源|重新导入|后台|Import|Upload|Remote|Worker|Recover)' -count=1`。预期当前行为全通过；纯兼容补测无需人为制造红灯。若发现原缺陷，先保留失败事实，单列修复后再继续。
-- [ ] 独立审查契约、测试断言及范围；提交`test(media): pin media and job compatibility contracts`，只暂存本项文件。
+- [x] 补`Test镜像多错仍按原先顺序返回`：坏rev先于删除读取；补来源先查ISO再查来源字段；上传先范围语法再来源键、存在性、kind和边界。给出具体400/404/409或问题代码断言，禁止只测“有错”。
+- [x] 在VM运行既有与新增点名测试：`go test ./internal/interfaces/console ./cmd/lober ./internal/infrastructure/media ./internal/infrastructure/persistence/pgstore -run 'Test(ISO|镜像|Source|ISOSources|契约ISO|契约审计|删除快照|补来源|重新导入|后台|Import|Upload|Remote|Worker|Recover)' -count=1`。预期当前行为全通过；纯兼容补测无需人为制造红灯。若发现原缺陷，先保留失败事实，单列修复后再继续。
+- [x] 独立审查契约、测试断言及范围；提交`test(media): pin media and job compatibility contracts`，只暂存本项文件。
 
 ### Task 2：十一网页入口改用镜像应用契约
 
