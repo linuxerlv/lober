@@ -8,6 +8,7 @@ import (
 	"github.com/lober/lober/internal/domain/repository"
 	"io"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -137,5 +138,121 @@ func Test余量累加溢出先拒绝(t *testing.T) {
 	_, err := setup(f).Create(t.Context(), admin, CreateRequest{Name: "image", Family: "linux", Series: "debian", Sources: []SourceSpec{{Kind: "upload", Size: math.MaxInt64}, {Kind: "upload", Role: "netboot", Size: 1}}})
 	if !errors.Is(err, repository.ErrInvalid) || f.calls != 0 {
 		t.Fatal(err, f.calls)
+	}
+}
+
+// 记录应用交给写能力的真实参数，避免只用“没有权限错误”冒充写入成功。
+type adminWriteFixture struct {
+	fixture
+	writes        []string
+	id            string
+	rev           int64
+	created       model.ISO
+	registeredISO model.ISO
+	spec          SourceSpec
+	bytes         string
+	offset        int64
+	writeAudit    repository.Audit
+}
+
+func (f *adminWriteFixture) CreateISO(ctx context.Context, i model.ISO, a repository.Audit) (model.ISO, error) {
+	f.writes = append(f.writes, "create")
+	f.created = i
+	f.writeAudit = a
+	return f.fixture.CreateISO(ctx, i, a)
+}
+func (f *adminWriteFixture) Register(_ context.Context, i model.ISO, k, a, r string, n int64, d string, audit repository.Audit) error {
+	f.writes = append(f.writes, "register")
+	f.registeredISO = i
+	f.spec = SourceSpec{Kind: k, Addr: a, Role: r, Size: n, SHA256: d}
+	f.writeAudit = audit
+	return nil
+}
+func (f *adminWriteFixture) Upload(_ context.Context, id, r string, n int64, b io.Reader, a repository.Audit) error {
+	f.writes = append(f.writes, "upload")
+	f.id = id
+	f.spec.Role = r
+	f.offset = n
+	f.writeAudit = a
+	data, err := io.ReadAll(b)
+	f.bytes = string(data)
+	return err
+}
+func (f *adminWriteFixture) record(op, id string, rev int64, a repository.Audit) error {
+	f.writes = append(f.writes, op)
+	f.id = id
+	f.rev = rev
+	f.writeAudit = a
+	return nil
+}
+func (f *adminWriteFixture) Cancel(_ context.Context, id string, a repository.Audit) error {
+	return f.record("cancel", id, 0, a)
+}
+func (f *adminWriteFixture) Retry(_ context.Context, id string, a repository.Audit) error {
+	return f.record("retry", id, 0, a)
+}
+func (f *adminWriteFixture) Reimport(_ context.Context, id string, a repository.Audit) error {
+	return f.record("reimport", id, 0, a)
+}
+func (f *adminWriteFixture) DeprecateISO(_ context.Context, id string, rev int64, a repository.Audit) error {
+	return f.record("deprecate", id, rev, a)
+}
+func (f *adminWriteFixture) Delete(_ context.Context, id string, rev int64, a repository.Audit) error {
+	return f.record("delete", id, rev, a)
+}
+
+func Test镜像管理员八个写入口传递有效输入(t *testing.T) {
+	for _, op := range []string{"create", "register", "upload", "cancel", "retry", "reimport", "deprecate", "delete"} {
+		t.Run(op, func(t *testing.T) {
+			f := &adminWriteFixture{fixture: fixture{source: model.Source{ISOID: "image", Kind: model.SourceUpload, TotalSize: 4, Rev: 1}}}
+			r := NewRegistry(Deps{ISOs: f, Sources: f, Control: f, Deletion: f, Clock: func() int64 { return 123 }})
+			var err error
+			action := "iso." + op
+			want := op
+			switch op {
+			case "create":
+				var result CreateResult
+				result, err = r.Create(t.Context(), admin, CreateRequest{Name: "Debian", Family: "linux", Series: "debian", Sources: []SourceSpec{{Kind: "upload", Size: 4}}})
+				if err == nil && (!result.Created || result.ISO.ID != "image" || result.ISO.Name != "Debian" || f.created.Family != "linux" || f.created.Series != "debian" || f.registeredISO.ID != "image" || f.spec.Kind != "upload" || f.spec.Size != 4) {
+					t.Fatalf("创建事实不完整: result=%+v fixture=%+v", result, f)
+				}
+				want = "create,register"
+			case "register":
+				err = r.RegisterSource(t.Context(), admin, RegisterRequest{ID: "image", Source: SourceSpec{Kind: "upload", Role: "netboot", Size: 4}})
+				if err == nil && (f.registeredISO.ID != "image" || f.spec.Kind != "upload" || f.spec.Role != "netboot" || f.spec.Size != 4) {
+					t.Fatalf("登记参数丢失: %+v", f)
+				}
+				action = "iso.source.register"
+			case "upload":
+				err = r.Upload(t.Context(), admin, UploadRequest{ID: "image", Start: 1, End: 3, Total: 4, ContentLength: 3, Body: strings.NewReader("abc")})
+				if err == nil && (f.id != "image" || f.offset != 1 || f.bytes != "abc" || f.writeAudit != (repository.Audit{})) {
+					t.Fatalf("上传参数或零审计丢失: %+v", f)
+				}
+			case "cancel":
+				err = r.Cancel(t.Context(), admin, "image")
+			case "retry":
+				err = r.Retry(t.Context(), admin, "image")
+			case "reimport":
+				err = r.Reimport(t.Context(), admin, "image")
+			case "deprecate":
+				err = r.Deprecate(t.Context(), admin, RevisionRequest{ID: "image", Rev: 7})
+			case "delete":
+				err = r.Delete(t.Context(), admin, RevisionRequest{ID: "image", Rev: 7})
+			}
+			if err != nil || strings.Join(f.writes, ",") != want {
+				t.Fatalf("err=%v writes=%v want=%s", err, f.writes, want)
+			}
+			if op != "upload" && f.writeAudit != (repository.Audit{Actor: admin.Username, Action: action, At: 123}) {
+				t.Fatalf("审计丢失: %+v", f.writeAudit)
+			}
+			if op == "cancel" || op == "retry" || op == "reimport" || op == "deprecate" || op == "delete" {
+				if f.id != "image" {
+					t.Fatal(f.id)
+				}
+			}
+			if (op == "deprecate" || op == "delete") && f.rev != 7 {
+				t.Fatal(f.rev)
+			}
+		})
 	}
 }

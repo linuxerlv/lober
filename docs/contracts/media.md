@@ -2,7 +2,7 @@
 
 本文件固定第四阶段迁移前的行为。公开请求以控制台路由描述和现有响应为准；保存约定以 `domain/repository` 为准。本文件不增加新的请求格式或业务能力。
 
-核对来源：`interfaces/console/{isos,isosource}.go`、`domain/repository/{isos,sources}.go`、`infrastructure/persistence/pgstore/{isos,sources}.go`、`infrastructure/media`、`cmd/lober/{supervisor,deletion}.go`。
+迁移前核对来源包括原 `cmd/lober/{supervisor,deletion}.go`。当前实现位于 `application/media`、`domain/media`、`infrastructure/media`；网页入口为 `interfaces/console/{isos,isosource}.go`，数据库约定仍是 `domain/repository/{isos,sources}.go` 与 `infrastructure/persistence/pgstore/{isos,sources}.go`。
 
 ## 1. 身份、输入与错误
 
@@ -111,3 +111,23 @@ Start 先检查恢复读取，再启动循环；重复 Start 成功但不增加�
 ### 基线验证入口
 
 `console/media_contract_test.go` 固定十一入口、审计及危险输入顺序；`isos_test.go` 用真实来源能力检查部分创建与审计。现有媒体上传、恢复、导入以及组装、排队回滚、删除和异常恢复测试继续作为基线。`pgstore/contract_isosources_test.go` 检查真实数据库的版本、区间、审计回滚及排队边界。
+
+## 9. 第四阶段实现边界
+
+| 归属 | 当前责任 | 禁止承担的责任 |
+| --- | --- | --- |
+| 网页入口 | 解析请求、调用 Registry 十一方法、转换响应和错误 | 直接查库、调用内部 Sources/SourceControl/Deletion 或通过同包辅助函数返回旧业务 |
+| 镜像应用 | 身份、错误顺序、状态、审计、恢复、删除与后台生命周期 | 直接打开文件、请求网络或启动工具；不能调用其他应用的具体服务 |
+| 领域规则 | 用传入的事实判断识别、来源齐备、导入与删除条件 | 读取文件、网络、时钟或随机数；不能持有仓储或执行查询/写入 |
+| 文件实现 | 受控读写、会话、摘要、发布、清理和协调锁 | 持有 Store 或 media/port 的仓储/控制接口，决定或写入 ISO/Source 业务状态 |
+| 组装入口 | 构造共用能力、传递依赖、启动和关闭 | 镜像仓储调用、恢复/导入/删除流程及业务状态判断 |
+
+能力包同时包含应用需要的仓储接口和文件会话接口，允许导入该包不等于允许使用全部接口。类型守卫识别别名、点导入、方法值、匿名接口和同包转发。正常文件事实读取仍允许；精确的 `catalog.Arch.Valid` 只检查架构值。识别、导入、删除等领域业务函数不能由文件实现调用。
+
+领域的 `domain/media` 只复用 `domain/repository.CheckID`、`CheckSource`、`ErrInvalid` 三个纯符号。导入许可只适用于这两个精确包，相邻包和子包不能借用。应用仅使用 `io/fs.ErrNotExist` 表示缺失，以及 `io/fs.SkipAll` 结束自身递归；没有把 `fs.FS` 或文件函数传入应用/领域。
+
+同一实例的来源锁、登记闸门连接 Sources、Deletion 和文件能力。Supervisor 使用恢复/获取/导入、来源只读与清理重试小接口；Control 成功后才 Wake，Registry 使用 Control 和 Deletion。生产连接由 `cmd/lober/app.go` 与 Wire 生成结果明确提供。
+
+本阶段还修复过旧行为缺陷：恢复持锁期间 Close 先发取消，避免相互等待；恢复文件时合并保留主错误和恢复错误。具体失败复现及行为影响见阶段的 Task3、Task5 执行和审查记录，不能将其仅视为代码搬迁。
+
+第四阶段删除154项旧许可，剩余107项只属于第五、六阶段。精确删除集和起点内容校验由 `archtest/media_rules_test.go` 固定。阶段验收和两道收尾审查状态见[第四阶段证据](../superpowers/reviews/2026-10-23-ddd-phase4-evidence.md)。
