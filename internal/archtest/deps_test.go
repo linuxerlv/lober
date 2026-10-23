@@ -66,29 +66,30 @@ var sourceRoots = []string{"internal", "cmd"}
 type layer string
 
 const (
-	layerExecution    layer = "执行状态机"
-	layerMachine      layer = "机器协议入口"
-	layerEvents       layer = "日志收集"
-	layerOpenAPI      layer = "契约导出"
-	layerCore         layer = "层 1"
-	layerStore        layer = "存储层"
-	layerRender       layer = "渲染"
-	layerBuiltin      layer = "内置内容"
-	layerISO          layer = "ISO"
-	layerConsole      layer = "控制台"
-	layerAssembly     layer = "装配点"
-	layerGuard        layer = "守卫"
-	layerIdentity     layer = "随机编号"
-	layerApplication  layer = "应用层"
-	layerNotification layer = "通知实现"
+	layerExecution      layer = "执行状态机"
+	layerMachine        layer = "机器协议入口"
+	layerEvents         layer = "日志收集"
+	layerOpenAPI        layer = "契约导出"
+	layerCore           layer = "层 1"
+	layerStore          layer = "存储层"
+	layerRender         layer = "渲染"
+	layerBuiltin        layer = "内置内容"
+	layerISO            layer = "ISO"
+	layerConsole        layer = "控制台"
+	layerAssembly       layer = "装配点"
+	layerGuard          layer = "守卫"
+	layerIdentity       layer = "随机编号"
+	layerApplication    layer = "应用层"
+	layerNotification   layer = "通知实现"
+	layerSelectionGuard layer = "选择锁"
 )
 
 // layers 是 layer 的全部取值，按日志里的先后排。
-var layers = []layer{layerExecution, layerMachine, layerEvents, layerOpenAPI, layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerAssembly, layerGuard, layerIdentity, layerApplication, layerNotification}
+var layers = []layer{layerExecution, layerMachine, layerEvents, layerOpenAPI, layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerAssembly, layerGuard, layerIdentity, layerApplication, layerNotification, layerSelectionGuard}
 
 // minChecked 是 Test全模块依赖守卫 每层至少要查到的包数。删了某层的包就改这里；渲染与内置内容的包加进来以后，
 // 补上它们的下限——忘了补会由「查到了包的层都登记了下限」那一条报出来。
-var minChecked = map[layer]int{layerExecution: 1, layerMachine: 1, layerEvents: 1, layerOpenAPI: 1, layerCore: 9, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1, layerIdentity: 1, layerApplication: 1, layerNotification: 1}
+var minChecked = map[layer]int{layerExecution: 1, layerMachine: 1, layerEvents: 1, layerOpenAPI: 1, layerCore: 9, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1, layerIdentity: 1, layerApplication: 1, layerNotification: 1, layerSelectionGuard: 1}
 
 // minDirs 是 moduleSourceDirs 至少要遍历到的目录数。目录遍历没有别的防线：sourceRoots 少了一项、或者
 // checkModule 收到空的 dirs，ruleListed（整包被构建约束排除的目录）与 go test 的缓存跟踪都会静默失效，
@@ -301,6 +302,8 @@ func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[
 		case layerApplication:
 			found = append(found, ignoredFiles(p)...)
 			found = append(found, checkSources(fsys, p, checkApplicationFile)...)
+		case layerSelectionGuard:
+			found = append(found, checkPackage(fsys, p, checkSelectionFile)...)
 		case layerNotification:
 			found = append(found, checkPackage(fsys, p, checkNotificationFile)...)
 		case layerIdentity:
@@ -345,6 +348,8 @@ func layerOf(pkg string) layer {
 		return layerIdentity
 	case applicationModule(pkg) != "":
 		return layerApplication
+	case pkg == pkgSelectionGuard:
+		return layerSelectionGuard
 	case pkg == pkgNotification:
 		return layerNotification
 	case pkg == pkgGuard:

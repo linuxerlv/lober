@@ -102,33 +102,3 @@ func Test删除快照写失败保留数据及清理失败可重启重试(t *test
 		t.Fatal("outside bytes changed", err)
 	}
 }
-
-func TestESXi配置读取原文且不能逃离制品根(t *testing.T) {
-	base := t.TempDir()
-	repo := filepath.Join(base, "esxi", "7.0", "x86_64", "install")
-	if err := os.MkdirAll(repo, 0750); err != nil {
-		t.Fatal(err)
-	}
-	raw := "title=original\nmodules=a --- nested/b\nunknown=preserved\n"
-	if err := os.WriteFile(filepath.Join(repo, "boot.cfg"), []byte(raw), 0600); err != nil {
-		t.Fatal(err)
-	}
-	reader := bootConfigReader{root: base}
-	snapshot := model.SnapshotISO{Artifacts: map[string]string{"repo": "esxi/7.0/x86_64/install/"}}
-	got, err := reader.ReadESXiBootConfig(t.Context(), snapshot)
-	if err != nil || got != raw {
-		t.Fatal(got, err)
-	}
-	snapshot.Artifacts["repo"] = "../outside"
-	if _, err := reader.ReadESXiBootConfig(t.Context(), snapshot); err == nil {
-		t.Fatal("traversal accepted")
-	}
-	outside := t.TempDir()
-	if err := os.Symlink(outside, filepath.Join(base, "escaped")); err != nil {
-		t.Fatal(err)
-	}
-	snapshot.Artifacts["repo"] = "escaped"
-	if _, err := reader.ReadESXiBootConfig(t.Context(), snapshot); err == nil {
-		t.Fatal("symlink escape accepted")
-	}
-}

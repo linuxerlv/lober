@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"github.com/lober/lober/internal/infrastructure/notification"
+	"github.com/lober/lober/internal/infrastructure/selection"
 	"github.com/lober/lober/internal/interfaces/console"
 	"log/slog"
 )
@@ -34,7 +35,7 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 	}
 	mainSourceSupervisor, cleanup2 := supervisorOf(ctx, sources, mainLoggingStore, mainDeletionJournal, mainRegistrationGate, cfg, logger)
 	notifier := notification.NewHub()
-	selectionGuard := console.NewSelectionGuard()
+	selectionGuard := selection.NewGuard()
 	mainMachineBundle, err := machineOf(mainLoggingStore, notifier, cfg, clock, logger)
 	if err != nil {
 		cleanup2()
@@ -43,7 +44,11 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 	}
 	taskControl := taskControlOf(mainMachineBundle)
 	wizard := wizardOf(mainLoggingStore, notifier, clock, selectionGuard, taskControl)
-	deps := consoleDepsOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, notifier, cfg, clock, logger, wizard, selectionGuard, taskControl)
+	hooks := hookAuthoringOf(mainLoggingStore, clock)
+	templates := templateAuthoringOf(mainLoggingStore, clock, selectionGuard)
+	frozenPreview := previewRendererOf(cfg)
+	editor := authoringEditorOf(mainLoggingStore, frozenPreview)
+	deps := consoleDepsOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, notifier, cfg, clock, logger, wizard, hooks, templates, editor, frozenPreview, taskControl)
 	server := console.New(deps)
 	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, mainSourceSupervisor, mainDeletionJournal, mainRegistrationGate, mainMachineBundle)
 	return mainApp, func() {

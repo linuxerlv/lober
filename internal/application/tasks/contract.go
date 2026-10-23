@@ -3,7 +3,6 @@ package tasks
 
 import (
 	"context"
-	"errors"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks/port"
 	"github.com/lober/lober/internal/domain/model"
@@ -12,9 +11,9 @@ import (
 )
 
 var (
-	ErrForbidden              = errors.New("没有创建任务的权限")
-	ErrUnauthenticated        = errors.New("操作者身份无效")
-	ErrPasswordChangeRequired = errors.New("需要先修改密码")
+	ErrForbidden              = ports.ErrForbidden
+	ErrUnauthenticated        = ports.ErrUnauthenticated
+	ErrPasswordChangeRequired = ports.ErrPasswordChangeRequired
 )
 
 // ProblemsError 保留按原顺序收集的普通问题，展示方式由入口决定。
@@ -118,6 +117,6 @@ type WizardDeps struct {
 	Manifest       selection.Manifest
 	Clock          ports.Clock
 	Notifier       ports.Notifier
-	SelectionGuard port.SelectionGuard
+	SelectionGuard ports.SelectionGuard
 	Diagnostics    port.TaskDiagnostics
 }

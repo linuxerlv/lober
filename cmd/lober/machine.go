@@ -20,6 +20,7 @@ import (
 	"github.com/lober/lober/internal/domain/render"
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/infrastructure/events"
+	"github.com/lober/lober/internal/infrastructure/media"
 	"github.com/lober/lober/internal/interfaces/console"
 	"github.com/lober/lober/internal/interfaces/machine"
 )
@@ -74,7 +75,7 @@ func machineOf(st repository.Store, hub console.Notifier, cfg config, clock cons
 		original := ""
 		if r.Task.Snapshot.Format == "esxi-ks" && r.Kind == catalog.FileAux {
 			var err error
-			original, err = (bootConfigReader{root: cfg.ISO.Artifacts}).ReadESXiBootConfig(r.Context, r.Task.Snapshot.ISO)
+			original, err = iso.NewBootConfigReader(cfg.ISO.Artifacts).ReadESXiBootConfig(r.Context, r.Task.Snapshot.ISO)
 			if err != nil {
 				return nil, errors.New("immutable boot configuration unavailable")
 			}

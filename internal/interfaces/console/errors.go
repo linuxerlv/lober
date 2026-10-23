@@ -5,6 +5,8 @@ import (
 	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
+	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
@@ -48,14 +50,22 @@ func jsonProblems(ps []model.Problem) []problemJSON {
 }
 func RespondError(c *gin.Context, err error) {
 	switch {
-	case errors.Is(err, tasks.ErrUnauthenticated):
+	case errors.Is(err, authoring.ErrRejectReason):
+		Fail(c, 400, nil, model.ConsoleRejectReason)
+		return
+	case errors.Is(err, ports.ErrUnauthenticated):
 		Fail(c, 401, nil, model.ConsoleUnauthorized)
 		return
-	case errors.Is(err, tasks.ErrPasswordChangeRequired):
+	case errors.Is(err, ports.ErrPasswordChangeRequired):
 		Fail(c, 403, nil, model.ConsolePasswordChangeRequired)
 		return
-	case errors.Is(err, tasks.ErrForbidden):
+	case errors.Is(err, ports.ErrForbidden):
 		Fail(c, 403, nil, model.ConsoleForbidden)
+		return
+	}
+	var previewProblems *authoring.ProblemsError
+	if errors.As(err, &previewProblems) {
+		Judge(c, previewProblems.Problems)
 		return
 	}
 	var applicationProblems *tasks.ProblemsError

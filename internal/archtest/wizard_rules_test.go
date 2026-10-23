@@ -15,7 +15,7 @@ func wizardTransitionFixture(t *testing.T, body string) []violation {
 	for _, src := range []struct{ name, text string }{
 		{"server.go", `package console; import (repo "` + pkgStore + `"; tp "` + pkgTasksPort + `"; p "` + pkgPorts + `"); type deps struct{Users repo.Users; TaskCtl TaskControl; Tasks tp.Tasks; Notifier p.Notifier}; type server struct{deps deps}; type TaskControl interface{CanCancel()}`},
 		{"auth.go", `package console; func(s *server) login(){s.deps.Users.GetUser()}`},
-		{"templates.go", `package console; import (a "` + layer1 + `/activation"; repo "` + pkgStore + `"); func toTemplateResponse(){a.Template()}; func(s *server) templateHooks(){repo.TemplateHookKeys()}`},
+		{"legacy_templates.go", `package console; func toTemplateResponse(){(&server{}).templateHooks()}; func(s *server) templateHooks(){s.login()}`},
 		{"tasks.go", `package console; func(s *server) taskResponse(){s.deps.TaskCtl.CanCancel()}`},
 		{"bridge.go", `package console; func(s *server) bridge(){s.login()}; var alias=toTemplateResponse`},
 		{"wizard.go", `package console; import p "` + layer1 + `/params"; type Clock func()int64; func(s *server) wizardHosts(){` + body + `}; var _=p.FieldKey("")`},
@@ -27,7 +27,7 @@ func wizardTransitionFixture(t *testing.T, body string) []violation {
 		files = append(files, f)
 	}
 	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
-	imports := transitionFixtureImporter{pkgStore: `package repository; type Users interface{GetUser()}; func TemplateHookKeys(){}`, layer1 + "/activation": `package activation; func Template(){}`, layer1 + "/params": `package params; type FieldKey string`, pkgTasksPort: `package port; type Tasks interface{CreateCurrentTasks()}`, pkgPorts: `package ports; type Notifier interface{Publish()}`}
+	imports := transitionFixtureImporter{pkgStore: `package repository; type Users interface{GetUser()}`, layer1 + "/params": `package params; type FieldKey string`, pkgTasksPort: `package port; type Tasks interface{CreateCurrentTasks()}`, pkgPorts: `package ports; type Notifier interface{Publish()}`}
 	if _, e := (&types.Config{Importer: imports}).Check(pkgConsole, fset, files, info); e != nil {
 		t.Fatal("夹具类型错误", e)
 	}

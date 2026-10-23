@@ -9,7 +9,6 @@ import (
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/domain/selection"
-	"slices"
 )
 
 type wizard struct{ deps WizardDeps }
@@ -21,18 +20,7 @@ func NewWizard(d WizardDeps) Wizard {
 	}
 	return &wizard{deps: d}
 }
-func authorize(actor ports.Actor) error {
-	if actor.Username == "" || actor.Disabled || !actor.Role.Valid() {
-		return ErrUnauthenticated
-	}
-	if actor.MustChangePassword {
-		return ErrPasswordChangeRequired
-	}
-	if !slices.Contains(access.PermsOf(actor.Role), access.PermTaskCreate) {
-		return ErrForbidden
-	}
-	return nil
-}
+func authorize(actor ports.Actor) error { return actor.Authorize(access.PermTaskCreate) }
 func (w *wizard) Hosts(ctx context.Context, actor ports.Actor, req HostRequest) (HostPage, error) {
 	if err := authorize(actor); err != nil {
 		return HostPage{}, err

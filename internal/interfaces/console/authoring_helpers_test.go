@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
@@ -154,9 +156,9 @@ func TestAuthoringCandidateVersionsCursorAndReplacementOrdinal(t *testing.T) {
 	second.Name = "b-candidate"
 	tpl := model.Template{ID: identity.NewID(), Version: 1, Name: "ordinal-template", Author: "alice", Family: "linux", Series: []catalog.Series{"rocky"}, Body: "{{slot:disk}}\n", Assembly: map[string][]model.Instance{"disk": {{HookID: "missing", HookVersion: 1}, {HookID: second.ID, HookVersion: 1}}}}
 	fixture := &authoringReadFixture{template: tpl, hooks: []model.Hook{first, newer, second}}
-	srv := &server{deps: Deps{Templates: fixture, Hooks: fixture}}
+	srv := &server{deps: Deps{AuthoringEditor: authoring.NewEditor(authoring.EditorDeps{Templates: fixture, Hooks: fixture, Hosts: fixture, ISOs: fixture, Renderer: authoring.NewPreviewRenderer(nil, ports.PreviewEndpoints{})})}}
 	engine := gin.New()
-	engine.GET("/console/v1/templates/:id/versions/:version/hook-candidates", srv.hookCandidates)
+	engine.GET("/console/v1/templates/:id/versions/:version/hook-candidates", func(c *gin.Context) { c.Set(ctxUser, &model.User{Username: "reader", Role: model.RoleAdmin}); c.Next() }, srv.hookCandidates)
 	s := &Server{Engine: engine}
 	base := fmt.Sprintf("/console/v1/templates/%s/versions/1/hook-candidates?slot=disk&index=2&limit=1", tpl.ID)
 	page := responseData[hookCandidatePage](t, httpCall(s, "GET", base, "", ""))
@@ -193,7 +195,7 @@ func TestAuthoringCandidateVersionsCursorAndReplacementOrdinal(t *testing.T) {
 	if len(after.Items) != 1 || after.Items[0].Hook.ID != second.ID || after.Next != "" {
 		t.Fatal(after)
 	}
-	for _, index := range []string{"0", "-1", "4", "bad"} {
+	for _, index := range []string{"0", "-1", "4", "bad", "999999999999999999999999999999999"} {
 		w := httpCall(s, "GET", fmt.Sprintf("/console/v1/templates/%s/versions/1/hook-candidates?slot=disk&index=%s", tpl.ID, index), "", "")
 		if w.Code != 400 {
 			t.Fatal(index, w.Code)
@@ -202,4 +204,11 @@ func TestAuthoringCandidateVersionsCursorAndReplacementOrdinal(t *testing.T) {
 	if fixture.template.Assembly["disk"][1].HookID != second.ID {
 		t.Fatal("candidate read changed the stored assembly")
 	}
+}
+
+func (f *authoringReadFixture) GetHost(context.Context, string) (model.Host, error) {
+	return model.Host{}, repository.ErrNotFound
+}
+func (f *authoringReadFixture) GetISO(context.Context, string) (model.ISO, error) {
+	return model.ISO{}, repository.ErrNotFound
 }

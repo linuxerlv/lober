@@ -5,9 +5,8 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/domain/activation"
+	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/repository"
 )
 
 type hookRequest struct {
@@ -62,11 +61,11 @@ type nameRequest struct {
 	Name string `json:"name"`
 }
 
-func ProblemsOf(h model.Hook) []model.Problem { return activation.Hook(h) }
-func toHookResponse(h model.Hook) hookResponse {
-	return hookResponse{ID: h.ID, Version: h.Version, Name: h.Name, Description: h.Description, State: h.State, Author: h.Author, Approver: h.Approver, Builtin: h.Builtin, TimeoutSec: h.TimeoutSec, Required: h.Required, Params: declsToDTO(h.Params), Impls: implsToDTO(h.Impls), Problems: jsonProblems(ProblemsOf(h)), Rev: h.Rev}
+func toHookResponse(view authoring.HookView) hookResponse {
+	h := view.Hook
+	return hookResponse{ID: h.ID, Version: h.Version, Name: h.Name, Description: h.Description, State: h.State, Author: h.Author, Approver: h.Approver, Builtin: h.Builtin, TimeoutSec: h.TimeoutSec, Required: h.Required, Params: declsToDTO(h.Params), Impls: implsToDTO(h.Impls), Problems: jsonProblems(view.Problems), Rev: h.Rev}
 }
-func hookResponses(hs []model.Hook) []hookResponse {
+func hookResponses(hs []authoring.HookView) []hookResponse {
 	out := make([]hookResponse, len(hs))
 	for i, h := range hs {
 		out[i] = toHookResponse(h)
@@ -99,23 +98,16 @@ func queryBool(c *gin.Context, key string) (bool, bool) {
 	}
 	return raw == "true", true
 }
-func authoringQuery(c *gin.Context) (repository.HookQuery, bool) {
-	number, limit, ok := queryPagination(c)
+func authoringQuery(c *gin.Context) (authoring.ListRequest, bool) {
+	number, limit, ok := parseQueryPagination(c)
 	if !ok {
-		return repository.HookQuery{}, false
+		return authoring.ListRequest{}, false
 	}
 	approved, ok := queryBool(c, "approved")
 	if !ok {
-		return repository.HookQuery{}, false
+		return authoring.ListRequest{}, false
 	}
-	q := repository.HookQuery{NamePrefix: c.Query("prefix"), ApprovedOnly: approved, Cursor: c.Query("cursor"), Limit: limit, Page: number}
-	if state := c.Query("state"); state != "" {
-		if !model.VersionState(state).Valid() {
-			Fail(c, 400, nil, model.ConsoleBadRequest)
-			return q, false
-		}
-		q.States = []model.VersionState{model.VersionState(state)}
-	}
+	q := authoring.ListRequest{PageRequest: authoring.PageRequest{Cursor: c.Query("cursor"), Limit: limit, Page: number}, Prefix: c.Query("prefix"), Approved: approved, State: model.VersionState(c.Query("state"))}
 	return q, true
 }
 func (s *server) listHooks(c *gin.Context) {
@@ -123,13 +115,18 @@ func (s *server) listHooks(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, ok := Get(c, func() (repository.Page[model.Hook], error) { return s.deps.Hooks.ListHooks(c.Request.Context(), q) })
+	req := q
+	page, ok := Get(c, func() (authoring.HookPage, error) {
+		return s.deps.HookAuthoring.List(c.Request.Context(), actorOf(c), req)
+	})
 	if ok {
 		Ok(c, hookPage{hookResponses(page.Items), page.Next, page.Total})
 	}
 }
 func (s *server) listHookVersions(c *gin.Context) {
-	hs, ok := Get(c, func() ([]model.Hook, error) { return s.deps.Hooks.ListHookVersions(c.Request.Context(), c.Param("id")) })
+	hs, ok := Get(c, func() ([]authoring.HookView, error) {
+		return s.deps.HookAuthoring.Versions(c.Request.Context(), actorOf(c), c.Param("id"))
+	})
 	if ok {
 		Ok(c, versionPage{hookResponses(hs)})
 	}
@@ -142,24 +139,26 @@ func positiveInt(c *gin.Context, raw string) (int, bool) {
 	}
 	return n, true
 }
-func hookKeyOf(c *gin.Context) (model.HookKey, bool) {
-	version, ok := positiveInt(c, c.Param("version"))
-	if !ok {
-		return model.HookKey{}, false
+
+// 无法解析的数字交给应用入口，保留各操作自己的检查顺序。
+func hookKeyOf(c *gin.Context) model.HookKey {
+	version, err := strconv.Atoi(c.Param("version"))
+	if err != nil {
+		version = 0
 	}
-	k := model.HookKey{ID: c.Param("id"), Version: version}
-	if err := repository.CheckVersionKey(k.ID, k.Version); err != nil {
-		RespondError(c, err)
-		return k, false
+	return model.HookKey{ID: c.Param("id"), Version: version}
+}
+func hookRevisionOf(c *gin.Context) authoring.HookRevision {
+	rev, err := strconv.ParseInt(c.Query("rev"), 10, 64)
+	if err != nil {
+		rev = 0
 	}
-	return k, true
+	return authoring.HookRevision{Key: hookKeyOf(c), Rev: rev}
 }
 func (s *server) getHook(c *gin.Context) {
-	k, ok := hookKeyOf(c)
-	if !ok {
-		return
-	}
-	h, ok := Get(c, func() (model.Hook, error) { return s.deps.Hooks.GetHook(c.Request.Context(), k) })
+	h, ok := Get(c, func() (authoring.HookView, error) {
+		return s.deps.HookAuthoring.Get(c.Request.Context(), actorOf(c), hookKeyOf(c))
+	})
 	if ok {
 		Ok(c, toHookResponse(h))
 	}
@@ -172,60 +171,47 @@ func (s *server) createHook(c *gin.Context) {
 	if !Bind(c, &req) {
 		return
 	}
-	h := hookOf(req)
-	h.Author = userOf(c).Username
-	created, ok := Write(c, func() (model.Hook, error) { return s.deps.Hooks.CreateHook(c.Request.Context(), h) })
+	h, ok := Write(c, func() (authoring.HookView, error) {
+		return s.deps.HookAuthoring.Create(c.Request.Context(), actorOf(c), hookOf(req))
+	})
 	if ok {
-		Ok(c, toHookResponse(created))
+		Ok(c, toHookResponse(h))
 	}
 }
 func (s *server) saveHookDraft(c *gin.Context) {
-	k, ok := hookKeyOf(c)
-	if !ok {
+	// 保存原本先检查版本，再解析正文；应用仍独立检查同一版本键。
+	k := hookKeyOf(c)
+	if k.Version <= 0 {
+		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return
 	}
 	var req hookDraftRequest
 	if !Bind(c, &req) {
 		return
 	}
-	current, ok := Get(c, func() (model.Hook, error) { return s.deps.Hooks.GetHook(c.Request.Context(), k) })
-	if !ok {
-		return
-	}
-	if req.Name != "" && req.Name != current.Name {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
-		return
-	}
 	h := hookOf(req.hookRequest)
-	h.ID, h.Version, h.Rev, h.Name = current.ID, current.Version, req.Rev, current.Name
-	h.Author, h.Approver, h.State, h.Builtin = current.Author, current.Approver, current.State, current.Builtin
-	saved, ok := Write(c, func() (model.Hook, error) { return s.deps.Hooks.SaveHookDraft(c.Request.Context(), h) })
+	h.ID, h.Version, h.Rev = k.ID, k.Version, req.Rev
+	saved, ok := Write(c, func() (authoring.HookView, error) {
+		return s.deps.HookAuthoring.SaveDraft(c.Request.Context(), actorOf(c), h)
+	})
 	if ok {
 		Ok(c, toHookResponse(saved))
 	}
 }
 func (s *server) newHookVersion(c *gin.Context) {
-	from, ok := positiveInt(c, c.Query("from"))
-	if !ok {
-		return
+	from, err := strconv.Atoi(c.Query("from"))
+	if err != nil {
+		from = 0
 	}
-	h, ok := Write(c, func() (model.Hook, error) {
-		return s.deps.Hooks.NewHookVersion(c.Request.Context(), c.Param("id"), from, userOf(c).Username)
+	h, ok := Write(c, func() (authoring.HookView, error) {
+		return s.deps.HookAuthoring.NewVersion(c.Request.Context(), actorOf(c), authoring.VersionSource{ID: c.Param("id"), From: from})
 	})
 	if ok {
 		Ok(c, toHookResponse(h))
 	}
 }
 func (s *server) deleteHookDraft(c *gin.Context) {
-	k, ok := hookKeyOf(c)
-	if !ok {
-		return
-	}
-	rev, ok := queryRev(c)
-	if !ok {
-		return
-	}
-	if err := s.deps.Hooks.DeleteHookDraft(c.Request.Context(), k, rev); err != nil {
+	if err := s.deps.HookAuthoring.DeleteDraft(c.Request.Context(), actorOf(c), hookRevisionOf(c)); err != nil {
 		RespondError(c, err)
 		return
 	}
@@ -236,7 +222,7 @@ func (s *server) renameHook(c *gin.Context) {
 	if !Bind(c, &req) {
 		return
 	}
-	if err := s.deps.Hooks.RenameHook(c.Request.Context(), c.Param("id"), req.Name, s.auditFrom(c, "")); err != nil {
+	if err := s.deps.HookAuthoring.Rename(c.Request.Context(), actorOf(c), authoring.RenameRequest{ID: c.Param("id"), Name: req.Name}); err != nil {
 		RespondError(c, err)
 		return
 	}
