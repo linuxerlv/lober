@@ -251,13 +251,25 @@ func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T)
 
 ### Task 6：第四阶段边界守卫、完整验收与整分支审查
 
-**Files:** 新建`internal/archtest/media_rules_test.go`、`docs/superpowers/reviews/2026-10-23-ddd-phase4-evidence.md`；修改`archtest/{deps,iso,transition_uses,transition_rules,transition_manifest,migration,four_layer,domain_rules,authoring_rules,hosts_rules}_test.go`及契约、路线和本计划。只改本阶段需要的边界，不替后续身份和任务阶段搬迁。
+**Files:** 新建`internal/archtest/media_rules_test.go`、`docs/superpowers/reviews/2026-10-23-ddd-phase4-evidence.md`；本项直接修改`archtest/{iso,transition_uses,hosts_rules,application_rules,wizard_helpers}_test.go`、`application/media/registry_test.go`及契约、路线和本计划。只改本阶段需要的边界，不替后续身份和任务阶段搬迁。
+
+初稿列出的下列七个文件，其所需改动已随前项进入本模块分支。Task6承接核对，不为重复列名再改一遍：
+
+| 文件（均在 internal/archtest） | 已完成的职责与提交 |
+| --- | --- |
+| deps_test.go | Task4登记镜像领域包下限（75b04a5）；Task5精确允许三个纯校验符号的包依赖（7d5acab），仍由类型检查限制符号。 |
+| transition_rules_test.go | Task3增加旧登记流程拒绝反例（9b88bd2）；Task5将已删除的清理方法许可改为拒绝（7d5acab）。 |
+| transition_manifest_test.go | Task2至5依次删除5项网页规则和125项旧镜像许可（bbf21a4、9b88bd2、75b04a5、7d5acab）。 |
+| migration_test.go | Task2删除24项网页镜像仓储许可（bbf21a4）。 |
+| four_layer_test.go | Task3验证精确文件能力包依赖（9b88bd2）；Task4将新镜像领域包纳入发现检查（75b04a5）。 |
+| domain_rules_test.go | Task4将镜像领域和io/fs加入禁止外部操作的检查（75b04a5）。 |
+| authoring_rules_test.go | Task2至5同步真实清单数量，保留前阶段清零要求（bbf21a4、9b88bd2、75b04a5、7d5acab）。 |
 
 **Interfaces:** 承接Task1至5的真实应用和能力；固定第四阶段为0、阶段1/2/3及向导继续0。审查公开Registry、内部SourceControl、Transfer/ImportSession/Journal和后台生命周期的组合，不只检查文件是否存在。
 
 - [x] 先补会失败的守卫：console重新用仓储/旧Sources、media基础设施持有Store或通过方法值/同包辅助查库、应用导入基础设施或其他应用服务、领域读文件、cmd重新承担镜像状态流程均被拒绝；允许精确media/port实现与正常事实读取。正反例先通过类型检查，不能用语法错误假装守卫有效。
 - [x] 第四阶段累计正好删除24项网页仓储、5项网页规则、125项旧镜像例外，共154项，261→107；四清单为64/0/42/1。保留阶段5为65项、阶段6为42项；其余内容逐项与起点比较相同，不只比数量。原阶段3清单内容摘要是阶段快照，更新为本轮真实基线和删除集，保留原三阶段清零保障。
-- [x] 收紧实际类型检查：不把“基础设施不能导入任何领域函数”当目标，也不换成整个domain/media包通配放行。最终本方案的业务规则由应用/领域调用，文件实现通过明确port事实返回；旧media临时清单清零并保留防复活检查。新包、别名、点导入、包级函数值和方法值不能绕过。cmd只保留本模块构造/启停，镜像业务函数不能留在组装入口。
+- [ ] 收紧实际类型检查：不把“基础设施不能导入任何领域函数”当目标，也不换成整个domain/media包通配放行。最终本方案的业务规则由应用/领域调用，文件实现通过明确port事实返回；旧media临时清单清零并保留防复活检查。新包、别名、点导入、包级函数值和方法值不能绕过。cmd只保留本模块构造/启停，镜像业务函数不能留在组装入口。首轮独立审查发现新文件与本地接口组合的遗漏，修复复审前保持未完成。
 - [x] lober VM按下节原命令执行完整检查；保存每轮精确树、环境、命令、起止时间、退出码、缓存/跳过项、错误及最终差异。先修真实阻塞问题，不改设置、不漏跑失败包。
 - [ ] 此前五项任务与所有危险输入闭环后，提交`refactor(media): enforce phase-four boundaries`供本项独立审查；再做一次覆盖本阶段完整提交序列的整分支审查，包含十一入口及五项Review Focus。审查明确列出未判断项，根执行者逐项裁定，不默认忽略。
 - [ ] 两道收尾审查均通过才标记模块分支可交付。文档-only收尾以Git精确差异证明代码仍等于被测树，不重复同一套件。保留模块分支、工作区和必要原日志；清理不得删用户文件或其他阶段证据。
