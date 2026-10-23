@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/hosts"
+	"github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
@@ -23,16 +24,13 @@ type Deps struct {
 	HookAuthoring     authoring.Hooks
 	TemplateAuthoring authoring.Templates
 	AuthoringEditor   authoring.Editor
-	ISOs              repository.ISOs
+	MediaRegistry     media.Registry
 	Tasks             repository.Tasks
 	Wizard            tasks.Wizard
 	Events            repository.Events
 	Audit             repository.AuditLog
 	Users             repository.Users
 	RoleMenus         repository.RoleMenus
-	ISOSource         ISOSource
-	Sources           ISOSourceState
-	ISODeletion       ISODeletion
 	FrozenPreview     ports.FrozenPreview
 	TaskCtl           TaskControl
 	Notifier          Notifier

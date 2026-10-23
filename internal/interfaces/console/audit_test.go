@@ -65,8 +65,7 @@ func Test每条正式审计路由都写入正确操作者和目标(t *testing.T)
 	s, st, _ := newHTTPServer(t)
 	admin := adminHTTP(t, s, st)
 	reviewer := reviewerHTTP(t, s, st)
-	s.server.deps.ISOSource = auditedISOSource{st}
-	s.server.deps.ISODeletion = &mockISODeletion{st: st}
+	setMedia(s, st, st, auditedISOSource{st}, &mockISODeletion{st: st})
 	s.server.deps.TaskCtl = &taskControlFixture{st: st}
 	seen := map[string]bool{}
 	run := func(action, method, path, body, token, kind, id string) map[string]any {

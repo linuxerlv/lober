@@ -9,7 +9,7 @@ import (
 func Test引用删除返回结构化引用方(t *testing.T) {
 	s, st, token, iso, tpl := wizardFixture(t)
 	created := responseData[wizardSubmitResult](t, httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-1"}]`), token))
-	s.server.deps.ISODeletion = &mockISODeletion{st: st}
+	setMedia(s, st, st, &mockISOSource{calls: map[string][]sourceCall{}}, &mockISODeletion{st: st})
 	check := func(path, kind, id string) {
 		t.Helper()
 		w := httpCall(s, "DELETE", path, "", token)

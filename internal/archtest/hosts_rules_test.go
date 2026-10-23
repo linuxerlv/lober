@@ -90,7 +90,7 @@ func Test主机许可已清零(t *testing.T) {
 		baseline string
 		removed  []migrationException
 	}{
-		{"migrationExceptions", migrationExceptions, 88, "918b4747e6458b9d190ca2403744f80ba8a8fd564df1b174b3ee4fb2837be4b4", []migrationException{
+		{"migrationExceptions", migrationExceptions, 64, "918b4747e6458b9d190ca2403744f80ba8a8fd564df1b174b3ee4fb2837be4b4", []migrationException{
 			{pkgConsole, "internal/interfaces/console/hosts.go", "(*server).createHost", pkgStore, "Hosts.CreateHost", "3"},
 			{pkgConsole, "internal/interfaces/console/hosts.go", "(*server).deleteHost", pkgStore, "Hosts.DeleteHost", "3"},
 			{pkgConsole, "internal/interfaces/console/hosts.go", "(*server).getHost", pkgStore, "Hosts.GetHost", "3"},
@@ -101,15 +101,44 @@ func Test主机许可已清零(t *testing.T) {
 			{pkgConsole, "internal/interfaces/console/hosts.go", "(*server).listHosts", pkgStore, "Page", "3"},
 			{pkgConsole, "internal/interfaces/console/hosts.go", "(*server).updateHost", pkgStore, "Hosts.UpdateHost", "3"},
 			{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "Hosts", "3"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*exactChunkReader).Read", pkgStore, "ErrInvalid", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).createISO", pkgStore, "CheckNewISO", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).createISO", pkgStore, "ISOs.CreateISO", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).deprecateISO", pkgStore, "ISOs.DeprecateISO", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).getISO", pkgStore, "ISOs.GetISO", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).isoProgress", pkgConsole, "ISOSourceState.SourcesOf", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).isoProgress", pkgStore, "ISOs.GetISO", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).listISOs", pkgStore, "ISOQuery", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).listISOs", pkgStore, "ISOs.ListISOs", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).listISOs", pkgStore, "Page", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).registerISOSource", pkgStore, "ISOs.GetISO", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).sourceOperation", pkgStore, "Audit", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).sourceProgress", pkgStore, "ErrConflict", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).sourceProgress", pkgStore, "ErrNotFound", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).sourceProgress", pkgConsole, "ISOSourceState.GetSource", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).sourceProgress", pkgConsole, "ISOSourceState.RangesOf", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).uploadChunk", pkgStore, "CheckSourceKey", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).uploadChunk", pkgStore, "ErrConflict", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).uploadChunk", pkgStore, "ErrNotFound", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).uploadChunk", pkgConsole, "ISOSourceState.GetSource", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "checkISOSource", pkgStore, "CheckSource", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "checkISOSource", pkgStore, "ErrInvalid", "4"},
+			{pkgConsole, "internal/interfaces/console/isosource.go", "package-init", pkgStore, "Audit", "4"},
+			{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "ISOs", "4"},
 		}},
 		{"mediaMigrationExceptions", mediaMigrationExceptions, 125, "4e93eaf8a62876bfa694042b348843f41709e729f45b4354708802cfe5df19db", []migrationException{}},
-		{"consoleRuleMigrationExceptions", consoleRuleMigrationExceptions, 47, "e0e7825d6c0d7450d4a9fb8b9bfe883e90f8fa43107494b48260afe800631708", []migrationException{
+		{"consoleRuleMigrationExceptions", consoleRuleMigrationExceptions, 42, "e0e7825d6c0d7450d4a9fb8b9bfe883e90f8fa43107494b48260afe800631708", []migrationException{
 			{pkgConsole, "internal/interfaces/console/csv.go", "parseHostCSV", "github.com/lober/lober/internal/domain/model", "Host.Validate", "3"},
 			{pkgConsole, "internal/interfaces/console/csv.go", "parseHostCSV", "github.com/lober/lober/internal/domain/model", "HostReservedAttrs", "3"},
 			{pkgConsole, "internal/interfaces/console/csv.go", "parseHostCSV", "github.com/lober/lober/internal/domain/model", "NewProblem", "3"},
 			{pkgConsole, "internal/interfaces/console/csv.go", "parseHostCSV", "github.com/lober/lober/internal/domain/model", "NormalizeSN", "3"},
 			{pkgConsole, "internal/interfaces/console/csv.go", "parseHostCSV", "github.com/lober/lober/internal/domain/model", "ValidAttrKey", "3"},
 			{pkgConsole, "internal/interfaces/console/hosts.go", "normalizedHostSN", "github.com/lober/lober/internal/domain/model", "NormalizeSN", "3"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).listISOs", "github.com/lober/lober/internal/domain/catalog", "Family.Valid", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).listISOs", "github.com/lober/lober/internal/domain/catalog", "Series.Valid", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).listISOs", "github.com/lober/lober/internal/domain/model", "ISOState.Valid", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "checkISOSource", "github.com/lober/lober/internal/domain/catalog", "ExtraSourceOf", "4"},
+			{pkgConsole, "internal/interfaces/console/isos.go", "(*server).checkSourceSpace", "github.com/lober/lober/internal/domain/model", "NewProblem", "4"},
 		}},
 		{"notificationMigrationExceptions", notificationMigrationExceptions, 1, "ba63e2a81c31ee5bf62e0288cdf68e5845af7009edfd247e6b18a119189aeaf6", []migrationException{}},
 	} {
@@ -119,10 +148,10 @@ func Test主机许可已清零(t *testing.T) {
 		total += len(tc.entries)
 		expectedRemoved := 0
 		if tc.name == "migrationExceptions" {
-			expectedRemoved = 10
+			expectedRemoved = 34
 		}
 		if tc.name == "consoleRuleMigrationExceptions" {
-			expectedRemoved = 6
+			expectedRemoved = 11
 		}
 		if len(tc.removed) != expectedRemoved {
 			t.Fatalf("%s removed=%d", tc.name, len(tc.removed))
@@ -135,7 +164,7 @@ func Test主机许可已清零(t *testing.T) {
 			lines = append(lines, strings.Join([]string{e.Caller, e.File, e.Function, e.Target, e.Symbol, e.RemoveIn}, "\t")+"\n")
 		}
 		for _, e := range tc.removed {
-			if e.RemoveIn != "3" || (e.File != "internal/interfaces/console/hosts.go" && e.File != "internal/interfaces/console/csv.go" && e.File != "internal/interfaces/console/server.go") {
+			if !(e.RemoveIn == "3" && (e.File == "internal/interfaces/console/hosts.go" || e.File == "internal/interfaces/console/csv.go" || e.File == "internal/interfaces/console/server.go") || e.RemoveIn == "4" && (e.File == "internal/interfaces/console/isos.go" || e.File == "internal/interfaces/console/isosource.go" || e.File == "internal/interfaces/console/server.go")) {
 				t.Fatalf("unexpected removal: %+v", e)
 			}
 			lines = append(lines, strings.Join([]string{e.Caller, e.File, e.Function, e.Target, e.Symbol, e.RemoveIn}, "\t")+"\n")
@@ -145,7 +174,7 @@ func Test主机许可已清零(t *testing.T) {
 			t.Errorf("%s changed beyond the exact phase-three removals: %s", tc.name, got)
 		}
 	}
-	if total != 261 {
-		t.Fatalf("total=%d want 261", total)
+	if total != 232 {
+		t.Fatalf("total=%d want 232", total)
 	}
 }

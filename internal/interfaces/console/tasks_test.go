@@ -221,7 +221,7 @@ func Test任务预览只使用固化快照及引用删除保护(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.server.deps.ISODeletion = &mockISODeletion{st: st}
+	setMedia(s, st, st, &mockISOSource{calls: map[string][]sourceCall{}}, &mockISODeletion{st: st})
 	w = httpCall(s, "DELETE", fmt.Sprintf("/console/v1/isos/%s?rev=%d", iso.ID, iso.Rev), "", token)
 	if w.Code != 409 {
 		t.Fatal(w.Code, w.Body.String())
@@ -234,7 +234,7 @@ func Test任务预览只使用固化快照及引用删除保护(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s.server.deps.ISOs = closed
+	setMedia(s, closed, closed, &mockISOSource{calls: map[string][]sourceCall{}}, &mockISODeletion{st: closed})
 	// 所有编写读口也注入关闭的仓储；任务预览仍应只读取已保存快照。
 	assembled := wizardDeps(s.server.deps, closed)
 	s.server.deps.HostRegistry = assembled.HostRegistry

@@ -97,7 +97,7 @@ func Test镜像多错仍按原先顺序返回(t *testing.T) {
 
 func Test镜像非法输入先于网络安全拒绝(t *testing.T) {
 	s, st, _, _, token := newISOServer(t)
-	s.server.deps.ISOSource = iso.New(st, iso.Dirs{Staging: t.TempDir(), Artifacts: t.TempDir()})
+	setMedia(s, st, st, iso.New(st, iso.Dirs{Staging: t.TempDir(), Artifacts: t.TempDir()}), &mockISODeletion{st: st})
 	for _, sources := range []string{
 		`[{"kind":"url","addr":"http://127.0.0.1/image.iso","sha256":"BAD"}]`,
 		`[{"kind":"url","addr":"http://127.0.0.1/image.iso"},{"kind":"upload","role":"netboot","size":0}]`,

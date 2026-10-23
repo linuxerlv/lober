@@ -68,8 +68,13 @@ type deletionCall struct {
 	Rev     int64
 	Audit   repository.Audit
 }
+type isoDeletionStore interface {
+	GetISO(context.Context, string) (model.ISO, error)
+	SourcesOf(context.Context, string) ([]model.Source, error)
+	DeleteISO(context.Context, string, int64, repository.Audit) error
+}
 type mockISODeletion struct {
-	st    repository.Store
+	st    isoDeletionStore
 	calls []deletionCall
 	err   error
 }
@@ -94,9 +99,7 @@ func newISOServer(t *testing.T) (*Server, *pgstore.Store, *mockISOSource, *mockI
 	s, st, _ := newHTTPServer(t)
 	src := &mockISOSource{calls: map[string][]sourceCall{}, staging: 1 << 40, artifacts: 1 << 40}
 	deletion := &mockISODeletion{st: st}
-	s.server.deps.ISOSource = src
-	s.server.deps.Sources = st
-	s.server.deps.ISODeletion = deletion
+	setMedia(s, st, st, src, deletion)
 	return s, st, src, deletion, adminHTTP(t, s, st)
 }
 func readyISO(t *testing.T, st repository.ISOs, name string, series catalog.Series) model.ISO {
@@ -149,7 +152,7 @@ func TestISO登记多来源与真实参数(t *testing.T) {
 
 func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T) {
 	s, st, _, _, token := newISOServer(t)
-	s.server.deps.ISOSource = iso.New(st, iso.Dirs{Staging: t.TempDir(), Artifacts: t.TempDir()})
+	setMedia(s, st, st, iso.New(st, iso.Dirs{Staging: t.TempDir(), Artifacts: t.TempDir()}), &mockISODeletion{st: st})
 	w := httpCall(s, "POST", "/console/v1/isos", `{"name":"partial","family":"linux","series":"debian","sources":[{"kind":"upload","size":4},{"kind":"path","addr":"/outside/netboot.iso","role":"netboot"}]}`, token)
 	id := strings.TrimPrefix(w.Header().Get("Location"), "/console/v1/isos/")
 	if w.Code != 422 || id == "" || id == w.Header().Get("Location") || !strings.Contains(w.Body.String(), "iso_source_rejected") {
@@ -417,7 +420,7 @@ func TestISO补登记来源用于失败后的恢复(t *testing.T) {
 }
 
 type progressInterleave struct {
-	ISOSourceState
+	repository.ISOSources
 	st   repository.ISOSources
 	once sync.Once
 }
@@ -428,7 +431,7 @@ func (p *progressInterleave) RangesOf(ctx context.Context, id, role string) ([]m
 	if err != nil {
 		return nil, err
 	}
-	return p.ISOSourceState.RangesOf(ctx, id, role)
+	return p.ISOSources.RangesOf(ctx, id, role)
 }
 func TestISO读取进度时并发上传不混合计数与区间(t *testing.T) {
 	s, st, _, _, token := newISOServer(t)
@@ -441,7 +444,7 @@ func TestISO读取进度时并发上传不混合计数与区间(t *testing.T) {
 	if _, err := st.SaveSource(t.Context(), source, repository.Audit{}); err != nil {
 		t.Fatal(err)
 	}
-	s.server.deps.Sources = &progressInterleave{ISOSourceState: st, st: st}
+	setMedia(s, st, &progressInterleave{ISOSources: st, st: st}, &mockISOSource{calls: map[string][]sourceCall{}}, &mockISODeletion{st: st})
 	p := responseData[isoProgress](t, httpCall(s, "GET", "/console/v1/isos/"+item.ID+"/progress", "", token))
 	if len(p.Sources) != 1 || p.Sources[0].Fetched != 9 || len(p.Sources[0].Ranges) != 1 || p.Sources[0].Ranges[0].Length != p.Sources[0].Fetched {
 		t.Fatal(p)
@@ -461,6 +464,7 @@ func TestISO分片未知长度仍拒绝错误字节数(t *testing.T) {
 		req.Header.Set("Content-Range", "bytes 0-8/*")
 		w := httptest.NewRecorder()
 		s.Engine.ServeHTTP(w, req)
+		mediaErrorEnvelope(t, w, 400, model.ConsoleBadRequest)
 		if w.Code != 400 {
 			t.Fatal(w.Code, w.Body.String())
 		}

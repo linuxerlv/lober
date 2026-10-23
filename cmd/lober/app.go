@@ -9,6 +9,7 @@ import (
 
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/hosts"
+	appmedia "github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/repository"
@@ -133,8 +134,11 @@ func authoringEditorOf(st repository.Store, renderer ports.FrozenPreview) author
 func hostRegistryOf(st repository.Store, clock console.Clock) hosts.Registry {
 	return hosts.NewRegistry(hosts.Deps{Hosts: st, Clock: clock})
 }
-func consoleDepsOf(st repository.Store, src *sourceSupervisor, j *deletionJournal, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, renderer ports.FrozenPreview, ctl console.TaskControl, hostRegistry hosts.Registry) console.Deps {
-	return console.Deps{HostRegistry: hostRegistry, ISOs: st, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, Audit: st, Users: st, RoleMenus: st, Sources: st, ISOSource: src, ISODeletion: j, FrozenPreview: renderer, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
+func mediaRegistryOf(st repository.Store, src *sourceSupervisor, j *deletionJournal, clock console.Clock) appmedia.Registry {
+	return appmedia.NewRegistry(appmedia.Deps{ISOs: st, Sources: st, Control: src, Deletion: j, Clock: clock})
+}
+func consoleDepsOf(st repository.Store, mediaRegistry appmedia.Registry, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, renderer ports.FrozenPreview, ctl console.TaskControl, hostRegistry hosts.Registry) console.Deps {
+	return console.Deps{HostRegistry: hostRegistry, MediaRegistry: mediaRegistry, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, Audit: st, Users: st, RoleMenus: st, FrozenPreview: renderer, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
 }
 func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, raw *iso.Sources, s *sourceSupervisor, j *deletionJournal, g *registrationGate, m *machineBundle) *app {
 	return &app{Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Native: raw, Supervisor: s, Deletion: j, Gate: g, Machine: m}

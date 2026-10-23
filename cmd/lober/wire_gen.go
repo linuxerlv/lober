@@ -34,6 +34,7 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 		return nil, nil, err
 	}
 	mainSourceSupervisor, cleanup2 := supervisorOf(ctx, sources, mainLoggingStore, mainDeletionJournal, mainRegistrationGate, cfg, logger)
+	registry := mediaRegistryOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, clock)
 	notifier := notification.NewHub()
 	selectionGuard := selection.NewGuard()
 	mainMachineBundle, err := machineOf(mainLoggingStore, notifier, cfg, clock, logger)
@@ -48,8 +49,8 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 	templates := templateAuthoringOf(mainLoggingStore, clock, selectionGuard)
 	frozenPreview := previewRendererOf(cfg)
 	editor := authoringEditorOf(mainLoggingStore, frozenPreview)
-	registry := hostRegistryOf(mainLoggingStore, clock)
-	deps := consoleDepsOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, notifier, cfg, clock, logger, wizard, hooks, templates, editor, frozenPreview, taskControl, registry)
+	hostsRegistry := hostRegistryOf(mainLoggingStore, clock)
+	deps := consoleDepsOf(mainLoggingStore, registry, notifier, cfg, clock, logger, wizard, hooks, templates, editor, frozenPreview, taskControl, hostsRegistry)
 	server := console.New(deps)
 	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, mainSourceSupervisor, mainDeletionJournal, mainRegistrationGate, mainMachineBundle)
 	return mainApp, func() {
