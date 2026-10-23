@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5"
+	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/infrastructure/persistence/pgstore"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/domain/model"
@@ -244,11 +248,11 @@ func Test主机CSV预演与失败优先级(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s.server.deps.Hosts = closed
+	s.server.deps.HostRegistry = hosts.NewRegistry(hosts.Deps{Hosts: closed, Clock: s.server.deps.Clock})
 	for _, query := range []string{"dryRun=true", "dryRun=false"} {
 		hostContractError(t, csvHTTP(s, "/console/v1/hosts/import?"+query, data, token), 500, "")
 	}
-	s.server.deps.Hosts = st
+	s.server.deps.HostRegistry = hosts.NewRegistry(hosts.Deps{Hosts: st, Clock: s.server.deps.Clock})
 	before, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if err != nil {
 		t.Fatal(err)
@@ -378,4 +382,327 @@ func Test主机应用审计失败与删除引用保护(t *testing.T) {
 			}
 		}
 	})
+}
+
+func hostContractServer(st *pgstore.Store) *Server {
+	return New(wizardDeps(Deps{ISOs: st, Tasks: st, Events: st, Audit: st, Users: st, RoleMenus: st, Clock: func() int64 { return fixedAt }}, st))
+}
+func hostContractConnection(t *testing.T, dsn string) *pgx.Conn {
+	t.Helper()
+	conn, err := pgx.Connect(t.Context(), dsn)
+	if err != nil {
+		t.Fatal("无法打开测试数据库连接")
+	}
+	t.Cleanup(func() { conn.Close(context.Background()) })
+	return conn
+}
+func hostContractSQL(t *testing.T, conn *pgx.Conn, sql string) {
+	t.Helper()
+	if _, err := conn.Exec(t.Context(), sql); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func Test主机导入预演后覆盖最新版本(t *testing.T) {
+	dsn := pgtest.Schema(t)
+	st, other := pgtest.OpenAt(t, dsn), pgtest.OpenAt(t, dsn)
+	s := hostContractServer(st)
+	token, _ := seedHTTPUser(t, s, st, "host_preview", model.RoleAdmin)
+	data := "sn,arch,rack\nSN-1,aarch64, A01 \n"
+	p := responseData[csvPlan](t, csvHTTP(s, "/console/v1/hosts/import?dryRun=true", data, token))
+	if p.Total != 1 || p.Rows[0].Action != "create" {
+		t.Fatal(p)
+	}
+	if _, err := other.CreateHost(t.Context(), model.Host{SN: "SN-1", Arch: "x86_64", Attrs: map[string]string{"old": "value"}}, repository.Audit{Actor: "other", Action: "host.create", At: fixedAt}); err != nil {
+		t.Fatal(err)
+	}
+	for _, rev := range []int64{2, 3} {
+		p := responseData[hostPage](t, csvHTTP(s, "/console/v1/hosts/import", data, token))
+		if len(p.Items) != 1 || p.Items[0].Rev != rev || p.Items[0].Arch != "aarch64" || !reflect.DeepEqual(p.Items[0].Attrs, map[string]string{"rack": " A01 "}) || p.Next != "" || p.Total != nil {
+			t.Fatal(p)
+		}
+		actual, err := other.GetHost(t.Context(), "SN-1")
+		if err != nil || !reflect.DeepEqual(p.Items[0], toHostResponse(actual)) {
+			t.Fatal(actual, err)
+		}
+	}
+}
+
+// 审计触发器在真实事务内碰到数据库门闩；观察连接必须看到阻塞关系才放行。
+func hostContractAuditGate(t *testing.T, conn *pgx.Conn, action string) pgx.Tx {
+	t.Helper()
+	hostContractSQL(t, conn, `CREATE TABLE host_contract_gate (id integer PRIMARY KEY); INSERT INTO host_contract_gate VALUES (1)`)
+	hostContractSQL(t, conn, fmt.Sprintf(`CREATE FUNCTION host_contract_pause() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action = '%s' THEN PERFORM id FROM host_contract_gate FOR UPDATE; END IF; RETURN NEW; END $$`, action))
+	hostContractSQL(t, conn, `CREATE TRIGGER host_contract_pause BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION host_contract_pause()`)
+	tx, err := conn.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tx.Rollback(context.Background()) })
+	if _, err = tx.Exec(t.Context(), `LOCK TABLE host_contract_gate IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	return tx
+}
+func hostContractBlocked(t *testing.T, observer *pgx.Conn, blocker int, relation string) int {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	for {
+		var pid int
+		err := observer.QueryRow(ctx, `SELECT COALESCE((SELECT a.pid FROM pg_stat_activity a WHERE a.wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(a.pid)) AND EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid=a.pid AND NOT l.granted) AND EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid=a.pid AND l.relation=to_regclass($2)) LIMIT 1),0)`, blocker, relation).Scan(&pid)
+		if err != nil {
+			t.Fatalf("未观察到 %s 的数据库等待：%v", relation, err)
+		}
+		if pid != 0 {
+			t.Logf("连接 %d 等待连接 %d，关系 %s", pid, blocker, relation)
+			return pid
+		}
+	}
+}
+func hostContractAwait(t *testing.T, done <-chan *httptest.ResponseRecorder) *httptest.ResponseRecorder {
+	t.Helper()
+	select {
+	case w := <-done:
+		return w
+	case <-time.After(10 * time.Second):
+		t.Fatal("请求未完成")
+		return nil
+	}
+}
+func hostContractEntry(t *testing.T, entered <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("请求没有进入真实写入入口")
+	}
+}
+
+type hostContractImportEntry struct {
+	repository.Hosts
+	entered chan<- struct{}
+}
+
+func (p hostContractImportEntry) ImportHosts(ctx context.Context, hs []model.Host, a repository.Audit) ([]model.Host, error) {
+	close(p.entered)
+	return p.Hosts.ImportHosts(ctx, hs, a)
+}
+
+type hostContractTaskEntry struct {
+	repository.CurrentTaskCreator
+	entered chan<- struct{}
+}
+
+func (p hostContractTaskEntry) CreateCurrentTasks(ctx context.Context, ts []model.Task, a repository.Audit) ([]model.Task, error) {
+	close(p.entered)
+	return p.CurrentTaskCreator.CreateCurrentTasks(ctx, ts, a)
+}
+
+func Test主机变更与向导提交按数据库事实交错(t *testing.T) {
+	for _, hostFirst := range []bool{true, false} {
+		name := "任务先锁主机并保留旧快照"
+		action := "task.create"
+		if hostFirst {
+			name = "主机先提交后任务重查拒绝"
+			action = "host.import"
+		}
+		t.Run(name, func(t *testing.T) {
+			dsn := pgtest.Schema(t)
+			st, other := pgtest.OpenAt(t, dsn), pgtest.OpenAt(t, dsn)
+			s, second := hostContractServer(st), hostContractServer(other)
+			_, _, token, iso, tpl := seedWizardFixture(t, s, st)
+			secondToken, _ := seedHTTPUser(t, second, other, "host_concurrent", model.RoleAdmin)
+			gateConn, observer := hostContractConnection(t, dsn), hostContractConnection(t, dsn)
+			gate := hostContractAuditGate(t, gateConn, action)
+			taskEntered, importEntered := make(chan struct{}), make(chan struct{})
+			assembled := wizardDeps(s.server.deps, st, hostContractTaskEntry{st, taskEntered})
+			s.server.deps.Wizard, s.server.deps.TemplateAuthoring = assembled.Wizard, assembled.TemplateAuthoring
+			second.server.deps.HostRegistry = hosts.NewRegistry(hosts.Deps{Hosts: hostContractImportEntry{other, importEntered}, Clock: second.server.deps.Clock})
+			submitted, imported := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+			submit := func() {
+				submitted <- httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-1"}]`), token)
+			}
+			importCSV := func() {
+				imported <- csvHTTP(second, "/console/v1/hosts/import", "sn,arch,firmware\nSN-1,aarch64,uefi\n", secondToken)
+			}
+			if hostFirst {
+				go importCSV()
+				hostContractEntry(t, importEntered)
+			} else {
+				go submit()
+				hostContractEntry(t, taskEntered)
+			}
+			writer := hostContractBlocked(t, observer, int(gateConn.PgConn().PID()), "host_contract_gate")
+			if hostFirst {
+				go submit()
+				hostContractEntry(t, taskEntered)
+			} else {
+				go importCSV()
+				hostContractEntry(t, importEntered)
+			}
+			waiter := hostContractBlocked(t, observer, writer, "hosts")
+			if waiter == writer || waiter == int(gateConn.PgConn().PID()) {
+				t.Fatal("并发写入没有使用独立连接")
+			}
+			if err := gate.Commit(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			importedPage := responseData[hostPage](t, hostContractAwait(t, imported))
+			if len(importedPage.Items) != 1 || importedPage.Items[0].Arch != "aarch64" || importedPage.Items[0].Rev != 2 {
+				t.Fatal(importedPage)
+			}
+			w := hostContractAwait(t, submitted)
+			if hostFirst {
+				var out struct {
+					Code int         `json:"code"`
+					Data batchDetail `json:"data"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+					t.Fatal(err)
+				}
+				ps := out.Data.ByHost["SN-1"]
+				if w.Code != 422 || out.Code != 422 || len(ps) == 0 || ps[0].Code != "arch_mismatch" {
+					t.Fatal(w.Code, w.Body.String())
+				}
+			} else {
+				out := responseData[wizardSubmitResult](t, w)
+				if len(out.Tasks) != 1 || out.Tasks[0].Snapshot.Host.Arch != "x86_64" {
+					t.Fatal(out)
+				}
+			}
+			page, err := st.ListTasks(t.Context(), repository.TaskQuery{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if hostFirst {
+				want = 0
+			}
+			if len(page.Items) != want {
+				t.Fatal(page)
+			}
+			if !hostFirst && page.Items[0].Snapshot.Host.Arch != "x86_64" {
+				t.Fatal(page.Items)
+			}
+			h, err := st.GetHost(t.Context(), "SN-1")
+			if err != nil || h.Arch != "aarch64" || h.Rev != 2 {
+				t.Fatal(h, err)
+			}
+			audits, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, a := range audits.Items {
+				if a.Action == "task.create" {
+					count++
+				}
+			}
+			if count != want {
+				t.Fatal("任务审计数", count, want)
+			}
+		})
+	}
+}
+
+func Test主机导入审计取消整批回滚(t *testing.T) {
+	for _, failure := range []string{"中间主机写入失败", "中间审计失败", "锁等待取消"} {
+		t.Run(failure, func(t *testing.T) {
+			dsn := pgtest.Schema(t)
+			st := pgtest.OpenAt(t, dsn)
+			s := hostContractServer(st)
+			token, _ := seedHTTPUser(t, s, st, "host_batch", model.RoleAdmin)
+			for _, sn := range []string{"SN-1", "SN-2"} {
+				if _, err := st.CreateHost(t.Context(), model.Host{SN: sn, Arch: "x86_64", Firmware: "uefi", Attrs: map[string]string{"rack": "old"}}, repository.Audit{Actor: "seed", Action: "host.create", At: fixedAt}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := st.GetHosts(t.Context(), []string{"SN-1", "SN-2", "SN-3"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeAudit, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+			if err != nil {
+				t.Fatal(err)
+			}
+			control := hostContractConnection(t, dsn)
+			csv := "sn,arch,rack\nSN-2,aarch64,new2\nSN-1,aarch64,new1\nSN-3,aarch64,new3\n"
+			switch failure {
+			case "中间主机写入失败":
+				hostContractSQL(t, control, `CREATE FUNCTION host_contract_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.sn='SN-2' THEN RAISE EXCEPTION 'host write fault'; END IF; RETURN NEW; END $$`)
+				hostContractSQL(t, control, `CREATE TRIGGER host_contract_fail BEFORE INSERT OR UPDATE ON hosts FOR EACH ROW EXECUTE FUNCTION host_contract_fail()`)
+				hostContractError(t, csvHTTP(s, "/console/v1/hosts/import", csv, token), 500, "")
+				hostContractSQL(t, control, `DROP TRIGGER host_contract_fail ON hosts`)
+			case "中间审计失败":
+				hostContractSQL(t, control, `CREATE FUNCTION host_contract_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='host.import' AND NEW.target_id='SN-1' THEN RAISE EXCEPTION 'audit write fault'; END IF; RETURN NEW; END $$`)
+				hostContractSQL(t, control, `CREATE TRIGGER host_contract_fail BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION host_contract_fail()`)
+				hostContractError(t, csvHTTP(s, "/console/v1/hosts/import", csv, token), 500, "")
+				hostContractSQL(t, control, `DROP TRIGGER host_contract_fail ON audit_log`)
+			case "锁等待取消":
+				tx, err := control.Begin(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback(context.Background())
+				if _, err = tx.Exec(t.Context(), `SELECT sn FROM hosts WHERE sn='SN-2' FOR UPDATE`); err != nil {
+					t.Fatal(err)
+				}
+				observer := hostContractConnection(t, dsn)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() {
+					_, err := s.server.deps.HostRegistry.Import(ctx, ports.Actor{Username: "host_batch", Role: model.RoleAdmin}, hosts.ImportRequest{CSV: []byte(csv)})
+					done <- err
+				}()
+				hostContractBlocked(t, observer, int(control.PgConn().PID()), "hosts")
+				cancel()
+				select {
+				case err := <-done:
+					if err == nil {
+						t.Fatal("取消后仍成功")
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatal("取消没有结束导入")
+				}
+				if err := tx.Rollback(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			after, err := st.GetHosts(t.Context(), []string{"SN-1", "SN-2", "SN-3"})
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatal("整批记录或版本改变", after, err)
+			}
+			afterAudit, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
+			if err != nil || !reflect.DeepEqual(beforeAudit, afterAudit) {
+				t.Fatal("失败留下审计", err)
+			}
+			success := responseData[hostPage](t, csvHTTP(s, "/console/v1/hosts/import", "sn,arch,rack\nSN-2,aarch64,new2\nSN-1,aarch64,new1\n", token))
+			if len(success.Items) != 2 || success.Items[0].SN != "SN-2" || success.Items[1].SN != "SN-1" || success.Items[0].Rev != 2 || success.Items[1].Rev != 2 {
+				t.Fatal(success)
+			}
+			// 直接按审计自增编号检查写入顺序，避免列表的倒序展示改变含义。
+			rows, err := control.Query(t.Context(), `SELECT target_id,actor,at,detail FROM audit_log WHERE action='host.import' ORDER BY id`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			var sns []string
+			for rows.Next() {
+				var sn, actor, detail string
+				var at int64
+				if err := rows.Scan(&sn, &actor, &at, &detail); err != nil {
+					t.Fatal(err)
+				}
+				if actor != "host_batch" || at != fixedAt || detail != "" {
+					t.Fatal(actor, at, detail)
+				}
+				sns = append(sns, sn)
+			}
+			if err := rows.Err(); err != nil || !reflect.DeepEqual(sns, []string{"SN-2", "SN-1"}) {
+				t.Fatal(sns, err)
+			}
+		})
+	}
 }

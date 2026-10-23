@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
@@ -49,6 +50,17 @@ func jsonProblems(ps []model.Problem) []problemJSON {
 	return out
 }
 func RespondError(c *gin.Context, err error) {
+	var csvFile *hosts.CSVFileError
+	if errors.As(err, &csvFile) {
+		Fail(c, 400, nil, csvFile.Message)
+		return
+	}
+	var csvRejected *hosts.ImportRejectedError
+	if errors.As(err, &csvRejected) {
+		Fail(c, 422, csvPlanOf(csvRejected.Plan), csvRejected.Message)
+		return
+	}
+
 	switch {
 	case errors.Is(err, authoring.ErrRejectReason):
 		Fail(c, 400, nil, model.ConsoleRejectReason)

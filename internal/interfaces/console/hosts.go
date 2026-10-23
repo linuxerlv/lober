@@ -154,46 +154,15 @@ func (s *server) importHosts(c *gin.Context) {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return
 	}
-	p, hosts, err := parseHostCSV(data, nil)
-	if err != nil {
-		Fail(c, 400, nil, err.Error())
-		return
-	}
-	sns := make([]string, len(hosts))
-	for i, h := range hosts {
-		sns[i] = h.SN
-	}
-	known, ok := Get(c, func() (map[string]model.Host, error) { return s.deps.Hosts.GetHosts(c.Request.Context(), sns) })
+	result, ok := Write(c, func() (hosts.ImportResult, error) {
+		return s.deps.HostRegistry.Import(c.Request.Context(), actorOf(c), hosts.ImportRequest{CSV: data, DryRun: dryRun})
+	})
 	if !ok {
 		return
 	}
-	rejected := false
-	message := model.ConsoleRejected
-	for i := range p.Rows {
-		row := &p.Rows[i]
-		if row.Action == "error" {
-			if !rejected {
-				message = row.Problems[0].Message
-			}
-			rejected = true
-			continue
-		}
-		if _, exists := known[row.SN]; exists {
-			row.Action = "update"
-		}
-	}
 	if dryRun {
-		Ok(c, p)
+		Ok(c, csvPlanOf(result.Plan))
 		return
 	}
-	if rejected {
-		Fail(c, 422, p, message)
-		return
-	}
-	imported, ok := Write(c, func() ([]model.Host, error) {
-		return s.deps.Hosts.ImportHosts(c.Request.Context(), hosts, s.auditFrom(c, ""))
-	})
-	if ok {
-		Ok(c, hostsPage(imported, ""))
-	}
+	Ok(c, hostsPage(result.Hosts, ""))
 }

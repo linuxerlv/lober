@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/domain/model"
 	"net/http/httptest"
 	"strings"
@@ -237,7 +238,7 @@ func TestCSV预演数据库失败不伪装新建(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s.server.deps.Hosts = closed
+	s.server.deps.HostRegistry = hosts.NewRegistry(hosts.Deps{Hosts: closed, Clock: s.server.deps.Clock})
 	w := csvHTTP(s, "/console/v1/hosts/import?dryRun=true", "sn\nSN-1\n", token)
 	if w.Code != 500 || strings.Contains(w.Body.String(), "backend unavailable") || strings.Contains(w.Body.String(), `"create"`) {
 		t.Fatal(w.Code, w.Body.String())
