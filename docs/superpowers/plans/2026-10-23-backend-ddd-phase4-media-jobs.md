@@ -241,13 +241,13 @@ func Test镜像创建后来源失败保留位置及已提交事实(t *testing.T)
 
 **Interfaces:** 实现NewDeletion、RetryAll、NewSupervisor/Start/Wake/Close；控制适配器维持SourceControl，只有登记/上传/重试/重导入持久化成功才Wake。最终root直接组装Registry、Sources、ImportFiles、Deletion和Supervisor；旧iso.Sources仓储构造器及cmd业务实现删除，不用空兼容壳延寿。
 
-- [ ] 在VM先跑新目标包测试，预期新删除/调度构造不存在而失败。迁移原deletion/supervision/queue_atomicity测试；保留cmd从实际newApp到后台、网页和重启的组装覆盖。
-- [ ] 删除应用先串行化journal操作，再持有登记写闸门，按原顺序读ISO/rev及来源，持久化快照后调用DeleteISO；失败或提交结果未知，确认记录存在才丢快照，绝不清字节。成功后清理失败返回成功并保留快照；清理成功才discard，discard失败留待恢复。
-- [ ] Journal实现保留`staging/deletions/<id>.json`、临时文件、独占创建、文件Sync→Rename→目录Sync、0600/0700权限、严格JSON/ID/非nil来源校验和汇总错误。不改变旧快照字段，不引入数据库队列表；启动后仍能读取搬迁前日志。
-- [ ] 清理应用先调用领域CheckDeletion核对快照，再保留两次确认：先确认记录不存在→取同一import锁→取消活动获取并取各来源锁→再次确认不存在→字节清理。文件实现保护owner、根目录和符号链接。本地来源即使与staging允许根重合也不删，其他ISO/owner及未知结果不删；重复清理安全。
-- [ ] 调度保留Workers/PollMS配置及原校验：默认2个工作名额、1000ms轮询，分别至少1，轮询转换不得溢出；工作键id/role/kind去重、非阻塞Wake、原100ms起步/上限30s/attempt最多9的退避公式、异常隔离及日志脱敏。Start先验证恢复读取再确认启动；Close可重复，停止且等待所有工作结束；upload恢复只等待客户端。
-- [ ] 补Review Focus第4/5项：真实库竞争检查删除/补来源两种顺序；旧快照恢复、坏快照旁有效快照继续、错误owner、共享本地根、丢提交确认；另测Close与launch/Start竞争、满名额、异常后释放与取消立即退出。检查磁盘哨兵、快照、审计和活动数，不能只断言error。
-- [ ] VM执行`go test ./internal/application/media ./internal/infrastructure/media ./cmd/lober ./internal/interfaces/console ./internal/infrastructure/persistence/pgstore -count=1`及对应race；Wire生成、网页类型检查。先提交候选`refactor(media): own durable cleanup and background lifecycle`供独立审查，通过后才标记本项完成。
+- [x] 在VM先跑新目标包测试，预期新删除/调度构造不存在而失败。迁移原deletion/supervision/queue_atomicity测试；保留cmd从实际newApp到后台、网页和重启的组装覆盖。
+- [x] 删除应用先串行化journal操作，再持有登记写闸门，按原顺序读ISO/rev及来源，持久化快照后调用DeleteISO；失败或提交结果未知，确认记录存在才丢快照，绝不清字节。成功后清理失败返回成功并保留快照；清理成功才discard，discard失败留待恢复。
+- [x] Journal实现保留`staging/deletions/<id>.json`、临时文件、独占创建、文件Sync→Rename→目录Sync、0600/0700权限、严格JSON/ID/非nil来源校验和汇总错误。不改变旧快照字段，不引入数据库队列表；启动后仍能读取搬迁前日志。
+- [x] 清理应用先调用领域CheckDeletion核对快照，再保留两次确认：先确认记录不存在→取同一import锁→取消活动获取并取各来源锁→再次确认不存在→字节清理。文件实现保护owner、根目录和符号链接。本地来源即使与staging允许根重合也不删，其他ISO/owner及未知结果不删；重复清理安全。
+- [x] 调度保留Workers/PollMS配置及原校验：默认2个工作名额、1000ms轮询，分别至少1，轮询转换不得溢出；工作键id/role/kind去重、非阻塞Wake、原100ms起步/上限30s/attempt最多9的退避公式、异常隔离及日志脱敏。Start先验证恢复读取再确认启动；Close可重复，停止且等待所有工作结束；upload恢复只等待客户端。
+- [x] 补Review Focus第4/5项：真实库竞争检查删除/补来源两种顺序；旧快照恢复、坏快照旁有效快照继续、错误owner、共享本地根、丢提交确认；另测Close与launch/Start竞争、满名额、异常后释放与取消立即退出。检查磁盘哨兵、快照、审计和活动数，不能只断言error。
+- [x] VM执行`go test ./internal/application/media ./internal/infrastructure/media ./cmd/lober ./internal/interfaces/console ./internal/infrastructure/persistence/pgstore -count=1`及对应race；Wire生成、控制台契约类型校验`pnpm --dir web check:console-types`；本项未改网页源码时不安装Vue依赖做全量网页类型检查。先提交候选`refactor(media): own durable cleanup and background lifecycle`供独立审查，通过后才标记本项完成。
 
 ### Task 6：第四阶段边界守卫、完整验收与整分支审查
 
