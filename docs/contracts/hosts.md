@@ -74,4 +74,4 @@
 
 `internal/archtest/hosts_rules_test.go` 对 `hosts.go`、`csv.go` 做类型检查，追踪同包函数、方法值和包级别名。仅允许 Registry 的 List/Get/Create/Update/Delete/Import 六方法；纯 HostResponse/CsvPlan 转换保留。直接仓储、小接口、旧规则、通知和任务诊断均拒绝。
 
-当前是本地候选；完整检查及两道独立审查的实际状态见[第三阶段证据](../superpowers/reviews/2026-10-23-ddd-phase3-evidence.md)。
+模块分支完整检查、逐项独立审查及整分支审查已通过；实际结果见[第三阶段证据](../superpowers/reviews/2026-10-23-ddd-phase3-evidence.md)。

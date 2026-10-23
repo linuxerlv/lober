@@ -175,4 +175,4 @@ Task6只补文档，不改数据库结构、网页字段、前端或生产行为
 | consoleRuleMigrationExceptions | 47 | 4：5；5：30；6：12 |
 | notificationMigrationExceptions | 1 | 6：1，仍仅console.NewHub |
 
-六项正式编号能力和唯一通知转发的原检查保持。当前候选的完整验证及独立审查状态见[第三阶段证据](../superpowers/reviews/2026-10-23-ddd-phase3-evidence.md)；不代表已经合入develop或通过后续企业、人工验收。
+六项正式编号能力和唯一通知转发的原检查保持。模块分支完整验证、逐项独立审查及整分支审查均通过，实际状态见[第三阶段证据](../superpowers/reviews/2026-10-23-ddd-phase3-evidence.md)；不代表已经合入develop或通过后续企业、人工验收。
