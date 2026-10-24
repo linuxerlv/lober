@@ -20,7 +20,7 @@ func taskFinalFindings(caller string, fset *token.FileSet, files []*ast.File, in
 	if !console && !assembly {
 		return nil
 	}
-	policy := taskPolicyChecker(files, info)
+	policy, localDecision := taskPolicyChecker(files, info)
 	var found []violation
 	for _, f := range files {
 		logging := map[*ast.Ident]bool{}
@@ -58,7 +58,7 @@ func taskFinalFindings(caller string, fset *token.FileSet, files []*ast.File, in
 				}
 			case *ast.CallExpr:
 				// EqualFold等返回布尔值的函数也不能替代直接比较。
-				if typ := info.TypeOf(x); typ != nil && types.Identical(typ, types.Typ[types.Bool]) && policy(x) {
+				if typ := info.TypeOf(x); localDecision(x) || typ != nil && types.Identical(typ, types.Typ[types.Bool]) && policy(x) {
 					report("任务状态或固件判断")
 				}
 			case *ast.AssignStmt:
@@ -96,15 +96,37 @@ func taskFinalFindings(caller string, fset *token.FileSet, files []*ast.File, in
 }
 
 // 只追同包返回值、局部赋值和容器内容；容器长度与类型描述不继承元素来源。
-func taskPolicyChecker(files []*ast.File, info *types.Info) func(ast.Expr) bool {
+func taskPolicyChecker(files []*ast.File, info *types.Info) (func(ast.Expr) bool, func(*ast.CallExpr) bool) {
+	type binding struct {
+		value    ast.Expr
+		elements []ast.Expr
+	}
 	origins := map[types.Object][]ast.Expr{}
 	elementOrigins := map[types.Object][]ast.Expr{}
 	functions := map[types.Object]*ast.FuncDecl{}
 	returns := map[ast.Node][]ast.Expr{}
+	conditions := map[ast.Node][]ast.Expr{}
+	bodyCalls := map[ast.Node][]*ast.CallExpr{}
 	remember := func(node ast.Node, body *ast.BlockStmt, results *ast.FieldList) {
 		ast.Inspect(body, func(n ast.Node) bool {
 			if _, nested := n.(*ast.FuncLit); nested {
 				return false
+			}
+			switch x := n.(type) {
+			case *ast.IfStmt:
+				conditions[node] = append(conditions[node], x.Cond)
+			case *ast.SwitchStmt:
+				conditions[node] = append(conditions[node], x.Tag)
+			case *ast.CaseClause:
+				for _, test := range x.List {
+					if !info.Types[test].IsType() {
+						conditions[node] = append(conditions[node], test)
+					}
+				}
+			case *ast.ForStmt:
+				conditions[node] = append(conditions[node], x.Cond)
+			case *ast.CallExpr:
+				bodyCalls[node] = append(bodyCalls[node], x)
 			}
 			if ret, ok := n.(*ast.ReturnStmt); ok {
 				returns[node] = append(returns[node], ret.Results...)
@@ -193,8 +215,39 @@ func taskPolicyChecker(files []*ast.File, info *types.Info) func(ast.Expr) bool 
 		}
 		return out
 	}
-	var visit func(ast.Expr, bool, map[types.Object]ast.Expr, map[types.Object]bool, map[ast.Node]bool) bool
-	visit = func(e ast.Expr, elements bool, bindings map[types.Object]ast.Expr, seen map[types.Object]bool, calls map[ast.Node]bool) bool {
+	// 普通参数按对象绑定；普通变参保留整组，slice...保留传入的切片。
+	bind := func(target target, call *ast.CallExpr, parent map[types.Object]binding) map[types.Object]binding {
+		bound := map[types.Object]binding{}
+		for obj, value := range parent {
+			bound[obj] = value
+		}
+		sig, offset := target.sig, 0
+		if sel, ok := target.expr.(*ast.SelectorExpr); ok && info.Selections[sel] != nil && info.Selections[sel].Kind() == types.MethodExpr {
+			offset = 1
+		}
+		for i := 0; i < sig.Params().Len(); i++ {
+			start := i + offset
+			if sig.Variadic() && i == sig.Params().Len()-1 && !call.Ellipsis.IsValid() {
+				if start <= len(call.Args) {
+					bound[sig.Params().At(i)] = binding{elements: call.Args[start:]}
+				}
+			} else if start < len(call.Args) {
+				bound[sig.Params().At(i)] = binding{value: call.Args[start]}
+			}
+		}
+		if sig.Recv() != nil {
+			if sel, ok := target.expr.(*ast.SelectorExpr); ok {
+				if offset == 1 && len(call.Args) > 0 {
+					bound[sig.Recv()] = binding{value: call.Args[0]}
+				} else {
+					bound[sig.Recv()] = binding{value: sel.X}
+				}
+			}
+		}
+		return bound
+	}
+	var visit func(ast.Expr, bool, map[types.Object]binding, map[types.Object]bool, map[ast.Node]bool) bool
+	visit = func(e ast.Expr, elements bool, bindings map[types.Object]binding, seen map[types.Object]bool, calls map[ast.Node]bool) bool {
 		if e == nil {
 			return false
 		}
@@ -217,8 +270,18 @@ func taskPolicyChecker(files []*ast.File, info *types.Info) func(ast.Expr) bool 
 			}
 			seen[obj] = true
 			defer delete(seen, obj)
-			if value := bindings[obj]; value != nil {
-				return next(value, elements)
+			if bound, ok := bindings[obj]; ok {
+				if bound.value != nil {
+					return next(bound.value, elements)
+				}
+				if elements {
+					for _, value := range bound.elements {
+						if next(value, false) || next(value, true) {
+							return true
+						}
+					}
+				}
+				return false
 			}
 			for _, value := range origins[obj] {
 				if next(value, elements) {
@@ -270,27 +333,7 @@ func taskPolicyChecker(files []*ast.File, info *types.Info) func(ast.Expr) bool 
 					if calls[fn] {
 						continue
 					}
-					bound := map[types.Object]ast.Expr{}
-					for obj, value := range bindings {
-						bound[obj] = value
-					}
-					sig := target.sig
-					offset := 0
-					if sel, ok := target.expr.(*ast.SelectorExpr); ok && info.Selections[sel] != nil && info.Selections[sel].Kind() == types.MethodExpr {
-						offset = 1
-					}
-					for i := 0; i < sig.Params().Len() && i+offset < len(x.Args); i++ {
-						bound[sig.Params().At(i)] = x.Args[i+offset]
-					}
-					if sig.Recv() != nil {
-						if sel, ok := target.expr.(*ast.SelectorExpr); ok {
-							if offset == 1 && len(x.Args) > 0 {
-								bound[sig.Recv()] = x.Args[0]
-							} else {
-								bound[sig.Recv()] = sel.X
-							}
-						}
-					}
+					bound := bind(target, x, bindings)
 					calls[fn] = true
 					for _, value := range returns[fn] {
 						if visit(value, elements, bound, seen, calls) {
@@ -309,6 +352,8 @@ func taskPolicyChecker(files []*ast.File, info *types.Info) func(ast.Expr) bool 
 					}
 				}
 			}
+		case *ast.BinaryExpr:
+			return next(x.X, false) || next(x.Y, false)
 		case *ast.IndexExpr:
 			return next(x.X, true) || next(x.X, false) || next(x.Index, false)
 		case *ast.CompositeLit:
@@ -326,7 +371,7 @@ func taskPolicyChecker(files []*ast.File, info *types.Info) func(ast.Expr) bool 
 		case *ast.TypeAssertExpr:
 			return next(x.X, true) || next(x.X, false)
 		case *ast.SliceExpr:
-			return elements && next(x.X, true)
+			return next(x.X, elements) || next(x.Low, false) || next(x.High, false) || next(x.Max, false)
 		case *ast.StarExpr:
 			return next(x.X, elements)
 		case *ast.UnaryExpr:
@@ -334,9 +379,35 @@ func taskPolicyChecker(files []*ast.File, info *types.Info) func(ast.Expr) bool 
 		}
 		return false
 	}
-	return func(e ast.Expr) bool {
-		return visit(e, false, map[types.Object]ast.Expr{}, map[types.Object]bool{}, map[ast.Node]bool{})
+	// 返回常量的辅助也可能在内部判断状态，按调用处的绑定检查其条件和同包调用。
+	var decision func(*ast.CallExpr, map[types.Object]binding, map[ast.Node]bool) bool
+	decision = func(call *ast.CallExpr, bindings map[types.Object]binding, active map[ast.Node]bool) bool {
+		for _, target := range callable(call.Fun, map[types.Object]bool{}) {
+			fn := target.node
+			if active[fn] {
+				continue
+			}
+			bound := bind(target, call, bindings)
+			active[fn] = true
+			for _, condition := range conditions[fn] {
+				if visit(condition, false, bound, map[types.Object]bool{}, map[ast.Node]bool{}) {
+					delete(active, fn)
+					return true
+				}
+			}
+			for _, inner := range bodyCalls[fn] {
+				if decision(inner, bound, active) {
+					delete(active, fn)
+					return true
+				}
+			}
+			delete(active, fn)
+		}
+		return false
 	}
+	return func(e ast.Expr) bool {
+		return visit(e, false, map[types.Object]binding{}, map[types.Object]bool{}, map[ast.Node]bool{})
+	}, func(call *ast.CallExpr) bool { return decision(call, map[types.Object]binding{}, map[ast.Node]bool{}) }
 }
 
 func taskPolicyType(typ types.Type) bool {
@@ -611,6 +682,32 @@ func Test任务终态边界拒绝仓储和后端旁路(t *testing.T) {
 		{"函数文字纯状态输出", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)string{text:=func(task m.Task)string{return string(task.State)};return text(t)}`, true},
 		{"range纯状态输出", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)string{for _,v:=range []string{string(t.State)}{return v};return ""}`, true},
 		{"函数文字常量不沾状态", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{label:=func(s string)string{return "ready"};return label(string(t.State))=="ready"}`, true},
+		{"复审N1状态布尔返回比较", pkgConsole, `import m "` + pkgModel + `";func isDone(s string)bool{return s=="done"};func bypass(t m.Task)bool{return isDone(string(t.State))}`, false},
+		{"复审N1固件布尔返回比较", pkgConsole, `import m "` + pkgModel + `";func isUEFI(s string)bool{return s=="uefi"};func bypass(t m.Task)bool{return isUEFI(string(t.Snapshot.Host.Firmware))}`, false},
+		{"复审N1状态拼接返回比较", pkgConsole, `import m "` + pkgModel + `";func copyText(s string)string{return s+""};func bypass(t m.Task)bool{return copyText(string(t.State))=="done"}`, false},
+		{"复审N1固件拼接返回比较", pkgConsole, `import m "` + pkgModel + `";func copyText(s string)string{return s+""};func bypass(t m.Task)bool{return copyText(string(t.Snapshot.Host.Firmware))=="uefi"}`, false},
+		{"复审N1状态字符串切片返回比较", pkgConsole, `import m "` + pkgModel + `";func copyText(s string)string{return s[:]};func bypass(t m.Task)bool{return copyText(string(t.State))=="done"}`, false},
+		{"复审N1固件字符串切片返回比较", pkgConsole, `import m "` + pkgModel + `";func copyText(s string)string{return s[:]};func bypass(t m.Task)bool{return copyText(string(t.Snapshot.Host.Firmware))=="uefi"}`, false},
+		{"复审N1逻辑和一元表达式", pkgConsole, `import m "` + pkgModel + `";func matches(s string)bool{return !(s!="done" && s!="failed")};func bypass(t m.Task)bool{return matches(string(t.State))}`, false},
+		{"复审N2状态位于第二个参数", pkgConsole, `import m "` + pkgModel + `";func pick(values ...string)string{return values[1]};func bypass(t m.Task)bool{return pick("ordinary",string(t.State))=="done"}`, false},
+		{"复审N2固件位于后续参数", pkgConsole, `import m "` + pkgModel + `";func pick(values ...string)string{return values[2]};func bypass(t m.Task)bool{return pick("one","two",string(t.Snapshot.Host.Firmware))=="uefi"}`, false},
+		{"复审N2固定参数后可变参数", pkgConsole, `import m "` + pkgModel + `";func pick(prefix string,values ...string)string{return values[1]};func bypass(t m.Task)bool{return pick("prefix","ordinary",string(t.State))=="done"}`, false},
+		{"复审N2函数值可变参数", pkgConsole, `import m "` + pkgModel + `";func pick(values ...string)string{return values[1]};func bypass(t m.Task)bool{call:=pick;return call("ordinary",string(t.State))=="done"}`, false},
+		{"复审N2函数文字可变参数", pkgConsole, `import m "` + pkgModel + `";func bypass(t m.Task)bool{pick:=func(values ...string)string{return values[1]};return pick("ordinary",string(t.Snapshot.Host.Firmware))=="uefi"}`, false},
+		{"复审N2切片展开状态", pkgConsole, `import m "` + pkgModel + `";func pick(values ...string)string{return values[1]};func bypass(t m.Task)bool{return pick([]string{"ordinary",string(t.State)}...)=="done"}`, false},
+		{"复审N2切片展开固件", pkgConsole, `import m "` + pkgModel + `";func pick(values ...string)string{return values[1]};func bypass(t m.Task)bool{return pick([]string{"ordinary",string(t.Snapshot.Host.Firmware)}...)=="uefi"}`, false},
+		{"复审N3状态条件返回常量", pkgConsole, `import m "` + pkgModel + `";func label(s string)string{if s=="done"{return "yes"};return "no"};func bypass(t m.Task)bool{return label(string(t.State))=="yes"}`, false},
+		{"复审N3固件条件返回常量", pkgConsole, `import m "` + pkgModel + `";func label(s string)string{if s=="uefi"{return "yes"};return "no"};func bypass(t m.Task)bool{return label(string(t.Snapshot.Host.Firmware))=="yes"}`, false},
+		{"复审N3状态switch返回常量", pkgConsole, `import m "` + pkgModel + `";func label(s string)string{switch s{case "done":return "yes"};return "no"};func bypass(t m.Task)bool{return label(string(t.State))=="yes"}`, false},
+		{"复审N3固件switch返回常量", pkgConsole, `import m "` + pkgModel + `";func label(s string)string{switch s{case "uefi":return "yes"};return "no"};func bypass(t m.Task)bool{return label(string(t.Snapshot.Host.Firmware))=="yes"}`, false},
+		{"复审N3无标签switch条件", pkgConsole, `import m "` + pkgModel + `";func label(s string)string{switch{case s=="done":return "yes"};return "no"};func bypass(t m.Task)bool{return label(string(t.State))=="yes"}`, false},
+		{"复审N3辅助分支也是状态判断", pkgConsole, `import m "` + pkgModel + `";func label(s string)string{if s=="done"{return "yes"};return "no"};func output(t m.Task)string{return label(string(t.State))}`, false},
+		{"复审N3嵌套辅助分支", pkgConsole, `import m "` + pkgModel + `";func label(s string)string{if s=="uefi"{return "yes"};return "no"};func outer(s string)string{return label(s)};func output(t m.Task)string{return outer(string(t.Snapshot.Host.Firmware))}`, false},
+		{"可变参数只作纯输出", pkgConsole, `import m "` + pkgModel + `";func pick(values ...string)string{return values[1]};func output(t m.Task)string{return pick("ordinary",string(t.State))}`, true},
+		{"可变参数只判断长度", pkgConsole, `import m "` + pkgModel + `";func count(values ...string)int{return len(values)};func output(t m.Task)bool{return count("ordinary",string(t.State))>0}`, true},
+		{"可变参数无条件常量", pkgConsole, `import m "` + pkgModel + `";func label(values ...string)string{return "ready"};func output(t m.Task)bool{return label("ordinary",string(t.State))=="ready"}`, true},
+		{"布尔常量不沾状态参数", pkgConsole, `import m "` + pkgModel + `";func yes(s string)bool{return 2>1};func output(t m.Task)bool{return yes(string(t.State))}`, true},
+		{"普通字段辅助比较", pkgConsole, `import m "` + pkgModel + `";func label(s string)string{if s=="ordinary"{return "yes"};return "no"};func output(t m.Task)bool{return label(t.ID)=="yes"}`, true},
 		{"纯状态容器长度", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{values:=[]string{string(t.State)};return len(values)>0}`, true},
 		{"辅助函数仅输出状态文本", pkgConsole, `import m "` + pkgModel + `";func stateText(t m.Task)string{return string(t.State)};func f(t m.Task)string{return stateText(t)}`, true},
 		{"辅助函数返回普通字段", pkgConsole, `import m "` + pkgModel + `";func name(t m.Task)string{return t.ID};func f(t m.Task)bool{return name(t)=="example"}`, true},
@@ -735,13 +832,16 @@ func Test任务终态规则接入真实全模块扫描(t *testing.T) {
 	write("internal/interfaces/console/control.go", `package console;import("context";m "`+pkgModel+`";p "`+pkgPorts+`");type control interface{Cancel(context.Context,*m.Task,p.AuditIntent)error};func byControl(ctx context.Context,c control,t *m.Task,a p.AuditIntent)error{return c.Cancel(ctx,t,a)}`)
 	write("internal/application/tasks/readfile.go", `package tasks;import "io/fs";func readTaskFile(files fs.FS)([]byte,error){return fs.ReadFile(files,"tasks.json")}`)
 	write("internal/application/tasks/port/readfile.go", `package port;import "io/fs";func readTaskFile(files fs.FS)([]byte,error){return fs.ReadFile(files,"tasks.json")}`)
+	write("internal/interfaces/console/binary_helper.go", `package console;import m "`+pkgModel+`";func isDone(s string)bool{return s=="done"};func byBinary(t m.Task)bool{return isDone(string(t.State))}`)
+	write("internal/interfaces/console/variadic_helper.go", `package console;import m "`+pkgModel+`";func pick(values ...string)string{return values[1]};func byVariadic(t m.Task)bool{return pick("ordinary",string(t.State))=="done"}`)
+	write("internal/interfaces/console/conditional_helper.go", `package console;import m "`+pkgModel+`";func label(s string)string{if s=="done"{return "yes"};return "no"};func byConditional(t m.Task)bool{return label(string(t.State))=="yes"}`)
 	got := check()
 	for _, v := range got {
 		if v.rule == ruleParse {
 			t.Fatal("违规源码必须先成功装载", v)
 		}
 	}
-	for _, file := range []string{"internal/interfaces/console/extra.go", "cmd/lober/extra.go", "internal/application/tasks/extra.go", "internal/interfaces/console/policy.go", "internal/interfaces/console/control.go", "internal/application/tasks/readfile.go", "internal/application/tasks/port/readfile.go"} {
+	for _, file := range []string{"internal/interfaces/console/extra.go", "cmd/lober/extra.go", "internal/application/tasks/extra.go", "internal/interfaces/console/policy.go", "internal/interfaces/console/control.go", "internal/application/tasks/readfile.go", "internal/application/tasks/port/readfile.go", "internal/interfaces/console/binary_helper.go", "internal/interfaces/console/variadic_helper.go", "internal/interfaces/console/conditional_helper.go"} {
 		found := false
 		for _, v := range got {
 			found = found || strings.Contains(v.pos, file)
