@@ -95,6 +95,12 @@ var phaseSixCompletedRemovals = map[string][]migrationException{
 		{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrReferenced", "6"},
 		{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ProblemsError", "6"},
 		{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ReferencedError", "6"},
+		{pkgConsole, "internal/interfaces/console/pagination.go", "queryPagination", "github.com/lober/lober/internal/domain/repository", "CheckPageQuery", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).getTask", pkgStore, "Tasks.GetTask", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", pkgStore, "Page", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", pkgStore, "TaskQuery", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", pkgStore, "Tasks.ListTasks", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).previewTask", pkgStore, "Tasks.GetTask", "6"},
 	},
 	"consoleRuleMigrationExceptions": {
 		{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrTemplateNotCurrent", "6"},
@@ -105,6 +111,9 @@ var phaseSixCompletedRemovals = map[string][]migrationException{
 		{pkgConsole, "internal/interfaces/console/openapi.go", "(*schemaBuilder).definition", "github.com/lober/lober/internal/domain/catalog", "AllSeries", "6"},
 		{pkgConsole, "internal/interfaces/console/openapi.go", "(*schemaBuilder).definition", "github.com/lober/lober/internal/domain/catalog", "Families", "6"},
 		{pkgConsole, "internal/interfaces/console/openapi.go", "(*schemaBuilder).definition", "github.com/lober/lober/internal/domain/model", "Roles", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", "github.com/lober/lober/internal/domain/model", "NormalizeSN", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", "github.com/lober/lober/internal/domain/model", "TaskState.Valid", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).previewTask", "github.com/lober/lober/internal/domain/catalog", "Firmware.Valid", "6"},
 	},
 }
 
@@ -202,6 +211,19 @@ func phaseSixCompletedOwner(e migrationException) bool {
 	if e.File == "internal/interfaces/console/errors.go" {
 		return true
 	}
+	if e.File == "internal/interfaces/console/pagination.go" {
+		return e.Function == "queryPagination" && e.Target == pkgStore && e.Symbol == "CheckPageQuery"
+	}
+	if e.File == "internal/interfaces/console/tasks.go" {
+		switch e.Function {
+		case "(*server).getTask", "(*server).previewTask":
+			return e.Target == pkgStore && e.Symbol == "Tasks.GetTask" || e.Function == "(*server).previewTask" && e.Target == modulePath+"/internal/domain/catalog" && e.Symbol == "Firmware.Valid"
+		case "(*server).listTasks":
+			return e.Target == pkgStore && slices.Contains([]string{"Page", "TaskQuery", "Tasks.ListTasks"}, e.Symbol) || e.Target == pkgModel && slices.Contains([]string{"NormalizeSN", "TaskState.Valid"}, e.Symbol)
+		}
+		return false
+	}
+
 	if e.File != "internal/interfaces/console/openapi.go" || e.Function != "(*schemaBuilder).definition" {
 		return false
 	}
@@ -211,7 +233,7 @@ func phaseSixCompletedOwner(e migrationException) bool {
 	return e.Target == modulePath+"/internal/domain/catalog" && slices.Contains([]string{"AllArchs", "AllFirmwares", "AllFormats", "AllSeries", "Families"}, e.Symbol)
 }
 
-func Test错误与枚举迁移精确删除18项保留21项(t *testing.T) {
+func Test错误枚举与任务读取迁移精确删除27项保留12项(t *testing.T) {
 	total, removedTotal := 0, 0
 	for name, current := range phaseSixCurrentTables() {
 		var want []migrationException
@@ -228,7 +250,7 @@ func Test错误与枚举迁移精确删除18项保留21项(t *testing.T) {
 		}
 		for _, e := range phaseSixCompletedRemovals[name] {
 			if !slices.Contains(phaseSixOriginalEntries[name], e) || !phaseSixCompletedOwner(e) {
-				t.Errorf("错误与枚举迁移的删除项不精确: %+v", e)
+				t.Errorf("已完成迁移的删除项不精确: %+v", e)
 			}
 		}
 		if !slices.Equal(current, want) {
@@ -236,18 +258,34 @@ func Test错误与枚举迁移精确删除18项保留21项(t *testing.T) {
 		}
 		total += len(current)
 	}
-	if total != 21 || removedTotal != 18 {
+	if total != 12 || removedTotal != 27 {
 		t.Fatal(total, removedTotal)
 	}
 }
 
-func Test错误与枚举历史不能放行已删除的真实类型调用(t *testing.T) {
+func Test错误枚举与任务读取历史不能放行已删除的真实类型调用(t *testing.T) {
 	imports := identityFixtureImports(t)
 	for _, entries := range phaseSixCompletedRemovals {
 		for _, e := range entries {
 			t.Run(e.Symbol, func(t *testing.T) {
 				body := `import r "` + pkgStore + `";func RespondError(){_=r.` + e.Symbol + `}`
 				switch e.Symbol {
+				case "CheckPageQuery":
+					body = `import r "` + pkgStore + `";func queryPagination(){_,_=r.CheckPageQuery("",0,0)}`
+				case "Tasks.GetTask":
+					body = `import r "` + pkgStore + `";type server struct { tasks r.Tasks };func (s *server)` + strings.TrimPrefix(e.Function, "(*server).") + `(){_=s.tasks.GetTask}`
+				case "Page":
+					body = `import r "` + pkgStore + `";type server struct{};func (*server)listTasks(){var _ r.Page[int]}`
+				case "TaskQuery":
+					body = `import r "` + pkgStore + `";type server struct{};func (*server)listTasks(){_=r.TaskQuery{}}`
+				case "Tasks.ListTasks":
+					body = `import r "` + pkgStore + `";type server struct { tasks r.Tasks };func (s *server)listTasks(){_=s.tasks.ListTasks}`
+				case "NormalizeSN":
+					body = `import m "` + pkgModel + `";type server struct{};func (*server)listTasks(){_,_=m.NormalizeSN("")}`
+				case "TaskState.Valid":
+					body = `import m "` + pkgModel + `";type server struct{};func (*server)listTasks(){_=m.TaskState("").Valid()}`
+				case "Firmware.Valid":
+					body = `import c "` + e.Target + `";type server struct{};func (*server)previewTask(){_=c.Firmware("").Valid()}`
 				case "AllArchs", "AllFirmwares", "AllFormats", "AllSeries", "Families", "Roles":
 					body = `import d "` + e.Target + `";type schemaBuilder struct{};func (*schemaBuilder)definition(){_=d.` + e.Symbol + `()}`
 				case "BatchError", "ProblemsError", "ReferencedError":
@@ -302,6 +340,28 @@ func Test迁移入口只接受明确交付的公开枚举(t *testing.T) {
 			got := identityTypedFixture(t, imports, pkgConsole, "wizard.go", tc.body)
 			if (len(got) == 0) != tc.allowed {
 				t.Fatalf("allowed=%v findings=%v", tc.allowed, got)
+			}
+		})
+	}
+}
+
+func Test任务读取入口只允许明确三个应用方法(t *testing.T) {
+	imports := identityFixtureImports(t)
+	for _, tc := range []struct {
+		name, body string
+		allowed    bool
+	}{
+		{"列表", `import a "` + pkgTasks + `";func f(r a.Reader){_=r.List}`, true},
+		{"详情", `import a "` + pkgTasks + `";func f(r a.Reader){_=r.Get}`, true},
+		{"预览", `import a "` + pkgTasks + `";func f(r a.Reader){_=r.Preview}`, true},
+		{"构造器仍拒绝", `import a "` + pkgTasks + `";func f(){_=a.NewReader}`, false},
+		{"直接小仓储仍拒绝", `import p "` + pkgTasks + `/port";func f(r p.TaskReader){_=r.ListTasks}`, false},
+		{"直接诊断仍拒绝", `import p "` + pkgTasks + `/port";func f(r p.TaskDiagnostics){_=r.CanCancel}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := identityTypedFixture(t, imports, pkgConsole, "wizard.go", tc.body)
+			if (len(got) == 0) != tc.allowed {
+				t.Fatal(tc.allowed, got)
 			}
 		})
 	}

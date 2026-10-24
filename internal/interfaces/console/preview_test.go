@@ -178,6 +178,7 @@ func Test预览ESXi使用真实原始配置且未知示例不可用(t *testing.T
 		t.Fatal(err)
 	}
 	s.server.deps.FrozenPreview = authoring.NewPreviewRenderer(diskBootConfig{root}, ports.PreviewEndpoints{})
+	rewireTaskReader(s)
 	s.server.deps.AuthoringEditor = authoring.NewEditor(authoring.EditorDeps{Templates: st, Hooks: st, Hosts: st, ISOs: st, Renderer: s.server.deps.FrozenPreview})
 	p := responseData[previewResponse](t, httpCall(s, "POST", previewPath(tpl), fmt.Sprintf(`{"isoID":%q,"firmware":"uefi"}`, item.ID), token))
 	found := false

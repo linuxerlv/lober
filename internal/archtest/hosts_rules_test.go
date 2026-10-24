@@ -15,9 +15,9 @@ func hostsTransitionFixture(t *testing.T, file, body string) []violation {
 	var files []*ast.File
 	for _, src := range []struct{ name, text string }{
 		{"server.go", `package console; import(repo "` + pkgStore + `"; id "` + modulePath + `/internal/application/identity"; h "` + modulePath + `/internal/application/hosts"; p "` + pkgPorts + `"; tp "` + pkgTasksPort + `"); type localReader interface{GetHost()}; type deps struct{LegacyTasks repo.Tasks; Registry h.Registry; Other h.Other; Local localReader; Notifier p.Notifier; Diagnostics tp.TaskDiagnostics}; type server struct{deps deps;principal id.Principal}`},
-		{"tasks.go", `package console; func(s *server) getTask(){s.deps.LegacyTasks.GetTask()}`},
-		{"legacy.go", `package console; func(s *server) bridge(){s.getTask()}; func(s *server) bridge2(){s.bridge()}; func oldResponse(){(&server{}).getTask()}; var alias=oldResponse`},
-		{"errors.go", `package console; func RespondError(){(&server{}).getTask()}`},
+		{"tasks.go", `package console; func(s *server) controlTask(){s.deps.LegacyTasks.GetTask()}`},
+		{"legacy.go", `package console; func(s *server) bridge(){s.controlTask()}; func(s *server) bridge2(){s.bridge()}; func oldResponse(){(&server{}).controlTask()}; var alias=oldResponse`},
+		{"errors.go", `package console; func RespondError(){(&server{}).controlTask()}`},
 		{file, `package console; import m "` + pkgModel + `"; type HostResponse struct{SN string}; type CsvPlan struct{Total int}; func toHostResponse(h m.Host)HostResponse{return HostResponse{h.SN}}; func toCsvPlan(n int)CsvPlan{return CsvPlan{n}}; func(s *server) hostHandler(){` + body + `}; var _=m.Host{}`},
 	} {
 		f, err := parser.ParseFile(fset, "internal/interfaces/console/"+src.name, src.text, 0)
@@ -52,7 +52,7 @@ func Test主机入口不能绕回旧业务(t *testing.T) {
 			{"直接仓储", `s.deps.LegacyTasks.GetTask()`, false},
 			{"局部别名", `u:=s.deps.LegacyTasks;u.GetTask()`, false},
 			{"方法值", `f:=s.deps.LegacyTasks.GetTask;f()`, false},
-			{"旧辅助方法值", `f:=s.getTask;f()`, false},
+			{"旧辅助方法值", `f:=s.controlTask;f()`, false},
 			{"包级别名", `alias()`, false},
 			{"两层旧辅助", `s.bridge2()`, false},
 			{"旧响应转发", `oldResponse()`, false},

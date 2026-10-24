@@ -176,3 +176,10 @@ Task6只补文档，不改数据库结构、网页字段、前端或生产行为
 | notificationMigrationExceptions | 1 | 6：1，仍仅console.NewHub |
 
 六项正式编号能力和唯一通知转发的原检查保持。模块分支完整验证、逐项独立审查及整分支审查均通过，实际状态见[第三阶段证据](../superpowers/reviews/2026-10-23-ddd-phase3-evidence.md)。用户随后明确集成目标为 `dev`，本地合并及合并后验证见[dev 集成记录](../superpowers/reviews/2026-10-23-ddd-phase3-dev-integration.md)；后续企业、人工验收另行推进。
+
+
+## 第六阶段任务读取边界
+
+任务列表、详情和冻结预览通过`application/tasks.Reader`，只消费任务读取、原诊断和冻结渲染三个明确能力。网页只解析语法和转换结果；应用验证可信操作者并保持原错误先后。生产与测试均显式组装，不从旧网页依赖回退。控制和事件订阅仍待后续任务迁移。
+
+七条路径、问题顺序、空数组、审计及流行为见[任务读取、控制和事件约定](task-read-control-events.md)。本步骤删除九项旧许可，当前剩12项；冻结39项及更早历史记录不变。

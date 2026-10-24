@@ -73,7 +73,7 @@ func RespondError(c *gin.Context, err error) {
 	case errors.Is(err, identity.ErrLoginFailed):
 		Fail(c, 401, nil, model.ConsoleLoginFailed)
 		return
-	case errors.Is(err, identity.ErrBadRequest), errors.Is(err, audit.ErrBadRequest):
+	case errors.Is(err, identity.ErrBadRequest), errors.Is(err, audit.ErrBadRequest), errors.Is(err, tasks.ErrBadRequest):
 		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return
 	case errors.Is(err, identity.ErrSelfDisable):

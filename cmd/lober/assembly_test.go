@@ -22,6 +22,7 @@ import (
 	"github.com/lober/lober/internal/application/hosts"
 	appmedia "github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/params"
@@ -512,5 +513,121 @@ func Test身份接线共用会话与凭据协调(t *testing.T) {
 	}
 	if err := a.Initialise(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 只实现读取口，其他总仓储方法一旦误用就会失败。
+type taskReadAssemblyStore struct {
+	repository.Store
+	calls []string
+	task  model.Task
+}
+
+func (s *taskReadAssemblyStore) GetTask(_ context.Context, id string) (model.Task, error) {
+	s.calls = append(s.calls, "get:"+id)
+	return s.task, nil
+}
+func (s *taskReadAssemblyStore) ListTasks(_ context.Context, _ repository.TaskQuery) (repository.Page[model.Task], error) {
+	s.calls = append(s.calls, "list")
+	return repository.Page[model.Task]{Items: []model.Task{s.task}}, nil
+}
+
+type taskReadAssemblyRenderer struct {
+	calls    int
+	snapshot model.Snapshot
+	id       string
+	firmware catalog.Firmware
+}
+
+func (r *taskReadAssemblyRenderer) RenderFrozen(_ context.Context, s model.Snapshot, f catalog.Firmware, id string) ([]ports.PreviewFile, []string, []model.Problem, error) {
+	r.calls++
+	r.snapshot = s
+	r.id = id
+	r.firmware = f
+	return []ports.PreviewFile{{Name: "proof"}}, []string{"credential"}, nil, nil
+}
+
+type taskReadAssemblyControl struct {
+	console.TaskControl
+	calls []string
+}
+
+func (c *taskReadAssemblyControl) CanCancel(t model.Task) []model.Problem {
+	c.calls = append(c.calls, "cancel:"+t.ID)
+	return []model.Problem{model.NewProblem("host_has_open_task", model.Subject{})}
+}
+func (c *taskReadAssemblyControl) CanRetry(t model.Task) []model.Problem {
+	c.calls = append(c.calls, "retry:"+t.ID)
+	return nil
+}
+func Test任务读取和预览显式组装(t *testing.T) {
+	st := &taskReadAssemblyStore{task: model.Task{ID: "stored", Snapshot: model.Snapshot{Template: model.SnapshotTemplate{Body: "saved"}, Host: model.SnapshotHost{Firmware: catalog.FirmwareUEFI}}}}
+	ctl := &taskReadAssemblyControl{}
+	renderer := &taskReadAssemblyRenderer{}
+	reader := taskReaderOf(st, ctl, renderer)
+	actor := ports.Actor{Username: "viewer", Role: model.RoleViewer}
+	if len(st.calls) != 0 || len(ctl.calls) != 0 || renderer.calls != 0 {
+		t.Fatal("组装提前调用依赖")
+	}
+	page, e := reader.List(t.Context(), actor, tasks.ListRequest{})
+	if e != nil || len(page.Items) != 1 || len(page.Items[0].CanCancel) != 1 {
+		t.Fatal(page, e)
+	}
+	item, e := reader.Get(t.Context(), actor, "raw")
+	if e != nil || item.Task.ID != "stored" {
+		t.Fatal(item, e)
+	}
+	preview, e := reader.Preview(t.Context(), actor, "lookup", tasks.PreviewRequest{})
+	if e != nil || len(preview.Files) != 1 || renderer.calls != 1 || renderer.id != "stored" || !reflect.DeepEqual(renderer.snapshot, st.task.Snapshot) || renderer.firmware != catalog.FirmwareUEFI {
+		t.Fatal(preview, e, renderer)
+	}
+	if !reflect.DeepEqual(st.calls, []string{"list", "get:raw", "get:lookup"}) || !reflect.DeepEqual(ctl.calls, []string{"cancel:stored", "retry:stored", "cancel:stored", "retry:stored"}) {
+		t.Fatal(st.calls, ctl.calls)
+	}
+	// 使用真实Wire生成的服务验证网页没有遗漏读取与预览依赖。
+	a, _ := assembled(t)
+	r := httptest.NewRequest("POST", "/console/v1/auth/login", strings.NewReader(`{"username":"admin","password":"initial password"}`))
+	w := httptest.NewRecorder()
+	a.Console.Engine.ServeHTTP(w, r)
+	var login struct {
+		Data struct {
+			Token string `json:"token"`
+		}
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &login) != nil || login.Data.Token == "" {
+		t.Fatal(w.Code)
+	}
+	r = httptest.NewRequest("PUT", "/console/v1/users/admin", strings.NewReader(`{"role":"admin","password":"changed password","rev":1}`))
+	r.Header.Set("Authorization", "Bearer "+login.Data.Token)
+	w = httptest.NewRecorder()
+	a.Console.Engine.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	r = httptest.NewRequest("POST", "/console/v1/auth/login", strings.NewReader(`{"username":"admin","password":"changed password"}`))
+	w = httptest.NewRecorder()
+	a.Console.Engine.ServeHTTP(w, r)
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &login) != nil || login.Data.Token == "" {
+		t.Fatal(w.Code)
+	}
+	for _, path := range []string{"/console/v1/tasks", "/console/v1/tasks/missing", "/console/v1/tasks/missing/preview"} {
+		method := "GET"
+		body := ""
+		want := 404
+		if path == "/console/v1/tasks" {
+			want = 200
+		}
+		if strings.HasSuffix(path, "preview") {
+			method = "POST"
+			body = `{"firmware":"bad"}`
+			want = 400
+		}
+		r = httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+login.Data.Token)
+		w = httptest.NewRecorder()
+		a.Console.Engine.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatal(path, w.Code, w.Body.String())
+		}
 	}
 }

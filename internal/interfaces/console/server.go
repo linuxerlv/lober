@@ -26,6 +26,7 @@ type Deps struct {
 	MediaRegistry     media.Registry
 	Tasks             repository.Tasks
 	Wizard            tasks.Wizard
+	TaskReader        tasks.Reader
 	Events            repository.Events
 	AuditReader       audit.Reader
 	Identity          identity.Registry

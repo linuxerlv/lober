@@ -85,6 +85,7 @@ func wizardDepsGuard(d Deps, store authoringTestStore, guard ports.SelectionGuar
 	d.MediaRegistry = media.NewRegistry(media.Deps{ISOs: store, Sources: store, Control: &mockISOSource{calls: map[string][]sourceCall{}}, Deletion: &mockISODeletion{st: store}, Clock: d.Clock})
 	d.HostRegistry = hosts.NewRegistry(hosts.Deps{Hosts: store, Clock: d.Clock})
 	d.HookAuthoring = authoring.NewHooks(authoring.HookDeps{Hooks: store, Clock: d.Clock})
+	d.TaskReader = tasks.NewReader(tasks.ReaderDeps{Tasks: d.Tasks, Diagnostics: d.TaskCtl, Renderer: d.FrozenPreview})
 	d.Wizard = tasks.NewWizard(tasks.WizardDeps{Hosts: store, ISOs: store, Hooks: store, Templates: store, Tasks: wizardTaskRepository{d.Tasks, current}, Manifest: manifest, Clock: d.Clock, Notifier: d.Notifier, SelectionGuard: guard, Diagnostics: d.TaskCtl})
 	return d
 }
@@ -126,4 +127,10 @@ type identityTestFixture struct {
 
 func identityFixture(s *Server) *identityTestFixture {
 	return s.server.deps.Identity.(*identityTestFixture)
+}
+
+// 替换旧测试诊断或渲染器后，明确重接读取应用，避免仍持有旧实例。
+func rewireTaskReader(s *Server) {
+	d := s.server.deps
+	s.server.deps.TaskReader = tasks.NewReader(tasks.ReaderDeps{Tasks: d.Tasks, Diagnostics: d.TaskCtl, Renderer: d.FrozenPreview})
 }

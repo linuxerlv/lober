@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/application/tasks"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -130,6 +131,7 @@ func Test任务控制委托审计及错误隔离(t *testing.T) {
 	s, st, token, task, _ := taskFixture(t)
 	ctl := &taskControlFixture{st: st}
 	s.server.deps.TaskCtl = ctl
+	rewireTaskReader(s)
 	before, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if err != nil {
 		t.Fatal(err)
@@ -567,5 +569,65 @@ func Test任务SSE退出与到期只检查原令牌(t *testing.T) {
 				t.Fatal("原令牌失效后未关闭")
 			}
 		})
+	}
+}
+
+// 网页只绑定原始筛选文本，分页语法不合法时不能调用应用。
+type taskReaderHTTPFixture struct {
+	tasks.Reader
+	calls   int
+	req     tasks.ListRequest
+	choice  tasks.TaskChoice
+	preview tasks.PreviewResult
+	err     error
+}
+
+func (f *taskReaderHTTPFixture) List(_ context.Context, _ ports.Actor, q tasks.ListRequest) (tasks.TaskPage, error) {
+	f.calls++
+	f.req = q
+	return tasks.TaskPage{Items: []tasks.TaskChoice{f.choice}, Next: "next"}, f.err
+}
+func (f *taskReaderHTTPFixture) Get(_ context.Context, _ ports.Actor, _ string) (tasks.TaskChoice, error) {
+	f.calls++
+	return f.choice, f.err
+}
+func (f *taskReaderHTTPFixture) Preview(_ context.Context, _ ports.Actor, _ string, _ tasks.PreviewRequest) (tasks.PreviewResult, error) {
+	f.calls++
+	return f.preview, f.err
+}
+func Test任务网页只转换读取应用结果与原始查询(t *testing.T) {
+	s, _, token, task, _ := taskFixture(t)
+	p := model.NewProblem("host_has_open_task", model.Subject{Kind: model.KindHost, ID: "SN-1"})
+	f := &taskReaderHTTPFixture{choice: tasks.TaskChoice{Task: task, CanCancel: []model.Problem{p}}}
+	s.server.deps.TaskReader = f
+	for _, path := range []string{"?limit=bad&created_from=bad", "?page=1&cursor=x", "?page_size=501"} {
+		w := httpCall(s, "GET", "/console/v1/tasks"+path, "", token)
+		if w.Code != 400 || f.calls != 0 {
+			t.Fatal(path, w.Code, f.calls)
+		}
+	}
+	page := responseData[taskPage](t, httpCall(s, "GET", "/console/v1/tasks?page=2&page_size=3&created_from=bad&created_to=-1&host_sn=sn-1&state=bad", "", token))
+	if page.Next != "next" || len(page.Items) != 1 || len(page.Items[0].CanCancel) != 1 || f.req.CreatedFrom != "bad" || f.req.CreatedTo != "-1" || f.req.HostSN != "sn-1" || f.req.State != "bad" || f.req.Page != 2 || f.req.Limit != 3 {
+		t.Fatal(page, f.req)
+	}
+	detail := responseData[taskItem](t, httpCall(s, "GET", "/console/v1/tasks/lookup", "", token))
+	if !reflect.DeepEqual(detail, toTaskChoiceItem(f.choice)) {
+		t.Fatal(detail)
+	}
+	ps := []model.Problem{model.NewProblem("arch_mismatch", model.Subject{}, "x86_64", "aarch64"), p}
+	f.preview = tasks.PreviewResult{Problems: ps}
+	w := httpCall(s, "POST", "/console/v1/tasks/lookup/preview", `{}`, token)
+	if w.Code != StatusOfProblems(ps) || !strings.Contains(w.Body.String(), "arch_mismatch") {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	f.err = errors.New("private renderer")
+	w = httpCall(s, "POST", "/console/v1/tasks/lookup/preview", `{}`, token)
+	if w.Code != 500 || strings.Contains(w.Body.String(), "arch_mismatch") || strings.Contains(w.Body.String(), "private renderer") {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	f.err = tasks.ErrBadRequest
+	w = httpCall(s, "GET", "/console/v1/tasks", "", token)
+	if w.Code != 400 {
+		t.Fatal(w.Code, w.Body.String())
 	}
 }

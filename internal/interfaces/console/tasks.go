@@ -86,53 +86,28 @@ func (s *server) taskResponse(t model.Task) taskItem {
 	return toTaskChoiceItem(out)
 }
 func (s *server) listTasks(c *gin.Context) {
-	number, limit, ok := queryPagination(c)
+	number, limit, ok := parseQueryPagination(c)
 	if !ok {
 		return
 	}
-	from, ok := queryNonnegative(c, "created_from")
-	if !ok {
-		return
-	}
-	to, ok := queryNonnegative(c, "created_to")
-	if !ok {
-		return
-	}
-	if to != 0 && from > to {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
-		return
-	}
-	q := repository.TaskQuery{HostSN: c.Query("host_sn"), CreatedFrom: from, CreatedTo: to, Cursor: c.Query("cursor"), Limit: limit, Page: number}
-	if q.HostSN != "" {
-		sn, err := model.NormalizeSN(q.HostSN)
-		if err != nil {
-			RespondError(c, err)
-			return
-		}
-		q.HostSN = sn
-	}
-	if raw := c.Query("state"); raw != "" {
-		state := model.TaskState(raw)
-		if !state.Valid() {
-			Fail(c, 400, nil, model.ConsoleBadRequest)
-			return
-		}
-		q.States = []model.TaskState{state}
-	}
-	page, ok := Get(c, func() (repository.Page[model.Task], error) { return s.deps.Tasks.ListTasks(c.Request.Context(), q) })
+	page, ok := Get(c, func() (tasks.TaskPage, error) {
+		return s.deps.TaskReader.List(c.Request.Context(), actorOf(c), tasks.ListRequest{PageRequest: tasks.PageRequest{Page: number, Limit: limit, Cursor: c.Query("cursor")}, HostSN: c.Query("host_sn"), State: c.Query("state"), CreatedFrom: c.Query("created_from"), CreatedTo: c.Query("created_to")})
+	})
 	if !ok {
 		return
 	}
 	items := make([]taskItem, len(page.Items))
 	for i, t := range page.Items {
-		items[i] = s.taskResponse(t)
+		items[i] = toTaskChoiceItem(t)
 	}
 	Ok(c, taskPage{items, page.Next, page.Total})
 }
 func (s *server) getTask(c *gin.Context) {
-	t, ok := Get(c, func() (model.Task, error) { return s.deps.Tasks.GetTask(c.Request.Context(), c.Param("id")) })
+	t, ok := Get(c, func() (tasks.TaskChoice, error) {
+		return s.deps.TaskReader.Get(c.Request.Context(), actorOf(c), c.Param("id"))
+	})
 	if ok {
-		Ok(c, s.taskResponse(t))
+		Ok(c, toTaskChoiceItem(t))
 	}
 }
 func toEventItem(e repository.Event) eventItem {
@@ -273,34 +248,11 @@ func (s *server) previewTask(c *gin.Context) {
 	if !Bind(c, &req) {
 		return
 	}
-	if req.Firmware != "" && !req.Firmware.Valid() {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
+	result, ok := Get(c, func() (tasks.PreviewResult, error) {
+		return s.deps.TaskReader.Preview(c.Request.Context(), actorOf(c), c.Param("id"), tasks.PreviewRequest{Firmware: req.Firmware})
+	})
+	if !ok || !Judge(c, result.Problems) {
 		return
 	}
-	t, ok := Get(c, func() (model.Task, error) { return s.deps.Tasks.GetTask(c.Request.Context(), c.Param("id")) })
-	if !ok {
-		return
-	}
-	firmware := req.Firmware
-	var labels []string
-	if firmware == "" {
-		firmware = t.Snapshot.Host.Firmware
-		if firmware == "" {
-			firmware = catalog.FirmwareUEFI
-			labels = append(labels, "firmware")
-		}
-	}
-	files, sample, ps, err := s.deps.FrozenPreview.RenderFrozen(c.Request.Context(), t.Snapshot, firmware, t.ID)
-	if err != nil {
-		RespondError(c, err)
-		return
-	}
-	if !Judge(c, ps) {
-		return
-	}
-	sample = append(sample, labels...)
-	for i := range files {
-		files[i].Sample = len(sample) > 0
-	}
-	Ok(c, previewResponse{Files: previewFiles(files), Problems: jsonProblems(ps), Sample: sample})
+	Ok(c, previewResponse{Files: previewFiles(result.Files), Problems: jsonProblems(result.Problems), Sample: result.Sample})
 }

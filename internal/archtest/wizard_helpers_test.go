@@ -125,7 +125,7 @@ func migratedApplicationMethod(fn *types.Func) bool {
 	}
 	if target == pkgTasks {
 		switch symbol {
-		case "Wizard.Hosts", "Wizard.ISOs", "Wizard.Templates", "Wizard.Params", "Wizard.Submit":
+		case "Reader.List", "Reader.Get", "Reader.Preview", "Wizard.Hosts", "Wizard.ISOs", "Wizard.Templates", "Wizard.Params", "Wizard.Submit":
 			return true
 		}
 	}
