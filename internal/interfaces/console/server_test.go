@@ -3,9 +3,14 @@ package console
 import (
 	"bytes"
 	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/identity"
+	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/domain/access"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/infrastructure/credentials"
 	"log/slog"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -56,8 +61,8 @@ func Test审计取当前用户路由动作与注入时钟(t *testing.T) {
 	s, st, now := newHTTPServer(t)
 	token, _ := seedHTTPUser(t, s, st, "alice", model.RoleAdmin)
 	now.Store(fixedAt + 42)
-	var got repository.Audit
-	s.server.installRoutes(s, []route{{method: "POST", path: "/console/v1/probe", perm: PermUserManage, audit: "probe.write", tag: "probe", summary: "Audited probe", handle: func(c *gin.Context) { got = s.server.auditFrom(c, "reason"); Ok(c, nil) }}})
+	var got ports.AuditIntent
+	s.server.installRoutes(s, []route{{method: "POST", path: "/console/v1/probe", perm: PermUserManage, audit: "probe.write", tag: "probe", summary: "Audited probe", handle: func(c *gin.Context) { got = s.server.auditIntentFrom(c, "reason"); Ok(c, nil) }}})
 	if w := httpCall(s, "POST", "/console/v1/probe", "", token); w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
@@ -99,28 +104,28 @@ func Test查询令牌只允许SSE且Authorization优先(t *testing.T) {
 }
 func Test会话期限与退出登录(t *testing.T) {
 	now := fixedAt
-	s := newSessions(10, func() int64 { return now })
-	token := s.put("alice")
+	s := identity.NewSessionBook(10, func() int64 { return now }, credentials.NewTokens())
+	token := s.Put("alice")
 	if len(token) != 64 {
 		t.Fatal(token)
 	}
-	if name, ok := s.lookup(token); !ok || name != "alice" {
+	if name, ok := s.Lookup(token); !ok || name != "alice" {
 		t.Fatal("missing session")
 	}
 	now += 10
-	if _, ok := s.lookup(token); ok {
+	if _, ok := s.Lookup(token); ok {
 		t.Fatal("expired")
 	}
-	token = s.put("alice")
-	s.drop(token)
-	if _, ok := s.lookup(token); ok {
+	token = s.Put("alice")
+	s.Drop(token)
+	if _, ok := s.Lookup(token); ok {
 		t.Fatal("logout")
 	}
 }
 func Test路由权限全部登记(t *testing.T) {
 	s, _, _ := newHTTPServer(t)
 	known := map[string]bool{PermAnyUser: true, "": true}
-	for _, p := range AllPerms() {
+	for _, p := range access.AllPerms() {
 		known[p] = true
 	}
 	for _, r := range s.Routes() {
@@ -133,5 +138,29 @@ func Test路由权限全部登记(t *testing.T) {
 	}
 	if model.ConsoleUnauthorized == "" {
 		t.Fatal("empty auth explanation")
+	}
+}
+
+func Test错误Authorization不能回退查询令牌(t *testing.T) {
+	s, st, _ := newHTTPServer(t)
+	token, _ := seedHTTPUser(t, s, st, "reader", model.RoleViewer)
+	s.server.installRoutes(s, []route{{method: "GET", path: "/console/v1/bearer-probe", perm: PermTaskRead, tag: "probe", summary: "Stream probe", stream: true, handle: func(c *gin.Context) { Ok(c, true) }}})
+	for _, header := range []string{"Basic value", "Bearer", "Bearer one two"} {
+		req := httptest.NewRequest("GET", "/console/v1/bearer-probe?access_token="+token, nil)
+		req.Header.Set("Authorization", header)
+		w := httptest.NewRecorder()
+		s.Engine.ServeHTTP(w, req)
+		if w.Code != 401 {
+			t.Fatal("错误请求头使用了查询令牌", header, w.Code)
+		}
+	}
+}
+func Test只有路由说明时可构造但身份请求明确失败(t *testing.T) {
+	s := New(Deps{Clock: func() int64 { return fixedAt }})
+	if len(s.Routes()) == 0 || s.OpenAPI() == nil {
+		t.Fatal("路由说明不可用")
+	}
+	if w := httpCall(s, "GET", "/console/v1/user/info", "", ""); w.Code != 500 {
+		t.Fatal("缺身份依赖未明确失败", w.Code)
 	}
 }

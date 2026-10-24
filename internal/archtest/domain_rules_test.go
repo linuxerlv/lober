@@ -8,7 +8,7 @@ import (
 )
 
 func Test领域拒绝随机数和外部操作(t *testing.T) {
-	for _, pkg := range []string{layer1 + "/media", pkgModel, pkgStore, pkgStore + "/nested", layer1 + "/selection", layer1 + "/access", pkgRender} {
+	for _, pkg := range []string{layer1 + "/audit", layer1 + "/media", pkgModel, pkgStore, pkgStore + "/nested", layer1 + "/selection", layer1 + "/access", pkgRender} {
 		for _, imp := range []string{"crypto/rand", "math/rand", "io/fs", "os", "io/ioutil", "net", "net/http", "time", gin, "gorm.io/gorm", pgxV5, pkgPgstore, modulePath + "/internal/infrastructure/identity", pkgConsole} {
 			t.Run(pkg+"/"+imp, func(t *testing.T) {
 				check := checkSource
@@ -79,5 +79,18 @@ func Test编号正式能力必须精确到实际调用(t *testing.T) {
 				t.Fatalf("准许=%v，违规=%v", tc.allowed, got)
 			}
 		})
+	}
+}
+
+func Test审计领域只依赖纯标准库(t *testing.T) {
+	for _, imp := range []string{pkgModel, pkgStore, layer1 + "/access", pkgPorts, "os", "time"} {
+		if got := checkSource(t, layer1+"/audit", importing(imp)); len(got) == 0 {
+			t.Fatal("审计领域放过依赖", imp)
+		}
+	}
+	for _, imp := range []string{"strings", "unicode", "unicode/utf8"} {
+		if got := checkSource(t, layer1+"/audit", importing(imp)); len(got) != 0 {
+			t.Fatal(imp, got)
+		}
 	}
 }

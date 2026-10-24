@@ -1,6 +1,7 @@
 package console
 
 import (
+	"github.com/lober/lober/internal/domain/access"
 	"github.com/lober/lober/internal/domain/model"
 
 	"slices"
@@ -17,32 +18,32 @@ func Test每个角色的权限码(t *testing.T) {
 		{model.RoleHookAuthor, []string{"hook:write", "template:write"}}, {model.RoleHookApprover, []string{"hook:approve", "template:approve"}},
 	} {
 		want := append(slices.Clone(read), tt.extra...)
-		if !slices.Equal(PermsOf(tt.role), want) {
-			t.Fatal(tt.role, PermsOf(tt.role))
+		if !slices.Equal(access.PermsOf(tt.role), want) {
+			t.Fatal(tt.role, access.PermsOf(tt.role))
 		}
 	}
 }
 func TestAdmin拿全部权限码(t *testing.T) {
-	if len(AllPerms()) != 16 || !slices.Equal(PermsOf(model.RoleAdmin), AllPerms()) {
-		t.Fatal(AllPerms())
+	if len(access.AllPerms()) != 16 || !slices.Equal(access.PermsOf(model.RoleAdmin), access.AllPerms()) {
+		t.Fatal(access.AllPerms())
 	}
 }
 func Test未知角色没有权限(t *testing.T) {
 	for _, r := range []model.Role{"", "root", "Admin", "viewer "} {
-		if len(PermsOf(r)) != 0 {
+		if len(access.PermsOf(r)) != 0 {
 			t.Fatal(r)
 		}
 	}
 }
 func TestPermsOf返回副本(t *testing.T) {
-	a := PermsOf(model.RoleAdmin)
+	a := access.PermsOf(model.RoleAdmin)
 	a[0] = "changed"
-	if AllPerms()[0] != "host:read" {
+	if access.AllPerms()[0] != "host:read" {
 		t.Fatal("shared")
 	}
-	a = PermsOf(model.RoleViewer)
+	a = access.PermsOf(model.RoleViewer)
 	a[0] = "changed"
-	if PermsOf(model.RoleViewer)[0] != "host:read" {
+	if access.PermsOf(model.RoleViewer)[0] != "host:read" {
 		t.Fatal("shared")
 	}
 }

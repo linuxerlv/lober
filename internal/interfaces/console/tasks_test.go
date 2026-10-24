@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/application/ports"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -87,7 +88,7 @@ func Test任务列表详情事件及查询边界(t *testing.T) {
 
 type taskControlFixture struct {
 	st     repository.Tasks
-	calls  []repository.Audit
+	calls  []ports.AuditIntent
 	reject error
 	block  []model.Problem
 }
@@ -106,20 +107,20 @@ func (o *streamSubscriptionObserver) Subscribe(id string) (<-chan struct{}, func
 	return ch, func() { once.Do(func() { stop(); o.stopped.Add(1); o.active.Add(-1) }) }
 }
 
-func (f *taskControlFixture) Cancel(ctx context.Context, task model.Task, a repository.Audit) error {
+func (f *taskControlFixture) Cancel(ctx context.Context, task model.Task, a ports.AuditIntent) error {
 	f.calls = append(f.calls, a)
 	if f.reject != nil {
 		return f.reject
 	}
-	_, _, err := f.st.TransitionTaskByUser(ctx, task.ID, repository.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskCancelled, nil, a)
+	_, _, err := f.st.TransitionTaskByUser(ctx, task.ID, repository.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskCancelled, nil, repository.Audit{Actor: a.Actor, Action: a.Action, Detail: a.Detail, At: a.At})
 	return err
 }
-func (f *taskControlFixture) Retry(ctx context.Context, task model.Task, a repository.Audit) error {
+func (f *taskControlFixture) Retry(ctx context.Context, task model.Task, a ports.AuditIntent) error {
 	f.calls = append(f.calls, a)
 	if f.reject != nil {
 		return f.reject
 	}
-	_, _, err := f.st.TransitionTaskByUser(ctx, task.ID, repository.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskPending, nil, a)
+	_, _, err := f.st.TransitionTaskByUser(ctx, task.ID, repository.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskPending, nil, repository.Audit{Actor: a.Actor, Action: a.Action, Detail: a.Detail, At: a.At})
 	return err
 }
 func (f *taskControlFixture) CanCancel(model.Task) []model.Problem { return f.block }
@@ -516,5 +517,55 @@ func Test任务预览只使用冻结快照(t *testing.T) {
 	again := responseData[previewResponse](t, httpCall(s, "POST", path, `{"entered":{"tpl/message":"changed"}}`, token))
 	if !reflect.DeepEqual(first, again) || len(first.Files) != 4 || !strings.Contains(first.Files[0].Body, "old/kernel") || !strings.Contains(first.Files[1].Body, "# frozen "+id+" template-default") || first.Files[3].Body != h.Impls[0].Body || first.Files[3].Digest != h.Impls[0].Digest() || first.Files[3].Digest == "" {
 		t.Fatal(first, again)
+	}
+}
+
+func Test任务SSE退出与到期只检查原令牌(t *testing.T) {
+	for _, reason := range []string{"logout", "expiry-boundary"} {
+		t.Run(reason, func(t *testing.T) {
+			s, st, token, task, clock := taskFixture(t)
+			other := identityFixture(s).sessions.Put("admin")
+			srv := httptest.NewServer(s.Engine)
+			defer srv.Close()
+			req, _ := http.NewRequestWithContext(t.Context(), "GET", srv.URL+"/console/v1/tasks/"+task.ID+"/stream?after_seq=100", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != 200 {
+				t.Fatal(resp.StatusCode)
+			}
+			ch := readTaskStream(resp.Body)
+			if reason == "logout" {
+				if w := httpCall(s, "POST", "/console/v1/auth/logout", "", token); w.Code != 200 {
+					t.Fatal(w.Code)
+				}
+			} else {
+				expiry := identityFixture(s).sessions.ExpiresAt(token)
+				clock.Store(expiry - 1)
+				if !s.server.deps.Identity.StreamAuthorized(t.Context(), token, PermTaskRead) {
+					t.Fatal("到期前提前失效")
+				}
+				clock.Store(expiry)
+				other = identityFixture(s).sessions.Put("admin")
+			}
+			if w := httpCall(s, "GET", "/console/v1/user/info", "", other); w.Code != 200 {
+				t.Fatal("其他会话应继续有效", w.Code)
+			}
+			if _, err := st.AppendEvents(t.Context(), task.ID, []repository.NewEvent{{At: clock.Load(), Kind: "after.revoke", Key: reason}}); err != nil {
+				t.Fatal(err)
+			}
+			s.server.hub.Publish(task.ID)
+			select {
+			case got, ok := <-ch:
+				if ok {
+					t.Fatal("原令牌失效后仍发送事件", got)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("原令牌失效后未关闭")
+			}
+		})
 	}
 }

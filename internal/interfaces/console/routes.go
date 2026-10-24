@@ -2,6 +2,7 @@ package console
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/domain/model"
 
 	"slices"
@@ -9,6 +10,7 @@ import (
 )
 
 type route struct {
+	identityOperation                       identity.Operation
 	method, path, perm, audit, tag, summary string
 	req, resp, query                        any
 	headers                                 any
@@ -34,7 +36,7 @@ func (s *server) installRoutes(out *Server, rs []route) {
 		if rt.perm == "" && (rt.path != "/console/v1/auth/login" || rt.method != "POST") {
 			panic("only login is public")
 		}
-		if rt.perm != "" && rt.perm != PermAnyUser && !slices.Contains(AllPerms(), rt.perm) {
+		if rt.perm != "" && !identity.KnownPermission(rt.perm) {
 			panic("unregistered permission")
 		}
 		key := rt.method + " " + rt.path
@@ -46,7 +48,7 @@ func (s *server) installRoutes(out *Server, rs []route) {
 		out.routes = append(out.routes, RouteInfo{rt.method, rt.path, rt.perm, rt.audit, rt.tag})
 		handlers := []gin.HandlerFunc{rt.handle}
 		if rt.perm != "" {
-			handlers = []gin.HandlerFunc{s.authenticate(), s.authorize(rt.perm), rt.handle}
+			handlers = []gin.HandlerFunc{s.authenticate(), s.authorize(rt), rt.handle}
 		}
 		out.Engine.Handle(rt.method, rt.path, handlers...)
 	}
@@ -69,12 +71,14 @@ type userResponse struct {
 	MenuRev            int64      `json:"menuRev"`
 }
 
-func toUserResponse(u model.User) userResponse {
-	return userResponse{Username: u.Username, DisplayName: u.DisplayName, Email: u.Email, Avatar: u.Avatar, Bio: u.Bio, Role: u.Role, Permissions: PermsOf(u.Role), Disabled: u.Disabled, CreatedAt: u.CreatedAt, Rev: u.Rev, MustChangePassword: u.MustChangePassword, MenuIDs: []string{}}
+func toUserResponse(u identity.UserView) userResponse {
+	return userResponse{Username: u.Username, DisplayName: u.DisplayName, Email: u.Email, Avatar: u.Avatar, Bio: u.Bio, Role: u.Role, Permissions: u.Permissions, Disabled: u.Disabled, CreatedAt: u.CreatedAt, Rev: u.Rev, MustChangePassword: u.MustChangePassword, MenuIDs: u.MenuIDs, MenuRev: u.MenuRev}
 }
 func (s *server) userInfo(c *gin.Context) {
-	u, ok := Get(c, func() (userResponse, error) { return s.currentUserResponse(c.Request.Context(), *userOf(c)) })
+	u, ok := Get(c, func() (identity.UserView, error) {
+		return s.deps.Identity.CurrentUser(c.Request.Context(), principalOf(c))
+	})
 	if ok {
-		Ok(c, u)
+		Ok(c, toUserResponse(u))
 	}
 }

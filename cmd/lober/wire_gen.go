@@ -54,9 +54,11 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 	frozenPreview := previewRendererOf(cfg)
 	editor := authoringEditorOf(mainLoggingStore, frozenPreview)
 	hostsRegistry := hostRegistryOf(mainLoggingStore, clock)
-	deps := consoleDepsOf(mainLoggingStore, registry, notifier, cfg, clock, logger, wizard, hooks, templates, editor, frozenPreview, taskControl, hostsRegistry)
+	service := identityServiceOf(mainLoggingStore, cfg, clock)
+	reader := auditReaderOf(mainLoggingStore)
+	deps := consoleDepsOf(mainLoggingStore, registry, notifier, cfg, clock, logger, wizard, hooks, templates, editor, frozenPreview, taskControl, hostsRegistry, service, reader)
 	server := console.New(deps)
-	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, sourceControl, supervisor, deletion, mainMachineBundle)
+	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, sourceControl, supervisor, deletion, mainMachineBundle, service)
 	return mainApp, func() {
 		cleanup2()
 		cleanup()

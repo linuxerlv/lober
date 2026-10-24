@@ -5,10 +5,11 @@ import (
 	"github.com/lober/lober/internal/domain/model"
 )
 
-// Audit 是调用方给的一条审计：路由表声明审计动作，中间件按当前用户和动作生成它，处理函数原样交给仓储的
-// 写操作（spec §6.3）。零值表示没给审计。字段的规则由 CheckAudit 查。
+// Audit 是应用交给业务写操作的保存参数；操作者来自已认证身份，动作由操作契约确定。
+// 仓储在业务事务内一起保存它；查询由 application/audit 负责，没有独立写审计入口。
+// 零值表示没给审计。字段的规则由 CheckAudit 查。
 type Audit struct {
-	// Actor 是操作者，1–128 字节的可存文本（model.StorableText）。用户与会话在第 5 层，这里只是一个字符串。
+	// Actor 是操作者，1–128 字节的可存文本（model.StorableText）。用户与会话由身份应用管理，这里只是一个字符串。
 	Actor string
 	// Action 是动作，如 host.import：点分的两段以上，每段以小写字母开头，只含小写字母、数字和下划线，
 	// 不超过 64 字节。
@@ -22,10 +23,10 @@ type Audit struct {
 type AuditEntry struct {
 	ID int64 // 仓储分配，递增
 	Audit
-	// TargetKind 是审计的对象，由仓储填：host、iso、hook、template、task 之一。
+	// TargetKind 是审计的对象，由仓储填：host、iso、hook、template、task、user 或 role。
 	TargetKind string
 	// TargetID 是对象的标识，由仓储填：主机是 SN，ISO 与任务是 ID，hook 与模板的版本是「ID@版本」，
-	// 改名这类针对整个身份的操作是 ID。
+	// 改名这类针对整个身份的操作是 ID；用户是用户名，角色菜单是角色名。
 	TargetID string
 }
 

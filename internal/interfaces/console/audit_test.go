@@ -1,13 +1,17 @@
 package console
 
 import (
-	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/application/audit"
+	"github.com/lober/lober/internal/domain/access"
 	"io"
 	"net/url"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,6 +19,63 @@ import (
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 )
+
+type auditLaterPageFailure struct {
+	repository.AuditLog
+	queries   []repository.AuditQuery
+	firstSize int
+	next      string
+}
+
+func (f *auditLaterPageFailure) ListAudit(ctx context.Context, q repository.AuditQuery) (repository.Page[repository.AuditEntry], error) {
+	f.queries = append(f.queries, q)
+	if len(f.queries) > 1 {
+		return repository.Page[repository.AuditEntry]{}, errors.New("测试：后页读取失败")
+	}
+	page, err := f.AuditLog.ListAudit(ctx, q)
+	f.firstSize, f.next = len(page.Items), page.Next
+	return page, err
+}
+
+func Test审计导出后页失败不发送残缺下载(t *testing.T) {
+	s, st, _ := newHTTPServer(t)
+	token, _ := seedHTTPUser(t, s, st, "auditfailure", model.RoleAdmin)
+	hosts := make([]model.Host, 501)
+	for i := range hosts {
+		hosts[i] = model.Host{SN: fmt.Sprintf("LATE-%03d", i)}
+	}
+	if _, err := st.ImportHosts(t.Context(), hosts, repository.Audit{Actor: "=1+2", Action: "host.import", Detail: "原文", At: fixedAt}); err != nil {
+		t.Fatal(err)
+	}
+	failing := &auditLaterPageFailure{AuditLog: st}
+	s.server.deps.AuditReader = audit.NewReader(failing)
+	path := fmt.Sprintf("/console/v1/audit/export?action=host.import&actor=%%3D1%%2B2&target_kind=host&from=%d&to=%d", fixedAt, fixedAt)
+	w := httpCall(s, "GET", path, "", token)
+	if failing.firstSize != 500 || failing.next == "" || len(failing.queries) != 2 {
+		t.Fatalf("未实际读满第一页后失败：条数 %d，调用 %d", failing.firstSize, len(failing.queries))
+	}
+	want := repository.AuditQuery{Action: "host.import", Actor: "=1+2", TargetKind: "host", From: fixedAt, To: fixedAt, Limit: 500}
+	if failing.queries[0] != want {
+		t.Fatal("第一页过滤条件或页大小改变")
+	}
+	want.Cursor = failing.next
+	if failing.queries[1] != want {
+		t.Fatal("后页游标或过滤条件改变")
+	}
+	if w.Code != 500 || w.Header().Get("Content-Disposition") != "" || strings.HasPrefix(w.Header().Get("Content-Type"), "text/csv") {
+		t.Fatal("后页失败发送了残缺下载", w.Code)
+	}
+	var env struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil || env.Code != 500 || env.Message != model.ConsoleInternal {
+		t.Fatal("失败响应不是完整的错误消息")
+	}
+	if strings.Contains(w.Body.String(), "id,at,actor") || strings.Contains(w.Body.String(), "LATE-") {
+		t.Fatal("错误响应夹带已缓冲的CSV")
+	}
+}
 
 // Only ISO byte acquisition/import is substituted; audit persistence still
 // uses the actual source repository transactions. Real IO is assembled in T14.
@@ -237,6 +298,15 @@ func Test审计分页过滤完整CSV及公式作为文本(t *testing.T) {
 			t.Fatal(q)
 		}
 	}
+	expected, err := st.ListAudit(t.Context(), repository.AuditQuery{Action: "host.import", Limit: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tail, err := st.ListAudit(t.Context(), repository.AuditQuery{Action: "host.import", Limit: 500, Cursor: expected.Next})
+	if err != nil || len(expected.Items) != 500 || len(tail.Items) != 1 {
+		t.Fatalf("真实数据未跨页: %d %d %v", len(expected.Items), len(tail.Items), err)
+	}
+	expected.Items = append(expected.Items, tail.Items...)
 	before, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	w := httpCall(s, "GET", "/console/v1/audit/export?action=host.import", "", token)
 	if w.Code != 200 || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/csv") || w.Header().Get("Content-Disposition") == "" {
@@ -248,6 +318,12 @@ func Test审计分页过滤完整CSV及公式作为文本(t *testing.T) {
 	}
 	if strings.Join(rows[0], ",") != "id,at,actor,action,target_kind,target_id,detail" || rows[1][2] != "\t=1+2" || rows[1][6] != "\t \t@SUM(1,2)\n下一行" {
 		t.Fatal(rows[:2])
+	}
+	for i, e := range expected.Items {
+		want := []string{strconv.FormatInt(e.ID, 10), strconv.FormatInt(e.At, 10), "\t=1+2", "host.import", "host", e.TargetID, "\t \t@SUM(1,2)\n下一行"}
+		if !reflect.DeepEqual(rows[i+1], want) {
+			t.Fatalf("第 %d 行字段或顺序不符: %q", i, rows[i+1])
+		}
 	}
 	after, _ := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if len(before.Items) != len(after.Items) || before.Items[0].ID != after.Items[0].ID {
@@ -263,7 +339,7 @@ func Test审计分页过滤完整CSV及公式作为文本(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s.server.deps.Audit = closed
+	s.server.deps.AuditReader = audit.NewReader(closed)
 	for _, path := range []string{"/audit", "/audit/export"} {
 		w := httpCall(s, "GET", "/console/v1"+path, "", token)
 		if w.Code != 500 || strings.HasPrefix(w.Header().Get("Content-Type"), "text/csv") {
@@ -296,35 +372,37 @@ func Test每个权限码都有正式路由用到(t *testing.T) {
 	for _, r := range s.Routes() {
 		used[r.Perm] = true
 	}
-	for _, p := range AllPerms() {
+	for _, p := range access.AllPerms() {
 		if !used[p] {
 			t.Error("unused permission", p)
 		}
 	}
 }
-func Test审计CSV文本转义(t *testing.T) {
-	for _, raw := range []string{"=1+2", "+SUM(1,2)", "-1+2", "@SUM(1,2)", "\t=1+2", " \r\n=1+2", "＝1+2", "＋SUM(1,2)", "－1+2", "＠SUM(1,2)", "\u3000=1+2", "\ufeff=1+2", "\tplain", "\rplain", "\nplain", `=1+2";=1+2`, `=1+2'";,=1+2`} {
-		if got := csvText(raw); got != "\t"+raw {
-			t.Fatal(raw, got)
-		}
-		var data bytes.Buffer
-		w := csv.NewWriter(&data)
-		if err := w.Write([]string{csvText(raw)}); err != nil {
-			t.Fatal(err)
-		}
-		w.Flush()
-		if !strings.HasPrefix(data.String(), "\"\t") {
-			t.Fatal("text prefix is outside quoted field", data.String())
-		}
-		rows, err := csv.NewReader(&data).ReadAll()
-		// encoding/csv.Reader normalizes embedded CRLF to LF.
-		if err != nil || len(rows) != 1 || len(rows[0]) != 1 || rows[0][0] != "\t"+strings.ReplaceAll(raw, "\r\n", "\n") {
-			t.Fatal("CSV field split or altered", rows, err)
-		}
+
+func Test审计旧游标不倒灌并发新增及精确筛选(t *testing.T) {
+	s, st, _ := newHTTPServer(t)
+	token, _ := seedHTTPUser(t, s, st, "auditcursor", model.RoleAdmin)
+	a := repository.Audit{Actor: "CaseActor", Action: "host.import", Detail: "原文", At: fixedAt}
+	if _, err := st.ImportHosts(t.Context(), []model.Host{{SN: "OLD-1"}, {SN: "OLD-2"}, {SN: "OLD-3"}}, a); err != nil {
+		t.Fatal(err)
 	}
-	for _, raw := range []string{"", "普通文本", "123", "'already text", "a=b"} {
-		if got := csvText(raw); got != raw {
-			t.Fatal(raw, got)
+	first := responseData[auditPage](t, httpCall(s, "GET", "/console/v1/audit?action=host.import&limit=2", "", token))
+	if len(first.Items) != 2 || first.Next == "" {
+		t.Fatal(first)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := st.ImportHosts(t.Context(), []model.Host{{SN: "NEW"}}, a); done <- err }()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	next := responseData[auditPage](t, httpCall(s, "GET", "/console/v1/audit?action=host.import&limit=2&cursor="+url.QueryEscape(first.Next), "", token))
+	if len(next.Items) != 1 || next.Next != "" || next.Items[0].TargetID != "OLD-1" || next.Items[0].ID >= first.Items[1].ID {
+		t.Fatal(next)
+	}
+	for _, q := range []string{"actor=caseactor", "actor=%00", "target_kind=Host", "action=HOST.import", "from=" + fmt.Sprint(fixedAt+1), "to=" + fmt.Sprint(fixedAt-1)} {
+		page := responseData[auditPage](t, httpCall(s, "GET", "/console/v1/audit?page=1&page_size=20&"+q, "", token))
+		if len(page.Items) != 0 || page.Total == nil || *page.Total != 0 {
+			t.Fatalf("应为空页: %s %+v", q, page)
 		}
 	}
 }

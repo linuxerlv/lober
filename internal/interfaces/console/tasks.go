@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"time"
 
@@ -161,12 +160,7 @@ func (s *server) listEvents(c *gin.Context) {
 	Ok(c, eventPage{items})
 }
 func (s *server) streamAuthorized(c *gin.Context, token string) bool {
-	username, ok := s.sessions.lookup(token)
-	if !ok {
-		return false
-	}
-	u, err := s.deps.Users.GetUser(c.Request.Context(), username)
-	return err == nil && !u.Disabled && !u.MustChangePassword && u.Role.Valid() && slices.Contains(PermsOf(u.Role), PermTaskRead)
+	return s.deps.Identity.StreamAuthorized(c.Request.Context(), token, PermTaskRead)
 }
 func (s *server) taskStream(c *gin.Context) {
 	last, ok := queryNonnegative(c, "after_seq")
@@ -252,9 +246,9 @@ func (s *server) controlTask(c *gin.Context, retry bool) {
 	err := ErrTaskControlUnavailable
 	if ctl := s.deps.TaskCtl; ctl != nil {
 		if retry {
-			err = ctl.Retry(c.Request.Context(), t, s.auditFrom(c, ""))
+			err = ctl.Retry(c.Request.Context(), t, s.auditIntentFrom(c, ""))
 		} else {
-			err = ctl.Cancel(c.Request.Context(), t, s.auditFrom(c, ""))
+			err = ctl.Cancel(c.Request.Context(), t, s.auditIntentFrom(c, ""))
 		}
 	}
 	if err != nil {

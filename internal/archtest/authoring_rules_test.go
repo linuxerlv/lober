@@ -19,10 +19,10 @@ func authoringTransitionFixture(t *testing.T, file, body string) []violation {
 		renderImport = `; r "` + pkgRender + `"`
 	}
 	for _, src := range []struct{ name, text string }{
-		{"server.go", `package console; import(repo "` + pkgStore + `"; ap "` + modulePath + `/internal/application/authoring/port"; a "` + modulePath + `/internal/application/authoring"; p "` + pkgPorts + `"; tp "` + pkgTasksPort + `"); type localReader interface{GetHook()}; type deps struct{Users repo.Users; Hooks ap.HookReader; Authoring a.Hooks; Templates a.Templates; Editor a.Editor; Frozen p.FrozenPreview; Notifier p.Notifier; Diagnostics tp.TaskDiagnostics; Other a.Other; Local localReader}; type server struct{deps deps}`},
-		{"auth.go", `package console; import m "` + pkgModel + `"; func(s *server) login(){s.deps.Users.GetUser();_=m.Role("").Valid()}`},
-		{"legacy.go", `package console; func(s *server) bridge(){s.login()}; func(s *server) bridge2(){s.bridge()}; func oldResponse(){(&server{}).login()}; var alias=oldResponse; func pure(v int)int{return v}`},
-		{"errors.go", `package console; func RespondError(){(&server{}).login()}`},
+		{"server.go", `package console; import(repo "` + pkgStore + `"; ap "` + modulePath + `/internal/application/authoring/port"; a "` + modulePath + `/internal/application/authoring"; p "` + pkgPorts + `"; tp "` + pkgTasksPort + `"); type localReader interface{GetHook()}; type deps struct{LegacyTasks repo.Tasks; Hooks ap.HookReader; Authoring a.Hooks; Templates a.Templates; Editor a.Editor; Frozen p.FrozenPreview; Notifier p.Notifier; Diagnostics tp.TaskDiagnostics; Other a.Other; Local localReader}; type server struct{deps deps}`},
+		{"tasks.go", `package console; func(s *server) getTask(){s.deps.LegacyTasks.GetTask()}`},
+		{"legacy.go", `package console; func(s *server) bridge(){s.getTask()}; func(s *server) bridge2(){s.bridge()}; func oldResponse(){(&server{}).getTask()}; var alias=oldResponse; func pure(v int)int{return v}`},
+		{"errors.go", `package console; func RespondError(){(&server{}).getTask()}`},
 		{file, `package console; import (p "` + layer1 + `/params"` + renderImport + `); type Clock func()int64; func(s *server) authoringHandler(){` + body + `}; var _=p.FieldKey("")`},
 	} {
 		f, err := parser.ParseFile(fset, "internal/interfaces/console/"+src.name, src.text, 0)
@@ -33,7 +33,7 @@ func authoringTransitionFixture(t *testing.T, file, body string) []violation {
 	}
 	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
 	imports := transitionFixtureImporter{
-		pkgStore: `package repository; type Users interface{GetUser()}`,
+		pkgStore: `package repository; type Tasks interface{GetTask()}`,
 		modulePath + "/internal/application/authoring/port": `package port; type HookReader interface{GetHook()}`,
 		modulePath + "/internal/application/authoring":      `package authoring; type Hooks interface{Get(); EnsureBuiltinHook()}; type Templates interface{Derive()}; type Editor interface{Preview()}; type Other interface{Get()}`,
 		pkgPorts:           `package ports; type FrozenPreview interface{RenderFrozen(); Extra()}; type Notifier interface{Publish()}`,
@@ -53,10 +53,10 @@ func Test编写预览不能绕回旧业务(t *testing.T) {
 			name, body string
 			allowed    bool
 		}{
-			{"直接仓储", `s.deps.Users.GetUser()`, false},
-			{"局部别名", `u:=s.deps.Users;u.GetUser()`, false},
-			{"仓储方法值", `f:=s.deps.Users.GetUser;f()`, false},
-			{"旧辅助方法值", `f:=s.login;f()`, false},
+			{"直接仓储", `s.deps.LegacyTasks.GetTask()`, false},
+			{"局部别名", `u:=s.deps.LegacyTasks;u.GetTask()`, false},
+			{"仓储方法值", `f:=s.deps.LegacyTasks.GetTask;f()`, false},
+			{"旧辅助方法值", `f:=s.getTask;f()`, false},
 			{"两层同包转发", `s.bridge2()`, false},
 			{"包级别名", `alias()`, false},
 			{"旧响应计算", `oldResponse()`, false},
@@ -86,7 +86,7 @@ func Test编写预览不能绕回旧业务(t *testing.T) {
 }
 func Test第二阶段与向导许可已清零(t *testing.T) {
 	total := 0
-	for _, entries := range [][]migrationException{migrationExceptions, mediaMigrationExceptions, consoleRuleMigrationExceptions, notificationMigrationExceptions} {
+	for _, entries := range [][]migrationException{phaseFourBaselineEntries("migrationExceptions", migrationExceptions), phaseFourBaselineEntries("mediaMigrationExceptions", mediaMigrationExceptions), phaseFourBaselineEntries("consoleRuleMigrationExceptions", consoleRuleMigrationExceptions), phaseFourBaselineEntries("notificationMigrationExceptions", notificationMigrationExceptions)} {
 		total += len(entries)
 		for _, e := range entries {
 			if e.RemoveIn == "2" || e.File == "internal/interfaces/console/wizard.go" {

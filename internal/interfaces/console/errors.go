@@ -5,8 +5,10 @@ import (
 	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
+	"github.com/lober/lober/internal/application/audit"
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/hosts"
+	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
@@ -69,6 +71,18 @@ func RespondError(c *gin.Context, err error) {
 	}
 
 	switch {
+	case errors.Is(err, identity.ErrLoginFailed):
+		Fail(c, 401, nil, model.ConsoleLoginFailed)
+		return
+	case errors.Is(err, identity.ErrBadRequest), errors.Is(err, audit.ErrBadRequest):
+		Fail(c, 400, nil, model.ConsoleBadRequest)
+		return
+	case errors.Is(err, identity.ErrSelfDisable):
+		Fail(c, 409, nil, model.ConsoleSelfDisable)
+		return
+	case errors.Is(err, identity.ErrInitialPasswordUnchanged):
+		Fail(c, 409, nil, model.ConsolePasswordChangeRequired)
+		return
 	case errors.Is(err, authoring.ErrRejectReason):
 		Fail(c, 400, nil, model.ConsoleRejectReason)
 		return

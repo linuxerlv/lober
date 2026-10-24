@@ -1,11 +1,12 @@
 package console
 
 import (
-	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/audit"
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/hosts"
+	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
@@ -13,9 +14,7 @@ import (
 	"github.com/lober/lober/internal/domain/repository"
 	"log/slog"
 	"runtime/debug"
-	"slices"
 	"strings"
-	"sync"
 )
 
 type Clock = ports.Clock
@@ -28,14 +27,12 @@ type Deps struct {
 	Tasks             repository.Tasks
 	Wizard            tasks.Wizard
 	Events            repository.Events
-	Audit             repository.AuditLog
-	Users             repository.Users
-	RoleMenus         repository.RoleMenus
+	AuditReader       audit.Reader
+	Identity          identity.Registry
 	FrozenPreview     ports.FrozenPreview
 	TaskCtl           TaskControl
 	Notifier          Notifier
 	Clock             Clock
-	SessionTTL        int64
 	Logger            *slog.Logger
 }
 type Server struct {
@@ -44,14 +41,12 @@ type Server struct {
 	routes []RouteInfo
 }
 type server struct {
-	deps        Deps
-	sessions    *sessions
-	hub         Notifier
-	logger      *slog.Logger
-	index       map[string]route
-	routes      []route
-	owner       *Server
-	credentials sync.RWMutex
+	deps   Deps
+	hub    Notifier
+	logger *slog.Logger
+	index  map[string]route
+	routes []route
+	owner  *Server
 }
 
 func New(d Deps) *Server {
@@ -64,11 +59,7 @@ func New(d Deps) *Server {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
-	if d.SessionTTL == 0 {
-		d.SessionTTL = 12 * 3600
-	}
 	s := &server{deps: d, hub: d.Notifier, logger: d.Logger, index: make(map[string]route)}
-	s.sessions = newSessions(d.SessionTTL, d.Clock)
 	out := &Server{Engine: gin.New(), server: s}
 	s.owner = out
 	out.Engine.Use(s.recoverPanic(), s.requestLog())
@@ -78,16 +69,23 @@ func New(d Deps) *Server {
 }
 func (s *server) clock() int64 { return s.deps.Clock() }
 
-const ctxUser = "console.user"
+const ctxPrincipal = "console.principal"
+const ctxActor = "console.actor"
 const ctxStream = "console.stream"
 
-func userOf(c *gin.Context) *model.User { v, _ := c.Get(ctxUser); u, _ := v.(*model.User); return u }
-
+func principalOf(c *gin.Context) identity.Principal {
+	v, _ := c.Get(ctxPrincipal)
+	p, _ := v.(identity.Principal)
+	return p
+}
 func actorOf(c *gin.Context) ports.Actor {
-	if u := userOf(c); u != nil {
-		return ports.Actor{Username: u.Username, Role: u.Role, Disabled: u.Disabled, MustChangePassword: u.MustChangePassword}
+	if v, ok := c.Get(ctxPrincipal); ok {
+		p, _ := v.(identity.Principal)
+		return p.Actor()
 	}
-	return ports.Actor{}
+	v, _ := c.Get(ctxActor)
+	a, _ := v.(ports.Actor)
+	return a
 }
 
 func (s *server) recoverPanic() gin.HandlerFunc {
@@ -131,57 +129,34 @@ func (s *server) authenticate() gin.HandlerFunc {
 		if rt, ok := s.index[c.Request.Method+" "+c.FullPath()]; ok {
 			c.Set(ctxStream, rt.stream)
 		}
-		token := bearerToken(c)
-		username, ok := s.sessions.lookup(token)
-		if !ok {
-			Fail(c, 401, nil, model.ConsoleUnauthorized)
-			return
-		}
-		if s.deps.Users == nil {
+		if s.deps.Identity == nil {
 			Fail(c, 500, nil, model.ConsoleInternal)
 			return
 		}
-		u, err := s.deps.Users.GetUser(c.Request.Context(), username)
-		if errors.Is(err, repository.ErrNotFound) || err == nil && u.Disabled {
-			s.sessions.drop(token)
-			Fail(c, 401, nil, model.ConsoleUnauthorized)
-			return
-		}
+		p, err := s.deps.Identity.Authenticate(c.Request.Context(), bearerToken(c))
 		if err != nil {
 			RespondError(c, err)
 			return
 		}
-		if !u.Role.Valid() {
-			Fail(c, 401, nil, model.ConsoleUnauthorized)
-			return
-		}
-		c.Set(ctxUser, &u)
+		c.Set(ctxPrincipal, p)
 		c.Next()
 	}
 }
-func (s *server) authorize(perm string) gin.HandlerFunc {
+func (s *server) authorize(rt route) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		u := userOf(c)
-		if u != nil && u.MustChangePassword {
-			path := c.FullPath()
-			allowed := c.Request.Method == "GET" && path == "/console/v1/user/info" || c.Request.Method == "POST" && (path == "/console/v1/auth/logout" || path == "/console/v1/auth/password") || c.Request.Method == "PUT" && path == "/console/v1/users/:username" && c.Param("username") == u.Username
-			if !allowed {
-				Fail(c, 403, nil, model.ConsolePasswordChangeRequired)
-				return
-			}
-		}
-		if u == nil || perm != PermAnyUser && !slices.Contains(PermsOf(u.Role), perm) {
-			Fail(c, 403, nil, model.ConsoleForbidden)
+		err := s.deps.Identity.Authorize(principalOf(c), identity.AccessRequest{Permission: rt.perm, Operation: rt.identityOperation, TargetUsername: c.Param("username")})
+		if err != nil {
+			RespondError(c, err)
 			return
 		}
 		c.Next()
 	}
 }
-func (s *server) auditFrom(c *gin.Context, detail string) repository.Audit {
+func (s *server) auditIntentFrom(c *gin.Context, detail string) ports.AuditIntent {
 	r, ok := s.index[c.Request.Method+" "+c.FullPath()]
-	u := userOf(c)
-	if !ok || r.audit == "" || u == nil {
-		return repository.Audit{}
+	a := actorOf(c)
+	if !ok || r.audit == "" || a.Username == "" {
+		return ports.AuditIntent{}
 	}
-	return repository.Audit{Actor: u.Username, Action: r.audit, Detail: detail, At: s.clock()}
+	return ports.AuditIntent{Actor: a.Username, Action: r.audit, Detail: detail, At: s.clock()}
 }

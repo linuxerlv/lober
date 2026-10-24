@@ -14,10 +14,10 @@ func hostsTransitionFixture(t *testing.T, file, body string) []violation {
 	fset := token.NewFileSet()
 	var files []*ast.File
 	for _, src := range []struct{ name, text string }{
-		{"server.go", `package console; import(repo "` + pkgStore + `"; h "` + modulePath + `/internal/application/hosts"; p "` + pkgPorts + `"; tp "` + pkgTasksPort + `"); type localReader interface{GetHost()}; type deps struct{Users repo.Users; Registry h.Registry; Other h.Other; Local localReader; Notifier p.Notifier; Diagnostics tp.TaskDiagnostics}; type server struct{deps deps}`},
-		{"auth.go", `package console; func(s *server) login(){s.deps.Users.GetUser()}`},
-		{"legacy.go", `package console; func(s *server) bridge(){s.login()}; func(s *server) bridge2(){s.bridge()}; func oldResponse(){(&server{}).login()}; var alias=oldResponse`},
-		{"errors.go", `package console; func RespondError(){(&server{}).login()}`},
+		{"server.go", `package console; import(repo "` + pkgStore + `"; id "` + modulePath + `/internal/application/identity"; h "` + modulePath + `/internal/application/hosts"; p "` + pkgPorts + `"; tp "` + pkgTasksPort + `"); type localReader interface{GetHost()}; type deps struct{LegacyTasks repo.Tasks; Registry h.Registry; Other h.Other; Local localReader; Notifier p.Notifier; Diagnostics tp.TaskDiagnostics}; type server struct{deps deps;principal id.Principal}`},
+		{"tasks.go", `package console; func(s *server) getTask(){s.deps.LegacyTasks.GetTask()}`},
+		{"legacy.go", `package console; func(s *server) bridge(){s.getTask()}; func(s *server) bridge2(){s.bridge()}; func oldResponse(){(&server{}).getTask()}; var alias=oldResponse`},
+		{"errors.go", `package console; func RespondError(){(&server{}).getTask()}`},
 		{file, `package console; import m "` + pkgModel + `"; type HostResponse struct{SN string}; type CsvPlan struct{Total int}; func toHostResponse(h m.Host)HostResponse{return HostResponse{h.SN}}; func toCsvPlan(n int)CsvPlan{return CsvPlan{n}}; func(s *server) hostHandler(){` + body + `}; var _=m.Host{}`},
 	} {
 		f, err := parser.ParseFile(fset, "internal/interfaces/console/"+src.name, src.text, 0)
@@ -28,7 +28,8 @@ func hostsTransitionFixture(t *testing.T, file, body string) []violation {
 	}
 	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
 	imports := transitionFixtureImporter{
-		pkgStore: `package repository; type Users interface{GetUser()}`,
+		modulePath + "/internal/application/identity": `package identity;type Principal struct{};func(Principal)Actor(){};func(Principal)Other(){}`,
+		pkgStore: `package repository; type Tasks interface{GetTask()}`,
 		modulePath + "/internal/application/hosts": `package hosts; type Registry interface{List();Get();Create();Update();Delete();Import();Extra()}; type Other interface{Get()}`,
 		pkgPorts:     `package ports; type Notifier interface{Publish()}`,
 		pkgTasksPort: `package port; type TaskDiagnostics interface{CanCancel()}`,
@@ -46,10 +47,12 @@ func Test主机入口不能绕回旧业务(t *testing.T) {
 			name, body string
 			allowed    bool
 		}{
-			{"直接仓储", `s.deps.Users.GetUser()`, false},
-			{"局部别名", `u:=s.deps.Users;u.GetUser()`, false},
-			{"方法值", `f:=s.deps.Users.GetUser;f()`, false},
-			{"旧辅助方法值", `f:=s.login;f()`, false},
+			{"认证快照转操作者", `s.principal.Actor()`, true},
+			{"身份其他方法不可借用", `s.principal.Other()`, false},
+			{"直接仓储", `s.deps.LegacyTasks.GetTask()`, false},
+			{"局部别名", `u:=s.deps.LegacyTasks;u.GetTask()`, false},
+			{"方法值", `f:=s.deps.LegacyTasks.GetTask;f()`, false},
+			{"旧辅助方法值", `f:=s.getTask;f()`, false},
 			{"包级别名", `alias()`, false},
 			{"两层旧辅助", `s.bridge2()`, false},
 			{"旧响应转发", `oldResponse()`, false},

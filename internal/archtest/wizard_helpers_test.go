@@ -93,7 +93,7 @@ func wizardHelperFindings(fset *token.FileSet, files []*ast.File, info *types.In
 // 根集合包含本阶段全部处理文件，沿实际符号继续检查同包辅助。
 func migratedConsoleFile(file string) bool {
 	switch file {
-	case "wizard.go", "hooks.go", "templates.go", "lifecycle.go", "authoring_helpers.go", "slots.go", "preview.go", "hosts.go", "csv.go", "isos.go", "isosource.go":
+	case "wizard.go", "hooks.go", "templates.go", "lifecycle.go", "authoring_helpers.go", "slots.go", "preview.go", "hosts.go", "csv.go", "isos.go", "isosource.go", "auth.go", "password.go", "profile.go", "users.go", "menus.go", "audit.go", "perm.go":
 		return true
 	}
 	return false
@@ -102,6 +102,12 @@ func migratedConsoleFile(file string) bool {
 // 只登记已交付的入口与方法。共同能力包新增方法不会自动获得许可。
 func migratedApplicationMethod(fn *types.Func) bool {
 	target, symbol := fn.Pkg().Path(), transitionSymbol(fn)
+	if target == modulePath+"/internal/application/identity" {
+		return identityConsoleSymbol(symbol)
+	}
+	if target == pkgAuditApp {
+		return symbol == "Reader.List" || symbol == "Reader.ExportCSV"
+	}
 	if target == pkgPorts {
 		return symbol == "FrozenPreview.RenderFrozen"
 	}

@@ -32,7 +32,7 @@ func mediaTypedFixture(t *testing.T, caller string, sources map[string]string) [
 		"time":              `package time;type Time struct{}`,
 		"context":           `package context;import "time";type Context interface{Deadline()(time.Time,bool);Done()<-chan struct{};Err()error;Value(any)any}`,
 		"io/fs":             `package fs;var ErrNotExist error;var SkipAll error;type FS interface{Open()};func ReadFile(){};func WalkDir(){}`,
-		pkgStore:            `package repository; type ISOs interface{GetISO();UpdateISO()}; type ISOSources interface{SaveSource()}; type Users interface{GetUser()}; type Store interface{ISOs;ISOSources;Users}; func CheckID(){};func CheckSource(){};var ErrInvalid error`,
+		pkgStore:            `package repository; type ISOs interface{GetISO();UpdateISO()}; type ISOSources interface{SaveSource()}; type Tasks interface{GetTask()}; type Store interface{ISOs;ISOSources;Tasks}; func CheckID(){};func CheckSource(){};var ErrInvalid error`,
 		fixtureMediaPort:    `package port; type ISOs interface{GetISO();UpdateISO()}; type Sources interface{SaveSource()};type SourceControl interface{Register();Upload()};type Deletion interface{Delete()};type Transfer interface{BeginFetch()};type FetchSession interface{Open();Close()};type ImportSession interface{OpenSource();Publish()};type DeletionJournal interface{Persist();List();Discard()};type Entry struct{Size int64};type Fault struct{};func(*Fault)Error()string{return "file"}`,
 		fixtureMedia:        `package media;type Registry interface{List();Get();Create();RegisterSource();Progress();Upload();Cancel();Retry();Reimport();Deprecate();Delete();Extra()};type Sources struct{};func(*Sources)Recover(){};func(*Sources)Import(){};func NewSources()*Sources{return nil};type Supervisor struct{};func NewSupervisor()*Supervisor{return nil};func(*Supervisor)Start(){};func(*Supervisor)Close(){};func(*Supervisor)Wake(){}`,
 		pkgModel:            `package model;type ISOState string;type SourceState string;type TaskState string;type ISO struct{State ISOState};func(ISO)Validate(){};type Source struct{State SourceState};type Task struct{State TaskState};const ISOReady ISOState="ready"`,
@@ -101,9 +101,9 @@ func Test镜像网页入口追踪同包旧业务(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := mediaTypedFixture(t, pkgConsole, map[string]string{
-				"server.go": `package console;import(r "` + pkgStore + `";m "` + fixtureMedia + `");type local interface{GetISO()};type server struct{users r.Users;registry m.Registry;local local;old *m.Sources}`,
-				"auth.go":   `package console;func(s *server)login(){s.users.GetUser()}`,
-				"helper.go": `package console;func(s *server)bridge(){s.login()};func old(s *server){s.bridge()};var oldAlias=old;func pure(n int)int{return n};func oldGeneric[T any](s *server,v T){s.login()}`,
+				"server.go": `package console;import(r "` + pkgStore + `";m "` + fixtureMedia + `");type local interface{GetISO()};type server struct{tasks r.Tasks;registry m.Registry;local local;old *m.Sources}`,
+				"tasks.go":  `package console;func(s *server)getTask(){s.tasks.GetTask()}`,
+				"helper.go": `package console;func(s *server)bridge(){s.getTask()};func old(s *server){s.bridge()};var oldAlias=old;func pure(n int)int{return n};func oldGeneric[T any](s *server,v T){s.getTask()}`,
 				"isos.go":   `package console;func(s *server)handler(){` + tc.body + `}`,
 			})
 			if (len(got) == 0) != tc.allowed {
@@ -207,7 +207,7 @@ func Test镜像新网页文件不能调用内部能力(t *testing.T) {
 		{"本地接口真实签名直接调用", `import("context";m "` + pkgModel + `");type reader interface{GetISO(context.Context,string)(m.ISO,error)};func newMediaHandler(ctx context.Context,r reader)(m.ISO,error){return r.GetISO(ctx,"image")}`, false},
 		{"本地接口真实签名方法值", `import("context";m "` + pkgModel + `");type reader interface{GetISO(context.Context,string)(m.ISO,error)};func newMediaHandler(ctx context.Context,r reader)(m.ISO,error){read:=r.GetISO;return read(ctx,"image")}`, false},
 		{"后续任务接口正常调用", `import("context";m "` + pkgModel + `");type reader interface{GetTask(context.Context,string)(m.Task,error)};func newTaskHandler(ctx context.Context,r reader)(m.Task,error){if _,err:=r.GetTask(ctx,"task");err!=nil{return m.Task{},err};read:=r.GetTask;return read(ctx,"task")}`, true},
-		{"后续身份接口正常调用", `type reader interface{GetUser()};func newUserHandler(r reader){r.GetUser();read:=r.GetUser;read()}`, true},
+		{"已迁移身份本地仓储接口仍拒绝", `type reader interface{GetUser()};func newUserHandler(r reader){r.GetUser();read:=r.GetUser;read()}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := mediaTypedFixture(t, pkgConsole, map[string]string{"new.go": "package console;" + tc.body})
@@ -216,6 +216,13 @@ func Test镜像新网页文件不能调用内部能力(t *testing.T) {
 			}
 		})
 	}
+	t.Run("已迁移身份Registry正常调用", func(t *testing.T) {
+		body := `import i "` + pkgIdentityApp + `";func newUserHandler(r i.Registry){p,_:=r.Authenticate(nil,"token");_,_=r.CurrentUser(nil,p);read:=r.CurrentUser;_,_=read(nil,p)}`
+		got := identityTypedFixture(t, identityFixtureImports(t), pkgConsole, "new.go", body)
+		if len(got) != 0 {
+			t.Fatal("真实身份入口不应被镜像边界拦截", got)
+		}
+	})
 }
 
 // 起点是 dev 48f6c2c1f1ee4aebdd0349868a097891e5c9ad13。补回这154项后必须逐字等于起点。
@@ -391,6 +398,7 @@ func Test镜像迁移精确删除154项并保持后两阶段不变(t *testing.T)
 		}},
 		{"notificationMigrationExceptions", notificationMigrationExceptions, 1, "ba63e2a81c31ee5bf62e0288cdf68e5845af7009edfd247e6b18a119189aeaf6", []migrationException{}},
 	} {
+		tc.entries = phaseFourBaselineEntries(tc.name, tc.entries)
 		if len(tc.entries) != tc.count {
 			t.Errorf("%s=%d want %d", tc.name, len(tc.entries), tc.count)
 		}
