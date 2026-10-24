@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -15,6 +16,63 @@ import (
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 )
+
+type auditLaterPageFailure struct {
+	repository.AuditLog
+	queries   []repository.AuditQuery
+	firstSize int
+	next      string
+}
+
+func (f *auditLaterPageFailure) ListAudit(ctx context.Context, q repository.AuditQuery) (repository.Page[repository.AuditEntry], error) {
+	f.queries = append(f.queries, q)
+	if len(f.queries) > 1 {
+		return repository.Page[repository.AuditEntry]{}, errors.New("测试：后页读取失败")
+	}
+	page, err := f.AuditLog.ListAudit(ctx, q)
+	f.firstSize, f.next = len(page.Items), page.Next
+	return page, err
+}
+
+func Test审计导出后页失败不发送残缺下载(t *testing.T) {
+	s, st, _ := newHTTPServer(t)
+	token, _ := seedHTTPUser(t, s, st, "auditfailure", model.RoleAdmin)
+	hosts := make([]model.Host, 501)
+	for i := range hosts {
+		hosts[i] = model.Host{SN: fmt.Sprintf("LATE-%03d", i)}
+	}
+	if _, err := st.ImportHosts(t.Context(), hosts, repository.Audit{Actor: "=1+2", Action: "host.import", Detail: "原文", At: fixedAt}); err != nil {
+		t.Fatal(err)
+	}
+	failing := &auditLaterPageFailure{AuditLog: st}
+	s.server.deps.Audit = failing
+	path := fmt.Sprintf("/console/v1/audit/export?action=host.import&actor=%%3D1%%2B2&target_kind=host&from=%d&to=%d", fixedAt, fixedAt)
+	w := httpCall(s, "GET", path, "", token)
+	if failing.firstSize != 500 || failing.next == "" || len(failing.queries) != 2 {
+		t.Fatalf("未实际读满第一页后失败：条数 %d，调用 %d", failing.firstSize, len(failing.queries))
+	}
+	want := repository.AuditQuery{Action: "host.import", Actor: "=1+2", TargetKind: "host", From: fixedAt, To: fixedAt, Limit: 500}
+	if failing.queries[0] != want {
+		t.Fatal("第一页过滤条件或页大小改变")
+	}
+	want.Cursor = failing.next
+	if failing.queries[1] != want {
+		t.Fatal("后页游标或过滤条件改变")
+	}
+	if w.Code != 500 || w.Header().Get("Content-Disposition") != "" || strings.HasPrefix(w.Header().Get("Content-Type"), "text/csv") {
+		t.Fatal("后页失败发送了残缺下载", w.Code)
+	}
+	var env struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil || env.Code != 500 || env.Message != model.ConsoleInternal {
+		t.Fatal("失败响应不是完整的错误消息")
+	}
+	if strings.Contains(w.Body.String(), "id,at,actor") || strings.Contains(w.Body.String(), "LATE-") {
+		t.Fatal("错误响应夹带已缓冲的CSV")
+	}
+}
 
 // Only ISO byte acquisition/import is substituted; audit persistence still
 // uses the actual source repository transactions. Real IO is assembled in T14.

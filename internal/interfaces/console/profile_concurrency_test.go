@@ -1,8 +1,11 @@
 package console
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +13,57 @@ import (
 	"testing"
 	"time"
 )
+
+type profileMenuFailure struct {
+	repository.RoleMenus
+	reads int
+}
+
+func (f *profileMenuFailure) GetRoleMenus(context.Context, model.Role) (repository.RoleMenuSettings, bool, error) {
+	f.reads++
+	return repository.RoleMenuSettings{}, false, errors.New("测试：保存后的菜单读取失败")
+}
+
+func Test资料已提交后菜单读取失败保留事实(t *testing.T) {
+	s, st, _ := newHTTPServer(t)
+	token, before := seedHTTPUser(t, s, st, "profilefailure", model.RoleViewer)
+	menus := &profileMenuFailure{RoleMenus: st}
+	s.server.deps.RoleMenus = menus
+	body := fmt.Sprintf(`{"displayName":"已提交","email":"profile@example.com","avatar":"","bio":"保留资料","rev":%d}`, before.Rev)
+	w := httpCall(s, "PUT", "/console/v1/user/profile", body, token)
+	if w.Code != 500 || menus.reads != 1 {
+		t.Fatalf("响应 %d，菜单读取 %d 次", w.Code, menus.reads)
+	}
+	after, err := st.GetUser(t.Context(), before.Username)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Rev != before.Rev+1 || after.DisplayName != "已提交" || after.Email != "profile@example.com" || after.Bio != "保留资料" || after.Avatar != "" {
+		t.Fatal("菜单故障抹掉了已提交的资料")
+	}
+	if after.Password != before.Password || after.Role != before.Role || after.Disabled != before.Disabled || after.MustChangePassword != before.MustChangePassword || after.CreatedAt != before.CreatedAt {
+		t.Fatal("资料保存改动了账号安全字段")
+	}
+	entries, err := st.ListAudit(t.Context(), repository.AuditQuery{Action: "user.profile.update", TargetKind: "user", TargetID: before.Username})
+	if err != nil || len(entries.Items) != 1 {
+		t.Fatalf("资料审计数 %d，错误 %v", len(entries.Items), err)
+	}
+	if entries.Items[0].Actor != before.Username || entries.Items[0].At != fixedAt {
+		t.Fatal("资料审计身份或时间改变")
+	}
+	s.server.deps.RoleMenus = st
+	info := responseData[userResponse](t, httpCall(s, "GET", "/console/v1/user/info", "", token))
+	if info.Rev != after.Rev || info.DisplayName != after.DisplayName {
+		t.Fatal("原会话未读到已提交资料")
+	}
+	if w := httpCall(s, "PUT", "/console/v1/user/profile", body, token); w.Code != 409 {
+		t.Fatal("重试旧版本未返回冲突", w.Code)
+	}
+	entries, err = st.ListAudit(t.Context(), repository.AuditQuery{Action: "user.profile.update", TargetKind: "user", TargetID: before.Username})
+	if err != nil || len(entries.Items) != 1 {
+		t.Fatal("失败重试增加了审计")
+	}
+}
 
 type profileBodyGate struct {
 	io.Reader
