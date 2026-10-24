@@ -1,6 +1,9 @@
 package archtest
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // 只供历史指纹重建；不是当前许可，不得传给 transitionAllows。
 // 第五阶段的68项计划包括第六任务才移除的审计入口，仍使用中的条目不重复补入。
@@ -82,9 +85,12 @@ var phaseFivePlannedRemovals = map[string][]migrationException{
 }
 
 func phaseFourBaselineEntries(table string, current []migrationException) []migrationException {
-	out := append([]migrationException{}, current...)
+	out := phaseFiveBaselineEntries(table, current)
+	if out == nil {
+		return nil
+	}
 	seen := map[migrationException]bool{}
-	for _, e := range current {
+	for _, e := range out {
 		seen[e] = true
 	}
 	for _, e := range phaseFivePlannedRemovals[table] {
@@ -96,19 +102,22 @@ func phaseFourBaselineEntries(table string, current []migrationException) []migr
 	return out
 }
 func Test历史重建不添加当前许可(t *testing.T) {
-	for name, planned := range phaseFivePlannedRemovals {
-		original := append([]migrationException{}, planned...)
-		restored := phaseFourBaselineEntries(name, planned)
-		if len(restored) != len(planned) {
-			t.Fatal("仍在使用的许可被重复补入", name)
+	for name, count := range map[string]int{"migrationExceptions": 64, "mediaMigrationExceptions": 0, "consoleRuleMigrationExceptions": 42, "notificationMigrationExceptions": 1} {
+		current := slices.Clone(phaseSixCurrentTables()[name])
+		original := slices.Clone(current)
+		restored := phaseFourBaselineEntries(name, current)
+		if len(restored) != count || !slices.Equal(restored, phaseFourBaselineEntries(name, nil)) {
+			t.Fatal("缺失历史未补全或重复补入", name)
 		}
-		for i, e := range original {
-			if planned[i] != e {
-				t.Fatal("重建修改了当前清单")
+		if !slices.Equal(current, original) {
+			t.Fatal("重建修改了当前清单")
+		}
+		seen := map[migrationException]bool{}
+		for _, e := range restored {
+			if seen[e] {
+				t.Fatal("仍在使用的许可被重复补入", name, e)
 			}
-		}
-		if len(phaseFourBaselineEntries(name, nil)) != len(planned) {
-			t.Fatal("缺失历史未补全", name)
+			seen[e] = true
 		}
 	}
 }

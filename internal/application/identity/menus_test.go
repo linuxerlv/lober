@@ -15,6 +15,21 @@ import (
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 )
 
+func Test公开角色保持顺序与独立副本(t *testing.T) {
+	want := model.Roles()
+	got := PublicRoles()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("公开角色必须保持领域角色的全部值和顺序：got=%v want=%v", got, want)
+	}
+	got[0] = "changed"
+	if next := PublicRoles(); !reflect.DeepEqual(next, want) {
+		t.Fatalf("修改返回结果污染了公开角色：%v", next)
+	}
+	if !reflect.DeepEqual(model.Roles(), want) {
+		t.Fatal("修改公开结果污染了领域角色")
+	}
+}
+
 // 防止绕过应用入口的身份和输入检查；触碰保存或读取会直接报错。
 type menuGuard struct{ t *testing.T }
 

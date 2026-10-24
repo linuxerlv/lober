@@ -145,33 +145,4 @@ func Test迁移豁免必须精确且有清除阶段(t *testing.T) {
 
 // migrationExceptions 是当前非向导代码的固定清单；新增文件和函数不会自动获得豁免。
 // Symbol 的 接口.方法 表示经仓储接口调用；其余名称表示旧包的类型、函数或常量。
-var migrationExceptions = []migrationException{
-	// 保留 dev 已有流程；逐项登记，向导不增加放行。
-	{pkgConsole, "internal/interfaces/console/pagination.go", "queryPagination", "github.com/lober/lober/internal/domain/repository", "CheckPageQuery", "6"},
-	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "BatchError", "6"},
-	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrConflict", "6"},
-	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrDuplicate", "6"},
-	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrImmutable", "6"},
-	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrInvalid", "6"},
-	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrLastAdmin", "6"},
-	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrNotFound", "6"},
-	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrReferenced", "6"},
-	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ProblemsError", "6"},
-	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ReferencedError", "6"},
-	{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "Events", "6"},
-	{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "Tasks", "6"},
-	{pkgConsole, "internal/interfaces/console/taskcontrol.go", "Problems", pkgStore, "ErrRejected", "6"},
-	{pkgConsole, "internal/interfaces/console/taskcontrol.go", "Problems", pkgStore, "ProblemsError", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).controlTask", pkgStore, "Tasks.GetTask", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).getTask", pkgStore, "Tasks.GetTask", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listEvents", pkgStore, "Event", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listEvents", pkgStore, "Events.ListEvents", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", pkgStore, "Page", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", pkgStore, "TaskQuery", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", pkgStore, "Tasks.ListTasks", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).previewTask", pkgStore, "Tasks.GetTask", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).taskStream", pkgStore, "Event", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).taskStream", pkgStore, "Events.ListEvents", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).taskStream", pkgStore, "Tasks.GetTask", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "toEventItem", pkgStore, "Event", "6"},
-}
+var migrationExceptions = []migrationException{}

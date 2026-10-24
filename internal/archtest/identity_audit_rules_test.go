@@ -26,7 +26,7 @@ func identityConsoleSymbol(symbol string) bool {
 	case "Registry", "Principal", "LoginCommand", "SessionResult", "UserView", "Operation", "AccessRequest", "UserQuery", "UserPage", "CreateUserCommand", "UpdateUserCommand", "PasswordCommand", "ProfileCommand", "MenuDefinition", "RoleMenuView", "MenuList", "SaveMenusCommand",
 		"ErrLoginFailed", "ErrBadRequest", "ErrSelfDisable", "ErrInitialPasswordUnchanged", "General", "UserInfo", "Logout", "ChangePassword", "LegacySelfUpdate", "KnownPermission",
 		"PermAnyUser", "PermHostRead", "PermISORead", "PermHookRead", "PermTemplateRead", "PermTaskRead", "PermHostWrite", "PermTaskCreate", "PermTaskCancel", "PermTaskRetry", "PermHookWrite", "PermTemplateWrite", "PermHookApprove", "PermTemplateApprove", "PermISOWrite", "PermUserManage", "PermAuditRead",
-		"Access.Login", "Access.Logout", "Access.CurrentUser", "Access.Authenticate", "Access.Authorize", "Access.StreamAuthorized", "Accounts.ListUsers", "Accounts.CreateUser", "Accounts.UpdateUser", "Accounts.DisableUser", "Accounts.ChangePassword", "Accounts.UpdateProfile", "Menus.ListRoleMenus", "Menus.SaveRoleMenus", "Principal.Actor":
+		"Access.Login", "Access.Logout", "Access.CurrentUser", "Access.Authenticate", "Access.Authorize", "Access.StreamAuthorized", "Accounts.ListUsers", "Accounts.CreateUser", "Accounts.UpdateUser", "Accounts.DisableUser", "Accounts.ChangePassword", "Accounts.UpdateProfile", "Menus.ListRoleMenus", "Menus.SaveRoleMenus", "Principal.Actor", "PublicRoles":
 		return true
 	}
 	return false
@@ -49,6 +49,9 @@ func identityAuditFindings(caller string, fset *token.FileSet, files []*ast.File
 		return nil
 	}
 	var found []violation
+	if assembly {
+		found = append(found, machineAssemblyFindings(caller, fset, files, info)...)
+	}
 	for _, f := range files {
 		file := filepath.ToSlash(fset.Position(f.Pos()).Filename)
 		for _, decl := range f.Decls {
@@ -104,9 +107,7 @@ func identityAuditFindings(caller string, fset *token.FileSet, files []*ast.File
 						bad = bad || under(target, pkgIdentityPort) || under(target, pkgAuditApp+"/port") || under(target, pkgCredentials)
 					}
 					if console || assembly {
-						// 机器签名密钥是原有独立用途，只保留原文件、函数和 Reader 符号。
-						machineRandom := assembly && strings.HasSuffix(file, "cmd/lober/machine.go") && function == "machineSigningKey" && target == "crypto/rand" && symbol == "Reader"
-						bad = bad || !machineRandom && (under(target, "crypto/rand") || under(target, "crypto/pbkdf2") || under(target, "crypto/subtle") || under(target, "math/rand"))
+						bad = bad || under(target, "crypto/rand") || under(target, "crypto/pbkdf2") || under(target, "crypto/subtle") || under(target, "math/rand")
 					}
 					if assembly {
 						if target == layer1+"/access" || target == layer1+"/audit" {
@@ -171,10 +172,11 @@ func (i identityActualImporter) Import(path string) (*types.Package, error) {
 	return nil, fmt.Errorf("未装载真实依赖 %s", path)
 }
 
-func identityFixtureImports(t *testing.T) identityActualImporter {
+func identityFixtureImports(t *testing.T, extra ...string) identityActualImporter {
 	t.Helper()
-	loaded, err := packages.Load(&packages.Config{Dir: filepath.Dir(goModPath(t)), Mode: packages.NeedName | packages.NeedTypes | packages.NeedImports | packages.NeedDeps},
-		pkgIdentityApp, pkgAuditApp, pkgCredentials, pkgConsole, pkgExecution, "os", "time", "crypto/rand", "crypto/pbkdf2", "crypto/sha256")
+	patterns := []string{pkgIdentityApp, pkgAuditApp, pkgCredentials, pkgConsole, pkgExecution, "os", "time", "crypto/rand", "crypto/pbkdf2", "crypto/sha256"}
+	patterns = append(patterns, extra...)
+	loaded, err := packages.Load(&packages.Config{Dir: filepath.Dir(goModPath(t)), Mode: packages.NeedName | packages.NeedTypes | packages.NeedImports | packages.NeedDeps}, patterns...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,6 +226,7 @@ func Test身份审计类型边界(t *testing.T) {
 		{"网页本地会话接口", pkgConsole, `type local interface{Put(string)string};func f(s local){_=s.Put("x")}`, false},
 		{"网页点导入用户能力", pkgConsole, `import . "` + pkgIdentityPort + `";var _ Users`, false},
 		{"网页构造身份服务", pkgConsole, `import ` + i + `;var build=i.NewService`, false},
+		{"网页公开角色无需身份", pkgConsole, `import ` + i + `;func f(){_=i.PublicRoles()}`, true},
 		{"网页持有具体服务", pkgConsole, `import ` + i + `;var service *i.Service`, false},
 		{"网页构造会话表", pkgConsole, `import ` + i + `;var build=i.NewSessionBook`, false},
 		{"网页调用会话方法值", pkgConsole, `import ` + i + `;func f(s *i.SessionBook){put:=s.Put;_=put("x")}`, false},
@@ -417,7 +420,7 @@ func Test身份审计装配许可精确(t *testing.T) {
 		name, file, body string
 		allowed          bool
 	}{
-		{"原机器密钥读取", "machine.go", `import "crypto/rand";func machineSigningKey(){_=rand.Reader}`, true},
+		{"原机器密钥位置也拒绝随机数", "machine.go", `import "crypto/rand";func machineSigningKey(){_=rand.Reader}`, false},
 		{"机器密钥同文件其他函数", "machine.go", `import "crypto/rand";func extra(){_=rand.Reader}`, false},
 		{"机器密钥同名函数其他文件", "new.go", `import "crypto/rand";func machineSigningKey(){_=rand.Reader}`, false},
 		{"机器密钥原位置其他随机方法", "machine.go", `import "crypto/rand";func machineSigningKey(){_=rand.Read}`, false},
@@ -454,6 +457,7 @@ func Test身份审计精确删除68项保留39项(t *testing.T) {
 	}
 	total, removedTotal := 0, 0
 	for _, tc := range tables {
+		tc.current = phaseFiveBaselineEntries(tc.name, tc.current)
 		total += len(tc.current)
 		removedTotal += len(phaseFivePlannedRemovals[tc.name])
 		if len(tc.current) != tc.count {

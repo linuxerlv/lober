@@ -43,16 +43,18 @@ const (
 // pkgRender 与 pkgBuiltin 是第 3 层的两个包：它们自己和它们下面的包分别算渲染、内置内容。内置内容按格式分子目录放正文，
 // 子目录里有 .go 文件时就是内置内容的子包，按内置内容的规则查；只放正文的子目录不是包。
 const (
-	pkgExecution = modulePath + "/internal/application/execution"
-	pkgMachine   = modulePath + "/internal/interfaces/machine"
-	pkgEvents    = modulePath + "/internal/infrastructure/events"
-	pkgOpenAPI   = modulePath + "/cmd/console-openapi"
-	pkgRender    = modulePath + "/internal/domain/render"
-	pkgBuiltin   = modulePath + "/internal/infrastructure/builtin"
-	pkgConsole   = modulePath + "/internal/interfaces/console"
-	pkgAssembly  = modulePath + "/cmd/lober"
-	gin          = "github.com/gin-gonic/gin"
-	yamlV3       = "gopkg.in/yaml.v3"
+	pkgMachineKeys   = modulePath + "/internal/infrastructure/machinekeys"
+	pkgExecutionPort = pkgExecution + "/port"
+	pkgExecution     = modulePath + "/internal/application/execution"
+	pkgMachine       = modulePath + "/internal/interfaces/machine"
+	pkgEvents        = modulePath + "/internal/infrastructure/events"
+	pkgOpenAPI       = modulePath + "/cmd/console-openapi"
+	pkgRender        = modulePath + "/internal/domain/render"
+	pkgBuiltin       = modulePath + "/internal/infrastructure/builtin"
+	pkgConsole       = modulePath + "/internal/interfaces/console"
+	pkgAssembly      = modulePath + "/cmd/lober"
+	gin              = "github.com/gin-gonic/gin"
+	yamlV3           = "gopkg.in/yaml.v3"
 )
 
 // pkgGuard 是守卫自己，也就是本包。只有它自己算守卫，它下面的包不算。
@@ -66,6 +68,7 @@ var sourceRoots = []string{"internal", "cmd"}
 type layer string
 
 const (
+	layerMachineKeys    layer = "机器密钥文件"
 	layerExecution      layer = "执行状态机"
 	layerMachine        layer = "机器协议入口"
 	layerEvents         layer = "日志收集"
@@ -86,11 +89,11 @@ const (
 )
 
 // layers 是 layer 的全部取值，按日志里的先后排。
-var layers = []layer{layerExecution, layerMachine, layerEvents, layerOpenAPI, layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerAssembly, layerGuard, layerIdentity, layerCredentials, layerApplication, layerNotification, layerSelectionGuard}
+var layers = []layer{layerMachineKeys, layerExecution, layerMachine, layerEvents, layerOpenAPI, layerCore, layerStore, layerRender, layerBuiltin, layerISO, layerConsole, layerAssembly, layerGuard, layerIdentity, layerCredentials, layerApplication, layerNotification, layerSelectionGuard}
 
 // minChecked 是 Test全模块依赖守卫 每层至少要查到的包数。删了某层的包就改这里；渲染与内置内容的包加进来以后，
 // 补上它们的下限——忘了补会由「查到了包的层都登记了下限」那一条报出来。
-var minChecked = map[layer]int{layerExecution: 1, layerMachine: 1, layerEvents: 1, layerOpenAPI: 1, layerCore: 11, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1, layerIdentity: 1, layerCredentials: 1, layerApplication: 1, layerNotification: 1, layerSelectionGuard: 1}
+var minChecked = map[layer]int{layerMachineKeys: 1, layerExecution: 1, layerMachine: 1, layerEvents: 1, layerOpenAPI: 1, layerCore: 11, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1, layerIdentity: 1, layerCredentials: 1, layerApplication: 1, layerNotification: 1, layerSelectionGuard: 1}
 
 // minDirs 是 moduleSourceDirs 至少要遍历到的目录数。目录遍历没有别的防线：sourceRoots 少了一项、或者
 // checkModule 收到空的 dirs，ruleListed（整包被构建约束排除的目录）与 go test 的缓存跟踪都会静默失效，
@@ -291,6 +294,8 @@ func checkModule(fsys fs.FS, dirs []string, pkgs []goPackage) ([]violation, map[
 		case layerConsole:
 			found = append(found, ignoredFiles(p)...)
 			found = append(found, checkSources(fsys, p, checkConsoleFile)...)
+		case layerMachineKeys:
+			found = append(found, checkPackage(fsys, p, checkMachineKeysFile)...)
 		case layerExecution, layerMachine, layerEvents:
 			found = append(found, ignoredFiles(p)...)
 			found = append(found, checkSources(fsys, p, checkMachineFile)...)
@@ -337,7 +342,9 @@ func layerOf(pkg string) layer {
 		return layerISO
 	case under(pkg, pkgConsole):
 		return layerConsole
-	case under(pkg, pkgExecution):
+	case pkg == pkgMachineKeys:
+		return layerMachineKeys
+	case pkg == pkgExecution || pkg == pkgExecutionPort:
 		return layerExecution
 	case under(pkg, pkgMachine):
 		return layerMachine

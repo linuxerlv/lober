@@ -386,7 +386,7 @@ func Test主机应用审计失败与删除引用保护(t *testing.T) {
 }
 
 func hostContractServer(st *pgstore.Store) *Server {
-	return New(wizardDeps(Deps{Tasks: st, Events: st, AuditReader: audit.NewReader(st), Clock: func() int64 { return fixedAt }}, st))
+	return New(wizardDeps(testDeps{Tasks: st, Events: st, AuditReader: audit.NewReader(st), Clock: func() int64 { return fixedAt }}, st))
 }
 func hostContractConnection(t *testing.T, dsn string) *pgx.Conn {
 	t.Helper()
@@ -517,7 +517,7 @@ func Test主机变更与向导提交按数据库事实交错(t *testing.T) {
 			gateConn, observer := hostContractConnection(t, dsn), hostContractConnection(t, dsn)
 			gate := hostContractAuditGate(t, gateConn, action)
 			taskEntered, importEntered := make(chan struct{}), make(chan struct{})
-			assembled := wizardDeps(s.server.deps, st, hostContractTaskEntry{st, taskEntered})
+			assembled := wizardDeps(taskTestDeps(s), st, hostContractTaskEntry{st, taskEntered})
 			s.server.deps.Wizard, s.server.deps.TemplateAuthoring = assembled.Wizard, assembled.TemplateAuthoring
 			second.server.deps.HostRegistry = hosts.NewRegistry(hosts.Deps{Hosts: hostContractImportEntry{other, importEntered}, Clock: second.server.deps.Clock})
 			submitted, imported := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)

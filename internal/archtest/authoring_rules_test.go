@@ -5,6 +5,8 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -20,9 +22,9 @@ func authoringTransitionFixture(t *testing.T, file, body string) []violation {
 	}
 	for _, src := range []struct{ name, text string }{
 		{"server.go", `package console; import(repo "` + pkgStore + `"; ap "` + modulePath + `/internal/application/authoring/port"; a "` + modulePath + `/internal/application/authoring"; p "` + pkgPorts + `"; tp "` + pkgTasksPort + `"); type localReader interface{GetHook()}; type deps struct{LegacyTasks repo.Tasks; Hooks ap.HookReader; Authoring a.Hooks; Templates a.Templates; Editor a.Editor; Frozen p.FrozenPreview; Notifier p.Notifier; Diagnostics tp.TaskDiagnostics; Other a.Other; Local localReader}; type server struct{deps deps}`},
-		{"tasks.go", `package console; func(s *server) getTask(){s.deps.LegacyTasks.GetTask()}`},
-		{"legacy.go", `package console; func(s *server) bridge(){s.getTask()}; func(s *server) bridge2(){s.bridge()}; func oldResponse(){(&server{}).getTask()}; var alias=oldResponse; func pure(v int)int{return v}`},
-		{"errors.go", `package console; func RespondError(){(&server{}).getTask()}`},
+		{"tasks.go", `package console; func(s *server) taskStream(){s.deps.LegacyTasks.GetTask()}`},
+		{"legacy.go", `package console; func(s *server) bridge(){s.taskStream()}; func(s *server) bridge2(){s.bridge()}; func oldResponse(){(&server{}).taskStream()}; var alias=oldResponse; func pure(v int)int{return v}`},
+		{"errors.go", `package console; func RespondError(){(&server{}).taskStream()}`},
 		{file, `package console; import (p "` + layer1 + `/params"` + renderImport + `); type Clock func()int64; func(s *server) authoringHandler(){` + body + `}; var _=p.FieldKey("")`},
 	} {
 		f, err := parser.ParseFile(fset, "internal/interfaces/console/"+src.name, src.text, 0)
@@ -45,7 +47,8 @@ func authoringTransitionFixture(t *testing.T, file, body string) []violation {
 	if _, err := (&types.Config{Importer: imports}).Check(pkgConsole, fset, files, info); err != nil {
 		t.Fatal("反例类型错误", err)
 	}
-	return typedTransitionFindings("", pkgConsole, fset, files, info)
+	// 此夹具专测从网页入口能否到达业务；全局声明违规由独立总检查反例覆盖。
+	return wizardHelperFindings(fset, files, info)
 }
 func Test编写预览不能绕回旧业务(t *testing.T) {
 	for _, file := range []string{"hooks.go", "templates.go", "lifecycle.go", "authoring_helpers.go", "slots.go", "preview.go"} {
@@ -56,7 +59,7 @@ func Test编写预览不能绕回旧业务(t *testing.T) {
 			{"直接仓储", `s.deps.LegacyTasks.GetTask()`, false},
 			{"局部别名", `u:=s.deps.LegacyTasks;u.GetTask()`, false},
 			{"仓储方法值", `f:=s.deps.LegacyTasks.GetTask;f()`, false},
-			{"旧辅助方法值", `f:=s.getTask;f()`, false},
+			{"旧辅助方法值", `f:=s.taskStream;f()`, false},
 			{"两层同包转发", `s.bridge2()`, false},
 			{"包级别名", `alias()`, false},
 			{"旧响应计算", `oldResponse()`, false},
@@ -73,7 +76,7 @@ func Test编写预览不能绕回旧业务(t *testing.T) {
 			{"组件入口", `s.deps.Authoring.Get()`, true},
 			{"模板入口", `s.deps.Templates.Derive()`, true},
 			{"编辑入口", `s.deps.Editor.Preview()`, true},
-			{"冻结预览", `s.deps.Frozen.RenderFrozen()`, true},
+			{"冻结预览直调已删除", `s.deps.Frozen.RenderFrozen()`, false},
 		} {
 			t.Run(file+"/"+tc.name, func(t *testing.T) {
 				found := authoringTransitionFixture(t, file, tc.body)
@@ -96,5 +99,63 @@ func Test第二阶段与向导许可已清零(t *testing.T) {
 	}
 	if total != 107 {
 		t.Fatalf("固定许可总数=%d，期望107", total)
+	}
+}
+
+func Test启动组装只委托两个初始化入口(t *testing.T) {
+	name := filepath.Join(filepath.Dir(goModPath(t)), "cmd/lober/app.go")
+	source, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	for _, decl := range f.Decls {
+		if declarationName(decl) == "ensureBuiltin" {
+			t.Error("组装点仍公开任意写入重试回调")
+		}
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || declarationName(decl) != "(*app).Initialise" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.ForStmt, *ast.RangeStmt:
+				t.Error("启动组装仍拥有仓储循环")
+			case *ast.CallExpr:
+				method, ok := x.Fun.(*ast.SelectorExpr)
+				if !ok {
+					t.Error("启动初始化存在额外函数调用")
+					break
+				}
+				receiver, ok := method.X.(*ast.SelectorExpr)
+				if !ok {
+					t.Error("启动初始化必须委托注入入口")
+					break
+				}
+				calls = append(calls, receiver.Sel.Name+"."+method.Sel.Name)
+			}
+			return true
+		})
+	}
+	if strings.Join(calls, ",") != "Builtin.Initialise,Identity.Initialise" {
+		t.Fatal(calls)
+	}
+}
+
+func Test网页不能使用内置启动入口(t *testing.T) {
+	imports := identityFixtureImports(t)
+	a := `a "` + modulePath + `/internal/application/authoring"`
+	for _, body := range []string{
+		`import ` + a + `;func f(b a.Bootstrapper){_=b.Initialise(nil)}`,
+		`import ` + a + `;func f(){_=a.NewBootstrapper}`,
+	} {
+		if got := identityTypedFixture(t, imports, pkgConsole, "hooks.go", body); len(got) == 0 {
+			t.Fatal("网页获得了启动入口")
+		}
 	}
 }

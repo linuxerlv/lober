@@ -18,6 +18,11 @@ const fixtureMediaPort = fixtureMedia + "/port"
 
 // 所有正反例先通过 Go 类型检查，再调用生产源码所用的同一检查函数。
 func mediaTypedFixture(t *testing.T, caller string, sources map[string]string) []violation {
+	return mediaTypedFixtureMode(t, caller, sources, false)
+}
+
+// helperOnly 仅供专门的同包可达性单元测试；其余测试仍走完整总检查。
+func mediaTypedFixtureMode(t *testing.T, caller string, sources map[string]string, helperOnly bool) []violation {
 	t.Helper()
 	fset := token.NewFileSet()
 	var files []*ast.File
@@ -42,6 +47,9 @@ func mediaTypedFixture(t *testing.T, caller string, sources map[string]string) [
 	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}, Types: map[ast.Expr]types.TypeAndValue{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
 	if _, err := (&types.Config{Importer: imports}).Check(caller, fset, files, info); err != nil {
 		t.Fatal("夹具必须先通过类型检查", err)
+	}
+	if helperOnly {
+		return wizardHelperFindings(fset, files, info)
 	}
 	return typedTransitionFindings("", caller, fset, files, info)
 }
@@ -100,12 +108,12 @@ func Test镜像网页入口追踪同包旧业务(t *testing.T) {
 		{"纯响应转换", `_=pure(42)`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := mediaTypedFixture(t, pkgConsole, map[string]string{
+			got := mediaTypedFixtureMode(t, pkgConsole, map[string]string{
 				"server.go": `package console;import(r "` + pkgStore + `";m "` + fixtureMedia + `");type local interface{GetISO()};type server struct{tasks r.Tasks;registry m.Registry;local local;old *m.Sources}`,
-				"tasks.go":  `package console;func(s *server)getTask(){s.tasks.GetTask()}`,
-				"helper.go": `package console;func(s *server)bridge(){s.getTask()};func old(s *server){s.bridge()};var oldAlias=old;func pure(n int)int{return n};func oldGeneric[T any](s *server,v T){s.getTask()}`,
+				"tasks.go":  `package console;func(s *server)taskStream(){s.tasks.GetTask()}`,
+				"helper.go": `package console;func(s *server)bridge(){s.taskStream()};func old(s *server){s.bridge()};var oldAlias=old;func pure(n int)int{return n};func oldGeneric[T any](s *server,v T){s.taskStream()}`,
 				"isos.go":   `package console;func(s *server)handler(){` + tc.body + `}`,
-			})
+			}, true)
 			if (len(got) == 0) != tc.allowed {
 				t.Fatalf("allowed=%v findings=%v", tc.allowed, got)
 			}
@@ -127,7 +135,7 @@ func Test镜像组装只构造启停不处理业务(t *testing.T) {
 		{"状态更新", `import m "` + pkgModel + `";func run(s *m.ISO){s.State="ready"}`, false},
 		{"指针别名判断状态", `import m "` + pkgModel + `";type pointer = *m.ISO;func run(s pointer)bool{return s.State=="ready"}`, false},
 		{"复制结构判断状态", `import m "` + pkgModel + `";type copied m.Source;func run(s copied)bool{return s.State=="fetched"}`, false},
-		{"后续任务状态保持原范围", `import m "` + pkgModel + `";func run(s *m.Task)bool{s.State="running";return s.State=="running"}`, true},
+		{"终态任务状态不能由组装处理", `import m "` + pkgModel + `";func run(s *m.Task)bool{s.State="running";return s.State=="running"}`, false},
 		{"状态判断", `import m "` + pkgModel + `";func run(s m.ISO)bool{return s.State=="ready"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -206,7 +214,7 @@ func Test镜像新网页文件不能调用内部能力(t *testing.T) {
 		{"本地接口最小直接调用", `type reader interface{GetISO()};func newMediaHandler(r reader){r.GetISO()}`, false},
 		{"本地接口真实签名直接调用", `import("context";m "` + pkgModel + `");type reader interface{GetISO(context.Context,string)(m.ISO,error)};func newMediaHandler(ctx context.Context,r reader)(m.ISO,error){return r.GetISO(ctx,"image")}`, false},
 		{"本地接口真实签名方法值", `import("context";m "` + pkgModel + `");type reader interface{GetISO(context.Context,string)(m.ISO,error)};func newMediaHandler(ctx context.Context,r reader)(m.ISO,error){read:=r.GetISO;return read(ctx,"image")}`, false},
-		{"后续任务接口正常调用", `import("context";m "` + pkgModel + `");type reader interface{GetTask(context.Context,string)(m.Task,error)};func newTaskHandler(ctx context.Context,r reader)(m.Task,error){if _,err:=r.GetTask(ctx,"task");err!=nil{return m.Task{},err};read:=r.GetTask;return read(ctx,"task")}`, true},
+		{"终态任务本地仓储接口仍拒绝", `import("context";m "` + pkgModel + `");type reader interface{GetTask(context.Context,string)(m.Task,error)};func newTaskHandler(ctx context.Context,r reader)(m.Task,error){if _,err:=r.GetTask(ctx,"task");err!=nil{return m.Task{},err};read:=r.GetTask;return read(ctx,"task")}`, false},
 		{"已迁移身份本地仓储接口仍拒绝", `type reader interface{GetUser()};func newUserHandler(r reader){r.GetUser();read:=r.GetUser;read()}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

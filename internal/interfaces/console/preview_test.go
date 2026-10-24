@@ -177,8 +177,9 @@ func Test预览ESXi使用真实原始配置且未知示例不可用(t *testing.T
 	if err := os.WriteFile(filepath.Join(root, "esxi", "boot.cfg"), []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
-	s.server.deps.FrozenPreview = authoring.NewPreviewRenderer(diskBootConfig{root}, ports.PreviewEndpoints{})
-	s.server.deps.AuthoringEditor = authoring.NewEditor(authoring.EditorDeps{Templates: st, Hooks: st, Hosts: st, ISOs: st, Renderer: s.server.deps.FrozenPreview})
+	testCaps(s).FrozenPreview = authoring.NewPreviewRenderer(diskBootConfig{root}, ports.PreviewEndpoints{})
+	rewireTaskReader(s)
+	s.server.deps.AuthoringEditor = authoring.NewEditor(authoring.EditorDeps{Templates: st, Hooks: st, Hosts: st, ISOs: st, Renderer: testCaps(s).FrozenPreview})
 	p := responseData[previewResponse](t, httpCall(s, "POST", previewPath(tpl), fmt.Sprintf(`{"isoID":%q,"firmware":"uefi"}`, item.ID), token))
 	found := false
 	for _, f := range p.Files {

@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/infrastructure/notification"
 	"github.com/lober/lober/internal/infrastructure/selection"
 	"github.com/lober/lober/internal/interfaces/console"
@@ -16,7 +17,7 @@ import (
 
 // Injectors from wire.go:
 
-func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger) (*app, func(), error) {
+func newApp(ctx context.Context, cfg config, clock ports.Clock, logger *slog.Logger) (*app, func(), error) {
 	store, cleanup, err := openStore(ctx, cfg, logger)
 	if err != nil {
 		return nil, nil, err
@@ -47,18 +48,22 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 		cleanup()
 		return nil, nil, err
 	}
-	taskControl := taskControlOf(mainMachineBundle)
-	wizard := wizardOf(mainLoggingStore, notifier, clock, selectionGuard, taskControl)
+	control := taskBackendOf(mainMachineBundle)
+	wizard := wizardOf(mainLoggingStore, notifier, clock, selectionGuard, control)
 	hooks := hookAuthoringOf(mainLoggingStore, clock)
 	templates := templateAuthoringOf(mainLoggingStore, clock, selectionGuard)
 	frozenPreview := previewRendererOf(cfg)
 	editor := authoringEditorOf(mainLoggingStore, frozenPreview)
+	controller := taskControllerOf(mainLoggingStore, control, clock, notifier)
 	hostsRegistry := hostRegistryOf(mainLoggingStore, clock)
 	service := identityServiceOf(mainLoggingStore, cfg, clock)
 	reader := auditReaderOf(mainLoggingStore)
-	deps := consoleDepsOf(mainLoggingStore, registry, notifier, cfg, clock, logger, wizard, hooks, templates, editor, frozenPreview, taskControl, hostsRegistry, service, reader)
+	tasksReader := taskReaderOf(mainLoggingStore, control, frozenPreview)
+	eventReader := taskEventsOf(mainLoggingStore, notifier)
+	deps := consoleDepsOf(registry, clock, logger, wizard, hooks, templates, editor, controller, hostsRegistry, service, reader, tasksReader, eventReader)
 	server := console.New(deps)
-	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, sourceControl, supervisor, deletion, mainMachineBundle, service)
+	bootstrapper := builtinBootstrapperOf(mainLoggingStore)
+	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, sourceControl, supervisor, deletion, mainMachineBundle, service, bootstrapper)
 	return mainApp, func() {
 		cleanup2()
 		cleanup()

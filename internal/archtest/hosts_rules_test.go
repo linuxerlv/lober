@@ -8,16 +8,16 @@ import (
 	"testing"
 )
 
-// 每例先检查类型，再走总检查；旧业务只放在非根文件，避免污染允许例。
+// 每例先检查类型，再走总检查；同包旧业务故意保留，只检查入口可达性；总检查另有独立反例。
 func hostsTransitionFixture(t *testing.T, file, body string) []violation {
 	t.Helper()
 	fset := token.NewFileSet()
 	var files []*ast.File
 	for _, src := range []struct{ name, text string }{
 		{"server.go", `package console; import(repo "` + pkgStore + `"; id "` + modulePath + `/internal/application/identity"; h "` + modulePath + `/internal/application/hosts"; p "` + pkgPorts + `"; tp "` + pkgTasksPort + `"); type localReader interface{GetHost()}; type deps struct{LegacyTasks repo.Tasks; Registry h.Registry; Other h.Other; Local localReader; Notifier p.Notifier; Diagnostics tp.TaskDiagnostics}; type server struct{deps deps;principal id.Principal}`},
-		{"tasks.go", `package console; func(s *server) getTask(){s.deps.LegacyTasks.GetTask()}`},
-		{"legacy.go", `package console; func(s *server) bridge(){s.getTask()}; func(s *server) bridge2(){s.bridge()}; func oldResponse(){(&server{}).getTask()}; var alias=oldResponse`},
-		{"errors.go", `package console; func RespondError(){(&server{}).getTask()}`},
+		{"tasks.go", `package console; func(s *server) taskStream(){s.deps.LegacyTasks.GetTask()}`},
+		{"legacy.go", `package console; func(s *server) bridge(){s.taskStream()}; func(s *server) bridge2(){s.bridge()}; func oldResponse(){(&server{}).taskStream()}; var alias=oldResponse`},
+		{"errors.go", `package console; func RespondError(){(&server{}).taskStream()}`},
 		{file, `package console; import m "` + pkgModel + `"; type HostResponse struct{SN string}; type CsvPlan struct{Total int}; func toHostResponse(h m.Host)HostResponse{return HostResponse{h.SN}}; func toCsvPlan(n int)CsvPlan{return CsvPlan{n}}; func(s *server) hostHandler(){` + body + `}; var _=m.Host{}`},
 	} {
 		f, err := parser.ParseFile(fset, "internal/interfaces/console/"+src.name, src.text, 0)
@@ -38,7 +38,8 @@ func hostsTransitionFixture(t *testing.T, file, body string) []violation {
 	if _, err := (&types.Config{Importer: imports}).Check(pkgConsole, fset, files, info); err != nil {
 		t.Fatal("反例类型错误", err)
 	}
-	return typedTransitionFindings("", pkgConsole, fset, files, info)
+	// 此夹具专测从网页入口能否到达业务；全局声明违规由独立总检查反例覆盖。
+	return wizardHelperFindings(fset, files, info)
 }
 
 func Test主机入口不能绕回旧业务(t *testing.T) {
@@ -52,7 +53,7 @@ func Test主机入口不能绕回旧业务(t *testing.T) {
 			{"直接仓储", `s.deps.LegacyTasks.GetTask()`, false},
 			{"局部别名", `u:=s.deps.LegacyTasks;u.GetTask()`, false},
 			{"方法值", `f:=s.deps.LegacyTasks.GetTask;f()`, false},
-			{"旧辅助方法值", `f:=s.getTask;f()`, false},
+			{"旧辅助方法值", `f:=s.taskStream;f()`, false},
 			{"包级别名", `alias()`, false},
 			{"两层旧辅助", `s.bridge2()`, false},
 			{"旧响应转发", `oldResponse()`, false},

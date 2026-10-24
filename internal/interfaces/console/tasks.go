@@ -2,7 +2,6 @@ package console
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -11,7 +10,6 @@ import (
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/repository"
 )
 
 type taskPage struct {
@@ -77,65 +75,32 @@ func queryNonnegative(c *gin.Context, key string) (int64, bool) {
 	}
 	return value, true
 }
-func (s *server) taskResponse(t model.Task) taskItem {
-	out := tasks.TaskChoice{Task: t}
-	if s.deps.TaskCtl != nil {
-		out.CanCancel = s.deps.TaskCtl.CanCancel(t)
-		out.CanRetry = s.deps.TaskCtl.CanRetry(t)
-	}
-	return toTaskChoiceItem(out)
-}
 func (s *server) listTasks(c *gin.Context) {
-	number, limit, ok := queryPagination(c)
+	number, limit, ok := parseQueryPagination(c)
 	if !ok {
 		return
 	}
-	from, ok := queryNonnegative(c, "created_from")
-	if !ok {
-		return
-	}
-	to, ok := queryNonnegative(c, "created_to")
-	if !ok {
-		return
-	}
-	if to != 0 && from > to {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
-		return
-	}
-	q := repository.TaskQuery{HostSN: c.Query("host_sn"), CreatedFrom: from, CreatedTo: to, Cursor: c.Query("cursor"), Limit: limit, Page: number}
-	if q.HostSN != "" {
-		sn, err := model.NormalizeSN(q.HostSN)
-		if err != nil {
-			RespondError(c, err)
-			return
-		}
-		q.HostSN = sn
-	}
-	if raw := c.Query("state"); raw != "" {
-		state := model.TaskState(raw)
-		if !state.Valid() {
-			Fail(c, 400, nil, model.ConsoleBadRequest)
-			return
-		}
-		q.States = []model.TaskState{state}
-	}
-	page, ok := Get(c, func() (repository.Page[model.Task], error) { return s.deps.Tasks.ListTasks(c.Request.Context(), q) })
+	page, ok := Get(c, func() (tasks.TaskPage, error) {
+		return s.deps.TaskReader.List(c.Request.Context(), actorOf(c), tasks.ListRequest{PageRequest: tasks.PageRequest{Page: number, Limit: limit, Cursor: c.Query("cursor")}, HostSN: c.Query("host_sn"), State: c.Query("state"), CreatedFrom: c.Query("created_from"), CreatedTo: c.Query("created_to")})
+	})
 	if !ok {
 		return
 	}
 	items := make([]taskItem, len(page.Items))
 	for i, t := range page.Items {
-		items[i] = s.taskResponse(t)
+		items[i] = toTaskChoiceItem(t)
 	}
 	Ok(c, taskPage{items, page.Next, page.Total})
 }
 func (s *server) getTask(c *gin.Context) {
-	t, ok := Get(c, func() (model.Task, error) { return s.deps.Tasks.GetTask(c.Request.Context(), c.Param("id")) })
+	t, ok := Get(c, func() (tasks.TaskChoice, error) {
+		return s.deps.TaskReader.Get(c.Request.Context(), actorOf(c), c.Param("id"))
+	})
 	if ok {
-		Ok(c, s.taskResponse(t))
+		Ok(c, toTaskChoiceItem(t))
 	}
 }
-func toEventItem(e repository.Event) eventItem {
+func toEventItem(e tasks.Event) eventItem {
 	return eventItem{e.TaskID, e.Seq, e.At, e.Kind, e.Key, stringMap(e.Fields)}
 }
 func (s *server) listEvents(c *gin.Context) {
@@ -147,8 +112,8 @@ func (s *server) listEvents(c *gin.Context) {
 	if !ok {
 		return
 	}
-	events, ok := Get(c, func() ([]repository.Event, error) {
-		return s.deps.Events.ListEvents(c.Request.Context(), c.Param("id"), after, limit)
+	events, ok := Get(c, func() ([]tasks.Event, error) {
+		return s.deps.TaskEvents.List(c.Request.Context(), actorOf(c), c.Param("id"), after, limit)
 	})
 	if !ok {
 		return
@@ -175,23 +140,20 @@ func (s *server) taskStream(c *gin.Context) {
 		}
 		last = seq
 	}
-	id := c.Param("id")
-	if _, ok := Get(c, func() (model.Task, error) { return s.deps.Tasks.GetTask(c.Request.Context(), id) }); !ok {
-		return
-	}
-	hints, unsub := s.hub.Subscribe(id)
-	defer unsub()
-	events, ok := Get(c, func() ([]repository.Event, error) {
-		return s.deps.Events.ListEvents(c.Request.Context(), id, last, 200)
+	subscription, ok := Get(c, func() (tasks.EventSubscription, error) {
+		return s.deps.TaskEvents.Open(c.Request.Context(), actorOf(c), c.Param("id"), last)
 	})
 	if !ok {
 		return
 	}
+	defer subscription.Close()
+	events := subscription.Initial()
+	hints := subscription.Hints()
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("X-Accel-Buffering", "no")
 	token := bearerToken(c)
-	send := func(page []repository.Event) bool {
+	send := func(page []tasks.Event) bool {
 		for {
 			if c.Request.Context().Err() != nil || !s.streamAuthorized(c, token) {
 				return false
@@ -211,7 +173,7 @@ func (s *server) taskStream(c *gin.Context) {
 				return true
 			}
 			var err error
-			page, err = s.deps.Events.ListEvents(c.Request.Context(), id, last, 200)
+			page, err = subscription.Read(c.Request.Context(), last)
 			if err != nil {
 				return false
 			}
@@ -232,39 +194,22 @@ func (s *server) taskStream(c *gin.Context) {
 		case <-c.Request.Context().Done():
 			return
 		}
-		events, err := s.deps.Events.ListEvents(c.Request.Context(), id, last, 200)
+		events, err := subscription.Read(c.Request.Context(), last)
 		if err != nil || !send(events) {
 			return
 		}
 	}
 }
 func (s *server) controlTask(c *gin.Context, retry bool) {
-	t, ok := Get(c, func() (model.Task, error) { return s.deps.Tasks.GetTask(c.Request.Context(), c.Param("id")) })
-	if !ok {
-		return
-	}
-	err := ErrTaskControlUnavailable
-	if ctl := s.deps.TaskCtl; ctl != nil {
+	result, ok := Get(c, func() (tasks.TaskChoice, error) {
 		if retry {
-			err = ctl.Retry(c.Request.Context(), t, s.auditIntentFrom(c, ""))
-		} else {
-			err = ctl.Cancel(c.Request.Context(), t, s.auditIntentFrom(c, ""))
+			return s.deps.TaskController.Retry(c.Request.Context(), actorOf(c), c.Param("id"))
 		}
+		return s.deps.TaskController.Cancel(c.Request.Context(), actorOf(c), c.Param("id"))
+	})
+	if ok {
+		Ok(c, toTaskChoiceItem(result))
 	}
-	if err != nil {
-		if errors.Is(err, ErrTaskControlUnavailable) {
-			Fail(c, 422, nil, model.ConsoleTaskControlUnavailable)
-		} else {
-			RespondError(c, err)
-		}
-		return
-	}
-	back, ok := Get(c, func() (model.Task, error) { return s.deps.Tasks.GetTask(c.Request.Context(), t.ID) })
-	if !ok {
-		return
-	}
-	s.hub.Publish(back.ID)
-	Ok(c, s.taskResponse(back))
 }
 func (s *server) cancelTask(c *gin.Context) { s.controlTask(c, false) }
 func (s *server) retryTask(c *gin.Context)  { s.controlTask(c, true) }
@@ -273,34 +218,11 @@ func (s *server) previewTask(c *gin.Context) {
 	if !Bind(c, &req) {
 		return
 	}
-	if req.Firmware != "" && !req.Firmware.Valid() {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
+	result, ok := Get(c, func() (tasks.PreviewResult, error) {
+		return s.deps.TaskReader.Preview(c.Request.Context(), actorOf(c), c.Param("id"), tasks.PreviewRequest{Firmware: req.Firmware})
+	})
+	if !ok || !Judge(c, result.Problems) {
 		return
 	}
-	t, ok := Get(c, func() (model.Task, error) { return s.deps.Tasks.GetTask(c.Request.Context(), c.Param("id")) })
-	if !ok {
-		return
-	}
-	firmware := req.Firmware
-	var labels []string
-	if firmware == "" {
-		firmware = t.Snapshot.Host.Firmware
-		if firmware == "" {
-			firmware = catalog.FirmwareUEFI
-			labels = append(labels, "firmware")
-		}
-	}
-	files, sample, ps, err := s.deps.FrozenPreview.RenderFrozen(c.Request.Context(), t.Snapshot, firmware, t.ID)
-	if err != nil {
-		RespondError(c, err)
-		return
-	}
-	if !Judge(c, ps) {
-		return
-	}
-	sample = append(sample, labels...)
-	for i := range files {
-		files[i].Sample = len(sample) > 0
-	}
-	Ok(c, previewResponse{Files: previewFiles(files), Problems: jsonProblems(ps), Sample: sample})
+	Ok(c, previewResponse{Files: previewFiles(result.Files), Problems: jsonProblems(result.Problems), Sample: result.Sample})
 }

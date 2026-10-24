@@ -8,7 +8,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/repository"
 )
 
 // parseQueryPagination 按字段是否出现选择分页方式，保留旧游标请求。
@@ -70,18 +69,6 @@ func parsePaginationValues(values url.Values) (number, limit int, ok bool) {
 		return bad()
 	}
 	return number, limit, true
-}
-
-func queryPagination(c *gin.Context) (number, limit int, ok bool) {
-	number, limit, ok = parseQueryPagination(c)
-	if !ok {
-		return
-	}
-	if _, err := repository.CheckPageQuery(c.Query("cursor"), limit, number); err != nil {
-		RespondError(c, err)
-		return 0, 0, false
-	}
-	return
 }
 
 // validPageNumbers 只检查网页数字能否表示页码，不读取仓储或筛选候选。

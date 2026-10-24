@@ -2,24 +2,21 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
-	"io"
+	"github.com/lober/lober/internal/application/ports"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/execution"
-	"github.com/lober/lober/internal/domain/catalog"
-	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/render"
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/infrastructure/events"
+	"github.com/lober/lober/internal/infrastructure/machinekeys"
 	"github.com/lober/lober/internal/infrastructure/media"
 	"github.com/lober/lober/internal/interfaces/console"
 	"github.com/lober/lober/internal/interfaces/machine"
@@ -35,16 +32,13 @@ type machineAdapter struct {
 	logger *slog.Logger
 }
 
-func (a machineAdapter) Credentials(task model.Task) (string, string) {
-	return a.Token(task, execution.Install), a.Token(task, execution.Finalize)
-}
 func (a machineAdapter) Signal(ctx context.Context, id, token string, sig machine.Signal) error {
 	start := time.Now()
 	err := a.Service.Signal(ctx, id, token, execution.Signal{Phase: sig.Phase, Slot: sig.Slot, Timing: sig.Timing, Instance: sig.Instance, Digest: sig.Digest, RC: sig.RC, Body: sig.Body})
 	a.logger.Debug("机器信号处理", "operation", "machine.signal", "task", id, "duration", time.Since(start), "accepted", err == nil)
 	return err
 }
-func machineOf(st repository.Store, hub console.Notifier, cfg config, clock console.Clock, logger *slog.Logger) (*machineBundle, error) {
+func machineOf(st repository.Store, hub ports.Notifier, cfg config, clock ports.Clock, logger *slog.Logger) (*machineBundle, error) {
 	if !cfg.Machine.Enabled {
 		return &machineBundle{}, nil
 	}
@@ -58,7 +52,7 @@ func machineOf(st repository.Store, hub console.Notifier, cfg config, clock cons
 	if keyFile == "" {
 		keyFile = filepath.Join(cfg.ISO.Staging, "machine-signing.key")
 	}
-	key, err := machineSigningKey(keyFile)
+	key, err := machinekeys.LoadOrCreate(keyFile)
 	if err != nil {
 		return nil, errors.New("无法安全读取机器签名密钥")
 	}
@@ -67,73 +61,12 @@ func machineOf(st repository.Store, hub console.Notifier, cfg config, clock cons
 		return nil, err
 	}
 	collector := events.New(st, func() int64 { return clock() }, hub)
+	files := authoring.NewMachineRenderer(iso.NewBootConfigReader(cfg.ISO.Artifacts))
 	renderer := func(r machine.Request) ([]byte, error) {
-		fw := catalog.Firmware("")
-		if r.Task.Execution != nil {
-			fw = r.Task.Execution.Firmware
-		}
-		original := ""
-		if r.Task.Snapshot.Format == "esxi-ks" && r.Kind == catalog.FileAux {
-			var err error
-			original, err = iso.NewBootConfigReader(cfg.ISO.Artifacts).ReadESXiBootConfig(r.Context, r.Task.Snapshot.ISO)
-			if err != nil {
-				return nil, errors.New("immutable boot configuration unavailable")
-			}
-		}
-		body, problems, err := render.Render(render.Request{Snapshot: r.Task.Snapshot, Firmware: fw, ESXiBootConfig: original, Values: r.Values, Kind: r.Kind, Slot: r.Slot})
-		if err != nil || len(problems) != 0 {
-			return nil, errors.New("machine rendering rejected")
-		}
-		return body, nil
+		return files.Render(r.Context, authoring.MachineRenderRequest{Task: r.Task, Kind: r.Kind, Slot: r.Slot, Values: r.Values})
 	}
-	observer := func(task model.Task, address string) {
-		if task.Execution == nil {
-			return
-		}
-		life := int64(5400)
-		if task.Execution.ReachedReboot {
-			life = 86400
-		}
-		collector.ObserveIP(task.ID, task.Execution.Attempt, address, task.Execution.IssuedAt+life)
-	}
-	handler := machine.New(machineAdapter{engine, logger}, renderer, machine.Endpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, observer)
+	handler := machine.New(machineAdapter{engine, logger}, renderer, machine.Endpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, execution.NewIPObserver(collector))
 	return &machineBundle{Service: engine, Handler: handler, Logs: collector}, nil
-}
-func machineSigningKey(path string) ([]byte, error) {
-	if !filepath.IsAbs(path) {
-		return nil, errors.New("key path must be absolute")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return nil, err
-	}
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		key := make([]byte, 32)
-		if _, err := io.ReadFull(rand.Reader, key); err != nil {
-			return nil, err
-		}
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-		if err != nil {
-			if errors.Is(err, os.ErrExist) {
-				return machineSigningKey(path)
-			}
-			return nil, err
-		}
-		_, writeErr := f.Write(key)
-		syncErr := f.Sync()
-		closeErr := f.Close()
-		if writeErr != nil || syncErr != nil || closeErr != nil {
-			return nil, errors.New("key write failed")
-		}
-		return key, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() != 32 {
-		return nil, errors.New("key must be a private regular 32-byte file")
-	}
-	return os.ReadFile(path)
 }
 func (a *app) Handler() http.Handler {
 	frontend := console.WithFrontend(a.Console.Engine)

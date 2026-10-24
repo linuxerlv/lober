@@ -50,3 +50,9 @@ type Templates interface {
 	RenameTemplate(ctx context.Context, id, name string, a repository.Audit) error
 	DeleteTemplateDraft(ctx context.Context, k model.TemplateKey, rev int64) error
 }
+
+// BuiltinRepository 只装载内置内容；每个对象的原子性与并发复查由仓储负责。
+type BuiltinRepository interface {
+	EnsureBuiltinHook(context.Context, model.Hook) error
+	EnsureBuiltinTemplate(context.Context, model.Template) error
+}

@@ -244,3 +244,13 @@ func (s *Service) Sweep(ctx context.Context) error {
 		q.Cursor = page.Next
 	}
 }
+
+// Credentials 属于执行模块，供可信机器协议入口取得当前尝试的两项凭据。
+// 输入为原任务，不规范化、不另加大小限制；无Execution时两项均为空字符串。
+// 成功始终先安装、后收尾，逐项委托Token；不重新校验状态、有效期或调用者凭据。
+// 无错误或原因代码；不读仓储、不写任务，无事务、版本冲突与提交复查。
+// 相同任务和服务密钥可重复调用，并发只读；调用期间不得修改任务，无新重试规则。
+// 无审计、通知、上下文或超时，不新增取消检查。
+func (s *Service) Credentials(task model.Task) (string, string) {
+	return s.Token(task, Install), s.Token(task, Finalize)
+}

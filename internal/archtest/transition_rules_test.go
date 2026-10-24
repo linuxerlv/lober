@@ -52,13 +52,13 @@ func Test过渡符号许可不能被同包新函数借用(t *testing.T) {
 		name, file, function, body string
 		allowed                    bool
 	}{
-		{"原函数", "tasks.go", "getTask", "s.users.GetTask()", true},
-		{"原函数局部别名", "tasks.go", "getTask", "users := s.users; users.GetTask()", true},
-		{"原函数方法值", "tasks.go", "getTask", "read := s.users.GetTask; read()", true},
+		{"原函数", "tasks.go", "taskStream", "s.users.GetTask()", false},
+		{"原函数局部别名", "tasks.go", "taskStream", "users := s.users; users.GetTask()", false},
+		{"原函数方法值", "tasks.go", "taskStream", "read := s.users.GetTask; read()", false},
 		{"新函数", "tasks.go", "steal", "s.users.GetTask()", false},
 		{"新函数局部别名", "tasks.go", "steal", "users := s.users; users.GetTask()", false},
 		{"新函数方法值", "tasks.go", "steal", "read := s.users.GetTask; read()", false},
-		{"新文件同名函数", "new.go", "getTask", "s.users.GetTask()", false},
+		{"新文件同名函数", "new.go", "taskStream", "s.users.GetTask()", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// 类型声明单独放到允许声明的位置；待检查函数仍保留自己的真实文件身份。
@@ -85,7 +85,7 @@ func Test镜像过渡方法和唯一通知转发必须精确(t *testing.T) {
 		{pkgISO, "internal/infrastructure/media/delete.go", "package iso; import repo \"" + pkgStore + "\"; type Sources struct{store repo.Store}; func(s *Sources) confirmDeleted(){read:=s.store.GetISO;read()}", false},
 		{pkgISO, "internal/infrastructure/media/sources.go", "package iso; import repo \"" + pkgStore + "\"; type Sources struct{store repo.Store}; func(s *Sources) register(){s.store.GetISO()}", false},
 		{pkgISO, "internal/infrastructure/media/new.go", "package iso; import repo \"" + pkgStore + "\"; type Sources struct{store repo.Store}; func(s *Sources) confirmDeleted(){read:=s.store.GetISO;read()}", false},
-		{pkgConsole, "internal/interfaces/console/notify.go", "package console; import n \"" + pkgNotification + "\"; func NewHub()int{return n.NewHub()}", true},
+		{pkgConsole, "internal/interfaces/console/notify.go", "package console; import n \"" + pkgNotification + "\"; func NewHub()int{return n.NewHub()}", false},
 		{pkgConsole, "internal/interfaces/console/notify.go", "package console; import n \"" + pkgNotification + "\"; func steal()int{return n.NewHub()}", false},
 		{pkgConsole, "internal/interfaces/console/new.go", "package console; import n \"" + pkgNotification + "\"; var steal=n.NewHub", false},
 	} {
@@ -137,8 +137,8 @@ func Test真实总检查拒绝新文件仓储方法值及类型错误(t *testing
 	}
 	write("go.mod", "module "+modulePath+"\n\ngo 1.27.1\n")
 	write("internal/domain/repository/tasks.go", "package repository; type Tasks interface{ GetTask() }")
-	write("internal/interfaces/console/server.go", "package console; import repo \""+pkgStore+"\"; type server struct { users repo.Tasks }")
-	write("internal/interfaces/console/tasks.go", "package console; func(s *server) getTask(){s.users.GetTask()}")
+	write("internal/interfaces/console/server.go", "package console; type server struct {}")
+	write("internal/interfaces/console/tasks.go", "package console;func(s *server) taskStream(){}")
 	write("internal/infrastructure/media/iso.go", "package iso")
 	check := func() []violation {
 		t.Helper()
@@ -149,9 +149,16 @@ func Test真实总检查拒绝新文件仓储方法值及类型错误(t *testing
 	if got := check(); len(got) != 0 {
 		t.Fatal("合法真实基线失败", got)
 	}
-	write("internal/interfaces/console/new.go", "package console; func(s *server) steal(){users:=s.users; read:=users.GetTask; read()}")
+	// 不从任何网页入口到达的危险辅助声明，也必须被完整总检查拒绝。
+	write("internal/interfaces/console/legacy.go", "package console; import repo \""+pkgStore+"\";func unused(users repo.Tasks){users.GetTask()}")
+	if got := check(); len(got) != 2 || got[0].rule != ruleMigration || got[0].subject != pkgStore+".Tasks" || got[1].rule != ruleMigration || got[1].subject != pkgStore+".Tasks.GetTask" {
+		t.Fatal("未调用辅助声明绕过完整总检查", got)
+	}
+	write("internal/interfaces/console/legacy.go", "package console")
+
+	write("internal/interfaces/console/new.go", "package console; import repo \""+pkgStore+"\";func steal(users repo.Tasks){read:=users.GetTask;read()}")
 	got := check()
-	if len(got) != 1 || got[0].rule != ruleMigration || got[0].subject != pkgStore+".Tasks.GetTask" {
+	if len(got) != 2 || got[0].rule != ruleMigration || got[0].subject != pkgStore+".Tasks" || got[1].rule != ruleMigration || got[1].subject != pkgStore+".Tasks.GetTask" {
 		t.Fatal("真实新文件绕过守卫", got)
 	}
 	write("internal/interfaces/console/new.go", "package console; func steal(){undefinedCall()}")

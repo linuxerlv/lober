@@ -50,6 +50,6 @@ type Hooks interface {
 	// 名字被别的身份占了，报 DuplicateError。名字必须带保留前缀 model.ReservedNamePrefix（C12），不带报 ErrInvalid。
 	// 名字随身份定下：身份已在库里时，以后的版本不能换名，换了名同样报 ErrBuiltinMismatch；要改名只能换一个新 ID。
 	// 两次同时装载同一个版本时，后到的一次等先到的提交，内容相同同样什么都不做。占着名字的身份或要装载的身份恰好在
-	// 这期间变了时报 ErrConflict（规则同 CreateHook），由装配点重试；装配点把它当作装载失败，程序就会拒绝启动。
+	// 这期间变了时报 ErrConflict（规则同 CreateHook），由编写应用重试；应用最终把它当作装载失败，程序就会拒绝启动。
 	EnsureBuiltinHook(ctx context.Context, h model.Hook) error
 }

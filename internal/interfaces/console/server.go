@@ -11,28 +11,24 @@ import (
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/repository"
 	"log/slog"
 	"runtime/debug"
 	"strings"
 )
 
-type Clock = ports.Clock
 type Deps struct {
 	HostRegistry      hosts.Registry
 	HookAuthoring     authoring.Hooks
 	TemplateAuthoring authoring.Templates
 	AuthoringEditor   authoring.Editor
 	MediaRegistry     media.Registry
-	Tasks             repository.Tasks
 	Wizard            tasks.Wizard
-	Events            repository.Events
+	TaskReader        tasks.Reader
+	TaskController    tasks.Controller
+	TaskEvents        tasks.EventReader
 	AuditReader       audit.Reader
 	Identity          identity.Registry
-	FrozenPreview     ports.FrozenPreview
-	TaskCtl           TaskControl
-	Notifier          Notifier
-	Clock             Clock
+	Clock             ports.Clock
 	Logger            *slog.Logger
 }
 type Server struct {
@@ -42,7 +38,6 @@ type Server struct {
 }
 type server struct {
 	deps   Deps
-	hub    Notifier
 	logger *slog.Logger
 	index  map[string]route
 	routes []route
@@ -53,13 +48,13 @@ func New(d Deps) *Server {
 	if d.Clock == nil {
 		panic("console requires an injected clock")
 	}
-	if d.Notifier == nil {
-		d.Notifier = NewHub()
+	if d.TaskReader == nil || d.TaskController == nil || d.TaskEvents == nil {
+		panic("console requires task application entries")
 	}
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
-	s := &server{deps: d, hub: d.Notifier, logger: d.Logger, index: make(map[string]route)}
+	s := &server{deps: d, logger: d.Logger, index: make(map[string]route)}
 	out := &Server{Engine: gin.New(), server: s}
 	s.owner = out
 	out.Engine.Use(s.recoverPanic(), s.requestLog())
@@ -151,12 +146,4 @@ func (s *server) authorize(rt route) gin.HandlerFunc {
 		}
 		c.Next()
 	}
-}
-func (s *server) auditIntentFrom(c *gin.Context, detail string) ports.AuditIntent {
-	r, ok := s.index[c.Request.Method+" "+c.FullPath()]
-	a := actorOf(c)
-	if !ok || r.audit == "" || a.Username == "" {
-		return ports.AuditIntent{}
-	}
-	return ports.AuditIntent{Actor: a.Username, Action: r.audit, Detail: detail, At: s.clock()}
 }

@@ -22,12 +22,16 @@ import (
 	"github.com/lober/lober/internal/application/hosts"
 	appmedia "github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/application/tasks"
+	tasksport "github.com/lober/lober/internal/application/tasks/port"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/params"
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/domain/snapshot"
+	"github.com/lober/lober/internal/infrastructure/builtin"
 	"github.com/lober/lober/internal/infrastructure/media/isotest"
+	"github.com/lober/lober/internal/infrastructure/notification"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 	"github.com/lober/lober/internal/interfaces/console"
 	"strings"
@@ -43,7 +47,7 @@ func assemblyConfig(t *testing.T) config {
 func assembled(t *testing.T) (*app, config) {
 	t.Helper()
 	cfg := assemblyConfig(t)
-	a, closeApp, err := newApp(t.Context(), cfg, console.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a, closeApp, err := newApp(t.Context(), cfg, ports.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal("assembly failed")
 	}
@@ -455,7 +459,7 @@ func Test身份接线共用会话与凭据协调(t *testing.T) {
 	cfg.Machine = machineConfig{Enabled: true, KeyFile: filepath.Join(cfg.ISO.Staging, "machine.key")}
 	cfg.Preview.Gateway = "http://machine.example.test:18090"
 	cfg.Preview.Artifacts = "http://machine.example.test:18090/artifacts"
-	a, cleanup, err := newApp(t.Context(), cfg, console.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a, cleanup, err := newApp(t.Context(), cfg, ports.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +475,7 @@ func Test身份接线共用会话与凭据协调(t *testing.T) {
 	if field.Elem().Pointer() != webService.Elem().Pointer() {
 		t.Fatal("启动与网页创建了不同身份服务")
 	}
-	control := taskControlOf(a.Machine)
+	control := taskBackendOf(a.Machine)
 	for _, call := range []func(context.Context, model.Task, ports.AuditIntent) error{control.Cancel, control.Retry} {
 		if err := call(t.Context(), model.Task{ID: "missing"}, ports.AuditIntent{Actor: "admin", Action: "task.cancel", At: assemblyAt}); !errors.Is(err, repository.ErrNotFound) {
 			t.Fatal("正式任务控制没有交给原执行服务", err)
@@ -512,5 +516,299 @@ func Test身份接线共用会话与凭据协调(t *testing.T) {
 	}
 	if err := a.Initialise(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 只实现读取口，其他总仓储方法一旦误用就会失败。
+type taskReadAssemblyStore struct {
+	repository.Store
+	calls []string
+	task  model.Task
+}
+
+func (s *taskReadAssemblyStore) GetTask(_ context.Context, id string) (model.Task, error) {
+	s.calls = append(s.calls, "get:"+id)
+	return s.task, nil
+}
+func (s *taskReadAssemblyStore) ListTasks(_ context.Context, _ repository.TaskQuery) (repository.Page[model.Task], error) {
+	s.calls = append(s.calls, "list")
+	return repository.Page[model.Task]{Items: []model.Task{s.task}}, nil
+}
+
+type taskReadAssemblyRenderer struct {
+	calls    int
+	snapshot model.Snapshot
+	id       string
+	firmware catalog.Firmware
+}
+
+func (r *taskReadAssemblyRenderer) RenderFrozen(_ context.Context, s model.Snapshot, f catalog.Firmware, id string) ([]ports.PreviewFile, []string, []model.Problem, error) {
+	r.calls++
+	r.snapshot = s
+	r.id = id
+	r.firmware = f
+	return []ports.PreviewFile{{Name: "proof"}}, []string{"credential"}, nil, nil
+}
+
+type taskReadAssemblyControl struct {
+	tasksport.Control
+	calls []string
+}
+
+func (c *taskReadAssemblyControl) CanCancel(t model.Task) []model.Problem {
+	c.calls = append(c.calls, "cancel:"+t.ID)
+	return []model.Problem{model.NewProblem("host_has_open_task", model.Subject{})}
+}
+func (c *taskReadAssemblyControl) CanRetry(t model.Task) []model.Problem {
+	c.calls = append(c.calls, "retry:"+t.ID)
+	return nil
+}
+func Test任务读取和预览显式组装(t *testing.T) {
+	st := &taskReadAssemblyStore{task: model.Task{ID: "stored", Snapshot: model.Snapshot{Template: model.SnapshotTemplate{Body: "saved"}, Host: model.SnapshotHost{Firmware: catalog.FirmwareUEFI}}}}
+	ctl := &taskReadAssemblyControl{}
+	renderer := &taskReadAssemblyRenderer{}
+	reader := taskReaderOf(st, ctl, renderer)
+	actor := ports.Actor{Username: "viewer", Role: model.RoleViewer}
+	if len(st.calls) != 0 || len(ctl.calls) != 0 || renderer.calls != 0 {
+		t.Fatal("组装提前调用依赖")
+	}
+	page, e := reader.List(t.Context(), actor, tasks.ListRequest{})
+	if e != nil || len(page.Items) != 1 || len(page.Items[0].CanCancel) != 1 {
+		t.Fatal(page, e)
+	}
+	item, e := reader.Get(t.Context(), actor, "raw")
+	if e != nil || item.Task.ID != "stored" {
+		t.Fatal(item, e)
+	}
+	preview, e := reader.Preview(t.Context(), actor, "lookup", tasks.PreviewRequest{})
+	if e != nil || len(preview.Files) != 1 || renderer.calls != 1 || renderer.id != "stored" || !reflect.DeepEqual(renderer.snapshot, st.task.Snapshot) || renderer.firmware != catalog.FirmwareUEFI {
+		t.Fatal(preview, e, renderer)
+	}
+	if !reflect.DeepEqual(st.calls, []string{"list", "get:raw", "get:lookup"}) || !reflect.DeepEqual(ctl.calls, []string{"cancel:stored", "retry:stored", "cancel:stored", "retry:stored"}) {
+		t.Fatal(st.calls, ctl.calls)
+	}
+	// 使用真实Wire生成的服务验证网页没有遗漏读取与预览依赖。
+	a, _ := assembled(t)
+	r := httptest.NewRequest("POST", "/console/v1/auth/login", strings.NewReader(`{"username":"admin","password":"initial password"}`))
+	w := httptest.NewRecorder()
+	a.Console.Engine.ServeHTTP(w, r)
+	var login struct {
+		Data struct {
+			Token string `json:"token"`
+		}
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &login) != nil || login.Data.Token == "" {
+		t.Fatal(w.Code)
+	}
+	r = httptest.NewRequest("PUT", "/console/v1/users/admin", strings.NewReader(`{"role":"admin","password":"changed password","rev":1}`))
+	r.Header.Set("Authorization", "Bearer "+login.Data.Token)
+	w = httptest.NewRecorder()
+	a.Console.Engine.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	r = httptest.NewRequest("POST", "/console/v1/auth/login", strings.NewReader(`{"username":"admin","password":"changed password"}`))
+	w = httptest.NewRecorder()
+	a.Console.Engine.ServeHTTP(w, r)
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &login) != nil || login.Data.Token == "" {
+		t.Fatal(w.Code)
+	}
+	for _, path := range []string{"/console/v1/tasks", "/console/v1/tasks/missing", "/console/v1/tasks/missing/preview"} {
+		method := "GET"
+		body := ""
+		want := 404
+		if path == "/console/v1/tasks" {
+			want = 200
+		}
+		if strings.HasSuffix(path, "preview") {
+			method = "POST"
+			body = `{"firmware":"bad"}`
+			want = 400
+		}
+		r = httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+login.Data.Token)
+		w = httptest.NewRecorder()
+		a.Console.Engine.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatal(path, w.Code, w.Body.String())
+		}
+	}
+}
+
+// 后端已提交的提示仍保留，应用成功重读后还要补发。
+type taskControlAssemblyNotifier struct{ publishes []string }
+
+func (n *taskControlAssemblyNotifier) Publish(id string)                        { n.publishes = append(n.publishes, id) }
+func (*taskControlAssemblyNotifier) Subscribe(string) (<-chan struct{}, func()) { panic("不订阅") }
+
+type taskControlAssemblyBackend struct {
+	taskReadAssemblyControl
+	notifier ports.Notifier
+	got      model.Task
+	audit    ports.AuditIntent
+}
+
+func (b *taskControlAssemblyBackend) Cancel(_ context.Context, t model.Task, a ports.AuditIntent) error {
+	b.got = t
+	b.audit = a
+	b.notifier.Publish(t.ID)
+	return nil
+}
+func (b *taskControlAssemblyBackend) Retry(c context.Context, t model.Task, a ports.AuditIntent) error {
+	return b.Cancel(c, t, a)
+}
+func Test任务控制显式共用后端时钟和通知(t *testing.T) {
+	for _, retry := range []bool{false, true} {
+		st := &taskReadAssemblyStore{task: model.Task{ID: "stored", Rev: 9, State: model.TaskFailed}}
+		n := &taskControlAssemblyNotifier{}
+		b := &taskControlAssemblyBackend{notifier: n}
+		c := taskControllerOf(st, b, func() int64 { return 43 }, n)
+		op := c.Cancel
+		action := "task.cancel"
+		if retry {
+			op = c.Retry
+			action = "task.retry"
+		}
+		got, err := op(t.Context(), ports.Actor{Username: "operator", Role: model.RoleOperator}, "raw")
+		if err != nil || got.Task.ID != "stored" || len(got.CanCancel) != 1 || !reflect.DeepEqual(b.got, st.task) || b.audit != (ports.AuditIntent{Actor: "operator", Action: action, At: 43}) || !reflect.DeepEqual(st.calls, []string{"get:raw", "get:stored"}) || !reflect.DeepEqual(b.calls, []string{"cancel:stored", "retry:stored"}) || !reflect.DeepEqual(n.publishes, []string{"stored", "stored"}) {
+			t.Fatal(got, err, b.audit, st.calls, b.calls, n.publishes)
+		}
+	}
+}
+func Test任务控制未启用明确不可用(t *testing.T) {
+	st := &taskReadAssemblyStore{task: model.Task{ID: "stored"}}
+	n := &taskControlAssemblyNotifier{}
+	c := taskControllerOf(st, taskBackendOf(&machineBundle{}), func() int64 { return 44 }, n)
+	for _, op := range []func(context.Context, ports.Actor, string) (tasks.TaskChoice, error){c.Cancel, c.Retry} {
+		if _, err := op(t.Context(), ports.Actor{Username: "admin", Role: model.RoleAdmin}, "raw"); !errors.Is(err, tasks.ErrControlUnavailable) {
+			t.Fatal(err)
+		}
+	}
+	if !reflect.DeepEqual(st.calls, []string{"get:raw", "get:raw"}) || len(n.publishes) != 0 {
+		t.Fatal(st.calls, n.publishes)
+	}
+}
+
+type taskEventAssemblyStore struct {
+	taskReadAssemblyStore
+	after int64
+	limit int
+}
+
+func (s *taskEventAssemblyStore) ListEvents(_ context.Context, id string, after int64, limit int) ([]repository.Event, error) {
+	s.calls = append(s.calls, "events:"+id)
+	s.after = after
+	s.limit = limit
+	return []repository.Event{{TaskID: id, Seq: after + 1, Fields: map[string]string{"source": "saved"}}}, nil
+}
+func Test任务事件提供者复用原仓储与通知实例(t *testing.T) {
+	st := &taskEventAssemblyStore{}
+	hub := notification.NewHub()
+	reader := taskEventsOf(st, hub)
+	actor := ports.Actor{Username: "viewer", Role: model.RoleViewer}
+	sub, err := reader.Open(t.Context(), actor, "raw", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	if !reflect.DeepEqual(st.calls, []string{"get:raw", "events:raw"}) || st.after != 7 || st.limit != 200 || sub.Initial()[0].Fields["source"] != "saved" {
+		t.Fatal(st.calls, st.after, st.limit, sub.Initial())
+	}
+	hub.Publish("other")
+	select {
+	case <-sub.Hints():
+		t.Fatal("跨任务提示")
+	default:
+	}
+	hub.Publish("raw")
+	select {
+	case <-sub.Hints():
+	default:
+		t.Fatal("没有复用注入的共同通知实例")
+	}
+	sub.Close()
+	sub.Close()
+	if _, open := <-sub.Hints(); open {
+		t.Fatal("未退订")
+	}
+}
+
+type builtinAssemblyStore struct {
+	repository.Store
+	hooks     []model.Hook
+	templates []model.Template
+	order     []string
+}
+
+func (s *builtinAssemblyStore) EnsureBuiltinHook(_ context.Context, h model.Hook) error {
+	s.hooks = append(s.hooks, h)
+	s.order = append(s.order, "hook")
+	return nil
+}
+func (s *builtinAssemblyStore) EnsureBuiltinTemplate(_ context.Context, v model.Template) error {
+	s.templates = append(s.templates, v)
+	s.order = append(s.order, "template")
+	return nil
+}
+func Test内置提供者注入全部发布内容(t *testing.T) {
+	st := &builtinAssemblyStore{}
+	b := builtinBootstrapperOf(st)
+	if len(st.order) != 0 {
+		t.Fatal("构造时提前写入")
+	}
+	if err := b.Initialise(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(st.hooks, builtin.Hooks()) || !reflect.DeepEqual(st.templates, builtin.Templates()) {
+		t.Fatal("发布内容没有完整注入", len(st.hooks), len(st.templates))
+	}
+	seenTemplate := false
+	for _, kind := range st.order {
+		if kind == "template" {
+			seenTemplate = true
+		} else if seenTemplate {
+			t.Fatal("模板后又装载组件")
+		}
+	}
+}
+
+type orderedRealIdentity struct {
+	initialise func(context.Context, string) error
+}
+
+func (i orderedRealIdentity) Initialise(ctx context.Context, seed string) error {
+	return i.initialise(ctx, seed)
+}
+func Test真实接线先准备全部内置内容再创建管理员(t *testing.T) {
+	cfg := assemblyConfig(t)
+	a, cleanup, err := newApp(t.Context(), cfg, func() int64 { return assemblyAt }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if a.Builtin == nil {
+		t.Fatal("正式接线缺少内置初始化入口")
+	}
+	identity := a.Identity
+	called := false
+	a.Identity = orderedRealIdentity{initialise: func(ctx context.Context, seed string) error {
+		called = true
+		for _, h := range builtin.Hooks() {
+			if _, err := a.Store.GetHook(ctx, model.HookKey{ID: h.ID, Version: h.Version}); err != nil {
+				t.Fatal("身份初始化前缺少组件", err)
+			}
+		}
+		for _, v := range builtin.Templates() {
+			if _, err := a.Store.GetTemplate(ctx, model.TemplateKey{ID: v.ID, Version: v.Version}); err != nil {
+				t.Fatal("身份初始化前缺少模板", err)
+			}
+		}
+		return identity.Initialise(ctx, seed)
+	}}
+	if err := a.Initialise(); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("未创建初始管理员")
 	}
 }

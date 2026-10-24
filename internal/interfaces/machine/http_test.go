@@ -154,3 +154,30 @@ func TestBootServesPreseedAnswerToDebianInstallerAgent(t *testing.T) {
 		t.Fatal("no task must not install", w.Code, w.Body)
 	}
 }
+
+func Test机器观察只在凭据检查通过后调用(t *testing.T) {
+	f, _ := gatewayFixture(t)
+	calls := 0
+	h := New(f, func(r Request) ([]byte, error) { return []byte("answer"), nil }, Endpoints{}, func(task model.Task, address string) {
+		calls++
+		if task.ID != f.task.ID || address != "192.0.2.1:1234" {
+			t.Fatal("观察字段改变")
+		}
+	})
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/v1/answer/task-one/bad/ks.cfg", 0},
+		{"/v1/answer/task-one/install-token/ks.cfg", 1},
+		{"/v1/answer/task-one/bad/scripts/2.sh", 1},
+	} {
+		r := httptest.NewRequest("GET", tc.path, nil)
+		r.RemoteAddr = "192.0.2.1:1234"
+		r.Header.Set("X-Forwarded-For", "198.51.100.9")
+		h.ServeHTTP(httptest.NewRecorder(), r)
+		if calls != tc.want {
+			t.Fatal("未认证请求产生观察", calls, tc.want)
+		}
+	}
+}

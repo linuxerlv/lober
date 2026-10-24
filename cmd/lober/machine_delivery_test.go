@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"github.com/lober/lober/internal/application/ports"
 	"io"
 	"log/slog"
 	"net"
@@ -15,13 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lober/lober/internal/application/execution"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/params"
 	"github.com/lober/lober/internal/domain/snapshot"
 	"github.com/lober/lober/internal/infrastructure/builtin"
-	"github.com/lober/lober/internal/interfaces/console"
 )
 
 // These are real HTTP/PostgreSQL contract tests. Synthetic media records here
@@ -35,7 +34,7 @@ func TestLinuxMachineDeliversFrozenFilesAndCompletesProtocol(t *testing.T) {
 			cfg := assemblyConfig(t)
 			cfg.Machine.Enabled = true
 			cfg.Preview = previewConfig{Gateway: "http://gateway", Artifacts: "http://artifacts", SyslogAddr: "127.0.0.1:10514"}
-			a, cleanup, err := newApp(t.Context(), cfg, console.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
+			a, cleanup, err := newApp(t.Context(), cfg, ports.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -114,7 +113,7 @@ func TestLinuxMachineDeliversFrozenFilesAndCompletesProtocol(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			install, final := a.Machine.Service.Token(task, execution.Install), a.Machine.Service.Token(task, execution.Finalize)
+			install, final := a.Machine.Service.Credentials(task)
 			if !bytes.Contains(menu, []byte(install)) {
 				t.Fatal("menu lacks committed credential")
 			}

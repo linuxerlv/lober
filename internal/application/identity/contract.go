@@ -15,6 +15,9 @@ var (
 	ErrInitialPasswordUnchanged = errors.New("必须更换初始密码")
 )
 
+// PublicRoles 不要求身份，不读仓储、配置或会话；每次返回原顺序的独立角色切片。
+func PublicRoles() []model.Role { return model.Roles() }
+
 // Principal 只由本实例认证产生；请求正文不能提供或改写它。
 type Principal struct {
 	user  model.User

@@ -268,8 +268,8 @@ func Test编写审计失败状态与审批人均回滚(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
-				notified := &authoringNotificationProbe{Notifier: s.server.deps.Notifier}
-				s.server.deps.Notifier = notified
+				notified := &authoringNotificationProbe{Notifier: testCaps(s).Notifier}
+				testCaps(s).Notifier = notified
 				if cancelled {
 					cancel()
 				}
@@ -368,7 +368,7 @@ func Test模板取消等待选择锁后释放锁且不写入(t *testing.T) {
 				}
 			}
 			guard := &authoringWaitingGuard{SelectionGuard: selectionguard.NewGuard(), waiting: make(chan struct{}), entered: make(chan struct{})}
-			d := wizardDepsGuard(s.server.deps, st, guard)
+			d := wizardDepsGuard(taskTestDeps(s), st, guard)
 			before, e := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 			if e != nil {
 				t.Fatal(e)

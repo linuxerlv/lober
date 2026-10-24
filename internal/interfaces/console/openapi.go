@@ -3,6 +3,8 @@ package console
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 
@@ -24,10 +26,12 @@ func openAPIPath(path string) string {
 
 // OpenAPI derives the wire contract, including actual fields and response
 // envelopes, from registered descriptors. Every call owns its entire document.
-func (s *Server) OpenAPI() map[string]any {
+func (s *Server) OpenAPI() map[string]any { return openAPIDocument(s.server.routes) }
+
+func openAPIDocument(routes []route) map[string]any {
 	b := schemaBuilder{defs: make(map[string]any), names: make(map[reflect.Type]string), owners: make(map[string]reflect.Type)}
 	paths := make(map[string]any)
-	rs := slices.Clone(s.server.routes)
+	rs := slices.Clone(routes)
 	slices.SortFunc(rs, func(a, c route) int { return strings.Compare(a.path+" "+a.method, c.path+" "+c.method) })
 	problem := b.value(reflect.TypeOf(problemList{}))
 	batch := b.value(reflect.TypeOf(batchDetail{}))
@@ -273,29 +277,29 @@ func (b *schemaBuilder) definition(t reflect.Type) map[string]any {
 		values := make([]string, 0)
 		switch t {
 		case reflect.TypeOf(model.Role("")):
-			for _, v := range model.Roles() {
+			for _, v := range identity.PublicRoles() {
 				values = append(values, string(v))
 			}
 		case reflect.TypeOf(SourceKind("")):
 			values = []string{"url", "upload", "path"}
 		case reflect.TypeOf(catalog.Family("")):
-			for _, v := range catalog.Families() {
+			for _, v := range authoring.PublicCatalog().Families {
 				values = append(values, string(v))
 			}
 		case reflect.TypeOf(catalog.Format("")):
-			for _, v := range catalog.AllFormats() {
+			for _, v := range authoring.PublicCatalog().Formats {
 				values = append(values, string(v))
 			}
 		case reflect.TypeOf(catalog.Series("")):
-			for _, v := range catalog.AllSeries() {
+			for _, v := range authoring.PublicCatalog().Series {
 				values = append(values, string(v))
 			}
 		case reflect.TypeOf(catalog.Arch("")):
-			for _, v := range catalog.AllArchs() {
+			for _, v := range authoring.PublicCatalog().Archs {
 				values = append(values, string(v))
 			}
 		case reflect.TypeOf(catalog.Firmware("")):
-			for _, v := range catalog.AllFirmwares() {
+			for _, v := range authoring.PublicCatalog().Firmwares {
 				values = append(values, string(v))
 			}
 		}
@@ -307,3 +311,6 @@ func (b *schemaBuilder) definition(t reflect.Type) map[string]any {
 		return map[string]any{}
 	}
 }
+
+// OpenAPIDocument 只导出真实路由描述，不启动服务或访问依赖。
+func OpenAPIDocument() map[string]any { return openAPIDocument((&server{}).allRoutes()) }
