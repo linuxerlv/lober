@@ -3,6 +3,7 @@ package archtest
 import (
 	"go/ast"
 	"go/token"
+	"strconv"
 	"strings"
 )
 
@@ -12,10 +13,64 @@ const (
 	pkgTasksPort             = pkgTasks + "/port"
 	pkgSelectionGuard        = modulePath + "/internal/infrastructure/selection"
 	pkgNotification          = modulePath + "/internal/infrastructure/notification"
+	pkgCredentials           = modulePath + "/internal/infrastructure/credentials"
+	pkgIdentityPort          = modulePath + "/internal/application/identity/port"
 	ruleApplication     rule = "应用模块只依赖标准库、领域与自己的能力接口，不依赖网页、基础设施或其他应用服务"
 	ruleApplicationPort rule = "应用能力接口只依赖标准库、领域与共同能力接口"
 	ruleNotification    rule = "通知实现只依赖 sync 与共同通知契约"
 )
+
+func checkCredentialsFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
+	ruleCredentials := rule("凭据实现只依赖固定密码算法、令牌随机数与精确身份能力")
+	found := checkImports(fset, pkg, f, func(_, imp string) rule {
+		switch imp {
+		case "crypto/pbkdf2", "crypto/rand", "crypto/sha256", "crypto/subtle", "encoding/base64", "encoding/hex", "strings", pkgIdentityPort, layer1 + "/access":
+			return ""
+		default:
+			return ruleCredentials
+		}
+	})
+	allowed := map[string]map[string]bool{}
+	for _, imp := range f.Imports {
+		path, _ := strconv.Unquote(imp.Path.Value)
+		var names map[string]bool
+		alias := ""
+		switch path {
+		case pkgIdentityPort:
+			alias = "port"
+			names = map[string]bool{"Passwords": true, "Tokens": true, "ErrInvalidPassword": true}
+		case layer1 + "/access":
+			alias = "access"
+			names = map[string]bool{"ValidPasswordText": true}
+		default:
+			continue
+		}
+		if imp.Name != nil {
+			alias = imp.Name.Name
+		}
+		if alias == "." || alias == "_" {
+			found = append(found, violation{rule: ruleCredentials, pkg: pkg, subject: path, pos: position(fset, imp.Pos())})
+			continue
+		}
+		allowed[alias] = names
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		id, ok := sel.X.(*ast.Ident)
+		if !ok || id.Obj != nil {
+			return true
+		}
+		names, restricted := allowed[id.Name]
+		if restricted && !names[sel.Sel.Name] {
+			found = append(found, violation{rule: ruleCredentials, pkg: pkg, subject: id.Name + "." + sel.Sel.Name, pos: position(fset, sel.Pos())})
+		}
+		return true
+	})
+	return found
+}
 
 // 只认已设计的模块入口和精确接口子包；新模块必须先登记，不能借四层根目录绕过。
 func applicationModule(pkg string) string {
