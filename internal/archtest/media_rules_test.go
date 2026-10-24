@@ -135,7 +135,7 @@ func Test镜像组装只构造启停不处理业务(t *testing.T) {
 		{"状态更新", `import m "` + pkgModel + `";func run(s *m.ISO){s.State="ready"}`, false},
 		{"指针别名判断状态", `import m "` + pkgModel + `";type pointer = *m.ISO;func run(s pointer)bool{return s.State=="ready"}`, false},
 		{"复制结构判断状态", `import m "` + pkgModel + `";type copied m.Source;func run(s copied)bool{return s.State=="fetched"}`, false},
-		{"后续任务状态保持原范围", `import m "` + pkgModel + `";func run(s *m.Task)bool{s.State="running";return s.State=="running"}`, true},
+		{"终态任务状态不能由组装处理", `import m "` + pkgModel + `";func run(s *m.Task)bool{s.State="running";return s.State=="running"}`, false},
 		{"状态判断", `import m "` + pkgModel + `";func run(s m.ISO)bool{return s.State=="ready"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -214,7 +214,7 @@ func Test镜像新网页文件不能调用内部能力(t *testing.T) {
 		{"本地接口最小直接调用", `type reader interface{GetISO()};func newMediaHandler(r reader){r.GetISO()}`, false},
 		{"本地接口真实签名直接调用", `import("context";m "` + pkgModel + `");type reader interface{GetISO(context.Context,string)(m.ISO,error)};func newMediaHandler(ctx context.Context,r reader)(m.ISO,error){return r.GetISO(ctx,"image")}`, false},
 		{"本地接口真实签名方法值", `import("context";m "` + pkgModel + `");type reader interface{GetISO(context.Context,string)(m.ISO,error)};func newMediaHandler(ctx context.Context,r reader)(m.ISO,error){read:=r.GetISO;return read(ctx,"image")}`, false},
-		{"后续任务接口正常调用", `import("context";m "` + pkgModel + `");type reader interface{GetTask(context.Context,string)(m.Task,error)};func newTaskHandler(ctx context.Context,r reader)(m.Task,error){if _,err:=r.GetTask(ctx,"task");err!=nil{return m.Task{},err};read:=r.GetTask;return read(ctx,"task")}`, true},
+		{"终态任务本地仓储接口仍拒绝", `import("context";m "` + pkgModel + `");type reader interface{GetTask(context.Context,string)(m.Task,error)};func newTaskHandler(ctx context.Context,r reader)(m.Task,error){if _,err:=r.GetTask(ctx,"task");err!=nil{return m.Task{},err};read:=r.GetTask;return read(ctx,"task")}`, false},
 		{"已迁移身份本地仓储接口仍拒绝", `type reader interface{GetUser()};func newUserHandler(r reader){r.GetUser();read:=r.GetUser;read()}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
