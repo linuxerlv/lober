@@ -267,6 +267,66 @@ func Test身份审计类型边界(t *testing.T) {
 }
 
 // 公共能力不能新增仓储返回值、可修改的身份凭据或会话表出口。
+func identityPublicMethodErrors(name string, typ types.Type, pointer bool, want map[string]string, qualify func(*types.Package) string) []string {
+	if pointer {
+		typ = types.NewPointer(typ)
+	}
+	methods := types.NewMethodSet(typ)
+	got := map[string]string{}
+	for j := 0; j < methods.Len(); j++ {
+		method := methods.At(j).Obj()
+		if method.Exported() {
+			got[method.Name()] = types.TypeString(method.Type(), qualify)
+		}
+	}
+	var errors []string
+	if len(got) != len(want) {
+		errors = append(errors, fmt.Sprintf("%s 能力方法数改变: %v", name, got))
+	}
+	for method, signature := range want {
+		if got[method] != signature {
+			errors = append(errors, fmt.Sprintf("%s.%s=%s，期望%s", name, method, got[method], signature))
+		}
+	}
+	if !pointer && (name == "Principal" || name == "AuditIntent") {
+		errors = append(errors, identityPublicMethodErrors(name, typ, true, want, qualify)...)
+	}
+	return errors
+}
+
+func Test公共契约拒绝仅指针公开方法(t *testing.T) {
+	for _, tc := range []struct {
+		name, source string
+		want         map[string]string
+		allowed      bool
+	}{
+		{"Principal正常值方法", "package fixture; type Principal struct{}; func (Principal) Actor(){}", map[string]string{"Actor": "func()"}, true},
+		{"Principal额外指针方法", "package fixture; type Principal struct{}; func (Principal) Actor(){}; func (*Principal) Extra(){}", map[string]string{"Actor": "func()"}, false},
+		{"AuditIntent无方法", "package fixture; type AuditIntent struct{}", map[string]string{}, true},
+		{"AuditIntent额外指针方法", "package fixture; type AuditIntent struct{}; func (*AuditIntent) Extra(){}", map[string]string{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "fixture.go", tc.source, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkg, err := (&types.Config{}).Check("fixture", fset, []*ast.File{f}, nil)
+			if err != nil {
+				t.Fatal("反例必须先通过真实 Go 类型检查", err)
+			}
+			name := "Principal"
+			if strings.Contains(tc.source, "AuditIntent") {
+				name = "AuditIntent"
+			}
+			got := identityPublicMethodErrors(name, pkg.Scope().Lookup(name).Type(), false, tc.want, func(p *types.Package) string { return p.Name() })
+			if (len(got) == 0) != tc.allowed {
+				t.Fatalf("allowed=%v errors=%v", tc.allowed, got)
+			}
+		})
+	}
+}
+
 func Test身份审计公共能力固定(t *testing.T) {
 	imports := identityFixtureImports(t)
 	qualify := func(p *types.Package) string { return p.Name() }
@@ -307,25 +367,8 @@ func Test身份审计公共能力固定(t *testing.T) {
 			if obj == nil {
 				t.Fatal("能力丢失", tc.name)
 			}
-			typ := obj.Type()
-			if tc.pointer {
-				typ = types.NewPointer(typ)
-			}
-			methods := types.NewMethodSet(typ)
-			got := map[string]string{}
-			for j := 0; j < methods.Len(); j++ {
-				method := methods.At(j).Obj()
-				if method.Exported() {
-					got[method.Name()] = types.TypeString(method.Type(), qualify)
-				}
-			}
-			if len(got) != len(tc.want) {
-				t.Errorf("能力方法数改变: %v", got)
-			}
-			for name, want := range tc.want {
-				if got[name] != want {
-					t.Errorf("%s=%s，期望%s", name, got[name], want)
-				}
+			for _, err := range identityPublicMethodErrors(tc.name, obj.Type(), tc.pointer, tc.want, qualify) {
+				t.Error(err)
 			}
 		})
 	}
