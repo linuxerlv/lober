@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lober/lober/internal/application/execution"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/params"
@@ -114,7 +113,7 @@ func TestLinuxMachineDeliversFrozenFilesAndCompletesProtocol(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			install, final := a.Machine.Service.Token(task, execution.Install), a.Machine.Service.Token(task, execution.Finalize)
+			install, final := a.Machine.Service.Credentials(task)
 			if !bytes.Contains(menu, []byte(install)) {
 				t.Fatal("menu lacks committed credential")
 			}

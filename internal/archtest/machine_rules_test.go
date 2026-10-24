@@ -19,10 +19,26 @@ func checkMachineFile(fset *token.FileSet, pkg string, f *ast.File) []violation 
 		if under(pkg, pkgEvents) {
 			own = pkgEvents
 		}
-		allowed := (isStd(name) && name != "C" && name != "unsafe") || inLayer1(name) || name == pkgStore || under(name, own) || pkg == pkgExecution && name == pkgPorts
+		if pkg == pkgExecutionPort {
+			if name != "context" && name != pkgModel && name != pkgCatalog {
+				found = append(found, violation{rule: ruleMachine, pkg: pkg, subject: name, pos: position(fset, imp.Pos())})
+			}
+			continue
+		}
+		allowed := (isStd(name) && name != "C" && name != "unsafe") || inLayer1(name) || name == pkgStore || name == own || pkg == pkgExecution && name == pkgPorts || (pkg == pkgExecution || pkg == pkgEvents) && name == pkgExecutionPort
 		if !allowed {
 			found = append(found, violation{rule: ruleMachine, pkg: pkg, subject: name, pos: position(fset, imp.Pos())})
 		}
 	}
 	return found
+}
+
+func checkMachineKeysFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
+	return checkImports(fset, pkg, f, func(_, imp string) rule {
+		switch imp {
+		case "crypto/rand", "errors", "io", "os", "path/filepath":
+			return ""
+		}
+		return rule("机器密钥只依赖原私密文件操作需要的精确标准库")
+	})
 }

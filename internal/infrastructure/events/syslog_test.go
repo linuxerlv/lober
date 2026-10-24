@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lober/lober/internal/application/execution"
+	executionport "github.com/lober/lober/internal/application/execution/port"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 )
@@ -65,5 +67,22 @@ func TestSyslogRejectsOldAttemptsAndBoundedPackets(t *testing.T) {
 	repo.task.State = model.TaskDone
 	if err := c.Receive(t.Context(), "192.168.56.101:514", []byte("finished")); err != nil || len(repo.entries) != 1 {
 		t.Fatal("terminal task log accepted", err)
+	}
+}
+
+var _ executionport.IPObservationSink = (*Collector)(nil)
+
+func Test执行观察小接口可直接连接日志收集器(t *testing.T) {
+	repo := &memoryRepo{task: model.Task{ID: "task-one", State: model.TaskInstalling, Execution: &model.Execution{Attempt: 2, IssuedAt: 1000}}}
+	now := int64(1000)
+	c := New(repo, func() int64 { return now }, nil)
+	observe := execution.NewIPObserver(c)
+	observe(repo.task, "192.0.2.1:1234")
+	if e := c.Receive(t.Context(), "192.0.2.1:514", []byte("installer")); e != nil || len(repo.entries) != 1 {
+		t.Fatal("小接口未连接", e)
+	}
+	now = 6400
+	if e := c.Receive(t.Context(), "192.0.2.1:514", []byte("expired")); e != nil || len(repo.entries) != 1 {
+		t.Fatal("观察有效期改变", e)
 	}
 }

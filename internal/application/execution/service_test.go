@@ -248,3 +248,14 @@ func TestTimeoutRestartRetryRevokesOldCredentialAndAuditIsAtomic(t *testing.T) {
 		t.Fatal("cancelled task supplied answer")
 	}
 }
+
+func Test机器凭据保持安装与收尾顺序(t *testing.T) {
+	s, err := execution.New(nil, []byte(strings.Repeat("k", 32)), func() int64 { return 1000 }, nil)
+	must(t, err)
+	for _, task := range []model.Task{{ID: "task"}, {ID: "task", Execution: &model.Execution{Attempt: 2, IssuedAt: 1000}}} {
+		a, b := s.Credentials(task)
+		if a != s.Token(task, execution.Install) || b != s.Token(task, execution.Finalize) {
+			t.Fatal("凭据顺序改变")
+		}
+	}
+}

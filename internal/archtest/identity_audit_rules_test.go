@@ -49,6 +49,9 @@ func identityAuditFindings(caller string, fset *token.FileSet, files []*ast.File
 		return nil
 	}
 	var found []violation
+	if assembly {
+		found = append(found, machineAssemblyFindings(caller, fset, files, info)...)
+	}
 	for _, f := range files {
 		file := filepath.ToSlash(fset.Position(f.Pos()).Filename)
 		for _, decl := range f.Decls {
@@ -104,9 +107,7 @@ func identityAuditFindings(caller string, fset *token.FileSet, files []*ast.File
 						bad = bad || under(target, pkgIdentityPort) || under(target, pkgAuditApp+"/port") || under(target, pkgCredentials)
 					}
 					if console || assembly {
-						// 机器签名密钥是原有独立用途，只保留原文件、函数和 Reader 符号。
-						machineRandom := assembly && strings.HasSuffix(file, "cmd/lober/machine.go") && function == "machineSigningKey" && target == "crypto/rand" && symbol == "Reader"
-						bad = bad || !machineRandom && (under(target, "crypto/rand") || under(target, "crypto/pbkdf2") || under(target, "crypto/subtle") || under(target, "math/rand"))
+						bad = bad || under(target, "crypto/rand") || under(target, "crypto/pbkdf2") || under(target, "crypto/subtle") || under(target, "math/rand")
 					}
 					if assembly {
 						if target == layer1+"/access" || target == layer1+"/audit" {
@@ -419,7 +420,7 @@ func Test身份审计装配许可精确(t *testing.T) {
 		name, file, body string
 		allowed          bool
 	}{
-		{"原机器密钥读取", "machine.go", `import "crypto/rand";func machineSigningKey(){_=rand.Reader}`, true},
+		{"原机器密钥位置也拒绝随机数", "machine.go", `import "crypto/rand";func machineSigningKey(){_=rand.Reader}`, false},
 		{"机器密钥同文件其他函数", "machine.go", `import "crypto/rand";func extra(){_=rand.Reader}`, false},
 		{"机器密钥同名函数其他文件", "new.go", `import "crypto/rand";func machineSigningKey(){_=rand.Reader}`, false},
 		{"机器密钥原位置其他随机方法", "machine.go", `import "crypto/rand";func machineSigningKey(){_=rand.Read}`, false},
