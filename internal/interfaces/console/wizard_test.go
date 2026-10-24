@@ -40,9 +40,9 @@ func Test向导只转换应用给出的诊断和完整任务(t *testing.T) {
 	s, st, token, iso, tpl := wizardFixture(t)
 	problem := model.NewProblem("host_has_open_task", model.Subject{Kind: model.KindHost, ID: "SN-1"})
 	d := s.server.deps
-	d.TaskCtl = &taskControlFixture{st: st, block: []model.Problem{problem}}
+	backend := &taskControlFixture{st: st, block: []model.Problem{problem}}
 	// 诊断在应用构造时注入，原任务控制入口的后置替换不参与向导。
-	assembled := wizardDeps(d, st)
+	assembled := wizardDepsGuardControl(d, st, selectionguard.NewGuard(), backend)
 	s.server.deps.Wizard, s.server.deps.TemplateAuthoring, s.server.deps.TaskReader = assembled.Wizard, assembled.TemplateAuthoring, assembled.TaskReader
 	result := responseData[wizardSubmitResult](t, httpCall(s, "POST", "/console/v1/wizard/tasks", wizardBody(iso, tpl, `[{"sn":"SN-1","entered":{"tpl/hostname":"node-one"}}]`), token))
 	if len(result.Tasks) != 1 || len(result.Tasks[0].CanCancel) != 1 || len(result.Tasks[0].CanRetry) != 1 || result.Tasks[0].CanCancel[0].Code != problem.Code || result.Tasks[0].Snapshot.Template.Params["hostname"].Items[0] != "node-one" {

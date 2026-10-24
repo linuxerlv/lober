@@ -27,11 +27,11 @@ type Deps struct {
 	Tasks             repository.Tasks
 	Wizard            tasks.Wizard
 	TaskReader        tasks.Reader
+	TaskController    tasks.Controller
 	Events            repository.Events
 	AuditReader       audit.Reader
 	Identity          identity.Registry
 	FrozenPreview     ports.FrozenPreview
-	TaskCtl           TaskControl
 	Notifier          Notifier
 	Clock             Clock
 	Logger            *slog.Logger
@@ -152,12 +152,4 @@ func (s *server) authorize(rt route) gin.HandlerFunc {
 		}
 		c.Next()
 	}
-}
-func (s *server) auditIntentFrom(c *gin.Context, detail string) ports.AuditIntent {
-	r, ok := s.index[c.Request.Method+" "+c.FullPath()]
-	a := actorOf(c)
-	if !ok || r.audit == "" || a.Username == "" {
-		return ports.AuditIntent{}
-	}
-	return ports.AuditIntent{Actor: a.Username, Action: r.audit, Detail: detail, At: s.clock()}
 }

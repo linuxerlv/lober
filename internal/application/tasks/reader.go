@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/application/tasks/port"
 	"github.com/lober/lober/internal/domain/access"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
@@ -30,11 +31,11 @@ func readTime(raw string) (int64, error) {
 	}
 	return value, nil
 }
-func (r *reader) choice(t model.Task) TaskChoice {
+func taskChoice(t model.Task, diagnostics port.TaskDiagnostics) TaskChoice {
 	out := TaskChoice{Task: t, CanCancel: []model.Problem{}, CanRetry: []model.Problem{}}
-	if r.deps.Diagnostics != nil {
-		out.CanCancel = r.deps.Diagnostics.CanCancel(t)
-		out.CanRetry = r.deps.Diagnostics.CanRetry(t)
+	if diagnostics != nil {
+		out.CanCancel = diagnostics.CanCancel(t)
+		out.CanRetry = diagnostics.CanRetry(t)
 	}
 	return out
 }
@@ -77,7 +78,7 @@ func (r *reader) List(ctx context.Context, actor ports.Actor, req ListRequest) (
 	}
 	items := make([]TaskChoice, len(page.Items))
 	for i, t := range page.Items {
-		items[i] = r.choice(t)
+		items[i] = taskChoice(t, r.deps.Diagnostics)
 	}
 	return TaskPage{Items: items, Next: page.Next, Total: page.Total}, nil
 }
@@ -89,7 +90,7 @@ func (r *reader) Get(ctx context.Context, actor ports.Actor, id string) (TaskCho
 	if err != nil {
 		return TaskChoice{}, err
 	}
-	return r.choice(t), nil
+	return taskChoice(t, r.deps.Diagnostics), nil
 }
 func (r *reader) Preview(ctx context.Context, actor ports.Actor, id string, req PreviewRequest) (PreviewResult, error) {
 	if err := actor.Authorize(access.PermTaskRead); err != nil {

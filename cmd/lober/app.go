@@ -17,6 +17,7 @@ import (
 	appmedia "github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
+	tasksport "github.com/lober/lober/internal/application/tasks/port"
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/domain/selection"
 	"github.com/lober/lober/internal/infrastructure/builtin"
@@ -107,13 +108,13 @@ func supervisorOf(ctx context.Context, src *appmedia.Sources, st repository.Stor
 func mediaControlOf(src *appmedia.Sources, sup *appmedia.Supervisor) port.SourceControl {
 	return appmedia.NewControl(src, sup)
 }
-func taskControlOf(m *machineBundle) console.TaskControl {
+func taskBackendOf(m *machineBundle) tasksport.Control {
 	if m.Service != nil {
 		return execution.NewAuditedControl(m.Service)
 	}
-	return taskControlStub{}
+	return tasks.NewUnavailableControl()
 }
-func wizardOf(st repository.Store, hub ports.Notifier, clock console.Clock, guard ports.SelectionGuard, ctl console.TaskControl) tasks.Wizard {
+func wizardOf(st repository.Store, hub ports.Notifier, clock console.Clock, guard ports.SelectionGuard, ctl tasksport.Control) tasks.Wizard {
 	manifest := selection.Manifest{}
 	for _, t := range builtin.Templates() {
 		manifest.Templates = append(manifest.Templates, model.TemplateKey{ID: t.ID, Version: t.Version})
@@ -141,8 +142,8 @@ func hostRegistryOf(st repository.Store, clock console.Clock) hosts.Registry {
 func mediaRegistryOf(st repository.Store, src port.SourceControl, j *appmedia.Deletion, clock console.Clock) appmedia.Registry {
 	return appmedia.NewRegistry(appmedia.Deps{ISOs: st, Sources: st, Control: src, Deletion: j, Clock: clock})
 }
-func consoleDepsOf(st repository.Store, mediaRegistry appmedia.Registry, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, renderer ports.FrozenPreview, ctl console.TaskControl, hostRegistry hosts.Registry, identityService *identity.Service, auditReader audit.Reader, taskReader tasks.Reader) console.Deps {
-	return console.Deps{TaskReader: taskReader, HostRegistry: hostRegistry, MediaRegistry: mediaRegistry, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, AuditReader: auditReader, Identity: identityService, FrozenPreview: renderer, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger}
+func consoleDepsOf(st repository.Store, mediaRegistry appmedia.Registry, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, renderer ports.FrozenPreview, controller tasks.Controller, hostRegistry hosts.Registry, identityService *identity.Service, auditReader audit.Reader, taskReader tasks.Reader) console.Deps {
+	return console.Deps{TaskReader: taskReader, HostRegistry: hostRegistry, MediaRegistry: mediaRegistry, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, AuditReader: auditReader, Identity: identityService, FrozenPreview: renderer, TaskController: controller, Notifier: hub, Clock: clock, Logger: logger}
 }
 func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, src *appmedia.Sources, ctl port.SourceControl, s *appmedia.Supervisor, j *appmedia.Deletion, m *machineBundle, identityService *identity.Service) *app {
 	return &app{Identity: identityService, Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Sources: src, Control: ctl, Supervisor: s, Deletion: j, Machine: m}
@@ -156,6 +157,10 @@ func identityServiceOf(st repository.Store, cfg config, clock console.Clock) *id
 func auditReaderOf(st repository.Store) audit.Reader { return audit.NewReader(st) }
 
 // taskReaderOf 显式共用原任务仓储、诊断与冻结渲染能力。
-func taskReaderOf(st repository.Store, ctl console.TaskControl, renderer ports.FrozenPreview) tasks.Reader {
+func taskReaderOf(st repository.Store, ctl tasksport.Control, renderer ports.FrozenPreview) tasks.Reader {
 	return tasks.NewReader(tasks.ReaderDeps{Tasks: st, Diagnostics: ctl, Renderer: renderer})
+}
+
+func taskControllerOf(st repository.Store, backend tasksport.Control, clock ports.Clock, notifier ports.Notifier) tasks.Controller {
+	return tasks.NewController(tasks.ControllerDeps{Tasks: st, Backend: backend, Clock: clock, Notifier: notifier})
 }

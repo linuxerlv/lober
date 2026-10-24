@@ -130,8 +130,7 @@ func (f *taskControlFixture) CanRetry(model.Task) []model.Problem  { return f.bl
 func Test任务控制委托审计及错误隔离(t *testing.T) {
 	s, st, token, task, _ := taskFixture(t)
 	ctl := &taskControlFixture{st: st}
-	s.server.deps.TaskCtl = ctl
-	rewireTaskReader(s)
+	setTaskControl(s, ctl)
 	before, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +161,7 @@ func Test任务控制委托审计及错误隔离(t *testing.T) {
 	for _, test := range []struct {
 		err    error
 		status int
-	}{{repository.ErrConflict, 409}, {Problems([]model.Problem{model.NewProblem("host_has_open_task", model.Subject{Kind: model.KindHost, ID: "SN-1"})}), 422}, {errors.New("private backend credential"), 500}, {ErrTaskControlUnavailable, 422}} {
+	}{{repository.ErrConflict, 409}, {&repository.ProblemsError{Kind: repository.ErrRejected, Problems: []model.Problem{model.NewProblem("host_has_open_task", model.Subject{Kind: model.KindHost, ID: "SN-1"})}}, 422}, {errors.New("private backend credential"), 500}, {tasks.ErrControlUnavailable, 422}} {
 		ctl.reject = test.err
 		w := httpCall(s, "POST", "/console/v1/tasks/"+task.ID+"/cancel", "", token)
 		if w.Code != test.status || strings.Contains(w.Body.String(), "private backend credential") {
@@ -628,6 +627,45 @@ func Test任务网页只转换读取应用结果与原始查询(t *testing.T) {
 	f.err = tasks.ErrBadRequest
 	w = httpCall(s, "GET", "/console/v1/tasks", "", token)
 	if w.Code != 400 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+type taskControllerResultFixture struct {
+	calls  []string
+	actor  ports.Actor
+	choice tasks.TaskChoice
+	err    error
+}
+
+func (f *taskControllerResultFixture) Cancel(_ context.Context, a ports.Actor, id string) (tasks.TaskChoice, error) {
+	f.actor = a
+	f.calls = append(f.calls, "cancel:"+id)
+	return f.choice, f.err
+}
+func (f *taskControllerResultFixture) Retry(_ context.Context, a ports.Actor, id string) (tasks.TaskChoice, error) {
+	f.actor = a
+	f.calls = append(f.calls, "retry:"+id)
+	return f.choice, f.err
+}
+func Test任务控制网页只转换应用结果(t *testing.T) {
+	s, st, _ := newHTTPServer(t)
+	token, _ := seedHTTPUser(t, s, st, "alice", model.RoleAdmin)
+	ps := []model.Problem{model.NewProblem("host_has_open_task", model.Subject{})}
+	f := &taskControllerResultFixture{choice: tasks.TaskChoice{Task: model.Task{ID: "app-result", Rev: 17, State: model.TaskCancelled}, CanCancel: ps, CanRetry: ps}}
+	s.server.deps.TaskController = f
+	for _, action := range []string{"cancel", "retry"} {
+		got := responseData[taskItem](t, httpCall(s, "POST", "/console/v1/tasks/raw-id/"+action, `{"actor":"forged","action":"forged","detail":"forged","at":1}`, token))
+		if got.ID != "app-result" || got.Rev != 17 || got.State != model.TaskCancelled || len(got.CanCancel) != 1 || len(got.CanRetry) != 1 || got.CanCancel[0].Code != ps[0].Code || f.actor.Username != "alice" || f.actor.Role != model.RoleAdmin {
+			t.Fatal(got, f.actor)
+		}
+	}
+	if !reflect.DeepEqual(f.calls, []string{"cancel:raw-id", "retry:raw-id"}) {
+		t.Fatal(f.calls)
+	}
+	f.err = tasks.ErrControlUnavailable
+	w := httpCall(s, "POST", "/console/v1/tasks/raw-id/cancel", "", token)
+	if w.Code != 422 || !strings.Contains(w.Body.String(), model.ConsoleTaskControlUnavailable) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }

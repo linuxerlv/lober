@@ -9,8 +9,8 @@
 | GET `/console/v1/tasks` | `task:read` | 网页先解析分页数字及混用方式。应用先验证身份，再检查分页、created_from、created_to、时间范围、host_sn、state，之后查询。每项先 CanCancel 后 CanRetry。 |
 | GET `/console/v1/tasks/:id` | `task:read` | 按原编号查一次，再取诊断。只读取已保存的冻结快照。 |
 | POST `/console/v1/tasks/:id/preview` | `task:read` | 网页解析JSON。应用先验证身份，再检查非空请求固件，随后查任务。请求固件为空时取快照固件；仍为空时取UEFI并追加firmware样例标签。 |
-| POST `/console/v1/tasks/:id/cancel` | `task:cancel` | 查任务、生成可信审计意图、委托原控制、成功后重读、补发提示、诊断。审计动作仍为task.cancel。控制迁移待后续任务完成。 |
-| POST `/console/v1/tasks/:id/retry` | `task:retry` | 同取消；动作仍为task.retry。原版本交原执行服务复查，不自动改用新版本。控制迁移待后续任务完成。 |
+| POST `/console/v1/tasks/:id/cancel` | `task:cancel` | 查任务、生成可信审计意图、委托原控制、成功后重读、补发提示、诊断。审计动作仍为task.cancel。由tasks.Controller完成。 |
+| POST `/console/v1/tasks/:id/retry` | `task:retry` | 同取消；动作仍为task.retry。原版本交原执行服务复查，不自动改用新版本。由tasks.Controller完成。 |
 | GET `/console/v1/tasks/:id/events` | `task:read` | 解析after_seq、limit后直接读取。Seq大于after_seq，升序；不额外查任务。事件迁移待后续任务完成。 |
 | GET `/console/v1/tasks/:id/stream` | `task:read` | 解析after_seq，非空Last-Event-ID覆盖；查任务、订阅、首读200条后才发送流响应头。事件订阅迁移待后续任务完成。 |
 
@@ -30,7 +30,11 @@
 
 读取和预览不写业务、审计或通知，也不启动后台工作。Tasks和Renderer必须显式注入，缺失即拒绝构造；Diagnostics缺失时保留空诊断。不会回退到网页旧依赖。重复调用可以读到新的状态和诊断；分页依赖每次仓储事实，不承诺跨多次读取的一致快照。冻结快照不重新计算。没有写入，所以没有原子写、提交时复查或版本冲突重试。请求context原样传给仓储和渲染器，由原能力处理取消和超时，不新增计时器。[读取小接口](../../internal/application/tasks/port/task_read.go)只暴露查询方法。
 
-控制仍由原执行服务把状态、执行记录、事件及审计放在同一事务中提交。成功提交后执行服务发提示；网页成功重读后仍补发一次。提交成功而补读失败时，不补发第二次提示，也不能声称数据库已经回滚。
+控制仍由原执行服务把状态、执行记录、事件及审计放在同一事务中提交。Controller显式要求任务读取、后端、时钟和通知，缺失即拒绝构造。机器未启用时注入NewUnavailableControl：不提供诊断，取消和重试仍返回422及原消息。
+
+应用先检查各自权限，再读取原任务，用可信操作者、固定task.cancel或task.retry、空说明和一次注入时钟生成审计。不会在委托前重算诊断或提前拒绝。原任务版本原样传递；重复请求和并发条件由既有后端在锁内复查，冲突不自动换版本重试。后端失败直接返回，不重读、不补发，也不另写审计。
+
+成功提交后执行服务发提示；应用成功重读后仍补发一次，然后先取取消诊断再取重试诊断。context原样传递，提交成功后不插入额外的取消检查。提交成功而补读失败时，不补发第二次提示，也不能声称数据库已经回滚。
 
 ## 事件流
 

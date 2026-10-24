@@ -20,9 +20,9 @@ func authoringTransitionFixture(t *testing.T, file, body string) []violation {
 	}
 	for _, src := range []struct{ name, text string }{
 		{"server.go", `package console; import(repo "` + pkgStore + `"; ap "` + modulePath + `/internal/application/authoring/port"; a "` + modulePath + `/internal/application/authoring"; p "` + pkgPorts + `"; tp "` + pkgTasksPort + `"); type localReader interface{GetHook()}; type deps struct{LegacyTasks repo.Tasks; Hooks ap.HookReader; Authoring a.Hooks; Templates a.Templates; Editor a.Editor; Frozen p.FrozenPreview; Notifier p.Notifier; Diagnostics tp.TaskDiagnostics; Other a.Other; Local localReader}; type server struct{deps deps}`},
-		{"tasks.go", `package console; func(s *server) controlTask(){s.deps.LegacyTasks.GetTask()}`},
-		{"legacy.go", `package console; func(s *server) bridge(){s.controlTask()}; func(s *server) bridge2(){s.bridge()}; func oldResponse(){(&server{}).controlTask()}; var alias=oldResponse; func pure(v int)int{return v}`},
-		{"errors.go", `package console; func RespondError(){(&server{}).controlTask()}`},
+		{"tasks.go", `package console; func(s *server) taskStream(){s.deps.LegacyTasks.GetTask()}`},
+		{"legacy.go", `package console; func(s *server) bridge(){s.taskStream()}; func(s *server) bridge2(){s.bridge()}; func oldResponse(){(&server{}).taskStream()}; var alias=oldResponse; func pure(v int)int{return v}`},
+		{"errors.go", `package console; func RespondError(){(&server{}).taskStream()}`},
 		{file, `package console; import (p "` + layer1 + `/params"` + renderImport + `); type Clock func()int64; func(s *server) authoringHandler(){` + body + `}; var _=p.FieldKey("")`},
 	} {
 		f, err := parser.ParseFile(fset, "internal/interfaces/console/"+src.name, src.text, 0)
@@ -56,7 +56,7 @@ func Test编写预览不能绕回旧业务(t *testing.T) {
 			{"直接仓储", `s.deps.LegacyTasks.GetTask()`, false},
 			{"局部别名", `u:=s.deps.LegacyTasks;u.GetTask()`, false},
 			{"仓储方法值", `f:=s.deps.LegacyTasks.GetTask;f()`, false},
-			{"旧辅助方法值", `f:=s.controlTask;f()`, false},
+			{"旧辅助方法值", `f:=s.taskStream;f()`, false},
 			{"两层同包转发", `s.bridge2()`, false},
 			{"包级别名", `alias()`, false},
 			{"旧响应计算", `oldResponse()`, false},

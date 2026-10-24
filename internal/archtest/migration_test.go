@@ -149,9 +149,6 @@ var migrationExceptions = []migrationException{
 	// 保留 dev 已有流程；逐项登记，向导不增加放行。
 	{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "Events", "6"},
 	{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "Tasks", "6"},
-	{pkgConsole, "internal/interfaces/console/taskcontrol.go", "Problems", pkgStore, "ErrRejected", "6"},
-	{pkgConsole, "internal/interfaces/console/taskcontrol.go", "Problems", pkgStore, "ProblemsError", "6"},
-	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).controlTask", pkgStore, "Tasks.GetTask", "6"},
 	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listEvents", pkgStore, "Event", "6"},
 	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listEvents", pkgStore, "Events.ListEvents", "6"},
 	{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).taskStream", pkgStore, "Event", "6"},

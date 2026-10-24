@@ -101,6 +101,9 @@ var phaseSixCompletedRemovals = map[string][]migrationException{
 		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", pkgStore, "TaskQuery", "6"},
 		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", pkgStore, "Tasks.ListTasks", "6"},
 		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).previewTask", pkgStore, "Tasks.GetTask", "6"},
+		{pkgConsole, "internal/interfaces/console/taskcontrol.go", "Problems", pkgStore, "ErrRejected", "6"},
+		{pkgConsole, "internal/interfaces/console/taskcontrol.go", "Problems", pkgStore, "ProblemsError", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).controlTask", pkgStore, "Tasks.GetTask", "6"},
 	},
 	"consoleRuleMigrationExceptions": {
 		{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrTemplateNotCurrent", "6"},
@@ -211,12 +214,15 @@ func phaseSixCompletedOwner(e migrationException) bool {
 	if e.File == "internal/interfaces/console/errors.go" {
 		return true
 	}
+	if e.File == "internal/interfaces/console/taskcontrol.go" {
+		return e.Function == "Problems" && e.Target == pkgStore && slices.Contains([]string{"ErrRejected", "ProblemsError"}, e.Symbol)
+	}
 	if e.File == "internal/interfaces/console/pagination.go" {
 		return e.Function == "queryPagination" && e.Target == pkgStore && e.Symbol == "CheckPageQuery"
 	}
 	if e.File == "internal/interfaces/console/tasks.go" {
 		switch e.Function {
-		case "(*server).getTask", "(*server).previewTask":
+		case "(*server).controlTask", "(*server).getTask", "(*server).previewTask":
 			return e.Target == pkgStore && e.Symbol == "Tasks.GetTask" || e.Function == "(*server).previewTask" && e.Target == modulePath+"/internal/domain/catalog" && e.Symbol == "Firmware.Valid"
 		case "(*server).listTasks":
 			return e.Target == pkgStore && slices.Contains([]string{"Page", "TaskQuery", "Tasks.ListTasks"}, e.Symbol) || e.Target == pkgModel && slices.Contains([]string{"NormalizeSN", "TaskState.Valid"}, e.Symbol)
@@ -233,7 +239,7 @@ func phaseSixCompletedOwner(e migrationException) bool {
 	return e.Target == modulePath+"/internal/domain/catalog" && slices.Contains([]string{"AllArchs", "AllFirmwares", "AllFormats", "AllSeries", "Families"}, e.Symbol)
 }
 
-func Test错误枚举与任务读取迁移精确删除27项保留12项(t *testing.T) {
+func Test错误枚举任务读取与控制迁移精确删除30项保留9项(t *testing.T) {
 	total, removedTotal := 0, 0
 	for name, current := range phaseSixCurrentTables() {
 		var want []migrationException
@@ -258,12 +264,12 @@ func Test错误枚举与任务读取迁移精确删除27项保留12项(t *testin
 		}
 		total += len(current)
 	}
-	if total != 12 || removedTotal != 27 {
+	if total != 9 || removedTotal != 30 {
 		t.Fatal(total, removedTotal)
 	}
 }
 
-func Test错误枚举与任务读取历史不能放行已删除的真实类型调用(t *testing.T) {
+func Test错误枚举任务读取与控制历史不能放行已删除的真实类型调用(t *testing.T) {
 	imports := identityFixtureImports(t)
 	for _, entries := range phaseSixCompletedRemovals {
 		for _, e := range entries {
@@ -292,6 +298,13 @@ func Test错误枚举与任务读取历史不能放行已删除的真实类型�
 					body = `import r "` + pkgStore + `";func RespondError(){var _ *r.` + e.Symbol + `}`
 				case "Code.Category":
 					body = `import m "` + pkgModel + `";func StatusOfProblems(c m.Code){_=c.Category()}`
+				}
+				if e.Function == "Problems" {
+					if e.Symbol == "ProblemsError" {
+						body = `import r "` + pkgStore + `";func Problems(){var _ *r.ProblemsError}`
+					} else {
+						body = `import r "` + pkgStore + `";func Problems(){_=r.ErrRejected}`
+					}
 				}
 				got := identityTypedFixture(t, imports, pkgConsole, strings.TrimPrefix(e.File, "internal/interfaces/console/"), body)
 				for _, v := range got {
@@ -364,5 +377,56 @@ func Test任务读取入口只允许明确三个应用方法(t *testing.T) {
 				t.Fatal(tc.allowed, got)
 			}
 		})
+	}
+}
+
+func Test任务控制入口只允许明确两个应用方法(t *testing.T) {
+	imports := identityFixtureImports(t)
+	for _, tc := range []struct {
+		name, body string
+		allowed    bool
+	}{
+		{"取消", `import a "` + pkgTasks + `";func f(c a.Controller){_=c.Cancel}`, true},
+		{"重试", `import a "` + pkgTasks + `";func f(c a.Controller){_=c.Retry}`, true},
+		{"构造器仍拒绝", `import a "` + pkgTasks + `";func f(){_=a.NewController}`, false},
+		{"不可用构造器仍拒绝", `import a "` + pkgTasks + `";func f(){_=a.NewUnavailableControl}`, false},
+		{"直接控制后端仍拒绝", `import p "` + pkgTasks + `/port";func f(c p.Control){_=c.Cancel}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := identityTypedFixture(t, imports, pkgConsole, "wizard.go", tc.body)
+			if (len(got) == 0) != tc.allowed {
+				t.Fatal(tc.allowed, got)
+			}
+		})
+	}
+}
+
+func Test任务控制旧调用不再获准(t *testing.T) {
+	imports := identityFixtureImports(t)
+	for _, tc := range []struct{ file, body, symbol string }{
+		{"tasks.go", `import r "` + pkgStore + `";type server struct{tasks r.Tasks};func(s *server)controlTask(){_=s.tasks.GetTask}`, "Tasks.GetTask"},
+		{"taskcontrol.go", `import r "` + pkgStore + `";func Problems(){_=r.ErrRejected}`, "ErrRejected"},
+		{"taskcontrol.go", `import r "` + pkgStore + `";func Problems(){var _ *r.ProblemsError}`, "ProblemsError"},
+	} {
+		got := identityTypedFixture(t, imports, pkgConsole, tc.file, tc.body)
+		found := false
+		for _, v := range got {
+			if v.subject == pkgStore+"."+tc.symbol {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal(tc.symbol, got)
+		}
+	}
+}
+
+func Test任务控制迁移当前精确保留9项(t *testing.T) {
+	total := 0
+	for _, entries := range phaseSixCurrentTables() {
+		total += len(entries)
+	}
+	if total != 9 {
+		t.Fatal(total)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	mediaport "github.com/lober/lober/internal/application/media/port"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
+	tasksport "github.com/lober/lober/internal/application/tasks/port"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/domain/selection"
@@ -57,6 +58,9 @@ func wizardDeps(d Deps, store authoringTestStore, override ...repository.Current
 	return wizardDepsGuard(d, store, selectionguard.NewGuard(), override...)
 }
 func wizardDepsGuard(d Deps, store authoringTestStore, guard ports.SelectionGuard, override ...repository.CurrentTaskCreator) Deps {
+	return wizardDepsGuardControl(d, store, guard, tasks.NewUnavailableControl(), override...)
+}
+func wizardDepsGuardControl(d Deps, store authoringTestStore, guard ports.SelectionGuard, backend tasksport.Control, override ...repository.CurrentTaskCreator) Deps {
 	if d.Identity == nil {
 		repositories := &identityTestRepositories{Users: store, RoleMenus: store}
 		sessions := identity.NewSessionBook(0, d.Clock, credentials.NewTokens())
@@ -85,8 +89,9 @@ func wizardDepsGuard(d Deps, store authoringTestStore, guard ports.SelectionGuar
 	d.MediaRegistry = media.NewRegistry(media.Deps{ISOs: store, Sources: store, Control: &mockISOSource{calls: map[string][]sourceCall{}}, Deletion: &mockISODeletion{st: store}, Clock: d.Clock})
 	d.HostRegistry = hosts.NewRegistry(hosts.Deps{Hosts: store, Clock: d.Clock})
 	d.HookAuthoring = authoring.NewHooks(authoring.HookDeps{Hooks: store, Clock: d.Clock})
-	d.TaskReader = tasks.NewReader(tasks.ReaderDeps{Tasks: d.Tasks, Diagnostics: d.TaskCtl, Renderer: d.FrozenPreview})
-	d.Wizard = tasks.NewWizard(tasks.WizardDeps{Hosts: store, ISOs: store, Hooks: store, Templates: store, Tasks: wizardTaskRepository{d.Tasks, current}, Manifest: manifest, Clock: d.Clock, Notifier: d.Notifier, SelectionGuard: guard, Diagnostics: d.TaskCtl})
+	d.TaskController = tasks.NewController(tasks.ControllerDeps{Tasks: d.Tasks, Backend: backend, Clock: d.Clock, Notifier: d.Notifier})
+	d.TaskReader = tasks.NewReader(tasks.ReaderDeps{Tasks: d.Tasks, Diagnostics: backend, Renderer: d.FrozenPreview})
+	d.Wizard = tasks.NewWizard(tasks.WizardDeps{Hosts: store, ISOs: store, Hooks: store, Templates: store, Tasks: wizardTaskRepository{d.Tasks, current}, Manifest: manifest, Clock: d.Clock, Notifier: d.Notifier, SelectionGuard: guard, Diagnostics: backend})
 	return d
 }
 func seedHTTPUser(t *testing.T, s *Server, st repository.Users, name string, role model.Role) (string, model.User) {
@@ -130,7 +135,16 @@ func identityFixture(s *Server) *identityTestFixture {
 }
 
 // 替换旧测试诊断或渲染器后，明确重接读取应用，避免仍持有旧实例。
-func rewireTaskReader(s *Server) {
+func rewireTaskReader(s *Server, backendOverride ...tasksport.Control) {
 	d := s.server.deps
-	s.server.deps.TaskReader = tasks.NewReader(tasks.ReaderDeps{Tasks: d.Tasks, Diagnostics: d.TaskCtl, Renderer: d.FrozenPreview})
+	var backend tasksport.Control = tasks.NewUnavailableControl()
+	if len(backendOverride) > 0 {
+		backend = backendOverride[0]
+	}
+	s.server.deps.TaskReader = tasks.NewReader(tasks.ReaderDeps{Tasks: d.Tasks, Diagnostics: backend, Renderer: d.FrozenPreview})
+}
+func setTaskControl(s *Server, backend tasksport.Control) {
+	d := s.server.deps
+	s.server.deps.TaskController = tasks.NewController(tasks.ControllerDeps{Tasks: d.Tasks, Backend: backend, Clock: d.Clock, Notifier: d.Notifier})
+	rewireTaskReader(s, backend)
 }

@@ -52,13 +52,13 @@ func Test过渡符号许可不能被同包新函数借用(t *testing.T) {
 		name, file, function, body string
 		allowed                    bool
 	}{
-		{"原函数", "tasks.go", "controlTask", "s.users.GetTask()", true},
-		{"原函数局部别名", "tasks.go", "controlTask", "users := s.users; users.GetTask()", true},
-		{"原函数方法值", "tasks.go", "controlTask", "read := s.users.GetTask; read()", true},
+		{"原函数", "tasks.go", "taskStream", "s.users.GetTask()", true},
+		{"原函数局部别名", "tasks.go", "taskStream", "users := s.users; users.GetTask()", true},
+		{"原函数方法值", "tasks.go", "taskStream", "read := s.users.GetTask; read()", true},
 		{"新函数", "tasks.go", "steal", "s.users.GetTask()", false},
 		{"新函数局部别名", "tasks.go", "steal", "users := s.users; users.GetTask()", false},
 		{"新函数方法值", "tasks.go", "steal", "read := s.users.GetTask; read()", false},
-		{"新文件同名函数", "new.go", "controlTask", "s.users.GetTask()", false},
+		{"新文件同名函数", "new.go", "taskStream", "s.users.GetTask()", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// 类型声明单独放到允许声明的位置；待检查函数仍保留自己的真实文件身份。
@@ -138,7 +138,7 @@ func Test真实总检查拒绝新文件仓储方法值及类型错误(t *testing
 	write("go.mod", "module "+modulePath+"\n\ngo 1.27.1\n")
 	write("internal/domain/repository/tasks.go", "package repository; type Tasks interface{ GetTask() }")
 	write("internal/interfaces/console/server.go", "package console; import repo \""+pkgStore+"\"; type server struct { users repo.Tasks }")
-	write("internal/interfaces/console/tasks.go", "package console; func(s *server) controlTask(){s.users.GetTask()}")
+	write("internal/interfaces/console/tasks.go", "package console; func(s *server) taskStream(){s.users.GetTask()}")
 	write("internal/infrastructure/media/iso.go", "package iso")
 	check := func() []violation {
 		t.Helper()

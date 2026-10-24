@@ -23,6 +23,7 @@ import (
 	appmedia "github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
+	tasksport "github.com/lober/lober/internal/application/tasks/port"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/params"
@@ -472,7 +473,7 @@ func Test身份接线共用会话与凭据协调(t *testing.T) {
 	if field.Elem().Pointer() != webService.Elem().Pointer() {
 		t.Fatal("启动与网页创建了不同身份服务")
 	}
-	control := taskControlOf(a.Machine)
+	control := taskBackendOf(a.Machine)
 	for _, call := range []func(context.Context, model.Task, ports.AuditIntent) error{control.Cancel, control.Retry} {
 		if err := call(t.Context(), model.Task{ID: "missing"}, ports.AuditIntent{Actor: "admin", Action: "task.cancel", At: assemblyAt}); !errors.Is(err, repository.ErrNotFound) {
 			t.Fatal("正式任务控制没有交给原执行服务", err)
@@ -548,7 +549,7 @@ func (r *taskReadAssemblyRenderer) RenderFrozen(_ context.Context, s model.Snaps
 }
 
 type taskReadAssemblyControl struct {
-	console.TaskControl
+	tasksport.Control
 	calls []string
 }
 
@@ -629,5 +630,59 @@ func Test任务读取和预览显式组装(t *testing.T) {
 		if w.Code != want {
 			t.Fatal(path, w.Code, w.Body.String())
 		}
+	}
+}
+
+// 后端已提交的提示仍保留，应用成功重读后还要补发。
+type taskControlAssemblyNotifier struct{ publishes []string }
+
+func (n *taskControlAssemblyNotifier) Publish(id string)                        { n.publishes = append(n.publishes, id) }
+func (*taskControlAssemblyNotifier) Subscribe(string) (<-chan struct{}, func()) { panic("不订阅") }
+
+type taskControlAssemblyBackend struct {
+	taskReadAssemblyControl
+	notifier ports.Notifier
+	got      model.Task
+	audit    ports.AuditIntent
+}
+
+func (b *taskControlAssemblyBackend) Cancel(_ context.Context, t model.Task, a ports.AuditIntent) error {
+	b.got = t
+	b.audit = a
+	b.notifier.Publish(t.ID)
+	return nil
+}
+func (b *taskControlAssemblyBackend) Retry(c context.Context, t model.Task, a ports.AuditIntent) error {
+	return b.Cancel(c, t, a)
+}
+func Test任务控制显式共用后端时钟和通知(t *testing.T) {
+	for _, retry := range []bool{false, true} {
+		st := &taskReadAssemblyStore{task: model.Task{ID: "stored", Rev: 9, State: model.TaskFailed}}
+		n := &taskControlAssemblyNotifier{}
+		b := &taskControlAssemblyBackend{notifier: n}
+		c := taskControllerOf(st, b, func() int64 { return 43 }, n)
+		op := c.Cancel
+		action := "task.cancel"
+		if retry {
+			op = c.Retry
+			action = "task.retry"
+		}
+		got, err := op(t.Context(), ports.Actor{Username: "operator", Role: model.RoleOperator}, "raw")
+		if err != nil || got.Task.ID != "stored" || len(got.CanCancel) != 1 || !reflect.DeepEqual(b.got, st.task) || b.audit != (ports.AuditIntent{Actor: "operator", Action: action, At: 43}) || !reflect.DeepEqual(st.calls, []string{"get:raw", "get:stored"}) || !reflect.DeepEqual(b.calls, []string{"cancel:stored", "retry:stored"}) || !reflect.DeepEqual(n.publishes, []string{"stored", "stored"}) {
+			t.Fatal(got, err, b.audit, st.calls, b.calls, n.publishes)
+		}
+	}
+}
+func Test任务控制未启用明确不可用(t *testing.T) {
+	st := &taskReadAssemblyStore{task: model.Task{ID: "stored"}}
+	n := &taskControlAssemblyNotifier{}
+	c := taskControllerOf(st, taskBackendOf(&machineBundle{}), func() int64 { return 44 }, n)
+	for _, op := range []func(context.Context, ports.Actor, string) (tasks.TaskChoice, error){c.Cancel, c.Retry} {
+		if _, err := op(t.Context(), ports.Actor{Username: "admin", Role: model.RoleAdmin}, "raw"); !errors.Is(err, tasks.ErrControlUnavailable) {
+			t.Fatal(err)
+		}
+	}
+	if !reflect.DeepEqual(st.calls, []string{"get:raw", "get:raw"}) || len(n.publishes) != 0 {
+		t.Fatal(st.calls, n.publishes)
 	}
 }

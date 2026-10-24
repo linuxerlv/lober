@@ -102,8 +102,8 @@ func Test镜像网页入口追踪同包旧业务(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := mediaTypedFixture(t, pkgConsole, map[string]string{
 				"server.go": `package console;import(r "` + pkgStore + `";m "` + fixtureMedia + `");type local interface{GetISO()};type server struct{tasks r.Tasks;registry m.Registry;local local;old *m.Sources}`,
-				"tasks.go":  `package console;func(s *server)controlTask(){s.tasks.GetTask()}`,
-				"helper.go": `package console;func(s *server)bridge(){s.controlTask()};func old(s *server){s.bridge()};var oldAlias=old;func pure(n int)int{return n};func oldGeneric[T any](s *server,v T){s.controlTask()}`,
+				"tasks.go":  `package console;func(s *server)taskStream(){s.tasks.GetTask()}`,
+				"helper.go": `package console;func(s *server)bridge(){s.taskStream()};func old(s *server){s.bridge()};var oldAlias=old;func pure(n int)int{return n};func oldGeneric[T any](s *server,v T){s.taskStream()}`,
 				"isos.go":   `package console;func(s *server)handler(){` + tc.body + `}`,
 			})
 			if (len(got) == 0) != tc.allowed {

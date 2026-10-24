@@ -2,7 +2,6 @@ package console
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -76,14 +75,6 @@ func queryNonnegative(c *gin.Context, key string) (int64, bool) {
 		return 0, false
 	}
 	return value, true
-}
-func (s *server) taskResponse(t model.Task) taskItem {
-	out := tasks.TaskChoice{Task: t}
-	if s.deps.TaskCtl != nil {
-		out.CanCancel = s.deps.TaskCtl.CanCancel(t)
-		out.CanRetry = s.deps.TaskCtl.CanRetry(t)
-	}
-	return toTaskChoiceItem(out)
 }
 func (s *server) listTasks(c *gin.Context) {
 	number, limit, ok := parseQueryPagination(c)
@@ -214,32 +205,15 @@ func (s *server) taskStream(c *gin.Context) {
 	}
 }
 func (s *server) controlTask(c *gin.Context, retry bool) {
-	t, ok := Get(c, func() (model.Task, error) { return s.deps.Tasks.GetTask(c.Request.Context(), c.Param("id")) })
-	if !ok {
-		return
-	}
-	err := ErrTaskControlUnavailable
-	if ctl := s.deps.TaskCtl; ctl != nil {
+	result, ok := Get(c, func() (tasks.TaskChoice, error) {
 		if retry {
-			err = ctl.Retry(c.Request.Context(), t, s.auditIntentFrom(c, ""))
-		} else {
-			err = ctl.Cancel(c.Request.Context(), t, s.auditIntentFrom(c, ""))
+			return s.deps.TaskController.Retry(c.Request.Context(), actorOf(c), c.Param("id"))
 		}
+		return s.deps.TaskController.Cancel(c.Request.Context(), actorOf(c), c.Param("id"))
+	})
+	if ok {
+		Ok(c, toTaskChoiceItem(result))
 	}
-	if err != nil {
-		if errors.Is(err, ErrTaskControlUnavailable) {
-			Fail(c, 422, nil, model.ConsoleTaskControlUnavailable)
-		} else {
-			RespondError(c, err)
-		}
-		return
-	}
-	back, ok := Get(c, func() (model.Task, error) { return s.deps.Tasks.GetTask(c.Request.Context(), t.ID) })
-	if !ok {
-		return
-	}
-	s.hub.Publish(back.ID)
-	Ok(c, s.taskResponse(back))
 }
 func (s *server) cancelTask(c *gin.Context) { s.controlTask(c, false) }
 func (s *server) retryTask(c *gin.Context)  { s.controlTask(c, true) }

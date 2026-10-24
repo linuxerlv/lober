@@ -70,6 +70,9 @@ func RespondError(c *gin.Context, err error) {
 	}
 
 	switch {
+	case errors.Is(err, tasks.ErrControlUnavailable):
+		Fail(c, 422, nil, model.ConsoleTaskControlUnavailable)
+		return
 	case errors.Is(err, identity.ErrLoginFailed):
 		Fail(c, 401, nil, model.ConsoleLoginFailed)
 		return

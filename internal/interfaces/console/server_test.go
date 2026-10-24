@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/application/identity"
-	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/domain/access"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
@@ -58,15 +57,19 @@ func Test权限使用仓储里的当前角色与禁用状态(t *testing.T) {
 	}
 }
 func Test审计取当前用户路由动作与注入时钟(t *testing.T) {
-	s, st, now := newHTTPServer(t)
+	s, st, _, task, now := taskFixture(t)
 	token, _ := seedHTTPUser(t, s, st, "alice", model.RoleAdmin)
 	now.Store(fixedAt + 42)
-	var got ports.AuditIntent
-	s.server.installRoutes(s, []route{{method: "POST", path: "/console/v1/probe", perm: PermUserManage, audit: "probe.write", tag: "probe", summary: "Audited probe", handle: func(c *gin.Context) { got = s.server.auditIntentFrom(c, "reason"); Ok(c, nil) }}})
-	if w := httpCall(s, "POST", "/console/v1/probe", "", token); w.Code != 200 {
+	backend := &taskControlFixture{st: st}
+	setTaskControl(s, backend)
+	if w := httpCall(s, "POST", "/console/v1/tasks/"+task.ID+"/cancel", `{"actor":"forged","action":"forged","detail":"reason","at":1}`, token); w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
-	if got.Actor != "alice" || got.Action != "probe.write" || got.Detail != "reason" || got.At != fixedAt+42 {
+	if len(backend.calls) != 1 {
+		t.Fatal(backend.calls)
+	}
+	got := backend.calls[0]
+	if got.Actor != "alice" || got.Action != "task.cancel" || got.Detail != "" || got.At != fixedAt+42 {
 		t.Fatal(got)
 	}
 	if !strings.Contains(httpCall(s, "GET", "/console/v1/user/info", "", token).Body.String(), "alice") {
