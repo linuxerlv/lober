@@ -28,6 +28,7 @@ import (
 )
 
 type app struct {
+	Builtin    authoring.Bootstrapper
 	Identity   identity.Bootstrapper
 	Context    context.Context
 	Config     config
@@ -43,34 +44,12 @@ type app struct {
 }
 
 func (a *app) Initialise() error {
-	for _, h := range builtin.Hooks() {
-		if err := ensureBuiltin(a.Context, func() error { return a.Store.EnsureBuiltinHook(a.Context, h) }); err != nil {
-			return err
-		}
-	}
-	for _, t := range builtin.Templates() {
-		if err := ensureBuiltin(a.Context, func() error { return a.Store.EnsureBuiltinTemplate(a.Context, t) }); err != nil {
-			return err
-		}
+	if err := a.Builtin.Initialise(a.Context); err != nil {
+		return err
 	}
 	return a.Identity.Initialise(a.Context, a.Config.SeedAdmin)
 }
 
-func ensureBuiltin(ctx context.Context, operation func() error) error {
-	for attempt := 0; attempt < 4; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		err := operation()
-		if err == nil || !errors.Is(err, repository.ErrConflict) {
-			return err
-		}
-		if attempt == 3 {
-			return err
-		}
-	}
-	return repository.ErrConflict
-}
 func openStore(ctx context.Context, cfg config, logger *slog.Logger) (*pgstore.Store, func(), error) {
 	st, err := pgstore.Open(ctx, cfg.PG.DSN, pgstore.WithMaxConns(cfg.PG.MaxConns))
 	if err != nil {
@@ -145,8 +124,8 @@ func mediaRegistryOf(st repository.Store, src port.SourceControl, j *appmedia.De
 func consoleDepsOf(mediaRegistry appmedia.Registry, clock ports.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, controller tasks.Controller, hostRegistry hosts.Registry, identityService *identity.Service, auditReader audit.Reader, taskReader tasks.Reader, taskEvents tasks.EventReader) console.Deps {
 	return console.Deps{TaskReader: taskReader, TaskEvents: taskEvents, HostRegistry: hostRegistry, MediaRegistry: mediaRegistry, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, AuditReader: auditReader, Identity: identityService, TaskController: controller, Clock: clock, Logger: logger}
 }
-func appOf(ctx context.Context, cfg config, clock ports.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, src *appmedia.Sources, ctl port.SourceControl, s *appmedia.Supervisor, j *appmedia.Deletion, m *machineBundle, identityService *identity.Service) *app {
-	return &app{Identity: identityService, Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Sources: src, Control: ctl, Supervisor: s, Deletion: j, Machine: m}
+func appOf(ctx context.Context, cfg config, clock ports.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, src *appmedia.Sources, ctl port.SourceControl, s *appmedia.Supervisor, j *appmedia.Deletion, m *machineBundle, identityService *identity.Service, builtinBootstrapper authoring.Bootstrapper) *app {
+	return &app{Builtin: builtinBootstrapper, Identity: identityService, Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Sources: src, Control: ctl, Supervisor: s, Deletion: j, Machine: m}
 }
 
 func identityServiceOf(st repository.Store, cfg config, clock ports.Clock) *identity.Service {
@@ -168,4 +147,8 @@ func taskControllerOf(st repository.Store, backend tasksport.Control, clock port
 // taskEventsOf 与执行、向导和控制入口共用唯一通知实例。
 func taskEventsOf(st repository.Store, notifier ports.Notifier) tasks.EventReader {
 	return tasks.NewEventReader(tasks.EventDeps{Tasks: st, Events: st, Notifier: notifier})
+}
+
+func builtinBootstrapperOf(st repository.Store) authoring.Bootstrapper {
+	return authoring.NewBootstrapper(st, builtin.Hooks(), builtin.Templates())
 }

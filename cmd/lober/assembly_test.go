@@ -29,6 +29,7 @@ import (
 	"github.com/lober/lober/internal/domain/params"
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/domain/snapshot"
+	"github.com/lober/lober/internal/infrastructure/builtin"
 	"github.com/lober/lober/internal/infrastructure/media/isotest"
 	"github.com/lober/lober/internal/infrastructure/notification"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
@@ -729,5 +730,85 @@ func Test任务事件提供者复用原仓储与通知实例(t *testing.T) {
 	sub.Close()
 	if _, open := <-sub.Hints(); open {
 		t.Fatal("未退订")
+	}
+}
+
+type builtinAssemblyStore struct {
+	repository.Store
+	hooks     []model.Hook
+	templates []model.Template
+	order     []string
+}
+
+func (s *builtinAssemblyStore) EnsureBuiltinHook(_ context.Context, h model.Hook) error {
+	s.hooks = append(s.hooks, h)
+	s.order = append(s.order, "hook")
+	return nil
+}
+func (s *builtinAssemblyStore) EnsureBuiltinTemplate(_ context.Context, v model.Template) error {
+	s.templates = append(s.templates, v)
+	s.order = append(s.order, "template")
+	return nil
+}
+func Test内置提供者注入全部发布内容(t *testing.T) {
+	st := &builtinAssemblyStore{}
+	b := builtinBootstrapperOf(st)
+	if len(st.order) != 0 {
+		t.Fatal("构造时提前写入")
+	}
+	if err := b.Initialise(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(st.hooks, builtin.Hooks()) || !reflect.DeepEqual(st.templates, builtin.Templates()) {
+		t.Fatal("发布内容没有完整注入", len(st.hooks), len(st.templates))
+	}
+	seenTemplate := false
+	for _, kind := range st.order {
+		if kind == "template" {
+			seenTemplate = true
+		} else if seenTemplate {
+			t.Fatal("模板后又装载组件")
+		}
+	}
+}
+
+type orderedRealIdentity struct {
+	initialise func(context.Context, string) error
+}
+
+func (i orderedRealIdentity) Initialise(ctx context.Context, seed string) error {
+	return i.initialise(ctx, seed)
+}
+func Test真实接线先准备全部内置内容再创建管理员(t *testing.T) {
+	cfg := assemblyConfig(t)
+	a, cleanup, err := newApp(t.Context(), cfg, func() int64 { return assemblyAt }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if a.Builtin == nil {
+		t.Fatal("正式接线缺少内置初始化入口")
+	}
+	identity := a.Identity
+	called := false
+	a.Identity = orderedRealIdentity{initialise: func(ctx context.Context, seed string) error {
+		called = true
+		for _, h := range builtin.Hooks() {
+			if _, err := a.Store.GetHook(ctx, model.HookKey{ID: h.ID, Version: h.Version}); err != nil {
+				t.Fatal("身份初始化前缺少组件", err)
+			}
+		}
+		for _, v := range builtin.Templates() {
+			if _, err := a.Store.GetTemplate(ctx, model.TemplateKey{ID: v.ID, Version: v.Version}); err != nil {
+				t.Fatal("身份初始化前缺少模板", err)
+			}
+		}
+		return identity.Initialise(ctx, seed)
+	}}
+	if err := a.Initialise(); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("未创建初始管理员")
 	}
 }

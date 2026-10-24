@@ -62,7 +62,8 @@ func newApp(ctx context.Context, cfg config, clock ports.Clock, logger *slog.Log
 	eventReader := taskEventsOf(mainLoggingStore, notifier)
 	deps := consoleDepsOf(registry, clock, logger, wizard, hooks, templates, editor, controller, hostsRegistry, service, reader, tasksReader, eventReader)
 	server := console.New(deps)
-	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, sourceControl, supervisor, deletion, mainMachineBundle, service)
+	bootstrapper := builtinBootstrapperOf(mainLoggingStore)
+	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, sourceControl, supervisor, deletion, mainMachineBundle, service, bootstrapper)
 	return mainApp, func() {
 		cleanup2()
 		cleanup()

@@ -1,6 +1,8 @@
 package archtest
 
 import (
+	"go/parser"
+	"go/token"
 	"testing"
 	"testing/fstest"
 )
@@ -23,6 +25,20 @@ func Test内置内容不扩大上下文许可(t *testing.T) {
 	for _, pkg := range []string{pkgBuiltin, pkgBuiltin + "/nested"} {
 		if got := checkLayer3Source(t, pkg, importing("embed")); len(got) != 0 {
 			t.Fatalf("内置正文原有embed许可被改变：%v", got)
+		}
+	}
+}
+
+func Test编写初始化不得导入发布文件包(t *testing.T) {
+	fset := token.NewFileSet()
+	pkg := modulePath + "/internal/application/authoring"
+	for _, target := range []string{pkgBuiltin, pkgBuiltin + "/kickstart"} {
+		f, err := parser.ParseFile(fset, "bootstrap.go", importing(target), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := checkApplicationFile(fset, pkg, f); len(got) == 0 {
+			t.Fatal("应用读取了发布文件包", target)
 		}
 	}
 }

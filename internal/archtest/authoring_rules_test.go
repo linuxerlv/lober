@@ -5,6 +5,8 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -97,5 +99,63 @@ func Test第二阶段与向导许可已清零(t *testing.T) {
 	}
 	if total != 107 {
 		t.Fatalf("固定许可总数=%d，期望107", total)
+	}
+}
+
+func Test启动组装只委托两个初始化入口(t *testing.T) {
+	name := filepath.Join(filepath.Dir(goModPath(t)), "cmd/lober/app.go")
+	source, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	for _, decl := range f.Decls {
+		if declarationName(decl) == "ensureBuiltin" {
+			t.Error("组装点仍公开任意写入重试回调")
+		}
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || declarationName(decl) != "(*app).Initialise" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.ForStmt, *ast.RangeStmt:
+				t.Error("启动组装仍拥有仓储循环")
+			case *ast.CallExpr:
+				method, ok := x.Fun.(*ast.SelectorExpr)
+				if !ok {
+					t.Error("启动初始化存在额外函数调用")
+					break
+				}
+				receiver, ok := method.X.(*ast.SelectorExpr)
+				if !ok {
+					t.Error("启动初始化必须委托注入入口")
+					break
+				}
+				calls = append(calls, receiver.Sel.Name+"."+method.Sel.Name)
+			}
+			return true
+		})
+	}
+	if strings.Join(calls, ",") != "Builtin.Initialise,Identity.Initialise" {
+		t.Fatal(calls)
+	}
+}
+
+func Test网页不能使用内置启动入口(t *testing.T) {
+	imports := identityFixtureImports(t)
+	a := `a "` + modulePath + `/internal/application/authoring"`
+	for _, body := range []string{
+		`import ` + a + `;func f(b a.Bootstrapper){_=b.Initialise(nil)}`,
+		`import ` + a + `;func f(){_=a.NewBootstrapper}`,
+	} {
+		if got := identityTypedFixture(t, imports, pkgConsole, "hooks.go", body); len(got) == 0 {
+			t.Fatal("网页获得了启动入口")
+		}
 	}
 }
