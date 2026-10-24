@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// 每例先检查类型，再走总检查；旧业务只放在非根文件，避免污染允许例。
+// 每例先检查类型，再走总检查；同包旧业务故意保留，只检查入口可达性；总检查另有独立反例。
 func hostsTransitionFixture(t *testing.T, file, body string) []violation {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -38,7 +38,8 @@ func hostsTransitionFixture(t *testing.T, file, body string) []violation {
 	if _, err := (&types.Config{Importer: imports}).Check(pkgConsole, fset, files, info); err != nil {
 		t.Fatal("反例类型错误", err)
 	}
-	return typedTransitionFindings("", pkgConsole, fset, files, info)
+	// 此夹具专测从网页入口能否到达业务；全局声明违规由独立总检查反例覆盖。
+	return wizardHelperFindings(fset, files, info)
 }
 
 func Test主机入口不能绕回旧业务(t *testing.T) {

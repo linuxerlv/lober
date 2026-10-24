@@ -3,19 +3,18 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/lober/lober/internal/application/ports"
 	"io"
 	"log/slog"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/lober/lober/internal/interfaces/console"
 )
 
 func Test装配角色菜单及改密重启保留(t *testing.T) {
 	cfg := assemblyConfig(t)
 	open := func() (*app, func()) {
 		t.Helper()
-		a, closeApp, err := newApp(t.Context(), cfg, console.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		a, closeApp, err := newApp(t.Context(), cfg, ports.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
 		if err != nil {
 			t.Fatal("assembly failed")
 		}

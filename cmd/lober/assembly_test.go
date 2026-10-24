@@ -30,6 +30,7 @@ import (
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/domain/snapshot"
 	"github.com/lober/lober/internal/infrastructure/media/isotest"
+	"github.com/lober/lober/internal/infrastructure/notification"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 	"github.com/lober/lober/internal/interfaces/console"
 	"strings"
@@ -45,7 +46,7 @@ func assemblyConfig(t *testing.T) config {
 func assembled(t *testing.T) (*app, config) {
 	t.Helper()
 	cfg := assemblyConfig(t)
-	a, closeApp, err := newApp(t.Context(), cfg, console.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a, closeApp, err := newApp(t.Context(), cfg, ports.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal("assembly failed")
 	}
@@ -457,7 +458,7 @@ func Test身份接线共用会话与凭据协调(t *testing.T) {
 	cfg.Machine = machineConfig{Enabled: true, KeyFile: filepath.Join(cfg.ISO.Staging, "machine.key")}
 	cfg.Preview.Gateway = "http://machine.example.test:18090"
 	cfg.Preview.Artifacts = "http://machine.example.test:18090/artifacts"
-	a, cleanup, err := newApp(t.Context(), cfg, console.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a, cleanup, err := newApp(t.Context(), cfg, ports.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,5 +685,49 @@ func Test任务控制未启用明确不可用(t *testing.T) {
 	}
 	if !reflect.DeepEqual(st.calls, []string{"get:raw", "get:raw"}) || len(n.publishes) != 0 {
 		t.Fatal(st.calls, n.publishes)
+	}
+}
+
+type taskEventAssemblyStore struct {
+	taskReadAssemblyStore
+	after int64
+	limit int
+}
+
+func (s *taskEventAssemblyStore) ListEvents(_ context.Context, id string, after int64, limit int) ([]repository.Event, error) {
+	s.calls = append(s.calls, "events:"+id)
+	s.after = after
+	s.limit = limit
+	return []repository.Event{{TaskID: id, Seq: after + 1, Fields: map[string]string{"source": "saved"}}}, nil
+}
+func Test任务事件提供者复用原仓储与通知实例(t *testing.T) {
+	st := &taskEventAssemblyStore{}
+	hub := notification.NewHub()
+	reader := taskEventsOf(st, hub)
+	actor := ports.Actor{Username: "viewer", Role: model.RoleViewer}
+	sub, err := reader.Open(t.Context(), actor, "raw", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	if !reflect.DeepEqual(st.calls, []string{"get:raw", "events:raw"}) || st.after != 7 || st.limit != 200 || sub.Initial()[0].Fields["source"] != "saved" {
+		t.Fatal(st.calls, st.after, st.limit, sub.Initial())
+	}
+	hub.Publish("other")
+	select {
+	case <-sub.Hints():
+		t.Fatal("跨任务提示")
+	default:
+	}
+	hub.Publish("raw")
+	select {
+	case <-sub.Hints():
+	default:
+		t.Fatal("没有复用注入的共同通知实例")
+	}
+	sub.Close()
+	sub.Close()
+	if _, open := <-sub.Hints(); open {
+		t.Fatal("未退订")
 	}
 }

@@ -9,6 +9,4 @@ var consoleRuleMigrationExceptions = []migrationException{
 }
 
 // 唯一通知转发维持旧构造默认值；生产组装直接创建实现。
-var notificationMigrationExceptions = []migrationException{
-	{pkgConsole, "internal/interfaces/console/notify.go", "NewHub", pkgNotification, "NewHub", "6"},
-}
+var notificationMigrationExceptions = []migrationException{}

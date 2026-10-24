@@ -159,7 +159,7 @@ func Test错误Authorization不能回退查询令牌(t *testing.T) {
 	}
 }
 func Test只有路由说明时可构造但身份请求明确失败(t *testing.T) {
-	s := New(Deps{Clock: func() int64 { return fixedAt }})
+	s := New(emptyConsoleDeps(func() int64 { return fixedAt }))
 	if len(s.Routes()) == 0 || s.OpenAPI() == nil {
 		t.Fatal("路由说明不可用")
 	}

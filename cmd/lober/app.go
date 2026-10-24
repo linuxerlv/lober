@@ -31,7 +31,7 @@ type app struct {
 	Identity   identity.Bootstrapper
 	Context    context.Context
 	Config     config
-	Clock      console.Clock
+	Clock      ports.Clock
 	Logger     *slog.Logger
 	Store      repository.Store
 	Console    *console.Server
@@ -114,7 +114,7 @@ func taskBackendOf(m *machineBundle) tasksport.Control {
 	}
 	return tasks.NewUnavailableControl()
 }
-func wizardOf(st repository.Store, hub ports.Notifier, clock console.Clock, guard ports.SelectionGuard, ctl tasksport.Control) tasks.Wizard {
+func wizardOf(st repository.Store, hub ports.Notifier, clock ports.Clock, guard ports.SelectionGuard, ctl tasksport.Control) tasks.Wizard {
 	manifest := selection.Manifest{}
 	for _, t := range builtin.Templates() {
 		manifest.Templates = append(manifest.Templates, model.TemplateKey{ID: t.ID, Version: t.Version})
@@ -124,10 +124,10 @@ func wizardOf(st repository.Store, hub ports.Notifier, clock console.Clock, guar
 	}
 	return tasks.NewWizard(tasks.WizardDeps{Hosts: st, ISOs: st, Templates: st, Hooks: st, Tasks: st, Manifest: manifest, Clock: clock, Notifier: hub, SelectionGuard: guard, Diagnostics: ctl})
 }
-func hookAuthoringOf(st repository.Store, clock console.Clock) authoring.Hooks {
+func hookAuthoringOf(st repository.Store, clock ports.Clock) authoring.Hooks {
 	return authoring.NewHooks(authoring.HookDeps{Hooks: st, Clock: clock})
 }
-func templateAuthoringOf(st repository.Store, clock console.Clock, guard ports.SelectionGuard) authoring.Templates {
+func templateAuthoringOf(st repository.Store, clock ports.Clock, guard ports.SelectionGuard) authoring.Templates {
 	return authoring.NewTemplates(authoring.TemplateDeps{Templates: st, Hooks: st, Clock: clock, SelectionGuard: guard})
 }
 func previewRendererOf(cfg config) ports.FrozenPreview {
@@ -136,20 +136,20 @@ func previewRendererOf(cfg config) ports.FrozenPreview {
 func authoringEditorOf(st repository.Store, renderer ports.FrozenPreview) authoring.Editor {
 	return authoring.NewEditor(authoring.EditorDeps{Templates: st, Hooks: st, Hosts: st, ISOs: st, Renderer: renderer})
 }
-func hostRegistryOf(st repository.Store, clock console.Clock) hosts.Registry {
+func hostRegistryOf(st repository.Store, clock ports.Clock) hosts.Registry {
 	return hosts.NewRegistry(hosts.Deps{Hosts: st, Clock: clock})
 }
-func mediaRegistryOf(st repository.Store, src port.SourceControl, j *appmedia.Deletion, clock console.Clock) appmedia.Registry {
+func mediaRegistryOf(st repository.Store, src port.SourceControl, j *appmedia.Deletion, clock ports.Clock) appmedia.Registry {
 	return appmedia.NewRegistry(appmedia.Deps{ISOs: st, Sources: st, Control: src, Deletion: j, Clock: clock})
 }
-func consoleDepsOf(st repository.Store, mediaRegistry appmedia.Registry, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, renderer ports.FrozenPreview, controller tasks.Controller, hostRegistry hosts.Registry, identityService *identity.Service, auditReader audit.Reader, taskReader tasks.Reader) console.Deps {
-	return console.Deps{TaskReader: taskReader, HostRegistry: hostRegistry, MediaRegistry: mediaRegistry, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, AuditReader: auditReader, Identity: identityService, FrozenPreview: renderer, TaskController: controller, Notifier: hub, Clock: clock, Logger: logger}
+func consoleDepsOf(mediaRegistry appmedia.Registry, clock ports.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, controller tasks.Controller, hostRegistry hosts.Registry, identityService *identity.Service, auditReader audit.Reader, taskReader tasks.Reader, taskEvents tasks.EventReader) console.Deps {
+	return console.Deps{TaskReader: taskReader, TaskEvents: taskEvents, HostRegistry: hostRegistry, MediaRegistry: mediaRegistry, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, AuditReader: auditReader, Identity: identityService, TaskController: controller, Clock: clock, Logger: logger}
 }
-func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, src *appmedia.Sources, ctl port.SourceControl, s *appmedia.Supervisor, j *appmedia.Deletion, m *machineBundle, identityService *identity.Service) *app {
+func appOf(ctx context.Context, cfg config, clock ports.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, src *appmedia.Sources, ctl port.SourceControl, s *appmedia.Supervisor, j *appmedia.Deletion, m *machineBundle, identityService *identity.Service) *app {
 	return &app{Identity: identityService, Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Sources: src, Control: ctl, Supervisor: s, Deletion: j, Machine: m}
 }
 
-func identityServiceOf(st repository.Store, cfg config, clock console.Clock) *identity.Service {
+func identityServiceOf(st repository.Store, cfg config, clock ports.Clock) *identity.Service {
 	sessions := identity.NewSessionBook(cfg.SessionTTLHours*3600, clock, credentials.NewTokens())
 	return identity.NewService(identity.Deps{Users: st, RoleMenus: st, Passwords: credentials.NewPasswords(), Sessions: sessions, Clock: clock})
 }
@@ -163,4 +163,9 @@ func taskReaderOf(st repository.Store, ctl tasksport.Control, renderer ports.Fro
 
 func taskControllerOf(st repository.Store, backend tasksport.Control, clock ports.Clock, notifier ports.Notifier) tasks.Controller {
 	return tasks.NewController(tasks.ControllerDeps{Tasks: st, Backend: backend, Clock: clock, Notifier: notifier})
+}
+
+// taskEventsOf 与执行、向导和控制入口共用唯一通知实例。
+func taskEventsOf(st repository.Store, notifier ports.Notifier) tasks.EventReader {
+	return tasks.NewEventReader(tasks.EventDeps{Tasks: st, Events: st, Notifier: notifier})
 }

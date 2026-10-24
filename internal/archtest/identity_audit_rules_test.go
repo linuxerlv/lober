@@ -171,10 +171,11 @@ func (i identityActualImporter) Import(path string) (*types.Package, error) {
 	return nil, fmt.Errorf("未装载真实依赖 %s", path)
 }
 
-func identityFixtureImports(t *testing.T) identityActualImporter {
+func identityFixtureImports(t *testing.T, extra ...string) identityActualImporter {
 	t.Helper()
-	loaded, err := packages.Load(&packages.Config{Dir: filepath.Dir(goModPath(t)), Mode: packages.NeedName | packages.NeedTypes | packages.NeedImports | packages.NeedDeps},
-		pkgIdentityApp, pkgAuditApp, pkgCredentials, pkgConsole, pkgExecution, "os", "time", "crypto/rand", "crypto/pbkdf2", "crypto/sha256")
+	patterns := []string{pkgIdentityApp, pkgAuditApp, pkgCredentials, pkgConsole, pkgExecution, "os", "time", "crypto/rand", "crypto/pbkdf2", "crypto/sha256"}
+	patterns = append(patterns, extra...)
+	loaded, err := packages.Load(&packages.Config{Dir: filepath.Dir(goModPath(t)), Mode: packages.NeedName | packages.NeedTypes | packages.NeedImports | packages.NeedDeps}, patterns...)
 	if err != nil {
 		t.Fatal(err)
 	}

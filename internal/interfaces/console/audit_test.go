@@ -367,7 +367,7 @@ func Test审计接口五角色权限(t *testing.T) {
 	}
 }
 func Test每个权限码都有正式路由用到(t *testing.T) {
-	s := New(Deps{Clock: func() int64 { return fixedAt }})
+	s := New(emptyConsoleDeps(func() int64 { return fixedAt }))
 	used := map[string]bool{}
 	for _, r := range s.Routes() {
 		used[r.Perm] = true

@@ -122,7 +122,7 @@ func TestOpenAPI草稿嵌入内容与Rev都在请求schema(t *testing.T) {
 
 // 包目录可以调整，已经发布给网页的类型名称和引用仍须稳定。
 func TestOpenAPI公开角色与来源状态名称保持兼容(t *testing.T) {
-	doc := New(Deps{Clock: func() int64 { return fixedAt }}).OpenAPI()
+	doc := New(emptyConsoleDeps(func() int64 { return fixedAt })).OpenAPI()
 	defs := doc["components"].(map[string]any)["schemas"].(map[string]any)
 	for _, name := range []string{"StoreRole", "StoreSourceState"} {
 		if _, exists := defs[name]; !exists {
@@ -166,7 +166,7 @@ func TestOpenAPI公开角色与来源状态名称保持兼容(t *testing.T) {
 }
 
 func TestOpenAPI公开枚举与路由数量保持兼容(t *testing.T) {
-	doc := New(Deps{Clock: func() int64 { return fixedAt }}).OpenAPI()
+	doc := New(emptyConsoleDeps(func() int64 { return fixedAt })).OpenAPI()
 	defs := doc["components"].(map[string]any)["schemas"].(map[string]any)
 	for _, tc := range []struct {
 		name string
@@ -191,5 +191,18 @@ func TestOpenAPI公开枚举与路由数量保持兼容(t *testing.T) {
 	}
 	if count != 75 {
 		t.Fatalf("公开路由数量改变：%d", count)
+	}
+}
+
+func Test纯接口文档与真实路由等价且每次独立(t *testing.T) {
+	s := New(emptyConsoleDeps(func() int64 { return fixedAt }))
+	want := s.OpenAPI()
+	first := OpenAPIDocument()
+	if !reflect.DeepEqual(first, want) {
+		t.Fatal("纯文档没有使用真实完整路由描述")
+	}
+	first["paths"].(map[string]any)["/console/v1/tasks"].(map[string]any)["get"].(map[string]any)["summary"] = "changed"
+	if !reflect.DeepEqual(OpenAPIDocument(), want) || !reflect.DeepEqual(s.OpenAPI(), want) {
+		t.Fatal("重复导出共享内部数据")
 	}
 }

@@ -109,7 +109,7 @@ func migratedApplicationMethod(fn *types.Func) bool {
 		return symbol == "Reader.List" || symbol == "Reader.ExportCSV"
 	}
 	if target == pkgPorts {
-		return symbol == "FrozenPreview.RenderFrozen" || symbol == "DescribeFailure" || symbol == "ProblemClass"
+		return symbol == "DescribeFailure" || symbol == "ProblemClass"
 	}
 	if target == modulePath+"/internal/application/media" {
 		switch symbol {
@@ -125,7 +125,7 @@ func migratedApplicationMethod(fn *types.Func) bool {
 	}
 	if target == pkgTasks {
 		switch symbol {
-		case "Controller.Cancel", "Controller.Retry", "Reader.List", "Reader.Get", "Reader.Preview", "Wizard.Hosts", "Wizard.ISOs", "Wizard.Templates", "Wizard.Params", "Wizard.Submit":
+		case "EventReader.List", "EventReader.Open", "EventSubscription.Initial", "EventSubscription.Hints", "EventSubscription.Read", "EventSubscription.Close", "Controller.Cancel", "Controller.Retry", "Reader.List", "Reader.Get", "Reader.Preview", "Wizard.Hosts", "Wizard.ISOs", "Wizard.Templates", "Wizard.Params", "Wizard.Submit":
 			return true
 		}
 	}

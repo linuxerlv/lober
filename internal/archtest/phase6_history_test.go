@@ -104,6 +104,14 @@ var phaseSixCompletedRemovals = map[string][]migrationException{
 		{pkgConsole, "internal/interfaces/console/taskcontrol.go", "Problems", pkgStore, "ErrRejected", "6"},
 		{pkgConsole, "internal/interfaces/console/taskcontrol.go", "Problems", pkgStore, "ProblemsError", "6"},
 		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).controlTask", pkgStore, "Tasks.GetTask", "6"},
+		{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "Events", "6"},
+		{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "Tasks", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listEvents", pkgStore, "Event", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listEvents", pkgStore, "Events.ListEvents", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).taskStream", pkgStore, "Event", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).taskStream", pkgStore, "Events.ListEvents", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).taskStream", pkgStore, "Tasks.GetTask", "6"},
+		{pkgConsole, "internal/interfaces/console/tasks.go", "toEventItem", pkgStore, "Event", "6"},
 	},
 	"consoleRuleMigrationExceptions": {
 		{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrTemplateNotCurrent", "6"},
@@ -118,6 +126,7 @@ var phaseSixCompletedRemovals = map[string][]migrationException{
 		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).listTasks", "github.com/lober/lober/internal/domain/model", "TaskState.Valid", "6"},
 		{pkgConsole, "internal/interfaces/console/tasks.go", "(*server).previewTask", "github.com/lober/lober/internal/domain/catalog", "Firmware.Valid", "6"},
 	},
+	"notificationMigrationExceptions": {{pkgConsole, "internal/interfaces/console/notify.go", "NewHub", pkgNotification, "NewHub", "6"}},
 }
 
 func phaseSixCurrentTables() map[string][]migrationException {
@@ -220,8 +229,16 @@ func phaseSixCompletedOwner(e migrationException) bool {
 	if e.File == "internal/interfaces/console/pagination.go" {
 		return e.Function == "queryPagination" && e.Target == pkgStore && e.Symbol == "CheckPageQuery"
 	}
+	if e.File == "internal/interfaces/console/server.go" {
+		return e.Function == "package-init" && e.Target == pkgStore && slices.Contains([]string{"Tasks", "Events"}, e.Symbol)
+	}
+	if e.File == "internal/interfaces/console/notify.go" {
+		return e.Function == "NewHub" && e.Target == pkgNotification && e.Symbol == "NewHub"
+	}
 	if e.File == "internal/interfaces/console/tasks.go" {
 		switch e.Function {
+		case "(*server).listEvents", "(*server).taskStream", "toEventItem":
+			return e.Target == pkgStore && slices.Contains([]string{"Event", "Events.ListEvents", "Tasks.GetTask"}, e.Symbol)
 		case "(*server).controlTask", "(*server).getTask", "(*server).previewTask":
 			return e.Target == pkgStore && e.Symbol == "Tasks.GetTask" || e.Function == "(*server).previewTask" && e.Target == modulePath+"/internal/domain/catalog" && e.Symbol == "Firmware.Valid"
 		case "(*server).listTasks":
@@ -239,7 +256,7 @@ func phaseSixCompletedOwner(e migrationException) bool {
 	return e.Target == modulePath+"/internal/domain/catalog" && slices.Contains([]string{"AllArchs", "AllFirmwares", "AllFormats", "AllSeries", "Families"}, e.Symbol)
 }
 
-func Test错误枚举任务读取与控制迁移精确删除30项保留9项(t *testing.T) {
+func Test第六阶段迁移精确删除39项当前四表全零(t *testing.T) {
 	total, removedTotal := 0, 0
 	for name, current := range phaseSixCurrentTables() {
 		var want []migrationException
@@ -264,13 +281,13 @@ func Test错误枚举任务读取与控制迁移精确删除30项保留9项(t *t
 		}
 		total += len(current)
 	}
-	if total != 9 || removedTotal != 30 {
+	if total != 0 || removedTotal != 39 {
 		t.Fatal(total, removedTotal)
 	}
 }
 
 func Test错误枚举任务读取与控制历史不能放行已删除的真实类型调用(t *testing.T) {
-	imports := identityFixtureImports(t)
+	imports := identityFixtureImports(t, pkgNotification)
 	for _, entries := range phaseSixCompletedRemovals {
 		for _, e := range entries {
 			t.Run(e.Symbol, func(t *testing.T) {
@@ -278,6 +295,17 @@ func Test错误枚举任务读取与控制历史不能放行已删除的真实�
 				switch e.Symbol {
 				case "CheckPageQuery":
 					body = `import r "` + pkgStore + `";func queryPagination(){_,_=r.CheckPageQuery("",0,0)}`
+				case "Tasks", "Events":
+					body = `import r "` + pkgStore + `";var _ r.` + e.Symbol
+				case "Event":
+					body = `import r "` + pkgStore + `";type server struct{};func (*server)` + strings.TrimPrefix(e.Function, "(*server).") + `(){var _ r.Event}`
+					if e.Function == "toEventItem" {
+						body = `import r "` + pkgStore + `";func toEventItem(){var _ r.Event}`
+					}
+				case "Events.ListEvents":
+					body = `import r "` + pkgStore + `";type server struct{events r.Events};func(s *server)` + strings.TrimPrefix(e.Function, "(*server).") + `(){_=s.events.ListEvents}`
+				case "NewHub":
+					body = `import n "` + pkgNotification + `";func NewHub(){_=n.NewHub}`
 				case "Tasks.GetTask":
 					body = `import r "` + pkgStore + `";type server struct { tasks r.Tasks };func (s *server)` + strings.TrimPrefix(e.Function, "(*server).") + `(){_=s.tasks.GetTask}`
 				case "Page":
@@ -421,12 +449,31 @@ func Test任务控制旧调用不再获准(t *testing.T) {
 	}
 }
 
-func Test任务控制迁移当前精确保留9项(t *testing.T) {
+func Test任务事件迁移当前四表必须为空(t *testing.T) {
 	total := 0
 	for _, entries := range phaseSixCurrentTables() {
 		total += len(entries)
 	}
-	if total != 9 {
+	if total != 0 {
 		t.Fatal(total)
+	}
+}
+
+func Test任务事件入口只允许已交付方法(t *testing.T) {
+	imports := identityFixtureImports(t)
+	for _, tc := range []struct {
+		body    string
+		allowed bool
+	}{
+		{`import a "` + pkgTasks + `";func f(r a.EventReader){_=r.List;_=r.Open}`, true},
+		{`import a "` + pkgTasks + `";func f(s a.EventSubscription){_=s.Initial;_=s.Hints;_=s.Read;_=s.Close}`, true},
+		{`import a "` + pkgTasks + `";func f(){_=a.NewEventReader}`, false},
+		{`import p "` + pkgTasksPort + `";func f(r p.EventReader){_=r.ListEvents}`, false},
+		{`import p "` + pkgPorts + `";func f(r p.FrozenPreview){_=r.RenderFrozen}`, false},
+	} {
+		got := identityTypedFixture(t, imports, pkgConsole, "wizard.go", tc.body)
+		if (len(got) == 0) != tc.allowed {
+			t.Fatal(tc, got)
+		}
 	}
 }

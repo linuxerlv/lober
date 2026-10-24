@@ -1,6 +1,6 @@
 # 任务读取、控制和事件约定
 
-任务列表、详情和冻结预览已通过 [tasks.Reader](../../internal/application/tasks/read_contract.go) 进入应用。控制及事件订阅仍由原网页入口处理，待后续任务迁移。本文记录保留行为，不代表后续迁移已经完成。
+任务列表、详情和冻结预览通过 [tasks.Reader](../../internal/application/tasks/read_contract.go) 进入应用。取消和重试通过 [tasks.Controller](../../internal/application/tasks/control_contract.go)。事件查询和订阅通过 [tasks.EventReader](../../internal/application/tasks/event_contract.go)。网页层只处理请求、响应和连接循环。
 
 ## 七个入口
 
@@ -11,8 +11,8 @@
 | POST `/console/v1/tasks/:id/preview` | `task:read` | 网页解析JSON。应用先验证身份，再检查非空请求固件，随后查任务。请求固件为空时取快照固件；仍为空时取UEFI并追加firmware样例标签。 |
 | POST `/console/v1/tasks/:id/cancel` | `task:cancel` | 查任务、生成可信审计意图、委托原控制、成功后重读、补发提示、诊断。审计动作仍为task.cancel。由tasks.Controller完成。 |
 | POST `/console/v1/tasks/:id/retry` | `task:retry` | 同取消；动作仍为task.retry。原版本交原执行服务复查，不自动改用新版本。由tasks.Controller完成。 |
-| GET `/console/v1/tasks/:id/events` | `task:read` | 解析after_seq、limit后直接读取。Seq大于after_seq，升序；不额外查任务。事件迁移待后续任务完成。 |
-| GET `/console/v1/tasks/:id/stream` | `task:read` | 解析after_seq，非空Last-Event-ID覆盖；查任务、订阅、首读200条后才发送流响应头。事件订阅迁移待后续任务完成。 |
+| GET `/console/v1/tasks/:id/events` | `task:read` | 解析after_seq、limit后直接读取。Seq大于after_seq，升序；不额外查任务。由tasks.EventReader.List完成。 |
+| GET `/console/v1/tasks/:id/stream` | `task:read` | 解析after_seq，非空Last-Event-ID覆盖；查任务、订阅、首读200条后才发送流响应头。由tasks.EventReader.Open完成。 |
 
 ## 输入、错误和空值
 
@@ -41,3 +41,7 @@
 保持text/event-stream、no-cache及X-Accel-Buffering:no。每条格式仍为id、event:task和JSON data，空页也Flush。订阅早于首读，首读失败立即退订且使用普通错误响应。每页发送前先检查连接上下文，再用最初令牌复查权限；不从新令牌续命。
 
 每页200条，满页继续补读，短页等提示或5秒轮询；任务结束不自动断流。断开、写失败、提示关闭及晚期读取失败均结束并退订，发头后不再写JSON错误。通知继续按任务隔离、容量一、合并提示，重复退订安全；不新增持久队列或必达承诺。
+
+EventReader必须显式注入任务读取、事件读取和共享通知实例。List在权限之后直接沿用原ListEvents校验，不增加查任务。Open先检查权限，再拒绝负after_seq，随后查任务、订阅、首读；首读失败先退订。返回的Event是普通数据，Fields独立复制，网页仍把空字段输出为空对象。
+
+EventSubscription提供Initial、Hints、Read和Close。Initial每次返回独立副本；Read固定200条并传递原context，空结果为数组。Close可重复或并发调用，退订只执行一次。应用不新建通知实例，也不启动后台任务或计时器。网页构造必须显式传入TaskReader、TaskController和TaskEvents，缺少时立即失败。

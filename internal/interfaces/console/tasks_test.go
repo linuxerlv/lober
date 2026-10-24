@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"io"
@@ -96,7 +97,7 @@ type taskControlFixture struct {
 
 // 通过通知契约观察订阅生命周期，不读取搬迁后的通知实现私有字段。
 type streamSubscriptionObserver struct {
-	Notifier
+	ports.Notifier
 	active  atomic.Int64
 	stopped atomic.Int64
 }
@@ -135,7 +136,7 @@ func Test任务控制委托审计及错误隔离(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ch, unsub := s.server.hub.Subscribe(task.ID)
+	ch, unsub := testCaps(s).Notifier.Subscribe(task.ID)
 	defer unsub()
 	for _, step := range []struct {
 		action string
@@ -238,7 +239,7 @@ func Test任务预览只使用固化快照及引用删除保护(t *testing.T) {
 	}
 	setMedia(s, closed, closed, &mockISOSource{calls: map[string][]sourceCall{}}, &mockISODeletion{st: closed})
 	// 所有编写读口也注入关闭的仓储；任务预览仍应只读取已保存快照。
-	assembled := wizardDeps(s.server.deps, closed)
+	assembled := wizardDeps(taskTestDeps(s), closed)
 	s.server.deps.HostRegistry = assembled.HostRegistry
 	s.server.deps.HookAuthoring, s.server.deps.TemplateAuthoring, s.server.deps.AuthoringEditor = assembled.HookAuthoring, assembled.TemplateAuthoring, assembled.AuthoringEditor
 	frozen := responseData[previewResponse](t, httpCall(s, "POST", path, `{"firmware":"uefi"}`, token))
@@ -292,8 +293,8 @@ func awaitStreamRecord(t *testing.T, ch <-chan streamRecord, timeout time.Durati
 }
 func Test任务SSE补读分页丢通知续读及断开退订(t *testing.T) {
 	s, st, token, task, _ := taskFixture(t)
-	subscriptions := &streamSubscriptionObserver{Notifier: s.server.hub}
-	s.server.hub = subscriptions
+	subscriptions := &streamSubscriptionObserver{Notifier: testCaps(s).Notifier}
+	setTaskNotifier(s, subscriptions)
 	batch := make([]repository.NewEvent, 205)
 	for i := range batch {
 		batch[i] = repository.NewEvent{At: fixedAt, Kind: "stream.test", Key: fmt.Sprintf("event-%d", i)}
@@ -322,7 +323,7 @@ func Test任务SSE补读分页丢通知续读及断开退订(t *testing.T) {
 	if _, err := st.AppendEvents(t.Context(), task.ID, []repository.NewEvent{{At: fixedAt, Kind: "stream.hint", Key: "hint"}}); err != nil {
 		t.Fatal(err)
 	}
-	s.server.hub.Publish(task.ID)
+	testCaps(s).Notifier.Publish(task.ID)
 	e := awaitStreamRecord(t, ch, 2*time.Second)
 	if e.event.Seq != 206 {
 		t.Fatal(e)
@@ -421,7 +422,7 @@ func Test任务SSE连接期间复查禁用改密及会话过期(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			s.server.hub.Publish(task.ID)
+			testCaps(s).Notifier.Publish(task.ID)
 			select {
 			case got, ok := <-ch:
 				if ok {
@@ -446,7 +447,7 @@ func Test任务SSE连接期间复查禁用改密及会话过期(t *testing.T) {
 }
 
 func Test任务SSE断线续读OpenAPI请求头(t *testing.T) {
-	s := New(Deps{Clock: func() int64 { return fixedAt }})
+	s := New(emptyConsoleDeps(func() int64 { return fixedAt }))
 	op := s.OpenAPI()["paths"].(map[string]any)["/console/v1/tasks/{id}/stream"].(map[string]any)["get"].(map[string]any)
 	found := false
 	for _, raw := range op["parameters"].([]any) {
@@ -558,7 +559,7 @@ func Test任务SSE退出与到期只检查原令牌(t *testing.T) {
 			if _, err := st.AppendEvents(t.Context(), task.ID, []repository.NewEvent{{At: clock.Load(), Kind: "after.revoke", Key: reason}}); err != nil {
 				t.Fatal(err)
 			}
-			s.server.hub.Publish(task.ID)
+			testCaps(s).Notifier.Publish(task.ID)
 			select {
 			case got, ok := <-ch:
 				if ok {
@@ -667,5 +668,222 @@ func Test任务控制网页只转换应用结果(t *testing.T) {
 	w := httpCall(s, "POST", "/console/v1/tasks/raw-id/cancel", "", token)
 	if w.Code != 422 || !strings.Contains(w.Body.String(), model.ConsoleTaskControlUnavailable) {
 		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+// 在真实身份认证之后替换事件入口，精确观察网页的连接退出分支。
+type streamBoundaryEvents struct {
+	tasks.EventReader
+	sub   *streamBoundarySubscription
+	err   error
+	opens int
+	after int64
+}
+
+func (e *streamBoundaryEvents) Open(_ context.Context, _ ports.Actor, _ string, after int64) (tasks.EventSubscription, error) {
+	e.opens++
+	e.after = after
+	return e.sub, e.err
+}
+
+type streamBoundarySubscription struct {
+	initial []tasks.Event
+	pages   [][]tasks.Event
+	hints   chan struct{}
+	readErr error
+	reads   []int64
+	closes  int
+}
+
+func (s *streamBoundarySubscription) Initial() []tasks.Event { return s.initial }
+func (s *streamBoundarySubscription) Hints() <-chan struct{} { return s.hints }
+func (s *streamBoundarySubscription) Read(_ context.Context, after int64) ([]tasks.Event, error) {
+	s.reads = append(s.reads, after)
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	if len(s.pages) == 0 {
+		return []tasks.Event{}, nil
+	}
+	p := s.pages[0]
+	s.pages = s.pages[1:]
+	return p, nil
+}
+func (s *streamBoundarySubscription) Close() { s.closes++ }
+
+type streamBoundaryIdentity struct {
+	identity.Registry
+	checks int
+	tokens []string
+	denyAt int
+}
+
+func (i *streamBoundaryIdentity) StreamAuthorized(ctx context.Context, token, permission string) bool {
+	i.checks++
+	i.tokens = append(i.tokens, token)
+	if i.denyAt != 0 && i.checks >= i.denyAt {
+		return false
+	}
+	return i.Registry.StreamAuthorized(ctx, token, permission)
+}
+
+type streamBoundaryWriter struct {
+	*httptest.ResponseRecorder
+	flushes int
+	fail    bool
+	onFlush func()
+}
+
+func (w *streamBoundaryWriter) Flush() {
+	w.flushes++
+	w.ResponseRecorder.Flush()
+	if w.onFlush != nil {
+		w.onFlush()
+	}
+}
+func (w *streamBoundaryWriter) Write(b []byte) (int, error) {
+	if w.fail {
+		return 0, errors.New("write failed")
+	}
+	return w.ResponseRecorder.Write(b)
+}
+func Test任务SSE首读失败无流头且坏序号先拒绝(t *testing.T) {
+	s, _, token, task, _ := taskFixture(t)
+	e := &streamBoundaryEvents{err: errors.New("initial read")}
+	s.server.deps.TaskEvents = e
+	w := httpCall(s, "GET", "/console/v1/tasks/"+task.ID+"/stream", "", token)
+	if w.Code != 500 || strings.Contains(w.Header().Get("Content-Type"), "event-stream") || w.Header().Get("Cache-Control") != "" || w.Header().Get("X-Accel-Buffering") != "" || e.opens != 1 {
+		t.Fatal(w.Code, w.Header(), e.opens)
+	}
+	for _, tc := range []struct{ query, header string }{{"bad", "3"}, {"-1", "3"}, {"0", "-1"}, {"0", "bad"}} {
+		req := httptest.NewRequest("GET", "/console/v1/tasks/"+task.ID+"/stream?after_seq="+tc.query, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Last-Event-ID", tc.header)
+		w := httptest.NewRecorder()
+		s.Engine.ServeHTTP(w, req)
+		if w.Code != 400 || e.opens != 1 {
+			t.Fatal(tc, w.Code, e.opens)
+		}
+	}
+}
+func Test任务SSE精确分页空页复查与所有退出退订(t *testing.T) {
+	for _, tc := range []struct {
+		name                               string
+		count                              int
+		late, writeFail, cancel, denyEmpty bool
+	}{{"200", 200, false, false, false, false}, {"201", 201, false, false, false, false}, {"400", 400, false, false, false, false}, {"空页", 0, false, false, false, false}, {"晚期错误", 200, true, false, false, false}, {"写入失败", 1, false, true, false, false}, {"连接取消", 1, false, false, true, false}, {"末空页拒绝", 200, false, false, false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, token, task, _ := taskFixture(t)
+			rows := make([]tasks.Event, tc.count)
+			for i := range rows {
+				rows[i] = tasks.Event{TaskID: task.ID, Seq: int64(i + 1), Kind: "kind", Key: "key"}
+			}
+			sub := &streamBoundarySubscription{hints: make(chan struct{}), readErr: nil}
+			close(sub.hints)
+			first := min(tc.count, 200)
+			sub.initial = rows[:first]
+			for start := first; start < tc.count; start += 200 {
+				sub.pages = append(sub.pages, rows[start:min(start+200, tc.count)])
+			}
+			if tc.late {
+				sub.readErr = errors.New("late read")
+			}
+			e := &streamBoundaryEvents{sub: sub}
+			s.server.deps.TaskEvents = e
+			ident := &streamBoundaryIdentity{Registry: s.server.deps.Identity}
+			if tc.denyEmpty {
+				ident.denyAt = 2
+			}
+			s.server.deps.Identity = ident
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			req := httptest.NewRequest("GET", "/console/v1/tasks/"+task.ID+"/stream?after_seq=99", nil).WithContext(ctx)
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Last-Event-ID", "0")
+			w := &streamBoundaryWriter{ResponseRecorder: httptest.NewRecorder(), fail: tc.writeFail}
+			if tc.cancel {
+				w.onFlush = cancel
+			}
+			s.Engine.ServeHTTP(w, req)
+			if e.after != 0 || sub.closes != 1 {
+				t.Fatal(e.after, sub.closes)
+			}
+			if w.Header().Get("Content-Type") != "text/event-stream" || w.Header().Get("Cache-Control") != "no-cache" || w.Header().Get("X-Accel-Buffering") != "no" {
+				t.Fatal(w.Header())
+			}
+			wantPages := tc.count/200 + 1
+			if tc.writeFail {
+				wantPages = 1
+			}
+			if tc.late || tc.cancel {
+				wantPages = 1
+			}
+			if tc.denyEmpty {
+				wantPages = 2
+			}
+			if ident.checks != wantPages {
+				t.Fatal("每页复查", ident.checks, wantPages)
+			}
+			for _, got := range ident.tokens {
+				if got != token {
+					t.Fatal(ident.tokens)
+				}
+			}
+			wantFlush := wantPages
+			if tc.writeFail {
+				wantFlush = 0
+			}
+			if tc.denyEmpty {
+				wantFlush = 1
+			}
+			if w.flushes != wantFlush {
+				t.Fatal("空页也应刷新", w.flushes, wantFlush)
+			}
+			wantReads := tc.count / 200
+			if tc.cancel || tc.writeFail {
+				wantReads = 0
+			}
+			if tc.late || tc.denyEmpty {
+				wantReads = 1
+			}
+			if len(sub.reads) != wantReads {
+				t.Fatal(sub.reads, wantReads)
+			}
+			for i, after := range sub.reads {
+				if after != int64((i+1)*200) {
+					t.Fatal(sub.reads)
+				}
+			}
+			if strings.Contains(w.Body.String(), "late read") || strings.Contains(w.Body.String(), "console.internal") {
+				t.Fatal("晚期错误写入JSON", w.Body.String())
+			}
+			if !tc.writeFail && tc.count > 0 {
+				want := fmt.Sprintf("id: 1\nevent: task\ndata: {\"taskID\":%q,\"seq\":1,\"at\":0,\"kind\":\"kind\",\"key\":\"key\",\"fields\":{}}\n\n", task.ID)
+				if !strings.HasPrefix(w.Body.String(), want) {
+					t.Fatal(w.Body.String())
+				}
+			}
+		})
+	}
+}
+func Test网页必须显式注入三个任务应用入口(t *testing.T) {
+	for _, field := range []string{"TaskReader", "TaskController", "TaskEvents"} {
+		t.Run(field, func(t *testing.T) {
+			d := emptyConsoleDeps(func() int64 { return fixedAt })
+			switch field {
+			case "TaskReader":
+				d.TaskReader = nil
+			case "TaskController":
+				d.TaskController = nil
+			case "TaskEvents":
+				d.TaskEvents = nil
+			}
+			defer func() {
+				if recover() == nil {
+					t.Fatal("缺少任务应用入口未拒绝")
+				}
+			}()
+			New(d)
+		})
 	}
 }

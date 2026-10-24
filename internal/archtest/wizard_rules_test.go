@@ -31,7 +31,8 @@ func wizardTransitionFixture(t *testing.T, body string) []violation {
 	if _, e := (&types.Config{Importer: imports}).Check(pkgConsole, fset, files, info); e != nil {
 		t.Fatal("夹具类型错误", e)
 	}
-	return typedTransitionFindings("", pkgConsole, fset, files, info)
+	// 此夹具专测从网页入口能否到达业务；全局声明违规由独立总检查反例覆盖。
+	return wizardHelperFindings(fset, files, info)
 }
 func Test向导不能经同包辅助函数绕回旧业务(t *testing.T) {
 	for _, tc := range []struct {

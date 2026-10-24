@@ -18,6 +18,11 @@ const fixtureMediaPort = fixtureMedia + "/port"
 
 // 所有正反例先通过 Go 类型检查，再调用生产源码所用的同一检查函数。
 func mediaTypedFixture(t *testing.T, caller string, sources map[string]string) []violation {
+	return mediaTypedFixtureMode(t, caller, sources, false)
+}
+
+// helperOnly 仅供专门的同包可达性单元测试；其余测试仍走完整总检查。
+func mediaTypedFixtureMode(t *testing.T, caller string, sources map[string]string, helperOnly bool) []violation {
 	t.Helper()
 	fset := token.NewFileSet()
 	var files []*ast.File
@@ -42,6 +47,9 @@ func mediaTypedFixture(t *testing.T, caller string, sources map[string]string) [
 	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}, Types: map[ast.Expr]types.TypeAndValue{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
 	if _, err := (&types.Config{Importer: imports}).Check(caller, fset, files, info); err != nil {
 		t.Fatal("夹具必须先通过类型检查", err)
+	}
+	if helperOnly {
+		return wizardHelperFindings(fset, files, info)
 	}
 	return typedTransitionFindings("", caller, fset, files, info)
 }
@@ -100,12 +108,12 @@ func Test镜像网页入口追踪同包旧业务(t *testing.T) {
 		{"纯响应转换", `_=pure(42)`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := mediaTypedFixture(t, pkgConsole, map[string]string{
+			got := mediaTypedFixtureMode(t, pkgConsole, map[string]string{
 				"server.go": `package console;import(r "` + pkgStore + `";m "` + fixtureMedia + `");type local interface{GetISO()};type server struct{tasks r.Tasks;registry m.Registry;local local;old *m.Sources}`,
 				"tasks.go":  `package console;func(s *server)taskStream(){s.tasks.GetTask()}`,
 				"helper.go": `package console;func(s *server)bridge(){s.taskStream()};func old(s *server){s.bridge()};var oldAlias=old;func pure(n int)int{return n};func oldGeneric[T any](s *server,v T){s.taskStream()}`,
 				"isos.go":   `package console;func(s *server)handler(){` + tc.body + `}`,
-			})
+			}, true)
 			if (len(got) == 0) != tc.allowed {
 				t.Fatalf("allowed=%v findings=%v", tc.allowed, got)
 			}

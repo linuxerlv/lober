@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/lober/lober/internal/application/ports"
 	"io"
 	"log/slog"
 	"net"
@@ -13,8 +14,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
-	"github.com/lober/lober/internal/interfaces/console"
 )
 
 func main() {
@@ -51,7 +50,7 @@ func run(args []string, output io.Writer) error {
 	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	a, cleanup, err := newApp(ctx, cfg, console.Clock(func() int64 { return time.Now().Unix() }), logger)
+	a, cleanup, err := newApp(ctx, cfg, ports.Clock(func() int64 { return time.Now().Unix() }), logger)
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"github.com/lober/lober/internal/application/ports"
 	"io"
 	"log/slog"
 	"net/http"
@@ -9,8 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/lober/lober/internal/interfaces/console"
 )
 
 func TestEnabledMachineAssemblyPersistsProtectedKeyAndServesCanonicalRoute(t *testing.T) {
@@ -19,7 +18,7 @@ func TestEnabledMachineAssemblyPersistsProtectedKeyAndServesCanonicalRoute(t *te
 	cfg.Preview.Gateway = "http://192.168.56.2:18090"
 	cfg.Preview.Artifacts = "http://192.168.56.2:18090/artifacts"
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	clock := console.Clock(func() int64 { return assemblyAt })
+	clock := ports.Clock(func() int64 { return assemblyAt })
 	a, cleanup, err := newApp(t.Context(), cfg, clock, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +91,7 @@ func TestEnabledMachineRejectsInvalidEndpointOrUnprotectedKey(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			_, cleanup, err := newApp(t.Context(), cfg, console.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
+			_, cleanup, err := newApp(t.Context(), cfg, ports.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if cleanup != nil {
 				cleanup()
 			}

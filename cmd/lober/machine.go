@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"github.com/lober/lober/internal/application/ports"
 	"io"
 	"log/slog"
 	"net"
@@ -44,7 +45,7 @@ func (a machineAdapter) Signal(ctx context.Context, id, token string, sig machin
 	a.logger.Debug("机器信号处理", "operation", "machine.signal", "task", id, "duration", time.Since(start), "accepted", err == nil)
 	return err
 }
-func machineOf(st repository.Store, hub console.Notifier, cfg config, clock console.Clock, logger *slog.Logger) (*machineBundle, error) {
+func machineOf(st repository.Store, hub ports.Notifier, cfg config, clock ports.Clock, logger *slog.Logger) (*machineBundle, error) {
 	if !cfg.Machine.Enabled {
 		return &machineBundle{}, nil
 	}

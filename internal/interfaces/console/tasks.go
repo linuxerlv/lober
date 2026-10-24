@@ -10,7 +10,6 @@ import (
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/repository"
 )
 
 type taskPage struct {
@@ -101,7 +100,7 @@ func (s *server) getTask(c *gin.Context) {
 		Ok(c, toTaskChoiceItem(t))
 	}
 }
-func toEventItem(e repository.Event) eventItem {
+func toEventItem(e tasks.Event) eventItem {
 	return eventItem{e.TaskID, e.Seq, e.At, e.Kind, e.Key, stringMap(e.Fields)}
 }
 func (s *server) listEvents(c *gin.Context) {
@@ -113,8 +112,8 @@ func (s *server) listEvents(c *gin.Context) {
 	if !ok {
 		return
 	}
-	events, ok := Get(c, func() ([]repository.Event, error) {
-		return s.deps.Events.ListEvents(c.Request.Context(), c.Param("id"), after, limit)
+	events, ok := Get(c, func() ([]tasks.Event, error) {
+		return s.deps.TaskEvents.List(c.Request.Context(), actorOf(c), c.Param("id"), after, limit)
 	})
 	if !ok {
 		return
@@ -141,23 +140,20 @@ func (s *server) taskStream(c *gin.Context) {
 		}
 		last = seq
 	}
-	id := c.Param("id")
-	if _, ok := Get(c, func() (model.Task, error) { return s.deps.Tasks.GetTask(c.Request.Context(), id) }); !ok {
-		return
-	}
-	hints, unsub := s.hub.Subscribe(id)
-	defer unsub()
-	events, ok := Get(c, func() ([]repository.Event, error) {
-		return s.deps.Events.ListEvents(c.Request.Context(), id, last, 200)
+	subscription, ok := Get(c, func() (tasks.EventSubscription, error) {
+		return s.deps.TaskEvents.Open(c.Request.Context(), actorOf(c), c.Param("id"), last)
 	})
 	if !ok {
 		return
 	}
+	defer subscription.Close()
+	events := subscription.Initial()
+	hints := subscription.Hints()
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("X-Accel-Buffering", "no")
 	token := bearerToken(c)
-	send := func(page []repository.Event) bool {
+	send := func(page []tasks.Event) bool {
 		for {
 			if c.Request.Context().Err() != nil || !s.streamAuthorized(c, token) {
 				return false
@@ -177,7 +173,7 @@ func (s *server) taskStream(c *gin.Context) {
 				return true
 			}
 			var err error
-			page, err = s.deps.Events.ListEvents(c.Request.Context(), id, last, 200)
+			page, err = subscription.Read(c.Request.Context(), last)
 			if err != nil {
 				return false
 			}
@@ -198,7 +194,7 @@ func (s *server) taskStream(c *gin.Context) {
 		case <-c.Request.Context().Done():
 			return
 		}
-		events, err := s.deps.Events.ListEvents(c.Request.Context(), id, last, 200)
+		events, err := subscription.Read(c.Request.Context(), last)
 		if err != nil || !send(events) {
 			return
 		}

@@ -16,3 +16,8 @@ type TaskReader interface {
 	TaskGetter
 	ListTasks(context.Context, repository.TaskQuery) (repository.Page[model.Task], error)
 }
+
+// EventReader 沿用原查询校验、升序和空结果，不改仓储错误。
+type EventReader interface {
+	ListEvents(context.Context, string, int64, int) ([]repository.Event, error)
+}

@@ -45,7 +45,8 @@ func authoringTransitionFixture(t *testing.T, file, body string) []violation {
 	if _, err := (&types.Config{Importer: imports}).Check(pkgConsole, fset, files, info); err != nil {
 		t.Fatal("反例类型错误", err)
 	}
-	return typedTransitionFindings("", pkgConsole, fset, files, info)
+	// 此夹具专测从网页入口能否到达业务；全局声明违规由独立总检查反例覆盖。
+	return wizardHelperFindings(fset, files, info)
 }
 func Test编写预览不能绕回旧业务(t *testing.T) {
 	for _, file := range []string{"hooks.go", "templates.go", "lifecycle.go", "authoring_helpers.go", "slots.go", "preview.go"} {
@@ -73,7 +74,7 @@ func Test编写预览不能绕回旧业务(t *testing.T) {
 			{"组件入口", `s.deps.Authoring.Get()`, true},
 			{"模板入口", `s.deps.Templates.Derive()`, true},
 			{"编辑入口", `s.deps.Editor.Preview()`, true},
-			{"冻结预览", `s.deps.Frozen.RenderFrozen()`, true},
+			{"冻结预览直调已删除", `s.deps.Frozen.RenderFrozen()`, false},
 		} {
 			t.Run(file+"/"+tc.name, func(t *testing.T) {
 				found := authoringTransitionFixture(t, file, tc.body)
