@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-22-backend-ddd-four-layer-design.md`（用户已确认）；阶段范围见 `2026-10-22-backend-ddd-roadmap.md`。同日其他登录设计不作为已实现事实，本阶段不顺带引入刷新令牌、Cookie 或动态角色。
 
-**状态与起点：** 用户已批准实施。七项任务及逐项独立审查、整分支终审和唯一补强的局部复审均已完成；原完整命令在lober VM通过。基于已验收的本地 `dev`：`9c457799133f64a268f0c3607233feaaa78bc863`，交付并保留 `codex/ddd-identity-audit` 模块分支。指针方法守卫已补齐，仅保留既有日志噪声后续项；见[最终交付结论](../reviews/2026-10-24-ddd-phase5-final-review.md)和[验证记录](../reviews/2026-10-24-ddd-phase5-evidence.md)。
+**状态与起点：** 用户已批准实施。七项任务及逐项独立审查、整分支终审和唯一补强的局部复审均已完成；原完整命令在lober VM通过。基于已验收的本地 `dev`：`9c457799133f64a268f0c3607233feaaa78bc863`，交付并保留 `codex/ddd-identity-audit` 模块分支。指针方法守卫已补齐，仅保留既有日志噪声后续项；见[最终交付结论](../reviews/2026-10-24-ddd-phase5-final-review.md)和[验证记录](../reviews/2026-10-24-ddd-phase5-evidence.md)。 用户后续已授权合入dev，实际本地合并为 `b0edb9d`，合并后原完整VM验收与独立集成审查通过；最新状态见[dev集成记录](../reviews/2026-10-24-ddd-phase5-dev-integration.md)。
 
 ## Global Constraints
 
