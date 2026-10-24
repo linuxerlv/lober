@@ -1,6 +1,6 @@
 # 第五阶段：身份权限与审计验证证据
 
-七项实现已落地；原完整验收在第二轮通过。第七项独立审查与整分支审查仍待控制器执行，当前不标记模块可交付。
+第五阶段可交付。七项任务独立审查、整分支终审与唯一补强的局部复审全部通过。指针方法守卫缺口已关闭，仅保留既有日志噪声后续项。最新代码对应与审查结论见[最终交付记录](2026-10-24-ddd-phase5-final-review.md)。
 
 本阶段起点为已验收的 `dev` 提交 `9c457799133f64a268f0c3607233feaaa78bc863`。模块分支为 `codex/ddd-identity-audit`，工作区为 `E:/src/lober/.worktree/ddd-identity-audit`。未合并、推送或推进后续环境。
 
@@ -14,8 +14,9 @@
 | 4，角色菜单与启动初始化 | `3b4634f` | [报告](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/task-4-report.md)、[独立审查](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/task-4-review.md)已关闭 |
 | 5，一次接通身份与任务接缝 | `7c6baae` | [报告](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/task-5-report.md)、[独立审查](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/task-5-review.md)已关闭；第七项另补用户分页迁移遗漏 |
 | 6，审计查询与完整导出 | `4457db6` | [报告](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/task-6-report.md)、[独立审查](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/task-6-review.md)已关闭 |
-| 7，精确边界与完整验收 | 本证据所属提交 | [报告](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/task-7-report.md)；独立审查待执行 |
-| 整分支审查 | 起点至最终候选 | 待执行；不能用前六项审查或测试通过替代 |
+| 7，精确边界与完整验收 | `f65b48c` | [报告](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/task-7-report.md)、[独立审查](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/task-7-review.md)已关闭 |
+| 整分支审查 | `9c45779..f65b48c` | [独立终审](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/final-review.md)通过；两项轻微问题按补强复审关闭或递延 |
+| 唯一补强与局部复审 | `f65b48c..7a5704d` | [补强报告](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/final-fix-report.md)、[局部复审](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/final-rereview.md)通过；指针漏检已关闭，日志噪声明确递延 |
 
 身份生产入口使用同一 Registry/Bootstrapper 实例。会话表与凭据协调锁留在应用内；密码和令牌实现独立。审计 Reader 只读，导出完整缓冲后才交给网页。共同 AuditIntent 只有四个普通字段，任务控制只作类型转换后委托原实现。
 
@@ -140,16 +141,22 @@ git diff --exit-code
 
 ## 交付边界
 
-本文所在提交与被测树的精确差异只含本证据、第五阶段计划和总路线三份文档；所有执行代码、测试和生成文件相同。提交前后分别用 `git diff --name-only 839257c56c3280f2002db454e949b19c0cb8a0b7 <提交树或HEAD>` 检查；详见[提交与被测树证明](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/task7-commit-proof.json)。纯文档收尾不重复绿灯套件。工作区、模块分支、原日志、失败证据和用户文件全部保留。
+第七项提交 `f65b48c` 与当时被测树的精确差异只含本证据、第五阶段计划和总路线三份文档；当时所有执行代码、测试和生成文件相同。最新补强与交付源码关系见文末。提交前后分别用 `git diff --name-only 839257c56c3280f2002db454e949b19c0cb8a0b7 <提交树或HEAD>` 检查；详见[提交与被测树证明](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/task7-commit-proof.json)。纯文档收尾不重复绿灯套件。工作区、模块分支、原日志、失败证据和用户文件全部保留。
 
-第七项独立审查与整分支审查待控制器完成。未覆盖实物镜像、实机安装、企业测试套件、浏览器人工验收、完整前端构建或合并后的集成测试；不声称这些范围通过。测试日志仍含既有Gin调试输出与预期故障注入消息，未为减少日志修改测试准备或断言。
+七项独立审查、整分支审查和补强复审均已关闭。未覆盖实物镜像、实机安装、企业测试套件、浏览器人工验收、完整前端构建或合并后的集成测试；不声称这些范围通过。测试日志仍含既有Gin调试输出与预期故障注入消息，未为减少日志修改测试准备或断言。
 
 ## 终审后的公共契约守卫补强
 
-上文记录的是 `f65b48c29fcb838ece864765d3e54011b56adf17` 之前的验收和当时的待审状态。其后七项独立审查及整分支审查完成，整分支终审记录两项轻微问题。本段只记录针对其中第一项的补强；控制器的局部复审仍待完成，不把原整分支审查当作本次改动的审查结果。
+上文两轮VM验收对应 `f65b48c29fcb838ece864765d3e54011b56adf17` 候选。其后整分支终审通过并记录两项轻微问题；以下为唯一补强。针对本次差异的局部复审也已通过：指针方法漏检已关闭；既有日志噪声单独递延，没有新增问题。
 
 - `Principal` 与 `AuditIntent` 的公开方法现在同时检查值类型和指针类型。`Principal.Actor` 仍必须是值方法。真实 Go 类型检查通过的两个“仅指针新增公开方法”反例，先在旧守卫下失败，再在补强后通过。没有修改产品代码或原字段、签名及历史清单检查。
 - `finalfix-acceptance` 在 lober 虚拟机对冻结树 `136b8f1db89960218f5a66798c88d0ed2a0f5946` 原样运行完整验收命令。命令文件摘要 `948265128bd7802fd6b367ce6f272ef5492739459b0cca49bfb86e68d0cbf9f9`，UTC `2026-10-24T06:49:15Z–06:59:19Z`，退出 0，虚拟机没有生成差异或未跟踪文件。强制发现通过；普通及竞态测试各 35 包通过、8 包无测试文件，其中各 30 包使用缓存。九包点名重跑 9 包通过，明确通过 111 个顶层和 260 个子测试；明确跳过、失败、无匹配均为 0，简略输出中的隐式跳过总数未知。
 - 终审第二项是既有 Gin 调试及预期故障日志过多，继续单独递延。此次没有修改日志、测试准备缓存、密码强度、竞态超时或断言。
 
 本轮红灯、绿灯、安全日志、原命令验收统计和源码树核对见[补强报告](../../../.superpowers/sdd/2026-10-24-backend-ddd-phase5-identity-audit/final-fix-report.md)。本段写入后的纯文档差异以该报告的提交证明为准；不为纯文档收尾重复套件。
+
+## 最终交付状态
+
+七项任务、整分支终审、唯一补强局部复审均已关闭，没有严重或重要问题。十三入口和五项重点逐项结论、全部实施判断及后续范围见[最终交付记录](2026-10-24-ddd-phase5-final-review.md)。仅保留既有调试/预期故障日志噪声一项非阻断后续整理事项。
+
+最新通过树为 `136b8f1db89960218f5a66798c88d0ed2a0f5946`，实现补强提交为 `7a5704d`。交付文档收尾相对该被测树只包含本证据、第五阶段计划、总路线、最终交付记录四份Markdown；其他所有路径逐一相同。原始日志和工作区保留，不为文档变化重复测试。
