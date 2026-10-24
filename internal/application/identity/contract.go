@@ -86,3 +86,58 @@ type Access interface {
 	// 账号异常返回 false，不额外删除令牌；context 传给读取，事件发送留在入口。
 	StreamAuthorized(context.Context, string, string) bool
 }
+
+type UserQuery struct {
+	Page, Limit int
+	Cursor      string
+}
+type UserPage struct {
+	Items []UserView
+	Next  string
+	Total *int64
+}
+type CreateUserCommand struct {
+	Username, DisplayName, Password string
+	Role                            model.Role
+	Disabled                        bool
+}
+type UpdateUserCommand struct {
+	Username, DisplayName, Password string
+	Role                            model.Role
+	Disabled                        bool
+	Rev                             int64
+}
+type PasswordCommand struct{ CurrentPassword, NewPassword string }
+type ProfileCommand struct {
+	DisplayName, Email, Avatar, Bio string
+	Rev                             int64
+}
+
+// Accounts 的身份只接受本实例认证的请求快照；先查归属、改密要求与权限，再处理输入。
+// context 传给原仓储调用；不增加数据库认证或取消检查。写入和审计由仓储同事务提交，
+// 保存失败保留原错误及全部会话，保存成功后需要撤销的会话立即撤销。
+type Accounts interface {
+	// ListUsers 仅管理员可用；检查分页后按用户名C顺序查询，页码和游标规则沿用仓储。
+	// 结果不含凭据，菜单为空非nil数组/版本0；不额外查菜单、不写审计，重复查询读取当时数据。
+	ListUsers(context.Context, Principal, UserQuery) (UserPage, error)
+	// CreateUser 仅管理员可用；先账号/角色/口令基础检查，再散列，资料细节留给保存校验。
+	// 创建时间与 user.create 审计时间分别读时钟；重复账号服从唯一约束，不新增会话。
+	CreateUser(context.Context, Principal, CreateUserCommand) (UserView, error)
+	// UpdateUser 仅管理员可用；强制改密仅放行管理员本人旧更新入口，不给普通用户管理权限。
+	// Rev/角色/正文账号先于自禁用检查；读目标后检查初始口令，再在锁外散列。
+	// 请求Rev原样保存，不自动刷新；持写锁提交 user.update 后，仅密码非空或禁用才清目标全部会话。
+	// 返回基础结果不读菜单；重复旧版本冲突，角色单独变化由下次认证读取。
+	UpdateUser(context.Context, Principal, string, UpdateUserCommand) (UserView, error)
+	// DisableUser 仅管理员可用；自禁用先于读目标，保存为禁用而非删除账号。
+	// 写锁内提交 user.disable 后清目标全部会话；最后管理员及并发版本由数据库保护。
+	// 每次先读取目标再保存，重复禁用仍按原保存流程写审计和新版本。
+	DisableUser(context.Context, Principal, string) error
+	// ChangePassword 允许强制改密的本人；必填后查旧口令，错误Forbidden先于新口令检查。
+	// 新旧相同或不可保存报BadRequest；散列在写锁外，锁内重读账号、版本、散列及本令牌。
+	// 提交 user.password.change 后撤销本人全部会话；并发变化报冲突，重复请求须重新认证。
+	ChangePassword(context.Context, Principal, PasswordCommand) error
+	// UpdateProfile 本人可用，强制改密期间拒绝；必填Rev后先CheckProfile，再比较认证快照Rev。
+	// 只从旧快照改名字、邮箱、头像、简介四项，不重读安全字段、不持凭据锁。
+	// user.profile.update 成功后再读菜单；菜单失败时保存已提交，旧版本重试冲突，不清会话。
+	UpdateProfile(context.Context, Principal, ProfileCommand) (UserView, error)
+}
