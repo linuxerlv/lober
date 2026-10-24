@@ -20,72 +20,7 @@ func taskFinalFindings(caller string, fset *token.FileSet, files []*ast.File, in
 	if !console && !assembly {
 		return nil
 	}
-	// 保存局部赋值的来源，转成字符串再比较也仍属于状态或固件判断。
-	origins := map[types.Object][]ast.Expr{}
-	for _, f := range files {
-		ast.Inspect(f, func(n ast.Node) bool {
-			switch x := n.(type) {
-			case *ast.AssignStmt:
-				if len(x.Lhs) == len(x.Rhs) {
-					for i, lhs := range x.Lhs {
-						if id, ok := lhs.(*ast.Ident); ok {
-							obj := info.ObjectOf(id)
-							origins[obj] = append(origins[obj], x.Rhs[i])
-						}
-					}
-				}
-			case *ast.ValueSpec:
-				if len(x.Names) == len(x.Values) {
-					for i, id := range x.Names {
-						origins[info.Defs[id]] = append(origins[info.Defs[id]], x.Values[i])
-					}
-				}
-			}
-			return true
-		})
-	}
-	var policyValue func(ast.Expr, map[types.Object]bool) bool
-	policyValue = func(e ast.Expr, seen map[types.Object]bool) bool {
-		if e == nil {
-			return false
-		}
-		if taskPolicyType(info.TypeOf(e)) {
-			return true
-		}
-		// 切片、映射和类型描述是普通输出；它们的长度不代表某个状态取值。
-		if typ := info.TypeOf(e); typ != nil {
-			if _, scalar := typ.Underlying().(*types.Basic); !scalar {
-				return false
-			}
-		}
-		switch x := ast.Unparen(e).(type) {
-		case *ast.Ident:
-			obj := info.ObjectOf(x)
-			if seen[obj] {
-				return false
-			}
-			seen[obj] = true
-			for _, value := range origins[obj] {
-				if policyValue(value, seen) {
-					return true
-				}
-			}
-		case *ast.CallExpr:
-			for _, arg := range x.Args {
-				if policyValue(arg, seen) {
-					return true
-				}
-			}
-		case *ast.StarExpr:
-			return policyValue(x.X, seen)
-		case *ast.UnaryExpr:
-			return policyValue(x.X, seen)
-		case *ast.IndexExpr:
-			return policyValue(x.X, seen) || policyValue(x.Index, seen)
-		}
-		return false
-	}
-	policy := func(e ast.Expr) bool { return policyValue(e, map[types.Object]bool{}) }
+	policy := taskPolicyChecker(files, info)
 	var found []violation
 	for _, f := range files {
 		logging := map[*ast.Ident]bool{}
@@ -160,6 +95,250 @@ func taskFinalFindings(caller string, fset *token.FileSet, files []*ast.File, in
 	return found
 }
 
+// 只追同包返回值、局部赋值和容器内容；容器长度与类型描述不继承元素来源。
+func taskPolicyChecker(files []*ast.File, info *types.Info) func(ast.Expr) bool {
+	origins := map[types.Object][]ast.Expr{}
+	elementOrigins := map[types.Object][]ast.Expr{}
+	functions := map[types.Object]*ast.FuncDecl{}
+	returns := map[ast.Node][]ast.Expr{}
+	remember := func(node ast.Node, body *ast.BlockStmt, results *ast.FieldList) {
+		ast.Inspect(body, func(n ast.Node) bool {
+			if _, nested := n.(*ast.FuncLit); nested {
+				return false
+			}
+			if ret, ok := n.(*ast.ReturnStmt); ok {
+				returns[node] = append(returns[node], ret.Results...)
+				if len(ret.Results) == 0 && results != nil {
+					for _, field := range results.List {
+						for _, id := range field.Names {
+							returns[node] = append(returns[node], id)
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Body != nil {
+				functions[info.Defs[fn.Name]] = fn
+				remember(fn, fn.Body, fn.Type.Results)
+			}
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.FuncLit:
+				remember(x, x.Body, x.Type.Results)
+			case *ast.RangeStmt:
+				if id, ok := x.Value.(*ast.Ident); ok {
+					elementOrigins[info.ObjectOf(id)] = append(elementOrigins[info.ObjectOf(id)], x.X)
+				}
+			case *ast.AssignStmt:
+				if len(x.Lhs) == len(x.Rhs) {
+					for i, lhs := range x.Lhs {
+						if id, ok := lhs.(*ast.Ident); ok {
+							origins[info.ObjectOf(id)] = append(origins[info.ObjectOf(id)], x.Rhs[i])
+						}
+						if index, ok := lhs.(*ast.IndexExpr); ok {
+							if id, ok := index.X.(*ast.Ident); ok {
+								origins[info.ObjectOf(id)] = append(origins[info.ObjectOf(id)], x.Rhs[i])
+							}
+						}
+					}
+				}
+			case *ast.ValueSpec:
+				if len(x.Names) == len(x.Values) {
+					for i, id := range x.Names {
+						origins[info.Defs[id]] = append(origins[info.Defs[id]], x.Values[i])
+					}
+				}
+			}
+			return true
+		})
+	}
+	type target struct {
+		node ast.Node
+		sig  *types.Signature
+		expr ast.Expr
+	}
+	var callable func(ast.Expr, map[types.Object]bool) []target
+	callable = func(e ast.Expr, seen map[types.Object]bool) []target {
+		if fn, ok := ast.Unparen(e).(*ast.FuncLit); ok {
+			if sig, ok := info.TypeOf(fn).(*types.Signature); ok {
+				return []target{{fn, sig, e}}
+			}
+		}
+		if conversion, ok := ast.Unparen(e).(*ast.CallExpr); ok && info.Types[conversion.Fun].IsType() && len(conversion.Args) == 1 {
+			return callable(conversion.Args[0], seen)
+		}
+		var obj types.Object
+		switch x := ast.Unparen(e).(type) {
+		case *ast.Ident:
+			obj = info.ObjectOf(x)
+		case *ast.SelectorExpr:
+			obj = info.Uses[x.Sel]
+		}
+		if obj == nil || seen[obj] {
+			return nil
+		}
+		if fn := functions[obj]; fn != nil {
+			return []target{{fn, info.Defs[fn.Name].Type().(*types.Signature), e}}
+		}
+		seen[obj] = true
+		defer delete(seen, obj)
+		var out []target
+		for _, source := range origins[obj] {
+			out = append(out, callable(source, seen)...)
+		}
+		return out
+	}
+	var visit func(ast.Expr, bool, map[types.Object]ast.Expr, map[types.Object]bool, map[ast.Node]bool) bool
+	visit = func(e ast.Expr, elements bool, bindings map[types.Object]ast.Expr, seen map[types.Object]bool, calls map[ast.Node]bool) bool {
+		if e == nil {
+			return false
+		}
+		if taskPolicyType(info.TypeOf(e)) {
+			return true
+		}
+		if !elements {
+			if typ := info.TypeOf(e); typ != nil {
+				if _, scalar := typ.Underlying().(*types.Basic); !scalar {
+					return false
+				}
+			}
+		}
+		next := func(value ast.Expr, contents bool) bool { return visit(value, contents, bindings, seen, calls) }
+		switch x := ast.Unparen(e).(type) {
+		case *ast.Ident:
+			obj := info.ObjectOf(x)
+			if obj == nil || seen[obj] {
+				return false
+			}
+			seen[obj] = true
+			defer delete(seen, obj)
+			if value := bindings[obj]; value != nil {
+				return next(value, elements)
+			}
+			for _, value := range origins[obj] {
+				if next(value, elements) {
+					return true
+				}
+			}
+			for _, container := range elementOrigins[obj] {
+				if next(container, true) {
+					return true
+				}
+			}
+		case *ast.CallExpr:
+			if id, ok := x.Fun.(*ast.Ident); ok {
+				if builtin, ok := info.Uses[id].(*types.Builtin); ok {
+					switch builtin.Name() {
+					case "len", "cap":
+						if len(x.Args) == 1 {
+							if typ := info.TypeOf(x.Args[0]); typ != nil {
+								if basic, ok := typ.Underlying().(*types.Basic); ok && basic.Info()&types.IsString != 0 {
+									return next(x.Args[0], false)
+								}
+							}
+						}
+						return false
+					case "append":
+						if elements {
+							for i, arg := range x.Args {
+								if next(arg, i == 0 || x.Ellipsis.IsValid()) {
+									return true
+								}
+							}
+						}
+						return false
+					}
+				}
+			}
+			if info.Types[x.Fun].IsType() {
+				for _, arg := range x.Args {
+					if next(arg, false) || next(arg, true) {
+						return true
+					}
+				}
+				return false
+			}
+			local := callable(x.Fun, map[types.Object]bool{})
+			if len(local) > 0 {
+				for _, target := range local {
+					fn := target.node
+					if calls[fn] {
+						continue
+					}
+					bound := map[types.Object]ast.Expr{}
+					for obj, value := range bindings {
+						bound[obj] = value
+					}
+					sig := target.sig
+					offset := 0
+					if sel, ok := target.expr.(*ast.SelectorExpr); ok && info.Selections[sel] != nil && info.Selections[sel].Kind() == types.MethodExpr {
+						offset = 1
+					}
+					for i := 0; i < sig.Params().Len() && i+offset < len(x.Args); i++ {
+						bound[sig.Params().At(i)] = x.Args[i+offset]
+					}
+					if sig.Recv() != nil {
+						if sel, ok := target.expr.(*ast.SelectorExpr); ok {
+							if offset == 1 && len(x.Args) > 0 {
+								bound[sig.Recv()] = x.Args[0]
+							} else {
+								bound[sig.Recv()] = sel.X
+							}
+						}
+					}
+					calls[fn] = true
+					for _, value := range returns[fn] {
+						if visit(value, elements, bound, seen, calls) {
+							delete(calls, fn)
+							return true
+						}
+					}
+					delete(calls, fn)
+				}
+				return false
+			}
+			if !elements {
+				for _, arg := range x.Args {
+					if next(arg, false) || next(arg, true) {
+						return true
+					}
+				}
+			}
+		case *ast.IndexExpr:
+			return next(x.X, true) || next(x.X, false) || next(x.Index, false)
+		case *ast.CompositeLit:
+			if elements {
+				for _, value := range x.Elts {
+					if kv, ok := value.(*ast.KeyValueExpr); ok {
+						if next(kv.Key, false) || next(kv.Value, false) || next(kv.Value, true) {
+							return true
+						}
+					} else if next(value, false) || next(value, true) {
+						return true
+					}
+				}
+			}
+		case *ast.TypeAssertExpr:
+			return next(x.X, true) || next(x.X, false)
+		case *ast.SliceExpr:
+			return elements && next(x.X, true)
+		case *ast.StarExpr:
+			return next(x.X, elements)
+		case *ast.UnaryExpr:
+			return next(x.X, elements)
+		}
+		return false
+	}
+	return func(e ast.Expr) bool {
+		return visit(e, false, map[types.Object]ast.Expr{}, map[types.Object]bool{}, map[ast.Node]bool{})
+	}
+}
+
 func taskPolicyType(typ types.Type) bool {
 	if typ == nil {
 		return false
@@ -228,10 +407,38 @@ func taskBoundaryObject(obj types.Object, console, assembly bool) bool {
 			return true
 		}
 		for i := 0; i < sig.Params().Len(); i++ {
-			typ := types.Unalias(sig.Params().At(i).Type())
-			if named, ok := typ.(*types.Named); ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == pkgModel && named.Obj().Name() == "Task" {
+			if taskControlRecord(sig.Params().At(i).Type()) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// 指针和别名拆开后，对照真实Task的完整结构；同名的无关类型不会被当成任务。
+func taskControlRecord(typ types.Type) bool {
+	for typ != nil {
+		typ = types.Unalias(typ)
+		if ptr, ok := typ.(*types.Pointer); ok {
+			typ = ptr.Elem()
+			continue
+		}
+		break
+	}
+	if typ == nil {
+		return false
+	}
+	fields, ok := typ.Underlying().(*types.Struct)
+	if !ok {
+		return false
+	}
+	for i := 0; i < fields.NumFields(); i++ {
+		pkg := fields.Field(i).Pkg()
+		if pkg == nil || pkg.Path() != pkgModel {
+			continue
+		}
+		if original := pkg.Scope().Lookup("Task"); original != nil && types.Identical(fields, original.Type().Underlying()) {
+			return true
 		}
 	}
 	return false
@@ -366,6 +573,12 @@ func Test任务终态边界拒绝仓储和后端旁路(t *testing.T) {
 		{"本地事件接口", pkgConsole, `import("context";r "` + pkgStore + `");type leaked interface{ListEvents(context.Context,string,int64,int)([]r.Event,error)};func f(r leaked){_=r.ListEvents}`, false},
 		{"后端控制", pkgConsole, `import p "` + pkgTasksPort + `";func f(c p.Control){_=c.Cancel;_=c.Retry}`, false},
 		{"本地后端控制", pkgConsole, `import("context";m "` + pkgModel + `";p "` + pkgPorts + `");type leaked interface{Cancel(context.Context,m.Task,p.AuditIntent)error};func f(c leaked){_=c.Cancel}`, false},
+		{"审查I3指针控制直接调用", pkgConsole, `import("context";m "` + pkgModel + `";p "` + pkgPorts + `");type leaked interface{Cancel(context.Context,*m.Task,p.AuditIntent)error};func bypass(ctx context.Context,c leaked,task *m.Task,audit p.AuditIntent)error{return c.Cancel(ctx,task,audit)}`, false},
+		{"审查I3指针重试方法值", pkgConsole, `import("context";m "` + pkgModel + `";p "` + pkgPorts + `");type leaked interface{Retry(context.Context,*m.Task,p.AuditIntent)error};func bypass(ctx context.Context,c leaked,task *m.Task,audit p.AuditIntent)error{retry:=c.Retry;return retry(ctx,task,audit)}`, false},
+		{"审查I3指针别名嵌入接口", pkgConsole, `import("context";m "` + pkgModel + `";p "` + pkgPorts + `");type taskAlias = *m.Task;type leaked interface{Cancel(context.Context,taskAlias,p.AuditIntent)error};type embedded interface{leaked};func bypass(ctx context.Context,c embedded,task taskAlias,audit p.AuditIntent)error{cancel:=c.Cancel;return cancel(ctx,task,audit)}`, false},
+		{"审查I3复制任务值控制", pkgConsole, `import("context";m "` + pkgModel + `";p "` + pkgPorts + `");type copied m.Task;type leaked interface{Retry(context.Context,copied,p.AuditIntent)error};func bypass(ctx context.Context,c leaked,task copied,audit p.AuditIntent)error{return c.Retry(ctx,task,audit)}`, false},
+		{"审查I3复制任务指针控制", pkgConsole, `import("context";m "` + pkgModel + `";p "` + pkgPorts + `");type copied m.Task;type leaked interface{Cancel(context.Context,*copied,p.AuditIntent)error};func bypass(ctx context.Context,c leaked,task *copied,audit p.AuditIntent)error{return c.Cancel(ctx,task,audit)}`, false},
+		{"无关同名结构不当成任务", pkgConsole, `import "context";type Task struct{Label string};type local interface{Cancel(context.Context,*Task)error};func f(c local,t *Task)error{return c.Cancel(nil,t)}`, true},
 		{"本地诊断", pkgConsole, `import m "` + pkgModel + `";type leaked interface{CanRetry(m.Task)[]m.Problem};func f(c leaked){_=c.CanRetry}`, false},
 		{"通知构造别名", pkgConsole, `import n "` + pkgNotification + `";var build=n.NewHub`, false},
 		{"通知发布方法值", pkgConsole, `import p "` + pkgPorts + `";func f(n p.Notifier){_=n.Publish}`, false},
@@ -374,6 +587,34 @@ func Test任务终态边界拒绝仓储和后端旁路(t *testing.T) {
 		{"指针别名状态分支", pkgConsole, `import m "` + pkgModel + `";type alias=m.Task;func f(t *alias)bool{switch t.State{case m.TaskDone:return true};return false}`, false},
 		{"复制结构状态分支", pkgConsole, `import m "` + pkgModel + `";type copied m.Task;func f(t copied)bool{return t.State=="done"}`, false},
 		{"字符串转换后状态比较", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{s:=string(t.State);return s=="done"}`, false},
+		{"审查I1状态辅助返回比较", pkgConsole, `import m "` + pkgModel + `";func stateText(t m.Task)string{return string(t.State)};func byHelper(t m.Task)bool{return stateText(t)=="done"}`, false},
+		{"审查I1状态容器元素比较", pkgConsole, `import m "` + pkgModel + `";func byContainer(t m.Task)bool{values:=[]string{string(t.State)};return values[0]=="done"}`, false},
+		{"审查I1固件辅助返回比较", pkgConsole, `import m "` + pkgModel + `";func firmwareText(t m.Task)string{return string(t.Snapshot.Host.Firmware)};func byHelper(t m.Task)bool{return firmwareText(t)=="uefi"}`, false},
+		{"审查I1固件容器元素比较", pkgConsole, `import m "` + pkgModel + `";func byContainer(t m.Task)bool{values:=[]string{string(t.Snapshot.Host.Firmware)};return values[0]=="uefi"}`, false},
+		{"状态容器辅助返回元素比较", pkgConsole, `import m "` + pkgModel + `";func stateTexts(t m.Task)[]string{return []string{string(t.State)}};func f(t m.Task)bool{return stateTexts(t)[0]=="done"}`, false},
+		{"状态映射元素比较", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{values:=map[string]string{"state":string(t.State)};return values["state"]=="done"}`, false},
+		{"状态追加容器元素比较", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{var values []string;values=append(values,string(t.State));return values[0]=="done"}`, false},
+		{"审查I1状态容器Join比较", pkgConsole, `import("strings";m "` + pkgModel + `");func f(t m.Task)bool{values:=[]string{string(t.State)};return strings.Join(values,"")=="done"}`, false},
+		{"审查I1固件容器Join比较", pkgConsole, `import("strings";m "` + pkgModel + `");func f(t m.Task)bool{values:=[]string{string(t.Snapshot.Host.Firmware)};return strings.Join(values,"")=="uefi"}`, false},
+		{"纯状态Join输出", pkgConsole, `import("strings";m "` + pkgModel + `");func f(t m.Task)string{return strings.Join([]string{string(t.State)},"")}`, true},
+		{"纯固件Join输出", pkgConsole, `import("strings";m "` + pkgModel + `");func f(t m.Task)string{return strings.Join([]string{string(t.Snapshot.Host.Firmware)},"")}`, true},
+		{"审查I1状态字符串索引比较", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{return string(t.State)[0]=='d'}`, false},
+		{"审查I1固件字符串索引比较", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{return string(t.Snapshot.Host.Firmware)[0]=='u'}`, false},
+		{"审查I1状态函数文字返回比较", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{text:=func(task m.Task)string{return string(task.State)};return text(t)=="done"}`, false},
+		{"审查I1固件函数文字返回比较", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{text:=func(task m.Task)string{return string(task.Snapshot.Host.Firmware)};return text(t)=="uefi"}`, false},
+		{"审查I1状态range取值比较", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{for _,v:=range []string{string(t.State)}{return v=="done"};return false}`, false},
+		{"审查I1固件range取值比较", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{for _,v:=range []string{string(t.Snapshot.Host.Firmware)}{return v=="uefi"};return false}`, false},
+		{"审查I1状态容器转换比较", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{return string([]byte(string(t.State)))=="done"}`, false},
+		{"审查I1固件容器转换比较", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{return string([]byte(string(t.Snapshot.Host.Firmware)))=="uefi"}`, false},
+		{"明确接口转换保留状态", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{return any(string(t.State)).(string)=="done"}`, false},
+		{"明确接口转换保留固件", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{return any(string(t.Snapshot.Host.Firmware)).(string)=="uefi"}`, false},
+		{"函数文字纯状态输出", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)string{text:=func(task m.Task)string{return string(task.State)};return text(t)}`, true},
+		{"range纯状态输出", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)string{for _,v:=range []string{string(t.State)}{return v};return ""}`, true},
+		{"函数文字常量不沾状态", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{label:=func(s string)string{return "ready"};return label(string(t.State))=="ready"}`, true},
+		{"纯状态容器长度", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{values:=[]string{string(t.State)};return len(values)>0}`, true},
+		{"辅助函数仅输出状态文本", pkgConsole, `import m "` + pkgModel + `";func stateText(t m.Task)string{return string(t.State)};func f(t m.Task)string{return stateText(t)}`, true},
+		{"辅助函数返回普通字段", pkgConsole, `import m "` + pkgModel + `";func name(t m.Task)string{return t.ID};func f(t m.Task)bool{return name(t)=="example"}`, true},
+		{"辅助函数返回常量不沾输入状态", pkgConsole, `import m "` + pkgModel + `";func label(s string)string{return "ready"};func f(t m.Task)bool{return label(string(t.State))=="ready"}`, true},
 		{"固件比较", pkgConsole, `import c "` + pkgCatalog + `";func f(v c.Firmware)bool{return v==c.FirmwareUEFI}`, false},
 		{"固件空值回退", pkgConsole, `import c "` + pkgCatalog + `";func f(v *c.Firmware){if *v==""{*v=c.FirmwareUEFI}}`, false},
 		{"状态赋值", pkgConsole, `import m "` + pkgModel + `";func f(t *m.Task){t.State=m.TaskCancelled}`, false},
@@ -413,7 +654,7 @@ func Test任务终态边界拒绝仓储和后端旁路(t *testing.T) {
 }
 
 func Test任务应用只使用本模块契约(t *testing.T) {
-	imports := identityFixtureImports(t, pkgPgstore, pkgNotification, "net/http", "math/rand/v2", "database/sql", "os/exec", "syscall")
+	imports := identityFixtureImports(t, pkgPgstore, pkgNotification, "net/http", "math/rand/v2", "database/sql", "os/exec", "syscall", "io/fs")
 	for _, caller := range []string{pkgTasks, pkgTasksPort} {
 		for _, body := range []string{
 			`import a "` + modulePath + `/internal/application/authoring";var _ a.Hooks`,
@@ -428,6 +669,7 @@ func Test任务应用只使用本模块契约(t *testing.T) {
 			`import "database/sql";var _=sql.Open`,
 			`import "os/exec";var _=exec.Command`,
 			`import "syscall";var _=syscall.Open`,
+			`import "io/fs";func readTaskFile(files fs.FS)([]byte,error){return fs.ReadFile(files,"tasks.json")}`,
 		} {
 			t.Run(caller+body, func(t *testing.T) {
 				if got := identityTypedFixture(t, imports, caller, "task_extra.go", body); len(got) == 0 {
@@ -488,13 +730,18 @@ func Test任务终态规则接入真实全模块扫描(t *testing.T) {
 	write("internal/interfaces/console/extra.go", `package console;import("context";"`+pkgModel+`");type leaked interface{GetTask(context.Context,string)(model.Task,error)};func bypass(ctx context.Context,r leaked){call:=r.GetTask;_,_=call(ctx,"task-id")}`)
 	write("cmd/lober/extra.go", `package main;import m "`+pkgModel+`";type copied m.Task;func helper(t *copied){t.State="failed"}`)
 	write("internal/application/tasks/extra.go", `package tasks;import "os";var read=os.ReadFile`)
+	write("internal/interfaces/console/policy.go", `package console;import m "`+pkgModel+`";func stateText(t m.Task)string{return string(t.State)};func byHelper(t m.Task)bool{return stateText(t)=="done"};func byContainer(t m.Task)bool{values:=[]string{string(t.State)};return values[0]=="done"}`)
+	write("internal/application/ports/audit.go", `package ports;type AuditIntent struct{}`)
+	write("internal/interfaces/console/control.go", `package console;import("context";m "`+pkgModel+`";p "`+pkgPorts+`");type control interface{Cancel(context.Context,*m.Task,p.AuditIntent)error};func byControl(ctx context.Context,c control,t *m.Task,a p.AuditIntent)error{return c.Cancel(ctx,t,a)}`)
+	write("internal/application/tasks/readfile.go", `package tasks;import "io/fs";func readTaskFile(files fs.FS)([]byte,error){return fs.ReadFile(files,"tasks.json")}`)
+	write("internal/application/tasks/port/readfile.go", `package port;import "io/fs";func readTaskFile(files fs.FS)([]byte,error){return fs.ReadFile(files,"tasks.json")}`)
 	got := check()
 	for _, v := range got {
 		if v.rule == ruleParse {
 			t.Fatal("违规源码必须先成功装载", v)
 		}
 	}
-	for _, file := range []string{"internal/interfaces/console/extra.go", "cmd/lober/extra.go", "internal/application/tasks/extra.go"} {
+	for _, file := range []string{"internal/interfaces/console/extra.go", "cmd/lober/extra.go", "internal/application/tasks/extra.go", "internal/interfaces/console/policy.go", "internal/interfaces/console/control.go", "internal/application/tasks/readfile.go", "internal/application/tasks/port/readfile.go"} {
 		found := false
 		for _, v := range got {
 			found = found || strings.Contains(v.pos, file)

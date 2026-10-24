@@ -93,7 +93,7 @@ func checkApplicationFile(fset *token.FileSet, pkg string, f *ast.File) []violat
 func applicationRule(pkg, imp string) rule {
 	port := pkg == pkgPorts || strings.HasSuffix(pkg, "/port")
 	if pkg == pkgTasks || pkg == pkgTasksPort {
-		if under(imp, "os") || under(imp, "net") || under(imp, "database") || under(imp, "syscall") || imp == "io/ioutil" || under(imp, "crypto/rand") || under(imp, "math/rand") {
+		if under(imp, "os") || under(imp, "net") || under(imp, "database") || under(imp, "syscall") || imp == "io/fs" || imp == "io/ioutil" || under(imp, "crypto/rand") || under(imp, "math/rand") {
 			return ruleApplication
 		}
 	}
