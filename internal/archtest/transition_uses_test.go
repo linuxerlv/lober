@@ -64,6 +64,12 @@ func typedTransitionFindings(root, caller string, fset *token.FileSet, files []*
 					return true
 				}
 				obj := info.Uses[id]
+				if obj == nil && (under(caller, pkgISO) || under(caller, layer1+"/media")) {
+					// 匿名接口的声明没有 Uses；也不能把仓储藏在尚未调用的字段里。
+					if fn, ok := info.Defs[id].(*types.Func); ok && mediaRepositoryMethod(fn.Name()) {
+						obj = fn
+					}
+				}
 				if !transitionRestricted(caller, obj) {
 					return true
 				}
@@ -87,6 +93,9 @@ func typedTransitionFindings(root, caller string, fset *token.FileSet, files []*
 	if caller == pkgConsole {
 		found = append(found, wizardHelperFindings(fset, files, info)...)
 	}
+	if under(caller, pkgISO) || caller == pkgAssembly {
+		found = append(found, mediaStateFindings(caller, fset, files, info)...)
+	}
 	return found
 }
 
@@ -101,14 +110,147 @@ func transitionRestricted(caller string, obj types.Object) bool {
 		return false
 	}
 	target := obj.Pkg().Path()
+	if (caller == modulePath+"/internal/application/media" || caller == modulePath+"/internal/application/media/port") && target == "io/fs" {
+		// 一个是能力返回的缺失事实，一个是应用自身递归的停止标记；均不读文件。
+		return obj.Name() != "ErrNotExist" && obj.Name() != "SkipAll"
+	}
+	if under(caller, layer1+"/media") {
+		if _, ok := obj.(*types.Func); ok && mediaRepositoryMethod(obj.Name()) {
+			return true
+		}
+	}
+	if under(caller, layer1+"/media") && target == pkgStore {
+		// 镜像规则只复用这三个纯校验符号；仓储类型和方法仍全部拒绝。
+		switch transitionSymbol(obj) {
+		case "CheckID", "CheckSource", "ErrInvalid":
+			return caller != layer1+"/media"
+		}
+		return true
+	}
 	_, function := obj.(*types.Func)
 	if under(caller, pkgConsole) {
+		// 新文件也不能借本地接口查镜像；身份和任务接口仍按原阶段规则检查。
+		if function && target == caller && mediaRepositoryMethod(obj.Name()) {
+			if recv := obj.Type().(*types.Signature).Recv(); recv != nil {
+				if _, ok := recv.Type().Underlying().(*types.Interface); ok {
+					return true
+				}
+			}
+		}
+		if target == modulePath+"/internal/application/media/port" {
+			return true
+		}
+		if target == modulePath+"/internal/application/media" && function {
+			return !migratedApplicationMethod(obj.(*types.Func))
+		}
 		return target == pkgStore || under(target, pkgBuiltin) || under(target, pkgRender) || target == pkgNotification || target == layer1+"/access" || function && under(target, layer1) || target == pkgConsole && strings.HasPrefix(transitionSymbol(obj), "ISOSourceState.")
 	}
 	if under(caller, pkgISO) {
+		if _, ok := obj.(*types.TypeName); ok {
+			methods := types.NewMethodSet(obj.Type())
+			for i := 0; i < methods.Len(); i++ {
+				if mediaRepositoryMethod(methods.At(i).Obj().Name()) {
+					return true
+				}
+			}
+		}
+		if target == modulePath+"/internal/application/media/port" {
+			switch strings.Split(transitionSymbol(obj), ".")[0] {
+			case "ISOs", "Sources", "SourceControl", "Deletion", "Waker":
+				return true
+			}
+		}
+		// 小接口也不能重新声明同名仓储能力；不会因换了声明包而放行。
+		if function && mediaRepositoryMethod(obj.Name()) {
+			return true
+		}
+		// 普通架构值检查可用于解码事实；镜像识别、状态、导入和删除规则仍由应用调用。
+		if target == layer1+"/catalog" && transitionSymbol(obj) == "Arch.Valid" {
+			return false
+		}
 		return target == pkgStore || function && under(target, layer1)
 	}
+	if caller == pkgAssembly && function {
+		if mediaRepositoryMethod(obj.Name()) {
+			return true
+		}
+		if target == modulePath+"/internal/application/media" {
+			switch transitionSymbol(obj) {
+			case "NewRegistry", "NewSources", "NewControl", "NewDeletion", "NewSupervisor", "Supervisor.Start", "Supervisor.Close":
+				return false
+			}
+			return true
+		}
+		if target == modulePath+"/internal/application/media/port" || target == layer1+"/media" {
+			return true
+		}
+		if target == pkgModel && (strings.HasPrefix(transitionSymbol(obj), "ISO.") || strings.HasPrefix(transitionSymbol(obj), "Source.") || strings.HasPrefix(transitionSymbol(obj), "ISOState.") || strings.HasPrefix(transitionSymbol(obj), "SourceState.")) {
+			return true
+		}
+	}
 	return false
+}
+
+func mediaRepositoryMethod(name string) bool {
+	switch name {
+	case "CreateISO", "UpdateISO", "DeprecateISO", "DeleteISO", "GetISO", "ListISOs", "SaveSource", "SaveSourceAndAcquire", "GetSource", "SourcesOf", "ListUnfinishedSources", "SaveRange", "RangesOf", "DeleteSource":
+		return true
+	}
+	return false
+}
+
+// 文件适配器可以读取持久化事实，但不能产生业务状态；组装入口连状态判定也不承担。
+func mediaStateFindings(caller string, fset *token.FileSet, files []*ast.File, info *types.Info) []violation {
+	// 按字段真实类型识别；指针别名和复制的结构体仍保留这两个状态类型。
+	stateType := func(t types.Type) bool {
+		if t == nil {
+			return false
+		}
+		n, ok := types.Unalias(t).(*types.Named)
+		return ok && n.Obj().Pkg() != nil && n.Obj().Pkg().Path() == pkgModel && (n.Obj().Name() == "ISOState" || n.Obj().Name() == "SourceState")
+	}
+	state := func(e ast.Expr) bool {
+		s, ok := ast.Unparen(e).(*ast.SelectorExpr)
+		return ok && stateType(info.TypeOf(s))
+	}
+	var found []violation
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			bad := false
+			switch x := n.(type) {
+			case *ast.SelectorExpr:
+				bad = caller == pkgAssembly && state(x)
+			case *ast.AssignStmt:
+				for _, lhs := range x.Lhs {
+					bad = bad || state(lhs)
+				}
+			case *ast.UnaryExpr:
+				bad = x.Op == token.AND && state(x.X)
+			case *ast.CompositeLit:
+				if t := info.TypeOf(x); t != nil {
+					if fields, ok := t.Underlying().(*types.Struct); ok {
+						for i, e := range x.Elts {
+							if kv, ok := e.(*ast.KeyValueExpr); ok {
+								if id, ok := kv.Key.(*ast.Ident); ok {
+									for j := 0; j < fields.NumFields(); j++ {
+										field := fields.Field(j)
+										bad = bad || field.Name() == id.Name && stateType(field.Type())
+									}
+								}
+							} else if i < fields.NumFields() {
+								bad = bad || stateType(fields.Field(i).Type())
+							}
+						}
+					}
+				}
+			}
+			if bad {
+				found = append(found, violation{rule: ruleMigration, pkg: caller, subject: "镜像业务状态", pos: position(fset, n.Pos()), detail: "状态由镜像应用处理"})
+			}
+			return true
+		})
+	}
+	return found
 }
 
 func transitionSymbol(obj types.Object) string {

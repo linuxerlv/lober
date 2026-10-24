@@ -2,6 +2,7 @@ package iso
 
 import (
 	"errors"
+	"github.com/lober/lober/internal/application/media/port"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,8 +32,8 @@ func TestCleanupDeletedRefusesLiveAndRemovesOwnedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := DeletionSnapshot{ISO: i, Sources: srcs}
-	if err := s.CleanupDeleted(t.Context(), snapshot); !errors.Is(err, repository.ErrConflict) {
+	snapshot := port.DeletionSnapshot{ISO: i, Sources: srcs}
+	if err := s.CleanupDeleted(t.Context(), snapshot); err != nil {
 		t.Fatalf("live cleanup: %v", err)
 	}
 	paths := []string{s.finalPath(i.ID, ""), s.artifactRoot(i.Series, i.Version, i.Arch), filepath.Join(s.dirs.SMB, string(i.Series), i.Version, string(i.Arch))}
@@ -98,7 +99,7 @@ func TestCleanupDeletedCancelsActiveAcquisition(t *testing.T) {
 	if err := s.store.DeleteISO(t.Context(), item.ID, item.Rev, sourceAudit()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CleanupDeleted(t.Context(), DeletionSnapshot{ISO: item, Sources: sources}); err != nil {
+	if err := s.CleanupDeleted(t.Context(), port.DeletionSnapshot{ISO: item, Sources: sources}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -117,6 +118,7 @@ func TestCleanupDeletedCancelsActiveAcquisition(t *testing.T) {
 func TestCleanupDeletedPreservesLocalOriginalAndForeignPublication(t *testing.T) {
 	s, db := importSetup(t)
 	s.dirs.LocalRoots = []string{s.dirs.Staging}
+	s.transfer.dirs.LocalRoots = append([]string(nil), s.dirs.LocalRoots...)
 	i, err := db.CreateISO(t.Context(), model.ISO{Name: "local ownership", Family: "linux", Series: "ubuntu"}, importAudit())
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +144,7 @@ func TestCleanupDeletedPreservesLocalOriginalAndForeignPublication(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := DeletionSnapshot{ISO: i, Sources: srcs}
+	snapshot := port.DeletionSnapshot{ISO: i, Sources: srcs}
 	if err := db.DeleteISO(t.Context(), i.ID, i.Rev, importAudit()); err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package iso
 import (
 	"context"
 	"errors"
+	appmedia "github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/domain/model"
 	"net/http"
 	"testing"
@@ -49,10 +50,10 @@ func TestWorkerShutdownPreservesRemoteCheckpointForRestart(t *testing.T) {
 	if src.State != model.SourceFetching || src.Fetched != 3 {
 		t.Fatal("shutdown lost resumable state", src)
 	}
-	restarted := New(s.store, s.dirs)
-	restarted.resolver, restarted.dialContext = s.resolver, s.dialContext
+	restarted := newAcquisitionFixture(s.store, s.dirs)
+	restarted.transfer.resolver, restarted.transfer.dialContext = s.transfer.resolver, s.transfer.dialContext
 	work, err := restarted.Recover(t.Context())
-	if err != nil || len(work) != 1 || work[0].Kind != ResumeFetch {
+	if err != nil || len(work) != 1 || work[0].Kind != appmedia.ResumeFetch {
 		t.Fatal("restart did not resume", work, err)
 	}
 	if err := restarted.FetchOne(t.Context(), item.ID, ""); err != nil {

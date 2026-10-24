@@ -8,8 +8,8 @@ import (
 )
 
 func Test领域拒绝随机数和外部操作(t *testing.T) {
-	for _, pkg := range []string{pkgModel, pkgStore, pkgStore + "/nested", layer1 + "/selection", layer1 + "/access", pkgRender} {
-		for _, imp := range []string{"crypto/rand", "math/rand", "os", "io/ioutil", "net", "net/http", "time", gin, "gorm.io/gorm", pgxV5, pkgPgstore, modulePath + "/internal/infrastructure/identity", pkgConsole} {
+	for _, pkg := range []string{layer1 + "/media", pkgModel, pkgStore, pkgStore + "/nested", layer1 + "/selection", layer1 + "/access", pkgRender} {
+		for _, imp := range []string{"crypto/rand", "math/rand", "io/fs", "os", "io/ioutil", "net", "net/http", "time", gin, "gorm.io/gorm", pgxV5, pkgPgstore, modulePath + "/internal/infrastructure/identity", pkgConsole} {
 			t.Run(pkg+"/"+imp, func(t *testing.T) {
 				check := checkSource
 				if under(pkg, pkgStore) {

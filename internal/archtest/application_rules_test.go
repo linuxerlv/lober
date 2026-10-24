@@ -37,6 +37,11 @@ func checkApplicationFile(fset *token.FileSet, pkg string, f *ast.File) []violat
 
 func applicationRule(pkg, imp string) rule {
 	port := pkg == pkgPorts || strings.HasSuffix(pkg, "/port")
+	if pkg == modulePath+"/internal/application/media" || pkg == modulePath+"/internal/application/media/port" {
+		if imp == "os" || imp == "io/ioutil" || under(imp, "net") || under(imp, "os") || imp == "syscall" || imp == "path/filepath" {
+			return ruleApplication
+		}
+	}
 	if isStd(imp) && imp != "C" && imp != "unsafe" || under(imp, layer1) || imp == pkgPorts {
 		return ""
 	}

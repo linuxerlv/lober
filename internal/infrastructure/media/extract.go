@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/application/media/port"
 	"io"
 	"io/fs"
 	"os"
@@ -17,12 +17,13 @@ func safeImportRel(rel string) bool {
 	return fs.ValidPath(rel) && rel != "." && !strings.ContainsAny(rel, "\\:")
 }
 
-func (s *Sources) extract(ctx context.Context, id string, found Identified, main, extra fs.FS, raw *os.File, tmp string) (map[string]string, error) {
+func (s *ImportFiles) extract(ctx context.Context, plan port.ExtractionPlan, main, extra fs.FS, raw *os.File, tmp string) (map[string]string, error) {
+	found := plan.Identified
 	roles := map[string]string{}
 	file := func(role, name, out string, tree fs.FS) error {
 		if err := copyImportFile(ctx, tree, name, filepath.Join(tmp, out)); err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
-				return importProblem(id, "iso_artifact_missing", "artifacts."+role, role)
+				return &port.ExtractionFault{Kind: "artifact", Name: role}
 			}
 			return err
 		}
@@ -41,18 +42,18 @@ func (s *Sources) extract(ctx context.Context, id string, found Identified, main
 		}
 		st, e := fs.Stat(main, "images/install.img")
 		if e != nil || st.Size() == 0 {
-			return nil, importProblem(id, "iso_artifact_missing", "artifacts.stage2", "stage2")
+			return nil, &port.ExtractionFault{Kind: "artifact", Name: "stage2"}
 		}
 		roles["stage2"] = "install/"
 		repo, err := importRepoRoot(ctx, main)
 		if err != nil {
 			return nil, err
 		}
-		for _, required := range catalog.RepoPaths(found.Series) {
+		for _, required := range plan.RepoPaths {
 			name := path.Join(repo, required)
 			st, e := fs.Stat(main, name)
 			if e != nil || st.IsDir() || st.Size() == 0 {
-				return nil, importProblem(id, "iso_repo_incomplete", "artifacts.repo", name)
+				return nil, &port.ExtractionFault{Kind: "repository", Name: name}
 			}
 		}
 		roles["repo"] = "install/"
@@ -61,10 +62,7 @@ func (s *Sources) extract(ctx context.Context, id string, found Identified, main
 		}
 	case "preseed":
 		if extra == nil {
-			return nil, importProblem(id, "iso_extra_source_invalid", "source.netboot", "netboot")
-		}
-		if err := validateDebianRepository(ctx, id, found.Arch, main); err != nil {
-			return nil, err
+			return nil, &port.ExtractionFault{Kind: "extra", Name: "netboot"}
 		}
 		// The netboot medium supplies the installer, while the main DVD supplies
 		// the HTTP package repository referenced by the shipped preseed answer.
@@ -86,7 +84,7 @@ func (s *Sources) extract(ctx context.Context, id string, found Identified, main
 				}
 			}
 			if selected == "" {
-				return nil, importProblem(id, "iso_artifact_missing", "artifacts."+role, role)
+				return nil, &port.ExtractionFault{Kind: "artifact", Name: role}
 			}
 			out := "linux"
 			if role == "initrd" {
@@ -121,14 +119,14 @@ func (s *Sources) extract(ctx context.Context, id string, found Identified, main
 		if err := file("initrd", boot+"initrd", "initrd", main); err != nil {
 			return nil, err
 		}
-		repo := found.repoRoot
+		repo := found.RepoRoot
 		if repo == "" {
 			repo = "."
 		}
-		for _, required := range catalog.RepoPaths(found.Series) {
+		for _, required := range plan.RepoPaths {
 			st, e := fs.Stat(main, path.Join(repo, required))
 			if e != nil || st.IsDir() || st.Size() == 0 {
-				return nil, importProblem(id, "iso_repo_incomplete", "artifacts.repo", required)
+				return nil, &port.ExtractionFault{Kind: "repository", Name: required}
 			}
 		}
 		roles["repo"] = "install/"
@@ -141,96 +139,15 @@ func (s *Sources) extract(ctx context.Context, id string, found Identified, main
 			}
 		}
 	case "unattend":
-		return s.extractWindows(ctx, id, main, tmp)
+		return s.extractWindows(ctx, main, tmp)
 	default:
-		return nil, importProblem(id, "iso_version_missing", "version", string(found.Format))
+		return nil, &port.ExtractionFault{Kind: "format", Name: string(found.Format)}
 	}
 	return roles, nil
 }
 
-// Discover the suite from the medium, rather than assuming a Debian codename.
-// This checks minimum mirror structure; package availability still needs a real
-// installation, and the publisher digest is verified separately by Import.
-func validateDebianRepository(ctx context.Context, id string, arch catalog.Arch, tree fs.FS) error {
-	debArch := "amd64"
-	if arch == "aarch64" {
-		debArch = "arm64"
-	}
-	nonempty := func(name string) (bool, error) {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		st, err := fs.Stat(tree, name)
-		if errors.Is(err, fs.ErrNotExist) {
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		return st.Mode().IsRegular() && st.Size() > 0, nil
-	}
-	suites, err := fs.ReadDir(tree, "dists")
-	if err != nil {
-		return err
-	}
-	validIndex := false
-	for _, suite := range suites {
-		if !suite.IsDir() {
-			continue
-		}
-		root := path.Join("dists", suite.Name())
-		ok, err := nonempty(path.Join(root, "Release"))
-		if err != nil {
-			return err
-		}
-		if !ok {
-			continue
-		}
-		for _, suffix := range []string{"", ".gz", ".xz", ".bz2"} {
-			ok, err = nonempty(path.Join(root, "main", "binary-"+debArch, "Packages"+suffix))
-			if err != nil {
-				return err
-			}
-			if ok {
-				validIndex = true
-				break
-			}
-		}
-		if validIndex {
-			break
-		}
-	}
-	hasPackage := false
-	err = fs.WalkDir(tree, "pool", func(name string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if !entry.IsDir() && strings.HasSuffix(name, ".deb") {
-			ok, err := nonempty(name)
-			if err != nil {
-				return err
-			}
-			if ok {
-				hasPackage = true
-				return fs.SkipAll
-			}
-		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	if !validIndex || !hasPackage {
-		return importProblem(id, "iso_repo_incomplete", "artifacts.repo", "dists/*/Release, main/binary-"+debArch+"/Packages, pool/*.deb")
-	}
-	return nil
-}
-
 func importRepoRoot(ctx context.Context, tree fs.FS) (string, error) {
-	text, err := identifyText(ctx, tree, ".treeinfo")
+	text, err := mediaText(ctx, tree, ".treeinfo", 1<<20)
 	if err != nil {
 		return "", err
 	}

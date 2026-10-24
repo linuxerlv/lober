@@ -13,7 +13,7 @@ import (
 const (
 	pkgISO           = modulePath + "/internal/infrastructure/media"
 	pkgISO9660       = pkgISO + "/iso9660"
-	ruleISO     rule = "ISO 层只依赖标准库、core 与存储契约"
+	ruleISO     rule = "镜像文件实现只依赖标准库、领域事实与精确文件能力"
 	ruleISO9660 rule = "ISO9660 只依赖标准库"
 )
 
@@ -49,7 +49,7 @@ func checkISOFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
 		if under(pkg, pkgISO9660) {
 			r = ruleISO9660
 		} else {
-			allowed = allowed || inLayer1(name) || name == pkgStore || under(name, pkgISO)
+			allowed = allowed || inLayer1(name) || under(name, pkgISO) || pkg == pkgISO && name == modulePath+"/internal/application/media/port"
 		}
 		if !allowed {
 			found = append(found, violation{rule: r, pkg: pkg, subject: name, pos: position(fset, imp.Pos())})
@@ -80,7 +80,7 @@ func TestISORules(t *testing.T) {
 		reject   bool
 	}{
 		{pkgISO, "os", false}, {pkgISO, "net/http", false}, {pkgISO, "path/filepath", false},
-		{pkgISO, pkgModel, false}, {pkgISO, pkgStore, false}, {pkgISO, modulePath + "/internal/domain/render", true},
+		{pkgISO, pkgModel, false}, {pkgISO, pkgStore, true}, {pkgISO, modulePath + "/internal/domain/render", true},
 		{pkgISO, "example.com/parser", true}, {pkgISO, "C", true},
 		{pkgISO9660, "io/fs", false}, {pkgISO9660, pkgModel, true}, {pkgISO9660, pkgStore, true},
 	} {

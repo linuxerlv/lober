@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/lober/lober/internal/application/media/port"
 	"github.com/lober/lober/internal/domain/model"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/hosts"
+	appmedia "github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/repository"
@@ -26,10 +29,10 @@ type app struct {
 	Logger     *slog.Logger
 	Store      repository.Store
 	Console    *console.Server
-	Native     *iso.Sources
-	Supervisor *sourceSupervisor
-	Deletion   *deletionJournal
-	Gate       *registrationGate
+	Sources    *appmedia.Sources
+	Control    port.SourceControl
+	Supervisor *appmedia.Supervisor
+	Deletion   *appmedia.Deletion
 	Machine    *machineBundle
 }
 
@@ -89,18 +92,31 @@ func openStore(ctx context.Context, cfg config, logger *slog.Logger) (*pgstore.S
 		}
 	}, nil
 }
-func nativeSourcesOf(st repository.Store, cfg config) (*iso.Sources, error) {
+func mediaDirsOf(cfg config) (iso.Dirs, error) {
 	for _, dir := range []string{cfg.ISO.Staging, cfg.ISO.Artifacts, cfg.ISO.SMB} {
 		if err := os.MkdirAll(dir, 0750); err != nil {
-			return nil, err
+			return iso.Dirs{}, err
 		}
 	}
-	return iso.New(st, iso.Dirs{Staging: cfg.ISO.Staging, Artifacts: cfg.ISO.Artifacts, SMB: cfg.ISO.SMB, Tools: cfg.ISO.Tools, LocalRoots: cfg.ISO.LocalRoots}), nil
+	return iso.Dirs{Staging: cfg.ISO.Staging, Artifacts: cfg.ISO.Artifacts, SMB: cfg.ISO.SMB, Tools: cfg.ISO.Tools, LocalRoots: cfg.ISO.LocalRoots}, nil
 }
-func gateOf() *registrationGate { return &registrationGate{} }
-func supervisorOf(ctx context.Context, raw *iso.Sources, st repository.Store, j *deletionJournal, g *registrationGate, cfg config, logger *slog.Logger) (*sourceSupervisor, func()) {
-	s := newSourceSupervisor(ctx, raw, st, j, g, cfg.ISO, logger)
+func gateOf() *iso.RegistrationGate   { return iso.NewRegistrationGate() }
+func sourceLocksOf() *iso.SourceLocks { return iso.NewSourceLocks() }
+func acquisitionOf(st repository.Store, dirs iso.Dirs, locks *iso.SourceLocks, gate *iso.RegistrationGate) *appmedia.Sources {
+	return appmedia.NewSources(appmedia.SourceDeps{ISOs: st, Sources: st, Transfer: iso.NewTransfer(dirs), Import: iso.NewImportFiles(dirs), Locks: locks, Gate: gate})
+}
+func deletionJournalOf(dirs iso.Dirs) (*iso.DeletionJournal, error) {
+	return iso.NewDeletionJournal(dirs.Staging)
+}
+func deletionOf(st repository.Store, dirs iso.Dirs, journal *iso.DeletionJournal, locks *iso.SourceLocks, gate *iso.RegistrationGate, logger *slog.Logger) *appmedia.Deletion {
+	return appmedia.NewDeletion(appmedia.DeletionDeps{ISOs: st, Sources: st, Journal: journal, Files: iso.NewDeletedFiles(dirs), Locks: locks, Gate: gate, Logger: logger})
+}
+func supervisorOf(ctx context.Context, src *appmedia.Sources, st repository.Store, deletion *appmedia.Deletion, cfg config, logger *slog.Logger) (*appmedia.Supervisor, func()) {
+	s := appmedia.NewSupervisor(ctx, appmedia.SupervisorDeps{Work: src, Sources: st, Deletion: deletion, Logger: logger, Workers: cfg.ISO.Workers, PollInterval: time.Duration(cfg.ISO.PollMS) * time.Millisecond})
 	return s, s.Close
+}
+func mediaControlOf(src *appmedia.Sources, sup *appmedia.Supervisor) port.SourceControl {
+	return appmedia.NewControl(src, sup)
 }
 func taskControlOf(m *machineBundle) console.TaskControl {
 	if m.Service != nil {
@@ -133,9 +149,12 @@ func authoringEditorOf(st repository.Store, renderer ports.FrozenPreview) author
 func hostRegistryOf(st repository.Store, clock console.Clock) hosts.Registry {
 	return hosts.NewRegistry(hosts.Deps{Hosts: st, Clock: clock})
 }
-func consoleDepsOf(st repository.Store, src *sourceSupervisor, j *deletionJournal, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, renderer ports.FrozenPreview, ctl console.TaskControl, hostRegistry hosts.Registry) console.Deps {
-	return console.Deps{HostRegistry: hostRegistry, ISOs: st, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, Audit: st, Users: st, RoleMenus: st, Sources: st, ISOSource: src, ISODeletion: j, FrozenPreview: renderer, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
+func mediaRegistryOf(st repository.Store, src port.SourceControl, j *appmedia.Deletion, clock console.Clock) appmedia.Registry {
+	return appmedia.NewRegistry(appmedia.Deps{ISOs: st, Sources: st, Control: src, Deletion: j, Clock: clock})
 }
-func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, raw *iso.Sources, s *sourceSupervisor, j *deletionJournal, g *registrationGate, m *machineBundle) *app {
-	return &app{Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Native: raw, Supervisor: s, Deletion: j, Gate: g, Machine: m}
+func consoleDepsOf(st repository.Store, mediaRegistry appmedia.Registry, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, renderer ports.FrozenPreview, ctl console.TaskControl, hostRegistry hosts.Registry) console.Deps {
+	return console.Deps{HostRegistry: hostRegistry, MediaRegistry: mediaRegistry, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, Audit: st, Users: st, RoleMenus: st, FrozenPreview: renderer, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
+}
+func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, src *appmedia.Sources, ctl port.SourceControl, s *appmedia.Supervisor, j *appmedia.Deletion, m *machineBundle) *app {
+	return &app{Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Sources: src, Control: ctl, Supervisor: s, Deletion: j, Machine: m}
 }

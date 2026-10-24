@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin/binding"
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/hosts"
+	"github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
@@ -50,6 +51,12 @@ func jsonProblems(ps []model.Problem) []problemJSON {
 	return out
 }
 func RespondError(c *gin.Context, err error) {
+	var rangeError *media.RangeError
+	if errors.As(err, &rangeError) {
+		Fail(c, 400, nil, model.ConsoleContentRange)
+		return
+	}
+
 	var csvFile *hosts.CSVFileError
 	if errors.As(err, &csvFile) {
 		Fail(c, 400, nil, csvFile.Message)

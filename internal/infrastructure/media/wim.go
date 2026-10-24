@@ -10,8 +10,8 @@ import (
 	"strings"
 	"unicode/utf16"
 
+	"github.com/lober/lober/internal/application/media/port"
 	"github.com/lober/lober/internal/domain/catalog"
-	"github.com/lober/lober/internal/domain/model"
 )
 
 // WIMImage is one image from the WIM XML index. Version excludes BUILD as
@@ -33,7 +33,7 @@ func WIMImages(r io.ReaderAt, size int64) ([]WIMImage, error) {
 	if r == nil || size < 0 {
 		return nil, fmt.Errorf("WIMImages: reader and nonnegative size are required")
 	}
-	bad := func() error { return identifyProblem("iso_version_missing", "version", model.ISOVersionLabel) }
+	bad := func() error { return port.ErrWIMMalformed }
 	if size < 208 {
 		return nil, bad()
 	}
@@ -62,11 +62,11 @@ func WIMImages(r io.ReaderAt, size int64) ([]WIMImage, error) {
 	if flags&4 != 0 {
 		compression := binary.LittleEndian.Uint32(h[16:]) & 0x001e0000
 		if compression != 0x00020000 {
-			return nil, identifyProblem("iso_wim_compressed", "media")
+			return nil, port.ErrWIMCompressed
 		}
 		chunk := binary.LittleEndian.Uint32(h[20:])
 		if chunk != 32768 {
-			return nil, identifyProblem("iso_wim_compressed", "media")
+			return nil, port.ErrWIMCompressed
 		}
 		var err error
 		data, err = wimXPRESSResource(data, int(original), int(chunk))

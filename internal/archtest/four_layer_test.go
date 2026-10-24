@@ -39,7 +39,7 @@ func Test未知包不能绕过四层检查(t *testing.T) {
 			t.Errorf("未知包没有直接失败：%s，%v，%v", pkg, got, counts)
 		}
 	}
-	for _, suffix := range []string{"domain/model", "domain/repository/nested", "domain/render", "application/ports", "application/tasks", "application/tasks/port", "application/execution", "infrastructure/persistence/pgstore", "infrastructure/media", "infrastructure/notification", "infrastructure/selection", "infrastructure/events", "interfaces/console", "interfaces/machine"} {
+	for _, suffix := range []string{"domain/media", "domain/model", "domain/repository/nested", "domain/render", "application/ports", "application/tasks", "application/tasks/port", "application/execution", "infrastructure/persistence/pgstore", "infrastructure/media", "infrastructure/notification", "infrastructure/selection", "infrastructure/events", "interfaces/console", "interfaces/machine"} {
 		pkg := modulePath + "/internal/" + suffix
 		got, counts := checkModule(fstest.MapFS{}, nil, []goPackage{{ImportPath: pkg}})
 		if len(got) != 0 || len(counts) != 1 {
@@ -55,6 +55,19 @@ func Test选择锁只接受共同能力和同步库(t *testing.T) {
 		allowed := imp == "sync" || imp == pkgPorts
 		if allowed && len(got) != 0 || !allowed && len(got) == 0 {
 			t.Fatal(imp, got)
+		}
+	}
+}
+
+func Test镜像文件能力只向精确接口开放(t *testing.T) {
+	for _, caller := range []string{pkgISO, pkgISO9660, pkgISO + "/hidden", pkgNotification} {
+		for _, imp := range []string{modulePath + "/internal/application/media/port", modulePath + "/internal/application/media", modulePath + "/internal/application/media/port/hidden"} {
+			dir := strings.TrimPrefix(caller, modulePath+"/")
+			got, _ := checkModule(fstest.MapFS{dir + "/x.go": {Data: []byte(importing(imp))}}, nil, []goPackage{{ImportPath: caller, GoFiles: []string{"x.go"}}})
+			allowed := caller == pkgISO && imp == modulePath+"/internal/application/media/port"
+			if (len(got) == 0) != allowed {
+				t.Fatalf("%s -> %s: %v", caller, imp, got)
+			}
 		}
 	}
 }

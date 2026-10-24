@@ -470,7 +470,7 @@ func Test向导提交期间新版本审批必须等待任务提交(t *testing.T)
 	dsn := pgtest.Schema(t)
 	st := pgtest.OpenAt(t, dsn)
 	guard := &authoringWaitingGuard{SelectionGuard: selectionguard.NewGuard(), waiting: make(chan struct{}), entered: make(chan struct{})}
-	s := New(wizardDepsGuard(Deps{ISOs: st, Tasks: st, Events: st, Audit: st, Users: st, RoleMenus: st, Clock: func() int64 { return fixedAt }}, st, guard))
+	s := New(wizardDepsGuard(Deps{Tasks: st, Events: st, Audit: st, Users: st, RoleMenus: st, Clock: func() int64 { return fixedAt }}, st, guard))
 	_, _, token, iso, tpl := seedWizardFixture(t, s, st)
 	next, err := st.NewTemplateVersion(t.Context(), tpl.ID, 1, "author")
 	if err != nil {
@@ -576,7 +576,7 @@ func Test任务提交与独立实例审批的契约(t *testing.T) {
 			st := pgtest.OpenAt(t, dsn)
 			other := pgtest.OpenAt(t, dsn)
 			newServer := func(db *pgstore.Store) *Server {
-				return New(wizardDeps(Deps{ISOs: db, Tasks: db, Events: db, Audit: db, Users: db, RoleMenus: db, Clock: func() int64 { return fixedAt }}, db))
+				return New(wizardDeps(Deps{Tasks: db, Events: db, Audit: db, Users: db, RoleMenus: db, Clock: func() int64 { return fixedAt }}, db))
 			}
 			s, second := newServer(st), newServer(other)
 			_, _, token, iso, tpl := seedWizardFixture(t, s, st)

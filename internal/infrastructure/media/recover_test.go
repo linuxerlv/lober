@@ -1,6 +1,7 @@
 package iso
 
 import (
+	appmedia "github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/domain/model"
 	"strings"
 	"testing"
@@ -14,7 +15,7 @@ func TestRecoverFetchAndImportNoWorkStarted(t *testing.T) {
 		t.Fatal(err)
 	}
 	todo, err := s.Recover(t.Context())
-	if err != nil || len(todo) != 1 || todo[0].Kind != ResumeFetch || todo[0].ISOID != item.ID {
+	if err != nil || len(todo) != 1 || todo[0].Kind != appmedia.ResumeFetch || todo[0].ISOID != item.ID {
 		t.Fatalf("%+v %v", todo, err)
 	}
 	if src := mustSource(t, s, item.ID, ""); src.State != model.SourcePending {
@@ -34,7 +35,7 @@ func TestRecoverFetchAndImportNoWorkStarted(t *testing.T) {
 		t.Fatal(err)
 	}
 	todo, err = s.Recover(t.Context())
-	if err != nil || len(todo) != 1 || todo[0].Kind != ResumeImport {
+	if err != nil || len(todo) != 1 || todo[0].Kind != appmedia.ResumeImport {
 		t.Fatalf("fetched not scheduled: %+v %v", todo, err)
 	}
 }

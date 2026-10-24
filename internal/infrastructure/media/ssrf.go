@@ -3,6 +3,7 @@ package iso
 import (
 	"context"
 	"errors"
+	"github.com/lober/lober/internal/application/media/port"
 	"net"
 	"net/http"
 	"net/netip"
@@ -14,12 +15,12 @@ import (
 // addresses must pass before any network connection is made.
 func CheckURL(u *url.URL, ips []netip.Addr) error {
 	if u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || len(ips) == 0 {
-		return sourceRejected("", "", isoSourceReasonURL)
+		return fault(port.URLRejected)
 	}
 	for _, ip := range ips {
 		ip = ip.Unmap()
 		if !ip.IsValid() || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
-			return sourceRejected("", "", isoSourceReasonURL)
+			return fault(port.URLRejected)
 		}
 	}
 	return nil
@@ -29,7 +30,7 @@ func CheckURL(u *url.URL, ips []netip.Addr) error {
 // validates every address, and connects only to those addresses. The transport
 // still uses the URL host for the Host header, TLS SNI and certificate checks.
 // No proxy or shared connection pool can bypass the per-request validation.
-type validatedTransport struct{ sources *Sources }
+type validatedTransport struct{ sources *Transfer }
 
 func (v validatedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	host := req.URL.Hostname()
@@ -48,7 +49,7 @@ func (v validatedTransport) RoundTrip(req *http.Request) (*http.Response, error)
 			port = "80"
 		}
 	}
-	tr := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+	tr := &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true, DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 		var errs []error
 		for _, ip := range ips {
 			conn, e := v.sources.dialContext(ctx, network, net.JoinHostPort(ip.String(), port))
@@ -67,13 +68,13 @@ func (v validatedTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	return resp, err
 }
 
-func (s *Sources) lookup(ctx context.Context, host string) ([]netip.Addr, error) {
+func (s *Transfer) lookup(ctx context.Context, host string) ([]netip.Addr, error) {
 	if ip, err := netip.ParseAddr(host); err == nil {
 		return []netip.Addr{ip}, nil
 	}
 	return s.resolver(ctx, host)
 }
 
-func (s *Sources) httpClient() *http.Client {
+func (s *Transfer) httpClient() *http.Client {
 	return &http.Client{Transport: validatedTransport{sources: s}}
 }

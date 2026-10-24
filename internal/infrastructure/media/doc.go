@@ -1,15 +1,8 @@
-// Package iso acquires installation media and imports verified artifacts. The
-// assembly point injects all directories and runs blocking FetchOne and Import
-// calls in supervised workers. This package never starts a goroutine.
+// Package iso 提供媒体读取、传输、格式解析和文件发布能力。
+// 应用层控制获取与导入顺序；本包不启动后台循环。
 //
-// Local media are read in place; the operator-owned original is never copied or
-// deleted (the binding system specification). Uploads and downloads publish
-// staging files only after complete-byte
-// and digest validation. Import builds temporary directories on the artifact
-// filesystem before renaming, so staging and artifacts may be on different disks.
-// Recover only returns work: ResumeFetch for uploads means await more chunks,
-// not call FetchOne. Progress contains the missing upload intervals.
-// The assembly point shares one Sources instance for each staging directory:
-// PostgreSQL revisions coordinate state, while instance locks serialize file
-// access. Concurrent processes must not share a staging directory.
+// 本地原件只读。导入先在目标盘创建临时兄弟目录，再发布完整目录。
+// 应用在所有复制结束后复核全部来源，确认数据库状态后才决定撤销新树。
+// 删除快照与文件清理由本包提供能力，执行顺序和共享锁由应用层控制。
+// 同一暂存目录只允许一个运行实例，不支持多进程共享。
 package iso

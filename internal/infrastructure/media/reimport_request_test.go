@@ -2,6 +2,7 @@ package iso
 
 import (
 	"errors"
+	appmedia "github.com/lober/lober/internal/application/media"
 	"os"
 	"testing"
 
@@ -39,14 +40,14 @@ func TestRequestReimportPersistsRecoverableWorkBeforeExtraction(t *testing.T) {
 	if _, err := os.Stat(s.artifactRoot("rocky", "9.6", "x86_64")); !os.IsNotExist(err) {
 		t.Fatal("request performed extraction", err)
 	}
-	restarted := New(db, s.dirs)
+	restarted := newAcquisitionFixture(db, s.dirs)
 	work, err := restarted.Recover(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	found := false
 	for _, w := range work {
-		if w.ISOID == item.ID && w.Kind == ResumeImport {
+		if w.ISOID == item.ID && w.Kind == appmedia.ResumeImport {
 			found = true
 		}
 	}

@@ -3,7 +3,7 @@ package iso
 import (
 	"context"
 	"errors"
-	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/application/media/port"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,12 +13,12 @@ var windowsTools = []string{"wimboot", "winpe-busybox", "winpe-curl"}
 
 const winpeshlContent = "[LaunchApps]\r\n%SYSTEMDRIVE%\\lober\\startnet.cmd\r\n"
 
-func (s *Sources) extractWindows(ctx context.Context, id string, tree fs.FS, tmp string) (map[string]string, error) {
+func (s *ImportFiles) extractWindows(ctx context.Context, tree fs.FS, tmp string) (map[string]string, error) {
 	roles := map[string]string{}
 	for role, name := range map[string]string{"bcd": "boot/bcd", "boot-sdi": "boot/boot.sdi", "boot-wim": "sources/boot.wim"} {
 		if err := copyImportFile(ctx, tree, name, filepath.Join(tmp, filepath.FromSlash(name))); err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
-				return nil, importProblem(id, "iso_artifact_missing", "artifacts."+role, role)
+				return nil, &port.ExtractionFault{Kind: "artifact", Name: role}
 			}
 			return nil, err
 		}
@@ -29,7 +29,7 @@ func (s *Sources) extractWindows(ctx context.Context, id string, tree fs.FS, tmp
 		p := filepath.Join(s.dirs.Tools, tool)
 		st, err := os.Lstat(p)
 		if err != nil || !st.Mode().IsRegular() || st.Size() == 0 {
-			return nil, importProblem(id, "iso_tool_missing", "tools."+tool, tool)
+			return nil, &port.ExtractionFault{Kind: "tool", Name: tool}
 		}
 		f, err := os.Open(p)
 		if err != nil {
@@ -47,7 +47,7 @@ func (s *Sources) extractWindows(ctx context.Context, id string, tree fs.FS, tmp
 	}
 	roles["winpeshl"] = "winpeshl.ini"
 	if len(roles) != 7 {
-		return nil, repository.ErrInvalid
+		return nil, fault(port.InvalidFile)
 	}
 	return roles, nil
 }

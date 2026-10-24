@@ -82,7 +82,8 @@ func Test镜像过渡方法和唯一通知转发必须精确(t *testing.T) {
 		caller, file, source string
 		allowed              bool
 	}{
-		{pkgISO, "internal/infrastructure/media/delete.go", "package iso; import repo \"" + pkgStore + "\"; type Sources struct{store repo.Store}; func(s *Sources) confirmDeleted(){read:=s.store.GetISO;read()}", true},
+		{pkgISO, "internal/infrastructure/media/delete.go", "package iso; import repo \"" + pkgStore + "\"; type Sources struct{store repo.Store}; func(s *Sources) confirmDeleted(){read:=s.store.GetISO;read()}", false},
+		{pkgISO, "internal/infrastructure/media/sources.go", "package iso; import repo \"" + pkgStore + "\"; type Sources struct{store repo.Store}; func(s *Sources) register(){s.store.GetISO()}", false},
 		{pkgISO, "internal/infrastructure/media/new.go", "package iso; import repo \"" + pkgStore + "\"; type Sources struct{store repo.Store}; func(s *Sources) confirmDeleted(){read:=s.store.GetISO;read()}", false},
 		{pkgConsole, "internal/interfaces/console/notify.go", "package console; import n \"" + pkgNotification + "\"; func NewHub()int{return n.NewHub()}", true},
 		{pkgConsole, "internal/interfaces/console/notify.go", "package console; import n \"" + pkgNotification + "\"; func steal()int{return n.NewHub()}", false},

@@ -2,73 +2,29 @@ package iso
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/application/media/port"
+	"github.com/lober/lober/internal/domain/model"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/repository"
 )
 
-// DeletionSnapshot is captured before the caller's audited Store.DeleteISO.
-// Sources must be a nonnil snapshot of SourcesOf, including an empty slice when
-// no source exists. Source kinds preserve operator-owned local originals even
-// when allowed roots overlap staging. The assembly point retains this snapshot
-// until CleanupDeleted succeeds, and supplies its durable retry policy.
-type DeletionSnapshot struct {
-	ISO     model.ISO
-	Sources []model.Source
+type DeletedFiles struct{ dirs Dirs }
+
+func NewDeletedFiles(d Dirs) *DeletedFiles { return &DeletedFiles{dirs: d} }
+func (s *DeletedFiles) finalPath(id, role string) string {
+	if role != "" {
+		id += "." + role
+	}
+	return filepath.Join(s.dirs.Staging, id)
 }
 
-// CleanupDeleted removes only managed bytes belonging to an already deleted
-// ISO. It is idempotent and cannot delete while its database row still exists.
-// It never performs the audited database deletion itself.
-func (s *Sources) CleanupDeleted(ctx context.Context, snapshot DeletionSnapshot) error {
+// Cleanup 只接收应用已检查的快照，所有删除仍受根目录及拥有者检查约束。
+func (s *DeletedFiles) Cleanup(ctx context.Context, snapshot port.DeletionSnapshot) error {
 	item := snapshot.ISO
-	if err := repository.CheckID(item.ID); err != nil {
-		return err
-	}
-	// Acquiring/failed records may legitimately lack identification metadata.
-	// Validate any supplied path components without requiring readiness.
-	checked := item
-	if checked.Version == "" {
-		checked.Version = "pending"
-	}
-	if checked.Arch == "" {
-		checked.Arch = "x86_64"
-	}
-	if snapshot.Sources == nil || len(checked.Validate()) > 0 {
-		return repository.ErrInvalid
-	}
-	seen := map[string]bool{}
-	for _, source := range snapshot.Sources {
-		if source.ISOID != item.ID || seen[source.Role] {
-			return repository.ErrInvalid
-		}
-		if err := repository.CheckSource(source); err != nil {
-			return err
-		}
-		seen[source.Role] = true
-	}
-	if err := s.confirmDeleted(ctx, item.ID); err != nil {
-		return err
-	}
-	unlock := s.lockSource(item.ID, "@import")
-	defer unlock()
-	for _, source := range snapshot.Sources {
-		if cancel, ok := s.active.Load(item.ID + "/" + source.Role); ok {
-			cancel.(context.CancelFunc)()
-		}
-		unlock := s.lockSource(item.ID, source.Role)
-		defer unlock()
-	}
-	if err := s.confirmDeleted(ctx, item.ID); err != nil {
-		return err
-	}
 	if item.Version != "" && item.Arch != "" {
 		rel := filepath.Join(string(item.Series), item.Version, string(item.Arch))
 		owner := item.ID + "\n" + item.SHA256 + "\n"
@@ -118,7 +74,7 @@ func (s *Sources) CleanupDeleted(ctx context.Context, snapshot DeletionSnapshot)
 			return err
 		}
 		if !st.Mode().IsRegular() && st.Mode()&fs.ModeSymlink == 0 {
-			return repository.ErrConflict
+			return &port.Fault{Kind: port.PublicationConflict}
 		}
 		return root.Remove(name)
 	}
@@ -148,20 +104,6 @@ func (s *Sources) CleanupDeleted(ctx context.Context, snapshot DeletionSnapshot)
 	return nil
 }
 
-func (s *Sources) confirmDeleted(ctx context.Context, id string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	_, err := s.store.GetISO(ctx, id)
-	if errors.Is(err, repository.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return repository.ErrConflict
-}
-
 func cleanupOwnedTree(ctx context.Context, base, rel, owner string, temp bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -182,13 +124,13 @@ func cleanupOwnedTree(ctx context.Context, base, rel, owner string, temp bool) e
 		return err
 	}
 	if !st.IsDir() || st.Mode()&fs.ModeSymlink != 0 {
-		return repository.ErrConflict
+		return &port.Fault{Kind: port.PublicationConflict}
 	}
 	f, err := root.Open(filepath.Join(rel, ".lober-owner"))
 	if err != nil {
-		// A partial temporary tree has not reached the ownership-marker step yet.
+		// 未完成的临时目录可能还没写入拥有者标记。
 		if !temp || !os.IsNotExist(err) {
-			return fmt.Errorf("%w: publication ownership unavailable", repository.ErrConflict)
+			return fmt.Errorf("%w: publication ownership unavailable", &port.Fault{Kind: port.PublicationConflict})
 		}
 	} else {
 		b, readErr := io.ReadAll(io.LimitReader(f, 256))
@@ -197,7 +139,7 @@ func cleanupOwnedTree(ctx context.Context, base, rel, owner string, temp bool) e
 			return readErr
 		}
 		if string(b) != owner {
-			return fmt.Errorf("%w: publication belongs to other content", repository.ErrConflict)
+			return fmt.Errorf("%w: publication belongs to other content", &port.Fault{Kind: port.PublicationConflict})
 		}
 	}
 	return root.RemoveAll(rel)

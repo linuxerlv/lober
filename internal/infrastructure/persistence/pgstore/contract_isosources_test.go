@@ -183,3 +183,47 @@ func TestSourceValidation(t *testing.T) {
 		}
 	}
 }
+
+func Test契约ISO来源排队按版本一次提交(t *testing.T) {
+	s := pgtest.OpenStore(t)
+	ctx := t.Context()
+	item := mustCreateISO(t, s, rockyISO("queue-contract"))
+	src, err := s.SaveSource(ctx, model.Source{ISOID: item.ID, Kind: model.SourceUpload, State: model.SourcePending, TotalSize: 4}, repository.Audit{})
+	must(t, err, "登记")
+	src.State = model.SourceFetching
+	src, err = s.SaveSource(ctx, src, repository.Audit{})
+	must(t, err, "开始获取")
+	src.State, src.Fetched = model.SourceFetched, 4
+	src, err = s.SaveSource(ctx, src, repository.Audit{})
+	must(t, err, "完成来源")
+	item.State = model.ISOFailed
+	item, err = s.UpdateISO(ctx, item)
+	must(t, err, "导入失败")
+	a := anAudit("iso.reimport")
+	failedAudit := a
+	failedAudit.Actor = pgtest.FaultActor
+	if _, err := s.SaveSourceAndAcquire(ctx, src, item.Rev, failedAudit); err == nil {
+		t.Fatal("审计失败应撤销来源与镜像排队")
+	}
+	before, err := s.GetISO(ctx, item.ID)
+	must(t, err, "重读镜像")
+	unchanged, exists, err := s.GetSource(ctx, item.ID, "")
+	must(t, err, "重读来源")
+	if !exists || before.State != model.ISOFailed || before.Rev != item.Rev || !reflect.DeepEqual(unchanged, src) {
+		t.Fatal(before, unchanged, src)
+	}
+	saved, err := s.SaveSourceAndAcquire(ctx, src, item.Rev, a)
+	must(t, err, "排队")
+	queued, err := s.GetISO(ctx, item.ID)
+	must(t, err, "读取排队")
+	if queued.State != model.ISOAcquiring || queued.Rev != item.Rev+1 || saved.Rev != src.Rev+1 || saved.State != model.SourceFetched || saved.Fetched != 4 {
+		t.Fatal(queued, saved)
+	}
+	_, err = s.SaveSourceAndAcquire(ctx, src, item.Rev, a)
+	wantIs(t, err, repository.ErrConflict, "旧版本不能重复排队")
+	entries, err := s.ListAudit(ctx, repository.AuditQuery{TargetKind: "iso", TargetID: item.ID, Action: a.Action})
+	must(t, err, "审计")
+	if len(entries.Items) != 1 || entries.Items[0].Actor != a.Actor {
+		t.Fatal(entries)
+	}
+}
