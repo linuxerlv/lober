@@ -13,6 +13,6 @@ import (
 )
 
 func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger) (*app, func(), error) {
-	wire.Build(openStore, loggingStoreOf, wire.Bind(new(repository.Store), new(*loggingStore)), mediaDirsOf, gateOf, sourceLocksOf, acquisitionOf, deletionJournalOf, deletionOf, supervisorOf, mediaControlOf, notification.NewHub, machineOf, selectionguard.NewGuard, taskControlOf, wizardOf, hookAuthoringOf, templateAuthoringOf, previewRendererOf, authoringEditorOf, hostRegistryOf, mediaRegistryOf, identityServiceOf, consoleDepsOf, console.New, appOf)
+	wire.Build(openStore, loggingStoreOf, wire.Bind(new(repository.Store), new(*loggingStore)), mediaDirsOf, gateOf, sourceLocksOf, acquisitionOf, deletionJournalOf, deletionOf, supervisorOf, mediaControlOf, notification.NewHub, machineOf, selectionguard.NewGuard, taskControlOf, wizardOf, hookAuthoringOf, templateAuthoringOf, previewRendererOf, authoringEditorOf, hostRegistryOf, mediaRegistryOf, identityServiceOf, auditReaderOf, consoleDepsOf, console.New, appOf)
 	return nil, nil, nil
 }

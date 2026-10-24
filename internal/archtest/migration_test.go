@@ -148,14 +148,6 @@ func Test迁移豁免必须精确且有清除阶段(t *testing.T) {
 var migrationExceptions = []migrationException{
 	// 保留 dev 已有流程；逐项登记，向导不增加放行。
 	{pkgConsole, "internal/interfaces/console/pagination.go", "queryPagination", "github.com/lober/lober/internal/domain/repository", "CheckPageQuery", "6"},
-	{pkgConsole, "internal/interfaces/console/audit.go", "(*server).exportAudit", pkgStore, "AuditEntry", "5"},
-	{pkgConsole, "internal/interfaces/console/audit.go", "(*server).exportAudit", pkgStore, "AuditLog.ListAudit", "5"},
-	{pkgConsole, "internal/interfaces/console/audit.go", "(*server).exportAudit", pkgStore, "Page", "5"},
-	{pkgConsole, "internal/interfaces/console/audit.go", "(*server).listAudit", pkgStore, "AuditEntry", "5"},
-	{pkgConsole, "internal/interfaces/console/audit.go", "(*server).listAudit", pkgStore, "AuditLog.ListAudit", "5"},
-	{pkgConsole, "internal/interfaces/console/audit.go", "(*server).listAudit", pkgStore, "Page", "5"},
-	{pkgConsole, "internal/interfaces/console/audit.go", "auditFilters", pkgStore, "AuditQuery", "5"},
-	{pkgConsole, "internal/interfaces/console/audit.go", "toAuditItem", pkgStore, "AuditEntry", "5"},
 	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "BatchError", "6"},
 	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrConflict", "6"},
 	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrDuplicate", "6"},
@@ -166,7 +158,6 @@ var migrationExceptions = []migrationException{
 	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrReferenced", "6"},
 	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ProblemsError", "6"},
 	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ReferencedError", "6"},
-	{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "AuditLog", "5"},
 	{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "Events", "6"},
 	{pkgConsole, "internal/interfaces/console/server.go", "package-init", pkgStore, "Tasks", "6"},
 	{pkgConsole, "internal/interfaces/console/taskcontrol.go", "Problems", pkgStore, "ErrRejected", "6"},

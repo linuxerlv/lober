@@ -90,7 +90,7 @@ var layers = []layer{layerExecution, layerMachine, layerEvents, layerOpenAPI, la
 
 // minChecked 是 Test全模块依赖守卫 每层至少要查到的包数。删了某层的包就改这里；渲染与内置内容的包加进来以后，
 // 补上它们的下限——忘了补会由「查到了包的层都登记了下限」那一条报出来。
-var minChecked = map[layer]int{layerExecution: 1, layerMachine: 1, layerEvents: 1, layerOpenAPI: 1, layerCore: 10, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1, layerIdentity: 1, layerCredentials: 1, layerApplication: 1, layerNotification: 1, layerSelectionGuard: 1}
+var minChecked = map[layer]int{layerExecution: 1, layerMachine: 1, layerEvents: 1, layerOpenAPI: 1, layerCore: 11, layerStore: 3, layerRender: 1, layerBuiltin: 1, layerISO: 3, layerConsole: 1, layerAssembly: 1, layerGuard: 1, layerIdentity: 1, layerCredentials: 1, layerApplication: 1, layerNotification: 1, layerSelectionGuard: 1}
 
 // minDirs 是 moduleSourceDirs 至少要遍历到的目录数。目录遍历没有别的防线：sourceRoots 少了一项、或者
 // checkModule 收到空的 dirs，ruleListed（整包被构建约束排除的目录）与 go test 的缓存跟踪都会静默失效，
@@ -646,6 +646,8 @@ func layer1Rule(pkg, imp string) rule {
 // 成环的依赖，admission 去 import params 这类越级依赖要靠这里。
 func layerDirection(pkg, imp string) rule {
 	switch {
+	case pkg == layer1+"/audit":
+		return ruleDomainLeaf
 	case under(pkg, layer1+"/access"), under(pkg, layer1+"/selection"):
 		if imp != pkgModel {
 			return ruleDomainLeaf

@@ -1,6 +1,7 @@
 package console
 
 import (
+	"github.com/lober/lober/internal/application/audit"
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/identity"
@@ -31,7 +32,7 @@ func newHTTPServer(t *testing.T) (*Server, *pgstore.Store, *atomic.Int64) {
 	st := pgtest.OpenStore(t)
 	now := new(atomic.Int64)
 	now.Store(fixedAt)
-	s := New(wizardDeps(Deps{Tasks: st, Events: st, Audit: st, Clock: now.Load, Notifier: NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, st))
+	s := New(wizardDeps(Deps{Tasks: st, Events: st, AuditReader: audit.NewReader(st), Clock: now.Load, Notifier: NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, st))
 	return s, st, now
 }
 

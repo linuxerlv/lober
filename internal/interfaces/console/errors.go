@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
+	"github.com/lober/lober/internal/application/audit"
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/identity"
@@ -73,7 +74,7 @@ func RespondError(c *gin.Context, err error) {
 	case errors.Is(err, identity.ErrLoginFailed):
 		Fail(c, 401, nil, model.ConsoleLoginFailed)
 		return
-	case errors.Is(err, identity.ErrBadRequest):
+	case errors.Is(err, identity.ErrBadRequest), errors.Is(err, audit.ErrBadRequest):
 		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return
 	case errors.Is(err, identity.ErrSelfDisable):

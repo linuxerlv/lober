@@ -55,7 +55,8 @@ func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.L
 	editor := authoringEditorOf(mainLoggingStore, frozenPreview)
 	hostsRegistry := hostRegistryOf(mainLoggingStore, clock)
 	service := identityServiceOf(mainLoggingStore, cfg, clock)
-	deps := consoleDepsOf(mainLoggingStore, registry, notifier, cfg, clock, logger, wizard, hooks, templates, editor, frozenPreview, taskControl, hostsRegistry, service)
+	reader := auditReaderOf(mainLoggingStore)
+	deps := consoleDepsOf(mainLoggingStore, registry, notifier, cfg, clock, logger, wizard, hooks, templates, editor, frozenPreview, taskControl, hostsRegistry, service, reader)
 	server := console.New(deps)
 	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, sourceControl, supervisor, deletion, mainMachineBundle, service)
 	return mainApp, func() {

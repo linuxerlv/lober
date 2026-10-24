@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/lober/lober/internal/application/audit"
 	"github.com/lober/lober/internal/application/media/port"
 	"github.com/lober/lober/internal/domain/model"
 	"log/slog"
@@ -140,8 +141,8 @@ func hostRegistryOf(st repository.Store, clock console.Clock) hosts.Registry {
 func mediaRegistryOf(st repository.Store, src port.SourceControl, j *appmedia.Deletion, clock console.Clock) appmedia.Registry {
 	return appmedia.NewRegistry(appmedia.Deps{ISOs: st, Sources: st, Control: src, Deletion: j, Clock: clock})
 }
-func consoleDepsOf(st repository.Store, mediaRegistry appmedia.Registry, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, renderer ports.FrozenPreview, ctl console.TaskControl, hostRegistry hosts.Registry, identityService *identity.Service) console.Deps {
-	return console.Deps{HostRegistry: hostRegistry, MediaRegistry: mediaRegistry, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, Audit: st, Identity: identityService, FrozenPreview: renderer, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger}
+func consoleDepsOf(st repository.Store, mediaRegistry appmedia.Registry, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, renderer ports.FrozenPreview, ctl console.TaskControl, hostRegistry hosts.Registry, identityService *identity.Service, auditReader audit.Reader) console.Deps {
+	return console.Deps{HostRegistry: hostRegistry, MediaRegistry: mediaRegistry, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, AuditReader: auditReader, Identity: identityService, FrozenPreview: renderer, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger}
 }
 func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, src *appmedia.Sources, ctl port.SourceControl, s *appmedia.Supervisor, j *appmedia.Deletion, m *machineBundle, identityService *identity.Service) *app {
 	return &app{Identity: identityService, Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Sources: src, Control: ctl, Supervisor: s, Deletion: j, Machine: m}
@@ -151,3 +152,5 @@ func identityServiceOf(st repository.Store, cfg config, clock console.Clock) *id
 	sessions := identity.NewSessionBook(cfg.SessionTTLHours*3600, clock, credentials.NewTokens())
 	return identity.NewService(identity.Deps{Users: st, RoleMenus: st, Passwords: credentials.NewPasswords(), Sessions: sessions, Clock: clock})
 }
+
+func auditReaderOf(st repository.Store) audit.Reader { return audit.NewReader(st) }

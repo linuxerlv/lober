@@ -3,6 +3,7 @@ package console
 import (
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/audit"
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/identity"
@@ -26,7 +27,7 @@ type Deps struct {
 	Tasks             repository.Tasks
 	Wizard            tasks.Wizard
 	Events            repository.Events
-	Audit             repository.AuditLog
+	AuditReader       audit.Reader
 	Identity          identity.Registry
 	FrozenPreview     ports.FrozenPreview
 	TaskCtl           TaskControl
