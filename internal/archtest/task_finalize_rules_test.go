@@ -270,9 +270,10 @@ func taskPolicyChecker(files []*ast.File, info *types.Info) (func(ast.Expr) bool
 			}
 			seen[obj] = true
 			defer delete(seen, obj)
+			// 调用入参和函数内后续赋值都可能提供来源，不能互相遮掉。
 			if bound, ok := bindings[obj]; ok {
-				if bound.value != nil {
-					return next(bound.value, elements)
+				if bound.value != nil && next(bound.value, elements) {
+					return true
 				}
 				if elements {
 					for _, value := range bound.elements {
@@ -281,7 +282,6 @@ func taskPolicyChecker(files []*ast.File, info *types.Info) (func(ast.Expr) bool
 						}
 					}
 				}
-				return false
 			}
 			for _, value := range origins[obj] {
 				if next(value, elements) {
@@ -708,6 +708,19 @@ func Test任务终态边界拒绝仓储和后端旁路(t *testing.T) {
 		{"可变参数无条件常量", pkgConsole, `import m "` + pkgModel + `";func label(values ...string)string{return "ready"};func output(t m.Task)bool{return label("ordinary",string(t.State))=="ready"}`, true},
 		{"布尔常量不沾状态参数", pkgConsole, `import m "` + pkgModel + `";func yes(s string)bool{return 2>1};func output(t m.Task)bool{return yes(string(t.State))}`, true},
 		{"普通字段辅助比较", pkgConsole, `import m "` + pkgModel + `";func label(s string)string{if s=="ordinary"{return "yes"};return "no"};func output(t m.Task)bool{return label(t.ID)=="yes"}`, true},
+		{"复审N4零变参追加状态", pkgConsole, `import m "` + pkgModel + `";func pick(t m.Task,values ...string)string{values=append(values,string(t.State));return values[0]};func bypass(t m.Task)bool{return pick(t)=="done"}`, false},
+		{"复审N4零变参追加固件", pkgConsole, `import m "` + pkgModel + `";func pick(t m.Task,values ...string)string{values=append(values,string(t.Snapshot.Host.Firmware));return values[0]};func bypass(t m.Task)bool{return pick(t)=="uefi"}`, false},
+		{"复审N4普通变参后追加状态", pkgConsole, `import m "` + pkgModel + `";func pick(t m.Task,values ...string)string{values=append(values,string(t.State));return values[1]};func bypass(t m.Task)bool{return pick(t,"ordinary")=="done"}`, false},
+		{"复审N4普通变参后追加固件", pkgConsole, `import m "` + pkgModel + `";func pick(t m.Task,values ...string)string{values=append(values,string(t.Snapshot.Host.Firmware));return values[1]};func bypass(t m.Task)bool{return pick(t,"ordinary")=="uefi"}`, false},
+		{"复审N4切片展开后追加状态", pkgConsole, `import m "` + pkgModel + `";func pick(t m.Task,values ...string)string{values=append(values,string(t.State));return values[1]};func bypass(t m.Task)bool{return pick(t,[]string{"ordinary"}...)=="done"}`, false},
+		{"复审N4切片展开后追加固件", pkgConsole, `import m "` + pkgModel + `";func pick(t m.Task,values ...string)string{values=append(values,string(t.Snapshot.Host.Firmware));return values[1]};func bypass(t m.Task)bool{return pick(t,[]string{"ordinary"}...)=="uefi"}`, false},
+		{"复审N4普通参数重新赋状态", pkgConsole, `import m "` + pkgModel + `";func pick(t m.Task,value string)string{value=string(t.State);return value};func bypass(t m.Task)bool{return pick(t,"ordinary")=="done"}`, false},
+		{"复审N4普通参数重新赋固件", pkgConsole, `import m "` + pkgModel + `";func pick(t m.Task,value string)string{value=string(t.Snapshot.Host.Firmware);return value};func bypass(t m.Task)bool{return pick(t,"ordinary")=="uefi"}`, false},
+		{"复审N4变参整体重新赋状态", pkgConsole, `import m "` + pkgModel + `";func pick(t m.Task,values ...string)string{values=[]string{string(t.State)};return values[0]};func bypass(t m.Task)bool{return pick(t,"ordinary")=="done"}`, false},
+		{"复审N4变参整体重新赋固件", pkgConsole, `import m "` + pkgModel + `";func pick(t m.Task,values ...string)string{values=[]string{string(t.Snapshot.Host.Firmware)};return values[0]};func bypass(t m.Task)bool{return pick(t,"ordinary")=="uefi"}`, false},
+		{"零变参无条件常量", pkgConsole, `import m "` + pkgModel + `";func label(t m.Task,values ...string)string{return "ready"};func output(t m.Task)bool{return label(t)=="ready"}`, true},
+		{"零变参追加仅看长度", pkgConsole, `import m "` + pkgModel + `";func count(t m.Task,values ...string)int{values=append(values,string(t.State));return len(values)};func output(t m.Task)bool{return count(t)>0}`, true},
+		{"零变参追加只作输出", pkgConsole, `import m "` + pkgModel + `";func pick(t m.Task,values ...string)string{values=append(values,string(t.State));return values[0]};func output(t m.Task)string{return pick(t)}`, true},
 		{"纯状态容器长度", pkgConsole, `import m "` + pkgModel + `";func f(t m.Task)bool{values:=[]string{string(t.State)};return len(values)>0}`, true},
 		{"辅助函数仅输出状态文本", pkgConsole, `import m "` + pkgModel + `";func stateText(t m.Task)string{return string(t.State)};func f(t m.Task)string{return stateText(t)}`, true},
 		{"辅助函数返回普通字段", pkgConsole, `import m "` + pkgModel + `";func name(t m.Task)string{return t.ID};func f(t m.Task)bool{return name(t)=="example"}`, true},
@@ -835,13 +848,14 @@ func Test任务终态规则接入真实全模块扫描(t *testing.T) {
 	write("internal/interfaces/console/binary_helper.go", `package console;import m "`+pkgModel+`";func isDone(s string)bool{return s=="done"};func byBinary(t m.Task)bool{return isDone(string(t.State))}`)
 	write("internal/interfaces/console/variadic_helper.go", `package console;import m "`+pkgModel+`";func pick(values ...string)string{return values[1]};func byVariadic(t m.Task)bool{return pick("ordinary",string(t.State))=="done"}`)
 	write("internal/interfaces/console/conditional_helper.go", `package console;import m "`+pkgModel+`";func label(s string)string{if s=="done"{return "yes"};return "no"};func byConditional(t m.Task)bool{return label(string(t.State))=="yes"}`)
+	write("internal/interfaces/console/reassigned_helper.go", `package console;import m "`+pkgModel+`";func reassigned(t m.Task,values ...string)string{values=append(values,string(t.State));return values[0]};func byReassigned(t m.Task)bool{return reassigned(t)=="done"}`)
 	got := check()
 	for _, v := range got {
 		if v.rule == ruleParse {
 			t.Fatal("违规源码必须先成功装载", v)
 		}
 	}
-	for _, file := range []string{"internal/interfaces/console/extra.go", "cmd/lober/extra.go", "internal/application/tasks/extra.go", "internal/interfaces/console/policy.go", "internal/interfaces/console/control.go", "internal/application/tasks/readfile.go", "internal/application/tasks/port/readfile.go", "internal/interfaces/console/binary_helper.go", "internal/interfaces/console/variadic_helper.go", "internal/interfaces/console/conditional_helper.go"} {
+	for _, file := range []string{"internal/interfaces/console/extra.go", "cmd/lober/extra.go", "internal/application/tasks/extra.go", "internal/interfaces/console/policy.go", "internal/interfaces/console/control.go", "internal/application/tasks/readfile.go", "internal/application/tasks/port/readfile.go", "internal/interfaces/console/binary_helper.go", "internal/interfaces/console/variadic_helper.go", "internal/interfaces/console/conditional_helper.go", "internal/interfaces/console/reassigned_helper.go"} {
 		found := false
 		for _, v := range got {
 			found = found || strings.Contains(v.pos, file)
