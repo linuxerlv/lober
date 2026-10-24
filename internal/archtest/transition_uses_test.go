@@ -96,6 +96,7 @@ func typedTransitionFindings(root, caller string, fset *token.FileSet, files []*
 	if under(caller, pkgISO) || caller == pkgAssembly {
 		found = append(found, mediaStateFindings(caller, fset, files, info)...)
 	}
+	found = append(found, identityAuditFindings(caller, fset, files, info)...)
 	return found
 }
 

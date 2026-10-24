@@ -55,7 +55,7 @@ func queryLimit(c *gin.Context) (int, bool) {
 	return limit, true
 }
 func (s *server) listUsers(c *gin.Context) {
-	number, limit, ok := queryPagination(c)
+	number, limit, ok := parseQueryPagination(c)
 	if !ok {
 		return
 	}

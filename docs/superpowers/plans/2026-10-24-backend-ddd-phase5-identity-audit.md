@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-22-backend-ddd-four-layer-design.md`（用户已确认）；阶段范围见 `2026-10-22-backend-ddd-roadmap.md`。同日其他登录设计不作为已实现事实，本阶段不顺带引入刷新令牌、Cookie 或动态角色。
 
-**状态与起点：** 本文待用户审阅，只制定计划，未实施、未运行测试。基于已在 lober VM 完成第四阶段合并验收的本地 `dev`：`9c457799133f64a268f0c3607233feaaa78bc863`。计划和后续模块分支为 `codex/ddd-identity-audit`。默认沿用逐项实施、独立审查和最后整分支审查。
+**状态与起点：** 用户已批准实施。任务1至6实现和逐项独立审查已完成；任务7边界与精确清理已实现，原完整VM验收已按原命令重跑通过，任务7独立审查及整分支审查待控制器完成。基于已验收的本地 `dev`：`9c457799133f64a268f0c3607233feaaa78bc863`，仅交付 `codex/ddd-identity-audit` 模块分支。实际证据见[第五阶段验证记录](../reviews/2026-10-24-ddd-phase5-evidence.md)，尚未标记模块可交付，未合并或推送。
 
 ## Global Constraints
 
@@ -205,12 +205,12 @@ func KnownPermission(string) bool // 仅路由描述合法性检查，权限决�
 
 **Interfaces:** 消费本计划十三入口和保存契约，产出逐条基线、65+3精确删除集合及可复用真实库夹具。
 
-- [ ] 对照真实路由/DTO/保存代码写契约，记录空数组、菜单版本、错误顺序和审计动作；不新增独立机器契约文件。
-- [ ] 补 `Test身份十三入口契约与强制改密矩阵`：13项描述、五角色、强制改密admin本人PUT允许而viewer仍403，普通请求/事件流令牌区别。
-- [ ] 补 `Test资料已提交后菜单读取失败保留事实`：注入保存后的菜单故障，响应500但真实资料Rev和一次审计已提交；不撤销原会话。
-- [ ] 补 `Test审计导出后页失败不发送残缺下载`：500条后返回错误；无成功下载头、不是200部分CSV；原公式与所有页断言保留。
-- [ ] VM运行 `go test ./internal/interfaces/console ./internal/infrastructure/persistence/pgstore ./cmd/lober -run 'Test.*(身份十三|资料已提交|审计导出后页|登录|并发改密|慢资料|契约用户|角色菜单|最后启用管理员|并发管理员)' -count=1`。纯已有行为补测预期通过，不人为制造红灯；真实缺陷另列失败证据及修复，不能悄悄改基线。
-- [ ] 提交 `test(identity): pin authentication and audit compatibility`，独立审查通过后接下一项。
+- [x] 对照真实路由/DTO/保存代码写契约，记录空数组、菜单版本、错误顺序和审计动作；不新增独立机器契约文件。
+- [x] 补 `Test身份十三入口契约与强制改密矩阵`：13项描述、五角色、强制改密admin本人PUT允许而viewer仍403，普通请求/事件流令牌区别。
+- [x] 补 `Test资料已提交后菜单读取失败保留事实`：注入保存后的菜单故障，响应500但真实资料Rev和一次审计已提交；不撤销原会话。
+- [x] 补 `Test审计导出后页失败不发送残缺下载`：500条后返回错误；无成功下载头、不是200部分CSV；原公式与所有页断言保留。
+- [x] VM运行 `go test ./internal/interfaces/console ./internal/infrastructure/persistence/pgstore ./cmd/lober -run 'Test.*(身份十三|资料已提交|审计导出后页|登录|并发改密|慢资料|契约用户|角色菜单|最后启用管理员|并发管理员)' -count=1`。纯已有行为补测预期通过，不人为制造红灯；真实缺陷另列失败证据及修复，不能悄悄改基线。
+- [x] 提交 `test(identity): pin authentication and audit compatibility`，独立审查通过后接下一项。
 
 ### Task 2：密码能力、会话及认证应用
 
@@ -218,12 +218,12 @@ func KnownPermission(string) bool // 仅路由描述合法性检查，权限决�
 
 **Interfaces:** 产出Access、Principal、SessionBook、UserView、SessionResult、Deps、NewService和两类密码能力；菜单目录与有效菜单读取由本项建立，Task4复用。
 
-- [ ] 先写能力缺失红灯，在VM点名 `Test身份登录凭据复核后才发布会话`、`Test身份会话期限与随机令牌契约`、`Test凭据实现只接受精确密码能力`；反例必须先通过类型检查。
-- [ ] 实现固定密码和令牌机制；原独立向量/随机盐/坏编码/无界工作量测试逐断言迁到合适归属。应用非法新口令测试保留，不能只测可用口令；原真实强度准备缓存不改。
-- [ ] 实现同实例会话表、协调锁和Access；保留实际锁/时钟/校验顺序、假散列、错误分类与不可伪造快照。CurrentUser/Login复用唯一有效菜单解析，失败时不发布会话。
-- [ ] 加通道控制的登录/重置顺序、过期边界、溢出、无效角色不清令牌、仓储故障不变401、全权限/菜单副本不共享可变切片断言；保留HTTP生产入口未切换。
-- [ ] VM运行 `go test ./internal/domain/access ./internal/application/identity ./internal/infrastructure/credentials ./internal/archtest -count=1` 及对应包 `-race -timeout=20m`。真实密码向量必跑；只用替身验证调用顺序不能代替真实算法。
-- [ ] 提交 `refactor(identity): define credential and session contracts`，独立审查；旧控制台许可此时不预先删除。
+- [x] 先写能力缺失红灯，在VM点名 `Test身份登录凭据复核后才发布会话`、`Test身份会话期限与随机令牌契约`、`Test凭据实现只接受精确密码能力`；反例必须先通过类型检查。
+- [x] 实现固定密码和令牌机制；原独立向量/随机盐/坏编码/无界工作量测试逐断言迁到合适归属。应用非法新口令测试保留，不能只测可用口令；原真实强度准备缓存不改。
+- [x] 实现同实例会话表、协调锁和Access；保留实际锁/时钟/校验顺序、假散列、错误分类与不可伪造快照。CurrentUser/Login复用唯一有效菜单解析，失败时不发布会话。
+- [x] 加通道控制的登录/重置顺序、过期边界、溢出、无效角色不清令牌、仓储故障不变401、全权限/菜单副本不共享可变切片断言；保留HTTP生产入口未切换。
+- [x] VM运行 `go test ./internal/domain/access ./internal/application/identity ./internal/infrastructure/credentials ./internal/archtest -count=1` 及对应包 `-race -timeout=20m`。真实密码向量必跑；只用替身验证调用顺序不能代替真实算法。
+- [x] 提交 `refactor(identity): define credential and session contracts`，独立审查；旧控制台许可此时不预先删除。
 
 ### Task 3：本人资料、改密和管理员账号操作
 
@@ -231,12 +231,12 @@ func KnownPermission(string) bool // 仅路由描述合法性检查，权限决�
 
 **Interfaces:** 消费Task2同一Service和Principal，产出Accounts六方法；UserQuery/UserPage及四种命令按第3节定义。
 
-- [ ] VM先跑新方法缺失红灯，覆盖拒绝后无仓储、散列和审计时钟副作用。
-- [ ] 实现原基础检查、读取、散列、锁和写入顺序；本人改密锁内重读，管理员更新保留请求Rev，不自动刷新。Profile只能用认证旧快照改四项资料，保存后再读菜单。
-- [ ] 保留 `Test并发改密不能让旧口令登录补发会话`、`Test并发本人改密不能覆盖管理员重置`、`Test慢资料请求不能用猜测新修订号恢复旧权限或凭据` 的真实数据库事实及屏障；新增应用侧同样边界，不用固定sleep证明竞争。
-- [ ] 补 `Test身份写入审计失败不撤销会话`、`Test仅改角色下次请求生效但不清令牌`、`Test身份跨实例管理员移除仍由数据库保护`，检查用户行/Rev/审计/有效令牌，而非只断言error。保留最后管理员表锁和事务内重查。
-- [ ] VM运行 `go test ./internal/application/identity ./internal/infrastructure/credentials ./internal/infrastructure/persistence/pgstore -count=1` 和对应race20m；不切生产登录、不开第二份生产会话。
-- [ ] 提交 `refactor(identity): move account and password operations`，独立审查。
+- [x] VM先跑新方法缺失红灯，覆盖拒绝后无仓储、散列和审计时钟副作用。
+- [x] 实现原基础检查、读取、散列、锁和写入顺序；本人改密锁内重读，管理员更新保留请求Rev，不自动刷新。Profile只能用认证旧快照改四项资料，保存后再读菜单。
+- [x] 保留 `Test并发改密不能让旧口令登录补发会话`、`Test并发本人改密不能覆盖管理员重置`、`Test慢资料请求不能用猜测新修订号恢复旧权限或凭据` 的真实数据库事实及屏障；新增应用侧同样边界，不用固定sleep证明竞争。
+- [x] 补 `Test身份写入审计失败不撤销会话`、`Test仅改角色下次请求生效但不清令牌`、`Test身份跨实例管理员移除仍由数据库保护`，检查用户行/Rev/审计/有效令牌，而非只断言error。保留最后管理员表锁和事务内重查。
+- [x] VM运行 `go test ./internal/application/identity ./internal/infrastructure/credentials ./internal/infrastructure/persistence/pgstore -count=1` 和对应race20m；不切生产登录、不开第二份生产会话。
+- [x] 提交 `refactor(identity): move account and password operations`，独立审查。
 
 ### Task 4：菜单操作及启动账号初始化
 
@@ -244,12 +244,12 @@ func KnownPermission(string) bool // 仅路由描述合法性检查，权限决�
 
 **Interfaces:** 消费Task2目录及有效菜单读取、Task3账号能力；Service至此完整实现网页Registry，Bootstrapper只给组装点。
 
-- [ ] 在VM先跑ListRoleMenus/SaveRoleMenus/Initialise缺失红灯，不给Registry加返回“待实现”的方法。
-- [ ] 实现菜单缺省/显式空、required、排序、首次与更新版本、直接调用权限；仍让数据库生成before/after审计。初始角色顺序、目录和响应空值不变。
-- [ ] 实现原空库初始化规则，复用同一个密码能力和时钟；已有用户时不散列seed、不改用户、不撤销会话。保留空seed错误及并发唯一约束结果，不加新全局锁协议。
-- [ ] 补 `Test菜单配置不提升接口权限`、`Test身份菜单首次竞争及审计回滚`、`Test身份初始化仅空库写入且不泄露种子口令`；复用真实库，验证先前资料提交后菜单失败的兼容边界。
-- [ ] VM运行 `go test ./internal/application/identity ./internal/domain/access ./internal/infrastructure/persistence/pgstore -count=1` 及对应race20m。
-- [ ] 提交 `refactor(identity): centralize role menus and bootstrap`，独立审查；生产切换仍留到Task5。
+- [x] 在VM先跑ListRoleMenus/SaveRoleMenus/Initialise缺失红灯，不给Registry加返回“待实现”的方法。
+- [x] 实现菜单缺省/显式空、required、排序、首次与更新版本、直接调用权限；仍让数据库生成before/after审计。初始角色顺序、目录和响应空值不变。
+- [x] 实现原空库初始化规则，复用同一个密码能力和时钟；已有用户时不散列seed、不改用户、不撤销会话。保留空seed错误及并发唯一约束结果，不加新全局锁协议。
+- [x] 补 `Test菜单配置不提升接口权限`、`Test身份菜单首次竞争及审计回滚`、`Test身份初始化仅空库写入且不泄露种子口令`；复用真实库，验证先前资料提交后菜单失败的兼容边界。
+- [x] VM运行 `go test ./internal/application/identity ./internal/domain/access ./internal/infrastructure/persistence/pgstore -count=1` 及对应race20m。
+- [x] 提交 `refactor(identity): centralize role menus and bootstrap`，独立审查；生产切换仍留到Task5。
 
 ### Task 5：一次接通身份入口与两个任务接缝
 
@@ -257,13 +257,13 @@ func KnownPermission(string) bool // 仅路由描述合法性检查，权限决�
 
 **Interfaces:** console.Deps增加Identity identity.Registry，移除Users、RoleMenus、SessionTTL；同一Service同时供Registry和Bootstrapper。共同AuditIntent和AuditedControl按第2/3节，TaskControl只换审计参数。
 
-- [ ] VM先跑 `Test身份接线共用会话与凭据协调`、`Test审计意图桥接不改变任务控制` 的新接线缺失红灯；先保护真实newApp的初始化、登录、重置、旧令牌拒绝及任务控制。
-- [ ] 原始Bearer提取、JSON/路径解析和响应留网页；authenticate/authorize委托Identity，actorOf从Principal取得Actor。route新增identityOperation，默认General；userinfo/logout/password分别声明对应操作，PUT用户声明LegacySelfUpdate，TargetUsername来自路径；不改变公开RouteInfo/OpenAPI字段。受保护请求缺依赖时明确失败，不回退旧Users。仅生成OpenAPI/路由的构造测试无需执行身份操作，不以仓储回退支持它。
-- [ ] 一次改11条身份入口，删除旧HashPassword/CheckPassword、业务PermsOf/AllPerms和网页持有的凭据锁/会话表；权限常量仅改从应用公开契约取得。harness原直接发会话的准备改用测试持有的同一SessionBook，不多加一次口令计算；保留真实强度缓存策略和独立随机盐测试。孤立处理器测试只注入可信ports.Actor，不新增能从JSON制造Principal的接口。
-- [ ] taskStream循环只委托StreamAuthorized，仍以原token复查；审计意图由路由和可信Actor/Clock生成。execution适配器转原Audit并委托既有四方法；stub只改参数类型，保持不可用错误。不修改任务状态判定、事件发送或取消重试本体。
-- [ ] App.Initialise保留内置准备顺序，只把用户初始化委托Bootstrapper。组装点由同一Clock、配置秒数和Tokens构造一个SessionBook，再构造一次Service；Registry/Bootstrapper绝不能各new一份。VM生成Wire并**等待取回完成**再冻结。
-- [ ] VM运行 `go test ./internal/interfaces/console ./cmd/lober ./internal/application/identity ./internal/application/execution ./internal/archtest -count=1`、相同包race20m、`pnpm --dir web check:console-types`及Wire diff；检查全部正式路由，而非只新身份路由。补退出/到期/账号改变的真实网络事件流断言，保留原三个事件流原因用例。
-- [ ] 只删实际消失的身份及三个接缝许可，逐项记账，不预填中间数。提交 `refactor(identity): route console through identity contracts` 并独立审查。
+- [x] VM先跑 `Test身份接线共用会话与凭据协调`、`Test审计意图桥接不改变任务控制` 的新接线缺失红灯；先保护真实newApp的初始化、登录、重置、旧令牌拒绝及任务控制。
+- [x] 原始Bearer提取、JSON/路径解析和响应留网页；authenticate/authorize委托Identity，actorOf从Principal取得Actor。route新增identityOperation，默认General；userinfo/logout/password分别声明对应操作，PUT用户声明LegacySelfUpdate，TargetUsername来自路径；不改变公开RouteInfo/OpenAPI字段。受保护请求缺依赖时明确失败，不回退旧Users。仅生成OpenAPI/路由的构造测试无需执行身份操作，不以仓储回退支持它。
+- [x] 一次改11条身份入口，删除旧HashPassword/CheckPassword、业务PermsOf/AllPerms和网页持有的凭据锁/会话表；权限常量仅改从应用公开契约取得。harness原直接发会话的准备改用测试持有的同一SessionBook，不多加一次口令计算；保留真实强度缓存策略和独立随机盐测试。孤立处理器测试只注入可信ports.Actor，不新增能从JSON制造Principal的接口。
+- [x] taskStream循环只委托StreamAuthorized，仍以原token复查；审计意图由路由和可信Actor/Clock生成。execution适配器转原Audit并委托既有四方法；stub只改参数类型，保持不可用错误。不修改任务状态判定、事件发送或取消重试本体。
+- [x] App.Initialise保留内置准备顺序，只把用户初始化委托Bootstrapper。组装点由同一Clock、配置秒数和Tokens构造一个SessionBook，再构造一次Service；Registry/Bootstrapper绝不能各new一份。VM生成Wire并**等待取回完成**再冻结。
+- [x] VM运行 `go test ./internal/interfaces/console ./cmd/lober ./internal/application/identity ./internal/application/execution ./internal/archtest -count=1`、相同包race20m、`pnpm --dir web check:console-types`及Wire diff；检查全部正式路由，而非只新身份路由。补退出/到期/账号改变的真实网络事件流断言，保留原三个事件流原因用例。
+- [x] 只删实际消失的身份及三个接缝许可，逐项记账，不预填中间数。提交 `refactor(identity): route console through identity contracts` 并独立审查。
 
 ### Task 6：审计查询与完整导出应用
 
@@ -271,12 +271,12 @@ func KnownPermission(string) bool // 仅路由描述合法性检查，权限决�
 
 **Interfaces:** 产出Reader.List/ExportCSV和普通Filter/Query/Entry/Page；console.Deps将Audit repository.AuditLog改为AuditReader audit.Reader。Reader只消费ports.Actor，不导入identity具体服务。
 
-- [ ] VM先跑新Reader缺失红灯及 `Test审计应用拒绝后不读仓储`、`Test审计应用导出后页失败无部分结果`。
-- [ ] 列表和导出保留身份→范围→分页→仓储顺序；网页数字仍复用现有parseQueryPagination，只做语法解析，不走旧queryPagination仓储检查。应用用原CheckPageQuery，不重写分页/游标；范围非法400，非可存筛选仍按原查询返回空页。
-- [ ] 导出在应用内使用同一内存缓冲与encoding/csv，逐页读取和编码，纯公式规则只留domain/audit一份。错误时返回nil结果，网页仅在成功后设置原下载头和200；JSON列表原文不转义。
-- [ ] 保留 `Test审计分页过滤完整CSV及公式作为文本`、`Test审计CSV文本转义` 和五角色权限；补第2页故障/取消、Unicode Cf/全角前缀/原首控制字符、空结果只有表头、并发新增审计不倒灌旧游标。核对真实500条以上数据与每个字段，不只断言成功码。
-- [ ] VM运行 `go test ./internal/application/audit ./internal/domain/audit ./internal/interfaces/console ./internal/infrastructure/persistence/pgstore ./cmd/lober -run 'Test.*(审计|Audit|CSV|身份接线|装配初始)' -count=1`及相同命中范围race20m；Wire生成/取回/diff、契约类型检查。未改前端源码时不安装Vue依赖。
-- [ ] 删除剩余本阶段审计许可，更新契约，提交 `refactor(audit): move queries and complete export behind reader`，独立审查。
+- [x] VM先跑新Reader缺失红灯及 `Test审计应用拒绝后不读仓储`、`Test审计应用导出后页失败无部分结果`。
+- [x] 列表和导出保留身份→范围→分页→仓储顺序；网页数字仍复用现有parseQueryPagination，只做语法解析，不走旧queryPagination仓储检查。应用用原CheckPageQuery，不重写分页/游标；范围非法400，非可存筛选仍按原查询返回空页。
+- [x] 导出在应用内使用同一内存缓冲与encoding/csv，逐页读取和编码，纯公式规则只留domain/audit一份。错误时返回nil结果，网页仅在成功后设置原下载头和200；JSON列表原文不转义。
+- [x] 保留 `Test审计分页过滤完整CSV及公式作为文本`、`Test审计CSV文本转义` 和五角色权限；补第2页故障/取消、Unicode Cf/全角前缀/原首控制字符、空结果只有表头、并发新增审计不倒灌旧游标。核对真实500条以上数据与每个字段，不只断言成功码。
+- [x] VM运行 `go test ./internal/application/audit ./internal/domain/audit ./internal/interfaces/console ./internal/infrastructure/persistence/pgstore ./cmd/lober -run 'Test.*(审计|Audit|CSV|身份接线|装配初始)' -count=1`及相同命中范围race20m；Wire生成/取回/diff、契约类型检查。未改前端源码时不安装Vue依赖。
+- [x] 删除剩余本阶段审计许可，更新契约，提交 `refactor(audit): move queries and complete export behind reader`，独立审查。
 
 ### Task 7：精确边界、完整验收和整分支审查
 
@@ -284,12 +284,15 @@ func KnownPermission(string) bool // 仅路由描述合法性检查，权限决�
 
 **Interfaces:** 承接完整Registry/Bootstrapper/Reader及共同AuditIntent；阶段5为0，阶段6为39；身份/审计新接口不能变成直连仓储的后门。
 
-- [ ] 先写并在VM运行类型有效反例：网页新文件/本地接口/方法值/包别名反查Users或RoleMenus、构造身份Service/SessionBook或调用会话表方法、重写角色/菜单判断、直接算口令或读随机数；credentials持有Store/自己的Users能力、应用导入网页/其他应用具体服务或外部IO、领域读时钟/文件、cmd重建身份业务均拒绝。正例包含正常Registry、路由权限常量、DTO转换、Crypto能力、execution只转换意图。先真实类型检查，不能以装载失败冒充拦截。
-- [ ] 核对68项删除集合：35+30阶段5及第2节三个明确阶段6条目；107→39、四表27/0/11/1。保留39项逐字段相同，零新增、零改阶段、零换名挪表；不能仅比较数量。
-- [ ] 更新历史快照检查的**接续方式**：media_rules原154项删除数据和原四个起点摘要保持，用当前39项+本轮68项还原上轮107项，再加原154项还原261。原前三阶段/向导/镜像清零及新阶段5清零均保持；不能改原摘要来容忍未知变化。
-- [ ] 冻结源码并在lober VM从头执行下节完整命令。逐轮保存树、环境、命令、时间、退出码、生成差异、缓存、明确skip和无匹配；不能把简略日志中的未知跳过总数写成0。
-- [ ] 提交 `refactor(identity): enforce phase-five contracts` 供本项独立审查；全部七项逐项门禁闭环后，再按完整起点到最终候选做独立整分支审查，逐一覆盖十三入口和五项Review Focus。每项未判断范围由根说明处理，不默认通过。
+- [x] 先写并在VM运行类型有效反例：网页新文件/本地接口/方法值/包别名反查Users或RoleMenus、构造身份Service/SessionBook或调用会话表方法、重写角色/菜单判断、直接算口令或读随机数；credentials持有Store/自己的Users能力、应用导入网页/其他应用具体服务或外部IO、领域读时钟/文件、cmd重建身份业务均拒绝。正例包含正常Registry、路由权限常量、DTO转换、Crypto能力、execution只转换意图。先真实类型检查，不能以装载失败冒充拦截。
+- [x] 核对68项删除集合：35+30阶段5及第2节三个明确阶段6条目；107→39、四表27/0/11/1。保留39项逐字段相同，零新增、零改阶段、零换名挪表；不能仅比较数量。
+- [x] 更新历史快照检查的**接续方式**：media_rules原154项删除数据和原四个起点摘要保持，用当前39项+本轮68项还原上轮107项，再加原154项还原261。原前三阶段/向导/镜像清零及新阶段5清零均保持；不能改原摘要来容忍未知变化。
+- [x] 冻结源码并在lober VM从头执行下节完整命令。逐轮保存树、环境、命令、时间、退出码、生成差异、缓存、明确skip和无匹配；不能把简略日志中的未知跳过总数写成0。
+- [x] 提交 `refactor(identity): enforce phase-five contracts` 供本项独立审查。
+- [ ] 控制器完成任务7独立审查；全部七项逐项门禁闭环后，再按完整起点到最终候选做独立整分支审查，逐一覆盖十三入口和五项Review Focus。每项未判断范围由根说明处理，不默认通过。
 - [ ] 两道收尾审查通过才标记模块可交付。文档收尾用Git精确差异证明执行代码仍等于被测树，不重复套件；保留模块分支、工作区、原日志和用户文件，不自动合入或推送。
+
+**实际调整：** Task5已按控制器预先裁定加入不可执行的68项历史重建记录，Task7继续加精确终态校验。Task7全模块检查发现用户列表仍调用旧queryPagination，控制器批准仅将该调用改为parseQueryPagination，由现有身份应用继续执行原分页规则；不增加旧调用许可，不改变39项剩余清单。机器密钥原随机源仅保留原文件/函数/符号的精确许可。
 
 ## 5. lober VM执行与验收
 

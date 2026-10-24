@@ -207,7 +207,7 @@ func Test镜像新网页文件不能调用内部能力(t *testing.T) {
 		{"本地接口真实签名直接调用", `import("context";m "` + pkgModel + `");type reader interface{GetISO(context.Context,string)(m.ISO,error)};func newMediaHandler(ctx context.Context,r reader)(m.ISO,error){return r.GetISO(ctx,"image")}`, false},
 		{"本地接口真实签名方法值", `import("context";m "` + pkgModel + `");type reader interface{GetISO(context.Context,string)(m.ISO,error)};func newMediaHandler(ctx context.Context,r reader)(m.ISO,error){read:=r.GetISO;return read(ctx,"image")}`, false},
 		{"后续任务接口正常调用", `import("context";m "` + pkgModel + `");type reader interface{GetTask(context.Context,string)(m.Task,error)};func newTaskHandler(ctx context.Context,r reader)(m.Task,error){if _,err:=r.GetTask(ctx,"task");err!=nil{return m.Task{},err};read:=r.GetTask;return read(ctx,"task")}`, true},
-		{"后续身份接口正常调用", `type reader interface{GetUser()};func newUserHandler(r reader){r.GetUser();read:=r.GetUser;read()}`, true},
+		{"已迁移身份本地仓储接口仍拒绝", `type reader interface{GetUser()};func newUserHandler(r reader){r.GetUser();read:=r.GetUser;read()}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := mediaTypedFixture(t, pkgConsole, map[string]string{"new.go": "package console;" + tc.body})
@@ -216,6 +216,13 @@ func Test镜像新网页文件不能调用内部能力(t *testing.T) {
 			}
 		})
 	}
+	t.Run("已迁移身份Registry正常调用", func(t *testing.T) {
+		body := `import i "` + pkgIdentityApp + `";func newUserHandler(r i.Registry){p,_:=r.Authenticate(nil,"token");_,_=r.CurrentUser(nil,p);read:=r.CurrentUser;_,_=read(nil,p)}`
+		got := identityTypedFixture(t, identityFixtureImports(t), pkgConsole, "new.go", body)
+		if len(got) != 0 {
+			t.Fatal("真实身份入口不应被镜像边界拦截", got)
+		}
+	})
 }
 
 // 起点是 dev 48f6c2c1f1ee4aebdd0349868a097891e5c9ad13。补回这154项后必须逐字等于起点。
