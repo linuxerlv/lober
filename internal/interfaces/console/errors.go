@@ -13,7 +13,6 @@ import (
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/repository"
 	"io"
 	"log/slog"
 	"maps"
@@ -106,61 +105,46 @@ func RespondError(c *gin.Context, err error) {
 		Judge(c, applicationProblems.Problems)
 		return
 	}
-	if errors.Is(err, repository.ErrTemplateNotCurrent) {
-		Fail(c, 409, nil, model.ConsoleTemplateCurrent)
-		return
-	}
-	if errors.Is(err, repository.ErrLastAdmin) {
-		Fail(c, 409, nil, model.ConsoleLastAdmin)
-		return
-	}
-	var referenced *repository.ReferencedError
-	if errors.As(err, &referenced) {
-		refs := make([]subjectJSON, len(referenced.References))
-		for i, s := range referenced.References {
-			refs[i] = subjectJSON{s.Kind, s.ID, s.Path, s.Line, s.Col}
-		}
-		Fail(c, 409, referenceDetail{refs}, model.ConsoleReferenced)
-		return
-	}
-	var batch *repository.BatchError
-	if errors.As(err, &batch) {
-		byHost := make(map[string][]problemJSON, len(batch.Result.ByHost))
-		for sn, ps := range batch.Result.ByHost {
-			byHost[sn] = jsonProblems(ps)
-		}
-		Fail(c, 422, batchDetail{jsonProblems(batch.Result.Common), byHost}, firstMessage(batch.Result.Common, batch.Result.ByHost))
-		return
-	}
-	var pe *repository.ProblemsError
-	if errors.As(err, &pe) {
-		Fail(c, 422, problemList{jsonProblems(pe.Problems)}, firstMessage(pe.Problems, nil))
-		return
-	}
 	status, message := 500, model.ConsoleInternal
-	var p model.Problem
-	if errors.As(err, &p) {
-		Judge(c, []model.Problem{p})
-		return
-	}
-	var pp *model.Problem
-	if errors.As(err, &pp) && pp != nil {
-		Judge(c, []model.Problem{*pp})
-		return
-	}
-	switch {
-	case errors.Is(err, repository.ErrNotFound):
-		status, message = 404, model.ConsoleNotFound
-	case errors.Is(err, repository.ErrConflict):
-		status, message = 409, model.ConsoleConflict
-	case errors.Is(err, repository.ErrDuplicate):
-		status, message = 409, model.ConsoleDuplicate
-	case errors.Is(err, repository.ErrImmutable):
-		status, message = 409, model.ConsoleImmutable
-	case errors.Is(err, repository.ErrReferenced):
-		status, message = 409, model.ConsoleReferenced
-	case errors.Is(err, repository.ErrInvalid):
-		status, message = 400, model.ConsoleBadRequest
+	if failure, ok := ports.DescribeFailure(err); ok {
+		switch failure.Kind {
+		case ports.TemplateNotCurrent:
+			status, message = 409, model.ConsoleTemplateCurrent
+		case ports.LastAdmin:
+			status, message = 409, model.ConsoleLastAdmin
+		case ports.ReferencedDetail:
+			refs := make([]subjectJSON, len(failure.References))
+			for i, s := range failure.References {
+				refs[i] = subjectJSON{s.Kind, s.ID, s.Path, s.Line, s.Col}
+			}
+			Fail(c, 409, referenceDetail{refs}, model.ConsoleReferenced)
+			return
+		case ports.BatchRejected:
+			byHost := make(map[string][]problemJSON, len(failure.ByHost))
+			for sn, ps := range failure.ByHost {
+				byHost[sn] = jsonProblems(ps)
+			}
+			Fail(c, 422, batchDetail{jsonProblems(failure.Common), byHost}, firstMessage(failure.Common, failure.ByHost))
+			return
+		case ports.StoredProblems:
+			Fail(c, 422, problemList{jsonProblems(failure.Problems)}, firstMessage(failure.Problems, nil))
+			return
+		case ports.DomainProblems:
+			Judge(c, failure.Problems)
+			return
+		case ports.NotFound:
+			status, message = 404, model.ConsoleNotFound
+		case ports.Conflict:
+			status, message = 409, model.ConsoleConflict
+		case ports.Duplicate:
+			status, message = 409, model.ConsoleDuplicate
+		case ports.Immutable:
+			status, message = 409, model.ConsoleImmutable
+		case ports.Referenced:
+			status, message = 409, model.ConsoleReferenced
+		case ports.Invalid:
+			status, message = 400, model.ConsoleBadRequest
+		}
 	}
 	if status == 500 {
 		slog.ErrorContext(c.Request.Context(), "console request failed", "error", err)
@@ -168,11 +152,8 @@ func RespondError(c *gin.Context, err error) {
 	Fail(c, status, nil, message)
 }
 func StatusOfProblems(ps []model.Problem) int {
-	if len(ps) > 0 {
-		switch ps[0].Code.Category() {
-		case model.CategoryIncompatible, model.CategoryState:
-			return 409
-		}
+	if ports.ProblemClass(ps) == ports.ProblemConflict {
+		return 409
 	}
 	return 422
 }

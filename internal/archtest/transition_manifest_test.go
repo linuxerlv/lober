@@ -6,8 +6,6 @@ var mediaMigrationExceptions = []migrationException{}
 // 非向导的旧领域判定、渲染及描述调用，按所属模块阶段逐条删除。
 var consoleRuleMigrationExceptions = []migrationException{
 	// 保留 dev 已有流程；逐项登记，向导不增加放行。
-	{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", "github.com/lober/lober/internal/domain/repository", "ErrTemplateNotCurrent", "6"},
-	{pkgConsole, "internal/interfaces/console/errors.go", "StatusOfProblems", "github.com/lober/lober/internal/domain/model", "Code.Category", "6"},
 	{pkgConsole, "internal/interfaces/console/openapi.go", "(*schemaBuilder).definition", "github.com/lober/lober/internal/domain/catalog", "AllArchs", "6"},
 	{pkgConsole, "internal/interfaces/console/openapi.go", "(*schemaBuilder).definition", "github.com/lober/lober/internal/domain/catalog", "AllFirmwares", "6"},
 	{pkgConsole, "internal/interfaces/console/openapi.go", "(*schemaBuilder).definition", "github.com/lober/lober/internal/domain/catalog", "AllFormats", "6"},

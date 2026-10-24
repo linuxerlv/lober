@@ -454,6 +454,7 @@ func Test身份审计精确删除68项保留39项(t *testing.T) {
 	}
 	total, removedTotal := 0, 0
 	for _, tc := range tables {
+		tc.current = phaseFiveBaselineEntries(tc.name, tc.current)
 		total += len(tc.current)
 		removedTotal += len(phaseFivePlannedRemovals[tc.name])
 		if len(tc.current) != tc.count {

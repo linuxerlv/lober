@@ -109,7 +109,7 @@ func migratedApplicationMethod(fn *types.Func) bool {
 		return symbol == "Reader.List" || symbol == "Reader.ExportCSV"
 	}
 	if target == pkgPorts {
-		return symbol == "FrozenPreview.RenderFrozen"
+		return symbol == "FrozenPreview.RenderFrozen" || symbol == "DescribeFailure" || symbol == "ProblemClass"
 	}
 	if target == modulePath+"/internal/application/media" {
 		switch symbol {
