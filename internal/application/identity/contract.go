@@ -141,3 +141,49 @@ type Accounts interface {
 	// user.profile.update 成功后再读菜单；菜单失败时保存已提交，旧版本重试冲突，不清会话。
 	UpdateProfile(context.Context, Principal, ProfileCommand) (UserView, error)
 }
+
+type MenuDefinition struct {
+	ID, Title, ParentID, Permission string
+	Required                        bool
+}
+type MenuList struct {
+	Menus []MenuDefinition
+	Roles []RoleMenuView
+}
+type SaveMenusCommand struct {
+	MenuIDs []string
+	Rev     int64
+}
+
+// Menus 只接收本实例认证快照；菜单显示不授予或撤销接口权限。
+// 两个操作均先查身份、改密要求和管理权限，再处理请求；不重复查询用户。
+type Menus interface {
+	// ListRoleMenus 返回独立目录和 viewer/operator/hook-author/hook-approver/admin 顺序的配置。
+	// 未配置用默认页面，已配置按当前权限和目录过滤并补必需项，显式空保持空数组。
+	// 重复查询读取当时数据；不写入或审计，任一读取失败返回原错误，不返回半份结果。
+	// context 原样传给每次仓储读取，不新增锁或取消检查。
+	ListRoleMenus(context.Context, Principal) (MenuList, error)
+	// SaveRoleMenus 区分未给数组与非nil空数组；角色、版本、格式、重复、可用和必需项不合法均报BadRequest。
+	// 按目录排序后保存请求原Rev，0仅供首次保存；旧版本或首次竞争由数据库报Conflict。
+	// 只保存该角色菜单，与 role.menus.update 审计同事务；before/after由数据库生成。
+	// 重复旧版本冲突，失败全部回滚；成功返回保存版本，不清会话、不额外查询菜单。
+	// context 传给原保存操作，不增加锁或取消检查；此前已提交的资料不随本次失败回滚。
+	SaveRoleMenus(context.Context, Principal, model.Role, SaveMenusCommand) (RoleMenuView, error)
+}
+
+// Registry 是网页可用的完整入口；启动初始化不交给网页。
+type Registry interface {
+	Access
+	Accounts
+	Menus
+}
+
+// Bootstrapper 仅供组装点在内置内容准备完成之后调用，不依赖网页身份。
+type Bootstrapper interface {
+	// Initialise 先ListUsers(Limit=1)；已有任意账号就忽略seed，不散列、不写入、不撤销会话。
+	// 空库先拒绝空seed，再用同一密码能力创建admin/管理员/强制改密；不返回口令或散列。
+	// 创建时间与bootstrap/user.create审计时间分别读时钟，账号与审计同事务。
+	// 重复调用已有账号时成功；并发空库创建仍服从唯一约束，不加全局锁或重试协议。
+	// 读取、散列、保存错误原样返回，非法口令沿用保存错误；context只传给原查询和保存。
+	Initialise(context.Context, string) error
+}
