@@ -10,7 +10,7 @@
 
 **Spec:** [已确认的四层设计](../specs/2026-10-22-backend-ddd-four-layer-design.md)、[总路线](2026-10-22-backend-ddd-roadmap.md)、[第五阶段dev集成记录](../reviews/2026-10-24-ddd-phase5-dev-integration.md)。同时读取仓库AGENTS.md、`docs/contracts/backend-modules.md`的既有任务创建契约及下文全部约束；身份复查仍遵守`docs/contracts/identity-audit.md`，冻结渲染仍遵守`docs/contracts/authoring-preview.md`。
 
-状态：八项任务的实现和逐项独立审查已完成。冻结代码 `7f2c35a006f80436ec73d10d9ab6206574985535` 的原完整VM验收和整分支独立代码审查已通过；原审查为Critical 0、Important 0、Minor 1，唯一总览文档过时项已修正并由根端关闭；针对文档提交 `7e9dd8d` 的独立关闭检查通过，新增Critical 0、Important 0、Minor 0。公开记录见[验证证据](../reviews/2026-10-24-ddd-phase6-evidence.md)及[最终审查](../reviews/2026-10-24-ddd-phase6-final-review.md)。模块分支保留，尚未集成dev或推进后续环境。
+状态：八项任务的实现和逐项独立审查已完成。冻结代码 `7f2c35a006f80436ec73d10d9ab6206574985535` 的原完整VM验收和整分支独立代码审查已通过；原审查为Critical 0、Important 0、Minor 1，唯一总览文档过时项已修正并由根端关闭；针对文档提交 `7e9dd8d` 的独立关闭检查通过，新增Critical 0、Important 0、Minor 0。公开记录见[验证证据](../reviews/2026-10-24-ddd-phase6-evidence.md)及[最终审查](../reviews/2026-10-24-ddd-phase6-final-review.md)。用户本轮明确授权后，来源`c8175f2`已本地合入dev，合并提交`7301128`；合并后原完整lober VM验收与独立集成审查通过，严重/重要/轻微问题均为0。最新状态见[第六阶段dev集成记录](../reviews/2026-10-25-ddd-phase6-dev-integration.md)。模块分支、全部工作区、证据及用户改动保留，尚未推送或推进后续环境。
 
 ## Global Constraints
 
