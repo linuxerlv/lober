@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -443,5 +444,73 @@ func Test主机应用组装传递仓储和时钟(t *testing.T) {
 		{Actor: "operator", Action: "host.delete", At: assemblyAt + 3},
 	}) {
 		t.Fatal(st.audits)
+	}
+}
+
+func Test身份接线共用会话与凭据协调(t *testing.T) {
+	if _, ok := reflect.TypeOf(console.Deps{}).FieldByName("Identity"); !ok {
+		t.Fatal("正式网页尚未接入身份契约")
+	}
+	cfg := assemblyConfig(t)
+	cfg.Machine = machineConfig{Enabled: true, KeyFile: filepath.Join(cfg.ISO.Staging, "machine.key")}
+	cfg.Preview.Gateway = "http://machine.example.test:18090"
+	cfg.Preview.Artifacts = "http://machine.example.test:18090/artifacts"
+	a, cleanup, err := newApp(t.Context(), cfg, console.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	if err = a.Initialise(); err != nil {
+		t.Fatal(err)
+	}
+	field := reflect.ValueOf(a).Elem().FieldByName("Identity")
+	if !field.IsValid() || field.IsNil() {
+		t.Fatal("启动初始化尚未共用身份服务")
+	}
+	webService := reflect.ValueOf(a.Console).Elem().FieldByName("server").Elem().FieldByName("deps").FieldByName("Identity")
+	if field.Elem().Pointer() != webService.Elem().Pointer() {
+		t.Fatal("启动与网页创建了不同身份服务")
+	}
+	control := taskControlOf(a.Machine)
+	for _, call := range []func(context.Context, model.Task, ports.AuditIntent) error{control.Cancel, control.Retry} {
+		if err := call(t.Context(), model.Task{ID: "missing"}, ports.AuditIntent{Actor: "admin", Action: "task.cancel", At: assemblyAt}); !errors.Is(err, repository.ErrNotFound) {
+			t.Fatal("正式任务控制没有交给原执行服务", err)
+		}
+	}
+	request := func(method, path, body, token string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		a.Console.Engine.ServeHTTP(w, r)
+		return w
+	}
+	login := func(password string) string {
+		w := request("POST", "/console/v1/auth/login", `{"username":"admin","password":"`+password+`"}`, "")
+		var result struct {
+			Data struct {
+				Token string `json:"token"`
+			} `json:"data"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Data.Token == "" {
+			t.Fatal("真实登录失败", w.Code)
+		}
+		return result.Data.Token
+	}
+	old := login(cfg.SeedAdmin)
+	if w := request("PUT", "/console/v1/users/admin", `{"role":"admin","password":"changed password","rev":1}`, old); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w := request("GET", "/console/v1/user/info", "", old); w.Code != 401 {
+		t.Fatal("改密没有撤销原令牌", w.Code)
+	}
+	fresh := login("changed password")
+	if w := request("GET", "/console/v1/user/info", "", fresh); w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	if err := a.Initialise(); err != nil {
+		t.Fatal(err)
 	}
 }

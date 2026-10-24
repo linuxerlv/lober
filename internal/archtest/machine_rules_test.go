@@ -19,7 +19,7 @@ func checkMachineFile(fset *token.FileSet, pkg string, f *ast.File) []violation 
 		if under(pkg, pkgEvents) {
 			own = pkgEvents
 		}
-		allowed := (isStd(name) && name != "C" && name != "unsafe") || inLayer1(name) || name == pkgStore || under(name, own)
+		allowed := (isStd(name) && name != "C" && name != "unsafe") || inLayer1(name) || name == pkgStore || under(name, own) || pkg == pkgExecution && name == pkgPorts
 		if !allowed {
 			found = append(found, violation{rule: ruleMachine, pkg: pkg, subject: name, pos: position(fset, imp.Pos())})
 		}

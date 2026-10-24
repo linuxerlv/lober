@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/domain/access"
 	"io"
 	"net/url"
 	"strings"
@@ -354,7 +355,7 @@ func Test每个权限码都有正式路由用到(t *testing.T) {
 	for _, r := range s.Routes() {
 		used[r.Perm] = true
 	}
-	for _, p := range AllPerms() {
+	for _, p := range access.AllPerms() {
 		if !used[p] {
 			t.Error("unused permission", p)
 		}

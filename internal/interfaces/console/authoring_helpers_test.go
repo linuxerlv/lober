@@ -158,7 +158,10 @@ func TestAuthoringCandidateVersionsCursorAndReplacementOrdinal(t *testing.T) {
 	fixture := &authoringReadFixture{template: tpl, hooks: []model.Hook{first, newer, second}}
 	srv := &server{deps: Deps{AuthoringEditor: authoring.NewEditor(authoring.EditorDeps{Templates: fixture, Hooks: fixture, Hosts: fixture, ISOs: fixture, Renderer: authoring.NewPreviewRenderer(nil, ports.PreviewEndpoints{})})}}
 	engine := gin.New()
-	engine.GET("/console/v1/templates/:id/versions/:version/hook-candidates", func(c *gin.Context) { c.Set(ctxUser, &model.User{Username: "reader", Role: model.RoleAdmin}); c.Next() }, srv.hookCandidates)
+	engine.GET("/console/v1/templates/:id/versions/:version/hook-candidates", func(c *gin.Context) {
+		c.Set(ctxActor, ports.Actor{Username: "reader", Role: model.RoleAdmin})
+		c.Next()
+	}, srv.hookCandidates)
 	s := &Server{Engine: engine}
 	base := fmt.Sprintf("/console/v1/templates/%s/versions/1/hook-candidates?slot=disk&index=2&limit=1", tpl.ID)
 	page := responseData[hookCandidatePage](t, httpCall(s, "GET", base, "", ""))

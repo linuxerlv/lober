@@ -90,7 +90,7 @@ func Test改密审计失败不改变凭据与会话(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	seedAuthUser(t, st, "alice", model.RoleViewer, "old")
 	token := loginHTTP(t, s, "alice", "old").Token
-	s.server.deps.Users = failingPasswordAudit{st}
+	identityFixture(s).repositories.Users = failingPasswordAudit{st}
 	if w := httpCall(s, "POST", "/console/v1/auth/password", `{"currentPassword":"old","newPassword":"new"}`, token); w.Code != 500 {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -106,7 +106,7 @@ func Test并发本人改密不能覆盖管理员重置(t *testing.T) {
 	token := loginHTTP(t, s, "alice", "old").Token
 	admin := adminHTTP(t, s, st)
 	paused := &pausedLoginUsers{Users: st, read: make(chan struct{}), resume: make(chan struct{})}
-	s.server.deps.Users = paused
+	identityFixture(s).repositories.Users = paused
 	result := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		result <- httpCall(s, "POST", "/console/v1/auth/password", `{"currentPassword":"old","newPassword":"stale"}`, token)

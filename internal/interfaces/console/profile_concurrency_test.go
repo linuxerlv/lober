@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/infrastructure/credentials"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -28,7 +29,7 @@ func Test资料已提交后菜单读取失败保留事实(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	token, before := seedHTTPUser(t, s, st, "profilefailure", model.RoleViewer)
 	menus := &profileMenuFailure{RoleMenus: st}
-	s.server.deps.RoleMenus = menus
+	identityFixture(s).repositories.RoleMenus = menus
 	body := fmt.Sprintf(`{"displayName":"已提交","email":"profile@example.com","avatar":"","bio":"保留资料","rev":%d}`, before.Rev)
 	w := httpCall(s, "PUT", "/console/v1/user/profile", body, token)
 	if w.Code != 500 || menus.reads != 1 {
@@ -51,7 +52,7 @@ func Test资料已提交后菜单读取失败保留事实(t *testing.T) {
 	if entries.Items[0].Actor != before.Username || entries.Items[0].At != fixedAt {
 		t.Fatal("资料审计身份或时间改变")
 	}
-	s.server.deps.RoleMenus = st
+	identityFixture(s).repositories.RoleMenus = st
 	info := responseData[userResponse](t, httpCall(s, "GET", "/console/v1/user/info", "", token))
 	if info.Rev != after.Rev || info.DisplayName != after.DisplayName {
 		t.Fatal("原会话未读到已提交资料")
@@ -118,7 +119,7 @@ func Test慢资料请求不能用猜测新修订号恢复旧权限或凭据(t *t
 			if back.Role != role || back.Disabled != (kind == "disable") || back.Rev != victim.Rev+1 {
 				t.Fatal("profile overwrote security fields")
 			}
-			if kind == "reset" && !CheckPassword(password, back.Password) {
+			if kind == "reset" && !credentials.NewPasswords().Check(password, back.Password) {
 				t.Fatal("profile restored old password")
 			}
 		})

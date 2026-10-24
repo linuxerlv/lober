@@ -10,19 +10,23 @@ import (
 	"time"
 
 	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/execution"
 	"github.com/lober/lober/internal/application/hosts"
+	"github.com/lober/lober/internal/application/identity"
 	appmedia "github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/domain/selection"
 	"github.com/lober/lober/internal/infrastructure/builtin"
+	"github.com/lober/lober/internal/infrastructure/credentials"
 	"github.com/lober/lober/internal/infrastructure/media"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore"
 	"github.com/lober/lober/internal/interfaces/console"
 )
 
 type app struct {
+	Identity   identity.Bootstrapper
 	Context    context.Context
 	Config     config
 	Clock      console.Clock
@@ -47,25 +51,9 @@ func (a *app) Initialise() error {
 			return err
 		}
 	}
-	users, err := a.Store.ListUsers(a.Context, repository.UserQuery{Limit: 1})
-	if err != nil {
-		return err
-	}
-	if len(users.Items) == 0 {
-		if a.Config.SeedAdmin == "" {
-			return errors.New("空库初始化必须显式配置 seedAdmin")
-		}
-		hash, err := console.HashPassword(a.Config.SeedAdmin)
-		if err != nil {
-			return err
-		}
-		_, err = a.Store.CreateUser(a.Context, model.User{Username: "admin", DisplayName: "管理员", Role: model.RoleAdmin, Password: hash, MustChangePassword: true, CreatedAt: a.Clock()}, repository.Audit{Actor: "bootstrap", Action: "user.create", At: a.Clock()})
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return a.Identity.Initialise(a.Context, a.Config.SeedAdmin)
 }
+
 func ensureBuiltin(ctx context.Context, operation func() error) error {
 	for attempt := 0; attempt < 4; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -120,7 +108,7 @@ func mediaControlOf(src *appmedia.Sources, sup *appmedia.Supervisor) port.Source
 }
 func taskControlOf(m *machineBundle) console.TaskControl {
 	if m.Service != nil {
-		return m.Service
+		return execution.NewAuditedControl(m.Service)
 	}
 	return taskControlStub{}
 }
@@ -152,9 +140,14 @@ func hostRegistryOf(st repository.Store, clock console.Clock) hosts.Registry {
 func mediaRegistryOf(st repository.Store, src port.SourceControl, j *appmedia.Deletion, clock console.Clock) appmedia.Registry {
 	return appmedia.NewRegistry(appmedia.Deps{ISOs: st, Sources: st, Control: src, Deletion: j, Clock: clock})
 }
-func consoleDepsOf(st repository.Store, mediaRegistry appmedia.Registry, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, renderer ports.FrozenPreview, ctl console.TaskControl, hostRegistry hosts.Registry) console.Deps {
-	return console.Deps{HostRegistry: hostRegistry, MediaRegistry: mediaRegistry, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, Audit: st, Users: st, RoleMenus: st, FrozenPreview: renderer, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger, SessionTTL: cfg.SessionTTLHours * 3600}
+func consoleDepsOf(st repository.Store, mediaRegistry appmedia.Registry, hub ports.Notifier, cfg config, clock console.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, renderer ports.FrozenPreview, ctl console.TaskControl, hostRegistry hosts.Registry, identityService *identity.Service) console.Deps {
+	return console.Deps{HostRegistry: hostRegistry, MediaRegistry: mediaRegistry, Tasks: st, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, Events: st, Audit: st, Identity: identityService, FrozenPreview: renderer, TaskCtl: ctl, Notifier: hub, Clock: clock, Logger: logger}
 }
-func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, src *appmedia.Sources, ctl port.SourceControl, s *appmedia.Supervisor, j *appmedia.Deletion, m *machineBundle) *app {
-	return &app{Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Sources: src, Control: ctl, Supervisor: s, Deletion: j, Machine: m}
+func appOf(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, src *appmedia.Sources, ctl port.SourceControl, s *appmedia.Supervisor, j *appmedia.Deletion, m *machineBundle, identityService *identity.Service) *app {
+	return &app{Identity: identityService, Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Sources: src, Control: ctl, Supervisor: s, Deletion: j, Machine: m}
+}
+
+func identityServiceOf(st repository.Store, cfg config, clock console.Clock) *identity.Service {
+	sessions := identity.NewSessionBook(cfg.SessionTTLHours*3600, clock, credentials.NewTokens())
+	return identity.NewService(identity.Deps{Users: st, RoleMenus: st, Passwords: credentials.NewPasswords(), Sessions: sessions, Clock: clock})
 }

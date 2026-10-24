@@ -36,3 +36,17 @@ func TestMachineAndExecutionStayBehindDeclaredInterfaces(t *testing.T) {
 		}
 	}
 }
+
+func Test共同审计意图只开放给执行包(t *testing.T) {
+	for _, pkg := range []string{pkgExecution, pkgExecution + "/hidden", pkgMachine, pkgEvents} {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "probe.go", "package probe;import _ \""+pkgPorts+"\"", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		allowed := len(checkMachineFile(fset, pkg, f)) == 0
+		if allowed != (pkg == pkgExecution) {
+			t.Fatal("共同能力开放范围改变", pkg, allowed)
+		}
+	}
+}

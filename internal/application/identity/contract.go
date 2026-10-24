@@ -187,3 +187,24 @@ type Bootstrapper interface {
 	// 读取、散列、保存错误原样返回，非法口令沿用保存错误；context只传给原查询和保存。
 	Initialise(context.Context, string) error
 }
+
+// 权限名称供入口声明路由使用，决策仍由 Authorize 完成。
+const (
+	PermAnyUser         = access.PermAnyUser
+	PermHostRead        = access.PermHostRead
+	PermISORead         = access.PermISORead
+	PermHookRead        = access.PermHookRead
+	PermTemplateRead    = access.PermTemplateRead
+	PermTaskRead        = access.PermTaskRead
+	PermHostWrite       = access.PermHostWrite
+	PermTaskCreate      = access.PermTaskCreate
+	PermTaskCancel      = access.PermTaskCancel
+	PermTaskRetry       = access.PermTaskRetry
+	PermHookWrite       = access.PermHookWrite
+	PermTemplateWrite   = access.PermTemplateWrite
+	PermHookApprove     = access.PermHookApprove
+	PermTemplateApprove = access.PermTemplateApprove
+	PermISOWrite        = access.PermISOWrite
+	PermUserManage      = access.PermUserManage
+	PermAuditRead       = access.PermAuditRead
+)

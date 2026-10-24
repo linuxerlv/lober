@@ -38,7 +38,7 @@ func fixtureTransitionUses(t *testing.T, caller, file, source string) []violatio
 	}
 	info := &types.Info{Uses: map[*ast.Ident]types.Object{}}
 	imports := transitionFixtureImporter{
-		pkgStore:        "package repository; type Users interface { GetUser() }; type ISOs interface { GetISO() }; type Store interface { ISOs }",
+		pkgStore:        "package repository; type Tasks interface { GetTask() }; type ISOs interface { GetISO() }; type Store interface { ISOs }",
 		pkgNotification: "package notification; func NewHub() int { return 1 }",
 	}
 	if _, err := (&types.Config{Importer: imports}).Check(caller, fset, []*ast.File{f}, info); err != nil {
@@ -52,21 +52,21 @@ func Test过渡符号许可不能被同包新函数借用(t *testing.T) {
 		name, file, function, body string
 		allowed                    bool
 	}{
-		{"原函数", "auth.go", "login", "s.users.GetUser()", true},
-		{"原函数局部别名", "auth.go", "login", "users := s.users; users.GetUser()", true},
-		{"原函数方法值", "auth.go", "login", "read := s.users.GetUser; read()", true},
-		{"新函数", "auth.go", "steal", "s.users.GetUser()", false},
-		{"新函数局部别名", "auth.go", "steal", "users := s.users; users.GetUser()", false},
-		{"新函数方法值", "auth.go", "steal", "read := s.users.GetUser; read()", false},
-		{"新文件同名函数", "new.go", "login", "s.users.GetUser()", false},
+		{"原函数", "tasks.go", "getTask", "s.users.GetTask()", true},
+		{"原函数局部别名", "tasks.go", "getTask", "users := s.users; users.GetTask()", true},
+		{"原函数方法值", "tasks.go", "getTask", "read := s.users.GetTask; read()", true},
+		{"新函数", "tasks.go", "steal", "s.users.GetTask()", false},
+		{"新函数局部别名", "tasks.go", "steal", "users := s.users; users.GetTask()", false},
+		{"新函数方法值", "tasks.go", "steal", "read := s.users.GetTask; read()", false},
+		{"新文件同名函数", "new.go", "getTask", "s.users.GetTask()", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// 类型声明单独放到允许声明的位置；待检查函数仍保留自己的真实文件身份。
-			source := "package console; import repo \"" + pkgStore + "\"; type server struct { users repo.Users }; func (s *server) " + tc.function + "(){" + tc.body + "}"
+			source := "package console; import repo \"" + pkgStore + "\"; type server struct { users repo.Tasks }; func (s *server) " + tc.function + "(){" + tc.body + "}"
 			found := fixtureTransitionUses(t, pkgConsole, "internal/interfaces/console/"+tc.file, source)
 			var methodUses []violation
 			for _, v := range found {
-				if v.subject == pkgStore+".Users.GetUser" {
+				if v.subject == pkgStore+".Tasks.GetTask" {
 					methodUses = append(methodUses, v)
 				}
 			}
@@ -136,9 +136,9 @@ func Test真实总检查拒绝新文件仓储方法值及类型错误(t *testing
 		}
 	}
 	write("go.mod", "module "+modulePath+"\n\ngo 1.27.1\n")
-	write("internal/domain/repository/users.go", "package repository; type Users interface{ GetUser() }")
-	write("internal/interfaces/console/server.go", "package console; import repo \""+pkgStore+"\"; type server struct { users repo.Users }")
-	write("internal/interfaces/console/auth.go", "package console; func(s *server) login(){s.users.GetUser()}")
+	write("internal/domain/repository/tasks.go", "package repository; type Tasks interface{ GetTask() }")
+	write("internal/interfaces/console/server.go", "package console; import repo \""+pkgStore+"\"; type server struct { users repo.Tasks }")
+	write("internal/interfaces/console/tasks.go", "package console; func(s *server) getTask(){s.users.GetTask()}")
 	write("internal/infrastructure/media/iso.go", "package iso")
 	check := func() []violation {
 		t.Helper()
@@ -149,9 +149,9 @@ func Test真实总检查拒绝新文件仓储方法值及类型错误(t *testing
 	if got := check(); len(got) != 0 {
 		t.Fatal("合法真实基线失败", got)
 	}
-	write("internal/interfaces/console/new.go", "package console; func(s *server) steal(){users:=s.users; read:=users.GetUser; read()}")
+	write("internal/interfaces/console/new.go", "package console; func(s *server) steal(){users:=s.users; read:=users.GetTask; read()}")
 	got := check()
-	if len(got) != 1 || got[0].rule != ruleMigration || got[0].subject != pkgStore+".Users.GetUser" {
+	if len(got) != 1 || got[0].rule != ruleMigration || got[0].subject != pkgStore+".Tasks.GetTask" {
 		t.Fatal("真实新文件绕过守卫", got)
 	}
 	write("internal/interfaces/console/new.go", "package console; func steal(){undefinedCall()}")

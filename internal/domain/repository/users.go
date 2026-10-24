@@ -7,7 +7,7 @@ import (
 )
 
 // Users persists accounts, with mutations and audit entries in one transaction.
-// Sessions belong to the console. Identity and creation time are immutable.
+// 会话归身份应用管理。账号标识和创建时间不能改。
 type Users interface {
 	CreateUser(context.Context, model.User, Audit) (model.User, error)
 	UpdateUser(context.Context, model.User, Audit) (model.User, error)

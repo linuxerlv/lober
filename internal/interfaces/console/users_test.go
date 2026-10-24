@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/infrastructure/credentials"
 	"testing"
 )
 
@@ -47,7 +48,7 @@ func Test用户HTTP创建修改禁用恢复与审计(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 	u, err := st.GetUser(t.Context(), "bob")
-	if err != nil || !CheckPassword("initial", u.Password) || u.Rev != 1 {
+	if err != nil || !credentials.NewPasswords().Check("initial", u.Password) || u.Rev != 1 {
 		t.Fatal(err)
 	}
 	bobToken := loginHTTP(t, s, "bob", "initial").Token
@@ -156,7 +157,7 @@ func Test初始管理员强制改密在服务端执行并持久化(t *testing.T)
 		t.Fatal(w.Body.String())
 	}
 	back, err := st.GetUser(t.Context(), "admin")
-	if err != nil || back.MustChangePassword || !CheckPassword("new password", back.Password) {
+	if err != nil || back.MustChangePassword || !credentials.NewPasswords().Check("new password", back.Password) {
 		t.Fatal("forced change not persisted")
 	}
 	if w := httpCall(s, "GET", "/console/v1/user/info", "", login.Token); w.Code != 401 {

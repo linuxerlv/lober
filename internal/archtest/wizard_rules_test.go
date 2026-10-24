@@ -13,11 +13,11 @@ func wizardTransitionFixture(t *testing.T, body string) []violation {
 	fset := token.NewFileSet()
 	var files []*ast.File
 	for _, src := range []struct{ name, text string }{
-		{"server.go", `package console; import (repo "` + pkgStore + `"; tp "` + pkgTasksPort + `"; p "` + pkgPorts + `"); type deps struct{Users repo.Users; TaskCtl TaskControl; Tasks tp.Tasks; Notifier p.Notifier}; type server struct{deps deps}; type TaskControl interface{CanCancel()}`},
-		{"auth.go", `package console; func(s *server) login(){s.deps.Users.GetUser()}`},
-		{"legacy_templates.go", `package console; func toTemplateResponse(){(&server{}).templateHooks()}; func(s *server) templateHooks(){s.login()}`},
+		{"server.go", `package console; import (repo "` + pkgStore + `"; tp "` + pkgTasksPort + `"; p "` + pkgPorts + `"); type deps struct{LegacyTasks repo.Tasks; TaskCtl TaskControl; Tasks tp.Tasks; Notifier p.Notifier}; type server struct{deps deps}; type TaskControl interface{CanCancel()}`},
+		{"tasks.go", `package console; func(s *server) getTask(){s.deps.LegacyTasks.GetTask()}`},
+		{"legacy_templates.go", `package console; func toTemplateResponse(){(&server{}).templateHooks()}; func(s *server) templateHooks(){s.getTask()}`},
 		{"tasks.go", `package console; func(s *server) taskResponse(){s.deps.TaskCtl.CanCancel()}`},
-		{"bridge.go", `package console; func(s *server) bridge(){s.login()}; var alias=toTemplateResponse`},
+		{"bridge.go", `package console; func(s *server) bridge(){s.getTask()}; var alias=toTemplateResponse`},
 		{"wizard.go", `package console; import p "` + layer1 + `/params"; type Clock func()int64; func(s *server) wizardHosts(){` + body + `}; var _=p.FieldKey("")`},
 	} {
 		f, e := parser.ParseFile(fset, "internal/interfaces/console/"+src.name, src.text, 0)
@@ -27,7 +27,7 @@ func wizardTransitionFixture(t *testing.T, body string) []violation {
 		files = append(files, f)
 	}
 	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
-	imports := transitionFixtureImporter{pkgStore: `package repository; type Users interface{GetUser()}`, layer1 + "/params": `package params; type FieldKey string`, pkgTasksPort: `package port; type Tasks interface{CreateCurrentTasks()}`, pkgPorts: `package ports; type Notifier interface{Publish()}`}
+	imports := transitionFixtureImporter{pkgStore: `package repository; type Tasks interface{GetTask()}`, layer1 + "/params": `package params; type FieldKey string`, pkgTasksPort: `package port; type Tasks interface{CreateCurrentTasks()}`, pkgPorts: `package ports; type Notifier interface{Publish()}`}
 	if _, e := (&types.Config{Importer: imports}).Check(pkgConsole, fset, files, info); e != nil {
 		t.Fatal("夹具类型错误", e)
 	}
@@ -38,10 +38,10 @@ func Test向导不能经同包辅助函数绕回旧业务(t *testing.T) {
 		name, body string
 		allowed    bool
 	}{
-		{"直接仓储", `s.deps.Users.GetUser()`, false},
-		{"局部仓储别名", `u:=s.deps.Users;u.GetUser()`, false},
-		{"旧函数", `s.login()`, false},
-		{"旧函数方法值", `f:=s.login;f()`, false},
+		{"直接仓储", `s.deps.LegacyTasks.GetTask()`, false},
+		{"局部仓储别名", `u:=s.deps.LegacyTasks;u.GetTask()`, false},
+		{"旧函数", `s.getTask()`, false},
+		{"旧函数方法值", `f:=s.getTask;f()`, false},
 		{"两层函数转发", `s.bridge()`, false},
 		{"模板响应旧规则", `toTemplateResponse()`, false},
 		{"模板引用旧辅助函数", `s.templateHooks()`, false},

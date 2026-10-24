@@ -37,7 +37,7 @@ func Test并发改密不能让旧口令登录补发会话(t *testing.T) {
 	admin := seedAuthUser(t, st, "administrator", model.RoleAdmin, "admin password")
 	token := loginHTTP(t, s, admin.Username, "admin password").Token
 	p := &pausedLoginUsers{Users: st, read: make(chan struct{}), resume: make(chan struct{})}
-	s.server.deps.Users = p
+	identityFixture(s).repositories.Users = p
 	result := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		result <- httpCall(s, "POST", "/console/v1/auth/login", `{"username":"alice","password":"old password"}`, "")

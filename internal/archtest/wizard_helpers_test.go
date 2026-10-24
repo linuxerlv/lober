@@ -102,6 +102,9 @@ func migratedConsoleFile(file string) bool {
 // 只登记已交付的入口与方法。共同能力包新增方法不会自动获得许可。
 func migratedApplicationMethod(fn *types.Func) bool {
 	target, symbol := fn.Pkg().Path(), transitionSymbol(fn)
+	if target == modulePath+"/internal/application/identity" {
+		return symbol == "Principal.Actor"
+	}
 	if target == pkgPorts {
 		return symbol == "FrozenPreview.RenderFrozen"
 	}

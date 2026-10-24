@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/infrastructure/credentials"
 	"strings"
 	"sync"
 	"testing"
@@ -13,11 +14,11 @@ import (
 const knownPasswordHash = "pbkdf2-sha256$600000$AAECAwQFBgcICQoLDA0ODw$lqWQTC4IyNpCMF28xdfPGOrSY21J9ZUmtgbyZpYoFHM"
 
 func Test口令散列格式随机盐与独立向量(t *testing.T) {
-	a, err := HashPassword("correct horse")
+	a, err := credentials.NewPasswords().Hash("correct horse")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := HashPassword("correct horse")
+	b, err := credentials.NewPasswords().Hash("correct horse")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,23 +31,23 @@ func Test口令散列格式随机盐与独立向量(t *testing.T) {
 	if e1 != nil || e2 != nil || len(salt) != 16 || len(key) != 32 {
 		t.Fatal("salt/key lengths")
 	}
-	if !CheckPassword("correct horse", knownPasswordHash) || !CheckPassword("correct horse", a) {
+	if !credentials.NewPasswords().Check("correct horse", knownPasswordHash) || !credentials.NewPasswords().Check("correct horse", a) {
 		t.Fatal("independent PBKDF2 vector not accepted")
 	}
 	for _, bad := range []string{"", "correct hors", "CORRECT HORSE", "correct horse "} {
-		if CheckPassword(bad, a) {
+		if credentials.NewPasswords().Check(bad, a) {
 			t.Fatal("wrong password accepted")
 		}
 	}
 }
 func Test口令散列拒绝坏编码和无界工作量(t *testing.T) {
 	for _, bad := range []string{"", "md5$600000$abc$def", "pbkdf2-sha256$0$a$b", "pbkdf2-sha256$-1$a$b", "pbkdf2-sha256$999999999$AAECAwQFBgcICQoLDA0ODw$x", strings.Replace(knownPasswordHash, "600000", "1", 1), strings.Replace(knownPasswordHash, "AAECAwQFBgcICQoLDA0ODw", "!!!", 1), knownPasswordHash + "$extra"} {
-		if CheckPassword("correct horse", bad) {
+		if credentials.NewPasswords().Check("correct horse", bad) {
 			t.Fatal("malformed hash accepted")
 		}
 	}
 	for _, bad := range []string{"", "x\x00", "x\xff"} {
-		if _, err := HashPassword(bad); err == nil {
+		if _, err := credentials.NewPasswords().Hash(bad); err == nil {
 			t.Fatal("invalid password accepted")
 		}
 	}
@@ -66,7 +67,7 @@ func seedPasswordHash(t *testing.T, pw string) string {
 	if hash, ok := seedPasswordHashes.values[pw]; ok {
 		return hash
 	}
-	hash, err := HashPassword(pw)
+	hash, err := credentials.NewPasswords().Hash(pw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,11 +172,11 @@ func Test测试用户重复准备复用完整强度散列(t *testing.T) {
 			t.Fatal("同一口令的测试准备重复生成散列")
 		}
 	}
-	if !strings.HasPrefix(users[0].Password, "pbkdf2-sha256$600000$") || !CheckPassword(password, users[0].Password) {
+	if !strings.HasPrefix(users[0].Password, "pbkdf2-sha256$600000$") || !credentials.NewPasswords().Check(password, users[0].Password) {
 		t.Fatal("复用值不是完整强度的真实散列")
 	}
 	other := seedAuthUser(t, st, "seedother", model.RoleViewer, password+" ")
-	if other.Password == users[0].Password || !CheckPassword(password+" ", other.Password) {
+	if other.Password == users[0].Password || !credentials.NewPasswords().Check(password+" ", other.Password) {
 		t.Fatal("不同原文口令共用了错误散列")
 	}
 	first := loginHTTP(t, s, users[0].Username, password)

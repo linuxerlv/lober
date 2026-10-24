@@ -3,6 +3,7 @@ package console
 import (
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/hosts"
+	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/application/media"
 	mediaport "github.com/lober/lober/internal/application/media/port"
 	"github.com/lober/lober/internal/application/ports"
@@ -11,6 +12,7 @@ import (
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/domain/selection"
 	"github.com/lober/lober/internal/infrastructure/builtin"
+	"github.com/lober/lober/internal/infrastructure/credentials"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 	selectionguard "github.com/lober/lober/internal/infrastructure/selection"
@@ -29,7 +31,7 @@ func newHTTPServer(t *testing.T) (*Server, *pgstore.Store, *atomic.Int64) {
 	st := pgtest.OpenStore(t)
 	now := new(atomic.Int64)
 	now.Store(fixedAt)
-	s := New(wizardDeps(Deps{Tasks: st, Events: st, Audit: st, Users: st, RoleMenus: st, Clock: now.Load, Notifier: NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, st))
+	s := New(wizardDeps(Deps{Tasks: st, Events: st, Audit: st, Clock: now.Load, Notifier: NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, st))
 	return s, st, now
 }
 
@@ -41,6 +43,8 @@ type wizardTaskRepository struct {
 // 测试也显式组装，保证向导、模板编写和通知订阅使用相同实例。
 type authoringTestStore interface {
 	repository.Hosts
+	repository.Users
+	repository.RoleMenus
 	repository.ISOs
 	repository.ISOSources
 	repository.Hooks
@@ -52,6 +56,12 @@ func wizardDeps(d Deps, store authoringTestStore, override ...repository.Current
 	return wizardDepsGuard(d, store, selectionguard.NewGuard(), override...)
 }
 func wizardDepsGuard(d Deps, store authoringTestStore, guard ports.SelectionGuard, override ...repository.CurrentTaskCreator) Deps {
+	if d.Identity == nil {
+		repositories := &identityTestRepositories{Users: store, RoleMenus: store}
+		sessions := identity.NewSessionBook(0, d.Clock, credentials.NewTokens())
+		service := identity.NewService(identity.Deps{Users: repositories, RoleMenus: repositories, Passwords: credentials.NewPasswords(), Sessions: sessions, Clock: d.Clock})
+		d.Identity = &identityTestFixture{Registry: service, sessions: sessions, repositories: repositories}
+	}
 	var current repository.CurrentTaskCreator = store
 	if len(override) > 0 {
 		current = override[0]
@@ -83,7 +93,7 @@ func seedHTTPUser(t *testing.T, s *Server, st repository.Users, name string, rol
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s.server.sessions.put(u.Username), u
+	return identityFixture(s).sessions.Put(u.Username), u
 }
 func httpCall(s *Server, method, path, body, token string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -100,4 +110,19 @@ func httpCall(s *Server, method, path, body, token string) *httptest.ResponseRec
 
 func setMedia(s *Server, isos mediaport.ISOs, sources mediaport.Sources, control mediaport.SourceControl, deletion mediaport.Deletion) {
 	s.server.deps.MediaRegistry = media.NewRegistry(media.Deps{ISOs: isos, Sources: sources, Control: control, Deletion: deletion, Clock: s.server.deps.Clock})
+}
+
+// 会话和可替换仓储只由测试夹具持有，生产网页只能访问 Registry。
+type identityTestRepositories struct {
+	repository.Users
+	repository.RoleMenus
+}
+type identityTestFixture struct {
+	identity.Registry
+	sessions     *identity.SessionBook
+	repositories *identityTestRepositories
+}
+
+func identityFixture(s *Server) *identityTestFixture {
+	return s.server.deps.Identity.(*identityTestFixture)
 }

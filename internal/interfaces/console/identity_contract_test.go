@@ -3,6 +3,7 @@ package console
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/lober/lober/internal/domain/access"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -58,7 +59,7 @@ func Test身份十三入口契约与强制改密矩阵(t *testing.T) {
 		}
 	}
 	roles := []model.Role{model.RoleViewer, model.RoleOperator, model.RoleHookAuthor, model.RoleHookApprover, model.RoleAdmin}
-	if !slices.Equal(model.Roles(), roles) || len(AllPerms()) != 16 {
+	if !slices.Equal(model.Roles(), roles) || len(access.AllPerms()) != 16 {
 		t.Fatal("角色顺序或权限数量改变")
 	}
 	for i, role := range roles {
@@ -76,7 +77,7 @@ func Test身份十三入口契约与强制改密矩阵(t *testing.T) {
 			for _, tc := range cases {
 				t.Run(fmt.Sprintf("%s/强制改密=%t/%s%s", role, forced, tc.method, tc.path), func(t *testing.T) {
 					path := strings.ReplaceAll(strings.ReplaceAll(tc.path, ":username", name), ":role", "viewer")
-					token := s.server.sessions.put(name)
+					token := identityFixture(s).sessions.Put(name)
 					want := tc.allowedStatus
 					message := ""
 					if forced && !tc.forcedAllowed {
@@ -100,7 +101,7 @@ func Test身份十三入口契约与强制改密矩阵(t *testing.T) {
 			}
 		}
 		// 旧用户更新入口仍让强制改密管理员更新本人，普通用户不能借此管理账号。
-		token := s.server.sessions.put(name)
+		token := identityFixture(s).sessions.Put(name)
 		other := httpCall(s, "PUT", "/console/v1/users/missing", "{}", token)
 		var denied struct {
 			Message string `json:"message"`

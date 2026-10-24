@@ -1,13 +1,9 @@
 package console
 
 import (
-	"context"
-	"errors"
-	"slices"
-
 	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/repository"
 )
 
 type menuDefinition struct {
@@ -16,26 +12,6 @@ type menuDefinition struct {
 	ParentID   string `json:"parentId"`
 	Permission string `json:"permission"`
 	Required   bool   `json:"required"`
-}
-
-var menuCatalog = []menuDefinition{
-	{ID: "tasks-group", Title: "任务"},
-	{ID: "tasks", Title: "任务列表", ParentID: "tasks-group", Permission: PermTaskRead},
-	{ID: "hosts-group", Title: "主机清单"},
-	{ID: "hosts", Title: "主机清单", ParentID: "hosts-group", Permission: PermHostRead},
-	{ID: "templates-group", Title: "模板"},
-	{ID: "templates", Title: "模板", ParentID: "templates-group", Permission: PermTemplateRead},
-	{ID: "hooks-group", Title: "hook"},
-	{ID: "hooks", Title: "hook 管理与审批", ParentID: "hooks-group", Permission: PermHookRead},
-	{ID: "isos-group", Title: "制品集"},
-	{ID: "isos", Title: "制品集导入", ParentID: "isos-group", Permission: PermISORead},
-	{ID: "tools-group", Title: "工具"},
-	{ID: "tools", Title: "磁盘策略 dry-run", ParentID: "tools-group", Permission: PermTemplateRead},
-	{ID: "reports-group", Title: "报表与审计"},
-	{ID: "reports", Title: "报表与审计", ParentID: "reports-group", Permission: PermAuditRead},
-	{ID: "access", Title: "权限管理"},
-	{ID: "users", Title: "账号管理", ParentID: "access", Permission: PermUserManage},
-	{ID: "role-menus", Title: "角色与菜单", ParentID: "access", Permission: PermUserManage, Required: true},
 }
 
 type roleMenuResponse struct {
@@ -60,105 +36,34 @@ func (s *server) menuRoutes() []route {
 	}
 }
 
-func availableMenus(role model.Role) []string {
-	out := []string{}
-	permissions := PermsOf(role)
-	for _, m := range menuCatalog {
-		// Folders carry hierarchy only; only second-level pages can be granted.
-		if m.ParentID != "" && slices.Contains(permissions, m.Permission) {
-			out = append(out, m.ID)
-		}
-	}
-	return out
-}
-
-func (s *server) roleMenus(ctx context.Context, role model.Role) (roleMenuResponse, error) {
-	if s.deps.RoleMenus == nil {
-		return roleMenuResponse{}, errors.New("role menu storage unavailable")
-	}
-	setting, found, err := s.deps.RoleMenus.GetRoleMenus(ctx, role)
-	if err != nil {
-		return roleMenuResponse{}, err
-	}
-	allowed := availableMenus(role)
-	out := roleMenuResponse{Role: role, AvailableMenuIDs: allowed, MenuIDs: append([]string{}, allowed...)}
-	if found {
-		out.MenuIDs = []string{}
-		out.Rev = setting.Rev
-		// Reapply current permissions if a future release changes the catalog.
-		for _, m := range menuCatalog {
-			if slices.Contains(allowed, m.ID) && (slices.Contains(setting.MenuIDs, m.ID) || m.Required) {
-				out.MenuIDs = append(out.MenuIDs, m.ID)
-			}
-		}
-	}
-	return out, nil
-}
-
 func (s *server) listRoleMenus(c *gin.Context) {
-	out := roleMenuListResponse{Menus: slices.Clone(menuCatalog), Roles: []roleMenuResponse{}}
-	for _, role := range model.Roles() {
-		item, err := s.roleMenus(c.Request.Context(), role)
-		if err != nil {
-			RespondError(c, err)
-			return
-		}
-		out.Roles = append(out.Roles, item)
+	result, ok := Get(c, func() (identity.MenuList, error) {
+		return s.deps.Identity.ListRoleMenus(c.Request.Context(), principalOf(c))
+	})
+	if !ok {
+		return
+	}
+	out := roleMenuListResponse{Menus: make([]menuDefinition, len(result.Menus)), Roles: make([]roleMenuResponse, len(result.Roles))}
+	for i, m := range result.Menus {
+		out.Menus[i] = menuDefinition{ID: m.ID, Title: m.Title, ParentID: m.ParentID, Permission: m.Permission, Required: m.Required}
+	}
+	for i, m := range result.Roles {
+		out.Roles[i] = toRoleMenuResponse(m)
 	}
 	Ok(c, out)
 }
-
+func toRoleMenuResponse(m identity.RoleMenuView) roleMenuResponse {
+	return roleMenuResponse{Role: m.Role, AvailableMenuIDs: m.AvailableMenuIDs, MenuIDs: m.MenuIDs, Rev: m.Rev}
+}
 func (s *server) saveRoleMenus(c *gin.Context) {
-	role := model.Role(c.Param("role"))
 	var req roleMenuRequest
 	if !Bind(c, &req) {
 		return
 	}
-	if !role.Valid() || req.Rev == nil || req.MenuIDs == nil {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
-		return
-	}
-	setting := repository.RoleMenuSettings{Role: role, MenuIDs: req.MenuIDs, Rev: *req.Rev}
-	if repository.CheckRoleMenus(setting) != nil {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
-		return
-	}
-	allowed := availableMenus(role)
-	for _, id := range req.MenuIDs {
-		if !slices.Contains(allowed, id) {
-			Fail(c, 400, nil, model.ConsoleBadRequest)
-			return
-		}
-	}
-	setting.MenuIDs = []string{}
-	for _, m := range menuCatalog {
-		if m.Required && slices.Contains(allowed, m.ID) && !slices.Contains(req.MenuIDs, m.ID) {
-			Fail(c, 400, nil, model.ConsoleBadRequest)
-			return
-		}
-		if slices.Contains(req.MenuIDs, m.ID) {
-			setting.MenuIDs = append(setting.MenuIDs, m.ID)
-		}
-	}
-	if s.deps.RoleMenus == nil {
-		Fail(c, 500, nil, model.ConsoleInternal)
-		return
-	}
-	saved, ok := Write(c, func() (repository.RoleMenuSettings, error) {
-		return s.deps.RoleMenus.SaveRoleMenus(c.Request.Context(), setting, s.auditFrom(c, ""))
+	result, ok := Write(c, func() (identity.RoleMenuView, error) {
+		return s.deps.Identity.SaveRoleMenus(c.Request.Context(), principalOf(c), model.Role(c.Param("role")), identity.SaveMenusCommand{MenuIDs: req.MenuIDs, Rev: *req.Rev})
 	})
 	if ok {
-		Ok(c, roleMenuResponse{Role: role, AvailableMenuIDs: allowed, MenuIDs: saved.MenuIDs, Rev: saved.Rev})
+		Ok(c, toRoleMenuResponse(result))
 	}
-}
-
-func (s *server) currentUserResponse(ctx context.Context, u model.User) (userResponse, error) {
-	menus, err := s.roleMenus(ctx, u.Role)
-	if err != nil {
-		return userResponse{}, err
-	}
-	out := toUserResponse(u)
-	out.MenuIDs = menus.MenuIDs
-	out.MenuRev = menus.Rev
-	return out, nil
 }

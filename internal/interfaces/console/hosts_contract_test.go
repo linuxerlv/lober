@@ -385,7 +385,7 @@ func Test主机应用审计失败与删除引用保护(t *testing.T) {
 }
 
 func hostContractServer(st *pgstore.Store) *Server {
-	return New(wizardDeps(Deps{Tasks: st, Events: st, Audit: st, Users: st, RoleMenus: st, Clock: func() int64 { return fixedAt }}, st))
+	return New(wizardDeps(Deps{Tasks: st, Events: st, Audit: st, Clock: func() int64 { return fixedAt }}, st))
 }
 func hostContractConnection(t *testing.T, dsn string) *pgx.Conn {
 	t.Helper()
