@@ -178,8 +178,10 @@ Task6只补文档，不改数据库结构、网页字段、前端或生产行为
 六项正式编号能力和唯一通知转发的原检查保持。模块分支完整验证、逐项独立审查及整分支审查均通过，实际状态见[第三阶段证据](../superpowers/reviews/2026-10-23-ddd-phase3-evidence.md)。用户随后明确集成目标为 `dev`，本地合并及合并后验证见[dev 集成记录](../superpowers/reviews/2026-10-23-ddd-phase3-dev-integration.md)；后续企业、人工验收另行推进。
 
 
-## 第六阶段任务读取边界
+## 第六阶段任务读取、控制和事件边界
 
-任务列表、详情和冻结预览通过`application/tasks.Reader`，只消费任务读取、原诊断和冻结渲染三个明确能力。网页只解析语法和转换结果；应用验证可信操作者并保持原错误先后。生产与测试均显式组装，不从旧网页依赖回退。控制和事件订阅仍待后续任务迁移。
+七个任务入口均已通过任务应用：`application/tasks.Reader` 负责列表、详情和冻结预览，`Controller` 负责取消和重试，`EventReader` 负责事件查询和订阅。网页只解析请求、取得可信身份、转换结果和处理连接；生产与测试显式组装三个入口，不从旧仓储、控制或通知依赖回退。控制仍由原执行服务原子保存状态、执行记录、事件和审计，通知只提示补读已提交事实。
 
-七条路径、问题顺序、空数组、审计及流行为见[任务读取、控制和事件约定](task-read-control-events.md)。本步骤删除九项旧许可，当前剩12项；冻结39项及更早历史记录不变。
+本阶段精确删除最后39项过渡许可，当前 `migrationExceptions`、`mediaMigrationExceptions`、`consoleRuleMigrationExceptions`、`notificationMigrationExceptions` 四表逐表为0；冻结39项和更早68/154项历史记录、摘要及六项正式编号能力不变。错误说明与公开枚举经应用契约提供，内置初始化归编写应用，机器渲染、观察策略和密钥读写分别归所属应用或基础设施；启动入口保留构造、普通字段转换和启停。
+
+七条路径、错误先后、空数组、审计及流行为见[任务读取、控制和事件约定](task-read-control-events.md)。模块分支的原完整验收和整分支代码审查已通过；证据与范围见[第六阶段验证证据](../superpowers/reviews/2026-10-24-ddd-phase6-evidence.md)及[最终审查记录](../superpowers/reviews/2026-10-24-ddd-phase6-final-review.md)。此前各阶段表格保留为当时的历史状态，不作为当前许可。

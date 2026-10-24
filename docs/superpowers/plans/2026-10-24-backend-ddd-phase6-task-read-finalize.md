@@ -10,7 +10,7 @@
 
 **Spec:** [已确认的四层设计](../specs/2026-10-22-backend-ddd-four-layer-design.md)、[总路线](2026-10-22-backend-ddd-roadmap.md)、[第五阶段dev集成记录](../reviews/2026-10-24-ddd-phase5-dev-integration.md)。同时读取仓库AGENTS.md、`docs/contracts/backend-modules.md`的既有任务创建契约及下文全部约束；身份复查仍遵守`docs/contracts/identity-audit.md`，冻结渲染仍遵守`docs/contracts/authoring-preview.md`。
 
-状态：用户已确认计划，并于2026-10-24授权按分任务实施、独立审查方式执行。实施从本计划提交后的独立分支开始；实际进度和测试结果另记证据，不将计划中的预期当作通过。
+状态：八项任务的实现和逐项独立审查已完成。冻结代码 `7f2c35a006f80436ec73d10d9ab6206574985535` 的原完整VM验收和整分支独立代码审查已通过；原审查为Critical 0、Important 0、Minor 1，唯一总览文档过时项在本次Step6修正，等待根端仅文档关闭检查。公开记录见[验证证据](../reviews/2026-10-24-ddd-phase6-evidence.md)及[最终审查](../reviews/2026-10-24-ddd-phase6-final-review.md)。模块分支保留，尚未集成dev或推进后续环境。
 
 ## Global Constraints
 
@@ -146,7 +146,7 @@ Task1第一次删除时就接好历史重建，不能拖到最后才修旧守卫
 - `FailureKind`使用具名常量：TemplateNotCurrent、LastAdmin、ReferencedDetail、BatchRejected、StoredProblems、DomainProblems、NotFound、Conflict、Duplicate、Immutable、Referenced、Invalid、ProblemConflict、ProblemRejected。这里只指分类，状态码仍在console映射。
 - Produces: 第2节所述 `phaseFiveBaselineEntries` 历史视图及当前精确剩余集27项。
 
-- [ ] **Step 1：写失败测试。** `Test错误说明保留包装优先级与普通值` 用包装错误、errors.Join和空详情固定：模板当前/最后管理员→引用详情→批量问题→仓储问题→model.Problem值→指针→普通仓储哨兵。加入 `errors.Join(repository.ErrConflict, model.Problem)`，应先按领域问题处理；仓储ProblemsError即使是state类也仍422。复制结果的切片/映射后不得改动原错误。未知错误返回false，仍由原500路径记录原错误。基本断言例如：
+- [x] **Step 1：写失败测试。** `Test错误说明保留包装优先级与普通值` 用包装错误、errors.Join和空详情固定：模板当前/最后管理员→引用详情→批量问题→仓储问题→model.Problem值→指针→普通仓储哨兵。加入 `errors.Join(repository.ErrConflict, model.Problem)`，应先按领域问题处理；仓储ProblemsError即使是state类也仍422。复制结果的切片/映射后不得改动原错误。未知错误返回false，仍由原500路径记录原错误。基本断言例如：
 
 ```go
 got, ok := ports.DescribeFailure(fmt.Errorf("wrapped: %w", repository.ErrNotFound))
@@ -154,11 +154,11 @@ if !ok || got.Kind != ports.NotFound {
     t.Fatal(got, ok)
 }
 ```
-- [ ] **Step 2：VM运行** `go test -count=1 -v ./internal/application/ports ./internal/interfaces/console ./internal/archtest`，确认新增行为尚未满足；保留失败记录。
-- [ ] **Step 3：实现分类和转换。** 保留RespondError前面各模块专用错误及授权错误的原顺序，然后调用DescribeFailure；该函数内保持上述完整顺序，不能先吞掉单条领域问题。ProblemClass只根据原第一条问题的类别返回冲突或拒绝，空/未知类别仍拒绝。网页状态码、中文消息、首条Common或按主机编号排序取首条消息、定位详情、空数组及null规则不变。
-- [ ] **Step 4：首次删除同提交接好历史。** 复制起点39项，核对第2节摘要，删除本任务12项。新增测试证明原四表摘要、68/154历史摘要、输入不变、非法新增/调序/改字段被拒、已删条目不能经历史放行；旧第五/第四阶段检查通过历史视图继续成立。当前精确27项仍是原表有序子集。
-- [ ] **Step 5：VM复跑Step2及既有错误响应、历史和完整依赖检查，全通过。** 500响应不能含 `private backend credential`，日志仍收到原错误；负例必须先完成类型检查。
-- [ ] **Step 6：提交并独立审查。** `refactor(console): describe failures through application contract`。只暂存Files中的实际改动；审查错误优先级和历史是否被降格。
+- [x] **Step 2：VM运行** `go test -count=1 -v ./internal/application/ports ./internal/interfaces/console ./internal/archtest`，确认新增行为尚未满足；保留失败记录。
+- [x] **Step 3：实现分类和转换。** 保留RespondError前面各模块专用错误及授权错误的原顺序，然后调用DescribeFailure；该函数内保持上述完整顺序，不能先吞掉单条领域问题。ProblemClass只根据原第一条问题的类别返回冲突或拒绝，空/未知类别仍拒绝。网页状态码、中文消息、首条Common或按主机编号排序取首条消息、定位详情、空数组及null规则不变。
+- [x] **Step 4：首次删除同提交接好历史。** 复制起点39项，核对第2节摘要，删除本任务12项。新增测试证明原四表摘要、68/154历史摘要、输入不变、非法新增/调序/改字段被拒、已删条目不能经历史放行；旧第五/第四阶段检查通过历史视图继续成立。当前精确27项仍是原表有序子集。
+- [x] **Step 5：VM复跑Step2及既有错误响应、历史和完整依赖检查，全通过。** 500响应不能含 `private backend credential`，日志仍收到原错误；负例必须先完成类型检查。
+- [x] **Step 6：提交并独立审查。** `refactor(console): describe failures through application contract`。只暂存Files中的实际改动；审查错误优先级和历史是否被降格。
 
 ### Task 2：接口描述只读取应用公开的枚举
 
@@ -171,17 +171,17 @@ if !ok || got.Kind != ports.NotFound {
 - Produces: `identity.PublicRoles() []model.Role`；`authoring.PublicCatalog() authoring.CatalogEnums`，字段Families []catalog.Family、Formats []catalog.Format、Series []catalog.Series、Archs []catalog.Arch、Firmwares []catalog.Firmware。
 - 无调用身份要求：只返回随程序发布的公开静态目录，不读数据、配置或会话；每次返回独立切片，原顺序不变。
 
-- [ ] **Step 1：写失败测试。** `Test公开目录保持顺序与独立副本`、`Test公开角色保持顺序与独立副本` 与唯一领域来源逐项比较，修改返回切片后第二次返回不变；新接口不另存一套硬编码枚举。角色断言例如：
+- [x] **Step 1：写失败测试。** `Test公开目录保持顺序与独立副本`、`Test公开角色保持顺序与独立副本` 与唯一领域来源逐项比较，修改返回切片后第二次返回不变；新接口不另存一套硬编码枚举。角色断言例如：
 
 ```go
 if got := identity.PublicRoles(); !reflect.DeepEqual(got, model.Roles()) {
     t.Fatal(got)
 }
 ```
-- [ ] **Step 2：VM运行** `go test -count=1 -v ./internal/application/authoring ./internal/application/identity ./internal/interfaces/console ./internal/archtest`，核对失败来自新增契约。
-- [ ] **Step 3：替换schemaBuilder中六处领域枚举调用。** 保留SourceKind的原网页枚举和所有reflect类型、引用、可选字段、顺序及75条路由描述；不生成第二套对外契约。身份类型守卫仅登记新公开只读函数，不扩大到服务构造器或其他身份操作。
-- [ ] **Step 4：删除六项规则许可，当前21项。** VM复跑Step2、`pnpm --dir web check:console-types`；既有OpenAPI重复编码、角色名称、Last-Event-ID和请求schema测试通过，前端生成类型无差异。
-- [ ] **Step 5：提交并独立审查。** `refactor(console): read schema enums from application contracts`。
+- [x] **Step 2：VM运行** `go test -count=1 -v ./internal/application/authoring ./internal/application/identity ./internal/interfaces/console ./internal/archtest`，核对失败来自新增契约。
+- [x] **Step 3：替换schemaBuilder中六处领域枚举调用。** 保留SourceKind的原网页枚举和所有reflect类型、引用、可选字段、顺序及75条路由描述；不生成第二套对外契约。身份类型守卫仅登记新公开只读函数，不扩大到服务构造器或其他身份操作。
+- [x] **Step 4：删除六项规则许可，当前21项。** VM复跑Step2、`pnpm --dir web check:console-types`；既有OpenAPI重复编码、角色名称、Last-Event-ID和请求schema测试通过，前端生成类型无差异。
+- [x] **Step 5：提交并独立审查。** `refactor(console): read schema enums from application contracts`。
 
 ### Task 3：任务列表、详情和冻结预览经应用入口
 
@@ -196,7 +196,7 @@ if got := identity.PublicRoles(); !reflect.DeepEqual(got, model.Roles()) {
 - `ListRequest`嵌入现有PageRequest，另有HostSN、State、CreatedFrom、CreatedTo string；时间保留原文本，便于在应用内按旧顺序解析。网页taskQuery的对外字段类型不变。
 - `TaskPage{Items []TaskChoice; Next string; Total *int64}`；`PreviewRequest{Firmware catalog.Firmware}`；`PreviewResult{Files []ports.PreviewFile; Sample []string; Problems []model.Problem}`。新增 `tasks.ErrBadRequest` 对应原400。新契约文档记录七条原接口、问题/空值/审计/流行为并链接Go契约；初次提交标清控制和订阅仍待Task4/5迁移，不冒称已实现。
 
-- [ ] **Step 1：写失败测试。** `Test任务查询保留错误先后` 设置分页无效+时间无效、范围倒置+编号无效、编号无效+状态无效的组合；记录零仓储调用及先返回的原错误。`Test任务查询不能绕过权限` 覆盖无身份、禁用、强制改密和原五角色；拒绝发生在参数和仓储之前。`Test任务列表保留分页顺序与诊断` 固定查询参数、返回顺序、Next/Total、空数组及CanCancel→CanRetry。用本步计数仓储夹具构造reader，calls记录其调用，断言：
+- [x] **Step 1：写失败测试。** `Test任务查询保留错误先后` 设置分页无效+时间无效、范围倒置+编号无效、编号无效+状态无效的组合；记录零仓储调用及先返回的原错误。`Test任务查询不能绕过权限` 覆盖无身份、禁用、强制改密和原五角色；拒绝发生在参数和仓储之前。`Test任务列表保留分页顺序与诊断` 固定查询参数、返回顺序、Next/Total、空数组及CanCancel→CanRetry。用本步计数仓储夹具构造reader，calls记录其调用，断言：
 
 ```go
 _, err := reader.Get(t.Context(), ports.Actor{}, "not-an-id")
@@ -204,12 +204,12 @@ if !errors.Is(err, ports.ErrUnauthenticated) || calls != 0 {
     t.Fatal(err, calls)
 }
 ```
-- [ ] **Step 2：补预览测试。** `Test任务预览固件先于查任务` 固定无效固件+不存在任务时先400且不查仓储。`Test任务预览仅传冻结快照与样例标签` 覆盖请求覆盖、快照回退、UEFI样例、渲染问题/错误；伪造依赖记录只能收到原快照，不允许读当前对象。复用既有冻结快照及引用删除保护测试。
-- [ ] **Step 3：VM运行** `go test -count=1 -v ./internal/application/tasks ./internal/interfaces/console ./cmd/lober ./internal/archtest`，确认新测试先失败。
-- [ ] **Step 4：实现Reader并同时接生产和测试。** 应用先Authorize(task:read)。HTTP仍先做分页数字/混用方式的语法解析，随后只绑定原始时间、编号和状态；应用先CheckPageQuery，再按原strconv.ParseInt规则依次读时间、检查范围、NormalizeSN、State.Valid。这样不把时间语法错误提前到分页业务错误之前。预览在查任务前检查请求固件，随后按第1节调用同一个冻结渲染契约；问题经原Judge路径，不以仓储ProblemsError代替。
-- [ ] **Step 5：去掉旧入口依赖。** list/get/preview不再用Deps.Tasks、TaskCtl或FrozenPreview；删除仅任务列表还在用的queryPagination，保留parseQueryPagination等网页语法函数。Deps暂时保留Tasks/Events给尚未迁移的控制和流使用；测试通过显式应用装配替换旧渲染/诊断注入，不新增生产回退。任务向导和Reader共用原诊断能力。
-- [ ] **Step 6：VM生成Wire，复跑Step3。** `WIRE_LOADER_MODE=fallback WIRE_LOADER_ARTIFACTS=0 go tool wire ./cmd/lober`，随后 `go tool wire diff ./cmd/lober` 使用同样两个环境值。新增 `Test任务读取和预览显式组装` 证明仓储、冻结渲染与诊断实际接入；删除九项许可，当前12项。
-- [ ] **Step 7：提交并独立审查。** `refactor(tasks): route reads and frozen preview through application`。重点比较原HTTP错误顺序和对外JSON，不重写既有测试断言。
+- [x] **Step 2：补预览测试。** `Test任务预览固件先于查任务` 固定无效固件+不存在任务时先400且不查仓储。`Test任务预览仅传冻结快照与样例标签` 覆盖请求覆盖、快照回退、UEFI样例、渲染问题/错误；伪造依赖记录只能收到原快照，不允许读当前对象。复用既有冻结快照及引用删除保护测试。
+- [x] **Step 3：VM运行** `go test -count=1 -v ./internal/application/tasks ./internal/interfaces/console ./cmd/lober ./internal/archtest`，确认新测试先失败。
+- [x] **Step 4：实现Reader并同时接生产和测试。** 应用先Authorize(task:read)。HTTP仍先做分页数字/混用方式的语法解析，随后只绑定原始时间、编号和状态；应用先CheckPageQuery，再按原strconv.ParseInt规则依次读时间、检查范围、NormalizeSN、State.Valid。这样不把时间语法错误提前到分页业务错误之前。预览在查任务前检查请求固件，随后按第1节调用同一个冻结渲染契约；问题经原Judge路径，不以仓储ProblemsError代替。
+- [x] **Step 5：去掉旧入口依赖。** list/get/preview不再用Deps.Tasks、TaskCtl或FrozenPreview；删除仅任务列表还在用的queryPagination，保留parseQueryPagination等网页语法函数。Deps暂时保留Tasks/Events给尚未迁移的控制和流使用；测试通过显式应用装配替换旧渲染/诊断注入，不新增生产回退。任务向导和Reader共用原诊断能力。
+- [x] **Step 6：VM生成Wire，复跑Step3。** `WIRE_LOADER_MODE=fallback WIRE_LOADER_ARTIFACTS=0 go tool wire ./cmd/lober`，随后 `go tool wire diff ./cmd/lober` 使用同样两个环境值。新增 `Test任务读取和预览显式组装` 证明仓储、冻结渲染与诊断实际接入；删除九项许可，当前12项。
+- [x] **Step 7：提交并独立审查。** `refactor(tasks): route reads and frozen preview through application`。重点比较原HTTP错误顺序和对外JSON，不重写既有测试断言。
 
 ### Task 4：取消与重试只通过任务控制契约
 
@@ -224,8 +224,8 @@ if !errors.Is(err, ports.ErrUnauthenticated) || calls != 0 {
 - Produces: `tasks.Controller.Cancel(context.Context, ports.Actor, string) (TaskChoice, error)`、`Retry(context.Context, ports.Actor, string) (TaskChoice, error)`；`NewController(ControllerDeps) Controller`。
 - `ControllerDeps{Tasks port.TaskGetter; Backend port.Control; Clock ports.Clock; Notifier ports.Notifier}`，均显式必需。`NewUnavailableControl() port.Control`返回无诊断、Cancel/Retry为 `tasks.ErrControlUnavailable` 的应用实现，供机器未启用时注入。生产提供者 `taskBackendOf(*machineBundle) tasksport.Control` 接替taskControlOf；`taskControllerOf(repository.Store, tasksport.Control, ports.Clock, ports.Notifier) tasks.Controller` 同时接入Wire。wizardOf和taskReaderOf同步消费这个后端。
 
-- [ ] **Step 1：写失败测试。** `Test任务控制拒绝越权且不读取`、`Test任务控制不存在先于不可用`、`Test任务控制保留版本审计与顺序` 固定第一次GetTask→Clock→后端→第二次GetTask→Publish→CanCancel→CanRetry。Actor/Action由应用决定，Detail仍空，At只用同一注入时钟；请求无法伪造审计。
-- [ ] **Step 2：写失败/部分成功测试。** `Test任务控制提交后读取失败不额外通知` 让后端模拟已提交并发布、第二次读取失败：返回原错误，保留一次后端提示，无额外发布，不声称回滚。读取失败夹具中readErr为预置错误，分别记录后端及应用发布次数，断言：
+- [x] **Step 1：写失败测试。** `Test任务控制拒绝越权且不读取`、`Test任务控制不存在先于不可用`、`Test任务控制保留版本审计与顺序` 固定第一次GetTask→Clock→后端→第二次GetTask→Publish→CanCancel→CanRetry。Actor/Action由应用决定，Detail仍空，At只用同一注入时钟；请求无法伪造审计。
+- [x] **Step 2：写失败/部分成功测试。** `Test任务控制提交后读取失败不额外通知` 让后端模拟已提交并发布、第二次读取失败：返回原错误，保留一次后端提示，无额外发布，不声称回滚。读取失败夹具中readErr为预置错误，分别记录后端及应用发布次数，断言：
 
 ```go
 if !errors.Is(err, readErr) || backendPublishes != 1 || appPublishes != 0 {
@@ -234,11 +234,11 @@ if !errors.Is(err, readErr) || backendPublishes != 1 || appPublishes != 0 {
 ```
 
 后端失败、版本冲突、不可用、审计失败均不触发应用重读/补发；成功时即使已有后端提示仍补发，context在提交后取消也不新增提前返回点。
-- [ ] **Step 3：VM运行** `go test -count=1 -v ./internal/application/tasks ./internal/application/execution ./internal/interfaces/console ./cmd/lober ./internal/archtest`，记录有效失败。
-- [ ] **Step 4：实现并接线。** 应用先Authorize原cancel/retry权限，查原任务后生成AuditIntent，委托原AuditedControl；不在任务应用复制状态机判定、CAS版本比较、凭据撤销或保存逻辑。原Service继续锁内复查并原子保存。网页只传actor/id并转换结果；ErrControlUnavailable仍422及原消息。
-- [ ] **Step 5：删除旧TaskControl/Problems和auditIntentFrom。** 原Problems只在测试使用，改用测试中真实的repository.ProblemsError表达原后端拒绝，不新增同名应用兼容入口。Deps.TaskCtl删除，向导诊断、Reader和Controller后端来自同一实例。生产fallback迁入应用；不实现任何新状态转移。
-- [ ] **Step 6：VM重新生成Wire，复跑Step3。** 复用 `Test审计意图桥接保留真实保存与冲突`、`TestTimeoutRestartRetryRevokesOldCredentialAndAuditIsAtomic`，证明真实数据库失败不多写状态/事件/审计；保留同主机已有未结束任务的拒绝。补组装用例覆盖机器启用/未启用及重复提示。删除三项许可，当前9项。
-- [ ] **Step 7：提交并独立审查。** `refactor(tasks): orchestrate audited task control in application`。
+- [x] **Step 3：VM运行** `go test -count=1 -v ./internal/application/tasks ./internal/application/execution ./internal/interfaces/console ./cmd/lober ./internal/archtest`，记录有效失败。
+- [x] **Step 4：实现并接线。** 应用先Authorize原cancel/retry权限，查原任务后生成AuditIntent，委托原AuditedControl；不在任务应用复制状态机判定、CAS版本比较、凭据撤销或保存逻辑。原Service继续锁内复查并原子保存。网页只传actor/id并转换结果；ErrControlUnavailable仍422及原消息。
+- [x] **Step 5：删除旧TaskControl/Problems和auditIntentFrom。** 原Problems只在测试使用，改用测试中真实的repository.ProblemsError表达原后端拒绝，不新增同名应用兼容入口。Deps.TaskCtl删除，向导诊断、Reader和Controller后端来自同一实例。生产fallback迁入应用；不实现任何新状态转移。
+- [x] **Step 6：VM重新生成Wire，复跑Step3。** 复用 `Test审计意图桥接保留真实保存与冲突`、`TestTimeoutRestartRetryRevokesOldCredentialAndAuditIsAtomic`，证明真实数据库失败不多写状态/事件/审计；保留同主机已有未结束任务的拒绝。补组装用例覆盖机器启用/未启用及重复提示。删除三项许可，当前9项。
+- [x] **Step 7：提交并独立审查。** `refactor(tasks): orchestrate audited task control in application`。
 
 ### Task 5：事件读取与订阅经应用，删除通知兼容入口
 
@@ -254,7 +254,7 @@ if !errors.Is(err, readErr) || backendPublishes != 1 || appPublishes != 0 {
 - `tasks.Event{TaskID string; Seq, At int64; Kind, Key string; Fields map[string]string}`，不别名仓储类型；Fields独立复制，网页仍转为原空对象。
 - `EventSubscription`方法：`Initial() []Event`、`Hints() <-chan struct{}`、`Read(context.Context, int64) ([]Event, error)`、`Close()`。Open先Authorize(task:read)，再拒绝负after_seq，随后按GetTask→订阅→首读的顺序返回首批；Read固定200，普通List保留原仓储查询校验。Close安全重复，应用不启动goroutine或计时器。
 
-- [ ] **Step 1：写失败测试。** `Test任务事件直接查询不额外查任务` 固定权限→原ListEvents，无额外GetTask。`Test事件订阅先订阅再首读且失败退订` 记录GetTask→Subscribe→ListEvents(200)；在订阅与首读之间提交事件应可被首读/提示覆盖，首读失败只退订一次。为该失败夹具记录calls，断言：
+- [x] **Step 1：写失败测试。** `Test任务事件直接查询不额外查任务` 固定权限→原ListEvents，无额外GetTask。`Test事件订阅先订阅再首读且失败退订` 记录GetTask→Subscribe→ListEvents(200)；在订阅与首读之间提交事件应可被首读/提示覆盖，首读失败只退订一次。为该失败夹具记录calls，断言：
 
 ```go
 want := []string{"get", "subscribe", "list:200", "close"}
@@ -264,13 +264,13 @@ if !reflect.DeepEqual(calls, want) {
 ```
 
 `Test事件订阅保留字段副本与上下文` 覆盖独立映射、空结果、原context、重复Close及订阅后读失败。
-- [ ] **Step 2：VM运行** `go test -count=1 -v ./internal/application/tasks ./internal/interfaces/console ./internal/infrastructure/notification ./cmd/lober ./internal/archtest`，确认新增行为先失败。
-- [ ] **Step 3：接应用数据能力，保留接口网络循环。** HTTP负责Last-Event-ID覆盖、5秒ticker、Flush、写入及最初令牌复查；应用负责Get/Subscribe/首次读取、普通事件转换、后续读取和退订。接口对Open成功立即defer Close，发送初页前才设头；第1.2节每个退出分支必须保留。
-- [ ] **Step 4：删除旧仓储/通知依赖。** Deps改为TaskReader、TaskController、TaskEvents三个应用入口；删除Tasks、Events、FrozenPreview、TaskCtl、Notifier和server.hub。Clock仍用于原请求耗时日志，类型直接写ports.Clock；cmd和测试中的console.Clock/Notifier统一改用ports，不保留别名。缺必需应用入口在构造时明确失败，不从接口层创建通知或仓储。
-- [ ] **Step 5：改测试装配并验证同一实例。** 原辅助函数签名尽量保留；需单独换后端、时钟、渲染或Hub的测试，通过测试专用装配 helper重建相应应用，显式共享同一Hub和诊断对象。若需保存这些测试能力，用测试文件中的fixture及t.Cleanup；不在生产Deps留下只为测试使用的旧字段，不缓存认证结果、不减密码工作量、不放宽断言。枚举所有旧NewHub、TaskCtl、FrozenPreview及server.hub引用，逐一改接线。
-- [ ] **Step 6：VM重新生成Wire，复跑Step2和事件流既有回归。** 必须实际执行 `Test任务SSE补读分页丢通知续读及断开退订`、`Test任务SSE连接期间复查禁用改密及会话过期`、`Test任务SSE退出与到期只检查原令牌`；增加HTTP测试固定首读失败无流头、坏after_seq优先、200/201/400条分页、晚期错误只断流、空页Flush、通道关闭和写入失败退订。保留通知并发发布、并发重复退订及发布与退订交错的竞态用例。
-- [ ] **Step 7：删除最后九项，当前四表全零。** 改写原“原位置允许访问”的过渡反例为拒绝，并保留真实类型检查和允许的应用入口正例；同一提交加入当前四表必须为空的断言，不等Task8。历史链仍39+68+154。
-- [ ] **Step 8：提交并独立审查。** `refactor(tasks): read committed events through application subscriptions`。
+- [x] **Step 2：VM运行** `go test -count=1 -v ./internal/application/tasks ./internal/interfaces/console ./internal/infrastructure/notification ./cmd/lober ./internal/archtest`，确认新增行为先失败。
+- [x] **Step 3：接应用数据能力，保留接口网络循环。** HTTP负责Last-Event-ID覆盖、5秒ticker、Flush、写入及最初令牌复查；应用负责Get/Subscribe/首次读取、普通事件转换、后续读取和退订。接口对Open成功立即defer Close，发送初页前才设头；第1.2节每个退出分支必须保留。
+- [x] **Step 4：删除旧仓储/通知依赖。** Deps改为TaskReader、TaskController、TaskEvents三个应用入口；删除Tasks、Events、FrozenPreview、TaskCtl、Notifier和server.hub。Clock仍用于原请求耗时日志，类型直接写ports.Clock；cmd和测试中的console.Clock/Notifier统一改用ports，不保留别名。缺必需应用入口在构造时明确失败，不从接口层创建通知或仓储。
+- [x] **Step 5：改测试装配并验证同一实例。** 原辅助函数签名尽量保留；需单独换后端、时钟、渲染或Hub的测试，通过测试专用装配 helper重建相应应用，显式共享同一Hub和诊断对象。若需保存这些测试能力，用测试文件中的fixture及t.Cleanup；不在生产Deps留下只为测试使用的旧字段，不缓存认证结果、不减密码工作量、不放宽断言。枚举所有旧NewHub、TaskCtl、FrozenPreview及server.hub引用，逐一改接线。
+- [x] **Step 6：VM重新生成Wire，复跑Step2和事件流既有回归。** 必须实际执行 `Test任务SSE补读分页丢通知续读及断开退订`、`Test任务SSE连接期间复查禁用改密及会话过期`、`Test任务SSE退出与到期只检查原令牌`；增加HTTP测试固定首读失败无流头、坏after_seq优先、200/201/400条分页、晚期错误只断流、空页Flush、通道关闭和写入失败退订。保留通知并发发布、并发重复退订及发布与退订交错的竞态用例。
+- [x] **Step 7：删除最后九项，当前四表全零。** 改写原“原位置允许访问”的过渡反例为拒绝，并保留真实类型检查和允许的应用入口正例；同一提交加入当前四表必须为空的断言，不等Task8。历史链仍39+68+154。
+- [x] **Step 8：提交并独立审查。** `refactor(tasks): read committed events through application subscriptions`。
 
 ### Task 6：内置内容初始化归编写应用
 
@@ -283,7 +283,7 @@ if !reflect.DeepEqual(calls, want) {
 - Produces: `authoring.Bootstrapper.Initialise(context.Context) error`；`NewBootstrapper(port.BuiltinRepository, []model.Hook, []model.Template) Bootstrapper`。发布内容由组装点从builtin包取值注入，不由领域或应用读取文件。提供者 `builtinBootstrapperOf(repository.Store) authoring.Bootstrapper` 加入Wire；app增加此依赖，Initialise只做两个初始化入口的顺序调用。
 - 契约：按原清单顺序先全部hook再模板；每个对象最多四次，只有ErrConflict重试，每次调用前检查context；非冲突或第4次错误原样返回。已成功对象保持幂等，不承诺跨全部对象的大事务，也不新增审计/通知。
 
-- [ ] **Step 1：写失败测试。** `Test内置初始化保留顺序四次冲突与取消` 固定冲突3次后成功、冲突4次报原错误、非冲突只调用1次、已取消不调用、hook失败不启动模板；无审计/通知。对连续冲突的单对象夹具，calls记录存储调用：
+- [x] **Step 1：写失败测试。** `Test内置初始化保留顺序四次冲突与取消` 固定冲突3次后成功、冲突4次报原错误、非冲突只调用1次、已取消不调用、hook失败不启动模板；无审计/通知。对连续冲突的单对象夹具，calls记录存储调用：
 
 ```go
 if calls != 4 || !errors.Is(err, repository.ErrConflict) {
@@ -292,10 +292,10 @@ if calls != 4 || !errors.Is(err, repository.ErrConflict) {
 ```
 
 `Test启动先内置内容后身份初始化` 记录顺序，内置失败时不创建初始管理员。
-- [ ] **Step 2：VM运行** `go test -count=1 -v ./internal/application/authoring ./cmd/lober ./internal/archtest`，核对新增失败。
-- [ ] **Step 3：实现并接线。** 删除cmd的ensureBuiltin及仓储循环；app只顺序委托编写Bootstrapper和原identity.Bootstrapper。保留构造时的发布清单映射，不在应用读builtin文件；不公开通用事务或任意存储操作回调。
-- [ ] **Step 4：VM生成Wire并复跑Step2。** 复用 `Test装配初始管理员强制改密及内置内容` 和 `Test空库必须显式初始口令已有用户不再要求`，确保初始化失败、重启幂等和原密码要求不变；39项历史及当前0许可检查继续通过。
-- [ ] **Step 5：提交并独立审查。** `refactor(authoring): own builtin initialization workflow`。
+- [x] **Step 2：VM运行** `go test -count=1 -v ./internal/application/authoring ./cmd/lober ./internal/archtest`，核对新增失败。
+- [x] **Step 3：实现并接线。** 删除cmd的ensureBuiltin及仓储循环；app只顺序委托编写Bootstrapper和原identity.Bootstrapper。保留构造时的发布清单映射，不在应用读builtin文件；不公开通用事务或任意存储操作回调。
+- [x] **Step 4：VM生成Wire并复跑Step2。** 复用 `Test装配初始管理员强制改密及内置内容` 和 `Test空库必须显式初始口令已有用户不再要求`，确保初始化失败、重启幂等和原密码要求不变；39项历史及当前0许可检查继续通过。
+- [x] **Step 5：提交并独立审查。** `refactor(authoring): own builtin initialization workflow`。
 
 ### Task 7：迁出机器组装点的渲染、观察和密钥实现
 
@@ -310,19 +310,21 @@ if calls != 4 || !errors.Is(err, repository.ErrConflict) {
 - Consumes/Produces: `executionport.IPObservationSink.ObserveIP(string, int, string, int64)`；`execution.NewIPObserver(port.IPObservationSink) func(model.Task, string)`。Collector以现有方法结构实现，无需导入应用具体服务。
 - Produces: `machinekeys.LoadOrCreate(string) ([]byte, error)`，只做原私密文件操作；只注册这个精确基础设施包，不开放任意子包或扩充六个随机编号能力；新包必须加入layerOf、layers和minChecked及完整模块实际分派，精确允许原密钥实现所需的标准库，不给它仓储、接口层或应用具体服务依赖。
 
-- [ ] **Step 1：写失败测试。** `Test机器渲染只用冻结任务且仅ESXi辅助文件读取原配置` 覆盖Execution有/无固件、ESXi辅助文件与其他文件、原始配置读取失败、领域问题和完整Values/Slot透传；只生成请求的文件，不注入预览样例。`Test机器日志观察保留原有效期` 固定Execution=nil不登记，普通IssuedAt+5400，ReachedReboot为IssuedAt+86400，Attempt/地址保持原值，复用原相加行为而不偷偷修正。sink夹具记录Observed调用的expires和attempt；IssuedAt=1000、Attempt=2且尚未重启时：
+- [x] **Step 1：写失败测试。** `Test机器渲染只用冻结任务且仅ESXi辅助文件读取原配置` 覆盖Execution有/无固件、ESXi辅助文件与其他文件、原始配置读取失败、领域问题和完整Values/Slot透传；只生成请求的文件，不注入预览样例。`Test机器日志观察保留原有效期` 固定Execution=nil不登记，普通IssuedAt+5400，ReachedReboot为IssuedAt+86400，Attempt/地址保持原值，复用原相加行为而不偷偷修正。sink夹具记录Observed调用的expires和attempt；IssuedAt=1000、Attempt=2且尚未重启时：
 
 ```go
 if expires != 6400 || attempt != 2 {
     t.Fatal(expires, attempt)
 }
 ```
-- [ ] **Step 2：密钥失败测试。** `Test机器密钥创建重读与权限保持` 覆盖32字节、新建目录0700、文件0600（已有父目录权限不变）、非绝对路径、符号链接/非普通文件、错误长度、权限错误、已存在文件重读及并发首次创建；成功读取者必须得到同一个已落盘密钥。旧实现中竞争方可能看到尚未写完的文件而失败，本次保留该失败，不增加等待或锁来承诺所有竞争方成功。保留旧独占创建、写入/同步/关闭的错误结果，不输出密钥。新增组装反例证明cmd不再允许原machineSigningKey位置读取随机数。
-- [ ] **Step 3：VM运行** `go test -count=1 -v ./internal/application/authoring ./internal/application/execution ./internal/infrastructure/machinekeys ./internal/infrastructure/events ./internal/interfaces/machine ./cmd/lober ./internal/archtest`，确认新增失败。
-- [ ] **Step 4：分别迁移三处实现。** 渲染应用决定原Execution固件、仅`esxi-ks`且FileAux时读BootConfig，再调用同一domain/render；读取失败保持 `immutable boot configuration unavailable`，渲染失败/问题保持 `machine rendering rejected`。观察策略移入execution，经小接口调用Collector；机器HTTP仍只在原凭据检查成功的位置调用观察。密钥文件实现移入machinekeys，算法、路径默认值和错误遮蔽保持原样。
-- [ ] **Step 5：cmd只构造和转换字段。** 原machine.Renderer闭包仅把machine.Request转普通MachineRenderRequest后委托；Credentials委托Service；Observer直接注入NewIPObserver。保留现有URL配置检查、machine.enabled关闭分支、受保护密钥默认路径、信号普通字段映射和日志、HTTP挂载、Sweep启动停止及syslog读取循环；它们不判断任务规则或写任务。
-- [ ] **Step 6：VM复跑Step3与原组装/交付回归。** 明确执行 `TestEnabledMachineAssemblyPersistsProtectedKeyAndServesCanonicalRoute`、`TestEnabledMachineRejectsInvalidEndpointOrUnprotectedKey`、`TestLinuxMachineDeliversFrozenFilesAndCompletesProtocol`。新增包接入完整扫描与精确导入规则，删除原cmd随机数例外及其允许正例，替换为拒绝；原六项编号正式能力及凭据算法白名单保持不变。此任务不应改变Wire依赖图，仍运行wire diff确认。
-- [ ] **Step 7：提交并独立审查。** `refactor(machine): keep assembly free of business workflows`。
+- [x] **Step 2：密钥失败测试。** `Test机器密钥创建重读与权限保持` 覆盖32字节、新建目录0700、文件0600（已有父目录权限不变）、非绝对路径、符号链接/非普通文件、错误长度、权限错误、已存在文件重读及并发首次创建；成功读取者必须得到同一个已落盘密钥。旧实现中竞争方可能看到尚未写完的文件而失败，本次保留该失败，不增加等待或锁来承诺所有竞争方成功。保留旧独占创建、写入/同步/关闭的错误结果，不输出密钥。新增组装反例证明cmd不再允许原machineSigningKey位置读取随机数。
+- [x] **Step 3：VM运行** `go test -count=1 -v ./internal/application/authoring ./internal/application/execution ./internal/infrastructure/machinekeys ./internal/infrastructure/events ./internal/interfaces/machine ./cmd/lober ./internal/archtest`，确认新增失败。
+- [x] **Step 4：分别迁移三处实现。** 渲染应用决定原Execution固件、仅`esxi-ks`且FileAux时读BootConfig，再调用同一domain/render；读取失败保持 `immutable boot configuration unavailable`，渲染失败/问题保持 `machine rendering rejected`。观察策略移入execution，经小接口调用Collector；机器HTTP仍只在原凭据检查成功的位置调用观察。密钥文件实现移入machinekeys，算法、路径默认值和错误遮蔽保持原样。
+- [x] **Step 5：cmd只构造和转换字段。** 原machine.Renderer闭包仅把machine.Request转普通MachineRenderRequest后委托；Credentials委托Service；Observer直接注入NewIPObserver。保留现有URL配置检查、machine.enabled关闭分支、受保护密钥默认路径、信号普通字段映射和日志、HTTP挂载、Sweep启动停止及syslog读取循环；它们不判断任务规则或写任务。
+- [x] **Step 6：VM复跑Step3与原组装/交付回归。** 明确执行 `TestEnabledMachineAssemblyPersistsProtectedKeyAndServesCanonicalRoute`、`TestEnabledMachineRejectsInvalidEndpointOrUnprotectedKey`、`TestLinuxMachineDeliversFrozenFilesAndCompletesProtocol`。新增包接入完整扫描与精确导入规则，删除原cmd随机数例外及其允许正例，替换为拒绝；原六项编号正式能力及凭据算法白名单保持不变。此任务不应改变Wire依赖图，仍运行wire diff确认。
+- [x] **Step 7：提交并独立审查。** `refactor(machine): keep assembly free of business workflows`。
+
+实施记录：观察port的精确检查实际集中在 `internal/archtest/task_finalize_rules_test.go`，完整模块扫描和隐藏包分派证明均已交付；原 `execution_guard_test.go` 完整保留。Task7 M1经独立审查确认等价并由根端接受，本计划与公开证据据实披露归置差异，不为文件名制造空源码改动。Task7 M2为原有Gin调试/路由输出，按1.3节保留，不声称日志完全安静。
 
 ### Task 8：终态守卫、原命令验收与整分支审查
 
@@ -335,7 +337,7 @@ if expires != 6400 || attempt != 2 {
 - Consumes: Task1至7的全部契约及测试证据，当前零许可和原始39/68/154历史。
 - Produces: 接入现有全模块检查的类型守卫，以及同一冻结候选树的VM验收与独立审查结论。没有新业务入口。
 
-- [ ] **Step 1：先写有效违规样例。** `Test任务终态边界拒绝仓储和后端旁路` 覆盖别名、方法值、嵌入/本地小接口、同包新函数、辅助函数转发、指针/类型别名/复制结构；接口不能GetTask/ListTasks/ListEvents、调用Control后端、NewHub/通知Publish或直接做状态/固件判断，cmd不能重做查询、控制、渲染、内置重试或状态赋值。加入真实应用入口、纯DTO字段转换、发布清单取值、构造与启停的允许样例。每个违规样例必须可类型检查，不能以错误方法签名冒充拦截。以下完整源码应类型检查成功，再被边界守卫拒绝：
+- [x] **Step 1：先写有效违规样例。** `Test任务终态边界拒绝仓储和后端旁路` 覆盖别名、方法值、嵌入/本地小接口、同包新函数、辅助函数转发、指针/类型别名/复制结构；接口不能GetTask/ListTasks/ListEvents、调用Control后端、NewHub/通知Publish或直接做状态/固件判断，cmd不能重做查询、控制、渲染、内置重试或状态赋值。加入真实应用入口、纯DTO字段转换、发布清单取值、构造与启停的允许样例。每个违规样例必须可类型检查，不能以错误方法签名冒充拦截。以下完整源码应类型检查成功，再被边界守卫拒绝：
 
 ```go
 package console
@@ -351,11 +353,11 @@ func bypass(ctx context.Context, r leaked) {
     _, _ = call(ctx, "task-id")
 }
 ```
-- [ ] **Step 2：补跨层和扫描证明。** `Test任务应用只使用本模块契约` 拒绝tasks直接导入authoring/execution服务、Gin、数据库和基础设施，以及绕过小接口的文件/网络/随机数操作。`Test终态零许可且历史不能复活调用` 检查四表逐表0、原39摘要、68/154历史记录、六个编号能力、Principal/AuditIntent的值和指针公开方法集保护不退步。完整发现新增包、缓存失效和构建标签排除检查保持有效。
-- [ ] **Step 3：VM运行** `go test -count=1 -v ./internal/archtest`，确认新增反例在接守卫前失败；实现检查并接同一完整模块扫描，复跑通过。禁止只检查示例或只搜索字符串。提交 `test(arch): enforce final task boundaries without migration permits`，通过独立任务审查后冻结候选源码。
-- [ ] **Step 4：按第5节完整验收。** 不以定向测试代替make check，不复制前五阶段的PASS；记录源码、数据库真实执行、工具环境、跳过/缓存/未匹配情况。发现失败按原命令诊断并复跑，源码变化后刷新候选树和相关证据。
-- [ ] **Step 5：独立整分支审查。** 审查者读取设计、本计划、dev起点到候选源码的全部差异、逐项审查记录和原始验证证据，重新核对错误顺序、冻结快照、提交/重读/通知、订阅竞态和零许可历史链。严重或重要问题必须关闭并复审；修复涉及代码时重新执行必要检查，最终完整验收覆盖最终源码树。
-- [ ] **Step 6：提交公开交付文档。** `docs: record phase-six validation and review`。公开记录只放脱敏结果和必要摘要，不提交原日志、连接文件、密钥、运行时配置或用户文件；附最终代码/文档树关系及未验范围。保留模块分支，等待后续集成指令。
+- [x] **Step 2：补跨层和扫描证明。** `Test任务应用只使用本模块契约` 拒绝tasks直接导入authoring/execution服务、Gin、数据库和基础设施，以及绕过小接口的文件/网络/随机数操作。`Test终态零许可且历史不能复活调用` 检查四表逐表0、原39摘要、68/154历史记录、六个编号能力、Principal/AuditIntent的值和指针公开方法集保护不退步。完整发现新增包、缓存失效和构建标签排除检查保持有效。
+- [x] **Step 3：VM运行** `go test -count=1 -v ./internal/archtest`，确认新增反例在接守卫前失败；实现检查并接同一完整模块扫描，复跑通过。禁止只检查示例或只搜索字符串。提交 `test(arch): enforce final task boundaries without migration permits`，通过独立任务审查后冻结候选源码。
+- [x] **Step 4：按第5节完整验收。** 不以定向测试代替make check，不复制前五阶段的PASS；记录源码、数据库真实执行、工具环境、跳过/缓存/未匹配情况。发现失败按原命令诊断并复跑，源码变化后刷新候选树和相关证据。
+- [x] **Step 5：独立整分支审查。** 审查者读取设计、本计划、dev起点到候选源码的全部差异、逐项审查记录和原始验证证据，重新核对错误顺序、冻结快照、提交/重读/通知、订阅竞态和零许可历史链。严重或重要问题必须关闭并复审；修复涉及代码时重新执行必要检查，最终完整验收覆盖最终源码树。
+- [x] **Step 6：提交公开交付文档。** `docs: record phase-six validation and review`。公开记录只放脱敏结果和必要摘要，不提交原日志、连接文件、密钥、运行时配置或用户文件；附最终代码/文档树关系及未验范围。保留模块分支，等待后续集成指令。
 
 ## 5. lober VM执行与验收
 
@@ -408,10 +410,14 @@ git diff --check
 
 各Task保留独立提交和对应审查记录；修复也独立提交，不重写已确认的dev历史。模块尚未集成时保持模块分支及前置dev不动。以后若获准集成且发现缺陷，按仓库流程回退第六阶段整体模块，再在模块分支修复、复验，不回退前五阶段。
 
-后续实施证据记录到Task8列出的两个公开review文档，原日志保存在私有忽略目录。现有已验收阶段的树、摘要和原日志均保留。
+实际实施、完整验收和独立审查已记录到Task8列出的两个公开review文档；原日志、失败记录、摘要和源码证明保存在私有忽略目录。现有已验收阶段的树、摘要、工作区和原日志均保留。
 
-## 7. 计划自查
+## 7. 执行结果与自查
 
-本轮仅由计划作者自查，没有实施或测试。设计第4—9节分别落实到Task3—7的职责归属、Task1/2的公共契约、Task4的原子控制、Task5的流与通知以及Task8守卫；设计第10节落实到独立分支、VM原完整命令和后续dev集成边界。
+设计第4—9节已落实到Task3—7的职责归属、Task1/2的公共契约、Task4的原子控制、Task5的流与通知以及Task8守卫。八项任务分别经过实施、有效失败/通过证明和独立审查；Task8三轮修复均保留原始失败和复审，最终代码关通过。当前四表0在Task5已接入，历史39/68/154及六项编号能力仍受保护。
 
-已逐项核对七个路由、39项删除归属、共享文件串行所有权、类型生产/消费关系和五类失败风险。历史重建随首次删除接入，最终零许可随Task5接入，不推迟到终审时补救。所有验收结果在执行后填写，本文不把规划当完成。
+冻结代码树 `11a9363dfc3c1b71b2d12ab830510249a79857be` 完成原make check（含原20分钟竞态、Linux构建、Wire检查）、控制台类型检查和完整13包详细验收。13包487顶层、2313子测试通过，明确Skip/FAIL/缓存/未匹配均0；34计划名称全部有实际PASS。真实数据库关键契约已执行。非详细make的隐藏Skip数未知，可选真实ISO未启用，额外离线全图诊断失败如实保留。
+
+独立整分支审查已完整读取dev起点至冻结代码的84文件差异与实际证据，原结论为Critical 0、Important 0、Minor 1。唯一Minor为backend-modules第六阶段仍写控制/订阅未迁及当前12项；本次只改该小节，并同步本计划、路线和两个公开记录，等待根端检查这次仅文档差异后关闭。Task7 M1的允许归置已公开说明，原Gin噪声继续按范围记录。
+
+这次收尾提交仅含五个Markdown文件。2114个代码候选跟踪文件中，除三个获准更新的既有Markdown外，其余2111个文件保持；553活动构建/测试/嵌入输入和生成类型摘要不变。完整套件测的是上述代码提交，没有冒称后来的文档HEAD重跑过Go套件。后续dev集成、企业/人工验收及test/preview/main晋级尚未进行。

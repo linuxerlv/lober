@@ -25,7 +25,7 @@
 
 第五阶段详细计划：[身份权限与审计](2026-10-24-backend-ddd-phase5-identity-audit.md)。以已验收dev的`9c45779`为起点，七项实现、独立审查、整分支终审和补强复审均已完成。精确删除68项，107→39，剩余逐字段不变；指针方法守卫已补齐，既有测试日志噪声仍单独整理。用户后续授权后，模块`3e48d68`已本地合入dev，合并提交`b0edb9d`；合并后原完整lober VM验收与独立集成审查通过。模块分支及所有工作区、原日志和用户文件保留，尚未推送或推进后续环境。最新状态见[第五阶段dev集成记录](../reviews/2026-10-24-ddd-phase5-dev-integration.md)；模块记录见[交付结论](../reviews/2026-10-24-ddd-phase5-final-review.md)。
 
-第六阶段详细计划：[任务查询、控制、事件流与通知收尾](2026-10-24-backend-ddd-phase6-task-read-finalize.md)。以已验收dev的`7c0edfd`为起点，独立分支`codex/ddd-task-read-finalize`；八项任务涵盖错误说明、公开枚举、任务读取与冻结预览、取消重试、事件订阅与通知、内置初始化、机器组装收尾、终态守卫及完整验收。当前39项按契约逐项清零，原39/68/154项历史保护保留。计划待用户审阅，尚未实施；后续测试仍只在lober VM执行。
+第六阶段详细计划：[任务查询、控制、事件流与通知收尾](2026-10-24-backend-ddd-phase6-task-read-finalize.md)。以已验收dev的`7c0edfd`为起点，`codex/ddd-task-read-finalize`模块分支八项实现、逐项独立审查、原完整lober VM验收和整分支独立代码审查已完成。代码提交`7f2c35a`交付七个任务应用入口及组装收尾，精确删除最后39项，当前四表逐表0，原39/68/154历史及六项正式编号能力保留。整分支原审查为Critical 0、Important 0、Minor 1；唯一总览文档过时项在本次文档提交修正，待根端仅文档关闭检查。实际结果与未验范围见[第六阶段证据](../reviews/2026-10-24-ddd-phase6-evidence.md)和[最终审查记录](../reviews/2026-10-24-ddd-phase6-final-review.md)。模块分支及所有证据保留，尚未合入dev、推送或推进test/preview/main；后续集成须另按用户指令执行。
 
 ## 全过程约束
 
