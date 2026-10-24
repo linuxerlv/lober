@@ -10,7 +10,7 @@
 
 **Spec:** [已确认的四层设计](../specs/2026-10-22-backend-ddd-four-layer-design.md)、[总路线](2026-10-22-backend-ddd-roadmap.md)、[第五阶段dev集成记录](../reviews/2026-10-24-ddd-phase5-dev-integration.md)。同时读取仓库AGENTS.md、`docs/contracts/backend-modules.md`的既有任务创建契约及下文全部约束；身份复查仍遵守`docs/contracts/identity-audit.md`，冻结渲染仍遵守`docs/contracts/authoring-preview.md`。
 
-状态：待用户审阅。本文只规定实施工作，尚未修改业务代码或测试。本轮未在本机或VM运行测试。
+状态：用户已确认计划，并于2026-10-24授权按分任务实施、独立审查方式执行。实施从本计划提交后的独立分支开始；实际进度和测试结果另记证据，不将计划中的预期当作通过。
 
 ## Global Constraints
 
@@ -133,7 +133,7 @@ Task1第一次删除时就接好历史重建，不能拖到最后才修旧守卫
 
 各任务均执行：先新增针对缺失行为的测试，在VM确认失败原因，再实现、复跑并提交。纯搬迁沿用既有测试；不为每个转发另写重复测试。若接口尚不存在，可先加入最小可编译契约或明确返回失败的实现，使测试因行为缺失而失败；不能把编译失败或夹具装载失败算作有效反例。
 
-### Task1：统一错误说明，接好历史重建
+### Task 1：统一错误说明，接好历史重建
 
 **Files:**
 - Create: `internal/application/ports/failure.go`、`failure_test.go`；`internal/archtest/phase6_history_test.go`。
@@ -160,7 +160,7 @@ if !ok || got.Kind != ports.NotFound {
 - [ ] **Step 5：VM复跑Step2及既有错误响应、历史和完整依赖检查，全通过。** 500响应不能含 `private backend credential`，日志仍收到原错误；负例必须先完成类型检查。
 - [ ] **Step 6：提交并独立审查。** `refactor(console): describe failures through application contract`。只暂存Files中的实际改动；审查错误优先级和历史是否被降格。
 
-### Task2：接口描述只读取应用公开的枚举
+### Task 2：接口描述只读取应用公开的枚举
 
 **Files:**
 - Create: `internal/application/authoring/schema_contract.go`、`schema_contract_test.go`。
@@ -183,7 +183,7 @@ if got := identity.PublicRoles(); !reflect.DeepEqual(got, model.Roles()) {
 - [ ] **Step 4：删除六项规则许可，当前21项。** VM复跑Step2、`pnpm --dir web check:console-types`；既有OpenAPI重复编码、角色名称、Last-Event-ID和请求schema测试通过，前端生成类型无差异。
 - [ ] **Step 5：提交并独立审查。** `refactor(console): read schema enums from application contracts`。
 
-### Task3：任务列表、详情和冻结预览经应用入口
+### Task 3：任务列表、详情和冻结预览经应用入口
 
 **Files:**
 - Create: `internal/application/tasks/read_contract.go`、`reader.go`、`reader_test.go`、`port/task_read.go`；`docs/contracts/task-read-control-events.md`。
@@ -211,7 +211,7 @@ if !errors.Is(err, ports.ErrUnauthenticated) || calls != 0 {
 - [ ] **Step 6：VM生成Wire，复跑Step3。** `WIRE_LOADER_MODE=fallback WIRE_LOADER_ARTIFACTS=0 go tool wire ./cmd/lober`，随后 `go tool wire diff ./cmd/lober` 使用同样两个环境值。新增 `Test任务读取和预览显式组装` 证明仓储、冻结渲染与诊断实际接入；删除九项许可，当前12项。
 - [ ] **Step 7：提交并独立审查。** `refactor(tasks): route reads and frozen preview through application`。重点比较原HTTP错误顺序和对外JSON，不重写既有测试断言。
 
-### Task4：取消与重试只通过任务控制契约
+### Task 4：取消与重试只通过任务控制契约
 
 **Files:**
 - Create: `internal/application/tasks/control_contract.go`、`controller.go`、`controller_test.go`、`port/control.go`。
@@ -240,7 +240,7 @@ if !errors.Is(err, readErr) || backendPublishes != 1 || appPublishes != 0 {
 - [ ] **Step 6：VM重新生成Wire，复跑Step3。** 复用 `Test审计意图桥接保留真实保存与冲突`、`TestTimeoutRestartRetryRevokesOldCredentialAndAuditIsAtomic`，证明真实数据库失败不多写状态/事件/审计；保留同主机已有未结束任务的拒绝。补组装用例覆盖机器启用/未启用及重复提示。删除三项许可，当前9项。
 - [ ] **Step 7：提交并独立审查。** `refactor(tasks): orchestrate audited task control in application`。
 
-### Task5：事件读取与订阅经应用，删除通知兼容入口
+### Task 5：事件读取与订阅经应用，删除通知兼容入口
 
 **Files:**
 - Create: `internal/application/tasks/event_contract.go`、`events.go`、`events_test.go`。
@@ -272,7 +272,7 @@ if !reflect.DeepEqual(calls, want) {
 - [ ] **Step 7：删除最后九项，当前四表全零。** 改写原“原位置允许访问”的过渡反例为拒绝，并保留真实类型检查和允许的应用入口正例；同一提交加入当前四表必须为空的断言，不等Task8。历史链仍39+68+154。
 - [ ] **Step 8：提交并独立审查。** `refactor(tasks): read committed events through application subscriptions`。
 
-### Task6：内置内容初始化归编写应用
+### Task 6：内置内容初始化归编写应用
 
 **Files:**
 - Create: `internal/application/authoring/bootstrap_contract.go`、`bootstrap.go`、`bootstrap_test.go`。
@@ -297,7 +297,7 @@ if calls != 4 || !errors.Is(err, repository.ErrConflict) {
 - [ ] **Step 4：VM生成Wire并复跑Step2。** 复用 `Test装配初始管理员强制改密及内置内容` 和 `Test空库必须显式初始口令已有用户不再要求`，确保初始化失败、重启幂等和原密码要求不变；39项历史及当前0许可检查继续通过。
 - [ ] **Step 5：提交并独立审查。** `refactor(authoring): own builtin initialization workflow`。
 
-### Task7：迁出机器组装点的渲染、观察和密钥实现
+### Task 7：迁出机器组装点的渲染、观察和密钥实现
 
 **Files:**
 - Create: `internal/application/authoring/machine_render.go`、`machine_render_test.go`；`internal/application/execution/observation.go`、`observation_test.go`、`port/observation.go`；`internal/infrastructure/machinekeys/key.go`、`key_test.go`。
@@ -324,7 +324,7 @@ if expires != 6400 || attempt != 2 {
 - [ ] **Step 6：VM复跑Step3与原组装/交付回归。** 明确执行 `TestEnabledMachineAssemblyPersistsProtectedKeyAndServesCanonicalRoute`、`TestEnabledMachineRejectsInvalidEndpointOrUnprotectedKey`、`TestLinuxMachineDeliversFrozenFilesAndCompletesProtocol`。新增包接入完整扫描与精确导入规则，删除原cmd随机数例外及其允许正例，替换为拒绝；原六项编号正式能力及凭据算法白名单保持不变。此任务不应改变Wire依赖图，仍运行wire diff确认。
 - [ ] **Step 7：提交并独立审查。** `refactor(machine): keep assembly free of business workflows`。
 
-### Task8：终态守卫、原命令验收与整分支审查
+### Task 8：终态守卫、原命令验收与整分支审查
 
 **Files:**
 - Create/Complete: `internal/archtest/task_finalize_rules_test.go`；`docs/superpowers/reviews/2026-10-24-ddd-phase6-evidence.md`、`2026-10-24-ddd-phase6-final-review.md`。
