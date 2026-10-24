@@ -10,7 +10,7 @@
 
 **Spec:** [已确认的四层设计](../specs/2026-10-22-backend-ddd-four-layer-design.md)、[总路线](2026-10-22-backend-ddd-roadmap.md)、[第五阶段dev集成记录](../reviews/2026-10-24-ddd-phase5-dev-integration.md)。同时读取仓库AGENTS.md、`docs/contracts/backend-modules.md`的既有任务创建契约及下文全部约束；身份复查仍遵守`docs/contracts/identity-audit.md`，冻结渲染仍遵守`docs/contracts/authoring-preview.md`。
 
-状态：八项任务的实现和逐项独立审查已完成。冻结代码 `7f2c35a006f80436ec73d10d9ab6206574985535` 的原完整VM验收和整分支独立代码审查已通过；原审查为Critical 0、Important 0、Minor 1，唯一总览文档过时项在本次Step6修正，等待根端仅文档关闭检查。公开记录见[验证证据](../reviews/2026-10-24-ddd-phase6-evidence.md)及[最终审查](../reviews/2026-10-24-ddd-phase6-final-review.md)。模块分支保留，尚未集成dev或推进后续环境。
+状态：八项任务的实现和逐项独立审查已完成。冻结代码 `7f2c35a006f80436ec73d10d9ab6206574985535` 的原完整VM验收和整分支独立代码审查已通过；原审查为Critical 0、Important 0、Minor 1，唯一总览文档过时项已修正并由根端关闭；针对文档提交 `7e9dd8d` 的独立关闭检查通过，新增Critical 0、Important 0、Minor 0。公开记录见[验证证据](../reviews/2026-10-24-ddd-phase6-evidence.md)及[最终审查](../reviews/2026-10-24-ddd-phase6-final-review.md)。模块分支保留，尚未集成dev或推进后续环境。
 
 ## Global Constraints
 
@@ -418,6 +418,6 @@ git diff --check
 
 冻结代码树 `11a9363dfc3c1b71b2d12ab830510249a79857be` 完成原make check（含原20分钟竞态、Linux构建、Wire检查）、控制台类型检查和完整13包详细验收。13包487顶层、2313子测试通过，明确Skip/FAIL/缓存/未匹配均0；34计划名称全部有实际PASS。真实数据库关键契约已执行。非详细make的隐藏Skip数未知，可选真实ISO未启用，额外离线全图诊断失败如实保留。
 
-独立整分支审查已完整读取dev起点至冻结代码的84文件差异与实际证据，原结论为Critical 0、Important 0、Minor 1。唯一Minor为backend-modules第六阶段仍写控制/订阅未迁及当前12项；本次只改该小节，并同步本计划、路线和两个公开记录，等待根端检查这次仅文档差异后关闭。Task7 M1的允许归置已公开说明，原Gin噪声继续按范围记录。
+独立整分支审查已完整读取dev起点至冻结代码的84文件差异与实际证据，原结论为Critical 0、Important 0、Minor 1。唯一Minor为backend-modules第六阶段仍写控制/订阅未迁及当前12项；该小节已修正，并同步本计划、路线和两个公开记录；文档提交 `7e9dd8d` 的独立关闭检查已通过，根端已关闭M1。Task7 M1的允许归置已公开说明，原Gin噪声继续按范围记录。
 
 这次收尾提交仅含五个Markdown文件。2114个代码候选跟踪文件中，除三个获准更新的既有Markdown外，其余2111个文件保持；553活动构建/测试/嵌入输入和生成类型摘要不变。完整套件测的是上述代码提交，没有冒称后来的文档HEAD重跑过Go套件。后续dev集成、企业/人工验收及test/preview/main晋级尚未进行。
