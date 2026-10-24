@@ -26,7 +26,7 @@ func identityConsoleSymbol(symbol string) bool {
 	case "Registry", "Principal", "LoginCommand", "SessionResult", "UserView", "Operation", "AccessRequest", "UserQuery", "UserPage", "CreateUserCommand", "UpdateUserCommand", "PasswordCommand", "ProfileCommand", "MenuDefinition", "RoleMenuView", "MenuList", "SaveMenusCommand",
 		"ErrLoginFailed", "ErrBadRequest", "ErrSelfDisable", "ErrInitialPasswordUnchanged", "General", "UserInfo", "Logout", "ChangePassword", "LegacySelfUpdate", "KnownPermission",
 		"PermAnyUser", "PermHostRead", "PermISORead", "PermHookRead", "PermTemplateRead", "PermTaskRead", "PermHostWrite", "PermTaskCreate", "PermTaskCancel", "PermTaskRetry", "PermHookWrite", "PermTemplateWrite", "PermHookApprove", "PermTemplateApprove", "PermISOWrite", "PermUserManage", "PermAuditRead",
-		"Access.Login", "Access.Logout", "Access.CurrentUser", "Access.Authenticate", "Access.Authorize", "Access.StreamAuthorized", "Accounts.ListUsers", "Accounts.CreateUser", "Accounts.UpdateUser", "Accounts.DisableUser", "Accounts.ChangePassword", "Accounts.UpdateProfile", "Menus.ListRoleMenus", "Menus.SaveRoleMenus", "Principal.Actor":
+		"Access.Login", "Access.Logout", "Access.CurrentUser", "Access.Authenticate", "Access.Authorize", "Access.StreamAuthorized", "Accounts.ListUsers", "Accounts.CreateUser", "Accounts.UpdateUser", "Accounts.DisableUser", "Accounts.ChangePassword", "Accounts.UpdateProfile", "Menus.ListRoleMenus", "Menus.SaveRoleMenus", "Principal.Actor", "PublicRoles":
 		return true
 	}
 	return false
@@ -224,6 +224,7 @@ func Test身份审计类型边界(t *testing.T) {
 		{"网页本地会话接口", pkgConsole, `type local interface{Put(string)string};func f(s local){_=s.Put("x")}`, false},
 		{"网页点导入用户能力", pkgConsole, `import . "` + pkgIdentityPort + `";var _ Users`, false},
 		{"网页构造身份服务", pkgConsole, `import ` + i + `;var build=i.NewService`, false},
+		{"网页公开角色无需身份", pkgConsole, `import ` + i + `;func f(){_=i.PublicRoles()}`, true},
 		{"网页持有具体服务", pkgConsole, `import ` + i + `;var service *i.Service`, false},
 		{"网页构造会话表", pkgConsole, `import ` + i + `;var build=i.NewSessionBook`, false},
 		{"网页调用会话方法值", pkgConsole, `import ` + i + `;func f(s *i.SessionBook){put:=s.Put;_=put("x")}`, false},

@@ -131,7 +131,7 @@ func migratedApplicationMethod(fn *types.Func) bool {
 	}
 	if target == modulePath+"/internal/application/authoring" {
 		switch symbol {
-		case "Hooks.List", "Hooks.Versions", "Hooks.Get", "Hooks.Create", "Hooks.SaveDraft", "Hooks.NewVersion", "Hooks.DeleteDraft", "Hooks.Rename", "Hooks.Submit", "Hooks.Approve", "Hooks.Reject", "Hooks.Deprecate", "Hooks.Validate",
+		case "PublicCatalog", "Hooks.List", "Hooks.Versions", "Hooks.Get", "Hooks.Create", "Hooks.SaveDraft", "Hooks.NewVersion", "Hooks.DeleteDraft", "Hooks.Rename", "Hooks.Submit", "Hooks.Approve", "Hooks.Reject", "Hooks.Deprecate", "Hooks.Validate",
 			"Templates.List", "Templates.Versions", "Templates.Get", "Templates.Create", "Templates.SaveDraft", "Templates.NewVersion", "Templates.DeleteDraft", "Templates.Rename", "Templates.Submit", "Templates.Approve", "Templates.Reject", "Templates.Deprecate", "Templates.Validate", "Templates.Derive",
 			"Editor.Slots", "Editor.Candidates", "Editor.SourceDiff", "Editor.PreviewParams", "Editor.Preview":
 			return true

@@ -164,3 +164,32 @@ func TestOpenAPI公开角色与来源状态名称保持兼容(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPI公开枚举与路由数量保持兼容(t *testing.T) {
+	doc := New(Deps{Clock: func() int64 { return fixedAt }}).OpenAPI()
+	defs := doc["components"].(map[string]any)["schemas"].(map[string]any)
+	for _, tc := range []struct {
+		name string
+		want []string
+	}{
+		{"CatalogFamily", []string{"linux", "windows", "esxi"}},
+		{"CatalogFormat", []string{"kickstart", "preseed", "autoinstall", "autoyast", "agama", "unattend", "esxi-ks"}},
+		{"CatalogSeries", []string{"rhel", "rocky", "almalinux", "openeuler", "opencloudos", "debian", "ubuntu", "sles15", "leap15", "sles16", "leap16", "windows-server", "windows-desktop", "esxi"}},
+		{"CatalogArch", []string{"x86_64", "aarch64"}},
+		{"CatalogFirmware", []string{"bios", "uefi"}},
+		{"StoreRole", []string{"viewer", "operator", "hook-author", "hook-approver", "admin"}},
+		{"SourceKind", []string{"url", "upload", "path"}},
+	} {
+		want := map[string]any{"type": "string", "enum": tc.want}
+		if !reflect.DeepEqual(defs[tc.name], want) {
+			t.Errorf("%s 公开取值或顺序改变：got=%v want=%v", tc.name, defs[tc.name], want)
+		}
+	}
+	count := 0
+	for _, item := range doc["paths"].(map[string]any) {
+		count += len(item.(map[string]any))
+	}
+	if count != 75 {
+		t.Fatalf("公开路由数量改变：%d", count)
+	}
+}

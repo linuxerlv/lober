@@ -3,6 +3,8 @@ package console
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 
@@ -273,29 +275,29 @@ func (b *schemaBuilder) definition(t reflect.Type) map[string]any {
 		values := make([]string, 0)
 		switch t {
 		case reflect.TypeOf(model.Role("")):
-			for _, v := range model.Roles() {
+			for _, v := range identity.PublicRoles() {
 				values = append(values, string(v))
 			}
 		case reflect.TypeOf(SourceKind("")):
 			values = []string{"url", "upload", "path"}
 		case reflect.TypeOf(catalog.Family("")):
-			for _, v := range catalog.Families() {
+			for _, v := range authoring.PublicCatalog().Families {
 				values = append(values, string(v))
 			}
 		case reflect.TypeOf(catalog.Format("")):
-			for _, v := range catalog.AllFormats() {
+			for _, v := range authoring.PublicCatalog().Formats {
 				values = append(values, string(v))
 			}
 		case reflect.TypeOf(catalog.Series("")):
-			for _, v := range catalog.AllSeries() {
+			for _, v := range authoring.PublicCatalog().Series {
 				values = append(values, string(v))
 			}
 		case reflect.TypeOf(catalog.Arch("")):
-			for _, v := range catalog.AllArchs() {
+			for _, v := range authoring.PublicCatalog().Archs {
 				values = append(values, string(v))
 			}
 		case reflect.TypeOf(catalog.Firmware("")):
-			for _, v := range catalog.AllFirmwares() {
+			for _, v := range authoring.PublicCatalog().Firmwares {
 				values = append(values, string(v))
 			}
 		}

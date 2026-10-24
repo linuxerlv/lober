@@ -99,6 +99,12 @@ var phaseSixCompletedRemovals = map[string][]migrationException{
 	"consoleRuleMigrationExceptions": {
 		{pkgConsole, "internal/interfaces/console/errors.go", "RespondError", pkgStore, "ErrTemplateNotCurrent", "6"},
 		{pkgConsole, "internal/interfaces/console/errors.go", "StatusOfProblems", pkgModel, "Code.Category", "6"},
+		{pkgConsole, "internal/interfaces/console/openapi.go", "(*schemaBuilder).definition", "github.com/lober/lober/internal/domain/catalog", "AllArchs", "6"},
+		{pkgConsole, "internal/interfaces/console/openapi.go", "(*schemaBuilder).definition", "github.com/lober/lober/internal/domain/catalog", "AllFirmwares", "6"},
+		{pkgConsole, "internal/interfaces/console/openapi.go", "(*schemaBuilder).definition", "github.com/lober/lober/internal/domain/catalog", "AllFormats", "6"},
+		{pkgConsole, "internal/interfaces/console/openapi.go", "(*schemaBuilder).definition", "github.com/lober/lober/internal/domain/catalog", "AllSeries", "6"},
+		{pkgConsole, "internal/interfaces/console/openapi.go", "(*schemaBuilder).definition", "github.com/lober/lober/internal/domain/catalog", "Families", "6"},
+		{pkgConsole, "internal/interfaces/console/openapi.go", "(*schemaBuilder).definition", "github.com/lober/lober/internal/domain/model", "Roles", "6"},
 	},
 }
 
@@ -192,7 +198,20 @@ func Test第六阶段历史只接受原表有序子集并复制(t *testing.T) {
 	}
 }
 
-func Test错误迁移精确删除12项保留27项(t *testing.T) {
+func phaseSixCompletedOwner(e migrationException) bool {
+	if e.File == "internal/interfaces/console/errors.go" {
+		return true
+	}
+	if e.File != "internal/interfaces/console/openapi.go" || e.Function != "(*schemaBuilder).definition" {
+		return false
+	}
+	if e.Target == pkgModel {
+		return e.Symbol == "Roles"
+	}
+	return e.Target == modulePath+"/internal/domain/catalog" && slices.Contains([]string{"AllArchs", "AllFirmwares", "AllFormats", "AllSeries", "Families"}, e.Symbol)
+}
+
+func Test错误与枚举迁移精确删除18项保留21项(t *testing.T) {
 	total, removedTotal := 0, 0
 	for name, current := range phaseSixCurrentTables() {
 		var want []migrationException
@@ -208,8 +227,8 @@ func Test错误迁移精确删除12项保留27项(t *testing.T) {
 			}
 		}
 		for _, e := range phaseSixCompletedRemovals[name] {
-			if !slices.Contains(phaseSixOriginalEntries[name], e) || e.File != "internal/interfaces/console/errors.go" {
-				t.Errorf("错误迁移的删除项不精确: %+v", e)
+			if !slices.Contains(phaseSixOriginalEntries[name], e) || !phaseSixCompletedOwner(e) {
+				t.Errorf("错误与枚举迁移的删除项不精确: %+v", e)
 			}
 		}
 		if !slices.Equal(current, want) {
@@ -217,24 +236,26 @@ func Test错误迁移精确删除12项保留27项(t *testing.T) {
 		}
 		total += len(current)
 	}
-	if total != 27 || removedTotal != 12 {
+	if total != 21 || removedTotal != 18 {
 		t.Fatal(total, removedTotal)
 	}
 }
 
-func Test错误历史不能放行已删除的真实类型调用(t *testing.T) {
+func Test错误与枚举历史不能放行已删除的真实类型调用(t *testing.T) {
 	imports := identityFixtureImports(t)
 	for _, entries := range phaseSixCompletedRemovals {
 		for _, e := range entries {
 			t.Run(e.Symbol, func(t *testing.T) {
 				body := `import r "` + pkgStore + `";func RespondError(){_=r.` + e.Symbol + `}`
 				switch e.Symbol {
+				case "AllArchs", "AllFirmwares", "AllFormats", "AllSeries", "Families", "Roles":
+					body = `import d "` + e.Target + `";type schemaBuilder struct{};func (*schemaBuilder)definition(){_=d.` + e.Symbol + `()}`
 				case "BatchError", "ProblemsError", "ReferencedError":
 					body = `import r "` + pkgStore + `";func RespondError(){var _ *r.` + e.Symbol + `}`
 				case "Code.Category":
 					body = `import m "` + pkgModel + `";func StatusOfProblems(c m.Code){_=c.Category()}`
 				}
-				got := identityTypedFixture(t, imports, pkgConsole, "errors.go", body)
+				got := identityTypedFixture(t, imports, pkgConsole, strings.TrimPrefix(e.File, "internal/interfaces/console/"), body)
 				for _, v := range got {
 					if v.subject == e.Target+"."+e.Symbol {
 						return
@@ -255,6 +276,27 @@ func Test迁移入口只接受明确交付的共同错误能力(t *testing.T) {
 		{"错误说明", `import p "` + pkgPorts + `";func f(){_,_=p.DescribeFailure(nil)}`, true},
 		{"首条问题分类", `import p "` + pkgPorts + `";func f(){_=p.ProblemClass(nil)}`, true},
 		{"其他共同业务能力仍被拒绝", `import p "` + pkgPorts + `";func f(a p.Actor){_=a.Authorize("")}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := identityTypedFixture(t, imports, pkgConsole, "wizard.go", tc.body)
+			if (len(got) == 0) != tc.allowed {
+				t.Fatalf("allowed=%v findings=%v", tc.allowed, got)
+			}
+		})
+	}
+}
+
+func Test迁移入口只接受明确交付的公开枚举(t *testing.T) {
+	imports := identityFixtureImports(t)
+	for _, tc := range []struct {
+		name, body string
+		allowed    bool
+	}{
+		{"公开目录", `import a "` + modulePath + `/internal/application/authoring";func f(){_=a.PublicCatalog()}`, true},
+		{"公开角色", `import i "` + pkgIdentityApp + `";func f(){_=i.PublicRoles()}`, true},
+		{"编写服务构造器仍被拒绝", `import a "` + modulePath + `/internal/application/authoring";func f(){_=a.NewHooks}`, false},
+		{"身份服务构造器仍被拒绝", `import i "` + pkgIdentityApp + `";func f(){_=i.NewService}`, false},
+		{"其他身份操作仍被拒绝", `import i "` + pkgIdentityApp + `";func f(){_=i.NewSessionBook}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := identityTypedFixture(t, imports, pkgConsole, "wizard.go", tc.body)
