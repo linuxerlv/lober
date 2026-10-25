@@ -23,6 +23,10 @@ export default defineConfig(async () => {
         viteCssLayerPlugin({ layerName: 'el', packageName: 'element-plus' }),
         ElementPlus({ format: 'esm' }),
       ],
+      resolve: {
+        // 应用和布局必须共用一份路由，否则布局读不到应用安装的路由对象。
+        dedupe: ['vue-router'],
+      },
       server: {
         proxy: {
           '/console': {
