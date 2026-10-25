@@ -400,6 +400,131 @@ class SessionChecks(unittest.TestCase):
         self.assertFalse(namespace['same'](actual))
 
 
+def no_task_frames(count=1):
+    target='/v1/boot?sn='+TARGET['sn']+'&arch=x86_64&firmware=bios'
+    return fixture.frames(fixture.http_frames(req=fixture.no_task_request(target)*count,
+        res=fixture.response(body=fixture.LOCAL_BOOT)*count))
+
+
+def no_task_session_contract(limit=4):
+    frozen=contract();row=frozen['targets'][OWNER['target_uuid']]
+    packet=fixture.no_task_contract(fixture.pcap(no_task_frames()))
+    for key in ('pcap_sha256','pcap_size','capture_start_ns','capture_end_ns'):packet.pop(key)
+    packet['client_sn']=TARGET['sn'];packet['max_boot_exchanges']=limit
+    packet['http'][0]['target_sha256']=fixture.digest(('/v1/boot?sn='+TARGET['sn']+'&arch=x86_64&firmware=bios').encode())
+    row.update(packet_mode='NO_TASK',packet_contract=packet)
+    return frozen
+
+
+class NoTaskSessionChecks(unittest.TestCase):
+    setUp=SessionChecks.setUp
+    create=SessionChecks.create
+    receipt=SessionChecks.receipt
+    analyze=SessionChecks.analyze
+    extract=SessionChecks.extract
+
+    def test_explicit_no_task_session_freezes_and_analyzes_complete_original(self):
+        _,receipt=self.receipt(fixture.pcap(no_task_frames()),frozen=no_task_session_contract())
+        result=self.analyze(receipt)
+        self.assertEqual(result['scope'],'NO_TASK_PACKET_EVIDENCE_ONLY')
+        self.assertEqual(result['boot_exchange_count'],1)
+        self.assertIsNone(receipt['packet_contract']['task_id'])
+        self.assertEqual(receipt['packet_mode'],'NO_TASK')
+
+    def test_explicit_no_task_repeat_count_is_frozen_before_capture(self):
+        _,receipt=self.receipt(fixture.pcap(no_task_frames(2)),frozen=no_task_session_contract(limit=2))
+        result=self.analyze(receipt)
+        self.assertEqual(result['boot_exchange_count'],2)
+        self.assertEqual(len(result['http']),2)
+
+    def test_explicit_task_mode_uses_original_task_parser_and_callback(self):
+        frozen=contract();frozen['targets'][OWNER['target_uuid']]['packet_mode']='TASK'
+        _,receipt=self.receipt(frozen=frozen)
+        result=self.analyze(receipt)
+        self.assertEqual(result['scope'],'PACKET_EVIDENCE_ONLY')
+        self.assertEqual(self.extract(receipt,result['http'][0]['reference'])['body'],b'yes')
+
+    def test_no_task_requires_explicit_mode_scope_schema_none_and_exact_serial(self):
+        changes=[lambda r:r.pop('packet_mode'), lambda r:r.update(packet_mode='TASK'),
+                 lambda r:r.update(packet_mode='no-task'), lambda r:r.update(packet_mode=None),
+                 lambda r:r['packet_contract'].update(scope='TASK'), lambda r:r['packet_contract'].pop('scope'),
+                 lambda r:r['packet_contract'].update(schema='lober-cloud-packet-v1'),
+                 lambda r:r['packet_contract'].update(task_id='invented-task'),
+                 lambda r:r['packet_contract'].update(client_sn='another-serial')]
+        for change in changes:
+            with self.subTest(change=change):
+                frozen=no_task_session_contract();change(frozen['targets'][OWNER['target_uuid']])
+                with self.assertRaises(ValueError):self.create(frozen=frozen)
+        self.assertFalse(self.host.calls)
+
+    def test_task_mode_does_not_infer_no_task_from_none_or_new_schema(self):
+        for explicit in (False,True):
+            frozen=contract();row=frozen['targets'][OWNER['target_uuid']]
+            if explicit:row['packet_mode']='TASK'
+            row['packet_contract']['task_id']=None
+            with self.assertRaises(ValueError):self.create(frozen=frozen)
+        frozen=contract();frozen['targets'][OWNER['target_uuid']]['packet_mode']='NO_TASK'
+        with self.assertRaises(ValueError):self.create(frozen=frozen)
+
+    def test_no_task_dispatches_only_its_parser_and_never_callback_extraction(self):
+        import cloud_packet_capture as parser
+        _,receipt=self.receipt(fixture.pcap(no_task_frames()),frozen=no_task_session_contract())
+        with patch.object(parser,'analyze_capture',side_effect=AssertionError('task analyzer must not run')):
+            result=self.analyze(receipt)
+        with patch.object(parser,'extract_verified_request',side_effect=AssertionError('callback extractor must not run')):
+            with self.assertRaisesRegex(ValueError,'禁止'):self.extract(receipt,result['http'][0]['reference'])
+
+    def test_no_task_rejects_post_or_other_get_wrong_body_and_incomplete_chain(self):
+        target='/v1/boot?sn='+TARGET['sn']+'&arch=x86_64&firmware=bios'
+        valid=fixture.http_frames(req=fixture.no_task_request(target),res=fixture.response(body=fixture.LOCAL_BOOT))
+        examples=[fixture.frames(),fixture.frames(valid+fixture.http_frames(port=43000)),
+                  fixture.frames(fixture.http_frames(req=fixture.no_task_request(target+'&extra=yes'),res=fixture.response(body=fixture.LOCAL_BOOT))),
+                  fixture.frames(fixture.http_frames(req=fixture.no_task_request(target),res=fixture.response(body=b'#!ipxe\nboot\n'))),
+                  fixture.frames(valid)[4:], [item for item in fixture.frames(valid) if item[0]!='data1']]
+        for frames in examples:
+            with self.subTest(packets=len(frames)):
+                _,receipt=self.receipt(fixture.pcap(frames),frozen=no_task_session_contract())
+                with self.assertRaises(ValueError):self.analyze(receipt)
+                with self.assertRaises(ValueError):self.extract(receipt,{})
+
+    def test_no_task_exchange_limit_is_bounded_and_cannot_be_relaxed_after_capture(self):
+        _,receipt=self.receipt(fixture.pcap(no_task_frames(16)),frozen=no_task_session_contract(limit=16))
+        self.assertEqual(self.analyze(receipt)['boot_exchange_count'],16)
+        for limit in (0,17,True,None):
+            with self.subTest(limit=limit),self.assertRaises(ValueError):self.create(frozen=no_task_session_contract(limit=limit))
+        _,receipt=self.receipt(fixture.pcap(no_task_frames(2)),frozen=no_task_session_contract(limit=1))
+        with self.assertRaises(ValueError):self.analyze(receipt)
+        receipt['packet_contract']['max_boot_exchanges']=2
+        with self.assertRaises(ValueError):self.analyze(receipt)
+        frozen,target,anchor=self.trusted[receipt['session_id']]
+        reissued=dict(anchor,receipt_sha256=session.canonical(receipt))
+        with self.assertRaises(ValueError):session.analyze_session(receipt,frozen,target,anchor=reissued)
+
+    def test_receipt_mode_is_not_a_dispatch_or_trust_source(self):
+        _,receipt=self.receipt(fixture.pcap(no_task_frames()),frozen=no_task_session_contract())
+        original=copy.deepcopy(receipt)
+        frozen,target,anchor=self.trusted[receipt['session_id']]
+        for mode in ('TASK',None,'NO_TASK_2'):
+            with self.subTest(mode=mode):
+                changed=copy.deepcopy(original);changed['packet_mode']=mode
+                with self.assertRaises(ValueError):self.analyze(changed)
+                with self.assertRaises(ValueError):self.extract(changed,{})
+                reissued=dict(anchor,receipt_sha256=session.canonical(changed))
+                with self.assertRaises(ValueError):session.analyze_session(changed,frozen,target,anchor=reissued)
+        changed=copy.deepcopy(original);changed.pop('packet_mode')
+        with self.assertRaises(ValueError):self.analyze(changed)
+
+    def test_independent_anchors_bind_no_task_contract_and_client_sn(self):
+        _,receipt=self.receipt(fixture.pcap(no_task_frames()),frozen=no_task_session_contract())
+        frozen,target,anchor=self.trusted[receipt['session_id']]
+        changed=copy.deepcopy(frozen);changed['targets'][OWNER['target_uuid']]['packet_mode']='TASK'
+        with self.assertRaises(ValueError):session.analyze_session(receipt,changed,target,anchor=anchor)
+        changed_receipt=copy.deepcopy(receipt);changed_receipt['packet_contract']['client_sn']='other'
+        changed_receipt['contract_sha256']=session.canonical(changed)
+        with self.assertRaises(ValueError):self.analyze(changed_receipt)
+        with self.assertRaises(ValueError):self.extract(changed_receipt,{})
+
+
 class HostSupervisorChecks(unittest.TestCase):
     def setUp(self):
         self.assertEqual((socket.gethostname(), os.geteuid()), ('lober', 1000))

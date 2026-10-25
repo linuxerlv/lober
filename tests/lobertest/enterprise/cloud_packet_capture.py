@@ -8,7 +8,8 @@ import socket
 import stat
 import struct
 
-__all__ = ['CaptureError', 'analyze_capture', 'extract_verified_request']
+__all__ = ['CaptureError', 'analyze_capture', 'extract_verified_request',
+           'validate_no_task_contract', 'analyze_no_task_capture']
 
 MAX_CAPTURE = 64 << 20
 MAX_PACKETS = 200000
@@ -19,6 +20,10 @@ MAX_MESSAGES = 4096
 MAX_HEADER = 65536
 MAX_TFTP_ATTEMPTS = 64
 MAX_PROVENANCE_WORK = 4_000_000
+_PACKET_KEYS = {'schema', 'pcap_sha256', 'pcap_size', 'capture_start_ns', 'capture_end_ns', 'client_mac',
+                'client_ip', 'boot_server_mac', 'boot_server_ip', 'service_mac', 'service_ip', 'service_port',
+                'task_id', 'tftp', 'http'}
+_LOCAL_BOOT = b'#!ipxe\nexit || sanboot --no-describe --drive 0x80\n'
 
 
 class CaptureError(ValueError):
@@ -48,10 +53,26 @@ def valid_sha(value):
 
 
 def validate_contract(value):
-    keys = {'schema', 'pcap_sha256', 'pcap_size', 'capture_start_ns', 'capture_end_ns', 'client_mac',
-            'client_ip', 'boot_server_mac', 'boot_server_ip', 'service_mac', 'service_ip', 'service_port',
-            'task_id', 'tftp', 'http'}
-    need(isinstance(value, dict) and set(value) == keys and value['schema'] == 'lober-cloud-packet-v1', 'Unknown packet contract')
+    need(isinstance(value, dict) and set(value) == _PACKET_KEYS and value['schema'] == 'lober-cloud-packet-v1', 'Unknown packet contract')
+    need(isinstance(value['task_id'], str) and re.fullmatch('[a-zA-Z0-9_-]{1,80}', value['task_id']), 'Invalid task binding')
+    _validate_packet_fields(value)
+
+
+def validate_no_task_contract(value):
+    """无任务合同必须显式声明；正常任务入口不接受此合同。"""
+    need(isinstance(value, dict) and set(value) == _PACKET_KEYS | {'scope', 'client_sn', 'max_boot_exchanges'}
+         and value['schema'] == 'lober-cloud-no-task-packet-v1' and value['scope'] == 'NO_TASK'
+         and value['task_id'] is None, 'Unknown no-task packet contract')
+    need(isinstance(value['client_sn'], str) and re.fullmatch('[A-Za-z0-9_-]{1,80}', value['client_sn']), 'Invalid no-task serial')
+    need(type(value['max_boot_exchanges']) is int and 1 <= value['max_boot_exchanges'] <= 16, 'Invalid frozen no-task exchange bound')
+    _validate_packet_fields(value)
+    target = ('/v1/boot?sn=' + value['client_sn'] + '&arch=x86_64&firmware=bios').encode()
+    need(value['http'] == [{'name': 'no_task_boot', 'method': 'GET', 'status': 200,
+                           'target_sha256': sha(target), 'request_body_sha256': sha(b''),
+                           'response_body_sha256': sha(_LOCAL_BOOT)}], 'No-task must freeze its exact boot GET and local-disk response')
+
+
+def _validate_packet_fields(value):
     need(valid_sha(value['pcap_sha256']) and type(value['pcap_size']) is int and 24 <= value['pcap_size'] <= MAX_CAPTURE,
          'Invalid frozen capture identity')
     need(type(value['capture_start_ns']) is int and type(value['capture_end_ns']) is int
@@ -68,7 +89,6 @@ def validate_contract(value):
         need(str(address) == value[key] and not address.is_multicast and not address.is_unspecified, 'Invalid frozen IPv4')
     need(len({value[k] for k in ('client_ip', 'boot_server_ip', 'service_ip')}) == 3, 'Peer IPv4s overlap')
     need(type(value['service_port']) is int and 1 <= value['service_port'] <= 65535, 'Invalid frozen port')
-    need(isinstance(value['task_id'], str) and re.fullmatch('[a-zA-Z0-9_-]{1,80}', value['task_id']), 'Invalid task binding')
     need(isinstance(value['tftp'], dict) and 1 <= len(value['tftp']) <= 16, 'Required TFTP set absent')
     for name, item in value['tftp'].items():
         need(isinstance(name, str) and re.fullmatch(r'[A-Za-z0-9_.\-/]{1,255}', name)
@@ -556,7 +576,7 @@ def provenance(segments, start, end):
             'first_complete_packet_index': complete['index'], 'first_complete_ns': complete['time_ns']}
 
 
-def http_exchanges(flows, contract):
+def http_exchanges(flows, contract, *, no_task=False):
     exchanges = []
     provenance_work = 0
     for flow in flows:
@@ -567,7 +587,7 @@ def http_exchanges(flows, contract):
             try:
                 item, cursor = http_message(client, cursor, True)
             except _IncompleteHTTP:
-                if flow['reset']:
+                if flow['reset'] and not no_task:
                     break
                 raise
             requests.append(item)
@@ -584,7 +604,7 @@ def http_exchanges(flows, contract):
                     interim += 1
                     need(interim <= 16, 'HTTP interim response count bound exceeded')
             except _IncompleteHTTP:
-                if flow['reset']:
+                if flow['reset'] and not no_task:
                     aborted = True
                     break
                 raise
@@ -592,6 +612,11 @@ def http_exchanges(flows, contract):
             res_ref = provenance(flow['server'], response['start'], response['end'])
             need(req_ref['first_complete_packet_index'] < min(res_ref['packet_indices']), 'HTTP response precedes its complete request')
             callback = request['method'] == 'POST' and request['target'].startswith(b'/v1/signal/')
+            if no_task:
+                expected = ('/v1/boot?sn=' + contract['client_sn'] + '&arch=x86_64&firmware=bios').encode()
+                need(request['method'] == 'GET' and request['target'] == expected and request['body'] == b''
+                     and response['status'] == 200 and response['body'] == _LOCAL_BOOT,
+                     'No-task capture contains an unrelated HTTP exchange')
             if callback:
                 need(request['target'].startswith(('/v1/signal/' + contract['task_id'] + '/').encode()), 'Callback task mismatch')
             reference = {'capture_sha256': contract['pcap_sha256'], 'flow_id': flow['id'], 'request_index': index,
@@ -608,13 +633,21 @@ def http_exchanges(flows, contract):
     return exchanges
 
 
-def _analyze(path, contract):
-    validate_contract(contract)
+def _analyze(path, contract, *, no_task=False):
+    if no_task:
+        validate_no_task_contract(contract)
+    else:
+        validate_contract(contract)
     data = read_capture(path, contract)
     packets, count = parse_pcap(data, contract)
     lease = prove_dhcp(packets, contract)
     transfers = prove_tftp(packets, contract, lease)
-    exchanges = http_exchanges(tcp_flows(packets, contract), contract)
+    exchanges = http_exchanges(tcp_flows(packets, contract), contract, no_task=no_task)
+    if no_task:
+        need(1 <= len(exchanges) <= contract['max_boot_exchanges'], 'No-task boot exchange count exceeds its frozen bound or is empty')
+        for public, _ in exchanges:
+            need(min(public['request']['packet_indices']) > max(max(row['packet_indices']) for row in transfers),
+                 'No-task HTTP precedes the complete required TFTP chain')
     records, private, used = [], [], set()
     for required in contract['http']:
         for public, request in exchanges:
@@ -632,14 +665,25 @@ def _analyze(path, contract):
             records.append(record); private.append((record, request)); break
         else:
             raise CaptureError('Required bound successful HTTP exchange absent')
-    return {'schema': 'lober-cloud-packet-evidence-v1', 'scope': 'PACKET_EVIDENCE_ONLY',
+    if no_task:
+        records = [{**public, 'name': 'no_task_boot'} for public, _ in exchanges]
+    result = {'schema': 'lober-cloud-no-task-packet-evidence-v1' if no_task else 'lober-cloud-packet-evidence-v1',
+            'scope': 'NO_TASK_PACKET_EVIDENCE_ONLY' if no_task else 'PACKET_EVIDENCE_ONLY',
             'capture_sha256': sha(data), 'capture_bytes': len(data), 'packet_count': count,
-            'dhcp': lease, 'tftp': transfers, 'http': records}, private
+            'dhcp': lease, 'tftp': transfers, 'http': records}
+    if no_task:
+        result['boot_exchange_count'] = len(records)
+    return result, private
 
 
 def analyze_capture(path, contract):
     """返回脱敏包证据；契约内每个必需交换都须真实存在且完整。"""
     return _analyze(path, contract)[0]
+
+
+def analyze_no_task_capture(path, contract):
+    """只证明无任务客户的网络引导及本地盘响应，不签发短流程通过。"""
+    return _analyze(path, contract, no_task=True)[0]
 
 
 def extract_verified_request(path, contract, reference):

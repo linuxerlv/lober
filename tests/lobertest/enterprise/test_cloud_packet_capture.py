@@ -604,5 +604,136 @@ class PacketChecks(unittest.TestCase):
                 capture.extract_verified_request(path, frozen, evidence)
 
 
+NO_TASK_TARGET = '/v1/boot?sn=PQ25L01&arch=x86_64&firmware=bios'
+LOCAL_BOOT = b'#!ipxe\nexit || sanboot --no-describe --drive 0x80\n'
+
+
+def no_task_request(target=NO_TASK_TARGET):
+    return b'GET ' + target.encode() + b' HTTP/1.1\r\nHost: lober\r\n\r\n'
+
+
+def no_task_contract(data):
+    result = contract(data)
+    result.update(schema='lober-cloud-no-task-packet-v1', scope='NO_TASK', task_id=None, client_sn='PQ25L01', max_boot_exchanges=4)
+    result['http'] = [{'name': 'no_task_boot', 'method': 'GET', 'status': 200,
+                       'target_sha256': digest(NO_TASK_TARGET.encode()), 'request_body_sha256': digest(b''),
+                       'response_body_sha256': digest(LOCAL_BOOT)}]
+    return result
+
+
+class NoTaskPacketChecks(unittest.TestCase):
+    def parse(self, items=None, change=None):
+        self.assertTrue(callable(getattr(capture, 'analyze_no_task_capture', None)), '缺少显式无任务解析入口')
+        data = pcap(frames(http_frames(req=no_task_request(), res=response(body=LOCAL_BOOT))) if items is None else items)
+        frozen = no_task_contract(data)
+        if change:
+            change(frozen)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'private.pcap'; path.write_bytes(data)
+            return capture.analyze_no_task_capture(path, frozen)
+
+    def reject(self, items=None, change=None):
+        self.assertTrue(callable(getattr(capture, 'analyze_no_task_capture', None)), '缺少显式无任务解析入口')
+        with self.assertRaises(ValueError):
+            self.parse(items, change)
+
+    def test_complete_no_task_chain_has_separate_scope_and_no_raw_target(self):
+        value = self.parse()
+        self.assertEqual(value['scope'], 'NO_TASK_PACKET_EVIDENCE_ONLY')
+        self.assertEqual(value['http'][0]['response_body_sha256'], digest(LOCAL_BOOT))
+        self.assertNotIn(NO_TASK_TARGET, str(value))
+        self.assertNotIn('PRIVATE-TOKEN', str(value))
+
+    def test_explicit_no_task_validator_and_task_none_are_required(self):
+        self.assertTrue(callable(getattr(capture, 'validate_no_task_contract', None)), '缺少显式无任务合同检查')
+        for change in (lambda c: c.update(task_id='fake-task'), lambda c: c.update(scope='TASK'),
+                       lambda c: c.update(schema='lober-cloud-packet-v1'), lambda c: c.pop('scope')):
+            with self.subTest(change=change):
+                self.reject(change=change)
+
+    def test_normal_task_entry_and_private_extraction_reject_no_task_contract(self):
+        data = pcap(frames(http_frames(req=no_task_request(), res=response(body=LOCAL_BOOT))))
+        frozen = no_task_contract(data)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'private.pcap'; path.write_bytes(data)
+            for action in (lambda: capture.validate_contract(frozen), lambda: capture.analyze_capture(path, frozen),
+                           lambda: capture.extract_verified_request(path, frozen, {})):
+                with self.subTest(action=action), self.assertRaises(ValueError):
+                    action()
+
+    def test_no_task_entry_rejects_normal_contract(self):
+        self.reject(change=lambda c: [c.pop(k) for k in ('scope', 'client_sn')])
+
+    def test_no_task_body_and_target_digests_cannot_be_omitted_or_changed(self):
+        for key in ('target_sha256', 'request_body_sha256', 'response_body_sha256'):
+            for remove in (False, True):
+                with self.subTest(key=key, remove=remove):
+                    self.reject(change=lambda c: c['http'][0].pop(key) if remove else c['http'][0].update({key: '0' * 64}))
+
+    def test_no_task_rejects_post_signal_even_with_success_and_edited_hash(self):
+        items = frames(http_frames())
+        def alter(c):
+            c['http'][0].update(method='POST', target_sha256=digest(TARGET.encode()),
+                                 request_body_sha256=digest(b'yes'), response_body_sha256=digest(b'OK'))
+        self.reject(items, alter)
+
+    def test_no_task_rejects_wrong_sn_or_arch_firmware_target(self):
+        for target in (NO_TASK_TARGET.replace('PQ25L01', 'PQ25L02'), NO_TASK_TARGET.replace('bios', 'uefi'),
+                       NO_TASK_TARGET + '&extra=yes', '/v1/boot?sn=PQ25L01'):
+            with self.subTest(target=target):
+                self.reject(frames(http_frames(req=no_task_request(target), res=response(body=LOCAL_BOOT))),
+                            lambda c: c['http'][0].update(target_sha256=digest(target.encode())))
+
+    def test_no_task_rejects_other_http_exchange_in_same_or_another_flow(self):
+        valid = http_frames(req=no_task_request(), res=response(body=LOCAL_BOOT))
+        for other in (http_frames(), http_frames(port=43000)):
+            with self.subTest(port=other[0][1][34:38]):
+                self.reject(frames(valid + other))
+
+    def test_no_task_accepts_equivalent_boot_gets_on_same_connection(self):
+        value = self.parse(frames(http_frames(req=no_task_request() * 2, res=response(body=LOCAL_BOOT) * 2)))
+        self.assertEqual(value['boot_exchange_count'], 2)
+        self.assertEqual(len(value['http']), 2)
+
+    def test_no_task_accepts_equivalent_boot_gets_on_new_connection(self):
+        valid = http_frames(req=no_task_request(), res=response(body=LOCAL_BOOT))
+        second = http_frames(req=no_task_request(), res=response(body=LOCAL_BOOT), client_seq=300, server_seq=700)
+        value = self.parse(frames(valid + second))
+        self.assertEqual(value['boot_exchange_count'], 2)
+        self.assertNotEqual(value['http'][0]['reference']['flow_id'], value['http'][1]['reference']['flow_id'])
+
+    def test_no_task_repeat_bound_is_frozen_and_cannot_be_exceeded(self):
+        items = frames(http_frames(req=no_task_request() * 2, res=response(body=LOCAL_BOOT) * 2))
+        self.reject(items, lambda c: c.update(max_boot_exchanges=1))
+        for count in (0, 17, True, None):
+            with self.subTest(count=count):
+                self.reject(change=lambda c: c.update(max_boot_exchanges=count))
+        self.reject(change=lambda c: c.pop('max_boot_exchanges'))
+
+    def test_no_task_rejects_wrong_local_boot_body_or_status(self):
+        for reply in (response(body=b'#!ipxe\nboot\n'), response(404, LOCAL_BOOT), response(body=LOCAL_BOOT[:-1])):
+            with self.subTest(reply=reply):
+                self.reject(frames(http_frames(req=no_task_request(), res=reply)))
+
+    def test_no_task_get_body_and_incomplete_callback_tail_are_rejected(self):
+        get_body = no_task_request().replace(b'\r\n\r\n', b'\r\nContent-Length: 3\r\n\r\nyes')
+        self.reject(frames(http_frames(req=get_body, res=response(body=LOCAL_BOOT))))
+        valid = http_frames(req=no_task_request(), res=response(body=LOCAL_BOOT))
+        tail = request()[:20]
+        extra = ('partial-post', tcp(CLIENT_IP, SERVICE_IP, 42000, 18090,
+                                     101 + len(no_task_request()), 501 + len(response(body=LOCAL_BOOT)), 0x18, tail))
+        reset = ('reset', tcp(SERVICE_IP, CLIENT_IP, 18090, 42000, 501 + len(response(body=LOCAL_BOOT)),
+                               101 + len(no_task_request()) + len(tail), 0x14, smac=SERVICE, dmac=CLIENT))
+        self.reject(frames(valid + [extra, reset]))
+
+    def test_no_task_retains_complete_tftp_and_frozen_capture_requirements(self):
+        items = [v for v in frames(http_frames(req=no_task_request(), res=response(body=LOCAL_BOOT))) if v[0] != 'data1']
+        self.reject(items)
+        for change in (lambda c: c.update(pcap_sha256='0' * 64), lambda c: c.update(tftp={}),
+                       lambda c: c.update(client_mac=BOOT), lambda c: c.update(capture_end_ns=1)):
+            with self.subTest(change=change):
+                self.reject(change=change)
+
+
 if __name__ == '__main__':
     unittest.main()

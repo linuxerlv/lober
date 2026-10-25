@@ -17,7 +17,7 @@ BRIDGE = 'virbr-pq25'
 NETWORK = 'lober-pq25'
 VM_BASE = Path('/home/dev/lober-production-qualification-20261025')
 PURPOSE = 'production-qualification-20261025'
-PARSER_SHA = 'e96e4ed586054a5ae76077444eb130f806be314b649002b7b02426fa22853c43'
+PARSER_SHA = 'b319d32db8a14f238c437843523428bea8d4274d5042d9fc9c51f6c997a481d0'
 
 
 class CaptureSessionError(ValueError):
@@ -71,14 +71,22 @@ def validate(owner, target, frozen):
     rows = frozen['targets']
     need(type(rows) is dict and 1 <= len(rows) <= 2 and target['uuid'] in rows, '目标不在显式合同中')
     row = rows[target['uuid']]
-    need(set(row) == {'target_sha256', 'packet_contract', 'boot_chain'} and row['target_sha256'] == canonical(target), '目标完整合同摘要不符')
+    row_keys = {'target_sha256', 'packet_contract', 'boot_chain'}
+    need(type(row) is dict and set(row) in (row_keys, row_keys | {'packet_mode'})
+         and row['target_sha256'] == canonical(target), '目标完整合同摘要不符')
+    mode = row.get('packet_mode', 'TASK')
+    need(mode in ('TASK', 'NO_TASK'), '未知抓包模式')
     packet = row['packet_contract']
     packet_keys = {'schema', 'client_mac', 'boot_server_mac', 'service_mac', 'client_ip', 'boot_server_ip', 'service_ip', 'service_port', 'task_id', 'tftp', 'http'}
+    if mode == 'NO_TASK':
+        packet_keys |= {'scope', 'client_sn', 'max_boot_exchanges'}
+        need(len(rows) == 1 and packet.get('client_sn') == target['sn'], '无任务模式只允许一个准确序列号目标')
     need(type(packet) is dict and set(packet) == packet_keys, '解析合同须在启动前冻结，不能事后删必需项')
     need((packet['client_mac'], packet['client_ip'], packet['boot_server_ip'], packet['service_ip'], packet['service_port']) ==
          (target['mac'], target['guest_ip'], target['host_ip'], target['service_ip'], 18090), '解析地址与目标不符')
-    from cloud_packet_capture import validate_contract
-    validate_contract(dict(packet, pcap_sha256='0' * 64, pcap_size=24, capture_start_ns=0, capture_end_ns=1))
+    from cloud_packet_capture import validate_contract, validate_no_task_contract
+    validator = validate_no_task_contract if mode == 'NO_TASK' else validate_contract
+    validator(dict(packet, pcap_sha256='0' * 64, pcap_size=24, capture_start_ns=0, capture_end_ns=1))
     chain = row['boot_chain']
     need(type(chain) is dict and set(chain) == {'firmware_sha256', 'dhcp_config_sha256', 'user_class_sha256', 'boot_file', 'required_tftp'}, '必须冻结实际 ROM 与 DHCP 分支')
     need(all(re.fullmatch('[0-9a-f]{64}', chain[k]) for k in ('firmware_sha256', 'dhcp_config_sha256', 'user_class_sha256')), '启动链摘要无效')
@@ -317,6 +325,8 @@ class CaptureSession:
                        target_sha256=canonical(self.target), packet_contract=copy.deepcopy(self.row['packet_contract']),
                        boot_chain=copy.deepcopy(self.row['boot_chain']), tcp_reset_policy=self.frozen['tcp_reset_policy'],
                        max_bytes=self.frozen['max_bytes'], max_seconds=self.frozen['max_seconds'])
+        if 'packet_mode' in self.row:
+            receipt['packet_mode'] = self.row['packet_mode']
         receipt['local_identity'] = local_identity(path)
         verify_receipt(receipt)
         private_write(self.output / ('capture-' + self.session_id + '-receipt.json'), receipt)
@@ -394,6 +404,7 @@ def _parser_contract(receipt, frozen_capture_contract, target_contract, anchor):
     need(receipt['contract_sha256'] == anchor['contract_sha256'] and receipt['target_sha256'] == anchor['target_sha256'], '回执合同或目标摘要不符')
     need(receipt['target_uuid'] == target_contract['uuid'] and receipt['bridge'] == frozen_capture_contract['bridge'], '回执目标或新桥不符')
     need(receipt['packet_contract'] == row['packet_contract'] and receipt['boot_chain'] == row['boot_chain'], '解析必需项或启动链与原合同不符')
+    need(receipt.get('packet_mode', 'TASK') == row.get('packet_mode', 'TASK'), '回执模式与独立冻结合同不符')
     need(all(receipt[key] == frozen_capture_contract[key] for key in ('tcp_reset_policy', 'max_bytes', 'max_seconds')), '复位策略或预算与原合同不符')
     need(isinstance(receipt['session_id'], str) and re.fullmatch('[0-9a-f]{32}', receipt['session_id']), '原采集会话标识无效')
     expected_host_path = str(Path(target_contract['disk_path']).parent) + '/private-captures/' + receipt['session_id'] + '/capture.pcap'
@@ -407,10 +418,13 @@ def _parser_contract(receipt, frozen_capture_contract, target_contract, anchor):
 
 def analyze_session(receipt, frozen_capture_contract, target_contract, *, anchor):
     """锚点须来自主层独立冻结原件；本函数不从待验回执生成信任。"""
-    from cloud_packet_capture import analyze_capture, parse_pcap
+    from cloud_packet_capture import analyze_capture, analyze_no_task_capture, parse_pcap
     receipt, frozen_capture_contract, target_contract, anchor = copy.deepcopy((receipt, frozen_capture_contract, target_contract, anchor))
     frozen = _parser_contract(receipt, frozen_capture_contract, target_contract, anchor)
-    result = analyze_capture(receipt['path'], frozen)
+    # 分派只读已独立锚定并验证的原合同，不根据回执或 task_id 猜模式。
+    mode = frozen_capture_contract['targets'][target_contract['uuid']].get('packet_mode', 'TASK')
+    analyzer = analyze_no_task_capture if mode == 'NO_TASK' else analyze_capture
+    result = analyzer(receipt['path'], frozen)
     need(result['packet_count'] == receipt['counts']['captured'], '解析包数与 tcpdump 结束统计不符')
     need(all(40000 <= row['server_port'] <= 40010 for row in result['tftp']), '实际 TFTP 端口不在冻结范围')
     chain = receipt['boot_chain']
@@ -425,8 +439,9 @@ def analyze_session(receipt, frozen_capture_contract, target_contract, *, anchor
 def extract_verified_callback(receipt, frozen_capture_contract, target_contract, reference, *, anchor):
     from cloud_packet_capture import extract_verified_request
     receipt, frozen_capture_contract, target_contract, reference, anchor = copy.deepcopy((receipt, frozen_capture_contract, target_contract, reference, anchor))
-    analyze_session(receipt, frozen_capture_contract, target_contract, anchor=anchor)
     frozen = _parser_contract(receipt, frozen_capture_contract, target_contract, anchor)
+    need(frozen_capture_contract['targets'][target_contract['uuid']].get('packet_mode', 'TASK') == 'TASK', '无任务抓包禁止提取或回放回调')
+    analyze_session(receipt, frozen_capture_contract, target_contract, anchor=anchor)
     value = extract_verified_request(receipt['path'], frozen, reference)
     need(value['method'] == 'POST' and value['response_status'] == 200, '只能提取原件中已成功的本任务回调')
     verify_receipt(receipt)
