@@ -21,8 +21,9 @@ async function signIn(username) {
 try {
   const admin = await signIn('admin');
   await admin.page.goto(input.url + '/#/access/role-menus');
-  await admin.page.getByLabel('配置角色', { exact: true }).selectOption('admin');
-  await admin.page.locator('input[type="checkbox"][value="role-menus"]').waitFor();
+  await admin.page.getByRole('combobox', { name: '配置角色', exact: true }).click();
+  await admin.page.getByRole('option', { name: '管理员（admin）', exact: true }).click();
+  await admin.page.locator('[data-key="role-menus"] input[type="checkbox"]').waitFor();
   results.push('administrator-role-menu-page');
   await admin.page.goto(input.url + '/#/hosts');
   await admin.page.locator('.vxe-grid').first().waitFor();
