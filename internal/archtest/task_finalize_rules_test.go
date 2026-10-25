@@ -898,7 +898,7 @@ func Test执行观察只开放精确能力包(t *testing.T) {
 				t.Fatal(e)
 			}
 			got := checkMachineFile(fset, pkg, f)
-			allowed := imp == pkgModel || pkg != pkgExecution+"/port" && (imp == "os" || imp == pkgStore) || imp == pkgExecution+"/port" && (pkg == pkgExecution || pkg == pkgEvents)
+			allowed := imp == pkgModel || imp == pkgStore || pkg != pkgExecution+"/port" && imp == "os" || imp == pkgExecution+"/port" && (pkg == pkgExecution || pkg == pkgEvents)
 			if (len(got) == 0) != allowed {
 				t.Fatal(pkg, imp, got)
 			}

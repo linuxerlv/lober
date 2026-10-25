@@ -20,7 +20,7 @@ func checkMachineFile(fset *token.FileSet, pkg string, f *ast.File) []violation 
 			own = pkgEvents
 		}
 		if pkg == pkgExecutionPort {
-			if name != "context" && name != pkgModel && name != pkgCatalog {
+			if name != "context" && name != pkgModel && name != pkgCatalog && name != pkgStore {
 				found = append(found, violation{rule: ruleMachine, pkg: pkg, subject: name, pos: position(fset, imp.Pos())})
 			}
 			continue

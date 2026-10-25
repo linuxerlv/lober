@@ -6,7 +6,7 @@
 
 可信机器协议适配器调用 execution.Gateway；Gateway 在本模块调用 execution.Service；用户控制经 tasks.Controller 与 AuditedControl 调用。仓储不认证机器令牌，执行应用负责凭据检查。Boot/Preseed 是现有按主机查找的特例；并非每个入口都先收机器令牌。公开网页权限不套在机器协议上。
 
-输入使用已有 Go 类型，不额外裁剪编号、改大小写、限制大小或把无效值替成示例；各方法明确列出的规范化与检查除外。Signal、执行推进和控制纯规则已归 `domain/execution`，应用保留 Signal 类型别名及同一个 ErrProtocol 哨兵。冻结文件选择由应用 Gateway 调用领域入口；HTTP只解析请求及输出，cmd以普通字段转换连接冻结渲染端口。日志归属及事件保存仍在 `infrastructure/events/syslog.go`，由Task5继续接入。
+输入使用已有 Go 类型，不额外裁剪编号、改大小写、限制大小或把无效值替成示例；各方法明确列出的规范化与检查除外。Signal、执行推进和控制纯规则已归 `domain/execution`，应用保留 Signal 类型别名及同一个 ErrProtocol 哨兵。冻结文件选择由应用 Gateway 调用领域入口；HTTP只解析请求及输出，cmd以普通字段转换连接冻结渲染端口。日志收录由执行应用 `installer_logs.go` 读取事实、调用领域资格规则、追加事件并在成功后通知；`infrastructure/events/syslog.go` 只管地址租约与字节。
 
 每次 commit 通过 repository.Tasks.UpdateTaskExecution 同事务保存任务状态、Execution、事件及可选审计。它按最新行的 State/Rev 比期望值；冲突不覆盖并发结果，应用是否重读重试依各方法。仓储只复查版本及存储约束，不在锁内再次校验机器令牌或重跑整个纯状态机；需要新尝试或状态复查时由应用循环完成。
 
@@ -83,7 +83,7 @@ ControlBackend 四方法唯一继承上述Service方法；AuditedControl 的Canc
 | Retry | 任务、秒时间；返回下一任务与问题。 | 先CanRetry，拒绝返回原值及问题；成功复制，无Execution先建attempt1，再递增Attempt并重建记录，转pending，问题nil。 |
 | Timeout | 任务、秒时间；返回下一任务及本次是否到期。 | 无Execution、Deadline为0或未到期返回原值/false；其余复制为failed、清期限并返回true。不额外筛状态；四状态扫描仍在应用。 |
 | SelectFile | 原冻结Snapshot与精确文件名；返回FrozenFile的Kind、Slot、Body、Hook。Hook为true表示正文可直接交付，允许空正文；其余Kind表示待渲染文件。 | hooks/先查摘要长度64，再按快照插槽/实例原顺序，只查Exec插槽；每个同摘要正文均复核，后续损坏仍ErrFrozenContent。未找到ErrFileNotFound。其他文件依次主应答、非空辅助名、首个匹配Exec脚本；scripts/02.sh不等于scripts/2.sh。不重新选择资源、不渲染。生产调用位于Gateway.File；内部错误不可直接回传机器。 |
-| CanReceiveInstallerLog | 任务与尝试号；非终态、Execution非nil且Attempt相等时true。 | 不查地址租约或当前时间，不裁剪正文。当前Collector待Task5接入，不能据此宣称已有应用日志入口。 |
+| CanReceiveInstallerLog | 任务与尝试号；非终态、Execution非nil且Attempt相等时true。 | 不查地址租约或当前时间，不裁剪正文。由执行应用的ReceiveInstallerLog调用；Collector不再判断任务事实。 |
 
 ErrProtocol、ErrFileNotFound、ErrFrozenContent是本领域的三个稳定错误对象；前者由应用别名引用，不重建错误。其他普通输入输出结构不新增独立操作。领域只依赖model/catalog及所需纯标准库，不取得密钥、不访问文件、网络、数据库、时钟或随机数。
 
@@ -125,9 +125,27 @@ NewIPObserver 与 IPObservationSink.ObserveIP 保留各自方法旁的完整约�
 
 当前Collector.ObserveIP只在内存登记：解析host:port并把IPv4映射地址还原，非法任务/尝试/地址、已过期忽略。新地址最多4096项，重复地址覆盖；锁保护登记，过期项清除。无错误、事件、审计、通知、事务或提交复查，不接收上下文，重启丢失归属。
 
-当前Collector.Receive先解析来源地址，无有效且未到期归属则成功忽略；再GetTask。任务不存在忽略，其他读取错误原样返回；终态、无Execution或Attempt不符忽略。接收正文先截到65536字节，再用SafeLogTail先遮掉机器路径凭据、后保留最多4096字节尾部；事件installer.syslog只含source_ip与log_base64。AppendEvents成功后才通知，失败不通知；它不推进任务、不记用户审计、不保证重复日志去重。
+Collector.Receive先解析直接连接的host:port并Unmap；非法地址、无租约或到期等号都成功忽略，不读Forwarded。互斥取归属后，在原位置只取一次时钟为At；有有效租约才先截正文前65536字节，再SafeLogTail脱敏并取最多4096字节尾部，随后同步调用InstallerLogReceiver。正文、原上下文及捕获的At原样转交；接收错误原样返回。Collector不读任务、不写事件、不通知。
 
-读取归属与任务、追加事件是分步操作，当前不承诺三者共同事务或锁内再次核对Attempt。Receive上下文传给仓储，UDP传输不承诺必达。监听、ReadFrom缓冲及错误日志仍在cmd/lober；这些现状不能写成已有执行应用日志入口。
+## 日志收录入口
+
+NewInstallerLogs(repo, notifier)连接InstallerLogRepository及本执行包已有的仅Publish通知口，返回InstallerLogReceiver；构造不查库、不读时钟、不校验或改写输入，可信组装必须提供非nil仓储。以下八项共同适用于构造、端口ReceiveInstallerLog及具体实现；仓储小口两方法的保存细节唯一委托repository.Tasks.GetTask、repository.Events.AppendEvents及repository/doc.go，不另加规则。
+
+①只供可信日志适配器调用，地址归属已由凭据成功后的租约观察确认；本入口不认证网页用户或机器令牌，不能作为接受网页伪造TaskID/Attempt/SourceIP的入口。
+
+②输入为InstallerLog{TaskID,Attempt,SourceIP,At,Body}，Body已截断并脱敏。上下文与各字段不规范化、不重取时钟。调用期间不得并发修改Body；接收器在返回前同步编码为log_base64，不保留可变输入切片。
+
+③固定顺序GetTask→domain/execution.CanReceiveInstallerLog→AppendEvents→成功Publish。非终态、Execution非nil且Attempt相同才收录；其他事实成功忽略。事件固定installer.syslog、空Key、原At，只含原source_ip与log_base64；返回error，无列表或分页顺序。
+
+④GetTask的ErrNotFound（含包装）成功忽略，其他读取错误原样返回；资格不符不追加。AppendEvents任何错误（含ErrNotFound、取消）都原样返回，不通知；成功后仅Publish一次，通知没有可返回错误。
+
+⑤不推进Task、不修改Rev、不记用户审计；只追加事件，保存事务沿原AppendEvents，不引入应用事务。租约读取、任务读取与追加不在共同事务内。
+
+⑥无入口重试或去重。重复日志包仍逐包追加，Key保持空，不用TaskRev作保存条件。
+
+⑦明确保留原有“读时判断后再追加”的窗口：GetTask之后发生取消或重试，也不新增原子Attempt复查；不承诺解决此窗口或跨实例归属。Collector只为内存租约加锁，重启丢失归属；UDP不保证必达。
+
+⑧无审计；仅AppendEvents成功后通知，无额外取消、超时或提交后检查。ctx原样传仓储，由仓储返回取消；若仓储已成功即按原顺序通知，即使ctx已取消。监听、ReadFrom缓冲及错误日志仍在cmd/lober。
 
 ## 机器传输顺序现状
 
@@ -139,16 +157,16 @@ NewIPObserver 与 IPObservationSink.ObserveIP 保留各自方法旁的完整约�
 
 ## 尚未实现的目标入口
 
-下面记录Task3/4已落地位置与Task5剩余职责。Task5目标尚不是可调用应用方法；实现后补本文件及能力清单，最终是否完整由Task8核对。
+下面记录Task3/4/5已落地位置；最终执行链是否完整仍由Task7保护与Task8核对。
 
 | 所属任务 | 目标能力 | 必须保留的当前约定 |
 | --- | --- | --- |
-| Task3（已实现本项） | 纯执行、控制、冻结选择和日志资格规则归domain/execution；应用已接入执行与控制，冻结选择已由Task4接线，日志资格留给Task5接线 | Signal查重与凭据时序、阶段预算、错误类别、State/Rev竞争、通知位置；不新增装机能力。 |
+| Task3（已实现本项） | 纯执行、控制、冻结选择和日志资格规则归domain/execution；应用已接入执行与控制，冻结选择已由Task4接线，日志资格已由Task5接线 | Signal查重与凭据时序、阶段预算、错误类别、State/Rev竞争、通知位置；不新增装机能力。 |
 | Task4（已实现本项） | execution.Gateway承接机器引导、文件请求与信号编排，HTTP只解析及输出 | 观察位置、组件摘要、渲染后Answer、原凭据范围及每条传输错误映射；接口只剩传输。 |
-| Task5 | 执行应用承接日志的任务规则、AppendEvents和成功后Publish；Collector继续管理IP租约/地址归属，并先截断再SafeLogTail | 归属上限/有效期/重启丢失、忽略次序、原日志字节、错误和通知位置；租约与字节处理保留在外部实现。 |
+| Task5（已实现本项） | 执行应用承接日志的任务规则、AppendEvents和成功后Publish；Collector继续管理IP租约/地址归属，并先截断再SafeLogTail | 归属上限/有效期/重启丢失、忽略次序、原日志字节、错误和通知位置；租约与字节处理保留在外部实现。 |
 
 镜像I3已由Task2纠正，当前约定见[镜像第11节](media.md#11-额外来源取消类型纠正i3)。Task6只细化[单次模板候选读取](backend-modules.md#单次模板候选读取的后续细化)，不承诺跨页一致，也不改变写事务。
 
 ## 当前验证位置
 
-纯规则：`internal/domain/execution/{protocol,control,delivery,log}_test.go`；执行服务与凭据：`internal/application/execution/{service,protocol,token,control_intent,observation}_test.go`。机器传输解析/状态映射：`internal/interfaces/machine/http_test.go`；真实Service交付顺序、旧文件/UA业务断言、错误来源与取消：`internal/application/execution/gateway_test.go`。日志归属与裁剪：`internal/infrastructure/events/syslog_test.go`。组装：`cmd/lober/{machine,assembly}_test.go`。事务与竞争：`internal/infrastructure/persistence/pgstore/{contract_tasks,contract_events,contract_concurrency}_test.go`及执行记录相关测试。这里只登记验证来源；Task3/4实际运行结果分别记在对应报告，不表示关闭Task5或其他后续缺口。
+纯规则：`internal/domain/execution/{protocol,control,delivery,log}_test.go`；执行服务与凭据：`internal/application/execution/{service,protocol,token,control_intent,observation,installer_logs}_test.go`。机器传输解析/状态映射：`internal/interfaces/machine/http_test.go`；真实Service交付顺序、旧文件/UA业务断言、错误来源与取消：`internal/application/execution/gateway_test.go`。日志收录事实、错误/通知与读取追加窗口：`internal/application/execution/installer_logs_test.go`；日志归属与裁剪：`internal/infrastructure/events/syslog_test.go`。组装：`cmd/lober/{machine,assembly}_test.go`。事务与竞争：`internal/infrastructure/persistence/pgstore/{contract_tasks,contract_events,contract_concurrency}_test.go`及执行记录相关测试。这里只登记验证来源；Task3/4/5实际运行结果分别记在对应报告，不表示关闭Task7保护、Task8全链复核或其他后续缺口。

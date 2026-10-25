@@ -61,7 +61,8 @@ func machineOf(st repository.Store, hub ports.Notifier, cfg config, clock ports.
 	if err != nil {
 		return nil, err
 	}
-	collector := events.New(st, func() int64 { return clock() }, hub)
+	logs := execution.NewInstallerLogs(st, hub)
+	collector := events.New(logs, func() int64 { return clock() })
 	files := authoring.NewMachineRenderer(iso.NewBootConfigReader(cfg.ISO.Artifacts))
 	renderer := executionport.RenderFunc(func(ctx context.Context, r executionport.RenderRequest) ([]byte, error) {
 		return files.Render(ctx, authoring.MachineRenderRequest{Task: r.Task, Kind: r.Kind, Slot: r.Slot, Values: r.Values})

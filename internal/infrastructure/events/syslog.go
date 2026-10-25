@@ -3,36 +3,28 @@ package events
 
 import (
 	"context"
-	"encoding/base64"
-	"errors"
 	"net"
 	"net/netip"
 	"sync"
 
+	executionport "github.com/lober/lober/internal/application/execution/port"
 	"github.com/lober/lober/internal/domain/model"
-	"github.com/lober/lober/internal/domain/repository"
 )
 
-type Repository interface {
-	GetTask(context.Context, string) (model.Task, error)
-	AppendEvents(context.Context, string, []repository.NewEvent) ([]repository.Appended, error)
-}
-type Notifier interface{ Publish(string) }
 type lease struct {
 	task    string
 	attempt int
 	expires int64
 }
 type Collector struct {
-	repo     Repository
+	receiver executionport.InstallerLogReceiver
 	now      func() int64
-	notifier Notifier
 	mu       sync.Mutex
 	leases   map[netip.Addr]lease
 }
 
-func New(repo Repository, now func() int64, notifier Notifier) *Collector {
-	return &Collector{repo: repo, now: now, notifier: notifier, leases: map[netip.Addr]lease{}}
+func New(receiver executionport.InstallerLogReceiver, now func() int64) *Collector {
+	return &Collector{receiver: receiver, now: now, leases: map[netip.Addr]lease{}}
 }
 func ip(address string) (netip.Addr, bool) {
 	host, _, err := net.SplitHostPort(address)
@@ -75,23 +67,8 @@ func (c *Collector) Receive(ctx context.Context, address string, body []byte) er
 	if !found || binding.expires <= at {
 		return nil
 	}
-	task, err := c.repo.GetTask(ctx, binding.task)
-	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return nil
-		}
-		return err
-	}
-	if task.State.Finished() || task.Execution == nil || task.Execution.Attempt != binding.attempt {
-		return nil
-	}
 	if len(body) > 65536 {
 		body = body[:65536]
 	}
-	safe := model.SafeLogTail(body)
-	_, err = c.repo.AppendEvents(ctx, task.ID, []repository.NewEvent{{At: at, Kind: "installer.syslog", Fields: map[string]string{"source_ip": addr.String(), "log_base64": base64.StdEncoding.EncodeToString(safe)}}})
-	if err == nil && c.notifier != nil {
-		c.notifier.Publish(task.ID)
-	}
-	return err
+	return c.receiver.ReceiveInstallerLog(ctx, executionport.InstallerLog{TaskID: binding.task, Attempt: binding.attempt, SourceIP: addr.String(), At: at, Body: model.SafeLogTail(body)})
 }
