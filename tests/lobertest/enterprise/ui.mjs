@@ -23,7 +23,9 @@ try {
   await admin.page.goto(input.url + '/#/access/role-menus');
   await admin.page.getByRole('combobox', { name: '配置角色', exact: true }).click();
   await admin.page.getByRole('option', { name: '管理员（admin）', exact: true }).click();
-  await admin.page.locator('[data-key="role-menus"] input[type="checkbox"]').waitFor();
+  const roleMenu = admin.page.locator('[data-key="role-menus"]');
+  await roleMenu.locator('.el-checkbox').waitFor();
+  await roleMenu.locator('input[type="checkbox"]').waitFor({ state: 'attached' });
   results.push('administrator-role-menu-page');
   await admin.page.goto(input.url + '/#/hosts');
   await admin.page.locator('.vxe-grid').first().waitFor();
