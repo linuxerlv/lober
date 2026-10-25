@@ -1,0 +1,146 @@
+{
+  "ID": "t-20261002-0001",
+  "HostSN": "SN-0001",
+  "ISOID": "iso-rocky96",
+  "TemplateID": "rocky-base",
+  "TemplateVersion": 4,
+  "State": "installing",
+  "Snapshot": {
+    "Schema": 1,
+    "Family": "linux",
+    "Series": "rocky",
+    "Format": "kickstart",
+    "Host": {
+      "SN": "SN-0001",
+      "Arch": "x86_64",
+      "Firmware": "uefi",
+      "Attrs": {
+        "hostname": "web-01",
+        "ip": "10.0.0.3/24"
+      }
+    },
+    "ISO": {
+      "ID": "iso-rocky96",
+      "Name": "Rocky Linux 9.6",
+      "Version": "9.6",
+      "Arch": "x86_64",
+      "Artifacts": {
+        "initrd": "rocky/9.6/x86_64/images/pxeboot/initrd.img",
+        "kernel": "rocky/9.6/x86_64/images/pxeboot/vmlinuz"
+      }
+    },
+    "Template": {
+      "ID": "rocky-base",
+      "Version": 4,
+      "Name": "Rocky-Base",
+      "Body": "text\nurl --url={{sys:repo}}\n{{lober:syslog}}\nnetwork --hostname={{param:hostname}}\n{{slot:分区}}\n%pre\n{{slot:装前检查@pre}}\n%end\n%post\n{{slot:装后配置@post-target}}\n{{lober:firstboot}}\n{{lober:cleanup}}\n%end\n",
+      "Params": {
+        "hostname": {
+          "Type": "hostname",
+          "List": false,
+          "Items": [
+            "web-01"
+          ]
+        },
+        "swap_mb": {
+          "Type": "int",
+          "List": false,
+          "Items": [
+            "8192"
+          ]
+        }
+      }
+    },
+    "Slots": [
+      {
+        "Seq": 1,
+        "Name": "分区",
+        "Exec": false,
+        "Timing": "",
+        "Instances": [
+          {
+            "HookID": "lvm",
+            "HookVersion": 1,
+            "HookName": "LVM-Layout",
+            "Kind": "fragment",
+            "Body": "part pv.01 --grow --ondisk={{param:disk}}\n",
+            "Interpreter": "",
+            "TimeoutSec": 0,
+            "Required": false,
+            "Digest": "",
+            "Params": {
+              "disk": {
+                "Type": "diskpath",
+                "List": false,
+                "Items": [
+                  "/dev/sda"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      {
+        "Seq": 2,
+        "Name": "装前检查",
+        "Exec": true,
+        "Timing": "pre",
+        "Instances": []
+      },
+      {
+        "Seq": 3,
+        "Name": "装后配置",
+        "Exec": true,
+        "Timing": "post-target",
+        "Instances": [
+          {
+            "HookID": "nic",
+            "HookVersion": 2,
+            "HookName": "Business-NIC",
+            "Kind": "script",
+            "Body": "#!/bin/sh\nip addr add \"$LOBER_PARAM_IP\" dev eth1\nip link set eth1 mtu \"$LOBER_PARAM_MTU\"\n",
+            "Interpreter": "sh",
+            "TimeoutSec": 900,
+            "Required": false,
+            "Digest": "faa7ad52309e371374ae2e274e5a68ab00be53ef287946c0bb7df5fad11507cd",
+            "Params": {
+              "dns": {
+                "Type": "ip",
+                "List": true,
+                "Items": [
+                  "10.0.0.53",
+                  "10.0.1.53"
+                ]
+              },
+              "ip": {
+                "Type": "cidr",
+                "List": false,
+                "Items": [
+                  "10.0.0.3/24"
+                ]
+              },
+              "mode": {
+                "Type": "enum",
+                "List": false,
+                "Items": [
+                  "active-backup"
+                ]
+              },
+              "mtu": {
+                "Type": "int",
+                "List": false,
+                "Items": [
+                  "1500"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "CreatedBy": "alice",
+  "CreatedAt": 1790000000,
+  "Rev": 0,
+  "Execution": null
+}

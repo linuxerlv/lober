@@ -19,8 +19,8 @@ import (
     "strconv"
     "strings"
     "time"
-    "github.com/lober/lober/internal/store"
-    "github.com/lober/lober/internal/store/pgstore"
+    "github.com/lober/lober/internal/domain/repository"
+    "github.com/lober/lober/internal/infrastructure/persistence/pgstore"
 )
 
 func fail() { fmt.Fprintln(os.Stderr, "Restricted event probe failed (database details suppressed)"); os.Exit(1) }
@@ -43,10 +43,10 @@ func main() {
     st, err := pgstore.Open(ctx, cfg.PG.DSN, pgstore.WithMaxConns(2)); if err != nil { fail() }; defer st.Close()
     task, err := st.GetTask(ctx, os.Args[2])
     if err != nil || string(task.State) != "pending" || !strings.HasPrefix(task.HostSN, "ENTERPRISE-") { fail() }
-    rows := make([]store.NewEvent, count)
+    rows := make([]repository.NewEvent, count)
     for i := range rows {
         n := strconv.Itoa(start+i)
-        rows[i] = store.NewEvent{At: time.Now().Unix(), Kind: "test.transport", Key: os.Args[5]+"-"+n,
+        rows[i] = repository.NewEvent{At: time.Now().Unix(), Kind: "test.transport", Key: os.Args[5]+"-"+n,
             Fields: map[string]string{"probe": n, "qualification": "transport-only"}}
     }
     result, err := st.AppendEvents(ctx, task.ID, rows); if err != nil { fail() }

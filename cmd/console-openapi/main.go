@@ -6,13 +6,12 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lober/lober/internal/console"
+	"github.com/lober/lober/internal/interfaces/console"
 )
 
 func main() {
 	gin.SetMode(gin.ReleaseMode)
-	s := console.New(console.Deps{Clock: func() int64 { return 0 }})
-	if err := json.NewEncoder(os.Stdout).Encode(s.OpenAPI()); err != nil {
+	if err := json.NewEncoder(os.Stdout).Encode(console.OpenAPIDocument()); err != nil {
 		panic(err)
 	}
 }

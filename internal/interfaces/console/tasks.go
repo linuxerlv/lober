@@ -1,0 +1,228 @@
+package console
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/tasks"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+)
+
+type taskPage struct {
+	Items []taskItem `json:"items"`
+	Next  string     `json:"next"`
+	Total *int64     `json:"total,omitempty"`
+}
+type eventItem struct {
+	TaskID string            `json:"taskID"`
+	Seq    int64             `json:"seq"`
+	At     int64             `json:"at"`
+	Kind   string            `json:"kind"`
+	Key    string            `json:"key"`
+	Fields map[string]string `json:"fields"`
+}
+type eventPage struct {
+	Items []eventItem `json:"items"`
+}
+type taskQuery struct {
+	Page        int             `form:"page"`
+	PageSize    int             `form:"page_size"`
+	HostSN      string          `form:"host_sn"`
+	State       model.TaskState `form:"state"`
+	CreatedFrom int64           `form:"created_from"`
+	CreatedTo   int64           `form:"created_to"`
+	Cursor      string          `form:"cursor"`
+	Limit       int             `form:"limit"`
+}
+type eventQuery struct {
+	AfterSeq int64 `form:"after_seq"`
+	Limit    int   `form:"limit"`
+}
+type streamQuery struct {
+	AfterSeq int64 `form:"after_seq"`
+}
+type streamHeaders struct {
+	LastEventID int64 `form:"Last-Event-ID"`
+}
+type taskPreviewRequest struct {
+	Firmware catalog.Firmware `json:"firmware,omitempty"`
+}
+
+func (s *server) taskRoutes() []route {
+	return []route{
+		{method: "GET", path: "/console/v1/tasks", perm: PermTaskRead, tag: "tasks", summary: "List tasks and frozen snapshots", query: taskQuery{}, resp: taskPage{}, handle: s.listTasks},
+		{method: "GET", path: "/console/v1/tasks/:id", perm: PermTaskRead, tag: "tasks", summary: "Read frozen task and control diagnostics", resp: taskItem{}, handle: s.getTask},
+		{method: "GET", path: "/console/v1/tasks/:id/events", perm: PermTaskRead, tag: "tasks", summary: "Read committed events after a sequence", query: eventQuery{}, resp: eventPage{}, handle: s.listEvents},
+		{method: "GET", path: "/console/v1/tasks/:id/stream", perm: PermTaskRead, tag: "tasks", summary: "Stream committed events with resume and polling recovery", query: streamQuery{}, headers: streamHeaders{}, stream: true, handle: s.taskStream},
+		{method: "POST", path: "/console/v1/tasks/:id/cancel", perm: PermTaskCancel, audit: "task.cancel", tag: "tasks", summary: "Delegate cancellation to task state machine", resp: taskItem{}, handle: s.cancelTask},
+		{method: "POST", path: "/console/v1/tasks/:id/retry", perm: PermTaskRetry, audit: "task.retry", tag: "tasks", summary: "Delegate retry to task state machine", resp: taskItem{}, handle: s.retryTask},
+		{method: "POST", path: "/console/v1/tasks/:id/preview", perm: PermTaskRead, tag: "tasks", summary: "Render frozen task snapshot with sample credentials", req: taskPreviewRequest{}, resp: previewResponse{}, handle: s.previewTask},
+	}
+}
+func queryNonnegative(c *gin.Context, key string) (int64, bool) {
+	raw := c.Query(key)
+	if raw == "" {
+		return 0, true
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
+		Fail(c, 400, nil, model.ConsoleBadRequest)
+		return 0, false
+	}
+	return value, true
+}
+func (s *server) listTasks(c *gin.Context) {
+	number, limit, ok := parseQueryPagination(c)
+	if !ok {
+		return
+	}
+	page, ok := Get(c, func() (tasks.TaskPage, error) {
+		return s.deps.TaskReader.List(c.Request.Context(), actorOf(c), tasks.ListRequest{PageRequest: tasks.PageRequest{Page: number, Limit: limit, Cursor: c.Query("cursor")}, HostSN: c.Query("host_sn"), State: c.Query("state"), CreatedFrom: c.Query("created_from"), CreatedTo: c.Query("created_to")})
+	})
+	if !ok {
+		return
+	}
+	items := make([]taskItem, len(page.Items))
+	for i, t := range page.Items {
+		items[i] = toTaskChoiceItem(t)
+	}
+	Ok(c, taskPage{items, page.Next, page.Total})
+}
+func (s *server) getTask(c *gin.Context) {
+	t, ok := Get(c, func() (tasks.TaskChoice, error) {
+		return s.deps.TaskReader.Get(c.Request.Context(), actorOf(c), c.Param("id"))
+	})
+	if ok {
+		Ok(c, toTaskChoiceItem(t))
+	}
+}
+func toEventItem(e tasks.Event) eventItem {
+	return eventItem{e.TaskID, e.Seq, e.At, e.Kind, e.Key, stringMap(e.Fields)}
+}
+func (s *server) listEvents(c *gin.Context) {
+	after, ok := queryNonnegative(c, "after_seq")
+	if !ok {
+		return
+	}
+	limit, ok := queryLimit(c)
+	if !ok {
+		return
+	}
+	events, ok := Get(c, func() ([]tasks.Event, error) {
+		return s.deps.TaskEvents.List(c.Request.Context(), actorOf(c), c.Param("id"), after, limit)
+	})
+	if !ok {
+		return
+	}
+	items := make([]eventItem, len(events))
+	for i, e := range events {
+		items[i] = toEventItem(e)
+	}
+	Ok(c, eventPage{items})
+}
+func (s *server) streamAuthorized(c *gin.Context, token string) bool {
+	return s.deps.Identity.StreamAuthorized(c.Request.Context(), token, PermTaskRead)
+}
+func (s *server) taskStream(c *gin.Context) {
+	last, ok := queryNonnegative(c, "after_seq")
+	if !ok {
+		return
+	}
+	if raw := c.GetHeader("Last-Event-ID"); raw != "" {
+		seq, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || seq < 0 {
+			Fail(c, 400, nil, model.ConsoleBadRequest)
+			return
+		}
+		last = seq
+	}
+	subscription, ok := Get(c, func() (tasks.EventSubscription, error) {
+		return s.deps.TaskEvents.Open(c.Request.Context(), actorOf(c), c.Param("id"), last)
+	})
+	if !ok {
+		return
+	}
+	defer subscription.Close()
+	events := subscription.Initial()
+	hints := subscription.Hints()
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("X-Accel-Buffering", "no")
+	token := bearerToken(c)
+	send := func(page []tasks.Event) bool {
+		for {
+			if c.Request.Context().Err() != nil || !s.streamAuthorized(c, token) {
+				return false
+			}
+			for _, e := range page {
+				data, err := json.Marshal(toEventItem(e))
+				if err != nil {
+					return false
+				}
+				if _, err = fmt.Fprintf(c.Writer, "id: %d\nevent: task\ndata: %s\n\n", e.Seq, data); err != nil {
+					return false
+				}
+				last = e.Seq
+			}
+			c.Writer.Flush()
+			if len(page) < 200 {
+				return true
+			}
+			var err error
+			page, err = subscription.Read(c.Request.Context(), last)
+			if err != nil {
+				return false
+			}
+		}
+	}
+	if !send(events) {
+		return
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case _, open := <-hints:
+			if !open {
+				return
+			}
+		case <-ticker.C:
+		case <-c.Request.Context().Done():
+			return
+		}
+		events, err := subscription.Read(c.Request.Context(), last)
+		if err != nil || !send(events) {
+			return
+		}
+	}
+}
+func (s *server) controlTask(c *gin.Context, retry bool) {
+	result, ok := Get(c, func() (tasks.TaskChoice, error) {
+		if retry {
+			return s.deps.TaskController.Retry(c.Request.Context(), actorOf(c), c.Param("id"))
+		}
+		return s.deps.TaskController.Cancel(c.Request.Context(), actorOf(c), c.Param("id"))
+	})
+	if ok {
+		Ok(c, toTaskChoiceItem(result))
+	}
+}
+func (s *server) cancelTask(c *gin.Context) { s.controlTask(c, false) }
+func (s *server) retryTask(c *gin.Context)  { s.controlTask(c, true) }
+func (s *server) previewTask(c *gin.Context) {
+	var req taskPreviewRequest
+	if !Bind(c, &req) {
+		return
+	}
+	result, ok := Get(c, func() (tasks.PreviewResult, error) {
+		return s.deps.TaskReader.Preview(c.Request.Context(), actorOf(c), c.Param("id"), tasks.PreviewRequest{Firmware: req.Firmware})
+	})
+	if !ok || !Judge(c, result.Problems) {
+		return
+	}
+	Ok(c, previewResponse{Files: previewFiles(result.Files), Problems: jsonProblems(result.Problems), Sample: result.Sample})
+}

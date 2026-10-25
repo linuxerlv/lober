@@ -8,40 +8,62 @@ package main
 
 import (
 	"context"
-	"github.com/lober/lober/internal/console"
+	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/infrastructure/notification"
+	"github.com/lober/lober/internal/infrastructure/selection"
+	"github.com/lober/lober/internal/interfaces/console"
 	"log/slog"
 )
 
 // Injectors from wire.go:
 
-func newApp(ctx context.Context, cfg config, clock console.Clock, logger *slog.Logger) (*app, func(), error) {
+func newApp(ctx context.Context, cfg config, clock ports.Clock, logger *slog.Logger) (*app, func(), error) {
 	store, cleanup, err := openStore(ctx, cfg, logger)
 	if err != nil {
 		return nil, nil, err
 	}
 	mainLoggingStore := loggingStoreOf(store, logger)
-	sources, err := nativeSourcesOf(mainLoggingStore, cfg)
+	dirs, err := mediaDirsOf(cfg)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	mainRegistrationGate := gateOf()
-	mainDeletionJournal, err := newDeletionJournal(mainLoggingStore, sources, mainRegistrationGate, cfg, logger)
+	sourceLocks := sourceLocksOf()
+	registrationGate := gateOf()
+	sources := acquisitionOf(mainLoggingStore, dirs, sourceLocks, registrationGate)
+	deletionJournal, err := deletionJournalOf(dirs)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	mainSourceSupervisor, cleanup2 := supervisorOf(ctx, sources, mainLoggingStore, mainDeletionJournal, mainRegistrationGate, cfg, logger)
-	notifier := console.NewHub()
+	deletion := deletionOf(mainLoggingStore, dirs, deletionJournal, sourceLocks, registrationGate, logger)
+	supervisor, cleanup2 := supervisorOf(ctx, sources, mainLoggingStore, deletion, cfg, logger)
+	sourceControl := mediaControlOf(sources, supervisor)
+	registry := mediaRegistryOf(mainLoggingStore, sourceControl, deletion, clock)
+	notifier := notification.NewHub()
+	selectionGuard := selection.NewGuard()
 	mainMachineBundle, err := machineOf(mainLoggingStore, notifier, cfg, clock, logger)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	deps := consoleDepsOf(mainLoggingStore, mainSourceSupervisor, mainDeletionJournal, notifier, mainMachineBundle, cfg, clock, logger)
+	control := taskBackendOf(mainMachineBundle)
+	wizard := wizardOf(mainLoggingStore, notifier, clock, selectionGuard, control)
+	hooks := hookAuthoringOf(mainLoggingStore, clock)
+	templates := templateAuthoringOf(mainLoggingStore, clock, selectionGuard)
+	frozenPreview := previewRendererOf(cfg)
+	editor := authoringEditorOf(mainLoggingStore, frozenPreview)
+	controller := taskControllerOf(mainLoggingStore, control, clock, notifier)
+	hostsRegistry := hostRegistryOf(mainLoggingStore, clock)
+	service := identityServiceOf(mainLoggingStore, cfg, clock)
+	reader := auditReaderOf(mainLoggingStore)
+	tasksReader := taskReaderOf(mainLoggingStore, control, frozenPreview)
+	eventReader := taskEventsOf(mainLoggingStore, notifier)
+	deps := consoleDepsOf(registry, clock, logger, wizard, hooks, templates, editor, controller, hostsRegistry, service, reader, tasksReader, eventReader)
 	server := console.New(deps)
-	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, mainSourceSupervisor, mainDeletionJournal, mainRegistrationGate, mainMachineBundle)
+	bootstrapper := builtinBootstrapperOf(mainLoggingStore)
+	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, sourceControl, supervisor, deletion, mainMachineBundle, service, bootstrapper)
 	return mainApp, func() {
 		cleanup2()
 		cleanup()

@@ -2,6 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"github.com/lober/lober/internal/application/execution"
+	"github.com/lober/lober/internal/application/ports"
 	"io"
 	"log/slog"
 	"net/http"
@@ -9,8 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/lober/lober/internal/console"
 )
 
 func TestEnabledMachineAssemblyPersistsProtectedKeyAndServesCanonicalRoute(t *testing.T) {
@@ -19,7 +21,7 @@ func TestEnabledMachineAssemblyPersistsProtectedKeyAndServesCanonicalRoute(t *te
 	cfg.Preview.Gateway = "http://192.168.56.2:18090"
 	cfg.Preview.Artifacts = "http://192.168.56.2:18090/artifacts"
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	clock := console.Clock(func() int64 { return assemblyAt })
+	clock := ports.Clock(func() int64 { return assemblyAt })
 	a, cleanup, err := newApp(t.Context(), cfg, clock, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +94,7 @@ func TestEnabledMachineRejectsInvalidEndpointOrUnprotectedKey(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			_, cleanup, err := newApp(t.Context(), cfg, console.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
+			_, cleanup, err := newApp(t.Context(), cfg, ports.Clock(func() int64 { return assemblyAt }), slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if cleanup != nil {
 				cleanup()
 			}
@@ -100,5 +102,55 @@ func TestEnabledMachineRejectsInvalidEndpointOrUnprotectedKey(t *testing.T) {
 				t.Fatal("unsafe machine configuration accepted")
 			}
 		})
+	}
+}
+
+func Test机器关闭不读取密钥启用使用原默认路径(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	clock := ports.Clock(func() int64 { return assemblyAt })
+	disabled, err := machineOf(nil, nil, config{}, clock, logger)
+	if err != nil || disabled.Service != nil || disabled.Handler != nil || disabled.Logs != nil {
+		t.Fatal("关闭分支改变", err)
+	}
+	cfg := assemblyConfig(t)
+	cfg.Machine = machineConfig{Enabled: true}
+	cfg.Preview.Gateway = "http://gateway"
+	cfg.Preview.Artifacts = "http://artifacts"
+	bundle, err := machineOf(nil, nil, cfg, clock, logger)
+	if err != nil || bundle.Service == nil || bundle.Handler == nil || bundle.Logs == nil {
+		t.Fatal("默认路径未组装", err)
+	}
+	info, err := os.Stat(filepath.Join(cfg.ISO.Staging, "machine-signing.key"))
+	if err != nil || info.Mode().Perm() != 0600 || info.Size() != 32 {
+		t.Fatal("默认密钥路径或权限改变", err)
+	}
+}
+
+type signalGatewayFixture struct {
+	execution.Gateway
+	context context.Context
+	input   execution.SignalInput
+	err     error
+	calls   int
+}
+
+func (f *signalGatewayFixture) Signal(ctx context.Context, in execution.SignalInput) error {
+	f.context = ctx
+	f.input = in
+	f.calls++
+	return f.err
+}
+func Test机器信号计时只委托应用入口(t *testing.T) {
+	cause := errors.New("signal failure")
+	f := &signalGatewayFixture{err: cause}
+	var logs bytes.Buffer
+	adapter := machineAdapter{Gateway: f, logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	ctx := t.Context()
+	in := execution.SignalInput{TaskID: "task", Token: "private-token", RemoteAddr: "192.0.2.1:1234", Signal: execution.Signal{Phase: "ready", Body: []byte("private-body")}}
+	if err := adapter.Signal(ctx, in); err != cause || f.calls != 1 || f.context != ctx || f.input.TaskID != in.TaskID || f.input.Token != in.Token || f.input.RemoteAddr != in.RemoteAddr || f.input.Signal.Phase != in.Signal.Phase || !bytes.Equal(f.input.Signal.Body, in.Signal.Body) {
+		t.Fatal("委托改动输入或错误", err, f)
+	}
+	if !bytes.Contains(logs.Bytes(), []byte("machine.signal")) || !bytes.Contains(logs.Bytes(), []byte("accepted=false")) || bytes.Contains(logs.Bytes(), []byte("private")) {
+		t.Fatal("信号日志丢失或泄露正文", logs.String())
 	}
 }

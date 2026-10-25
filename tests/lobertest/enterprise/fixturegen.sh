@@ -2,14 +2,14 @@
 set -euo pipefail
 # Test-only synthetic media, NEVER an operating-system installation qualification.
 # Reuse the product's existing ISO fixture encoder instead of forging a ready row.
-root=$(git rev-parse --show-toplevel)
+root=$(cd "$(dirname "$0")/../../.." && pwd)
 mkdir -p "$root/.tmp"
 scratch=$(mktemp -d "$root/.tmp/enterprise-fixture-XXXXXX")
 cat > "$scratch/main.go" <<'GO'
 package main
 import (
   "os"
-  "github.com/lober/lober/internal/iso/isotest"
+  "github.com/lober/lober/internal/infrastructure/media/isotest"
 )
 func main() {
   files := map[string][]byte{

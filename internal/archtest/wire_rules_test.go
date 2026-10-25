@@ -19,7 +19,7 @@ func Test装配只豁免规范Wire注入文件且仍检查其导入(t *testing.T
 	} {
 		dir := "cmd/lober"
 		if test.pkg == pkgConsole {
-			dir = "internal/console"
+			dir = "internal/interfaces/console"
 		}
 		fsys := fstest.MapFS{dir + "/" + test.name: {Data: []byte(test.source)}}
 		p := goPackage{ImportPath: test.pkg, IgnoredGoFiles: []string{test.name}}

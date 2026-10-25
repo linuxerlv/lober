@@ -1,0 +1,73 @@
+package archtest
+
+import (
+	"strings"
+	"testing"
+	"testing/fstest"
+)
+
+func Test基础设施拒绝接口层和应用具体服务(t *testing.T) {
+	for _, suffix := range []string{"persistence/pgstore", "persistence/pgstore/pgtest", "builtin", "media", "notification", "selection", "identity", "credentials", "events", "machinekeys"} {
+		pkg := modulePath + "/internal/infrastructure/" + suffix
+		for _, imp := range []string{modulePath + "/internal/interfaces/console", modulePath + "/internal/application/tasks", modulePath + "/internal/application/media", modulePath + "/internal/application/ports/hidden"} {
+			t.Run(suffix+"/"+imp, func(t *testing.T) {
+				dir := strings.TrimPrefix(pkg, modulePath+"/")
+				got, counts := checkModule(fstest.MapFS{dir + "/x.go": {Data: []byte(importing(imp))}}, nil, []goPackage{{ImportPath: pkg, GoFiles: []string{"x.go"}}})
+				if len(counts) == 0 {
+					t.Fatalf("新基础设施包没有接入检查：%v", got)
+				}
+				if len(got) == 0 {
+					t.Fatal("基础设施放过接口层或应用具体服务", pkg, imp)
+				}
+			})
+		}
+	}
+	// 实现共同能力可以导入这个精确的接口包，不能用禁止全部应用导入来冒充正确边界。
+	pkg := modulePath + "/internal/infrastructure/notification"
+	dir := strings.TrimPrefix(pkg, modulePath+"/")
+	got, counts := checkModule(fstest.MapFS{dir + "/x.go": {Data: []byte(importing("sync", modulePath+"/internal/application/ports"))}}, nil, []goPackage{{ImportPath: pkg, GoFiles: []string{"x.go"}}})
+	if len(got) != 0 || len(counts) == 0 {
+		t.Fatal("通知实现不能使用自己的能力接口", got, counts)
+	}
+}
+
+func Test未知包不能绕过四层检查(t *testing.T) {
+	for _, suffix := range []string{"infrastructure", "infrastructure/unknown", "infrastructure/machinekeys/hidden", "application/execution/hidden", "application/execution/port/hidden", "infrastructure/identity/hidden", "infrastructure/credentials/hidden", "infrastructure/persistence/unknown", "application/ports/hidden", "interfaces/unknown", "interfaces", "domainutils", "store/pgstore", "iso", "builtin", "console"} {
+		pkg := modulePath + "/internal/" + suffix
+		got, counts := checkModule(fstest.MapFS{}, nil, []goPackage{{ImportPath: pkg}})
+		if len(got) != 1 || got[0].rule != ruleLayer || len(counts) != 0 {
+			t.Errorf("未知包没有直接失败：%s，%v，%v", pkg, got, counts)
+		}
+	}
+	for _, suffix := range []string{"domain/audit", "application/audit", "application/audit/port", "domain/media", "domain/model", "domain/repository/nested", "domain/render", "application/ports", "application/tasks", "application/tasks/port", "application/execution", "application/execution/port", "infrastructure/persistence/pgstore", "infrastructure/media", "infrastructure/credentials", "infrastructure/notification", "infrastructure/selection", "infrastructure/events", "infrastructure/machinekeys", "interfaces/console", "interfaces/machine"} {
+		pkg := modulePath + "/internal/" + suffix
+		got, counts := checkModule(fstest.MapFS{}, nil, []goPackage{{ImportPath: pkg}})
+		if len(got) != 0 || len(counts) != 1 {
+			t.Errorf("已登记包漏出检查：%s，%v，%v", pkg, got, counts)
+		}
+	}
+}
+
+func Test选择锁只接受共同能力和同步库(t *testing.T) {
+	for _, imp := range []string{"sync", pkgPorts, "context", pkgTasks, pkgConsole} {
+		dir := "internal/infrastructure/selection"
+		got, _ := checkModule(fstest.MapFS{dir + "/x.go": {Data: []byte(importing(imp))}}, nil, []goPackage{{ImportPath: pkgSelectionGuard, GoFiles: []string{"x.go"}}})
+		allowed := imp == "sync" || imp == pkgPorts
+		if allowed && len(got) != 0 || !allowed && len(got) == 0 {
+			t.Fatal(imp, got)
+		}
+	}
+}
+
+func Test镜像文件能力只向精确接口开放(t *testing.T) {
+	for _, caller := range []string{pkgISO, pkgISO9660, pkgISO + "/hidden", pkgNotification} {
+		for _, imp := range []string{modulePath + "/internal/application/media/port", modulePath + "/internal/application/media", modulePath + "/internal/application/media/port/hidden"} {
+			dir := strings.TrimPrefix(caller, modulePath+"/")
+			got, _ := checkModule(fstest.MapFS{dir + "/x.go": {Data: []byte(importing(imp))}}, nil, []goPackage{{ImportPath: caller, GoFiles: []string{"x.go"}}})
+			allowed := caller == pkgISO && imp == modulePath+"/internal/application/media/port"
+			if (len(got) == 0) != allowed {
+				t.Fatalf("%s -> %s: %v", caller, imp, got)
+			}
+		}
+	}
+}
