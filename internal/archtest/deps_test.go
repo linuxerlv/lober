@@ -105,12 +105,13 @@ const pgxV5 = "github.com/jackc/pgx/v5"
 
 // 层内方向规则点名的包。
 const (
-	pkgCatalog    = layer1 + "/catalog"
-	pkgModel      = layer1 + "/model"
-	pkgActivation = layer1 + "/activation"
-	pkgParams     = layer1 + "/params"
-	pkgAdmission  = layer1 + "/admission"
-	pkgSnapshot   = layer1 + "/snapshot"
+	pkgCatalog        = layer1 + "/catalog"
+	pkgModel          = layer1 + "/model"
+	pkgActivation     = layer1 + "/activation"
+	pkgParams         = layer1 + "/params"
+	pkgAdmission      = layer1 + "/admission"
+	pkgSnapshot       = layer1 + "/snapshot"
+	pkgExecutionRules = layer1 + "/execution"
 )
 
 // stdAllowed 是层 1 与第 3 层的非测试源文件可以 import 的标准库包（T1-1 选 C）。这两层只做判定、
@@ -633,6 +634,12 @@ func checkClock(fset *token.FileSet, pkg string, f *ast.File) []violation {
 // 层 1 里按方向规则（layerDirection），此外一律不许。
 func layer1Rule(pkg, imp string) rule {
 	switch {
+	case pkg == pkgExecutionRules && imp != pkgModel && imp != pkgCatalog:
+		switch imp {
+		case "crypto/sha256", "encoding/hex", "encoding/json", "errors", "fmt", "maps", "strconv", "strings":
+			return ""
+		}
+		return ruleDomainLeaf
 	case pkg == layer1+"/media" && imp == pkgStore:
 		// 只复用纯校验；类型检查继续拦截仓储对象和方法。
 		return ""
@@ -655,6 +662,10 @@ func layerDirection(pkg, imp string) rule {
 	switch {
 	case pkg == layer1+"/audit":
 		return ruleDomainLeaf
+	case pkg == pkgExecutionRules:
+		if imp != pkgModel && imp != pkgCatalog {
+			return ruleDomainLeaf
+		}
 	case under(pkg, layer1+"/access"), under(pkg, layer1+"/selection"):
 		if imp != pkgModel {
 			return ruleDomainLeaf

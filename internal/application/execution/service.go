@@ -13,6 +13,7 @@ import (
 	"strconv"
 
 	"github.com/lober/lober/internal/domain/catalog"
+	executionrules "github.com/lober/lober/internal/domain/execution"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 )
@@ -31,6 +32,7 @@ type Repository interface {
 	// （internal/domain/repository/tasks.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。
 	UpdateTaskExecution(context.Context, string, repository.TaskExpect, model.TaskState, *model.Execution, []repository.NewEvent, repository.Audit) (model.Task, []repository.Appended, error)
 }
+
 // Publish 的八项约定唯一委托 ports.Notifier.Publish（internal/application/ports/notification.go），本口只缩小方法集。
 type Notifier interface{ Publish(string) }
 type Service struct {
@@ -55,6 +57,7 @@ func (s *Service) commit(ctx context.Context, before, after model.Task, event re
 	}
 	return next, err
 }
+
 // Boot 的八项应用约定唯一连接 docs/contracts/machine-execution.md「引导和应答」的本方法说明
 // 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) Boot(ctx context.Context, sn string, arch catalog.Arch, firmware catalog.Firmware) (model.Task, bool, error) {
@@ -68,11 +71,11 @@ func (s *Service) Boot(ctx context.Context, sn string, arch catalog.Arch, firmwa
 			return task, found, err
 		}
 		// An installed or running installer must never be booted into installation again.
-		if task.State != model.TaskPending && task.State != model.TaskBooting {
+		if !executionrules.CanBoot(task) {
 			return model.Task{}, false, nil
 		}
 		at := s.now()
-		next, err := boot(task, arch, firmware, at)
+		next, err := executionrules.Boot(task, arch, firmware, at)
 		if err != nil {
 			return model.Task{}, false, err
 		}
@@ -80,7 +83,7 @@ func (s *Service) Boot(ctx context.Context, sn string, arch catalog.Arch, firmwa
 		if errors.Is(err, repository.ErrConflict) {
 			return model.Task{}, false, nil
 		}
-		return next, err == nil && !next.State.Finished(), err
+		return next, err == nil && executionrules.BootDeliverable(next), err
 	}
 	return model.Task{}, false, repository.ErrConflict
 }
@@ -101,7 +104,7 @@ func (s *Service) Preseed(ctx context.Context, sn string) (model.Task, bool, err
 	if err != nil || !found {
 		return model.Task{}, false, err
 	}
-	if task.State != model.TaskBooting && task.State != model.TaskInstalling {
+	if !executionrules.PreseedAvailable(task) {
 		return model.Task{}, false, nil
 	}
 	return task, true, nil
@@ -123,6 +126,7 @@ func (s *Service) GetAuthorized(ctx context.Context, id, token string, finalize 
 	}
 	return task, nil
 }
+
 // Answer 的八项应用约定唯一连接 docs/contracts/machine-execution.md「引导和应答」的本方法说明
 // 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) Answer(ctx context.Context, id, token string) (model.Task, error) {
@@ -131,13 +135,11 @@ func (s *Service) Answer(ctx context.Context, id, token string) (model.Task, err
 		if err != nil {
 			return model.Task{}, err
 		}
-		if task.State == model.TaskInstalling {
+		if !executionrules.InstallingNeeded(task) {
 			return task, nil
 		}
-		next := clone(task)
 		at := s.now()
-		next.State = model.TaskInstalling
-		stage(next.Execution, "packages", at, 3600)
+		next, _ := executionrules.StartInstalling(task, at)
 		next, err = s.commit(ctx, task, next, repository.NewEvent{At: at, Kind: "machine.installing", Key: attemptKey(next, "installing")}, repository.Audit{})
 		if errors.Is(err, repository.ErrConflict) {
 			continue
@@ -146,9 +148,7 @@ func (s *Service) Answer(ctx context.Context, id, token string) (model.Task, err
 	}
 	return model.Task{}, repository.ErrConflict
 }
-func finalSignal(sig Signal) bool {
-	return sig.Timing == catalog.TimingFirstboot || sig.Phase == "booted" || sig.Phase == "init-start" || sig.Phase == "init-done" || sig.Phase == "ready"
-}
+
 // Signal 的八项应用约定唯一连接 docs/contracts/machine-execution.md「信号与超时扫描」的本方法说明
 // 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) Signal(ctx context.Context, id, token string, sig Signal) error {
@@ -158,21 +158,21 @@ func (s *Service) Signal(ctx context.Context, id, token string, sig Signal) erro
 			return err
 		}
 		scope := Install
-		if finalSignal(sig) {
+		if executionrules.FinalSignal(sig) {
 			scope = Finalize
 		}
 		if err := s.authorizeCredential(task, token, scope); err != nil {
 			return err
 		}
-		if scope == Install && task.State.Finished() {
+		if !executionrules.SignalAccessAllowed(task, sig) {
 			return ErrCredential
 		}
 		at := s.now()
-		next, duplicate, err := advance(task, sig, at)
+		next, duplicate, err := executionrules.Advance(task, sig, at)
 		if err != nil || duplicate {
 			return err
 		}
-		event := repository.NewEvent{At: at, Kind: "machine." + sig.Phase, Key: attemptKey(next, signalKey(sig)), Fields: map[string]string{"slot": strconv.Itoa(sig.Slot), "timing": string(sig.Timing), "instance": strconv.Itoa(sig.Instance), "digest": sig.Digest, "rc": strconv.Itoa(sig.RC), "log_base64": base64.StdEncoding.EncodeToString(model.SafeLogTail(sig.Body))}}
+		event := repository.NewEvent{At: at, Kind: "machine." + sig.Phase, Key: attemptKey(next, executionrules.SignalKey(sig)), Fields: map[string]string{"slot": strconv.Itoa(sig.Slot), "timing": string(sig.Timing), "instance": strconv.Itoa(sig.Instance), "digest": sig.Digest, "rc": strconv.Itoa(sig.RC), "log_base64": base64.StdEncoding.EncodeToString(model.SafeLogTail(sig.Body))}}
 		// Event kinds use dot identifiers; phases are canonical HTTP hyphen words.
 		switch sig.Phase {
 		case "slot-start":
@@ -199,10 +199,11 @@ func (s *Service) Signal(ctx context.Context, id, token string, sig Signal) erro
 
 // CanCancel 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
 // 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (*Service) CanCancel(t model.Task) []model.Problem { return CanCancel(t) }
+func (*Service) CanCancel(t model.Task) []model.Problem { return executionrules.CanCancel(t) }
+
 // CanRetry 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
 // 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (*Service) CanRetry(t model.Task) []model.Problem  { return CanRetry(t) }
+func (*Service) CanRetry(t model.Task) []model.Problem { return executionrules.CanRetry(t) }
 
 // User controls use the exact revision the user reviewed. Conflicts require refresh.
 func (s *Service) control(ctx context.Context, task model.Task, audit repository.Audit, retry bool) error {
@@ -216,36 +217,32 @@ func (s *Service) control(ctx context.Context, task model.Task, audit repository
 	if latest.Rev != task.Rev || latest.State != task.State {
 		return repository.ErrConflict
 	}
-	problems := CanCancel(latest)
+	problems := executionrules.CanCancel(latest)
 	if retry {
-		problems = CanRetry(latest)
+		problems = executionrules.CanRetry(latest)
 	}
 	if len(problems) > 0 {
 		return &repository.ProblemsError{Kind: repository.ErrRejected, Problems: problems}
 	}
-	next := clone(latest)
 	at := s.now()
+	var next model.Task
 	kind := "cancelled"
-	if next.Execution == nil {
-		next.Execution = runtime(at, 1)
-	}
 	if retry {
-		attempt := next.Execution.Attempt + 1
-		next.Execution = runtime(at, attempt)
-		next.State = model.TaskPending
+		next, _ = executionrules.Retry(latest, at)
 		kind = "retry"
 	} else {
-		next.State = model.TaskCancelled
-		next.Execution.Deadline = 0
+		next, _ = executionrules.Cancel(latest, at)
 	}
 	_, err = s.commit(ctx, latest, next, repository.NewEvent{At: at, Kind: "machine." + kind, Key: attemptKey(next, kind)}, audit)
 	return err
 }
+
 // Cancel 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
 // 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) Cancel(ctx context.Context, t model.Task, a repository.Audit) error {
 	return s.control(ctx, t, a, false)
 }
+
 // Retry 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
 // 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) Retry(ctx context.Context, t model.Task, a repository.Audit) error {
@@ -264,12 +261,10 @@ func (s *Service) Sweep(ctx context.Context) error {
 		}
 		for _, task := range page.Items {
 			at := s.now()
-			if task.Execution == nil || task.Execution.Deadline == 0 || at < task.Execution.Deadline {
+			next, timedOut := executionrules.Timeout(task, at)
+			if !timedOut {
 				continue
 			}
-			next := clone(task)
-			next.State = model.TaskFailed
-			next.Execution.Deadline = 0
 			_, err := s.commit(ctx, task, next, repository.NewEvent{At: at, Kind: "machine.timeout", Key: attemptKey(task, "timeout"), Fields: map[string]string{"state": string(task.State), "stage": task.Execution.Stage}}, repository.Audit{})
 			if err != nil && !errors.Is(err, repository.ErrConflict) {
 				return err
