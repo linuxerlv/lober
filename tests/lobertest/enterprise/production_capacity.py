@@ -487,13 +487,27 @@ def installation_problems(report, identity, root, contract=None):
                 if any(result.get(k) != identity[k] for k in ('run_id', 'product_sha', 'test_sha', 'binary_sha256')): raise ValueError('Task5 result identity mismatch')
                 if result.get('executor_sha256') != checker_ref['sha256']: raise ValueError('Task5 checker identity mismatch')
                 if target['uuid'] != case['target_uuid'] or evidence['task']['id'] != case['task_id']: raise ValueError('target/task mismatch')
-                if contract['installation_targets'].get(target['uuid']) != target: raise ValueError('target not frozen by Task4 common contract')
+                frozen_target=contract['installation_targets'].get(target['uuid'])
+                if getattr(module,'QUALIFICATION_CONTRACT_VERSION',0)>=2:
+                    if not module.target_in_contract(frozen_target,target): raise ValueError('target generation not frozen by common contract')
+                elif frozen_target!=target: raise ValueError('target not frozen by Task4 common contract')
                 if target['uuid'] in seen_guests or case['task_id'] in seen_tasks: raise ValueError('duplicate actual machine/task')
                 if target['sn'] in seen_sns: raise ValueError('duplicate machine serial')
                 if evidence['guest']['smbios_serial'] != target['sn'] or evidence['task']['hostSN'] != target['sn']: raise ValueError('guest identity mismatch')
-                # 当前Task5检查器固定单个目标常量。第二机必须由Task5核准的通用合同提供，不修改其全局常量绕过。
-                if target['sn'] != getattr(module, 'SN', None): raise ValueError('Task5 checker lacks reviewed contract for this target')
-                if module.check_qualification(evidence, False).get('status') != 'PASS': raise ValueError('external checker rejected actual guest evidence')
+                # 新检查器明确消费共同身份里冻结的完整目标；旧检查器仍只认原单机。
+                import inspect
+                supports_target = 'target' in inspect.signature(module.check_qualification).parameters
+                if getattr(module,'QUALIFICATION_CONTRACT_VERSION',0)>=2:
+                    if not contract.get('installation_helpers'): raise ValueError('common helper identities missing')
+                    accepted=module.check_qualification(evidence,False,target=target,
+                        bindings={'helpers':contract['installation_helpers'],'manifest':loaded['manifest'],
+                            'result_root':str((root/files['result']['path']).resolve().parent),'result_files':result['files']})
+                elif supports_target:
+                    accepted = module.check_qualification(evidence, False, target=target)
+                else:
+                    if target['sn'] != getattr(module, 'SN', None): raise ValueError('Task5 checker lacks reviewed contract for this target')
+                    accepted = module.check_qualification(evidence, False)
+                if accepted.get('status') != 'PASS': raise ValueError('external checker rejected actual guest evidence')
                 if loaded['guest'] != evidence['guest'] or loaded['repeat_guest'] != evidence['repeat']['guest']:
                     raise ValueError('guest acceptance data differs from actual raw guest output')
                 for filename, digest in result.get('files', {}).items():

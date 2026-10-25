@@ -354,7 +354,7 @@ class ReviewBoundaryTests(unittest.TestCase):
         self.assertTrue(cap.installation_problems({'status': 'PASS', 'synthetic': False,
                        'simultaneous_verified_installations': 2}, {}, Path('/nonexistent')))
 
-    def install_fixture(self, root, serial_parallel=False):
+    def install_fixture(self, root, serial_parallel=False, explicit=False):
         """仅聚合器合同夹具。冻结的是假检查器；这些JSON不是真实客户机结果。"""
         identity = {'run_id': 'CHECKER_ONLY_NO_QUALIFICATION', 'product_sha': 'a'*40, 'test_sha': 'b'*40,
                     'binary_sha256': 'c'*64, 'run_identity_sha256': 'd'*64}
@@ -363,6 +363,9 @@ class ReviewBoundaryTests(unittest.TestCase):
         for name in ('a', 'b'):
             path = root/('mock-checker-'+name+'.py')
             path.write_text("SN='SN-"+name+"'\ndef check_qualification(value, negative=False):\n assert value.get('checker_fixture') is True\n return {'status':'PASS'}\n")
+            if explicit:
+                path.write_text("SN='legacy-other'\nQUALIFICATION_CONTRACT_VERSION=2\ndef target_in_contract(frozen,target):\n return frozen==target\ndef check_qualification(value,negative=False,target=None,bindings=None):\n if not target or value['task']['hostSN']!=target['sn'] or not bindings or not bindings['helpers']:raise ValueError('explicit contract missing')\n return {'status':'PASS'}\n")
+                contract['installation_helpers']={'CHECKER_ONLY': 'd'*64}
             checkers[name] = {'path': path.name, 'sha256': cap.sha(path)}
             contract['installation_checkers'][str(path)] = cap.sha(path)
             contract['installation_targets']['VM-'+name] = {'uuid': 'VM-'+name, 'sn': 'SN-'+name}
@@ -394,6 +397,14 @@ class ReviewBoundaryTests(unittest.TestCase):
                 report[mode].append({**identity, 'status': 'PASS', 'synthetic': False,
                                      'target_uuid': 'VM-'+name, 'task_id': task_id, 'files': files, 'checker': checkers[name]})
         return identity, contract, report
+
+    def test_install_uses_explicit_frozen_target_and_helper_contract_without_changing_global_sn(self):
+        with tempfile.TemporaryDirectory(prefix='capacity-checker-only-') as directory:
+            root=Path(directory);identity,contract,report=self.install_fixture(root,explicit=True)
+            with patch.object(cap,'BASE',root):
+                self.assertEqual(cap.installation_problems(report,identity,root,contract),[])
+                missing=copy.deepcopy(contract);del missing['installation_helpers']
+                self.assertTrue(cap.installation_problems(report,identity,root,missing))
 
     def test_install_raw_contract_detects_duplicate_machine_serial_claim_and_changed_original(self):
         with tempfile.TemporaryDirectory(prefix='capacity-checker-only-') as directory:
