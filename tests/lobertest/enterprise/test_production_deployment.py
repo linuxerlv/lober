@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 import shutil
 import production_deployment as deployment
 
@@ -339,6 +340,99 @@ class DeploymentBoundaries(unittest.TestCase):
         self.assertEqual(environment['HOME'], pwd.getpwuid(os.getuid()).pw_dir)
         self.assertEqual(environment['PLAYWRIGHT_BROWSERS_PATH'], inputs['browser_path'])
         self.assertNotIn('LOBER_PG_DSN', environment)
+
+
+class WebAssetEntries(unittest.TestCase):
+    CONFIG = '/_app-config-5.8.0-d956ae99.js'
+    ENTRY = '/jse/index-index-sqlNm2DI.js'
+
+    def check_page(self, scripts, *, frozen=None, home=None, head=''):
+        page = ('<!doctype html><html><head>' + head + scripts +
+                '</head><body><div id="app"></div></body></html>').encode()
+        paths = frozen if frozen is not None else (self.CONFIG, self.ENTRY)
+        payloads = {path: b'export const checkerFixture = true;' for path in paths}
+        payloads['/index.html'] = page
+        assets = {path: deployment.hashlib.sha256(data).hexdigest() for path, data in payloads.items()}
+        payloads['/'] = page if home is None else home
+        # 只替代网络取字节；入口解析、清单绑定和全部摘要核对都用真实检查器。
+        with patch.object(deployment, 'fetch', side_effect=lambda service, path: payloads[path]):
+            return deployment.web_assets(object(), {'web_assets': assets})
+
+    def test_accepts_observed_vite_module_and_app_config_shape(self):
+        try:
+            result = self.check_page(f'<script src="{self.CONFIG}"></script>'
+                f'<script type="module" crossorigin src="{self.ENTRY}"></script>'
+                '<script data-app-loading="inject-js">window.loading=true;</script>')
+        except DeploymentError as exc:
+            self.fail(str(exc))
+        self.assertEqual(result['count'], 3)
+
+    def test_accepts_another_frozen_bundle_directory(self):
+        try:
+            result = self.check_page('<script type="module" src="/bundles/main.mjs"></script>',
+                                     frozen=('/bundles/main.mjs',))
+        except DeploymentError as exc:
+            self.fail(str(exc))
+        self.assertEqual(result['count'], 2)
+
+    def test_rejects_placeholder_with_legacy_assets_marker(self):
+        with self.assertRaises(DeploymentError):
+            self.check_page('<script src="/assets/loading.js"></script><p>placeholder</p>',
+                            frozen=('/assets/loading.js',))
+
+    def test_rejects_missing_scripts_even_with_legacy_marker(self):
+        with self.assertRaises(DeploymentError):
+            self.check_page('<!-- <script src="/assets/not-real.js"></script> -->')
+
+    def test_rejects_inline_module_without_frozen_external_entry(self):
+        with self.assertRaises(DeploymentError):
+            self.check_page('<script type="module">/* assets/ */</script>')
+
+    def test_rejects_unfrozen_application_entry(self):
+        with self.assertRaises(DeploymentError):
+            self.check_page('<script type="module" src="/assets/unfrozen.js"></script>')
+
+    def test_rejects_external_application_entry(self):
+        with self.assertRaises(DeploymentError):
+            self.check_page('<script type="module" src="https://outside.invalid/assets/app.js"></script>')
+
+    def test_rejects_protocol_relative_application_entry(self):
+        with self.assertRaises(DeploymentError):
+            self.check_page('<script type="module" src="//outside.invalid/assets/app.js"></script>')
+
+    def test_rejects_relative_application_entry(self):
+        with self.assertRaises(DeploymentError):
+            self.check_page('<script type="module" src="assets/app.js"></script>', frozen=('/assets/app.js',))
+
+    def test_rejects_unfrozen_config_before_valid_module(self):
+        with self.assertRaises(DeploymentError):
+            self.check_page('<script src="/assets/unfrozen-config.js"></script>'
+                            f'<script type="module" src="{self.ENTRY}"></script>')
+
+    def test_rejects_query_or_fragment_on_entry(self):
+        for src in ('/assets/app.js?v=1', '/assets/app.js#module'):
+            with self.subTest(src=src), self.assertRaises(DeploymentError):
+                self.check_page(f'<script type="module" src="{src}"></script>', frozen=('/assets/app.js',))
+
+    def test_rejects_traversal_encoded_or_backslash_entry(self):
+        for src in ('/assets/../app.js', '/assets/%2e%2e/app.js', '/assets/\\app.js'):
+            with self.subTest(src=src), self.assertRaises(DeploymentError):
+                self.check_page(f'<script type="module" src="{src}"></script>')
+
+    def test_rejects_base_that_changes_entry_origin(self):
+        with self.assertRaises(DeploymentError):
+            self.check_page('<script type="module" src="/assets/app.js"></script>',
+                            frozen=('/assets/app.js',), head='<base href="https://outside.invalid/">')
+
+    def test_rejects_ambiguous_duplicate_source(self):
+        with self.assertRaises(DeploymentError):
+            self.check_page('<script type="module" src="https://outside.invalid/assets/app.js" '
+                            'src="/assets/app.js"></script>', frozen=('/assets/app.js',))
+
+    def test_rejects_home_bytes_changed_from_frozen_index(self):
+        with self.assertRaises(DeploymentError):
+            self.check_page(f'<script type="module" src="{self.ENTRY}"></script>',
+                            home=b'changed homepage bytes')
 
 
 if __name__ == '__main__':

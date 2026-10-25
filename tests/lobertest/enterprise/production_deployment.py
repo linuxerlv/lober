@@ -4,6 +4,7 @@ import ctypes
 from contextlib import contextmanager
 import fcntl
 import hashlib
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -435,6 +436,19 @@ def fetch(service, path):
         return response.read()
 
 
+class HomeScripts(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.scripts = []
+
+    def handle_starttag(self, tag, attrs):
+        require(tag != 'base', 'Home page must not override the frozen entry origin')
+        if tag == 'script':
+            names = [name for name, _ in attrs]
+            require(len(names) == len(set(names)), 'Ambiguous home page script attributes')
+            self.scripts.append(dict(attrs))
+
+
 def web_assets(service, inputs):
     assets = inputs['web_assets']
     require(isinstance(assets, dict) and '/index.html' in assets and len(assets) > 1, 'Real web asset map absent')
@@ -444,8 +458,22 @@ def web_assets(service, inputs):
         payload = fetch(service, url)
         require(hashlib.sha256(payload).hexdigest() == expected, 'Embedded web asset bytes differ from release manifest')
     home = fetch(service, '/')
-    require(hashlib.sha256(home).hexdigest() == assets['/index.html'] and b'<script' in home and b'assets/' in home,
-            'Home page is missing real application entry scripts')
+    require(hashlib.sha256(home).hexdigest() == assets['/index.html'], 'Home page bytes differ from frozen index')
+    parser = HomeScripts()
+    parser.feed(home.decode('utf-8'))
+    parser.close()
+    application_entries = []
+    for script in parser.scripts:
+        if 'src' not in script:
+            continue  # 内联脚本的字节已由整个首页摘要核对。
+        source = script['src']
+        require(isinstance(source, str) and source.startswith('/') and not source.startswith('//')
+                and not any(char in source for char in '\\%?#') and not any(char.isspace() for char in source)
+                and all(part not in ('', '.', '..') for part in source[1:].split('/')) and source in assets,
+                'Home page script is not a canonical local frozen asset')
+        if (script.get('type') or '').strip().lower() == 'module':
+            application_entries.append(source)
+    require(application_entries, 'Home page is missing a frozen application module entry')
     return {'count': len(assets), 'map_sha256': hashlib.sha256(json.dumps(assets, sort_keys=True).encode()).hexdigest()}
 
 
