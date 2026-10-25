@@ -15,7 +15,7 @@ var layer3MediaRoles = map[catalog.Series][]string{
 	"almalinux":       {"kernel", "initrd", "stage2", "repo"},
 	"openeuler":       {"kernel", "initrd", "stage2", "repo"},
 	"opencloudos":     {"kernel", "initrd", "stage2", "repo"},
-	"debian":          {"kernel", "initrd"},
+	"debian":          {"kernel", "initrd", "repo"},
 	"ubuntu":          {"kernel", "initrd", "iso"},
 	"sles15":          {"kernel", "initrd", "repo"},
 	"leap15":          {"kernel", "initrd", "repo"},
