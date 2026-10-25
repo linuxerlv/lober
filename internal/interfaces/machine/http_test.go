@@ -2,87 +2,56 @@ package machine
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/lober/lober/internal/domain/catalog"
-	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/application/execution"
+	executionrules "github.com/lober/lober/internal/domain/execution"
 )
 
-type fixtureEngine struct {
-	task     model.Task
-	received Signal
+type fixtureGateway struct {
+	received  executionrules.Signal
+	boot      execution.BootInput
+	installer execution.InstallerAnswerInput
+	file      execution.FileInput
+	signal    execution.SignalInput
+	result    execution.BootResult
+	body      []byte
+	err       error
 }
 
-func (f *fixtureEngine) Boot(context.Context, string, catalog.Arch, catalog.Firmware) (model.Task, bool, error) {
-	return f.task, f.task.ID != "", nil
+func (f *fixtureGateway) BootMenu(_ context.Context, in execution.BootInput) (execution.BootResult, error) {
+	f.boot = in
+	return f.result, f.err
 }
-func (f *fixtureEngine) Preseed(_ context.Context, sn string) (model.Task, bool, error) {
-	if f.task.ID == "" || sn != f.task.HostSN {
-		return model.Task{}, false, nil
-	}
-	return f.task, true, nil
+func (f *fixtureGateway) InstallerAnswer(_ context.Context, in execution.InstallerAnswerInput) (execution.BootResult, error) {
+	f.installer = in
+	return f.result, f.err
 }
-func (f *fixtureEngine) GetAuthorized(_ context.Context, id, token string, final bool) (model.Task, error) {
-	if id != f.task.ID || token != "install-token" || final {
-		return model.Task{}, errors.New("credential")
-	}
-	return f.task, nil
+func (f *fixtureGateway) File(_ context.Context, in execution.FileInput) ([]byte, error) {
+	f.file = in
+	return f.body, f.err
 }
-func (f *fixtureEngine) Answer(ctx context.Context, id, token string) (model.Task, error) {
-	return f.GetAuthorized(ctx, id, token, false)
+func (f *fixtureGateway) Signal(_ context.Context, in execution.SignalInput) error {
+	f.signal = in
+	f.received = in.Signal
+	return f.err
 }
-func (f *fixtureEngine) Signal(_ context.Context, id, token string, sig Signal) error {
-	if id != f.task.ID || token != "install-token" {
-		return errors.New("credential")
-	}
-	f.received = sig
-	return nil
-}
-func (f *fixtureEngine) Credentials(model.Task) (string, string) {
-	return "install-token", "final-token"
-}
-func gatewayFixture(t *testing.T) (*fixtureEngine, http.Handler) {
+func gatewayFixture(t *testing.T) (*fixtureGateway, http.Handler) {
 	t.Helper()
-	body := "echo frozen\n"
-	digest := sha256.Sum256([]byte(body))
-	f := &fixtureEngine{task: model.Task{ID: "task-one", HostSN: "SN-ONE", Snapshot: model.Snapshot{Format: "kickstart", Slots: []model.SnapshotSlot{{Seq: 2, Name: "init", Exec: true, Timing: "firstboot", Instances: []model.SnapshotInstance{{Digest: hex.EncodeToString(digest[:]), Body: body}}}}}}}
-	return f, New(f, func(r Request) ([]byte, error) { return []byte(string(r.Kind) + ":" + r.Slot), nil }, Endpoints{Gateway: "http://gateway", Artifacts: "http://artifacts"})
+	f := &fixtureGateway{}
+	return f, New(f)
 }
 func call(h http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader(body)))
 	return w
-}
-func TestCanonicalFrozenFileRouting(t *testing.T) {
-	f, h := gatewayFixture(t)
-	for path, want := range map[string]string{"ks.cfg": "answer:", "scripts/2.sh": "script:init", "hooks/" + f.task.Snapshot.Slots[0].Instances[0].Digest: "echo frozen\n"} {
-		w := call(h, "GET", "/v1/answer/task-one/install-token/"+path, "")
-		if w.Code != 200 || w.Body.String() != want {
-			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
-		}
-		if w.Header().Get("Cache-Control") != "no-store" {
-			t.Fatal("credential response cacheable")
-		}
-	}
-	for _, path := range []string{"../ks.cfg", "scripts/02.sh", "scripts/1.sh", "hooks/" + strings.Repeat("b", 64), "meta-data", "ks.cfg/extra"} {
-		if w := call(h, "GET", "/v1/answer/task-one/install-token/"+path, ""); w.Code == 200 {
-			t.Fatal("unknown file accepted", path)
-		}
-	}
-	w := call(h, "GET", "/v1/answer/task-one/final-token/ks.cfg", "")
-	if w.Code == 200 || strings.Contains(w.Body.String(), "token") {
-		t.Fatal("credential rejection unsafe")
-	}
-	f.task.Snapshot.Slots[0].Instances[0].Body = "tampered"
-	if w := call(h, "GET", "/v1/answer/task-one/install-token/hooks/"+f.task.Snapshot.Slots[0].Instances[0].Digest, ""); w.Code == 200 {
-		t.Fatal("digest mismatch served")
-	}
 }
 func TestBoundedBinarySignalAndStrictQuery(t *testing.T) {
 	f, h := gatewayFixture(t)
@@ -103,81 +72,105 @@ func TestBoundedBinarySignalAndStrictQuery(t *testing.T) {
 		t.Fatal("GET mutates signal", w.Code)
 	}
 }
-func TestBootWithoutTaskReturnsLocalBootAndCanonicalPlatform(t *testing.T) {
-	f, h := gatewayFixture(t)
-	f.task = model.Task{}
-	w := call(h, "GET", "/v1/boot?sn=SN-ONE&arch=i386&firmware=pcbios", "")
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "sanboot") {
-		t.Fatal("missing local boot", w.Code, w.Body)
+func Test机器HTTP只解析输出(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "http.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	w = call(h, "GET", "/v1/boot?sn=SN-ONE&arch=unknown&firmware=bios", "")
-	if w.Code == 200 {
-		t.Fatal("invalid architecture accepted")
-	}
-}
-
-// D1：Debian 安装器在 auto 模式下把 DHCP option 67 的 bootfile 地址当 preseed
-// 下载并覆盖内核命令行；网关对 debian-installer 客户端在 /v1/boot 上直接发
-// preseed 应答，其余客户端保持 iPXE 菜单。
-func TestBootServesPreseedAnswerToDebianInstallerAgent(t *testing.T) {
-	f, h := gatewayFixture(t)
-	f.task.Snapshot.Format = "preseed"
-	callUA := func(agent, sn string) *httptest.ResponseRecorder {
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest("GET", "/v1/boot?sn="+sn+"&arch=x86_64&firmware=bios", nil)
-		if agent != "" {
-			req.Header.Set("User-Agent", agent)
+	ast.Inspect(f, func(n ast.Node) bool {
+		if s, ok := n.(*ast.SelectorExpr); ok {
+			switch s.Sel.Name {
+			case "Snapshot", "Execution", "Credentials", "GetAuthorized", "Answer", "Preseed", "Sum256":
+				t.Errorf("HTTP仍编排任务选择、摘要或推进: %s %s", s.Sel.Name, fset.Position(s.Pos()))
+			}
 		}
-		h.ServeHTTP(w, req)
-		return w
-	}
-	if w := callUA("iPXE/1.21.1+git-20220113", "SN-ONE"); w.Code != 200 || !strings.Contains(w.Body.String(), "menu:") {
-		t.Fatal("iPXE agent lost the menu", w.Code, w.Body)
-	}
-	if w := callUA("", "SN-ONE"); w.Code != 200 || !strings.Contains(w.Body.String(), "menu:") {
-		t.Fatal("unknown agent must keep the iPXE menu behavior", w.Code, w.Body)
-	}
-	if w := callUA("debian-installer", "SN-ONE"); w.Code != 200 || !strings.Contains(w.Body.String(), "answer:") {
-		t.Fatal("debian-installer agent did not get the preseed answer", w.Code, w.Body)
-	}
-	// 不给安装：无任务、别的 SN、非 preseed 格式都保持本地盘引导。
-	f.task.Snapshot.Format = "kickstart"
-	if w := callUA("debian-installer", "SN-ONE"); w.Code != 200 || !strings.Contains(w.Body.String(), "sanboot") {
-		t.Fatal("non-preseed format must not install", w.Code, w.Body)
-	}
-	f.task.Snapshot.Format = "preseed"
-	if w := callUA("debian-installer", "SN-OTHER"); w.Code != 200 || !strings.Contains(w.Body.String(), "sanboot") {
-		t.Fatal("unknown SN must not install", w.Code, w.Body)
-	}
-	f.task = model.Task{}
-	if w := callUA("debian-installer", "SN-ONE"); w.Code != 200 || !strings.Contains(w.Body.String(), "sanboot") {
-		t.Fatal("no task must not install", w.Code, w.Body)
-	}
-}
-
-func Test机器观察只在凭据检查通过后调用(t *testing.T) {
-	f, _ := gatewayFixture(t)
-	calls := 0
-	h := New(f, func(r Request) ([]byte, error) { return []byte("answer"), nil }, Endpoints{}, func(task model.Task, address string) {
-		calls++
-		if task.ID != f.task.ID || address != "192.0.2.1:1234" {
-			t.Fatal("观察字段改变")
-		}
+		return true
 	})
-	for _, tc := range []struct {
-		path string
-		want int
-	}{
-		{"/v1/answer/task-one/bad/ks.cfg", 0},
-		{"/v1/answer/task-one/install-token/ks.cfg", 1},
-		{"/v1/answer/task-one/bad/scripts/2.sh", 1},
-	} {
-		r := httptest.NewRequest("GET", tc.path, nil)
-		r.RemoteAddr = "192.0.2.1:1234"
-		r.Header.Set("X-Forwarded-For", "198.51.100.9")
+}
+
+func Test机器HTTP按来源类别映射而不猜原因(t *testing.T) {
+	entries := []struct {
+		path, method, agent string
+		fallback            int
+	}{{"/v1/boot?sn=SN-ONE&arch=x86_64&firmware=bios", "GET", "", 503}, {"/v1/boot?sn=SN-ONE&arch=x86_64&firmware=bios", "GET", "debian-installer", 503}, {"/v1/answer/task-one/token/ks.cfg", "GET", "", 403}, {"/v1/signal/task-one/token/installed", "POST", "", 409}}
+	kinds := []struct {
+		kind   execution.GatewayFailureKind
+		status int
+	}{{execution.LookupUnavailable, 503}, {execution.RenderRejected, 422}, {execution.Unauthorized, 403}, {execution.FileNotFound, 404}, {execution.AnswerConflict, 409}, {execution.SignalConflict, 409}, {"unknown", 0}}
+	for _, entry := range entries {
+		for _, tc := range kinds {
+			status := tc.status
+			if status == 0 {
+				status = entry.fallback
+			}
+			f := &fixtureGateway{err: &execution.GatewayError{Kind: tc.kind, Cause: execution.ErrCredential}}
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(entry.method, entry.path, nil)
+			r.Header.Set("User-Agent", entry.agent)
+			New(f).ServeHTTP(w, r)
+			if w.Code != status || w.Body.String() != http.StatusText(status)+"\n" {
+				t.Fatal("按底层错误猜状态或泄露原因", entry, tc, w.Code, w.Body.String())
+			}
+		}
+		f := &fixtureGateway{err: errors.New("secret unclassified")}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(entry.method, entry.path, nil)
+		r.Header.Set("User-Agent", entry.agent)
+		New(f).ServeHTTP(w, r)
+		if w.Code != entry.fallback || strings.Contains(w.Body.String(), "secret") {
+			t.Fatal("入口兜底改变", w.Code, w.Body.String())
+		}
+	}
+}
+func Test机器HTTP保留输入输出(t *testing.T) {
+	f, h := gatewayFixture(t)
+	f.result = execution.BootResult{Found: true, Body: []byte("body")}
+	r := httptest.NewRequest("GET", "/v1/boot?sn=Sn-One&arch=i386&firmware=pcbios", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if f.boot.SN != "Sn-One" || f.boot.Arch != "x86_64" || f.boot.Firmware != "bios" || w.Body.String() != "body" {
+		t.Fatal("普通菜单解析或输出改变", f.boot, w.Body.String())
+	}
+	for _, agent := range []string{"", "unknown", "Debian-installer", "debian-other"} {
+		f.boot = execution.BootInput{}
+		r := httptest.NewRequest("GET", "/v1/boot?sn=SN-ONE&arch=x86_64&firmware=bios", nil)
+		r.Header.Set("User-Agent", agent)
 		h.ServeHTTP(httptest.NewRecorder(), r)
-		if calls != tc.want {
-			t.Fatal("未认证请求产生观察", calls, tc.want)
+		if f.boot.SN != "SN-ONE" {
+			t.Fatal("UA识别扩大", agent)
+		}
+	}
+	r = httptest.NewRequest("GET", "/v1/boot?sn=SN-ONE&arch=x86_64&firmware=bios", nil)
+	r.RemoteAddr = "192.0.2.1:12"
+	r.Header.Set("User-Agent", " debian-installer/1")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if f.installer.SN != "SN-ONE" || f.installer.RemoteAddr != r.RemoteAddr {
+		t.Fatal("安装器转交字段改变", f.installer)
+	}
+	f.result = execution.BootResult{Body: []byte("must not leak")}
+	w = call(h, "GET", "/v1/boot?sn=SN-ONE&arch=x86_64&firmware=bios", "")
+	if w.Body.String() != "#!ipxe\nexit || sanboot --no-describe --drive 0x80\n" {
+		t.Fatal("无任务本地盘正文改变", w.Body.String())
+	}
+	f.body = []byte("answer")
+	r = httptest.NewRequest("GET", "/v1/answer/task-one/token/scripts/2.sh", nil)
+	r.RemoteAddr = "192.0.2.1:12"
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if f.file.TaskID != "task-one" || f.file.Token != "token" || f.file.Name != "scripts/2.sh" || f.file.RemoteAddr != r.RemoteAddr || w.Body.String() != "answer" {
+		t.Fatal("文件转交字段改变", f.file, w.Body.String())
+	}
+	if w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Fatal("响应头改变", w.Header())
+	}
+	for _, tc := range []struct {
+		method, path string
+		status       int
+	}{{"POST", "/v1/boot", 405}, {"GET", "/v1/boot?sn=a&sn=b&arch=x86_64&firmware=bios", 400}, {"GET", "/v1/boot?sn=a&arch=bad&firmware=bios", 400}, {"GET", "/v1/boot?sn=a&arch=x86_64&firmware=bad", 400}, {"GET", "/v1/boot?sn=a&arch=x86_64&firmware=bios&unknown=x", 400}, {"GET", "/v1/answer/task-one/token/ks.cfg?q=1", 400}, {"POST", "/v1/answer/task-one/token/ks.cfg", 405}, {"GET", "/v1/answer/task-one/token/../ks.cfg", 404}, {"POST", "/v1/signal/task-one/token/installed/extra", 404}, {"GET", "/v1/nope/task-one/token/x", 404}} {
+		if w := call(h, tc.method, tc.path, ""); w.Code != tc.status {
+			t.Fatal(tc, w.Code)
 		}
 	}
 }

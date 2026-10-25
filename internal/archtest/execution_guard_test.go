@@ -20,7 +20,7 @@ func TestMachineAndExecutionStayBehindDeclaredInterfaces(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(checkMachineFile(fset, pkg, file)) == 0 {
+			if len(checkMachineFile(fset, pkg, file)) == 0 && !(pkg == pkgMachine && dependency == pkgExecution) {
 				t.Errorf("%s may import %s", pkg, dependency)
 			}
 		}
@@ -47,6 +47,19 @@ func Test共同审计意图只开放给执行包(t *testing.T) {
 		allowed := len(checkMachineFile(fset, pkg, f)) == 0
 		if allowed != (pkg == pkgExecution) {
 			t.Fatal("共同能力开放范围改变", pkg, allowed)
+		}
+	}
+}
+
+func Test机器只新增执行应用精确依赖(t *testing.T) {
+	for _, dependency := range []string{pkgExecution, pkgExecution + "/hidden", pkgExecution + "/port", pkgConsole, pkgEvents} {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "probe.go", "package probe;import _ \""+dependency+"\"", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (len(checkMachineFile(fset, pkgMachine, f)) == 0) != (dependency == pkgExecution) {
+			t.Fatal(dependency)
 		}
 	}
 }

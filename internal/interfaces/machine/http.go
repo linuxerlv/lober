@@ -2,8 +2,6 @@
 package machine
 
 import (
-	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -12,54 +10,39 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/lober/lober/internal/application/execution"
 	"github.com/lober/lober/internal/domain/catalog"
+	executionrules "github.com/lober/lober/internal/domain/execution"
 	"github.com/lober/lober/internal/domain/model"
 )
 
-type Signal struct {
-	Phase    string
-	Slot     int
-	Timing   catalog.Timing
-	Instance int
-	Digest   string
-	RC       int
-	Body     []byte
-}
-type Engine interface {
-	Boot(context.Context, string, catalog.Arch, catalog.Firmware) (model.Task, bool, error)
-	Preseed(context.Context, string) (model.Task, bool, error)
-	GetAuthorized(context.Context, string, string, bool) (model.Task, error)
-	Answer(context.Context, string, string) (model.Task, error)
-	Signal(context.Context, string, string, Signal) error
-	Credentials(model.Task) (string, string)
-}
-type Request struct {
-	Context context.Context
-	Task    model.Task
-	Kind    catalog.FileKind
-	Slot    string
-	Values  map[catalog.SystemValue]string
-}
-type Renderer func(Request) ([]byte, error)
-type Endpoints struct{ Gateway, Artifacts, SMB, SyslogAddr string }
-type Observer func(model.Task, string)
-type handler struct {
-	engine    Engine
-	render    Renderer
-	endpoints Endpoints
-	observe   Observer
-}
+type handler struct{ gateway execution.Gateway }
 
-func New(engine Engine, render Renderer, endpoints Endpoints, observer ...Observer) http.Handler {
-	h := &handler{engine: engine, render: render, endpoints: endpoints}
-	if len(observer) > 0 {
-		h.observe = observer[0]
+func New(gateway execution.Gateway) http.Handler { return &handler{gateway: gateway} }
+func gatewayStatus(err error, fallback int) int {
+	var failure *execution.GatewayError
+	if errors.As(err, &failure) {
+		switch failure.Kind {
+		case execution.LookupUnavailable:
+			return 503
+		case execution.RenderRejected:
+			return 422
+		case execution.Unauthorized:
+			return 403
+		case execution.FileNotFound:
+			return 404
+		case execution.AnswerConflict, execution.SignalConflict:
+			return 409
+		}
 	}
-	return h
+	return fallback
 }
-func (h *handler) values(task model.Task) map[catalog.SystemValue]string {
-	install, final := h.engine.Credentials(task)
-	return map[catalog.SystemValue]string{"gateway": h.endpoints.Gateway, "artifacts": h.endpoints.Artifacts, "smb": h.endpoints.SMB, "syslog-addr": h.endpoints.SyslogAddr, "task": task.ID, "sn": task.HostSN, "token": install, "finalize-token": final}
+func bootResult(w http.ResponseWriter, result execution.BootResult) {
+	if !result.Found {
+		io.WriteString(w, "#!ipxe\nexit || sanboot --no-describe --drive 0x80\n")
+		return
+	}
+	w.Write(result.Body)
 }
 func fail(w http.ResponseWriter, code int) { http.Error(w, http.StatusText(code), code) }
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -135,21 +118,12 @@ func (h *handler) boot(w http.ResponseWriter, r *http.Request) {
 		h.installerBoot(w, r, q.Get("sn"))
 		return
 	}
-	task, found, err := h.engine.Boot(r.Context(), q.Get("sn"), arch, fw)
+	result, err := h.gateway.BootMenu(r.Context(), execution.BootInput{SN: q.Get("sn"), Arch: arch, Firmware: fw})
 	if err != nil {
-		fail(w, 503)
+		fail(w, gatewayStatus(err, 503))
 		return
 	}
-	if !found {
-		io.WriteString(w, "#!ipxe\nexit || sanboot --no-describe --drive 0x80\n")
-		return
-	}
-	body, err := h.render(Request{Context: r.Context(), Task: task, Kind: catalog.FileMenu, Values: h.values(task)})
-	if err != nil {
-		fail(w, 422)
-		return
-	}
-	w.Write(body)
+	bootResult(w, result)
 }
 
 // installerAgent 报告这次 /v1/boot 请求是不是安装器自己发起的。识别宁可保守：
@@ -165,105 +139,20 @@ func installerAgent(agent string) bool {
 // /v1/answer 同步做状态推进（d-i 不会再取命令行里的应答地址，状态机若不在这里
 // 推进会停在 booting）。
 func (h *handler) installerBoot(w http.ResponseWriter, r *http.Request, sn string) {
-	task, found, err := h.engine.Preseed(r.Context(), sn)
+	result, err := h.gateway.InstallerAnswer(r.Context(), execution.InstallerAnswerInput{SN: sn, RemoteAddr: r.RemoteAddr})
 	if err != nil {
-		fail(w, 503)
+		fail(w, gatewayStatus(err, 503))
 		return
 	}
-	if !found || task.Snapshot.Format != "preseed" {
-		io.WriteString(w, "#!ipxe\nexit || sanboot --no-describe --drive 0x80\n")
-		return
-	}
-	body, err := h.render(Request{Context: r.Context(), Task: task, Kind: catalog.FileAnswer, Values: h.values(task)})
-	if err != nil {
-		fail(w, 422)
-		return
-	}
-	install, _ := h.engine.Credentials(task)
-	if _, err := h.engine.Answer(r.Context(), task.ID, install); err != nil {
-		fail(w, 409)
-		return
-	}
-	if h.observe != nil {
-		h.observe(task, r.RemoteAddr)
-	}
-	w.Write(body)
+	bootResult(w, result)
 }
 func (h *handler) file(w http.ResponseWriter, r *http.Request, id, token, name string) {
-	task, err := h.engine.GetAuthorized(r.Context(), id, token, false)
+	body, err := h.gateway.File(r.Context(), execution.FileInput{TaskID: id, Token: token, Name: name, RemoteAddr: r.RemoteAddr})
 	if err != nil {
-		fail(w, 403)
+		fail(w, gatewayStatus(err, 403))
 		return
 	}
-	if h.observe != nil {
-		h.observe(task, r.RemoteAddr)
-	}
-	var body []byte
-	var kind catalog.FileKind
-	var slotName string
-	if strings.HasPrefix(name, "hooks/") {
-		digest := strings.TrimPrefix(name, "hooks/")
-		if len(digest) != 64 {
-			fail(w, 404)
-			return
-		}
-		found := false
-		for _, slot := range task.Snapshot.Slots {
-			if !slot.Exec {
-				continue
-			}
-			for _, hook := range slot.Instances {
-				if hook.Digest == digest {
-					sum := sha256.Sum256([]byte(hook.Body))
-					if hex.EncodeToString(sum[:]) != digest {
-						fail(w, 422)
-						return
-					}
-					body = []byte(hook.Body)
-					found = true
-				}
-			}
-		}
-		if !found {
-			fail(w, 404)
-			return
-		}
-	} else {
-		if name == fileName(task.Snapshot.Format, catalog.FileAnswer) {
-			kind = catalog.FileAnswer
-		} else if aux := fileName(task.Snapshot.Format, catalog.FileAux); aux != "" && name == aux {
-			kind = catalog.FileAux
-		} else {
-			for _, slot := range task.Snapshot.Slots {
-				if slot.Exec && name == "scripts/"+strconv.Itoa(slot.Seq)+".sh" {
-					kind = catalog.FileScript
-					slotName = slot.Name
-					break
-				}
-			}
-		}
-		if kind == "" {
-			fail(w, 404)
-			return
-		}
-		body, err = h.render(Request{Context: r.Context(), Task: task, Kind: kind, Slot: slotName, Values: h.values(task)})
-		if err != nil {
-			fail(w, 422)
-			return
-		}
-	}
-	// Recheck state by CAS before releasing the primary answer; concurrent cancel wins.
-	if kind == catalog.FileAnswer {
-		if _, err := h.engine.Answer(r.Context(), id, token); err != nil {
-			fail(w, 409)
-			return
-		}
-	}
 	w.Write(body)
-}
-func fileName(format catalog.Format, kind catalog.FileKind) string {
-	name, _ := catalog.DeliveryFileName(format, kind)
-	return name
 }
 func only(q url.Values, names ...string) bool {
 	for name, values := range q {
@@ -288,7 +177,7 @@ func (h *handler) signal(w http.ResponseWriter, r *http.Request, id, token, phas
 		fail(w, 400)
 		return
 	}
-	sig := Signal{Phase: phase}
+	sig := executionrules.Signal{Phase: phase}
 	slotPhase := phase == "slot-start" || phase == "slot-end" || phase == "hook-start" || phase == "hook-report"
 	if slotPhase {
 		sig.Slot, err = strconv.Atoi(q.Get("slot"))
@@ -334,14 +223,8 @@ func (h *handler) signal(w http.ResponseWriter, r *http.Request, id, token, phas
 		}
 		return
 	}
-	if h.observe != nil {
-		final := sig.Timing == catalog.TimingFirstboot || phase == "booted" || phase == "init-start" || phase == "init-done" || phase == "ready"
-		if task, err := h.engine.GetAuthorized(r.Context(), id, token, final); err == nil {
-			h.observe(task, r.RemoteAddr)
-		}
-	}
-	if err := h.engine.Signal(r.Context(), id, token, sig); err != nil {
-		fail(w, 409)
+	if err := h.gateway.Signal(r.Context(), execution.SignalInput{TaskID: id, Token: token, RemoteAddr: r.RemoteAddr, Signal: sig}); err != nil {
+		fail(w, gatewayStatus(err, 409))
 		return
 	}
 	w.WriteHeader(http.StatusOK)

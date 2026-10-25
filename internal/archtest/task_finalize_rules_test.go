@@ -945,7 +945,7 @@ func machineAssemblyFindings(caller string, fset *token.FileSet, files []*ast.Fi
 	return found
 }
 func Test机器组装不能借别名或小接口重做业务(t *testing.T) {
-	imports := identityFixtureImports(t, pkgRender, pkgEvents, pkgMachine, modulePath+"/internal/application/authoring/port", modulePath+"/internal/application/authoring", pkgMachineKeys)
+	imports := identityFixtureImports(t, pkgRender, pkgEvents, pkgMachine, pkgExecutionPort, modulePath+"/internal/application/authoring/port", modulePath+"/internal/application/authoring", pkgMachineKeys)
 	for _, tc := range []struct {
 		name, body string
 		allowed    bool
@@ -960,7 +960,7 @@ func Test机器组装不能借别名或小接口重做业务(t *testing.T) {
 		{"固件判断", `import m "` + pkgModel + `";func f(t m.Task)string{return string(t.Execution.Firmware)}`, false},
 		{"按编号观察", `import m "` + pkgModel + `";func f(t m.Task)int{return t.Execution.Attempt}`, false},
 		{"凭据委托", `import(e "` + pkgExecution + `";m "` + pkgModel + `");func f(s *e.Service,t m.Task)(string,string){return s.Credentials(t)}`, true},
-		{"普通请求转换", `import(a "` + modulePath + `/internal/application/authoring";m "` + pkgMachine + `");func f(r m.Request)a.MachineRenderRequest{return a.MachineRenderRequest{Task:r.Task,Kind:r.Kind,Slot:r.Slot,Values:r.Values}}`, true},
+		{"普通请求转换", `import(a "` + modulePath + `/internal/application/authoring";m "` + pkgExecutionPort + `");func f(r m.RenderRequest)a.MachineRenderRequest{return a.MachineRenderRequest{Task:r.Task,Kind:r.Kind,Slot:r.Slot,Values:r.Values}}`, true},
 		{"密钥入口", `import k "` + pkgMachineKeys + `";func f(){_=k.LoadOrCreate}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

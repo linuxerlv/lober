@@ -4,9 +4,9 @@
 
 ## 当前职责与共同保存边界
 
-可信机器协议适配器调用 execution.Service；用户控制经 tasks.Controller 与 AuditedControl 调用。仓储不认证机器令牌，执行应用负责凭据检查。Boot/Preseed 是现有按主机查找的特例；并非每个入口都先收机器令牌。公开网页权限不套在机器协议上。
+可信机器协议适配器调用 execution.Gateway；Gateway 在本模块调用 execution.Service；用户控制经 tasks.Controller 与 AuditedControl 调用。仓储不认证机器令牌，执行应用负责凭据检查。Boot/Preseed 是现有按主机查找的特例；并非每个入口都先收机器令牌。公开网页权限不套在机器协议上。
 
-输入使用已有 Go 类型，不额外裁剪编号、改大小写、限制大小或把无效值替成示例；各方法明确列出的规范化与检查除外。Signal、执行推进和控制纯规则已归 `domain/execution`，应用保留 Signal 类型别名及同一个 ErrProtocol 哨兵。冻结文件选择和日志接收条件已提供领域入口；当前机器文件传输和渲染仍在 `interfaces/machine/http.go`，日志归属及事件保存仍在 `infrastructure/events/syslog.go`，由Task4/5继续接入。
+输入使用已有 Go 类型，不额外裁剪编号、改大小写、限制大小或把无效值替成示例；各方法明确列出的规范化与检查除外。Signal、执行推进和控制纯规则已归 `domain/execution`，应用保留 Signal 类型别名及同一个 ErrProtocol 哨兵。冻结文件选择由应用 Gateway 调用领域入口；HTTP只解析请求及输出，cmd以普通字段转换连接冻结渲染端口。日志归属及事件保存仍在 `infrastructure/events/syslog.go`，由Task5继续接入。
 
 每次 commit 通过 repository.Tasks.UpdateTaskExecution 同事务保存任务状态、Execution、事件及可选审计。它按最新行的 State/Rev 比期望值；冲突不覆盖并发结果，应用是否重读重试依各方法。仓储只复查版本及存储约束，不在锁内再次校验机器令牌或重跑整个纯状态机；需要新尝试或状态复查时由应用循环完成。
 
@@ -68,7 +68,7 @@ ControlBackend 四方法唯一继承上述Service方法；AuditedControl 的Canc
 | Boot | 任务、架构、固件、秒时间；返回下一任务。初始期限900秒，最多3次引导。 | 无效架构/固件/状态先ErrProtocol；复制后拒绝ReachedReboot。平台不符、次数已满、booting期限已到转failed并清期限，无error。pending且BootCount为0重建当前尝试的起点。 |
 | BootDeliverable | 任务；返回!State.Finished()。 | 只保留原提交后发引导条件，不另加状态或非nil执行记录要求。 |
 | PreseedAvailable | 任务；booting/installing为true。 | 不检查格式、凭据、期限或推进状态。 |
-| InstallerAnswerAvailable | 任务；仅Snapshot.Format为preseed时true。 | 不替代此前Preseed资格检查，不能把二者合并。当前生产传输仍待Task4接入。 |
+| InstallerAnswerAvailable | 任务；仅Snapshot.Format为preseed时true。 | 不替代此前Preseed资格检查，不能把二者合并。生产调用位于Gateway.InstallerAnswer。 |
 | InstallingNeeded | 已通过GetAuthorized(Install)的任务；State不是installing时true。 | 与StartInstalling共用同一重复谓词，供应用决定是否读推进时钟。 |
 | StartInstalling | 同上，Execution须非nil；传入秒时间，返回下一任务及是否改变。 | 已installing返回原值/false；否则复制并进入installing/packages，期限min(at+3600,IssuedAt+5400)，返回true。不重复检查凭据。 |
 | Advance | 任务、Signal、秒时间；返回下一任务、是否完整相同重报、error。 | 先缺Execution/正文4096/早于IssuedAt，再按SignalKey及完整指纹查重，然后终态/16384信号/期限/冻结插槽与顺序；拒绝ErrProtocol。期限到达即拒绝新信号，精确重报早于期限及终态；重启后旧安装插槽即使精确也拒绝。pre600/packages3600/post1200，安装期限不超过IssuedAt+5400；reboot480/initializing900。 |
@@ -82,10 +82,42 @@ ControlBackend 四方法唯一继承上述Service方法；AuditedControl 的Canc
 | Cancel | 任务、秒时间；返回下一任务与问题。 | 先CanCancel，拒绝返回原值及问题；成功复制，无Execution先建attempt1；转cancelled并清Deadline，问题nil。 |
 | Retry | 任务、秒时间；返回下一任务与问题。 | 先CanRetry，拒绝返回原值及问题；成功复制，无Execution先建attempt1，再递增Attempt并重建记录，转pending，问题nil。 |
 | Timeout | 任务、秒时间；返回下一任务及本次是否到期。 | 无Execution、Deadline为0或未到期返回原值/false；其余复制为failed、清期限并返回true。不额外筛状态；四状态扫描仍在应用。 |
-| SelectFile | 原冻结Snapshot与精确文件名；返回FrozenFile的Kind、Slot、Body、Hook。Hook为true表示正文可直接交付，允许空正文；其余Kind表示待渲染文件。 | hooks/先查摘要长度64，再按快照插槽/实例原顺序，只查Exec插槽；每个同摘要正文均复核，后续损坏仍ErrFrozenContent。未找到ErrFileNotFound。其他文件依次主应答、非空辅助名、首个匹配Exec脚本；scripts/02.sh不等于scripts/2.sh。不重新选择资源、不渲染。当前生产传输待Task4接入；内部错误不可直接回传机器。 |
+| SelectFile | 原冻结Snapshot与精确文件名；返回FrozenFile的Kind、Slot、Body、Hook。Hook为true表示正文可直接交付，允许空正文；其余Kind表示待渲染文件。 | hooks/先查摘要长度64，再按快照插槽/实例原顺序，只查Exec插槽；每个同摘要正文均复核，后续损坏仍ErrFrozenContent。未找到ErrFileNotFound。其他文件依次主应答、非空辅助名、首个匹配Exec脚本；scripts/02.sh不等于scripts/2.sh。不重新选择资源、不渲染。生产调用位于Gateway.File；内部错误不可直接回传机器。 |
 | CanReceiveInstallerLog | 任务与尝试号；非终态、Execution非nil且Attempt相等时true。 | 不查地址租约或当前时间，不裁剪正文。当前Collector待Task5接入，不能据此宣称已有应用日志入口。 |
 
 ErrProtocol、ErrFileNotFound、ErrFrozenContent是本领域的三个稳定错误对象；前者由应用别名引用，不重建错误。其他普通输入输出结构不新增独立操作。领域只依赖model/catalog及所需纯标准库，不取得密钥、不访问文件、网络、数据库、时钟或随机数。
+
+## 机器交付入口
+
+本节是Gateway四个入口及NewGateway的唯一八项约定来源。①只供可信机器传输及组装调用，不认证网页用户；仓储不认证机器令牌，具体授权仍交本模块Service。②接收原Go结构值与原上下文，不新增规范化、大小限制、默认地址或格式能力；SN规范化沿用Service。RemoteAddr只作原连接地址，不读取转发头。
+
+③结果和顺序见下表；BootResult.Found=false时Body为空，由HTTP写原本地盘文本，应用不返回HTTP状态。④每阶段按来源包装GatewayError，不按Cause的文字或全局哨兵猜类别；失败不返回已渲染正文。⑤不新增跨渲染与数据库事务，状态/事件的原子范围只沿用Service；读任务、观察、渲染和最终推进是独立操作。
+
+⑥Gateway不重试、不缓存任务、文件或凭据；Service本来的冲突重读保持。重复可能读到新任务事实；相同信号的重复处理仍由Service/领域负责。⑦不在渲染后复查所有文件；只有主应答原样调用Answer，重新授权和提交复查沿用Service。调用者不得并发修改输入信号正文、冻结任务或渲染值，依赖的并发安全由实现负责。
+
+⑧Gateway不写额外审计或提示，Service成功提交后的通知保持。原上下文传入Service及Renderer；观察同步执行且不接收上下文。无新计时器、超时或提交后取消检查；任务在渲染期间取消时，主应答的随后Answer拒绝，正文不会交付。普通菜单的已提交Boot不因随后渲染失败而回滚。
+
+| 方法 | 输入、成功结果与精确顺序 | 错误来源与副作用 |
+| --- | --- | --- |
+| NewGateway | GatewayDeps含必需的本模块*Service、FrozenRenderer、四个普通Endpoints地址及可nil观察函数。服务或渲染器缺失（含有类型的nil）返回普通构造错误；地址不另验证。成功返回独立Gateway。 | 不访问仓储、渲染、时钟或观察；无审计、通知、事务、版本复查、重试、取消或超时。重复构造不共享新缓存，依赖安全由注入方保证。 |
+| BootMenu | BootInput含SN/Arch/Firmware。Service.Boot先完成原状态提交；Found=false返回零BootResult。找到后，先Credentials取得安装、收尾两凭据，再以FileMenu及冻结Task渲染，成功返回Body及Found=true。 | Boot任意错误为LookupUnavailable；渲染任意错误为RenderRejected。不增加观察，Boot提交先于渲染，不撤回已提交事件/通知。 |
+| InstallerAnswer | InstallerAnswerInput含SN/RemoteAddr。先Service.Preseed，随后InstallerAnswerAvailable只检查原preseed格式；任一未找到返回零BootResult。Credentials先安装后收尾供渲染；FileAnswer渲染成功后，再调用Credentials取得安装凭据，随后Answer，成功才观察原Task与原RemoteAddr，最后返回正文。 | Preseed任意错误LookupUnavailable；渲染任意错误RenderRejected；Answer任意错误AnswerConflict。失败不观察。不得缓存或合并渲染前后两次凭据取得，也不把格式检查替代Preseed资格检查。 |
+| File | FileInput含TaskID/Token/Name/RemoteAddr。先GetAuthorized(Install)，成功立即观察，再SelectFile按冻结快照完整原顺序选文件并检查每个匹配摘要。Hook=true正文直接使用（允许空正文），不取得渲染凭据；其余先Credentials再按Kind/Slot渲染。仅主FileAnswer在渲染后调用Answer，成功才返回正文。 | 初次GetAuthorized任意错误Unauthorized；选择未找到FileNotFound；摘要不符及渲染错误RenderRejected；最终Answer任意错误AnswerConflict。未知文件、摘要失败或渲染失败前的观察不能撤掉，脚本/辅助/组件不推进Answer。 |
+| Signal | SignalInput含TaskID/Token/RemoteAddr及完整domain/execution.Signal。仅观察函数非nil时，先按FinalSignal选原范围并GetAuthorized；成功才观察。随后始终独立调用Service.Signal。观察验证失败也继续，观察nil不增加这次读库。 | 最终Signal任意错误SignalConflict。观察验证错误不直接返回，不能和Service.Signal的凭据/状态验证合并；观察成功不保证随后Signal成功。 |
+
+## 机器交付错误
+
+GatewayFailureKind固定六项来源类别：LookupUnavailable、RenderRejected、Unauthorized、FileNotFound、AnswerConflict、SignalConflict。GatewayError含Kind与Cause；Error仅返回Kind固定文字，不包含Cause；Unwrap原样返回Cause，允许内部errors.Is/As诊断。Error/Unwrap是纯错误值操作：可信调用者传原错误对象，不规范化、无大小限制、无独立错误或诊断列表、同值结果相同；不认证、不读写存储、无事务、冲突、提交复查、审计、通知、上下文、取消或超时。
+
+HTTP仅按Kind分别映射503/422/403/404/409/409。未知Kind或未分类错误按入口兜底：Boot/InstallerAnswer为503，File为403，Signal为409。HTTP正文只写固定状态文字，不输出Cause或渲染正文。构造错误由启动组装返回，不转成机器请求状态。
+
+## 冻结渲染端口
+
+FrozenRenderer.Render属于执行模块的出站能力，cmd用RenderFunc连接authoring.MachineRenderer，两个应用模块不互相导入。①只供已由Gateway按原顺序授权或按SN引导的冻结渲染调用，不另认证网页用户或机器令牌。②原上下文及RenderRequest{Task,Kind,Slot,Values}逐字段传入；不修改冻结Task或Values，不新增规范化、限制、默认值或资源选择。
+
+③返回渲染正文与原错误，不改变顺序、空正文或错误；RenderFunc.Render只调用注入函数一次并原样返回。④端口不重分类错误；Gateway在渲染阶段包装RenderRejected。实际渲染规则及错误顺序唯一沿用authoring.MachineRenderer.Render的方法旁约定。
+
+⑤渲染本身不提交任务、事件或审计，无数据库共同事务；其配置读取与正文处理按原MachineRenderer约定。⑥没有端口重试或缓存，重复调用由原渲染器决定。⑦不保证多次调用共享配置快照，不做版本或锁内复查；调用期间不得并发修改输入，函数及渲染器并发安全由注入实现保证。⑧无额外审计、通知、超时或取消检查，原上下文原样委托，取消及外部读取行为沿用原渲染器。
 
 ## 地址观察与日志现状
 
@@ -103,20 +135,20 @@ NewIPObserver 与 IPObservationSink.ObserveIP 保留各自方法旁的完整约�
 
 文件路径先做路由形状、ID、安全词、方法和查询检查；GetAuthorized失败403。凭据成功后观察，然后选择真实应答/辅助文件/脚本/组件；未知文件404，组件正文摘要不符422，渲染失败422。主应答在渲染后重新Answer，失败409，之后才写正文。取消与渲染可能已分别完成，不存在跨渲染事务。
 
-信号先解析查询、限制正文4096（超限413、其他读取失败400），再尝试凭据观察，最后Signal。Signal错误统一409，成功200空正文。协议传输错误与应用ErrProtocol/ErrCredential的映射保持，不能把内部错误文本直接回传。
+信号先解析查询、限制正文4096（超限413、其他读取失败400），再调用Gateway.Signal；Gateway按上节尝试凭据观察，最后Service.Signal。Signal错误统一409，成功200空正文。协议传输错误与应用ErrProtocol/ErrCredential的映射保持，不能把内部错误文本直接回传。
 
 ## 尚未实现的目标入口
 
-下面记录Task3本项落地位置及Task4–5剩余职责。Task4/5目标不是现有可调用应用方法，不虚构方法名或签名；实现后由所属任务补本文件及能力清单，最终是否完整由Task8核对。
+下面记录Task3/4已落地位置与Task5剩余职责。Task5目标尚不是可调用应用方法；实现后补本文件及能力清单，最终是否完整由Task8核对。
 
 | 所属任务 | 目标能力 | 必须保留的当前约定 |
 | --- | --- | --- |
-| Task3（已实现本项） | 纯执行、控制、冻结选择和日志资格规则归domain/execution；应用已接入执行与控制，冻结选择及日志资格留给Task4/5接线 | Signal查重与凭据时序、阶段预算、错误类别、State/Rev竞争、通知位置；不新增装机能力。 |
-| Task4 | 由执行应用承接机器引导、文件请求与信号编排的普通输入输出入口 | 观察位置、组件摘要、渲染后Answer、原凭据范围及每条传输错误映射；接口只剩传输。 |
+| Task3（已实现本项） | 纯执行、控制、冻结选择和日志资格规则归domain/execution；应用已接入执行与控制，冻结选择已由Task4接线，日志资格留给Task5接线 | Signal查重与凭据时序、阶段预算、错误类别、State/Rev竞争、通知位置；不新增装机能力。 |
+| Task4（已实现本项） | execution.Gateway承接机器引导、文件请求与信号编排，HTTP只解析及输出 | 观察位置、组件摘要、渲染后Answer、原凭据范围及每条传输错误映射；接口只剩传输。 |
 | Task5 | 执行应用承接日志的任务规则、AppendEvents和成功后Publish；Collector继续管理IP租约/地址归属，并先截断再SafeLogTail | 归属上限/有效期/重启丢失、忽略次序、原日志字节、错误和通知位置；租约与字节处理保留在外部实现。 |
 
 镜像I3已由Task2纠正，当前约定见[镜像第11节](media.md#11-额外来源取消类型纠正i3)。Task6只细化[单次模板候选读取](backend-modules.md#单次模板候选读取的后续细化)，不承诺跨页一致，也不改变写事务。
 
 ## 当前验证位置
 
-纯规则：`internal/domain/execution/{protocol,control,delivery,log}_test.go`；执行服务与凭据：`internal/application/execution/{service,protocol,token,control_intent,observation}_test.go`。机器传输与文件顺序：`internal/interfaces/machine/http_test.go`。日志归属与裁剪：`internal/infrastructure/events/syslog_test.go`。组装：`cmd/lober/{machine,assembly}_test.go`。事务与竞争：`internal/infrastructure/persistence/pgstore/{contract_tasks,contract_events,contract_concurrency}_test.go`及执行记录相关测试。这里只登记验证来源，实际本次运行结果记在Task3报告，不表示关闭Task4/5或其他后续缺口。
+纯规则：`internal/domain/execution/{protocol,control,delivery,log}_test.go`；执行服务与凭据：`internal/application/execution/{service,protocol,token,control_intent,observation}_test.go`。机器传输解析/状态映射：`internal/interfaces/machine/http_test.go`；真实Service交付顺序、旧文件/UA业务断言、错误来源与取消：`internal/application/execution/gateway_test.go`。日志归属与裁剪：`internal/infrastructure/events/syslog_test.go`。组装：`cmd/lober/{machine,assembly}_test.go`。事务与竞争：`internal/infrastructure/persistence/pgstore/{contract_tasks,contract_events,contract_concurrency}_test.go`及执行记录相关测试。这里只登记验证来源；Task3/4实际运行结果分别记在对应报告，不表示关闭Task5或其他后续缺口。
