@@ -94,3 +94,14 @@ func Test审计领域只依赖纯标准库(t *testing.T) {
 		}
 	}
 }
+
+func Test选择资格只允许精确准入依赖(t *testing.T) {
+	for _, pkg := range []string{layer1 + "/selection", layer1 + "/selection/hidden", layer1 + "/access"} {
+		for _, imp := range []string{pkgModel, pkgAdmission, pkgAdmission + "/hidden", pkgActivation, pkgParams, pkgStore} {
+			allowed := imp == pkgModel || pkg == layer1+"/selection" && imp == pkgAdmission
+			if got := checkSource(t, pkg, importing(imp)); (len(got) == 0) != allowed {
+				t.Fatalf("%s -> %s: %v", pkg, imp, got)
+			}
+		}
+	}
+}

@@ -168,3 +168,15 @@ Users 只保留 CreateUser、UpdateUser、GetUser、ListUsers；RoleMenus 只保
 | consoleRuleMigrationExceptions | `github.com/lober/lober/internal/interfaces/console` | `internal/interfaces/console/users.go` | `(*server).createUser` | `github.com/lober/lober/internal/domain/model` | `StorableText` | `5` |
 | consoleRuleMigrationExceptions | `github.com/lober/lober/internal/interfaces/console` | `internal/interfaces/console/users.go` | `(*server).createUser` | `github.com/lober/lober/internal/domain/model` | `ValidIdent` | `5` |
 | consoleRuleMigrationExceptions | `github.com/lober/lober/internal/interfaces/console` | `internal/interfaces/console/users.go` | `(*server).updateUser` | `github.com/lober/lober/internal/domain/model` | `Role.Valid` | `5` |
+
+## 审计读取共同边界
+
+`audit.Reader` 先用可信 Actor 检查管理员读取权限，身份、改密、权限错误先于范围、分页和仓储错误。过滤文本不裁剪，时间含两端；应用不新增范围或条数限制。List 沿用游标默认100、页码默认20、最多500；空 Items 为非 nil 数组，next 末页为空串，total 仅页码存在。
+
+List 和 ExportCSV 只读，不写业务或审计，不发通知。因此没有原子写入、提交复查、版本冲突或写入重试。重复读取可看到新增事实；游标后续页只读更小 ID，但不承诺跨页数据库快照。上下文交给原仓储；ExportCSV 每页读取后与最终交付前还检查取消，失败不返回部分文件，List 不另增取消检查。
+
+## 身份纯值与凭据能力
+
+PublicRoles 与 Principal.Actor 的各自方法说明是唯一约定：二者没有输入校验错误，不查库、不写入、不通知、不涉及事务、版本冲突、提交复查、取消或超时。PublicRoles 每次返回原顺序的独立角色切片；Actor 返回普通快照值，零值 Principal 得到零 Actor。调用方仍须逐请求 Authenticate/Authorize，不能把 Actor 当作新认证。
+
+Passwords 的三个方法及 Tokens.NewToken 仅供可信身份应用或初始化调用。输入、错误和密码强度沿用方法旁既有说明及上文“认证、并发与取消”。不保存账号、会话或审计，不发通知，没有跨数据事务、提交复查或自动重试。Hash/NewToken 每次随机生成，故重复结果不固定；Check/CheckDummy 对同样输入按固定规则计算。调用时不修改输入，无共享账号并发事实，不接收上下文，不增加取消或超时。

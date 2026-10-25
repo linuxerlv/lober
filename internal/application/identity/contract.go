@@ -16,6 +16,7 @@ var (
 )
 
 // PublicRoles 不要求身份，不读仓储、配置或会话；每次返回原顺序的独立角色切片。
+// 八项纯值边界连接 docs/contracts/identity-audit.md「身份纯值与凭据能力」。
 func PublicRoles() []model.Role { return model.Roles() }
 
 // Principal 只由本实例认证产生；请求正文不能提供或改写它。
@@ -27,6 +28,7 @@ type Principal struct {
 
 // Actor 返回普通身份值，不含密码和令牌；零值快照得到零值 Actor。
 // 它不读仓储或时钟，不改变快照，也不触发审计。
+// 八项纯值边界连接 docs/contracts/identity-audit.md「身份纯值与凭据能力」。
 func (p Principal) Actor() ports.Actor {
 	if p.owner == nil {
 		return ports.Actor{}
@@ -66,6 +68,8 @@ type AccessRequest struct {
 // Access 处理本实例认证；Principal 只在当前请求内使用，不能跨请求缓存。
 // 以下方法不写数据库、不写审计；只有登录、退出及到期/异常认证会改变内存会话。
 // context 仅传给原仓储读取，不额外插入取消检查，也不把仓储故障改成未认证。
+// 六方法的输入、结果与错误顺序以各方法旁说明为唯一来源，共同并发/取消边界连接
+// docs/contracts/identity-audit.md「认证、并发与取消」；只读与内存会话操作无数据库原子写、提交复查或版本重试。
 type Access interface {
 	// Login 不清理输入；空字段先报 BadRequest，账号缺失或凭据失效统一报 LoginFailed。
 	// 先真/假散列校验，再持读锁重读凭据、读取菜单和发布；菜单失败不发令牌。
@@ -119,6 +123,9 @@ type ProfileCommand struct {
 // Accounts 的身份只接受本实例认证的请求快照；先查归属、改密要求与权限，再处理输入。
 // context 传给原仓储调用；不增加数据库认证或取消检查。写入和审计由仓储同事务提交，
 // 保存失败保留原错误及全部会话，保存成功后需要撤销的会话立即撤销。
+// 各方法的八项约定以方法旁说明为准；共用 docs/contracts/identity-audit.md
+// 「十三条入口」「保存约定与初始化」「认证、并发与取消」，不新增通知。
+// ListUsers无写入，故无原子写或提交复查；其他方法仅在各自列明的锁内复查，不承诺跨实例立即撤权。
 type Accounts interface {
 	// ListUsers 仅管理员可用；检查分页后按用户名C顺序查询，页码和游标规则沿用仓储。
 	// 结果不含凭据，菜单为空非nil数组/版本0；不额外查菜单、不写审计，重复查询读取当时数据。
@@ -160,6 +167,9 @@ type SaveMenusCommand struct {
 
 // Menus 只接收本实例认证快照；菜单显示不授予或撤销接口权限。
 // 两个操作均先查身份、改密要求和管理权限，再处理请求；不重复查询用户。
+// 各方法的八项约定以方法旁说明为准；共同来源为 docs/contracts/identity-audit.md
+// 「返回字段、菜单与权限」「保存约定与初始化」「认证、并发与取消」，无通知。
+// ListRoleMenus只读，无原子写/提交复查，也不承诺各角色多次读取为同一快照。
 type Menus interface {
 	// ListRoleMenus 返回独立目录和 viewer/operator/hook-author/hook-approver/admin 顺序的配置。
 	// 未配置用默认页面，已配置按当前权限和目录过滤并补必需项，显式空保持空数组。
@@ -188,6 +198,7 @@ type Bootstrapper interface {
 	// 创建时间与bootstrap/user.create审计时间分别读时钟，账号与审计同事务。
 	// 重复调用已有账号时成功；并发空库创建仍服从唯一约束，不加全局锁或重试协议。
 	// 读取、散列、保存错误原样返回，非法口令沿用保存错误；context只传给原查询和保存。
+	// 无通知；唯一初始化约定为上文方法说明及 docs/contracts/identity-audit.md「保存约定与初始化」。
 	Initialise(context.Context, string) error
 }
 

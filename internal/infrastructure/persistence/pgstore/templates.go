@@ -348,7 +348,15 @@ func (s *Store) ListTemplateVersions(ctx context.Context, id string) ([]model.Te
 // ListTemplates 见 repository.Templates。按系过滤看的是选出的那一项，与状态的过滤一样；系存成 jsonb 数组，按包含关系比。
 func (s *Store) ListTemplates(ctx context.Context, q repository.TemplateQuery) (repository.Page[model.Template], error) {
 	if q.Selection != nil {
-		q.ApprovedOnly = true
+		facts, err := s.ListTemplateCandidates(ctx, q)
+		if err != nil {
+			return repository.Page[model.Template]{}, err
+		}
+		out := repository.Page[model.Template]{Items: make([]model.Template, 0, len(facts.Items)), Next: facts.Next, Total: facts.Total}
+		for _, item := range facts.Items {
+			out.Items = append(out.Items, item.Template)
+		}
+		return out, nil
 	}
 	db, limit, err := templateTables.listQuery(s.read(ctx), q.Cursor, q.Limit, q.NamePrefix, q.States, q.ApprovedOnly, q.Page, false)
 	switch {
@@ -364,12 +372,7 @@ func (s *Store) ListTemplates(ctx context.Context, q repository.TemplateQuery) (
 		}
 		db = db.Where("template_versions.series @> CAST(? AS jsonb)", series)
 	}
-	if q.Selection != nil {
-		db, err = templateSelectionQuery(db, q.Selection)
-		if err != nil {
-			return repository.Page[model.Template]{}, err
-		}
-	}
+
 	db, total, err := numberedQuery[templateVersionRow](db, q.Page, limit)
 	if err != nil {
 		return repository.Page[model.Template]{}, err

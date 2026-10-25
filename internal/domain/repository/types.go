@@ -117,6 +117,13 @@ type TemplateQuery struct {
 	Limit        int
 }
 
+// TemplateCandidateFacts 是同次只读查询取得的一个模板与其精确引用；Hooks不含其他模板的组件。
+// 应用只读这份结果，不能将候选当成提交保证；普通输入输出字段随ListTemplateCandidates追溯。
+type TemplateCandidateFacts struct {
+	Template model.Template
+	Hooks    map[model.HookKey]model.Hook
+}
+
 // TemplateSelection supplies immutable facts needed to select wizard candidates.
 // Eligibility matches admission.TemplateUsable plus the current builtin manifest.
 type TemplateSelection struct {

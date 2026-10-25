@@ -108,10 +108,18 @@ func Test镜像网页入口追踪同包旧业务(t *testing.T) {
 		{"纯响应转换", `_=pure(42)`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			local := `type local struct{}`
+			if strings.Contains(tc.body, "s.local") {
+				local = `type local interface{GetISO()}`
+			}
+			legacy := ""
+			if strings.Contains(tc.body, "bridge") || strings.Contains(tc.body, "oldAlias") || strings.Contains(tc.body, "oldGeneric") {
+				legacy = `func(s *server)taskStream(){s.tasks.GetTask()};func(s *server)bridge(){s.taskStream()};func old(s *server){s.bridge()};var oldAlias=old;func oldGeneric[T any](s *server,v T){s.taskStream()}`
+			}
 			got := mediaTypedFixtureMode(t, pkgConsole, map[string]string{
-				"server.go": `package console;import(r "` + pkgStore + `";m "` + fixtureMedia + `");type local interface{GetISO()};type server struct{tasks r.Tasks;registry m.Registry;local local;old *m.Sources}`,
-				"tasks.go":  `package console;func(s *server)taskStream(){s.tasks.GetTask()}`,
-				"helper.go": `package console;func(s *server)bridge(){s.taskStream()};func old(s *server){s.bridge()};var oldAlias=old;func pure(n int)int{return n};func oldGeneric[T any](s *server,v T){s.taskStream()}`,
+				"server.go": `package console;import(r "` + pkgStore + `";m "` + fixtureMedia + `");` + local + `;type server struct{tasks r.Tasks;registry m.Registry;local local;old *m.Sources}`,
+				"tasks.go":  `package console;` + legacy,
+				"helper.go": `package console;func pure(n int)int{return n}`,
 				"isos.go":   `package console;func(s *server)handler(){` + tc.body + `}`,
 			}, true)
 			if (len(got) == 0) != tc.allowed {

@@ -107,10 +107,26 @@ func (w *wizard) Templates(ctx context.Context, actor ports.Actor, req TemplateR
 		return TemplatePage{}, err
 	}
 	query := repository.TemplateQuery{ApprovedOnly: true, Series: iso.Series, Cursor: req.Cursor, Limit: req.Limit, Page: req.Page}
-	// 页码模式先筛可用候选，再计算总数和截取页面；游标模式保留原顺序。
+	// 页码模式直接使用仓储在同一次读取中取得的精确事实。
 	if req.Page > 0 {
 		query.Selection = &repository.TemplateSelection{ISO: iso, BuiltinTemplates: w.deps.Manifest.Templates, BuiltinHooks: w.deps.Manifest.Hooks}
+		page, err := w.deps.Templates.ListTemplateCandidates(ctx, query)
+		if err != nil {
+			return TemplatePage{}, err
+		}
+		hooks := make(map[model.HookKey]model.Hook)
+		for _, item := range page.Items {
+			for key, hook := range item.Hooks {
+				hooks[key] = hook
+			}
+		}
+		items := make([]TemplateChoice, 0, len(page.Items))
+		for _, item := range page.Items {
+			items = append(items, TemplateChoice{Template: item.Template, Hooks: hooks, Problems: activation.Template(item.Template, hooks)})
+		}
+		return TemplatePage{Items: items, Next: page.Next, Total: page.Total}, nil
 	}
+	// 游标保留先截候选页再筛资格的顺序，空结果仍可能有下一游标。
 	page, err := w.deps.Templates.ListTemplates(ctx, query)
 	if err != nil {
 		return TemplatePage{}, err
@@ -121,7 +137,7 @@ func (w *wizard) Templates(ctx context.Context, actor ports.Actor, req TemplateR
 	}
 	items := make([]TemplateChoice, 0, len(page.Items))
 	for _, t := range page.Items {
-		if req.Page == 0 && (!selection.CurrentBuiltin(t, hooks, w.deps.Manifest) || len(admission.TemplateUsable(t, hooks, iso)) != 0) {
+		if !selection.TemplateEligible(t, hooks, iso, w.deps.Manifest) {
 			continue
 		}
 		items = append(items, TemplateChoice{Template: t, Hooks: hooks, Problems: activation.Template(t, hooks)})

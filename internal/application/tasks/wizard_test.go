@@ -25,6 +25,7 @@ type wizardStore struct {
 	hostPage      repository.Page[model.Host]
 	isoPage       repository.Page[model.ISO]
 	templatePage  repository.Page[model.Template]
+	candidatePage repository.Page[repository.TemplateCandidateFacts]
 	hostQuery     repository.HostQuery
 	isoQuery      repository.ISOQuery
 	templateQuery repository.TemplateQuery
@@ -55,6 +56,10 @@ func (f *wizardStore) GetTemplate(context.Context, model.TemplateKey) (model.Tem
 func (f *wizardStore) ListTemplates(_ context.Context, q repository.TemplateQuery) (repository.Page[model.Template], error) {
 	f.templateQuery = q
 	return f.templatePage, f.called("templates")
+}
+func (f *wizardStore) ListTemplateCandidates(_ context.Context, q repository.TemplateQuery) (repository.Page[repository.TemplateCandidateFacts], error) {
+	f.templateQuery = q
+	return f.candidatePage, f.called("candidates")
 }
 func (f *wizardStore) ListTemplateVersions(context.Context, string) ([]model.Template, error) {
 	return f.versions, f.called("versions")
@@ -109,6 +114,7 @@ func applicationFixture() (*wizardStore, WizardDeps, Selection, *testNotifier) {
 	}
 	f.isoPage.Items = []model.ISO{iso}
 	f.templatePage.Items = []model.Template{tpl}
+	f.candidatePage.Items = []repository.TemplateCandidateFacts{{Template: tpl, Hooks: f.hooks}}
 	n := &testNotifier{}
 	d := WizardDeps{Hosts: f, ISOs: f, Templates: f, Hooks: f, Tasks: f, Clock: func() int64 { return 1790000000 }, Notifier: n, SelectionGuard: &testGuard{}}
 	return f, d, Selection{ISOID: iso.ID, TemplateID: tpl.ID, TemplateVersion: 1}, n
@@ -311,7 +317,7 @@ func Test应用候选重复缺失保留问题顺序(t *testing.T) {
 func Test应用页码候选传递页码总数与过滤事实(t *testing.T) {
 	f, d, selection, _ := applicationFixture()
 	total := int64(7)
-	f.hostPage.Total, f.isoPage.Total, f.templatePage.Total = &total, &total, &total
+	f.hostPage.Total, f.isoPage.Total, f.candidatePage.Total = &total, &total, &total
 	d.Manifest.Templates = []model.TemplateKey{{ID: "builtin", Version: 2}}
 	d.Manifest.Hooks = []model.HookKey{{ID: "hook", Version: 3}}
 	w := NewWizard(d)
@@ -331,5 +337,51 @@ func Test应用页码候选传递页码总数与过滤事实(t *testing.T) {
 	}
 	if !reflect.DeepEqual(facts.ISO, f.iso) || !reflect.DeepEqual(facts.BuiltinTemplates, d.Manifest.Templates) || !reflect.DeepEqual(facts.BuiltinHooks, d.Manifest.Hooks) {
 		t.Fatal(facts)
+	}
+}
+
+func Test应用页码直接用同次事实且保留游标二次读取(t *testing.T) {
+	for _, numbered := range []bool{false, true} {
+		t.Run(map[bool]string{true: "页码", false: "游标"}[numbered], func(t *testing.T) {
+			f, d, s, _ := applicationFixture()
+			page := 0
+			if numbered {
+				page = 1
+			}
+			first := f.template
+			first.Assembly = map[string][]model.Instance{"pre": {{HookID: "one", HookVersion: 1}}}
+			second := first
+			second.ID = "other"
+			second.Assembly = map[string][]model.Instance{"pre": {{HookID: "two", HookVersion: 1}}}
+			one := model.Hook{ID: "one", Version: 1, State: model.VersionApproved}
+			two := model.Hook{ID: "two", Version: 1, State: model.VersionApproved}
+			f.candidatePage.Items = []repository.TemplateCandidateFacts{{Template: first, Hooks: map[model.HookKey]model.Hook{one.Key(): one}}, {Template: second, Hooks: map[model.HookKey]model.Hook{two.Key(): two}}}
+			got, err := NewWizard(d).Templates(t.Context(), operator, TemplateRequest{ISOID: s.ISOID, PageRequest: PageRequest{Page: page}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"iso", "templates", "hooks"}
+			if numbered {
+				want = []string{"iso", "candidates"}
+				if len(got.Items) != 2 || len(got.Items[0].Hooks) != 2 || len(got.Items[1].Hooks) != 2 {
+					t.Fatal(got)
+				}
+			}
+			if !reflect.DeepEqual(f.calls, want) {
+				t.Fatal(f.calls, want)
+			}
+			// 读取失败仍向外报告；页码的组件读取失败现在由同次facts能力报告。
+			f.calls = nil
+			failure := errors.New("读取事实失败")
+			failureAt := "hooks"
+			if numbered {
+				failureAt = "candidates"
+			}
+			f.fail[failureAt] = failure
+			_, err = NewWizard(d).Templates(t.Context(), operator, TemplateRequest{ISOID: s.ISOID, PageRequest: PageRequest{Page: page}})
+			if !errors.Is(err, failure) {
+				t.Fatal(err)
+			}
+		})
 	}
 }

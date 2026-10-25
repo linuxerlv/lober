@@ -1,8 +1,11 @@
 package execution_test
 
 import (
+	"context"
 	"github.com/lober/lober/internal/application/execution"
+	executionport "github.com/lober/lober/internal/application/execution/port"
 	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/infrastructure/events"
 	"math"
 	"testing"
 )
@@ -41,5 +44,26 @@ func Test机器日志观察保留原有效期(t *testing.T) {
 	}
 	if len(sink.calls) != 4 {
 		t.Fatal(sink.calls)
+	}
+}
+
+type observationLogReceiver struct{ calls []executionport.InstallerLog }
+
+func (r *observationLogReceiver) ReceiveInstallerLog(_ context.Context, in executionport.InstallerLog) error {
+	r.calls = append(r.calls, in)
+	return nil
+}
+func Test执行观察小接口可直接连接日志收集器(t *testing.T) {
+	r := &observationLogReceiver{}
+	now := int64(1000)
+	c := events.New(r, func() int64 { return now })
+	observe := execution.NewIPObserver(c)
+	observe(model.Task{ID: "task-one", Execution: &model.Execution{Attempt: 2, IssuedAt: 1000}}, "192.0.2.1:1234")
+	if err := c.Receive(t.Context(), "192.0.2.1:514", []byte("installer")); err != nil || len(r.calls) != 1 || r.calls[0].Attempt != 2 {
+		t.Fatal("小接口未连接", err)
+	}
+	now = 6400
+	if err := c.Receive(t.Context(), "192.0.2.1:514", []byte("expired")); err != nil || len(r.calls) != 1 {
+		t.Fatal("观察有效期改变", err)
 	}
 }

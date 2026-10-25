@@ -14,6 +14,7 @@ import (
 
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/execution"
+	executionport "github.com/lober/lober/internal/application/execution/port"
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/infrastructure/events"
 	"github.com/lober/lober/internal/infrastructure/machinekeys"
@@ -28,14 +29,14 @@ type machineBundle struct {
 	Logs    *events.Collector
 }
 type machineAdapter struct {
-	*execution.Service
+	execution.Gateway
 	logger *slog.Logger
 }
 
-func (a machineAdapter) Signal(ctx context.Context, id, token string, sig machine.Signal) error {
+func (a machineAdapter) Signal(ctx context.Context, in execution.SignalInput) error {
 	start := time.Now()
-	err := a.Service.Signal(ctx, id, token, execution.Signal{Phase: sig.Phase, Slot: sig.Slot, Timing: sig.Timing, Instance: sig.Instance, Digest: sig.Digest, RC: sig.RC, Body: sig.Body})
-	a.logger.Debug("机器信号处理", "operation", "machine.signal", "task", id, "duration", time.Since(start), "accepted", err == nil)
+	err := a.Gateway.Signal(ctx, in)
+	a.logger.Debug("机器信号处理", "operation", "machine.signal", "task", in.TaskID, "duration", time.Since(start), "accepted", err == nil)
 	return err
 }
 func machineOf(st repository.Store, hub ports.Notifier, cfg config, clock ports.Clock, logger *slog.Logger) (*machineBundle, error) {
@@ -60,12 +61,17 @@ func machineOf(st repository.Store, hub ports.Notifier, cfg config, clock ports.
 	if err != nil {
 		return nil, err
 	}
-	collector := events.New(st, func() int64 { return clock() }, hub)
+	logs := execution.NewInstallerLogs(st, hub)
+	collector := events.New(logs, func() int64 { return clock() })
 	files := authoring.NewMachineRenderer(iso.NewBootConfigReader(cfg.ISO.Artifacts))
-	renderer := func(r machine.Request) ([]byte, error) {
-		return files.Render(r.Context, authoring.MachineRenderRequest{Task: r.Task, Kind: r.Kind, Slot: r.Slot, Values: r.Values})
+	renderer := executionport.RenderFunc(func(ctx context.Context, r executionport.RenderRequest) ([]byte, error) {
+		return files.Render(ctx, authoring.MachineRenderRequest{Task: r.Task, Kind: r.Kind, Slot: r.Slot, Values: r.Values})
+	})
+	gateway, err := execution.NewGateway(execution.GatewayDeps{Service: engine, Renderer: renderer, Endpoints: execution.Endpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, Observe: execution.NewIPObserver(collector)})
+	if err != nil {
+		return nil, err
 	}
-	handler := machine.New(machineAdapter{engine, logger}, renderer, machine.Endpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, execution.NewIPObserver(collector))
+	handler := machine.New(machineAdapter{gateway, logger})
 	return &machineBundle{Service: engine, Handler: handler, Logs: collector}, nil
 }
 func (a *app) Handler() http.Handler {

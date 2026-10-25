@@ -28,6 +28,8 @@ type EventReader interface {
 
 // EventSubscription 只读已提交事件。调用者负责每页身份复查、网络发送和最终 Close。
 // 不因任务结束自动关闭，不新增审计、通知或后台工作。
+// 四方法共同遵守 docs/contracts/task-read-control-events.md「事件流」；只读已提交事实，无原子写或提交复查，
+// 无版本冲突重试。除Read传入上下文外不接收取消/超时，重复与并发Close按下方方法说明。
 type EventSubscription interface {
 	// Initial 返回首批独立副本，空结果是非空数组。
 	Initial() []Event

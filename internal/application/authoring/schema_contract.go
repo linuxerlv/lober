@@ -12,6 +12,7 @@ type CatalogEnums struct {
 }
 
 // PublicCatalog 不要求身份，不读仓储、配置或会话；每次返回原顺序的独立切片。
+// 八项纯能力边界唯一连接 docs/contracts/authoring-preview.md「内部只读与目录能力」。
 func PublicCatalog() CatalogEnums {
 	return CatalogEnums{
 		Families:  catalog.Families(),

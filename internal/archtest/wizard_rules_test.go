@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"strings"
 	"testing"
 )
 
@@ -12,13 +13,43 @@ func wizardTransitionFixture(t *testing.T, body string) []violation {
 	t.Helper()
 	fset := token.NewFileSet()
 	var files []*ast.File
+	legacy := ""
+	if strings.Contains(body, "s.bridge") {
+		legacy += `func(s *server)bridge(){s.taskStream()};`
+	}
+	if strings.Contains(body, "toTemplateResponse") || strings.Contains(body, "templateHooks") || strings.Contains(body, "alias") {
+		legacy += `func toTemplateResponse(){(&server{}).templateHooks()};func(s *server)templateHooks(){s.taskStream()};var alias=toTemplateResponse;`
+	}
+	if legacy != "" || strings.Contains(body, "taskStream") {
+		legacy += `func(s *server)taskStream(){s.deps.LegacyTasks.GetTask()};`
+	}
+	control := ""
+	if strings.Contains(body, "taskResponse") || strings.Contains(body, "TaskCtl") {
+		control = `type TaskControl interface{CanCancel()};func(s *server)taskResponse(){s.deps.TaskCtl.CanCancel()}`
+	}
+	neededImports, fields := "", ""
+	if legacy != "" || strings.Contains(body, "LegacyTasks") {
+		neededImports += `repo "` + pkgStore + `";`
+		fields += `LegacyTasks repo.Tasks;`
+	}
+	if control != "" {
+		fields += `TaskCtl TaskControl;`
+	}
+	if strings.Contains(body, "s.deps.Tasks") {
+		neededImports += `tp "` + pkgTasksPort + `";`
+		fields += `Tasks tp.Tasks;`
+	}
+	if strings.Contains(body, "s.deps.Notifier") {
+		neededImports += `p "` + pkgPorts + `";`
+		fields += `Notifier p.Notifier;`
+	}
+	if neededImports != "" {
+		neededImports = "import(" + neededImports + ");"
+	}
 	for _, src := range []struct{ name, text string }{
-		{"server.go", `package console; import (repo "` + pkgStore + `"; tp "` + pkgTasksPort + `"; p "` + pkgPorts + `"); type deps struct{LegacyTasks repo.Tasks; TaskCtl TaskControl; Tasks tp.Tasks; Notifier p.Notifier}; type server struct{deps deps}; type TaskControl interface{CanCancel()}`},
-		{"tasks.go", `package console; func(s *server) taskStream(){s.deps.LegacyTasks.GetTask()}`},
-		{"legacy_templates.go", `package console; func toTemplateResponse(){(&server{}).templateHooks()}; func(s *server) templateHooks(){s.taskStream()}`},
-		{"tasks.go", `package console; func(s *server) taskResponse(){s.deps.TaskCtl.CanCancel()}`},
-		{"bridge.go", `package console; func(s *server) bridge(){s.taskStream()}; var alias=toTemplateResponse`},
-		{"wizard.go", `package console; import p "` + layer1 + `/params"; type Clock func()int64; func(s *server) wizardHosts(){` + body + `}; var _=p.FieldKey("")`},
+		{"server.go", `package console;` + neededImports + `type deps struct{` + fields + `};type server struct{deps deps};` + control},
+		{"helper.go", `package console;` + legacy},
+		{"wizard.go", `package console;import p "` + layer1 + `/params";type Clock func()int64;func(s *server)wizardHosts(){` + body + `};var _=p.FieldKey("")`},
 	} {
 		f, e := parser.ParseFile(fset, "internal/interfaces/console/"+src.name, src.text, 0)
 		if e != nil {
@@ -26,13 +57,13 @@ func wizardTransitionFixture(t *testing.T, body string) []violation {
 		}
 		files = append(files, f)
 	}
-	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
+	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}, Types: map[ast.Expr]types.TypeAndValue{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
 	imports := transitionFixtureImporter{pkgStore: `package repository; type Tasks interface{GetTask()}`, layer1 + "/params": `package params; type FieldKey string`, pkgTasksPort: `package port; type Tasks interface{CreateCurrentTasks()}`, pkgPorts: `package ports; type Notifier interface{Publish()}`}
 	if _, e := (&types.Config{Importer: imports}).Check(pkgConsole, fset, files, info); e != nil {
 		t.Fatal("夹具类型错误", e)
 	}
-	// 此夹具专测从网页入口能否到达业务；全局声明违规由独立总检查反例覆盖。
-	return wizardHelperFindings(fset, files, info)
+	// 本例只注入所需声明；检查器仍扫描这里全部函数、变量和类型。
+	return typedTransitionFindings("", pkgConsole, fset, files, info)
 }
 func Test向导不能经同包辅助函数绕回旧业务(t *testing.T) {
 	for _, tc := range []struct {

@@ -87,15 +87,17 @@ func applicationModule(pkg string) string {
 }
 
 func checkApplicationFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
-	return checkImports(fset, pkg, f, applicationRule)
+	found := checkImports(fset, pkg, f, applicationRule)
+	if pkg == pkgExecution || pkg == pkgExecutionPort {
+		found = append(found, checkClock(fset, pkg, f)...)
+	}
+	return found
 }
 
 func applicationRule(pkg, imp string) rule {
 	port := pkg == pkgPorts || strings.HasSuffix(pkg, "/port")
-	if pkg == pkgTasks || pkg == pkgTasksPort {
-		if under(imp, "os") || under(imp, "net") || under(imp, "database") || under(imp, "syscall") || imp == "io/fs" || imp == "io/ioutil" || under(imp, "crypto/rand") || under(imp, "math/rand") {
-			return ruleApplication
-		}
+	if applicationExternalImport(imp) || imp == "io/fs" && pkg != modulePath+"/internal/application/media" && pkg != modulePath+"/internal/application/media/port" {
+		return ruleApplication
 	}
 	if under(pkg, pkgIdentityApp) || under(pkg, pkgAuditApp) {
 		if imp == "os" || under(imp, "os") || under(imp, "net") || imp == "io/ioutil" || imp == "syscall" || imp == "path/filepath" || imp == "time" || under(imp, "crypto") || under(imp, "math/rand") {
@@ -106,6 +108,19 @@ func applicationRule(pkg, imp string) rule {
 		if imp == "os" || imp == "io/ioutil" || under(imp, "net") || under(imp, "os") || imp == "syscall" || imp == "path/filepath" {
 			return ruleApplication
 		}
+	}
+	// 执行模块原先的角色更窄；共同限制不能顺便扩大它的依赖。
+	if pkg == pkgExecutionPort {
+		if imp == "context" || imp == pkgModel || imp == pkgCatalog || imp == pkgStore {
+			return ""
+		}
+		return ruleApplicationPort
+	}
+	if pkg == pkgExecution {
+		if isStd(imp) && imp != "C" && imp != "unsafe" || inLayer1(imp) || imp == pkgStore || imp == pkgPorts || imp == pkgExecutionPort {
+			return ""
+		}
+		return ruleApplication
 	}
 	if isStd(imp) && imp != "C" && imp != "unsafe" || under(imp, layer1) || imp == pkgPorts {
 		return ""
@@ -135,4 +150,9 @@ func checkSelectionFile(fset *token.FileSet, pkg string, f *ast.File) []violatio
 		}
 		return rule("选择锁只依赖 sync 与共同能力契约")
 	})
+}
+
+// 所有应用与其能力口共用外部操作限制，特殊分层也不能绕开。
+func applicationExternalImport(imp string) bool {
+	return under(imp, "os") || under(imp, "net") || under(imp, "database") || under(imp, "syscall") || imp == "io/ioutil" || under(imp, "crypto/rand") || under(imp, "math/rand") || imp == "plugin"
 }
