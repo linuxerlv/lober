@@ -207,8 +207,8 @@ Start 先检查恢复读取，再启动循环；重复 Start 成功但不增加�
 
 SourceControl.Register/Upload/Cancel/Retry/Reimport 的唯一应用约定分别为第3/4/5/5/6节，保留第1节审计规则。它只原样委托 Sources；Register、Upload、Retry、Reimport 成功后才Wake，Cancel不增加Wake。FreeSpace沿用上表Transfer.FreeSpace。Deletion.Delete沿用第7节。它们不做网页授权，调用方传可信审计；错误原样返回，不追加重试或取消检查。
 
-## 11. 已知取消类型缺陷与修复目标
+## 11. 额外来源取消类型纠正（I3）
 
-当前额外来源的 OpenSource、identifyNetboot、后续 `.disk/info` 三个错误分支，会把取消或截止错误变成 `iso_extra_source_invalid`。真实父上下文取消时已确认会丢失错误类型，但不能据此断言数据库已写failed；能力返回取消、父上下文仍可用时，还可能误入failImport写failed及来源错误。
+额外来源的 OpenSource、identifyNetboot、后续 `.disk/info` 三个错误分支，先用 errors.Is 检查取消或截止错误，并原样返回，包括包装错误。取消或截止不会记成内容失败，镜像完整记录（含状态和Rev）及来源记录（含Error）保持；已打开的导入会话仍关闭一次。非取消错误仍按原来的 `iso_extra_source_invalid` 分类及失败记录处理。
 
-Task2 计划在这三处保留可被 errors.Is 识别的取消/截止类型（包括包装错误），避免将其记成内容失败；非取消错误仍保留原业务分类。此段记录当前缺陷与目标，不声称已修复；它是第5节“取消贯穿”的现有例外，不是新增取消保证。后续结果由Task2独立提交和验证说明。
+Task2 明确纠正旧错误行为，并非目录搬迁：旧实现会丢失取消类型；能力返回取消、父上下文仍可用时，还会误写failed及主来源错误。真实父取消的两处读取回归使用不受取消影响的上下文查库，避免把查库失败误当成状态保持。这项修复不扩大第10节的取消检查位置，不改变发布、未知提交确认、后台重试或后续架构边界。

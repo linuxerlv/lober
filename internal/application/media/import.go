@@ -100,6 +100,9 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 		}
 		et, e := session.OpenSource(ctx, extra)
 		if e != nil {
+			if errors.Is(e, context.Canceled) || errors.Is(e, context.DeadlineExceeded) {
+				return e
+			}
 			return importProblem(id, "iso_extra_source_invalid", "source."+need.Role, need.Role)
 		}
 		ed, e := et.Digest(ctx)
@@ -110,11 +113,17 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 			return importProblem(id, "iso_content_mismatch", "source."+need.Role, extra.ExpectedSHA256, ed)
 		}
 		ei, e := identifyNetboot(ctx, et)
+		if errors.Is(e, context.Canceled) || errors.Is(e, context.DeadlineExceeded) {
+			return e
+		}
 		if e != nil || !mediarules.CheckExtra(found, ei, need.SameVersion, "NETBOOT") {
 			return importProblem(id, "iso_extra_source_invalid", "source."+need.Role, need.Role)
 		}
 		// Optical netinst initrds cannot be treated as network installer initrds.
 		info, e := identifyText(ctx, et, ".disk/info")
+		if errors.Is(e, context.Canceled) || errors.Is(e, context.DeadlineExceeded) {
+			return e
+		}
 		if e != nil || !mediarules.CheckExtra(found, ei, need.SameVersion, info) {
 			return importProblem(id, "iso_extra_source_invalid", "source."+need.Role, need.Role)
 		}
