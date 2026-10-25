@@ -253,6 +253,11 @@ func (s *Store) GetHook(ctx context.Context, k model.HookKey) (model.Hook, error
 
 // GetHooks 见 repository.Hooks。键先全部查过格式，有一个不合就报 ErrInvalid，不当成找不到。
 func (s *Store) GetHooks(ctx context.Context, ks []model.HookKey) (map[model.HookKey]model.Hook, error) {
+	return getHooks(s.read(ctx), ks)
+}
+
+// getHooks 只在给定连接或事务读取精确版本，批次共用同一读取边界。
+func getHooks(db *gorm.DB, ks []model.HookKey) (map[model.HookKey]model.Hook, error) {
 	for _, k := range ks {
 		if err := repository.CheckVersionKey(k.ID, k.Version); err != nil {
 			return nil, err
@@ -260,7 +265,7 @@ func (s *Store) GetHooks(ctx context.Context, ks []model.HookKey) (map[model.Hoo
 	}
 	out := make(map[model.HookKey]model.Hook, len(ks))
 	for chunk := range slices.Chunk(ks, batchSize) {
-		rows, err := hookVersionsIn(s.read(ctx), chunk)
+		rows, err := hookVersionsIn(db, chunk)
 		if err != nil {
 			return nil, err
 		}

@@ -3,9 +3,9 @@ package pgstore_test
 import (
 	"errors"
 	"fmt"
-	"github.com/lober/lober/internal/domain/admission"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
+	domainselection "github.com/lober/lober/internal/domain/selection"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 	"slices"
 	"testing"
@@ -213,19 +213,14 @@ func TestNumberedTemplateEligibilityBeforePagination(t *testing.T) {
 	selection := &repository.TemplateSelection{ISO: iso, BuiltinTemplates: []model.TemplateKey{{ID: currentBuiltin.ID, Version: 1}}, BuiltinHooks: []model.HookKey{builtinHook.Key()}}
 	for _, offers := range []map[string][]model.Option{nil, {"editions": {}}, {"editions": {{Value: "server", Label: "Server"}}}} {
 		selection.ISO.Offers = offers
-		all, err := s.ListTemplates(t.Context(), repository.TemplateQuery{ApprovedOnly: true, Series: iso.Series})
-		must(t, err, "all templates for behavioral reference")
+		all := slices.Concat(allPages(t, func(cursor string) (repository.Page[model.Template], error) {
+			return s.ListTemplates(t.Context(), repository.TemplateQuery{ApprovedOnly: true, Series: iso.Series, Cursor: cursor, Limit: 2})
+		})...)
 		want := []model.Template{}
-		for _, candidate := range all.Items {
+		for _, candidate := range all {
 			hooks, err := s.GetHooks(t.Context(), repository.HookRefs(candidate))
 			must(t, err, "reference hooks")
-			builtinOK := !candidate.Builtin || candidate.ID == currentBuiltin.ID && candidate.Version == currentBuiltin.Version
-			for _, h := range hooks {
-				if h.Builtin && (h.ID != builtinHook.ID || h.Version != builtinHook.Version) {
-					builtinOK = false
-				}
-			}
-			if builtinOK && len(admission.TemplateUsable(candidate, hooks, selection.ISO)) == 0 {
+			if domainselection.TemplateEligible(candidate, hooks, selection.ISO, domainselection.Manifest{Templates: selection.BuiltinTemplates, Hooks: selection.BuiltinHooks}) {
 				want = append(want, candidate)
 			}
 		}

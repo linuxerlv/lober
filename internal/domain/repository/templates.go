@@ -48,7 +48,16 @@ type Templates interface {
 	ListTemplateVersions(ctx context.Context, id string) ([]model.Template, error)
 	// ListTemplates 共用doc.go的可信调用、空值、错误、重复、原子保存、并发与取消边界；只读，不写审计或通知，无提交复查。
 	// 分页、筛选、顺序及Total遵守types.go对应Query与Page；先检查分页再解本对象游标。
+	// Selection非nil时唯一委托ListTemplateCandidates并剥离组件事实，继承其单次读取边界。
 	ListTemplates(ctx context.Context, q TemplateQuery) (Page[model.Template], error)
+	// ListTemplateCandidates 供可信应用读取候选及精确组件，不认证用户；不扩大作者查询口。
+	// Selection必填，否则ErrInvalid；其后分页、游标、筛选的检查顺序与ListTemplates相同，输入不修改。
+	// 先取每个身份最高审批版本，再用selection.TemplateEligible筛选；排序、非nil空Items、Next及Total遵守types.go。
+	// 只读REPEATABLE READ事务覆盖本次所有模板和精确组件批；错误或取消返回零Page，不交付半页/半总数。
+	// 不写业务、审计或通知，不持写锁；重复请求各自读取，不承诺跨页或跨请求快照，无提交复查或重试。
+	// ISO/Manifest是应用先取得的输入，不承诺与库中事实同刻；展示后能否提交仍由提交入口重查。
+	// 页码为统计合格总数会读完所有候选与引用，仅保留当前批及目标页；游标只读到limit+1个合格项。
+	ListTemplateCandidates(ctx context.Context, q TemplateQuery) (Page[TemplateCandidateFacts], error)
 	// EnsureBuiltinTemplate 共用doc.go的可信调用、空值、错误、重复、原子保存、并发与取消边界；对应Hooks方法的保存约定按本接口上方说明继承。
 	// 输入唯一沿用CheckBuiltinTemplate；不能带DerivedFrom，身份、版本及引用同事务。
 	EnsureBuiltinTemplate(ctx context.Context, t model.Template) error

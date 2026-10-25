@@ -35,6 +35,9 @@ type Templates interface {
 	// ListTemplates 的八项保存约定唯一委托 repository.Templates.ListTemplates
 	// （internal/domain/repository/templates.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。
 	ListTemplates(context.Context, repository.TemplateQuery) (repository.Page[model.Template], error)
+	// ListTemplateCandidates 的八项约定唯一委托 repository.Templates.ListTemplateCandidates
+	// （internal/domain/repository/templates.go）；继承单次事实一致边界，无额外事务、权限或重试。
+	ListTemplateCandidates(context.Context, repository.TemplateQuery) (repository.Page[repository.TemplateCandidateFacts], error)
 	// ListTemplateVersions 的八项保存约定唯一委托 repository.Templates.ListTemplateVersions
 	// （internal/domain/repository/templates.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。
 	ListTemplateVersions(context.Context, string) ([]model.Template, error)

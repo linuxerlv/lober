@@ -666,6 +666,10 @@ func layerDirection(pkg, imp string) rule {
 		if imp != pkgModel && imp != pkgCatalog {
 			return ruleDomainLeaf
 		}
+	case pkg == layer1+"/selection":
+		if imp != pkgModel && imp != pkgAdmission {
+			return ruleDomainLeaf
+		}
 	case under(pkg, layer1+"/access"), under(pkg, layer1+"/selection"):
 		if imp != pkgModel {
 			return ruleDomainLeaf
