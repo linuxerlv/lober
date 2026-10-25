@@ -10,9 +10,9 @@
 
 **Spec:** [已确认的四层设计](../specs/2026-10-22-backend-ddd-four-layer-design.md)、[全后端总审计](../reviews/2026-10-25-ddd-final-audit.md)、三份独立[结构](../reviews/2026-10-25-ddd-final-structure-review.md)、[编写/主机/镜像](../reviews/2026-10-25-ddd-final-authoring-hosts-media-review.md)、[任务/身份/审计](../reviews/2026-10-25-ddd-final-tasks-identity-audit-review.md)审查及现有`docs/contracts/*.md`。
 
-状态：Task1–8实施、逐项独立审查、整分支源码/契约复核和新真实提交的原完整VM验收均已完成。原六项及本轮新增问题全部关闭，严重0、重要0、轻微0待修；功能提交为`76ef20aadba11f3632e26f21dcf9acb883bfb737`。最后文档范围核对与提交条目仅随本次文档提交生效完成，在此候选冻结时没有此前已发生的最终文档提交。
+状态：Task1–8实施、逐项独立审查、整分支复核和模块验收已完成，原六项及新增问题全部关闭。模块交付提交`8800b50dcbd400202143c6f9a3acc24508a2eaff`已按用户本轮授权合入本地dev，实际合并`956bfbfd039a6987ef5e77a1409a91e4cc3d1ad2`的原完整lober VM验收及独立集成审查通过，严重0、重要0、轻微0。最后三份集成文档核对与提交随本次文档提交生效；未推送或晋级其他环境。
 
-[独立计划审阅](../reviews/2026-10-25-ddd-final-closure-plan-review.md)的原计划结论保留；实际实施、失败/重放、关闭证据和未验边界见[收尾证据](../reviews/2026-10-25-ddd-final-closure-evidence.md)及[最终审查](../reviews/2026-10-25-ddd-final-closure-review.md)。本轮只交付`codex/ddd-final-closure`，未推送、合入dev或晋级其他环境。
+[独立计划审阅](../reviews/2026-10-25-ddd-final-closure-plan-review.md)的原计划结论保留；实际实施、失败/重放、关闭证据和未验边界见[收尾证据](../reviews/2026-10-25-ddd-final-closure-evidence.md)及[最终审查](../reviews/2026-10-25-ddd-final-closure-review.md)。原模块交付时未合dev的结论保留在当时记录中；本轮合并对象、新VM结果、用户网页保护及未验边界见[收尾dev集成记录](../reviews/2026-10-25-ddd-final-closure-dev-integration.md)。
 
 ## Global Constraints
 
