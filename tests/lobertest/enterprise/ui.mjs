@@ -21,7 +21,7 @@ async function signIn(username) {
 try {
   const admin = await signIn('admin');
   await admin.page.goto(input.url + '/#/access/role-menus');
-  await admin.page.getByRole('combobox', { name: '配置角色', exact: true }).click();
+  await admin.page.getByRole('combobox', { name: '配置角色', exact: true }).locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")][1]').click();
   await admin.page.getByRole('option', { name: '管理员（admin）', exact: true }).click();
   const roleMenu = admin.page.locator('[data-key="role-menus"]');
   await roleMenu.locator('.el-checkbox').waitFor();
