@@ -154,5 +154,5 @@ func checkSelectionFile(fset *token.FileSet, pkg string, f *ast.File) []violatio
 
 // 所有应用与其能力口共用外部操作限制，特殊分层也不能绕开。
 func applicationExternalImport(imp string) bool {
-	return under(imp, "os") || under(imp, "net") || under(imp, "database") || under(imp, "syscall") || imp == "io/ioutil" || under(imp, "crypto/rand") || under(imp, "math/rand")
+	return under(imp, "os") || under(imp, "net") || under(imp, "database") || under(imp, "syscall") || imp == "io/ioutil" || under(imp, "crypto/rand") || under(imp, "math/rand") || imp == "plugin"
 }

@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"path/filepath"
 	"strings"
 )
 
@@ -101,7 +100,7 @@ func interfaceCapabilityFindings(caller string, fset *token.FileSet, files []*as
 	for _, f := range files {
 		for _, decl := range f.Decls {
 			// 内置页面只在这两个真实资源入口读文件；其他文件没有文件读取许可。
-			ui := console && strings.HasSuffix(filepath.ToSlash(fset.Position(f.Pos()).Filename), "internal/interfaces/console/ui.go") && (declarationName(decl) == "WithFrontend" || declarationName(decl) == "frontendHandler")
+			ui := consoleResourceEntry(caller, fset, f, decl)
 			ast.Inspect(decl, func(n ast.Node) bool {
 				if machine || events {
 					bad := false
@@ -186,7 +185,7 @@ func interfaceCapabilityFindings(caller string, fset *token.FileSet, files []*as
 					}
 					if target == "io/fs" || target == "embed" {
 						if function {
-							bad = bad || !ui || target == "io/fs" && symbol != "ReadFile" && symbol != "Sub" || target == "embed" && symbol != "FS.ReadFile" && symbol != "FS.Open"
+							bad = bad || !ui || !consoleResourceOperation(obj)
 						}
 					}
 					if strings.HasPrefix(target, modulePath+"/internal/application/") && strings.HasSuffix(target, "/port") {

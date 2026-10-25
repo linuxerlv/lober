@@ -14,22 +14,7 @@ func hostsTransitionFixture(t *testing.T, file, body string) []violation {
 	t.Helper()
 	fset := token.NewFileSet()
 	var files []*ast.File
-	legacy := ""
-	if strings.Contains(body, "bridge2") {
-		legacy += `func(s *server)bridge2(){s.bridge()};`
-	}
-	if strings.Contains(body, "bridge") {
-		legacy += `func(s *server)bridge(){s.taskStream()};`
-	}
-	if strings.Contains(body, "alias") || strings.Contains(body, "oldResponse") {
-		legacy += `func oldResponse(){(&server{}).taskStream()};var alias=oldResponse;`
-	}
-	if strings.Contains(body, "RespondError") {
-		legacy += `func RespondError(){(&server{}).taskStream()};`
-	}
-	if legacy != "" || strings.Contains(body, "taskStream") {
-		legacy += `func(s *server)taskStream(){s.deps.LegacyTasks.GetTask()};`
-	}
+	legacy := legacyConsoleBridgeFixture(body)
 	local := `type localReader struct{}`
 	if strings.Contains(body, "s.deps.Local") {
 		local = `type localReader interface{GetHost()}`
