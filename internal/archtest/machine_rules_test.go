@@ -3,34 +3,26 @@ package archtest
 import (
 	"go/ast"
 	"go/token"
-	"strconv"
 )
 
-const ruleMachine rule = "执行状态机与机器网关只依赖标准库、core、store 契约与各自包；跨模块通过声明接口和装配点连接"
+const ruleMachine rule = "机器接口只转换并委托网关，日志适配器只接收观察与日志能力，执行应用遵守应用边界"
 
 func checkMachineFile(fset *token.FileSet, pkg string, f *ast.File) []violation {
-	var found []violation
-	for _, imp := range f.Imports {
-		name, _ := strconv.Unquote(imp.Path.Value)
-		own := pkgExecution
-		if under(pkg, pkgMachine) {
-			own = pkgMachine
-		}
-		if under(pkg, pkgEvents) {
-			own = pkgEvents
-		}
-		if pkg == pkgExecutionPort {
-			if name != "context" && name != pkgModel && name != pkgCatalog && name != pkgStore {
-				found = append(found, violation{rule: ruleMachine, pkg: pkg, subject: name, pos: position(fset, imp.Pos())})
-			}
-			continue
-		}
-		allowed := (isStd(name) && name != "C" && name != "unsafe") || inLayer1(name) || name == pkgStore || name == own || pkg == pkgMachine && name == pkgExecution || pkg == pkgExecution && name == pkgPorts || (pkg == pkgExecution || pkg == pkgEvents) && name == pkgExecutionPort
-		if !allowed {
-			found = append(found, violation{rule: ruleMachine, pkg: pkg, subject: name, pos: position(fset, imp.Pos())})
-		}
+	if pkg == pkgExecution || pkg == pkgExecutionPort {
+		return checkApplicationFile(fset, pkg, f)
 	}
-	return found
+	return checkImports(fset, pkg, f, func(_, imp string) rule {
+		allowed := isStd(imp) && imp != "C" && imp != "unsafe" && !applicationExternalImport(imp) || imp == "net/http" || imp == "net/url" || imp == "net/netip"
+		if under(pkg, pkgMachine) {
+			allowed = allowed || under(imp, pkgMachine) || imp == pkgExecution || imp == pkgModel || imp == pkgCatalog || imp == pkgExecutionRules
+		} else if under(pkg, pkgEvents) {
+			allowed = imp == "context" || imp == "net" || imp == "net/netip" || imp == "sync" || imp == pkgModel || imp == pkgExecutionPort || under(imp, pkgEvents)
+		}
+		if allowed {
+			return ""
+		}
+		return ruleMachine
+	})
 }
 
 func checkMachineKeysFile(fset *token.FileSet, pkg string, f *ast.File) []violation {

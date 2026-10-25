@@ -96,9 +96,20 @@ func typedTransitionFindings(root, caller string, fset *token.FileSet, files []*
 	if under(caller, pkgISO) || caller == pkgAssembly {
 		found = append(found, mediaStateFindings(caller, fset, files, info)...)
 	}
+	found = append(found, interfaceCapabilityFindings(caller, fset, files, info)...)
 	found = append(found, identityAuditFindings(caller, fset, files, info)...)
 	found = append(found, taskFinalFindings(caller, fset, files, info)...)
-	return found
+	// 同一真实对象与位置可能被两条补充路径发现，只报告一次，不改变原精确断言。
+	unique := found[:0]
+	seen := map[string]bool{}
+	for _, v := range found {
+		key := string(v.rule) + "\x00" + v.pkg + "\x00" + v.subject + "\x00" + v.pos
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, v)
+		}
+	}
+	return unique
 }
 
 func transitionRestricted(caller string, obj types.Object) bool {

@@ -634,7 +634,7 @@ func checkClock(fset *token.FileSet, pkg string, f *ast.File) []violation {
 // 层 1 里按方向规则（layerDirection），此外一律不许。
 func layer1Rule(pkg, imp string) rule {
 	switch {
-	case pkg == pkgExecutionRules && imp != pkgModel && imp != pkgCatalog:
+	case under(pkg, pkgExecutionRules) && imp != pkgModel && imp != pkgCatalog:
 		switch imp {
 		case "crypto/sha256", "encoding/hex", "encoding/json", "errors", "fmt", "maps", "strconv", "strings":
 			return ""
@@ -662,7 +662,7 @@ func layerDirection(pkg, imp string) rule {
 	switch {
 	case pkg == layer1+"/audit":
 		return ruleDomainLeaf
-	case pkg == pkgExecutionRules:
+	case under(pkg, pkgExecutionRules):
 		if imp != pkgModel && imp != pkgCatalog {
 			return ruleDomainLeaf
 		}

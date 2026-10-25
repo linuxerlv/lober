@@ -34,8 +34,9 @@ func TestMachineAndExecutionStayBehindDeclaredInterfaces(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(checkMachineFile(fset, pkg, file)) != 0 {
-				t.Errorf("declared contract dependency rejected: %s", dependency)
+			allowed := dependency == "context" || dependency == pkgModel || dependency == pkgCatalog && pkg != pkgEvents || dependency == pkgStore && pkg == pkgExecution || dependency == "net/http" && pkg == pkgMachine
+			if (len(checkMachineFile(fset, pkg, file)) == 0) != allowed {
+				t.Errorf("角色依赖不符 pkg=%s dependency=%s allowed=%v", pkg, dependency, allowed)
 			}
 		}
 	}
