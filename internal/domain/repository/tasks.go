@@ -19,22 +19,34 @@ type Tasks interface {
 	//     问题，整批回滚，报 BatchError，不写任务，也不写审计。
 	//  4. 全部通过才写：ID 用 NewID 生成，State 为 pending，Rev 为 1。并发下撞上「一台主机一个未结束任务」的
 	//     约束时，同样回滚并报 BatchError，问题是 host_has_open_task。
+	// CreateTasks 先CheckAudit，再执行下述入参检查；成功结果保持任务输入顺序。
 	CreateTasks(ctx context.Context, ts []model.Task, a Audit) ([]model.Task, error)
+	// GetTask 共用doc.go的可信调用、空值、错误、重复、原子保存、并发与取消边界；只读，不写审计或通知，无提交复查。
+	// 先CheckID再查存在性，缺失ErrNotFound；原冻结快照和执行记录一起读取。
 	GetTask(ctx context.Context, id string) (model.Task, error)
 	// FindOpenTask 找这台主机未结束的那个任务（C31 保证最多一个），给第 7 层引导时用；没有时第二个返回值为
 	// false。sn 要是规范化之后的写法（与 model.NormalizeSN 的结果相同），否则报 ErrInvalid（CheckSN），不当成没有
 	// 任务：按 SN 查找的方法里只有它查。网关不能把漏了规范化当成「没有任务」，否则机器会从本地盘启动、任务一直等着
 	// （见 Hosts 的说明）。
 	FindOpenTask(ctx context.Context, sn string) (model.Task, bool, error)
+	// ListTasks 共用doc.go的可信调用、空值、错误、重复、原子保存、并发与取消边界；只读，不写审计或通知，无提交复查。
+	// 分页、筛选、顺序及Total遵守types.go对应Query与Page；先检查分页再解本对象游标。
 	ListTasks(ctx context.Context, q TaskQuery) (Page[model.Task], error)
 	// TransitionTask 是系统发起的条件推进，不审计：当前的状态与 Rev 都等于 expect 才写入，否则报 ErrConflict；
 	// 成功后 Rev 加 1。events 与状态在同一个事务里写，规则同 AppendEvents。目标状态不合法报 ErrInvalid。
 	// 推进到未结束的状态时，这台主机已有另一个未结束的任务（比如失败的任务重试时，期间又建了新任务），报
 	// ProblemsError(ErrRejected)，问题是 host_has_open_task。
+	// TransitionTask 先CheckTransition，再锁任务查存在性、原状态和Rev；成功返回新任务与输入事件逐项追加结果。
+	// 重复旧期望冲突，不自动重试；只改状态及事件，不重算冻结快照。
 	TransitionTask(ctx context.Context, id string, expect TaskExpect, to model.TaskState, events []NewEvent) (model.Task, []Appended, error)
 	// TransitionTaskByUser 是用户发起的推进（取消、重试），要审计，其余与 TransitionTask 相同。
+	// TransitionTaskByUser 先CheckAudit，再沿用TransitionTask检查与结果顺序；与审计同事务。
 	TransitionTaskByUser(ctx context.Context, id string, expect TaskExpect, to model.TaskState, events []NewEvent, a Audit) (model.Task, []Appended, error)
 	// UpdateTaskExecution 将执行进度、任务状态和事件一起提交，任一写入失败就全部回滚。
 	// 审计不为零时，先校验审计，再在同一事务里写入。
+	// UpdateTaskExecution 先CheckTransition，再校验非零审计，再检查runtime字段与序列化大小，随后锁任务查存在性与期望。
+	// 无审计时为系统更新；有审计时同事务。成功返回新任务及对应事件追加结果，旧期望冲突不自动重试。
+	// runtime必传：Attempt>=1、BootCount在0至3、IssuedAt>0、PhaseAt>=IssuedAt、Deadline>=0；
+	// Signals最多16384项，键和值各不超过128字节且为安全词，序列化不超过4 MiB；失败均ErrInvalid。
 	UpdateTaskExecution(ctx context.Context, id string, expect TaskExpect, to model.TaskState, runtime *model.Execution, events []NewEvent, a Audit) (model.Task, []Appended, error)
 }

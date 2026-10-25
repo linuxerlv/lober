@@ -1,5 +1,11 @@
 package execution
 
+// 本文件的仓储口只供可信应用或启动组装调用；仓储不认证网页用户或机器令牌。
+// 身份、权限或凭据检查的有无及先后，由各消费入口的操作约定负责。
+// Boot/Preseed按SN读取开放任务，不先验机器令牌；GetAuthorized先GetTask再验令牌。
+// 输入规范化由调用应用负责；排序、空值、错误优先级、重复/版本冲突、锁内复查、原子审计及取消均沿用所指保存契约。
+// 只读方法不写业务或审计、不发通知，故无原子写与提交复查；重复读取不保证多次或多页快照。
+
 import (
 	"context"
 	"encoding/base64"
@@ -12,11 +18,20 @@ import (
 )
 
 type Repository interface {
+	// GetTask 的八项保存约定唯一委托 repository.Tasks.GetTask
+	// （internal/domain/repository/tasks.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。
 	GetTask(context.Context, string) (model.Task, error)
+	// FindOpenTask 的八项保存约定唯一委托 repository.Tasks.FindOpenTask
+	// （internal/domain/repository/tasks.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。
 	FindOpenTask(context.Context, string) (model.Task, bool, error)
+	// ListTasks 的八项保存约定唯一委托 repository.Tasks.ListTasks
+	// （internal/domain/repository/tasks.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。
 	ListTasks(context.Context, repository.TaskQuery) (repository.Page[model.Task], error)
+	// UpdateTaskExecution 的八项保存约定唯一委托 repository.Tasks.UpdateTaskExecution
+	// （internal/domain/repository/tasks.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。
 	UpdateTaskExecution(context.Context, string, repository.TaskExpect, model.TaskState, *model.Execution, []repository.NewEvent, repository.Audit) (model.Task, []repository.Appended, error)
 }
+// Publish 的八项约定唯一委托 ports.Notifier.Publish（internal/application/ports/notification.go），本口只缩小方法集。
 type Notifier interface{ Publish(string) }
 type Service struct {
 	repo     Repository
@@ -25,6 +40,8 @@ type Service struct {
 	notifier Notifier
 }
 
+// New 的八项应用约定唯一连接 docs/contracts/machine-execution.md「构造、凭据与授权」的本方法说明
+// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func New(repo Repository, key []byte, now func() int64, notifier Notifier) (*Service, error) {
 	if len(key) < 32 || now == nil {
 		return nil, errors.New("invalid execution configuration")
@@ -38,6 +55,8 @@ func (s *Service) commit(ctx context.Context, before, after model.Task, event re
 	}
 	return next, err
 }
+// Boot 的八项应用约定唯一连接 docs/contracts/machine-execution.md「引导和应答」的本方法说明
+// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) Boot(ctx context.Context, sn string, arch catalog.Arch, firmware catalog.Firmware) (model.Task, bool, error) {
 	normalized, p := model.NormalizeSN(sn)
 	if p != nil {
@@ -71,6 +90,8 @@ func (s *Service) Boot(ctx context.Context, sn string, arch catalog.Arch, firmwa
 // 状态机，boot 都进不去；已结束的按 FindOpenTask 的口径本来就不算开放任务。
 // Debian 的安装器在 auto 模式下会把 DHCP option 67 的 bootfile 地址当 preseed 下载，
 // 并覆盖内核命令行上的 preseed/url，所以网关需要按 SN 在这个阶段给出真实应答（D1）。
+// Preseed 的八项应用约定唯一连接 docs/contracts/machine-execution.md「引导和应答」的本方法说明
+// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) Preseed(ctx context.Context, sn string) (model.Task, bool, error) {
 	normalized, p := model.NormalizeSN(sn)
 	if p != nil {
@@ -86,6 +107,8 @@ func (s *Service) Preseed(ctx context.Context, sn string) (model.Task, bool, err
 	return task, true, nil
 }
 
+// GetAuthorized 的八项应用约定唯一连接 docs/contracts/machine-execution.md「构造、凭据与授权」的本方法说明
+// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) GetAuthorized(ctx context.Context, id, token string, finalize bool) (model.Task, error) {
 	task, err := s.repo.GetTask(ctx, id)
 	if err != nil {
@@ -100,6 +123,8 @@ func (s *Service) GetAuthorized(ctx context.Context, id, token string, finalize 
 	}
 	return task, nil
 }
+// Answer 的八项应用约定唯一连接 docs/contracts/machine-execution.md「引导和应答」的本方法说明
+// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) Answer(ctx context.Context, id, token string) (model.Task, error) {
 	for range 8 {
 		task, err := s.GetAuthorized(ctx, id, token, false)
@@ -124,6 +149,8 @@ func (s *Service) Answer(ctx context.Context, id, token string) (model.Task, err
 func finalSignal(sig Signal) bool {
 	return sig.Timing == catalog.TimingFirstboot || sig.Phase == "booted" || sig.Phase == "init-start" || sig.Phase == "init-done" || sig.Phase == "ready"
 }
+// Signal 的八项应用约定唯一连接 docs/contracts/machine-execution.md「信号与超时扫描」的本方法说明
+// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) Signal(ctx context.Context, id, token string, sig Signal) error {
 	for range 8 {
 		task, err := s.repo.GetTask(ctx, id)
@@ -170,7 +197,11 @@ func (s *Service) Signal(ctx context.Context, id, token string, sig Signal) erro
 	return repository.ErrConflict
 }
 
+// CanCancel 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
+// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (*Service) CanCancel(t model.Task) []model.Problem { return CanCancel(t) }
+// CanRetry 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
+// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (*Service) CanRetry(t model.Task) []model.Problem  { return CanRetry(t) }
 
 // User controls use the exact revision the user reviewed. Conflicts require refresh.
@@ -210,14 +241,20 @@ func (s *Service) control(ctx context.Context, task model.Task, audit repository
 	_, err = s.commit(ctx, latest, next, repository.NewEvent{At: at, Kind: "machine." + kind, Key: attemptKey(next, kind)}, audit)
 	return err
 }
+// Cancel 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
+// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) Cancel(ctx context.Context, t model.Task, a repository.Audit) error {
 	return s.control(ctx, t, a, false)
 }
+// Retry 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
+// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) Retry(ctx context.Context, t model.Task, a repository.Audit) error {
 	return s.control(ctx, t, a, true)
 }
 
 // Sweep reads durable state on every invocation, including after process restart.
+// Sweep 的八项应用约定唯一连接 docs/contracts/machine-execution.md「信号与超时扫描」的本方法说明
+// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func (s *Service) Sweep(ctx context.Context) error {
 	q := repository.TaskQuery{States: []model.TaskState{model.TaskBooting, model.TaskInstalling, model.TaskRebooting, model.TaskInitializing}, Limit: 100}
 	for {
