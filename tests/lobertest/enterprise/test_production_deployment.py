@@ -435,5 +435,167 @@ class WebAssetEntries(unittest.TestCase):
                             home=b'changed homepage bytes')
 
 
+class CleanupSourceBoundaries(unittest.TestCase):
+    TREEINFO = (b'[general]\nname=Rocky Linux\nversion=9.6\narch=x86_64\n'
+                b'packagedir=media/Packages\n')
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.runtime = self.root / 'runtime'
+        (self.runtime / 'sources').mkdir(parents=True)
+        self.fixture = self.root / 'frozen.iso'
+        # 检查器用字节；真实冻结ISO另在VM轻量核验，不计安装通过。
+        self.fixture.write_bytes(b'\0' * 32769 + b'CD001' + self.TREEINFO + b'\0tail')
+        self.frozen_sha = digest(self.fixture)
+
+    def required(self, name):
+        fn = getattr(deployment, name, None)
+        self.assertTrue(callable(fn), name + ' must enforce the actual cleanup source contract')
+        return fn
+
+    def prepare(self):
+        return self.required('prepare_cleanup_source')(self.fixture, self.runtime, self.frozen_sha)
+
+    def test_cleanup_derives_only_frozen_unique_treeinfo_equal_length(self):
+        before = self.fixture.read_bytes()
+        record = self.prepare()
+        result = Path(record['path']).read_bytes()
+        self.assertEqual(result, before.replace(self.TREEINFO, self.TREEINFO.replace(b'9.6', b'9.7')))
+        self.assertEqual(self.fixture.read_bytes(), before)
+        self.assertEqual(record['fixture_sha256'], self.frozen_sha)
+        self.assertNotEqual(record['sha256'], self.frozen_sha)
+        self.assertEqual(record['size'], len(before))
+        self.assertEqual(record['version'], '9.7')
+        self.assertEqual(record['arch'], 'x86_64')
+        self.assertEqual(digest(record['path']), record['sha256'])
+
+    def test_cleanup_rejects_changed_frozen_fixture(self):
+        self.fixture.write_bytes(self.fixture.read_bytes() + b'changed')
+        with self.assertRaises(DeploymentError):
+            self.prepare()
+
+    def test_cleanup_rejects_absent_duplicate_or_incomplete_treeinfo(self):
+        for replacement in (b'', self.TREEINFO * 2, self.TREEINFO.replace(b'packagedir=media/Packages', b'packagedir=other')):
+            with self.subTest(replacement=replacement):
+                self.fixture.write_bytes(b'\0' * 32769 + b'CD001' + replacement + b'\0')
+                self.frozen_sha = digest(self.fixture)
+                with self.assertRaises(DeploymentError):
+                    self.prepare()
+
+    def test_cleanup_rejects_non_iso_or_other_version(self):
+        for data in (self.TREEINFO + b'\0', self.fixture.read_bytes().replace(b'9.6', b'9.8')):
+            self.fixture.write_bytes(data)
+            self.frozen_sha = digest(self.fixture)
+            with self.assertRaises(DeploymentError):
+                self.prepare()
+
+    def test_cleanup_refuses_existing_destination(self):
+        (self.runtime / 'sources/local-cleanup-original.iso').write_bytes(b'keep')
+        with self.assertRaises(DeploymentError):
+            self.prepare()
+        self.assertEqual((self.runtime / 'sources/local-cleanup-original.iso').read_bytes(), b'keep')
+
+    def exercise(self, mutation=None):
+        self.runtime = Path(tempfile.mkdtemp(dir=self.root))
+        (self.runtime / 'sources').mkdir()
+        cleanup = self.prepare()
+        sentinel = self.root / 'business-original.iso'
+        sentinel.write_bytes(b'original business source')
+        expected = {'sentinel':str(sentinel), 'sentinel_sha256':digest(sentinel),
+                    'protected':{'/isos/business':{'id':'business','state':'ready'},
+                                 '/tasks/old':{'id':'old','state':'pending'},
+                                 '/tasks/new':{'id':'new','state':'pending'}}}
+        ready = {'id':'cleanup', 'state':'ready', 'version':'9.7', 'arch':'x86_64',
+                 'sha256':cleanup['sha256'], 'rev':3}
+        rows = [{'iso_id':'cleanup','role':'','kind':'local','path':cleanup['path'],
+                 'state':'fetched','fetched':cleanup['size']}]
+        calls = []
+        test = self
+
+        class FakeService:
+            def request(self, method, path, token=None, expected=200):
+                calls.append((method,path,expected))
+                if path in test.protected:
+                    return copy.deepcopy(test.protected[path])
+                if method == 'GET' and path == '/isos/cleanup' and expected == 404:
+                    if mutation == 'not_deleted':
+                        raise DeploymentError('still present')
+                    return None
+                if method == 'DELETE' and path == '/isos/cleanup?rev=3':
+                    return None
+                raise AssertionError((method,path,expected))
+
+            def stop(self):
+                calls.append(('stop',))
+
+            def start(self):
+                calls.append(('start',))
+                if mutation == 'source_removed':
+                    Path(cleanup['path']).unlink()
+                elif mutation == 'source_changed':
+                    data = Path(cleanup['path']).read_bytes()
+                    Path(cleanup['path']).write_bytes(data[:-1]+b'X')
+                elif mutation == 'source_resized':
+                    Path(cleanup['path']).write_bytes(Path(cleanup['path']).read_bytes()+b'X')
+                elif mutation == 'sentinel_changed':
+                    sentinel.write_bytes(b'changed')
+                elif mutation in ('business_changed','old_task_changed','new_task_changed'):
+                    path = {'business_changed':'/isos/business','old_task_changed':'/tasks/old',
+                            'new_task_changed':'/tasks/new'}[mutation]
+                    test.protected[path]['state'] = 'changed'
+
+            def login(self, username, password):
+                return 'renewed-private-token'
+
+        self.protected = copy.deepcopy(expected['protected'])
+        if mutation in ('wrong_kind','wrong_path','wrong_iso','wrong_role','wrong_fetched','duplicate_source'):
+            key, value = {'wrong_kind':('kind','upload'), 'wrong_path':('path',str(sentinel)),
+                          'wrong_iso':('iso_id','business'), 'wrong_role':('role','extra'),
+                          'wrong_fetched':('fetched',1), 'duplicate_source':('kind','local')}[mutation]
+            rows[0][key] = value
+            if mutation == 'duplicate_source':
+                rows.append(dict(rows[0]))
+        if mutation in ('not_ready','wrong_version','wrong_arch','wrong_sha'):
+            key, value = {'not_ready':('state','failed'), 'wrong_version':('version','9.6'),
+                          'wrong_arch':('arch','aarch64'), 'wrong_sha':('sha256','0'*64)}[mutation]
+            ready[key] = value
+        pg = type('PrivatePG', (), {'root':self.root})()
+        with patch.object(deployment, 'import_media', return_value=ready) as importer, \
+             patch.object(deployment, 'query_sources', return_value=rows):
+            result = self.required('preserve_cleanup_source')(FakeService(), 'private-token', pg, cleanup,
+                expected, 'private-password')
+        self.assertEqual(importer.call_args.kwargs['local'], Path(cleanup['path']))
+        self.assertEqual(result['local_source']['path'], cleanup['path'])
+        self.assertEqual(result['deleted_iso_id'], 'cleanup')
+        self.assertIn(('DELETE','/isos/cleanup?rev=3',200), calls)
+        self.assertIn(('GET','/isos/cleanup',404), calls)
+        self.assertLess(calls.index(('stop',)), calls.index(('start',)))
+
+    def test_actual_ready_local_source_is_deleted_and_preserved_after_restart(self):
+        self.exercise()
+
+    def test_rejects_wrong_local_source_binding(self):
+        for mutation in ('wrong_kind','wrong_path','wrong_iso','wrong_role','wrong_fetched','duplicate_source'):
+            with self.subTest(mutation=mutation), self.assertRaises(DeploymentError):
+                self.exercise(mutation)
+
+    def test_rejects_not_ready_or_wrong_identified_media(self):
+        for mutation in ('not_ready','wrong_version','wrong_arch','wrong_sha'):
+            with self.subTest(mutation=mutation), self.assertRaises(DeploymentError):
+                self.exercise(mutation)
+
+    def test_rejects_delete_or_restart_source_loss(self):
+        for mutation in ('not_deleted','source_removed','source_changed','source_resized'):
+            with self.subTest(mutation=mutation), self.assertRaises((DeploymentError, FileNotFoundError)):
+                self.exercise(mutation)
+
+    def test_rejects_changed_business_iso_tasks_or_original_sentinel(self):
+        for mutation in ('business_changed','old_task_changed','new_task_changed','sentinel_changed'):
+            with self.subTest(mutation=mutation), self.assertRaises(DeploymentError):
+                self.exercise(mutation)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

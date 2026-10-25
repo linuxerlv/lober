@@ -659,6 +659,75 @@ def import_media(service, token, fixture, name, local=None):
     raise DeploymentError('Synthetic control-plane import timed out')
 
 
+CLEANUP_TREEINFO = (b'[general]\nname=Rocky Linux\nversion=9.6\narch=x86_64\n'
+                    b'packagedir=media/Packages\n')
+
+
+def prepare_cleanup_source(fixture, runtime, frozen_sha256):
+    data = Path(fixture).read_bytes()
+    require(hashlib.sha256(data).hexdigest() == frozen_sha256, 'Frozen synthetic fixture changed')
+    require(data[32769:32774] == b'CD001' and data.count(CLEANUP_TREEINFO) == 1 and
+            data.count(CLEANUP_TREEINFO + b'\0') == 1,
+            'Expected unique complete synthetic Rocky 9.6 treeinfo absent')
+    replacement = CLEANUP_TREEINFO.replace(b'version=9.6\n', b'version=9.7\n')
+    derived = data.replace(CLEANUP_TREEINFO, replacement, 1)
+    require(len(derived) == len(data) and derived != data, 'Synthetic cleanup derivation changed image size')
+    path = Path(runtime) / 'sources/local-cleanup-original.iso'
+    require(not path.exists() and not path.is_symlink(), 'Cleanup source destination already exists')
+    with path.open('xb') as out:
+        out.write(derived)
+    path.chmod(0o600)
+    require(digest(fixture) == frozen_sha256, 'Frozen fixture changed during cleanup derivation')
+    return {'path': str(path), 'size': len(derived), 'sha256': digest(path),
+            'fixture_sha256': frozen_sha256, 'version': '9.7', 'arch': 'x86_64'}
+
+
+def verify_cleanup_source(source):
+    path = Path(source['path'])
+    require(path.is_absolute() and path.name == 'local-cleanup-original.iso' and
+            path.is_file() and not path.is_symlink(), 'Cleanup local original missing or replaced')
+    require(source['version'] == '9.7' and source['arch'] == 'x86_64' and
+            source['sha256'] != source['fixture_sha256'] and path.stat().st_size == source['size'] and
+            digest(path) == source['sha256'], 'Cleanup local original metadata/bytes differ')
+    return path
+
+
+def require_cleanup_ready(item, source):
+    require(item.get('id') and item.get('state') == 'ready' and
+            all(item.get(key) == source[key] for key in ('version', 'arch', 'sha256')),
+            'Cleanup ISO did not identify the frozen derived source')
+
+
+def preserve_cleanup_source(service, token, pg, source, protected, password):
+    def verify_protected(current_token):
+        require(digest(protected['sentinel']) == protected['sentinel_sha256'], 'Original business source changed')
+        for path, value in protected['protected'].items():
+            require(service.request('GET', path, current_token) == value, 'Protected ISO/task changed: ' + path)
+
+    local = verify_cleanup_source(source)
+    require(str(local) != protected['sentinel'], 'Cleanup source replaced original business sentinel')
+    verify_protected(token)
+    item = import_media(service, token, local, 'restore-cleanup-local-source', local=local)
+    require_cleanup_ready(item, source)
+    rows = query_sources(pg, pg.root / 'cleanup-source-rows.log')
+    main = [v for v in rows if v['iso_id'] == item['id'] and v['role'] == '']
+    require(len(main) == 1 and main[0]['kind'] == 'local' and main[0]['path'] == str(local) and
+            main[0]['state'] == 'fetched' and main[0]['fetched'] == source['size'],
+            'Deleted ISO is not bound to the exact frozen local original')
+    verify_cleanup_source(source)
+    service.request('DELETE', '/isos/' + item['id'] + '?rev=' + str(item['rev']), token)
+    service.request('GET', '/isos/' + item['id'], token, expected=404)
+    # 删除记录后重启，真实清理逻辑仍须保留它实际读取的本地原件。
+    service.stop()
+    service.start()
+    token = service.login('admin', password)
+    verify_cleanup_source(source)
+    verify_protected(token)
+    return {'deleted_iso_id': item['id'], 'local_source': main[0], 'source': source,
+            'original_logical_path_unchanged': True, 'actual_local_iso_deleted_and_service_restarted': True,
+            'protected_iso_and_two_tasks_unchanged': True, 'sentinel_sha256': protected['sentinel_sha256']}
+
+
 def seed_business(service, password, fixture, runtime):
     token = service.login('admin', password)
     roles = ('viewer', 'operator', 'hook-author', 'hook-approver')
@@ -698,7 +767,8 @@ def seed_business(service, password, fixture, runtime):
                  '/isos/' + media['id'] + '/progress', '/audit?limit=500']
     snapshot = {path: service.request('GET', path, token) for path in endpoints}
     require(any(v.get('action') == 'host.create' and v.get('targetID') == host['sn'] for v in snapshot['/audit?limit=500']['items']), 'Host audit absent')
-    return {'endpoints': snapshot, 'task_path': task_path, 'preview': preview,
+    cleanup_source = prepare_cleanup_source(fixture, runtime, digest(runtime / 'sources/prepared-synthetic.iso'))
+    return {'endpoints': snapshot, 'task_path': task_path, 'preview': preview, 'cleanup_source': cleanup_source,
             'sentinel': str(sentinel), 'sentinel_sha256': digest(sentinel), 'host_sn': host['sn'],
             'selection': {'isoID': media['id'], 'templateID': template['id'], 'templateVersion': 1}}
 
@@ -808,6 +878,7 @@ def fresh(args, manifest, inputs, common):
             write_json(work / 'expected.json', expected)
             write_json(work / 'credentials.json', {'password': password})
             log.update(expected_sha256=digest(work / 'expected.json'), synthetic_control_plane_only=True)
+            log['cleanup_source'] = expected['cleanup_source']
         with evidence.check('browser_console') as log:
             log.update(browser(service, inputs, password, evidence.output))
         with evidence.check('restart_preserves_admin') as log:
@@ -944,16 +1015,12 @@ def restore_or_offline(args, manifest, inputs, common, phase, payload):
                 require(len(created['tasks']) == 1 and created['tasks'][0]['state'] == 'pending', 'Restored representative flow failed')
                 log['legitimate_new_task'] = created['tasks'][0]['id']
             with evidence.check('source_preserved') as log:
-                require(digest(expected['sentinel']) == expected['sentinel_sha256'], 'Restored local source byte digest differs')
-                scratch = import_media(service, token, logical / 'sources' / 'prepared-synthetic.iso', 'restore-cleanup-local-source', local=Path(expected['sentinel']))
-                service.request('DELETE', '/isos/' + scratch['id'] + '?rev=' + str(scratch['rev']), token)
-                service.request('GET', '/isos/' + scratch['id'], token, expected=404)
-                # 实际删除后再重启，让持久化清理日志重新检查本地原件。
-                service.stop()
-                service.start()
-                token = service.login('admin', password)
-                require(digest(expected['sentinel']) == expected['sentinel_sha256'], 'Background cleanup removed source sentinel')
-                log.update(sentinel_sha256=expected['sentinel_sha256'], original_logical_path_unchanged=True, actual_local_iso_deleted_and_service_restarted=True)
+                original_iso = '/isos/' + expected['selection']['isoID']
+                new_task = '/tasks/' + created['tasks'][0]['id']
+                protected = {**expected, 'protected': {original_iso: expected['endpoints'][original_iso],
+                    expected['task_path']: expected['endpoints'][expected['task_path']],
+                    new_task: service.request('GET', new_task, token)}}
+                log.update(preserve_cleanup_source(service, token, pg, expected['cleanup_source'], protected, password))
             with evidence.check('recovery_budget') as log:
                 elapsed = (time.time_ns() - disaster) / 1e9
                 require(0 <= elapsed <= 3600, 'Full recovery exceeded 60 minute budget')
@@ -967,7 +1034,9 @@ def restore_or_offline(args, manifest, inputs, common, phase, payload):
             with evidence.check('offline_browser_console') as log:
                 log.update(browser(service, inputs, password, evidence.output))
             with evidence.check('offline_import') as log:
-                item = import_media(service, token, logical / 'sources' / 'prepared-synthetic.iso', 'offline-synthetic-control-plane-only')
+                source = expected['cleanup_source']
+                item = import_media(service, token, verify_cleanup_source(source), 'offline-synthetic-control-plane-only')
+                require_cleanup_ready(item, source)
                 log.update(iso_id=item['id'], state=item['state'], synthetic_control_plane_only=True)
     except BaseException as exc:
         error = type(exc).__name__ + ': ' + str(exc) if isinstance(exc, DeploymentError) else type(exc).__name__
