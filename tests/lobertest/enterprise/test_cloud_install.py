@@ -201,77 +201,129 @@ class CloudChecks(unittest.TestCase):
                 with self.assertRaises(ValueError):checker.validate_short_approval(config,manifest)
                 host.assert_not_called();lease.assert_not_called()
     def test_short_entry_is_independent_of_verified_flag_and_never_creates_a_task(self):
+        for active in (False,True):
+            with self.subTest(active=active):self.exercise_short_entry(active=active)
+
+    def test_short_no_task_accepts_reviewed_linux01_generation(self):
+        self.exercise_short_entry(generation=True)
+
+    def test_short_no_task_rejects_unapproved_or_changed_generation_before_actions(self):
+        for fault in ('unapproved','uuid','disk-path','serial','round'):
+            with self.subTest(fault=fault):self.exercise_short_entry(generation=True,fault=fault)
+
+    def exercise_short_entry(self, *, active=False, generation=False, fault=None):
         """编排替身，不是原始网络证据；唯一允许结果仍待根核验。"""
         checker=module(self)
-        for active in (False,True):
-            with self.subTest(active=active),tempfile.TemporaryDirectory(prefix='main-short-fixture-') as directory:
-                root=Path(directory);events=[]
-                owner={**OWNER,'target_uuid':'7fe71ebb-a34d-4155-8410-d1427ca2f83a'};target=checker.target_spec(owner)
-                checker.short_file(root,'runtime.json',{'fixture_only':True});checker.short_file(root,'instance.json',{'fixture_only':True})
-                resource={'schema':'lober-cloud-target-resource-v1','owner':owner,'target':target,'executes_mutation':False,
-                    'failed_disk_delete_or_reuse_allowed':False,'review':{'approved':True,'root_reviewer':'root-fixture','independent_reviewer':'other-fixture'}}
-                checker.short_file(root,'resource.json',resource)
-                checker.short_file(root,'origin.json',{'deployment_receipt_sha256':checker.sha256(root/'runtime.json')})
-                frozen={'targets':{owner['target_uuid']:{'packet_mode':'NO_TASK'}},'max_seconds':60}
-                bindings={'product_sha':'a'*40,'test_sha':'b'*40,'binary_sha256':'c'*64,
-                    'runtime_record_sha256':checker.sha256(root/'runtime.json'),'instance_record_sha256':checker.sha256(root/'instance.json'),
-                    'target_contract_sha256':checker.canonical_sha256(resource)}
-                checks={key:checker.sha256(Path(checker.__file__).with_name(name+'.py')) for key,name in
-                    (('probe_sha256','cloud_no_task_probe'),('parser_sha256','cloud_packet_capture'),('capture_session_sha256','cloud_capture_session'))}
-                contract={'owner':owner,'target':target,'bindings':bindings,'checkers':checks,'capture_contract':frozen,
-                    'operations':{'start_source_sha256':hashlib.sha256(b'START-FIXTURE').hexdigest(),
-                                  'stop_source_sha256':hashlib.sha256(b'STOP-FIXTURE').hexdigest()},'max_seconds':60}
-                checker.short_file(root,'contract.json',contract)
-                manifest={**{key:bindings[key] for key in ('product_sha','test_sha','binary_sha256')},'cloud':{
-                    'owner':owner,'target':target,'instance_record_sha256':bindings['instance_record_sha256'],
-                    'database_origin_file':str(root/'origin.json'),'database_origin_sha256':checker.sha256(root/'origin.json'),
-                    'no_task_contract_sha256':checker.sha256(root/'contract.json'),
-                    'no_task_target_contract_file_sha256':checker.sha256(root/'resource.json')}}
-                config={'no_task_contract_file':str(root/'contract.json'),'no_task_runtime_record_file':str(root/'runtime.json'),
-                    'no_task_target_contract_file':str(root/'resource.json'),'instance_record_file':str(root/'instance.json'),
-                    'short_observation_seconds':5,'short_failure_evidence_verified':False}
-                class API:
-                    def authenticate(self):pass
-                    def api(self,method,path):
-                        if method!='GET':raise AssertionError('short禁止任务POST')
-                        events.append('GET');page={'items':[{'state':'pending'}] if active else [],'next':'','total':int(active)}
-                        self.last_raw_response={'path':'/console/v1'+path,'status':200,
-                            'payload':json.dumps({'code':0,'data':page,'message':''}).encode()}
-                        return page
-                class Captured:
-                    def __init__(self,*args):
-                        events.append('capture-start');self.output=root/'capture';self.output.mkdir(mode=0o700)
-                        checker.short_file(self.output,'capture-receipt-private.json',{'fixture_only':True})
-                        anchor=checker.short_file(self.output,'anchor.json',{'fixture_only':True})
-                        self.anchor_file=Path(anchor['path']);self.anchor_sha256=anchor['sha256']
-                    def check(self):pass
-                    def close(self):events.append('capture-close')
-                    def analyze(self):events.append('parse');return {'fixture_only':True}
-                def action(config,manifest,contract,context,output,kind):
-                    events.append(kind);return checker.short_file(output,'action-'+kind+'.json',{'fixture_only':True,'context':context})
-                def disk_snapshot(config,manifest,context,output,label):
-                    events.append(label);return checker.short_file(output,label+'.json',{'fixture_only':True,'context':context})
-                def verify(receipt,contract,*,anchor):
-                    self.assertFalse(receipt['root_verified']);self.assertEqual(checker.canonical_sha256(receipt),anchor['receipt_sha256'])
-                    self.assertEqual(len(receipt['records']),11)
-                    for ref in receipt['records'].values():self.assertEqual(checker.sha256(ref['path']),ref['sha256'])
-                    return {'status':'ROOT_REVIEW_REQUIRED','short_failure_evidence_verified':False}
-                probe=types.SimpleNamespace(prepare_no_task_probe=lambda contract:{'status':'PROPOSAL_ONLY'},verify_no_task_probe=verify)
-                with patch.object(checker,'load_cloud_helper',return_value=probe),patch.object(checker,'verify_instance'), \
-                    patch.object(checker,'Console',return_value=API()),patch.object(checker,'capture_contract',return_value=frozen), \
-                    patch.object(checker,'Capture',Captured),patch.object(checker,'short_host_action',side_effect=action), \
-                    patch.object(checker,'short_disk_snapshot',side_effect=disk_snapshot), \
-                    patch.object(checker,'target_action_source',return_value='START-FIXTURE'), \
-                    patch.object(checker,'owned_client_stop_source',return_value='STOP-FIXTURE'), \
-                    patch.object(checker.time,'monotonic',side_effect=[0,10]):
-                    if active:
-                        with self.assertRaises(ValueError):checker.short_no_task(config,manifest,root)
-                        self.assertNotIn('capture-start',events)
-                    else:
-                        result=checker.short_no_task(config,manifest,root)
-                        self.assertEqual(result['status'],'ROOT_REVIEW_REQUIRED');self.assertFalse(result['short_failure_evidence_verified'])
-                        self.assertLess(events.index('stop'),events.index('capture-close'))
-                        self.assertEqual(events.count('GET'),4)
+        with tempfile.TemporaryDirectory(prefix='main-short-fixture-') as directory:
+            root=Path(directory);events=[]
+            owner={**OWNER,'target_uuid':'7fe71ebb-a34d-4155-8410-d1427ca2f83a'};target={**TARGET_SPEC,'uuid':owner['target_uuid']}
+            if generation:
+                target.update(disk_path=ROOT+'/targets/linux01-g01/system.qcow2',disk_serial='PQ25_LINUX01_G01')
+            if fault=='uuid':owner['target_uuid']=target['uuid']='6df3e5fd-e1bf-4114-8471-613eebd26e52'
+            checker.short_file(root,'runtime.json',{'fixture_only':True});checker.short_file(root,'instance.json',{'fixture_only':True})
+            resource=checker.propose_target_contract(owner,target,[ROOT+'/linux01.qcow2']) if generation else {
+                'schema':'lober-cloud-target-resource-v1','owner':owner,'target':target,'executes_mutation':False,
+                'failed_disk_delete_or_reuse_allowed':False}
+            resource['review']={'approved':fault!='unapproved','root_reviewer':'root-fixture','independent_reviewer':'other-fixture'}
+            if fault=='disk-path':target['disk_path']=ROOT+'/targets/linux02-g01/system.qcow2'
+            if fault=='serial':target['disk_serial']='PQ25_LINUX01_G02'
+            checker.short_file(root,'resource.json',resource)
+            checker.short_file(root,'origin.json',{'deployment_receipt_sha256':checker.sha256(root/'runtime.json')})
+            import test_cloud_packet_capture as packets
+            packet=packets.no_task_contract(b'')
+            for key in ('pcap_sha256','pcap_size','capture_start_ns','capture_end_ns'):packet.pop(key)
+            frozen={'schema':'lober-cloud-capture-session-v1','host':target['host'],'bridge':target['bridge'],'network':target['network'],
+                'targets':{target['uuid']:{'packet_mode':'NO_TASK','target_sha256':checker.canonical_sha256(target),
+                    'packet_contract':packet,'boot_chain':{'firmware_sha256':'a'*64,'dhcp_config_sha256':'b'*64,
+                        'user_class_sha256':hashlib.sha256(b'').hexdigest(),'boot_file':'pq25.ipxe','required_tftp':['pq25.ipxe']}}},
+                'tftp_port_range':[40000,40010],'max_bytes':64*1024**2,'max_seconds':60,'tcp_reset_policy':'no-rst'}
+            bindings={'product_sha':'a'*40,'test_sha':'b'*40,'binary_sha256':'c'*64,
+                'runtime_record_sha256':checker.sha256(root/'runtime.json'),'instance_record_sha256':checker.sha256(root/'instance.json'),
+                'target_contract_sha256':checker.canonical_sha256(resource)}
+            checks={key:checker.sha256(Path(checker.__file__).with_name(name+'.py')) for key,name in
+                (('probe_sha256','cloud_no_task_probe'),('parser_sha256','cloud_packet_capture'),('capture_session_sha256','cloud_capture_session'))}
+            contract={'schema':'lober-cloud-no-task-probe-v1','scope':'NO_TASK','task_policy':'TOTAL_TASKS_ZERO',
+                'owner':{**owner,**({'run_id':'other-round'} if fault=='round' else {})},'target':target,'bindings':bindings,'checkers':checks,'capture_contract':frozen,
+                'operations':{'start_source_sha256':hashlib.sha256(b'START-FIXTURE').hexdigest(),
+                              'stop_source_sha256':hashlib.sha256(b'STOP-FIXTURE').hexdigest()},'max_seconds':60}
+            checker.short_file(root,'contract.json',contract)
+            manifest={**{key:bindings[key] for key in ('product_sha','test_sha','binary_sha256')},'cloud':{
+                'owner':owner,'target':target,'instance_record_sha256':bindings['instance_record_sha256'],
+                'database_origin_file':str(root/'origin.json'),'database_origin_sha256':checker.sha256(root/'origin.json'),
+                'no_task_contract_sha256':checker.sha256(root/'contract.json'),
+                'no_task_target_contract_file_sha256':checker.sha256(root/'resource.json')}}
+            if generation:
+                manifest['cloud'].update(target_contract=resource,target_contract_sha256=checker.canonical_sha256(resource))
+            config={'no_task_contract_file':str(root/'contract.json'),'no_task_runtime_record_file':str(root/'runtime.json'),
+                'no_task_target_contract_file':str(root/'resource.json'),'instance_record_file':str(root/'instance.json'),
+                'short_observation_seconds':5,'short_failure_evidence_verified':False}
+            class API:
+                def authenticate(self):pass
+                def api(self,method,path):
+                    if method!='GET':raise AssertionError('short禁止任务POST')
+                    events.append('GET');page={'items':[{'state':'pending'}] if active else [],'next':'','total':int(active)}
+                    self.last_raw_response={'path':'/console/v1'+path,'status':200,
+                        'payload':json.dumps({'code':0,'data':page,'message':''}).encode()}
+                    return page
+            class Captured:
+                def __init__(self,*args):
+                    events.append('capture-start');self.output=root/'capture';self.output.mkdir(mode=0o700)
+                    checker.short_file(self.output,'capture-receipt-private.json',{'fixture_only':True})
+                    anchor=checker.short_file(self.output,'anchor.json',{'fixture_only':True})
+                    self.anchor_file=Path(anchor['path']);self.anchor_sha256=anchor['sha256']
+                def check(self):pass
+                def close(self):events.append('capture-close')
+                def analyze(self):events.append('parse');return {'fixture_only':True}
+            def action(config,manifest,contract,context,output,kind):
+                events.append(kind);return checker.short_file(output,'action-'+kind+'.json',{'fixture_only':True,'context':context})
+            def disk_snapshot(config,manifest,context,output,label):
+                events.append(label);return checker.short_file(output,label+'.json',{'fixture_only':True,'context':context})
+            def verify(receipt,contract,*,anchor):
+                self.assertFalse(receipt['root_verified']);self.assertEqual(checker.canonical_sha256(receipt),anchor['receipt_sha256'])
+                self.assertEqual(len(receipt['records']),11)
+                for ref in receipt['records'].values():self.assertEqual(checker.sha256(ref['path']),ref['sha256'])
+                return {'status':'ROOT_REVIEW_REQUIRED','short_failure_evidence_verified':False}
+            probe=types.SimpleNamespace(prepare_no_task_probe=__import__('cloud_no_task_probe').prepare_no_task_probe,verify_no_task_probe=verify)
+            with patch.object(checker,'load_cloud_helper',return_value=probe),patch.object(checker,'verify_instance'), \
+                patch.object(checker,'Console',return_value=API()),patch.object(checker,'capture_contract',return_value=frozen), \
+                patch.object(checker,'Capture',Captured),patch.object(checker,'short_host_action',side_effect=action), \
+                patch.object(checker,'short_disk_snapshot',side_effect=disk_snapshot), \
+                patch.object(checker,'target_action_source',return_value='START-FIXTURE'), \
+                patch.object(checker,'owned_client_stop_source',return_value='STOP-FIXTURE'), \
+                patch.object(checker.time,'monotonic',side_effect=[0,10]),patch.object(checker,'SafetyLease') as lease, \
+                patch.object(checker,'host_command') as host:
+                if fault:
+                    with self.assertRaises(ValueError):checker.validate_short_approval(config,manifest)
+                    with self.assertRaises(ValueError):checker.short_no_task(config,manifest,root)
+                    checker.short_file(root,'identity.json',owner)
+                    config['identity_file']=str(root/'identity.json')
+                    checker.short_file(root,'config.json',config)
+                    manifest['cloud'].update(config_sha256=checker.sha256(root/'config.json'),executor_sha256=checker.sha256(checker.__file__),
+                        review={'approved':True,'executor_sha256':checker.sha256(checker.__file__),
+                            'root_reviewer':'root-fixture','independent_reviewer':'other-fixture'})
+                    checker.short_file(root,'manifest.json',manifest)
+                    with patch.object(checker.socket,'gethostname',return_value='lober'),patch.object(checker,'check_manifest'), \
+                        patch.object(checker,'check_run_identity'),patch.object(checker,'validate_phase_helpers'):
+                        with self.assertRaises(ValueError):
+                            checker.reviewed_phase('short',root/'config.json',root/'manifest.json',root/'unstarted-output')
+                    self.assertEqual(events,[]);lease.assert_not_called();host.assert_not_called()
+                elif active:
+                    with self.assertRaises(ValueError):checker.short_no_task(config,manifest,root)
+                    self.assertNotIn('capture-start',events)
+                else:
+                    checker.validate_short_approval(config,manifest)
+                    result=checker.short_no_task(config,manifest,root)
+                    receipt=checker.private_json(result['short_receipt']['path'])
+                    self.assertFalse(receipt['root_verified'])
+                    if generation:
+                        self.assertEqual(receipt['owner']['target_uuid'],'7fe71ebb-a34d-4155-8410-d1427ca2f83a')
+                        saved=checker.private_json(receipt['records']['target_contract']['path'])
+                        self.assertEqual(saved['target']['disk_path'],ROOT+'/targets/linux01-g01/system.qcow2')
+                        self.assertEqual(saved['target']['disk_serial'],'PQ25_LINUX01_G01')
+                        self.assertEqual(saved['preserve_failed_disks'],[ROOT+'/linux01.qcow2'])
+                    self.assertEqual(result['status'],'ROOT_REVIEW_REQUIRED');self.assertFalse(result['short_failure_evidence_verified'])
+                    self.assertLess(events.index('stop'),events.index('capture-close'))
+                    self.assertEqual(events.count('GET'),4)
     def test_install_error_defers_capture_close_until_outer_writer_stop(self):
         checker=module(self);closed=[]
         case={'capture':types.SimpleNamespace(close=lambda:closed.append('close'))}

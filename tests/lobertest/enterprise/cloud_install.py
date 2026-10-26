@@ -3128,7 +3128,6 @@ def validate_short_approval(config,manifest):
 def short_no_task(config,manifest,output):
     """真实短流程只交待根核验；没有任务POST，不自设verified=true。"""
     target=manifest_target(manifest);owner=manifest['cloud']['owner']
-    require(target==target_spec(owner),'本短流程只覆盖首条准确legacy空白目标')
     contract=bound_json(config['no_task_contract_file'],manifest['cloud']['no_task_contract_sha256'])
     probe=load_cloud_helper('cloud_no_task_probe',manifest)
     probe.prepare_no_task_probe(contract)
