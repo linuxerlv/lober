@@ -68,7 +68,8 @@ func renderMenu(r Request) ([]byte, []model.Problem, error) {
 		body = fmt.Sprintf("kernel %s auto=true priority=critical \\\n  preseed/url=%s \\\n  %s\ninitrd %s\n", artifacts["kernel"], answer, console, artifacts["initrd"])
 	case "autoinstall":
 		seed := catalog.AnswerURL(values["gateway"], values["task"], values["token"], "")
-		body = fmt.Sprintf("kernel %s autoinstall ip=dhcp url=%s ds=nocloud-net;s=%s %s ---\ninitrd %s\n", artifacts["kernel"], values["iso"], seed, console, artifacts["initrd"])
+		// 避免首次配置程序把安装镜像再次当成配置下载。
+		body = fmt.Sprintf("kernel %s autoinstall ip=dhcp url=%s cloud-config-url=/dev/null ds=nocloud-net;s=%s %s ---\ninitrd %s\n", artifacts["kernel"], values["iso"], seed, console, artifacts["initrd"])
 	case "autoyast":
 		body = fmt.Sprintf("kernel %s install=%s autoyast=%s %s\ninitrd %s\n", artifacts["kernel"], values["repo"], answer, console, artifacts["initrd"])
 	case "agama":
