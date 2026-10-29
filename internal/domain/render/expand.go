@@ -189,7 +189,12 @@ func (e expansion) systemValue(key catalog.SystemValue, subject model.Subject) (
 			p := model.NewProblem("render_artifact_missing", model.Subject{Kind: "iso", ID: e.request.Snapshot.ISO.ID, Path: "artifacts/" + string(key)}, key)
 			return "", &p
 		}
-		return catalog.ArtifactURL(base, rel), nil
+		value := catalog.ArtifactURL(base, rel)
+		if key == "repo" && e.request.Snapshot.Format == "kickstart" {
+			// Anaconda 会自行拼接斜杠；保留末尾斜杠会使元数据地址出现双斜杠。
+			value = strings.TrimRight(value, "/")
+		}
+		return value, nil
 	}
 	value, ok := e.request.Values[key]
 	if !ok || value == "" {

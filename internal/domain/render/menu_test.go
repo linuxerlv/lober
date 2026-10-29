@@ -74,7 +74,7 @@ func TestMenuRegressionBootAndInstallerArguments(t *testing.T) {
 	got, _, _ := Render(r)
 	text := strings.ReplaceAll(string(got), "\\\n", "")
 	// 75bdc20 / 7eb805e: stage2 comes from the full installer tree, packages separately.
-	for _, arg := range []string{"inst.stage2=http://ng.internal/artifacts/as-rocky94/install/", "inst.repo=http://ng.internal/artifacts/as-rocky94/repo/", "inst.cmdline", "inst.notmux", "inst.syslog=10.10.0.1:514"} {
+	for _, arg := range []string{"inst.stage2=http://ng.internal/artifacts/as-rocky94/install/", "inst.repo=http://ng.internal/artifacts/as-rocky94/repo ", "inst.cmdline", "inst.notmux", "inst.syslog=10.10.0.1:514"} {
 		if !strings.Contains(text, arg) {
 			t.Fatalf("missing installer arg %s", arg)
 		}

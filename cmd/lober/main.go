@@ -73,12 +73,13 @@ func serve(ctx context.Context, a *app) error {
 func serveListener(ctx context.Context, a *app, listener net.Listener) error {
 	defer listener.Close()
 	recoveryCtx, stopRecovery := context.WithCancel(ctx)
+	defer stopRecovery()
 	var packet net.PacketConn
+	var stream net.Listener
 	var err error
 	if a.Machine != nil && a.Machine.Logs != nil && a.Config.Machine.SyslogListen != "" {
-		packet, err = net.ListenPacket("udp", a.Config.Machine.SyslogListen)
+		packet, stream, err = listenSyslog(a.Config.Machine.SyslogListen)
 		if err != nil {
-			stopRecovery()
 			return errors.New("无法监听安装器 syslog 地址")
 		}
 	}
@@ -87,8 +88,16 @@ func serveListener(ctx context.Context, a *app, listener net.Listener) error {
 	defer func() { stopRecovery(); <-recoveryDone }()
 	if packet != nil {
 		logDone := make(chan struct{})
+		streamDone := make(chan struct{})
 		go func() { defer close(logDone); a.runSyslog(recoveryCtx, packet) }()
-		defer func() { stopRecovery(); packet.Close(); <-logDone }()
+		go func() { defer close(streamDone); a.runSyslogTCP(recoveryCtx, stream) }()
+		defer func() {
+			stopRecovery()
+			packet.Close()
+			stream.Close()
+			<-logDone
+			<-streamDone
+		}()
 	}
 	srv := &http.Server{Addr: a.Config.Listen, Handler: a.Handler(), ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
 	result := make(chan error, 1)

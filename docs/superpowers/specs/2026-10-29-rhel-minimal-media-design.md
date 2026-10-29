@@ -65,6 +65,16 @@
 
 本次不增加 Ubuntu Mini、openSUSE 网络盘、Windows 或 ESXi 支持。
 
+## 2026-10-30 真实装机发现的兼容性修正
+
+首轮 AlmaLinux 真实安装失败，不能按镜像 ready 判定装机通过。原安装器请求 `install//.treeinfo`、`install//treeinfo` 均为 404，随后回落请求不存在的根级 `repodata/repomd.xml`；真实 `install/.treeinfo` 和 `install/Minimal/repodata/repomd.xml` 均存在且摘要正确。安装器将答案里的仓库地址再拼接 `/`，所以 Kickstart 的仓库系统值必须去掉末尾分隔符。只修正该格式的 repo 地址；不改真实仓库根、不复制伪造元数据、不放宽静态文件路径检查，也不改变 stage2 和其他格式的地址。
+
+真实安装环境的 `pyanaconda/anaconda_logging.py` 使用 `*.* @@%s`，即 TCP 日志传输。现有服务仅监听 UDP。沿用原 `machine.syslogListen` 地址同时支持 UDP 与原生 TCP 换行日志，保留 UDP 行为、来源 IP 的有效凭证租约、任务轮次、终态忽略和日志清理规则。TCP 必须限制连接数、单条消息大小和空闲时间；取消或启动失败必须关闭监听及活动连接。对端地址只能取真实连接，不信任转发头，不新增认证旁路、数据库字段或配置字段。
+
+两个修正先分别补能编译且真实失败的回归用例，再实现。全部检查仍由唯一执行者在 lober VM 跑；修后焦点检查、原完整 `make check` 和独立审查通过后，用真实提交构建新候选。原失败任务、客户磁盘、串口记录和旧运行基准保留。重新装机必须使用新任务，并明确区分旧失败与新结果。日志只有在实际安装期间收到且来源、任务吻合才算通过。
+
+此补充修复已批准 Linux 装机目标暴露的缺陷，不增加支持系统范围。远程 HTTP 上传缺少浏览器校验能力另列限制；本次 localhost 正常页面续传不代表远程 HTTP 或生产 HTTPS 上传已验收。
+
 ## 公开来源
 
 - [AlmaLinux 10.2 安装盘与清单](https://repo.almalinux.org/almalinux/10.2/isos/x86_64/)

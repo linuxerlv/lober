@@ -360,7 +360,7 @@ func TestAnswerFirmwareAndKickstartRegressions(t *testing.T) {
 			t.Fatalf("%v %v", p, err)
 		}
 		text := string(got)
-		if !strings.Contains(text, "url --url=http://ng.internal/artifacts/fixture/repo/") {
+		if !strings.Contains(text, "url --url=http://ng.internal/artifacts/fixture/repo\n") {
 			t.Fatal("743e8af installation source")
 		}
 		if !strings.Contains(text, "cmdline\n") || strings.Contains(text, "\ntext\n") {

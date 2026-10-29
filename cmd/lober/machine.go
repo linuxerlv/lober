@@ -109,6 +109,30 @@ func guardMachine(work func() error) (err error) {
 	}()
 	return work()
 }
+
+func listenSyslog(address string) (net.PacketConn, net.Listener, error) {
+	packet, err := net.ListenPacket("udp", address)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 使用 UDP 实际绑定的地址，端口为 0 时两种协议也必须共用同一端口。
+	stream, err := net.Listen("tcp", packet.LocalAddr().String())
+	if err != nil {
+		packet.Close()
+		return nil, nil, err
+	}
+	return packet, stream, nil
+}
+
+func (a *app) runSyslogTCP(ctx context.Context, listener net.Listener) {
+	err := a.Machine.Logs.ServeTCP(ctx, listener, func(error) {
+		a.Logger.Warn("安装器 syslog 归档失败")
+	})
+	if err != nil && ctx.Err() == nil {
+		a.Logger.Error("安装器 TCP syslog 监听停止")
+	}
+}
+
 func (a *app) runSyslog(ctx context.Context, packet net.PacketConn) {
 	body := make([]byte, 65536)
 	for {

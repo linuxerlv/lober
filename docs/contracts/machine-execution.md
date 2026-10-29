@@ -127,6 +127,14 @@ NewIPObserver 与 IPObservationSink.ObserveIP 保留各自方法旁的完整约�
 
 Collector.Receive先解析直接连接的host:port并Unmap；非法地址、无租约或到期等号都成功忽略，不读Forwarded。互斥取归属后，在原位置只取一次时钟为At；有有效租约才先截正文前65536字节，再SafeLogTail脱敏并取最多4096字节尾部，随后同步调用InstallerLogReceiver。正文、原上下文及捕获的At原样转交；接收错误原样返回。Collector不读任务、不写事件、不通知。
 
+启用机器日志时，原 `machine.syslogListen` 同时监听 UDP 和 TCP，部署须允许两种协议到达同一地址与端口。先绑定 UDP，再用实际绑定地址打开 TCP；端口为 0 时也共用同一实际端口。任一协议绑定失败都不启动日志或恢复后台，并关闭已开的日志和 HTTP 监听。不增加配置或数据库字段，`preview.syslogAddr` 仍是客户机可到达的日志地址。
+
+原生 TCP 由 `infrastructure/events/syslog_tcp.go` 接收，只支持以换行字节 LF 分隔的消息。最多 64 条活动连接；正文最多 65536 字节，分隔用的 LF 不计入且不保存，其他字节保留。超长消息关闭连接且整条丢弃，不按截断片段收录；断连或读错误时没有 LF 的末条也丢弃。每次实际网络读取续上 30 秒空闲期限，到期关闭连接。正常断开、超长及空闲关闭都会释放连接名额。
+
+架构导入检查只为此网络职责精确增加 `bufio`、`time`、`errors`，分别供有界分帧、读取期限和异常保护使用。没有开放任意标准库；数据库、文件、进程、HTTP 客户端和应用业务实现仍不归日志传输。
+
+TCP 不在连接上缓存任务归属，每条完整消息以真实 RemoteAddr 调用原 Collector.Receive，再由原应用入口检查任务状态和尝试号。无租约、到期、旧尝试和终态仍按原规则忽略；没有转发头、正文身份或认证旁路。取消、HTTP 服务退出或 TCP 接收退出时关闭监听及全部活动连接，并等接收工作结束后才返回。单条收录错误或异常只记录不含正文和凭据的提示，后续完整消息仍可接收。UDP 仍使用原有逐包接收与裁剪行为。
+
 ## 日志收录入口
 
 NewInstallerLogs(repo, notifier)连接InstallerLogRepository及本执行包已有的仅Publish通知口，返回InstallerLogReceiver；构造不查库、不读时钟、不校验或改写输入，可信组装必须提供非nil仓储。以下八项共同适用于构造、端口ReceiveInstallerLog及具体实现；仓储小口两方法的保存细节唯一委托repository.Tasks.GetTask、repository.Events.AppendEvents及repository/doc.go，不另加规则。
@@ -145,7 +153,7 @@ NewInstallerLogs(repo, notifier)连接InstallerLogRepository及本执行包已�
 
 ⑦明确保留原有“读时判断后再追加”的窗口：GetTask之后发生取消或重试，也不新增原子Attempt复查；不承诺解决此窗口或跨实例归属。Collector只为内存租约加锁，重启丢失归属；UDP不保证必达。
 
-⑧无审计；仅AppendEvents成功后通知，无额外取消、超时或提交后检查。ctx原样传仓储，由仓储返回取消；若仓储已成功即按原顺序通知，即使ctx已取消。监听、ReadFrom缓冲及错误日志仍在cmd/lober。
+⑧无审计；仅AppendEvents成功后通知，无额外取消、超时或提交后检查。ctx原样传仓储，由仓储返回取消；若仓储已成功即按原顺序通知，即使ctx已取消。UDP的ReadFrom缓冲和错误日志仍在cmd/lober；TCP传输在infrastructure/events，cmd仅装配监听与服务生命周期。TCP的读取空闲期限只约束网络连接，不增加应用收录的事务或提交后检查。
 
 ## 机器传输顺序现状
 
@@ -169,4 +177,4 @@ NewInstallerLogs(repo, notifier)连接InstallerLogRepository及本执行包已�
 
 ## 当前验证位置
 
-纯规则：`internal/domain/execution/{protocol,control,delivery,log}_test.go`；执行服务与凭据：`internal/application/execution/{service,protocol,token,control_intent,observation,installer_logs}_test.go`。机器传输解析/状态映射：`internal/interfaces/machine/http_test.go`；真实Service交付顺序、旧文件/UA业务断言、错误来源与取消：`internal/application/execution/gateway_test.go`。日志收录事实、错误/通知与读取追加窗口：`internal/application/execution/installer_logs_test.go`；日志归属与裁剪：`internal/infrastructure/events/syslog_test.go`。组装：`cmd/lober/{machine,assembly}_test.go`。事务与竞争：`internal/infrastructure/persistence/pgstore/{contract_tasks,contract_events,contract_concurrency}_test.go`及执行记录相关测试。这里只登记验证来源；Task3/4/5实际运行结果分别记在对应报告，不表示关闭Task7保护、Task8全链复核或其他后续缺口。
+纯规则：`internal/domain/execution/{protocol,control,delivery,log}_test.go`；执行服务与凭据：`internal/application/execution/{service,protocol,token,control_intent,observation,installer_logs}_test.go`。机器传输解析/状态映射：`internal/interfaces/machine/http_test.go`；真实Service交付顺序、旧文件/UA业务断言、错误来源与取消：`internal/application/execution/gateway_test.go`。日志收录事实、错误/通知与读取追加窗口：`internal/application/execution/installer_logs_test.go`；日志归属、裁剪与TCP边界：`internal/infrastructure/events/{syslog,syslog_tcp}_test.go`。组装：`cmd/lober/{machine,assembly,machine_delivery,machine_tcp_delivery,machine_syslog_lifecycle}_test.go`。事务与竞争：`internal/infrastructure/persistence/pgstore/{contract_tasks,contract_events,contract_concurrency}_test.go`及执行记录相关测试。这里只登记验证来源；Task3/4/5实际运行结果分别记在对应报告，不表示关闭Task7保护、Task8全链复核或其他后续缺口。

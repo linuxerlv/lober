@@ -31,7 +31,7 @@ func expandRequest(r Request, slots map[string]string, parts map[catalog.SystemP
 func TestExpandValuesAndPreserveRaw(t *testing.T) {
 	body := "source={{sys:repo}} iso={{sys:iso}} task={{sys:task}} host={{param:host}}\n{{sys:lbrace}}x}} {{ ds.meta_data.local_hostname }} {{lober:TYPO}} {{param:bad|typo}}\r\n"
 	r := testRequest(body)
-	want := "source=https://assets.example/rhel/tree/ iso=https://assets.example/ubuntu/image.iso task=task-1 host=node.example\n{{x}} {{ ds.meta_data.local_hostname }} {{lober:TYPO}} {{param:bad|typo}}\r\n"
+	want := "source=https://assets.example/rhel/tree iso=https://assets.example/ubuntu/image.iso task=task-1 host=node.example\n{{x}} {{ ds.meta_data.local_hostname }} {{lober:TYPO}} {{param:bad|typo}}\r\n"
 	got, problems := expandRequest(r, nil, nil)
 	if len(problems) != 0 || string(got) != want {
 		t.Fatalf("got %q, problems %v; want %q", got, problems, want)

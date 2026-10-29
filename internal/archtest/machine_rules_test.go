@@ -16,7 +16,8 @@ func checkMachineFile(fset *token.FileSet, pkg string, f *ast.File) []violation 
 		if under(pkg, pkgMachine) {
 			allowed = allowed || under(imp, pkgMachine) || imp == pkgExecution || imp == pkgModel || imp == pkgCatalog || imp == pkgExecutionRules
 		} else if under(pkg, pkgEvents) {
-			allowed = imp == "context" || imp == "net" || imp == "net/netip" || imp == "sync" || imp == pkgModel || imp == pkgExecutionPort || under(imp, pkgEvents)
+			// TCP 的有界换行、空闲期限和异常保护只增加这三个标准库。
+			allowed = imp == "context" || imp == "net" || imp == "net/netip" || imp == "sync" || imp == "bufio" || imp == "time" || imp == "errors" || imp == pkgModel || imp == pkgExecutionPort || under(imp, pkgEvents)
 		}
 		if allowed {
 			return ""
