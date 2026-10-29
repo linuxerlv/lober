@@ -47,7 +47,11 @@ const showPreview = ref(false);
 const busy = ref(false);
 let source: EventSource | undefined;
 let poll: ReturnType<typeof setInterval> | undefined;
+let eventFlush: ReturnType<typeof setTimeout> | undefined;
+const pendingEvents = new Map<number, TaskEvent>();
 let active = true;
+let reloading = false;
+let reloadPending = false;
 const [EventGrid, eventGrid] = useVbenVxeGrid<TaskEvent>({
   gridOptions: {
     columns: [
@@ -77,16 +81,42 @@ function failed(reason: unknown) {
   problems.value = problemsOf(reason);
 }
 async function reload() {
+  if (!active) return;
+  if (reloading) {
+    reloadPending = true;
+    return;
+  }
+  reloading = true;
   try {
-    const result = await taskAPI.get(id);
-    if (active) task.value = result;
-  } catch (reason) {
-    if (active) failed(reason);
+    do {
+      reloadPending = false;
+      try {
+        const result = await taskAPI.get(id);
+        if (active) task.value = result;
+      } catch (reason) {
+        if (active) failed(reason);
+      }
+    } while (active && reloadPending);
+  } finally {
+    reloading = false;
   }
 }
 function append(incoming: TaskEvent[]) {
   if (!active) return;
   events.value = mergeEvents(events.value, incoming);
+}
+function queueEvent(event: TaskEvent) {
+  pendingEvents.set(event.seq, event);
+  if (eventFlush !== undefined) return;
+  // 新消息不推迟本批处理，持续到达时也会定时展示。
+  eventFlush = setTimeout(() => {
+    eventFlush = undefined;
+    if (!active) return;
+    const incoming = [...pendingEvents.values()];
+    pendingEvents.clear();
+    append(incoming);
+    void reload();
+  }, 100);
 }
 watch([events, eventPage, eventPageSize], () => {
   const start = (eventPage.value - 1) * eventPageSize.value;
@@ -97,6 +127,7 @@ function changeEventSize(size: number) {
   eventPage.value = 1;
 }
 async function loadEvents() {
+  if (!active) return;
   try {
     const page = await taskAPI.events(id, events.value.at(-1)?.seq ?? 0);
     append(page.items ?? []);
@@ -111,17 +142,17 @@ function connect() {
     taskStreamURL(apiURL, id, access.accessToken, events.value.at(-1)?.seq ?? 0),
   );
   source.onopen = () => {
-    connected.value = true;
+    if (active) connected.value = true;
   };
   source.onerror = () => {
-    connected.value = false;
+    if (active) connected.value = false;
   };
   source.addEventListener('task', (message) => {
+    if (!active) return;
     try {
       const event: TaskEvent = JSON.parse((message as MessageEvent<string>).data);
-      if (event.taskID === id && Number.isSafeInteger(event.seq)) {
-        append([event]);
-        void reload();
+      if (event.taskID === id && Number.isSafeInteger(event.seq) && event.seq > 0) {
+        queueEvent(event);
       }
     } catch {
       connected.value = false;
@@ -176,6 +207,9 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => {
   active = false;
+  reloadPending = false;
+  pendingEvents.clear();
+  if (eventFlush !== undefined) clearTimeout(eventFlush);
   source?.close();
   if (poll) clearInterval(poll);
 });
