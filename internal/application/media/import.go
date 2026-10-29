@@ -137,6 +137,10 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 		return err
 	} // claims SHA256 before any publication
 	plan := port.ExtractionPlan{ISO: iso, Identified: found, RepoPaths: catalog.RepoPaths(iso.Series), RequiredRoles: catalog.RequiredRoles(iso.Series)}
+	plan, err = planKickstartRepository(ctx, tree, plan)
+	if err != nil {
+		return err
+	}
 	if err = session.BeginPrepare(ctx, plan); err != nil {
 		return importFileError(id, err)
 	}

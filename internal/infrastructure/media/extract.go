@@ -45,11 +45,21 @@ func (s *ImportFiles) extract(ctx context.Context, plan port.ExtractionPlan, mai
 			return nil, &port.ExtractionFault{Kind: "artifact", Name: "stage2"}
 		}
 		roles["stage2"] = "install/"
-		repo, err := importRepoRoot(ctx, main)
-		if err != nil {
-			return nil, err
+		repo := found.RepoRoot
+		if repo == "" {
+			var err error
+			repo, err = importRepoRoot(ctx, main)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if repo != "." && !safeImportRel(repo) {
+			return nil, &port.ExtractionFault{Kind: "repository", Name: repo}
 		}
 		for _, required := range plan.RepoPaths {
+			if !safeImportRel(required) {
+				return nil, &port.ExtractionFault{Kind: "repository", Name: required}
+			}
 			name := path.Join(repo, required)
 			st, e := fs.Stat(main, name)
 			if e != nil || st.IsDir() || st.Size() == 0 {

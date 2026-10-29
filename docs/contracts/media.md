@@ -212,3 +212,13 @@ SourceControl.Register/Upload/Cancel/Retry/Reimport 的唯一应用约定分别�
 额外来源的 OpenSource、identifyNetboot、后续 `.disk/info` 三个错误分支，先用 errors.Is 检查取消或截止错误，并原样返回，包括包装错误。取消或截止不会记成内容失败，镜像完整记录（含状态和Rev）及来源记录（含Error）保持；已打开的导入会话仍关闭一次。非取消错误仍按原来的 `iso_extra_source_invalid` 分类及失败记录处理。
 
 Task2 明确纠正旧错误行为，并非目录搬迁：旧实现会丢失取消类型；能力返回取消、父上下文仍可用时，还会误写failed及主来源错误。真实父取消的两处读取回归使用不受取消影响的上下文查库，避免把查库失败误当成状态保持。这项修复不扩大第10节的取消检查位置，不改变发布、未知提交确认、后台重试或后续架构边界。
+
+## 12. AlmaLinux、Rocky Linux Minimal 安装盘扩展
+
+本节能力于 2026-10-29 获批准新增，不属于迁移前冻结的既有能力。只适用于 AlmaLinux、Rocky Linux 的 kickstart 安装盘。只有分组语义字段或 variant 段中的明确 Minimal 声明决定新布局；文件名、产品名称、注释及包目录或仓库路径中的普通 Minimal 目录名不决定布局。没有明确 Minimal 分组声明时，继续使用原完整盘规则，缺少 AppStream 仍拒绝。
+
+领域规则只解析文本，不读文件。明确 Minimal 声明后，general、tree、variant-Minimal 的清单、ID、仓库和包目录必须一致；general 与 release 的身份、版本及 tree 的架构事实必须一致。重复字段或分组、混合分组、缺失或冲突字段、危险路径均拒绝，不能退回完整盘规则。盘内版本保留原值，包括 AlmaLinux 的 10 和 Rocky 的 10.2，不按下载名称改写。
+
+应用通过 MediaView.Text 以原有 1 MiB 上限读取 `.treeinfo`，形成 RepoRoot 为 `.`、RepoPaths 为 `Minimal/repodata/repomd.xml` 的明确计划。同一计划交给 BeginPrepare 和 Prepare。文件实现优先消费明确根并复核路径安全，只有未指定根才沿用原 importRepoRoot；仓库必须存在且非空。发布 repo 指向含原 `.treeinfo` 与 Minimal 子目录的安装树根，stage2 位置保持。
+
+布局或仓库错误沿用 `iso_repo_incomplete`、`artifacts.repo` 及当前镜像编号。原复制和链接检查、来源摘要/大小/修改时间复核、发布拥有者检查与回滚规则继续适用；同版本的另一介质不能覆盖旧发布树。本节不增加软件包依赖求解、整仓库 XML 校验、额外网址或跳过检查的参数。
