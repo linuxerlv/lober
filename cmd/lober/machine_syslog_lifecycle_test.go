@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -259,6 +261,232 @@ func TestServeSyslogClosesActiveTCPOnCancelAndHTTPExit(t *testing.T) {
 			}
 			packet.Close()
 			stream.Close()
+		})
+	}
+}
+
+// 只为测试准备真实的同号 TCP/UDP。准备时若另一协议已被占用，关闭后换一对。
+// 被测工厂首轮仍会真正调用 net.Listen，不能用人工错误冒充端口碰撞。
+func reserveSyslogTestPair(t *testing.T) (net.PacketConn, net.Listener) {
+	t.Helper()
+	for i := 0; i < 8; i++ {
+		stream, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		packet, err := net.ListenPacket("udp", stream.Addr().String())
+		if err == nil {
+			t.Cleanup(func() { packet.Close(); stream.Close() })
+			return packet, stream
+		}
+		stream.Close()
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			t.Fatal(err)
+		}
+	}
+	t.Fatal("无法为回归准备同号的真实监听")
+	return nil, nil
+}
+
+func requireSyslogPacketClosed(t *testing.T, packet net.PacketConn) {
+	t.Helper()
+	if err := packet.SetReadDeadline(time.Now()); !errors.Is(err, net.ErrClosed) {
+		t.Fatal("失败轮次的 UDP 未关闭", err)
+	}
+}
+
+func TestSyslogZeroPortRetriesRealTCPCollision(t *testing.T) {
+	blockedUDP, blockedTCP := reserveSyslogTestPair(t)
+	availableUDP, availableTCP := reserveSyslogTestPair(t)
+	packetCalls, streamCalls := 0, 0
+	packet, stream, err := listenSyslogWith("127.0.0.1:0", func(network, address string) (net.PacketConn, error) {
+		packetCalls++
+		if network != "udp" || address != "127.0.0.1:0" {
+			t.Fatal("重选时改变了原地址或协议", network, address)
+		}
+		switch packetCalls {
+		case 1:
+			return blockedUDP, nil
+		case 2:
+			requireSyslogPacketClosed(t, blockedUDP)
+			return availableUDP, nil
+		default:
+			t.Fatal("可用轮次成功后仍继续分配")
+			return nil, errors.New("unexpected extra allocation")
+		}
+	}, func(network, address string) (net.Listener, error) {
+		streamCalls++
+		if network != "tcp" {
+			t.Fatal("没有绑定 TCP")
+		}
+		if streamCalls == 1 {
+			if address != blockedTCP.Addr().String() {
+				t.Fatal("没有使用首轮 UDP 实际端口")
+			}
+			unexpected, collision := net.Listen(network, address)
+			if unexpected != nil {
+				unexpected.Close()
+			}
+			if !errors.Is(collision, syscall.EADDRINUSE) {
+				t.Fatal("首轮没有发生真实 TCP 地址占用", collision)
+			}
+			t.Log("首轮真实 TCP 地址占用", collision)
+			return nil, collision
+		}
+		if streamCalls != 2 || address != availableUDP.LocalAddr().String() {
+			t.Fatal("重选后两种协议没有使用同一实际端口")
+		}
+		return availableTCP, nil
+	})
+	requireSyslogPacketClosed(t, blockedUDP)
+	if err != nil {
+		t.Fatal("随机端口遇真实 TCP 占用后未重新分配", err)
+	}
+	if packet == nil || stream == nil {
+		t.Fatal("重选成功却没有返回两种真实监听")
+	}
+	defer packet.Close()
+	defer stream.Close()
+	if packetCalls != 2 || streamCalls != 2 || packet.LocalAddr().String() != stream.Addr().String() || packet.LocalAddr().String() == blockedTCP.Addr().String() {
+		t.Fatal("重选后的同端口双协议结果错误", packetCalls, streamCalls)
+	}
+	// 返回的必须是仍可用的真实 UDP 和 TCP，不能只拼出相同地址。
+	sender, err := net.Dial("udp", packet.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+	if _, err := sender.Write([]byte("ready")); err != nil {
+		t.Fatal(err)
+	}
+	packet.SetReadDeadline(time.Now().Add(time.Second))
+	body := make([]byte, 16)
+	if n, _, err := packet.ReadFrom(body); err != nil || string(body[:n]) != "ready" {
+		t.Fatal("重选后的 UDP 不可用", err)
+	}
+	client, err := net.DialTimeout("tcp", stream.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal("重选后的 TCP 不可用", err)
+	}
+	client.Close()
+}
+
+func TestSyslogZeroPortCollisionExhaustionReleasesUDP(t *testing.T) {
+	firstUDP, blockedTCP := reserveSyslogTestPair(t)
+	packets := []net.PacketConn{firstUDP}
+	packetCalls, streamCalls := 0, 0
+	packet, stream, err := listenSyslogWith("127.0.0.1:0", func(network, address string) (net.PacketConn, error) {
+		packetCalls++
+		if packetCalls > 8 {
+			t.Fatal("随机端口碰撞重试超过总共 8 次")
+		}
+		if network != "udp" || address != "127.0.0.1:0" {
+			t.Fatal("重试改变原监听配置")
+		}
+		if packetCalls == 1 {
+			return firstUDP, nil
+		}
+		requireSyslogPacketClosed(t, packets[len(packets)-1])
+		next, err := net.ListenPacket(network, blockedTCP.Addr().String())
+		if err != nil {
+			t.Fatal("重试前旧 UDP 仍占用端口", err)
+		}
+		t.Cleanup(func() { next.Close() })
+		packets = append(packets, next)
+		return next, nil
+	}, func(network, address string) (net.Listener, error) {
+		streamCalls++
+		if network != "tcp" || address != blockedTCP.Addr().String() {
+			t.Fatal("没有尝试本轮真实 UDP 地址")
+		}
+		unexpected, collision := net.Listen(network, address)
+		if unexpected != nil {
+			unexpected.Close()
+		}
+		if !errors.Is(collision, syscall.EADDRINUSE) {
+			t.Fatal("耗尽回归没有产生真实 TCP 地址占用", collision)
+		}
+		return nil, collision
+	})
+	if packet != nil || stream != nil || !errors.Is(err, syscall.EADDRINUSE) {
+		t.Fatal("耗尽后隐藏错误或返回了监听资源", err)
+	}
+	for _, failed := range packets {
+		requireSyslogPacketClosed(t, failed)
+	}
+	if packetCalls != 8 || streamCalls != 8 {
+		t.Fatal("随机端口碰撞未在总共 8 次内有界重选", packetCalls, streamCalls)
+	}
+	probe, err := net.ListenPacket("udp", blockedTCP.Addr().String())
+	if err != nil {
+		t.Fatal("重试耗尽后 UDP 端口仍占用", err)
+	}
+	probe.Close()
+}
+
+func TestSyslogFixedPortCollisionIsNotRetried(t *testing.T) {
+	reservedUDP, blockedTCP := reserveSyslogTestPair(t)
+	address := blockedTCP.Addr().String()
+	packetCalls, streamCalls := 0, 0
+	packet, stream, err := listenSyslogWith(address, func(network, requested string) (net.PacketConn, error) {
+		packetCalls++
+		if packetCalls != 1 || network != "udp" || requested != address {
+			t.Fatal("固定端口被静默重选")
+		}
+		return reservedUDP, nil
+	}, func(network, requested string) (net.Listener, error) {
+		streamCalls++
+		return net.Listen(network, requested)
+	})
+	if packet != nil || stream != nil || !errors.Is(err, syscall.EADDRINUSE) || packetCalls != 1 || streamCalls != 1 {
+		t.Fatal("固定端口碰撞未立即返回原错误", err, packetCalls, streamCalls)
+	}
+	requireSyslogPacketClosed(t, reservedUDP)
+}
+
+func TestSyslogZeroPortOtherErrorsAreNotRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stage string
+		err   error
+	}{
+		{"TCP-permission", "tcp", syscall.EACCES},
+		{"TCP-unknown", "tcp", errors.New("stream failed")},
+		{"UDP-address-in-use", "udp", syscall.EADDRINUSE},
+		{"UDP-permission", "udp", syscall.EACCES},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reservedUDP, _ := reserveSyslogTestPair(t)
+			packetCalls, streamCalls := 0, 0
+			packet, stream, err := listenSyslogWith("127.0.0.1:0", func(network, address string) (net.PacketConn, error) {
+				packetCalls++
+				if packetCalls != 1 || network != "udp" || address != "127.0.0.1:0" {
+					t.Fatal("非 TCP 地址占用错误触发了重试")
+				}
+				if tc.stage == "udp" {
+					return nil, tc.err
+				}
+				return reservedUDP, nil
+			}, func(network, address string) (net.Listener, error) {
+				streamCalls++
+				if streamCalls != 1 || network != "tcp" || address != reservedUDP.LocalAddr().String() {
+					t.Fatal("非地址占用错误后再次绑定或改变地址")
+				}
+				return nil, tc.err
+			})
+			if packet != nil || stream != nil || !errors.Is(err, tc.err) || packetCalls != 1 {
+				t.Fatal("非 TCP 地址占用错误未原样失败", err, packetCalls)
+			}
+			if tc.stage == "udp" {
+				if streamCalls != 0 {
+					t.Fatal("UDP 失败后仍调用 TCP")
+				}
+			} else {
+				if streamCalls != 1 {
+					t.Fatal("非地址占用错误被重试", streamCalls)
+				}
+				requireSyslogPacketClosed(t, reservedUDP)
+			}
 		})
 	}
 }

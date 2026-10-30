@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/lober/lober/internal/application/authoring"
@@ -111,17 +112,37 @@ func guardMachine(work func() error) (err error) {
 }
 
 func listenSyslog(address string) (net.PacketConn, net.Listener, error) {
-	packet, err := net.ListenPacket("udp", address)
-	if err != nil {
-		return nil, nil, err
-	}
-	// 使用 UDP 实际绑定的地址，端口为 0 时两种协议也必须共用同一端口。
-	stream, err := net.Listen("tcp", packet.LocalAddr().String())
-	if err != nil {
+	return listenSyslogWith(address, net.ListenPacket, net.Listen)
+}
+
+func listenSyslogWith(address string, packetListen func(string, string) (net.PacketConn, error), streamListen func(string, string) (net.Listener, error)) (net.PacketConn, net.Listener, error) {
+	var lastErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		packet, err := packetListen("udp", address)
+		if err != nil {
+			return nil, nil, err
+		}
+		// 使用 UDP 实际绑定的地址，端口为 0 时两种协议也必须共用同一端口。
+		stream, err := streamListen("tcp", packet.LocalAddr().String())
+		if err == nil {
+			return packet, stream, nil
+		}
 		packet.Close()
-		return nil, nil, err
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			return nil, nil, err
+		}
+		// 只重选原本由系统分配的端口，不改变用户指定的固定端口。
+		_, port, splitErr := net.SplitHostPort(address)
+		if splitErr != nil {
+			return nil, nil, err
+		}
+		number, portErr := net.LookupPort("udp", port)
+		if portErr != nil || number != 0 {
+			return nil, nil, err
+		}
+		lastErr = err
 	}
-	return packet, stream, nil
+	return nil, nil, lastErr
 }
 
 func (a *app) runSyslogTCP(ctx context.Context, listener net.Listener) {
