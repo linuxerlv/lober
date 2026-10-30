@@ -132,6 +132,9 @@ func TestAllBuiltinAnswersFromSnapshots(t *testing.T) {
 					}
 				}
 				file := filepath.Join("testdata", "answers", string(f)+"-"+string(fw)+".golden")
+				if f == "agama" && tpl.Version >= 3 {
+					file = filepath.Join("testdata", "answers", fmt.Sprintf("agama-v%d-%s.golden", tpl.Version, fw))
+				}
 				if os.Getenv("LOBER_RECORD_BUILTIN") == "1" {
 					if _, err := os.Stat(file); err == nil {
 						t.Fatalf("refuse to replace existing golden %s", file)

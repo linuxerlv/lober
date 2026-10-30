@@ -89,8 +89,9 @@ func shippedTemplates() []model.Template {
 		}
 		// Content changes ship as higher version numbers: account/partition v2
 		// rebinds every template, kickstart/preseed already carried a v2.
+		// Agama v3 改用安装器实际支持的 UTC 时区名。
 		version := 2
-		if format == "kickstart" || format == "preseed" {
+		if format == "kickstart" || format == "preseed" || format == "agama" {
 			version = 3
 		}
 		ss := series(format)

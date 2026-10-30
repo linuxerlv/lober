@@ -1,6 +1,6 @@
 {
   product: { id: '{{param:product}}' },
-  localization: { language: 'en_US.UTF-8', keyboard: 'us', timezone: 'Etc/UTC' },
+  localization: { language: 'en_US.UTF-8', keyboard: 'us', timezone: 'UTC' },
   {{slot:partition}}
   {{slot:network}}
   {{slot:account}}
