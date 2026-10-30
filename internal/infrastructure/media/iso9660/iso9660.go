@@ -197,7 +197,8 @@ func (f *filesystem) parseRecord(b []byte, parent *node, extensions bool) (*node
 		return nil, false, err
 	}
 	offset := (int64(sector) + int64(b[1])) * f.block
-	if offset > f.limit || int64(size) > f.limit-offset {
+	outside := offset > f.limit || int64(size) > f.limit-offset
+	if outside && (size != 0 || b[1] != 0 || b[25]&2 != 0) {
 		return nil, false, fmt.Errorf("directory entry extent outside image")
 	}
 	namesize := int(b[32])
@@ -256,6 +257,10 @@ func (f *filesystem) parseRecord(b []byte, parent *node, extensions bool) (*node
 	}
 	if n.name != "." && n.name != ".." && (!fs.ValidPath(n.name) || strings.ContainsAny(n.name, "/\x00") || !utf8.ValidString(n.name)) {
 		return nil, false, fmt.Errorf("unsafe ISO file name %q", n.name)
+	}
+	// 兼容无数据的普通文件记录，不读取其卷外的数据位置。
+	if outside && !n.mode.IsRegular() {
+		return nil, false, fmt.Errorf("directory entry extent outside image")
 	}
 	return n, b[25]&0x80 != 0, nil
 }

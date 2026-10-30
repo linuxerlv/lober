@@ -179,6 +179,90 @@ func TestJolietPreferredAndCasePreserved(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type boundedReader struct {
+	*bytes.Reader
+	outOfBounds bool
+}
+
+func (r *boundedReader) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 || off > r.Size() || int64(len(p)) > r.Size()-off {
+		r.outOfBounds = true
+		return 0, io.ErrUnexpectedEOF
+	}
+	return r.Reader.ReadAt(p, off)
+}
+
+func TestJolietEmptyFileWithUnallocatedExtent(t *testing.T) {
+	b := image(entries(record([]byte{0}, 20, testSector, 2)), entries(
+		record([]byte{0}, 400, testSector, 2),
+		record(ucs("empty.lst;1"), 0xfffffff0, 0, 0),
+	))
+	r := &boundedReader{Reader: bytes.NewReader(b)}
+	defer func() {
+		if r.outOfBounds {
+			t.Error("read outside image")
+		}
+	}()
+	f, err := Open(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := fs.ReadDir(f, ".")
+	if err != nil || len(list) != 1 || list[0].Name() != "empty.lst" {
+		t.Fatalf("ReadDir = %v, %v", list, err)
+	}
+	info, err := fs.Stat(f, "empty.lst")
+	if err != nil || info.Size() != 0 || !info.Mode().IsRegular() {
+		t.Fatalf("Stat = %v, %v", info, err)
+	}
+	file, err := f.Open("empty.lst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	buf := make([]byte, 1)
+	if n, err := file.Read(buf); n != 0 || err != io.EOF {
+		t.Fatalf("Read = %d, %v; want 0, EOF", n, err)
+	}
+	if n, err := file.(io.ReaderAt).ReadAt(buf, 0); n != 0 || err != io.EOF {
+		t.Fatalf("ReadAt = %d, %v; want 0, EOF", n, err)
+	}
+}
+
+func TestRejectsOutOfBoundsRecordsWithDataOrDirectory(t *testing.T) {
+	withEA := record([]byte("EA;1"), 0xfffffff0, 0, 0)
+	withEA[1] = 1
+	mixedEndian := record([]byte("MIXED;1"), 0xfffffff0, 0, 0)
+	mixedEndian[9] ^= 1
+	for _, tc := range []struct {
+		name   string
+		record []byte
+	}{
+		{"nonempty file", record([]byte("FILE;1"), 0xfffffff0, 1, 0)},
+		{"directory", record([]byte("DIR"), 0xfffffff0, 0, 2)},
+		{"extended attributes", withEA},
+		{"Rock Ridge directory", record([]byte("DIR"), 0xfffffff0, 0, 0, px(0040755)...)},
+		{"mixed endian extent", mixedEndian},
+		{"unsafe Rock Ridge name", record([]byte("FILE;1"), 0xfffffff0, 0, 0, nm("../escape")...)},
+		{"out-of-bounds continuation", record([]byte("FILE;1"), 0xfffffff0, 0, 0, ce(0xfffffff0, 0, 28)...)},
+		{"unfinished multi extent", record([]byte("FILE;1"), 0xfffffff0, 0, 0x80)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &boundedReader{Reader: bytes.NewReader(image(entries(rrRoot(), tc.record), nil))}
+			f, err := Open(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fs.ReadDir(f, "."); err == nil {
+				t.Fatal("accepted out-of-bounds record")
+			}
+			if r.outOfBounds {
+				t.Error("read outside image")
+			}
+		})
+	}
+}
 func TestRockRidgeNamesPermissionsLinksAndContinuation(t *testing.T) {
 	extra := append(nm("MixedCase"), px(0100751)...)
 	link := append(nm("Link"), px(0120777)...)
@@ -238,6 +322,24 @@ func TestMultiExtentFile(t *testing.T) {
 	copy(b[602*testSector:], "tail")
 	f := mount(t, b)
 	requireFile(t, f, "big.bin", strings.Repeat("a", testSector)+"tail")
+}
+
+func TestMultiExtentFileWithUnallocatedEmptyFinalExtent(t *testing.T) {
+	b := image(entries(record([]byte{0}, 20, testSector, 2),
+		record([]byte("BIG.BIN;1"), 600, testSector, 0x80),
+		record([]byte("BIG.BIN;1"), 0xfffffff0, 0, 0)), nil)
+	copy(b[600*testSector:601*testSector], bytes.Repeat([]byte{'a'}, testSector))
+	r := &boundedReader{Reader: bytes.NewReader(b)}
+	defer func() {
+		if r.outOfBounds {
+			t.Error("read outside image")
+		}
+	}()
+	f, err := Open(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireFile(t, f, "big.bin", strings.Repeat("a", testSector))
 }
 func TestRejectsMalformedImagesAndPaths(t *testing.T) {
 	base := image(entries(record([]byte{0}, 20, testSector, 2), record([]byte("OK;1"), 600, 1, 0)), nil)
