@@ -65,5 +65,6 @@ export function uploadISOChunkApi(
       'Content-Range': `bytes ${start}-${start + bytes.size - 1}/${total}`,
     },
     params: { role },
+    timeout: 15 * 60_000,
   });
 }

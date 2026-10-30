@@ -73,6 +73,7 @@ describe('inventory HTTP contracts', () => {
         'Content-Range': 'bytes 3-5/9',
       },
       params: { role: 'netboot' },
+      timeout: 15 * 60_000,
     });
   });
 

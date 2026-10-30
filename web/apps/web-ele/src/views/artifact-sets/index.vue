@@ -291,11 +291,18 @@ async function uploadFile(id: string, role: string, file: File) {
       expected,
     );
     localStorage.setItem(identityKey(id, role), identity);
-    for (const chunk of missingChunks(source.totalSize, source.ranges ?? [])) {
+    for (const chunk of missingChunks(
+      source.totalSize,
+      source.ranges ?? [],
+      undefined,
+      source.state === 'fetching',
+    )) {
       if (disposed || uploadStopped.has(key)) break;
       if (!canWrite.value) throw new Error('上传权限已变更，上传已停止');
       uploadMessages[key] =
-        `上传 ${chunk.start}–${chunk.end} / ${file.size} 字节`;
+        chunk.end === file.size
+          ? `上传末片并校验完整文件：${chunk.start}–${chunk.end} / ${file.size} 字节`
+          : `上传 ${chunk.start}–${chunk.end} / ${file.size} 字节`;
       await uploadISOChunkApi(
         id,
         role,

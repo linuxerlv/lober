@@ -4,6 +4,7 @@ export function missingChunks(
   total: number,
   ranges: Schemas['SourceRange'][],
   chunkSize = 4 * 1024 * 1024,
+  finalizeComplete = false,
 ) {
   if (total <= 0 || chunkSize <= 0) throw new Error('文件大小无效');
   const result: { start: number; end: number }[] = [];
@@ -20,6 +21,13 @@ export function missingChunks(
     position = Math.min(total, Math.max(position, range.start + range.length));
   }
   append(total);
+  // 字节已齐但还没完成校验时，只重放原末块，让服务器继续完整校验。
+  if (finalizeComplete && result.length === 0) {
+    result.push({
+      start: Math.floor((total - 1) / chunkSize) * chunkSize,
+      end: total,
+    });
+  }
   return result;
 }
 
