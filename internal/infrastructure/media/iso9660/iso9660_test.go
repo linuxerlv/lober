@@ -167,15 +167,15 @@ func TestRockRidgeSymlinkParentAfterExpansion(t *testing.T) {
 		t.Fatal("resolved .. lexically before expanding the preceding symlink")
 	}
 }
-func TestJolietPreferredAndCasePreserved(t *testing.T) {
-	p := entries(rrRoot(), record([]byte("PRIMARY.;1"), 600, 7, 0, nm("RockRidge")...))
+func TestJolietFallbackWithoutRockRidgePreservesCase(t *testing.T) {
+	p := entries(record([]byte{0}, 20, testSector, 2), record([]byte("PRIMARY.;1"), 600, 7, 0))
 	j := entries(record([]byte{0}, 400, testSector, 2), record(ucs("Mixed安装.TXT;1"), 601, 6, 0))
 	b := image(p, j)
 	copy(b[600*testSector:], "primary")
 	copy(b[601*testSector:], "joliet")
 	f := mount(t, b)
 	requireFile(t, f, "Mixed安装.TXT", "joliet")
-	if _, err := f.Open("RockRidge"); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := f.Open("primary"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatal(err)
 	}
 }

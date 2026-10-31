@@ -29,8 +29,8 @@ type FileReader struct {
 
 func (r FileReader) Size() int64 { return r.Length }
 
-// Open opens a read-only ISO filesystem, preferring Joliet names, then Rock
-// Ridge names, then lowercased ISO names. It does not take ownership of r.
+// Open opens a read-only ISO filesystem, preferring Rock Ridge names, then Joliet
+// names, then lowercased ISO names. It does not take ownership of r.
 func Open(r SizeReader) (fs.FS, error) {
 	if r == nil || r.Size() < 18*2048 {
 		return nil, fmt.Errorf("ISO image is too short")
@@ -59,10 +59,34 @@ func Open(r SizeReader) (fs.FS, error) {
 	if !terminated || primary == nil {
 		return nil, fmt.Errorf("missing primary volume descriptor or terminator")
 	}
-	d := primary
-	if joliet != nil {
-		d = joliet
+	f, err := openVolume(r, primary, false)
+	if err != nil {
+		return nil, err
 	}
+	// 根目录的 SP 标记决定主目录是否提供 Rock Ridge 名称。
+	raw, err := f.recordAt(f.root.extents[0].offset, f.root.extents[0].size)
+	if err != nil {
+		return nil, err
+	}
+	sua, err := systemUse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(sua) >= 2 && string(sua[:2]) == "SP" {
+		if len(sua) < 7 || sua[2] != 7 || sua[3] != 1 || sua[4] != 0xbe || sua[5] != 0xef {
+			return nil, fmt.Errorf("invalid SUSP SP entry")
+		}
+		f.rockRidge = true
+		f.skip = int(sua[6])
+		return f, nil
+	}
+	if joliet != nil {
+		return openVolume(r, joliet, true)
+	}
+	return f, nil
+}
+
+func openVolume(r SizeReader, d []byte, joliet bool) (*filesystem, error) {
 	block, err := number16(d[128:132])
 	if err != nil || block < 512 || block > 2048 || 2048%block != 0 {
 		return nil, fmt.Errorf("invalid ISO logical block size")
@@ -71,7 +95,7 @@ func Open(r SizeReader) (fs.FS, error) {
 	if err != nil || volume == 0 || int64(volume)*int64(block) > r.Size() {
 		return nil, fmt.Errorf("ISO volume exceeds image")
 	}
-	f := &filesystem{r: r, limit: int64(volume) * int64(block), block: int64(block), joliet: joliet != nil}
+	f := &filesystem{r: r, limit: int64(volume) * int64(block), block: int64(block), joliet: joliet}
 	length := int(d[156])
 	if length < 34 || length > len(d)-156 {
 		return nil, fmt.Errorf("invalid root directory record")
@@ -85,22 +109,6 @@ func Open(r SizeReader) (fs.FS, error) {
 	}
 	root.name = "."
 	f.root = root
-	// SUSP's SP entry in the root self record enables Rock Ridge and specifies
-	// the reserved prefix of the System Use Area for all other records.
-	if !f.joliet {
-		raw, err := f.recordAt(root.extents[0].offset, root.extents[0].size)
-		if err != nil {
-			return nil, err
-		}
-		sua, err := systemUse(raw)
-		if err != nil {
-			return nil, err
-		}
-		if len(sua) >= 7 && string(sua[:2]) == "SP" && sua[2] == 7 && sua[3] == 1 && sua[4] == 0xbe && sua[5] == 0xef {
-			f.rockRidge = true
-			f.skip = int(sua[6])
-		}
-	}
 	return f, nil
 }
 
