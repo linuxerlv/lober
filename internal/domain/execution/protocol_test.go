@@ -190,8 +190,9 @@ func TestPhaseBudgetsAndLateSignalsCannotRefreshDeadline(t *testing.T) {
 		t.Fatal("pre budget missing")
 	}
 	task = apply(t, task, Signal{Phase: "slot-end", Slot: 3, Timing: catalog.TimingPre})
-	if task.Execution.Deadline != 1100+3600 || task.Execution.Stage != "packages" {
-		t.Fatal("package budget missing")
+	// packages 单独给满一份安装寿命，但仍封顶在 IssuedAt+InstallLife，不能从这一阶段重新起算。
+	if want := task.Execution.IssuedAt + InstallLife; task.Execution.Deadline != want || task.Execution.Stage != "packages" {
+		t.Fatalf("package budget = %d，想要封顶在 IssuedAt+InstallLife = %d", task.Execution.Deadline, want)
 	}
 	task = apply(t, task, slotSignal("slot-start", 1, 0, "", 0))
 	if task.Execution.Deadline != 1100+1200 || task.Execution.Stage != "post" {
@@ -248,21 +249,24 @@ func Test执行规则拒绝不改输入(t *testing.T) {
 }
 func Test执行期限等号与重启后重报(t *testing.T) {
 	task := taskFixture()
+	// 安装总期限是 IssuedAt+InstallLife（4 小时）。阶段自己的预算只能往里收，不能超过它。
+	expired := task.Execution.IssuedAt + InstallLife
+	task.Execution.Deadline = expired
 	sig := slotSignal("slot-start", 1, 0, "", 0)
-	if _, _, err := Advance(task, sig, 6400); err != ErrProtocol {
+	if _, _, err := Advance(task, sig, expired); err != ErrProtocol {
 		t.Fatal("期限等号放行", err)
 	}
-	next, dup, err := Advance(task, sig, 6399)
-	if err != nil || dup || next.Execution.Deadline != 6400 {
+	next, dup, err := Advance(task, sig, expired-1)
+	if err != nil || dup || next.Execution.Deadline != expired {
 		t.Fatal("安装总期限改变", next.Execution, err)
 	}
 	next.State = model.TaskFailed
-	if _, dup, err := Advance(next, sig, 6400); err != nil || !dup {
+	if _, dup, err := Advance(next, sig, expired); err != nil || !dup {
 		t.Fatal("终态到期精确重报被拒", dup, err)
 	}
 	next.Execution.ReachedReboot = true
-	if _, dup, err := Advance(next, sig, 6400); err != ErrProtocol || dup {
+	if _, dup, err := Advance(next, sig, expired); err != ErrProtocol || dup {
 		t.Fatal("重启后旧插槽被接收", dup, err)
 	}
-	t.Log("boundary: 6399 accepted, 6400 rejected; exact terminal duplicate accepted; reboot installer duplicate rejected")
+	t.Log("boundary: 期限前一秒接受、到期即拒；精确终态重报接受；重启后安装插槽重报拒绝")
 }

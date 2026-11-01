@@ -39,10 +39,18 @@ func TestCredentialsBindTaskAttemptScopeAndExpiry(t *testing.T) {
 		t.Fatal("old attempt accepted")
 	}
 	task.Execution.Attempt = 1
-	s.now = func() int64 { return 6400 }
+	// 安装寿命 4 小时：IssuedAt 1000 之后 14400 秒整才失效，差一秒仍可用。
+	// 这一步只看凭据寿命，先把阶段期限清零，免得被 InstallAccessAllowed 先行拦下。
+	task.Execution.Deadline = 0
+	s.now = func() int64 { return 1000 + 14400 }
 	if s.Authorize(task, install, Install) == nil {
 		t.Fatal("expired install accepted")
 	}
+	s.now = func() int64 { return 1000 + 14400 - 1 }
+	if s.Authorize(task, install, Install) != nil {
+		t.Fatal("install rejected one second before its four-hour lifetime ends")
+	}
+	s.now = func() int64 { return 6400 }
 	if s.Authorize(task, final, Finalize) != nil {
 		t.Fatal("finalize expires with install")
 	}

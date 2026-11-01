@@ -52,7 +52,7 @@ func (s *Service) authorizeCredential(task model.Task, token string, scope Scope
 	if task.Execution == nil || len(token) != 64 || (scope != Install && scope != Finalize) {
 		return ErrCredential
 	}
-	life := int64(5400)
+	life := int64(executionrules.InstallLife)
 	if scope == Finalize {
 		life = 86400
 	}

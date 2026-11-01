@@ -18,7 +18,7 @@ func StartInstalling(t model.Task, at int64) (model.Task, bool) {
 	}
 	t = clone(t)
 	t.State = model.TaskInstalling
-	stage(t.Execution, "packages", at, 3600)
+	stage(t.Execution, "packages", at, packagesBudget)
 	return t, true
 }
 

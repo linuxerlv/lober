@@ -21,7 +21,7 @@
 | New | 可信组装传Repository、密钥、秒时钟和可空Notifier。密钥不足32字节或nil时钟返回配置错误；不预查Repository是否nil。成功复制密钥并返回服务。 | 不访问存储或时钟，无审计/通知/事务/提交复查/取消；重复构造独立服务。依赖并发安全由注入实现保证。 |
 | Token | 可信调用者传冻结任务与Install/Finalize范围；无Execution或未知范围返回空串。用任务ID、Attempt、IssuedAt及范围计算64位小写十六进制签名。 | 不校验当前状态或有效期、不查库或时钟，无错误；同任务与密钥结果相同。只读，无事务、冲突、提交复查、审计、通知或取消。 |
 | Credentials | 原任务，先Install后Finalize返回两项Token；无Execution时两项为空。 | 完整约定保留在service.go方法旁；不验证调用者凭据或状态。 |
-| Authorize | 先检查Execution、令牌长度64、范围；然后时钟早于IssuedAt或有效期已到、签名不符均ErrCredential；Install再调用InstallAccessNeedsTime决定是否读原额外时钟，并交InstallAccessAllowed检查Deadline及状态。否则传不使用的0；nil执行记录不得授权。Install寿命5400秒，Finalize寿命86400秒，边界即失效。 | 只查传入快照与当前时钟，无仓储、写入、审计或通知；重复可能因时钟变化失效，无版本重试和提交复查，不接收上下文。 |
+| Authorize | 先检查Execution、令牌长度64、范围；然后时钟早于IssuedAt或有效期已到、签名不符均ErrCredential；Install再调用InstallAccessNeedsTime决定是否读原额外时钟，并交InstallAccessAllowed检查Deadline及状态。否则传不使用的0；nil执行记录不得授权。Install寿命14400秒，Finalize寿命86400秒，边界即失效。 | 只查传入快照与当前时钟，无仓储、写入、审计或通知；重复可能因时钟变化失效，无版本重试和提交复查，不接收上下文。 |
 | GetAuthorized | 先GetTask，再按finalize布尔值选范围调用Authorize；不存在/查询错误先于凭据错误。成功返回读取的原任务。 | 只读，无事务、审计/通知或提交复查；重复可能看到新状态，原上下文只交仓储。 |
 
 不承诺已发令牌跨尝试有效。Retry 创建新Execution、递增Attempt，原尝试令牌不能通过随后读取新任务的授权。Finalize的授权不额外套Install阶段状态限制；Signal还有下文独立规则，不能用GetAuthorized完全替代。
@@ -34,7 +34,7 @@
 | Preseed | NormalizeSN后找开放任务；非法SN、无任务或非booting/installing均不返回安装任务。成功返回原任务与true。 | 只读，无事务、审计、通知、提交复查或冲突重试；它本身不验证格式、令牌或推进状态，Debian格式检查及Answer由协议调用方负责。 |
 | Answer | 每轮GetAuthorized(Install)，InstallingNeeded为假直接返回，不读推进时钟；否则读时钟交StartInstalling进入installing/packages阶段。 | 同事务保存machine.installing事件；版本冲突最多8轮重读并重新授权，耗尽ErrConflict。相同已installing请求不再提交，不额外通知。渲染不在此方法内。 |
 
-引导阶段初始预算900秒，packages预算3600秒；pre/post等安装阶段不超过IssuedAt+5400。任务冻结快照不重新选择最新模板或镜像。状态机的其他既有规则、阶段预算和原因以domain/execution/protocol.go当前实现为准，后续迁移不得改参数。
+引导阶段初始预算900秒，packages预算14400秒；pre/post等安装阶段不超过IssuedAt+14400（4小时）。任务冻结快照不重新选择最新模板或镜像。状态机的其他既有规则、阶段预算和原因以domain/execution/protocol.go当前实现为准，后续迁移不得改参数。
 
 ## 信号与超时扫描
 
@@ -70,13 +70,13 @@ ControlBackend 四方法唯一继承上述Service方法；AuditedControl 的Canc
 | PreseedAvailable | 任务；booting/installing为true。 | 不检查格式、凭据、期限或推进状态。 |
 | InstallerAnswerAvailable | 任务；仅Snapshot.Format为preseed时true。 | 不替代此前Preseed资格检查，不能把二者合并。生产调用位于Gateway.InstallerAnswer。 |
 | InstallingNeeded | 已通过GetAuthorized(Install)的任务；State不是installing时true。 | 与StartInstalling共用同一重复谓词，供应用决定是否读推进时钟。 |
-| StartInstalling | 同上，Execution须非nil；传入秒时间，返回下一任务及是否改变。 | 已installing返回原值/false；否则复制并进入installing/packages，期限min(at+3600,IssuedAt+5400)，返回true。不重复检查凭据。 |
-| Advance | 任务、Signal、秒时间；返回下一任务、是否完整相同重报、error。 | 先缺Execution/正文4096/早于IssuedAt，再按SignalKey及完整指纹查重，然后终态/16384信号/期限/冻结插槽与顺序；拒绝ErrProtocol。期限到达即拒绝新信号，精确重报早于期限及终态；重启后旧安装插槽即使精确也拒绝。pre600/packages3600/post1200，安装期限不超过IssuedAt+5400；reboot480/initializing900。 |
+| StartInstalling | 同上，Execution须非nil；传入秒时间，返回下一任务及是否改变。 | 已installing返回原值/false；否则复制并进入installing/packages，期限min(at+14400,IssuedAt+14400)，返回true。不重复检查凭据。 |
+| Advance | 任务、Signal、秒时间；返回下一任务、是否完整相同重报、error。 | 先缺Execution/正文4096/早于IssuedAt，再按SignalKey及完整指纹查重，然后终态/16384信号/期限/冻结插槽与顺序；拒绝ErrProtocol。期限到达即拒绝新信号，精确重报早于期限及终态；重启后旧安装插槽即使精确也拒绝。pre600/packages14400/post1200，安装期限不超过IssuedAt+14400；reboot480/initializing900。 |
 | SignalKey | Signal；按Phase-Slot-Instance返回文本。 | 不校验内容。Signal字段依次为Phase、Slot、Timing、Instance、Digest、RC、Body，无JSON标签；完整JSON的SHA-256小写十六进制为存储指纹。应用attemptKey再加attempt前缀。 |
 | FinalSignal | Signal；TimingFirstboot或booted/init-start/init-done/ready时true。 | 不检查任务状态或信号是否可推进。 |
 | SignalAccessAllowed | 已通过原凭据验证的任务与Signal；收尾信号或非终态时true。 | 保留收尾及精确重报的原后续规则；不替代Advance或凭据检查。 |
 | InstallAccessNeedsTime | 任务；有Execution且Deadline>0时true。 | 与InstallAccessAllowed共用期限谓词；应用仅在凭据检查成功后按结果读原额外时钟。 |
-| InstallAccessAllowed | 任务、秒时间；无Execution为false；有正期限且at>=Deadline为false；其余按PreseedAvailable。 | 不验证签名或5400/86400寿命；无需时间时忽略传入0，不增加时钟读取。 |
+| InstallAccessAllowed | 任务、秒时间；无Execution为false；有正期限且at>=Deadline为false；其余按PreseedAvailable。 | 不验证签名或14400/86400寿命；无需时间时忽略传入0，不增加时钟读取。 |
 | CanCancel | 任务；非终态返回nil，否则一个task_control_state。 | 只诊断，不保证保存成功。 |
 | CanRetry | 任务；先查ReachedReboot，再查failed/cancelled。 | 已重启先返回一个task_retry_after_reboot；可重试nil；其他状态一个task_control_state。保留问题顺序。 |
 | Cancel | 任务、秒时间；返回下一任务与问题。 | 先CanCancel，拒绝返回原值及问题；成功复制，无Execution先建attempt1；转cancelled并清Deadline，问题nil。 |
@@ -121,7 +121,7 @@ FrozenRenderer.Render属于执行模块的出站能力，cmd用RenderFunc连接a
 
 ## 地址观察与日志现状
 
-NewIPObserver 与 IPObservationSink.ObserveIP 保留各自方法旁的完整约定：只有原凭据成功的观察位置才调用，按原Attempt及IssuedAt+5400/86400登记原RemoteAddr；无Execution不登记。地址处理、有效期与容量由Collector决定，不读转发头。普通文件请求在凭据检查后、选择文件和渲染前观察；信号在最终Signal前尝试GetAuthorized，成功就观察，观察成功不保证随后信号推进成功。Debian应答在Answer成功后观察。普通Boot菜单不增加观察。
+NewIPObserver 与 IPObservationSink.ObserveIP 保留各自方法旁的完整约定：只有原凭据成功的观察位置才调用，按原Attempt及IssuedAt+14400/86400登记原RemoteAddr；无Execution不登记。地址处理、有效期与容量由Collector决定，不读转发头。普通文件请求在凭据检查后、选择文件和渲染前观察；信号在最终Signal前尝试GetAuthorized，成功就观察，观察成功不保证随后信号推进成功。Debian应答在Answer成功后观察。普通Boot菜单不增加观察。
 
 当前Collector.ObserveIP只在内存登记：解析host:port并把IPv4映射地址还原，非法任务/尝试/地址、已过期忽略。新地址最多4096项，重复地址覆盖；锁保护登记，过期项清除。无错误、事件、审计、通知、事务或提交复查，不接收上下文，重启丢失归属。
 

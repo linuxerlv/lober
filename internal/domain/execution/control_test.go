@@ -15,8 +15,9 @@ func TestPureControlCopiesStateAndKeepsDiagnostics(t *testing.T) {
 	}
 	task.State = model.TaskBooting
 	next, changed = StartInstalling(task, 1200)
-	if !changed || !InstallingNeeded(task) || next.State != model.TaskInstalling || next.Execution.Stage != "packages" || next.Execution.Deadline != 4800 || task.State != model.TaskBooting {
-		t.Fatal(next, changed)
+	// 安装期限是「开始时间 + 一整份安装寿命」，再被 IssuedAt+InstallLife 封顶：整套装机最多 4 小时。
+	if want := task.Execution.IssuedAt + InstallLife; !changed || !InstallingNeeded(task) || next.State != model.TaskInstalling || next.Execution.Stage != "packages" || next.Execution.Deadline != want || task.State != model.TaskBooting {
+		t.Fatalf("%v changed=%v deadline=%d 想要 %d", next.Execution, changed, next.Execution.Deadline, want)
 	}
 	task.State = model.TaskInstalling
 	next, problems := Cancel(task, 1200)
