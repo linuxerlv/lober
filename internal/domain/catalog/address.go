@@ -30,6 +30,14 @@ func SignalURL(base, task, token, phase string) string {
 	return joinURL(base, []string{"v1", "signal", task, token, phase})
 }
 
+// InventoryURL 是采集镜像上报硬件清单的地址：{base}/v1/inventory/{sn}/{token}。
+//
+// 与 AnswerURL 比少了任务号的一段：采集时机器上还没有任务。sn 与 token 的每一段各自转义，
+// 取值都由签发方保证只含安全词字符，转义只是防御。
+func InventoryURL(base, sn, token string) string {
+	return joinURL(base, []string{"v1", "inventory", sn, token})
+}
+
 // ArtifactURL 是制品的完整地址：{base}/{rel}。rel 取自 ISO.Artifacts，是制品目录下的相对路径。rel 是盘上的
 // 路径而不是转义过的地址，所以按 / 切开、逐段转义，结尾的 / 留着（仓库树是目录）；base 结尾的 / 去掉。
 //

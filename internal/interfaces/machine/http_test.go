@@ -21,6 +21,7 @@ type fixtureGateway struct {
 	installer execution.InstallerAnswerInput
 	file      execution.FileInput
 	signal    execution.SignalInput
+	inventory execution.InventoryInput
 	result    execution.BootResult
 	body      []byte
 	err       error
@@ -41,6 +42,10 @@ func (f *fixtureGateway) File(_ context.Context, in execution.FileInput) ([]byte
 func (f *fixtureGateway) Signal(_ context.Context, in execution.SignalInput) error {
 	f.signal = in
 	f.received = in.Signal
+	return f.err
+}
+func (f *fixtureGateway) InventoryReport(_ context.Context, in execution.InventoryInput) error {
+	f.inventory = in
 	return f.err
 }
 func gatewayFixture(t *testing.T) (*fixtureGateway, http.Handler) {

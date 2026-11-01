@@ -31,8 +31,12 @@ func gatewayStatus(err error, fallback int) int {
 			return 403
 		case execution.FileNotFound:
 			return 404
-		case execution.AnswerConflict, execution.SignalConflict:
+		case execution.AnswerConflict, execution.SignalConflict, execution.InventoryBusy:
 			return 409
+		case execution.ReportRejected:
+			return 422
+		case execution.NotSupported:
+			return 404
 		}
 	}
 	return fallback
@@ -58,6 +62,22 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	// 采集上报没有任务编号，路径比其余几类短一段（/v1/inventory/{sn}/{token}），
+	// 所以在那条通用长度检查之前单独分流。
+	if len(parts) == 4 && parts[0] == "v1" && parts[1] == "inventory" {
+		for _, part := range parts {
+			if part == "" || part == "." || part == ".." {
+				fail(w, 404)
+				return
+			}
+		}
+		if r.Method != http.MethodPost || !model.IsSafeWord(parts[3]) {
+			fail(w, 404)
+			return
+		}
+		h.inventoryReport(w, r, parts[2], parts[3])
+		return
+	}
 	if len(parts) < 5 || parts[0] != "v1" || !model.ValidID(parts[2]) || !model.IsSafeWord(parts[3]) {
 		fail(w, 404)
 		return
@@ -92,6 +112,35 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		fail(w, 404)
 	}
+}
+
+// maxInventoryBytes 与领域层的上报上限一致；这里先按 HTTP 层挡一次，不把超大正文读进内存。
+const maxInventoryBytes = 64 << 10
+
+func (h *handler) inventoryReport(w http.ResponseWriter, r *http.Request, sn, token string) {
+	if r.URL.RawQuery != "" {
+		fail(w, 400)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxInventoryBytes+1))
+	if err != nil || len(body) > maxInventoryBytes {
+		fail(w, 400)
+		return
+	}
+	// 交给网关：分类、错误映射都在执行模块里做，接口层不知道采集模块存在。
+	if err := h.gateway.InventoryReport(r.Context(), execution.InventoryInput{
+		SN: sn, Token: token, Body: body, RemoteAddr: r.RemoteAddr,
+	}); err != nil {
+		code := gatewayStatus(err, 503)
+		if code == http.StatusUnprocessableEntity {
+			// 值不可信：正文带类别名，便于串口日志直接看出问题。
+			http.Error(w, err.Error(), code)
+			return
+		}
+		fail(w, code)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 func (h *handler) boot(w http.ResponseWriter, r *http.Request) {
 	q, err := url.ParseQuery(r.URL.RawQuery)

@@ -198,7 +198,7 @@ func interfaceCapabilityFindings(caller string, fset *token.FileSet, files []*as
 					}
 					if target == pkgExecution {
 						switch symbol {
-						case "Gateway", "BootInput", "InstallerAnswerInput", "FileInput", "SignalInput", "BootResult", "GatewayError", "GatewayFailureKind", "LookupUnavailable", "RenderRejected", "Unauthorized", "FileNotFound", "AnswerConflict", "SignalConflict", "Gateway.BootMenu", "Gateway.InstallerAnswer", "Gateway.File", "Gateway.Signal", "GatewayError.Error", "GatewayError.Unwrap":
+						case "Gateway", "BootInput", "InstallerAnswerInput", "FileInput", "SignalInput", "BootResult", "GatewayError", "GatewayFailureKind", "LookupUnavailable", "RenderRejected", "Unauthorized", "FileNotFound", "AnswerConflict", "SignalConflict", "ReportRejected", "NotSupported", "InventoryBusy", "Gateway.BootMenu", "Gateway.InstallerAnswer", "Gateway.File", "Gateway.Signal", "Gateway.InventoryReport", "InventoryInput", "GatewayError.Error", "GatewayError.Unwrap":
 						default:
 							bad = true
 						}

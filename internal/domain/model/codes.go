@@ -453,6 +453,37 @@ var codeTable = map[Code]codeSpec{
 	"iso_space_insufficient":   {CategoryIncomplete, 2, "暂存区只剩 %[1]v 字节，还差 %[2]v 字节", "清理暂存区，或改用允许目录内的服务器本地路径，再登记来源"},
 	// 用户由存储契约定义，Subject.Kind 不属于核心的八个领域对象。
 	"user_field_invalid": {CategoryInvalid, 1, "用户字段「%[1]v」不合法", "用户名用 1–32 个小写字母、数字或下划线并以字母开头；角色从内置五种中选择；新建时必须提供口令"},
+
+	// —— 采集上报（internal/domain/inventory）——
+
+	// 上报的固件不是 bios 或 uefi。参数：上报的值。
+	"inventory_firmware_invalid": {CategoryInvalid, 1,
+		"采集上报的固件是「%[1]v」，只能是 BIOS 或 UEFI",
+		"重新采集；采集程序按 /sys/firmware/efi 在不在于判断固件，这个值不对说明它读错了地方"},
+	// 上报里的数值不在合理范围。参数：字段名，上报的值。
+	"inventory_number_invalid": {CategoryInvalid, 2,
+		"采集上报的 %[1]v 是「%[2]v」，不在合理范围内",
+		"重新采集；仍然不对时核对采集镜像是否读错了单位或读错了文件"},
+	// 上报里的文本超长、含控制字符或不是可存文本。参数：字段名。
+	"inventory_text_invalid": {CategoryInvalid, 1,
+		"采集上报的 %[1]v 超长、含控制字符或不是可存的文本",
+		"重新采集；仍然不对时核对采集脚本读取的路径"},
+	// 上报里一块可安装磁盘都没有。不是「机器没硬盘」：多半是采集镜像缺了存储驱动。
+	"inventory_no_disk": {CategoryIncompatible, 0,
+		"采集没有发现任何可安装的磁盘",
+		"确认目标机的存储控制器在采集镜像的驱动范围内；采集镜像缺存储驱动时，内核看不到块设备"},
+	// 上报的磁盘设备名不是内核写法，或容量为零。参数：设备名。
+	"inventory_disk_invalid": {CategoryInvalid, 1,
+		"采集上报的磁盘「%[1]v」名称不合内核写法或容量为零",
+		"重新采集；仍然不对时核对采集脚本是否把分区或逻辑卷当成了磁盘"},
+	// 同一块磁盘在报告里出现了两次。参数：设备名。
+	"inventory_disk_duplicate": {CategoryInvalid, 1,
+		"采集上报里磁盘「%[1]v」出现了两次",
+		"重新采集；仍然重复说明采集脚本遍历 /sys/block 时重复读了同一项"},
+	// 渲染采集菜单时缺了一项必需配置。参数：缺的字段名。
+	"render_inventory_missing": {CategoryIncomplete, 1,
+		"渲染采集菜单缺少 %[1]v",
+		"在部署配置里补上采集镜像的内核与 initrd 相对路径，以及网关与制品基地址"},
 }
 
 // ISO 层选用的固定措辞集中在代码表文件；跨包调用需要导出。
