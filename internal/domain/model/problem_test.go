@@ -94,6 +94,15 @@ var extraCodes = map[Code]Category{
 	// Execution qualification: user controls share durable C34 decisions.
 	"task_control_state":      CategoryState,
 	"task_retry_after_reboot": CategoryState,
+
+	// 硬件采集（internal/domain/inventory）：采集上报的校验与采集菜单渲染。
+	"inventory_firmware_invalid": CategoryInvalid,
+	"inventory_number_invalid":   CategoryInvalid,
+	"inventory_text_invalid":     CategoryInvalid,
+	"inventory_no_disk":          CategoryIncompatible,
+	"inventory_disk_invalid":     CategoryInvalid,
+	"inventory_disk_duplicate":   CategoryInvalid,
+	"render_inventory_missing":   CategoryIncomplete,
 }
 
 func TestCode表与附录总表逐项一致(t *testing.T) {
@@ -115,9 +124,9 @@ func TestCode表与附录总表逐项一致(t *testing.T) {
 		}
 		want[c] = cat
 	}
-	// 58 appendix + 1 acceptance + 10 fixups + 1 layer2 + 1 layer2 fixup + 10 layer3 + 11 layer4 + 2 layer5 + 2 execution.
-	if len(want) != 96 {
-		t.Fatalf("附录加上追加的代码应共 96 个，测试里有 %d 个", len(want))
+	// 58 appendix + 1 acceptance + 10 fixups + 1 layer2 + 1 layer2 fixup + 10 layer3 + 11 layer4 + 2 layer5 + 2 execution + 7 inventory.
+	if len(want) != 103 {
+		t.Fatalf("附录加上追加的代码应共 103 个，测试里有 %d 个", len(want))
 	}
 	for c, cat := range want {
 		if got := c.Category(); got != cat {
