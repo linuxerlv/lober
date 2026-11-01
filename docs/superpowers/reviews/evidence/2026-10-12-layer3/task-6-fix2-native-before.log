@@ -1,9 +1,0 @@
-=== RUN   TestAnswerWindowsNativeCMDFirstboot
-=== RUN   TestAnswerWindowsNativeCMDFirstboot/wrapper-exit-71
-=== RUN   TestAnswerWindowsNativeCMDFirstboot/wrapper-exit-0
---- PASS: TestAnswerWindowsNativeCMDFirstboot (13.94s)
-    --- PASS: TestAnswerWindowsNativeCMDFirstboot/wrapper-exit-71 (5.08s)
-    --- PASS: TestAnswerWindowsNativeCMDFirstboot/wrapper-exit-0 (8.86s)
-=== RUN   TestAnswerWindowsNativeCMDPre
---- PASS: TestAnswerWindowsNativeCMDPre (0.03s)
-PASS

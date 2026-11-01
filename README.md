@@ -120,6 +120,8 @@ internal/
 
 ## 文档
 
+文档只保留在本机 `docs/` 下，不随仓库分发：
+
 - `docs/contracts/` — 各模块的行为契约
 - `docs/superpowers/specs/` — 设计文档
 - `docs/superpowers/plans/` — 实施计划

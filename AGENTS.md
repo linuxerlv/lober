@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-The Go service lives in `cmd/lober` and `internal/` (core, storage, rendering, ISO, console, and architecture checks); tests sit beside packages. `web/` is a pnpm workspace; its Vue app is `web/apps/web-ele` and shared packages are in `web/packages/`. Engineering documentation is in `docs/`.
+The Go service lives in `cmd/lober` and `internal/` (core, storage, rendering, ISO, console, and architecture checks); tests sit beside packages. `web/` is a pnpm workspace; its Vue app is `web/apps/web-ele` and shared packages are in `web/packages/`. Engineering documentation is kept locally under `docs/`; that directory is git-ignored and never pushed.
 
 ## Build, Test, and Development Commands
 
@@ -24,7 +24,7 @@ Use concise conventional commits such as `feat(console): ...`, `fix(iso): ...`, 
 
 ## Branch & Release Workflow
 
-Develop each feature or module on its own named branch, then merge it into `develop` for integration testing. If integration testing finds a defect, roll back the problematic feature or module branch; unaffected branches may be submitted again. Fix the failing branch and rerun integration testing until the combined changes pass. Then sync the integrated code to `test` and run the enterprise test suite. After it passes, sync to `preview` for manual acceptance and internal testing. Promote to `main` only after that review passes. For a bug found on `main`, create a `hotfix` branch and follow the patch release flow through testing and preview before merging the fix into `main`.
+Develop each feature or module on its own named branch, then merge it into `dev` for integration testing. Merge with a merge commit, never squash or rebase, so a faulty feature or module branch can be reverted as one unit. If integration testing finds a defect, roll back the problematic feature or module branch; unaffected branches may be submitted again. Fix the failing branch and rerun integration testing until the combined changes pass. Then sync the integrated code to `test` and run the enterprise test suite; the `lobervm` instance on the cloud server pulls the latest `test` branch from GitHub and runs tests there, never local uncommitted code. After it passes, sync to `preview` for manual acceptance and internal testing. Promote to `main` only after that review passes. GitHub stores code and runs basic checks only; it never deploys or reaches internal test environments. For a bug found on `main`, create a `fix/<name>` branch from `main` and follow the patch release flow through testing and preview before merging the fix into `main`. Keep branch names to `feat/<name>`, `fix/<name>`, `dev`, `test`, `preview`, and `main` only. Every promotion requires green CI, one approval, and resolved conversations. Tag releases on `main` as `vYYYY.MM.PATCH` and never move or delete a published tag.
 
 ## Security & Configuration
 

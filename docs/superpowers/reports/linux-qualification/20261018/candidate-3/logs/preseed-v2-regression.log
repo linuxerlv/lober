@@ -1,5 +1,0 @@
-ok  	github.com/lober/lober/internal/builtin	0.702s
-ok  	github.com/lober/lober/internal/render	5.366s
-ok  	github.com/lober/lober/internal/core/params	0.004s
-ok  	github.com/lober/lober/cmd/lober	5.808s
-ok  	github.com/lober/lober/internal/machine	0.002s
