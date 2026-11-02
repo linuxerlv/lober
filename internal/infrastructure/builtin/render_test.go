@@ -28,7 +28,11 @@ func fixtureInput(t *testing.T, tpl model.Template) params.Input {
 		hs[h.Key()] = h
 	}
 	entered := map[params.FieldKey]string{}
-	samples := map[string]string{"pwhash": "$6$fixture$notARealPasswordHash", "password": "Fixture_Pass9", "key": fixtureKey, "edition": "4", "product": "SLES", "packages": "curl\nvim"}
+	samples := map[string]string{"pwhash": "$6$fixture$notARealPasswordHash", "password": "Fixture_Pass9", "key": fixtureKey, "edition": "4", "product": "SLES"}
+	// Linux 和 Windows 的 packages 都有内置默认值，不用手填；ESXi 的 VIB 地址没有默认值。
+	if tpl.Family == "esxi" {
+		samples["packages"] = "https://depot.example.test/driver.vib"
+	}
 	for _, d := range tpl.Params {
 		if v, ok := samples[d.Name]; ok {
 			entered[params.FieldKey(model.TemplateFieldKey(d.Name))] = v
@@ -37,19 +41,25 @@ func fixtureInput(t *testing.T, tpl model.Template) params.Input {
 	for slot, instances := range tpl.Assembly {
 		for i, in := range instances {
 			h := hs[model.HookKey{ID: in.HookID, Version: in.HookVersion}]
+			impl, _ := h.ImplFor(tpl.Series[0])
+			var refs scan.Refs
+			if impl.Expanded() {
+				res, _ := scan.Scan(impl.Body)
+				refs = res.Refs()
+			}
 			for _, d := range h.Params {
-				if v, ok := samples[d.Name]; ok {
-					if d.Name == "packages" {
-						switch tpl.Family {
-						case "windows":
-							v = "Telnet-Client"
-						case "esxi":
-							v = "https://depot.example.test/driver.vib"
-						}
+				// 片段没引用的参数不进表单，填了会被参数求值当成未知字段。
+				if impl.Expanded() {
+					if _, ok := refs[d.Name]; !ok {
+						continue
 					}
-					if b, ok := in.Bindings[d.Name]; !ok || b.Editable {
-						entered[params.FieldKey(model.InstanceFieldKey(slot, i+1, d.Name))] = v
-					}
+				}
+				v, ok := samples[d.Name]
+				if !ok {
+					continue
+				}
+				if b, bound := in.Bindings[d.Name]; !bound || b.Editable {
+					entered[params.FieldKey(model.InstanceFieldKey(slot, i+1, d.Name))] = v
 				}
 			}
 		}
@@ -60,7 +70,9 @@ func fixtureInput(t *testing.T, tpl model.Template) params.Input {
 			iso.Artifacts[role] = "media/" + role
 		}
 	}
-	return params.Input{Template: tpl, Hooks: hs, ISO: iso, Host: model.Host{SN: "TASK9-FIXTURE", Arch: "amd64"}, Entered: entered}
+	return params.Input{Template: tpl, Hooks: hs, ISO: iso,
+		Host:    model.Host{SN: "TASK9-FIXTURE", Arch: "amd64", Attrs: map[string]string{"inv_system_disk": "sda"}},
+		Entered: entered}
 }
 
 func fixtureRequest(t *testing.T, tpl model.Template, firmware catalog.Firmware) render.Request {

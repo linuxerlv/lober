@@ -20,7 +20,6 @@ curl
 systemd
 openssh-server
 curl
-vim
 %end
 services --enabled=sshd
 %post --nochroot --interpreter=/bin/sh --erroronfail

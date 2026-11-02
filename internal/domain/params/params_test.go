@@ -203,7 +203,6 @@ func TestEvaluate完整模板的表单与取值(t *testing.T) {
 		{Key: "tpl/hostname", Label: "主机名", Type: "hostname", Required: true, Prefill: "web-01"},
 		{Key: "tpl/timezone", Label: "时区", Type: "word", Required: true, Prefill: "Asia/Shanghai"},
 		{Key: "分区/1/disk", Label: "系统盘", Type: "diskpath", Required: true, Locked: true, Prefill: "/dev/sda"},
-		{Key: "分区/1/swap_mb", Label: "交换分区（MiB）", Type: "int"},
 		{Key: "软件包/1/pkgs", Label: "软件包", Type: "word", List: true, Required: true, Prefill: "vim-enhanced\ntmux"},
 		{Key: "装后配置/1/ip", Label: "地址与前缀", Type: "cidr", Required: true, Locked: true, Prefill: "10.0.0.11/24"},
 		{Key: "装后配置/1/device", Label: "网卡名", Type: "word", Required: true, Locked: true, Prefill: "eth1"},
@@ -533,8 +532,8 @@ func TestEvaluate可改的格子取值不合法时说明用显示名(t *testing.
 		key         FieldKey
 		label, name string
 	}{
-		"操作员填的": {func(in *Input) { in.Entered = map[FieldKey]string{"分区/1/swap_mb": "-1"} },
-			"分区/1/swap_mb", "交换分区（MiB）", "swap_mb"},
+		"操作员填的": {func(in *Input) { in.Entered = map[FieldKey]string{"装后配置/2/mtu": "abc"} },
+			"装后配置/2/mtu", "MTU", "mtu"},
 		"预填的主机属性": {func(in *Input) { in.Host.Attrs["ip2"] = "192.168.10.11" }, "装后配置/2/ip", "地址与前缀", "ip"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -700,7 +699,7 @@ func TestEvaluate结构性缺失时跳过那个实例(t *testing.T) {
 	delete(in.Hooks, model.HookKey{ID: "nic", Version: 2})
 	res := Evaluate(in)
 	mustFail(t, res, slotAt("hook_ref_missing", "装后配置/1"), slotAt("hook_ref_missing", "装后配置/2"))
-	if got, want := fieldKeys(res), []FieldKey{"tpl/hostname", "tpl/timezone", "分区/1/disk", "分区/1/swap_mb", "软件包/1/pkgs"}; !slices.Equal(got, want) {
+	if got, want := fieldKeys(res), []FieldKey{"tpl/hostname", "tpl/timezone", "分区/1/disk", "软件包/1/pkgs"}; !slices.Equal(got, want) {
 		t.Errorf("字段是 %v，应为 %v", got, want)
 	}
 	if msg := res.Problems[0].Message; !strings.Contains(msg, "nic@2") {
@@ -791,4 +790,53 @@ func TestEvaluate重名的插槽与参数只算第一次出现(t *testing.T) {
 	if f := fieldOf(t, res, "tpl/hostname"); f.Label != "主机名" {
 		t.Errorf("重名的参数应按第一次出现的算，得到 %+v", f)
 	}
+}
+
+func TestEvaluate片段未引用的参数不进入表单(t *testing.T) {
+	account := model.Hook{
+		ID: "acct", Version: 1, Name: "账号", State: model.VersionApproved,
+		Params: []model.ParamDecl{
+			{Name: "username", Type: "word", Default: "lober"},
+			{Name: "pwhash", Type: "pwhash", Required: true},
+			{Name: "password", Type: "word"},
+		},
+		Impls: []model.Impl{{Family: "linux", Series: []catalog.Series{"rocky"}, Kind: model.ImplFragment,
+			Body: "user {{param:username}} {{param:pwhash}}\n"}},
+	}
+	disk := model.Hook{
+		ID: "diskonly", Version: 1, Name: "磁盘", State: model.VersionApproved,
+		Params: []model.ParamDecl{
+			{Name: "disk", Type: "word", Default: "sda"},
+			{Name: "disk_index", Type: "int", Default: "0"},
+		},
+		Impls: []model.Impl{{Family: "linux", Series: []catalog.Series{"rocky"}, Kind: model.ImplFragment,
+			Body: "/dev/{{param:disk}}\n"}},
+	}
+	in := Input{
+		Template: model.Template{
+			ID: "t", Version: 1, Name: "t", State: model.VersionApproved, Family: "linux",
+			Series: []catalog.Series{"rocky"}, Body: "{{slot:acct}}\n{{slot:disk}}\n",
+			Assembly: map[string][]model.Instance{
+				"acct": {{HookID: "acct", HookVersion: 1}},
+				"disk": {{HookID: "diskonly", HookVersion: 1}},
+			},
+		},
+		Hooks: hookMap(account, disk),
+		ISO:   model.ISO{ID: "r", Name: "r", Family: "linux", Series: "rocky", Version: "1", Arch: "x86_64", State: model.ISOReady},
+		Host:  model.Host{SN: hostSN, Arch: "x86_64"},
+		Entered: map[FieldKey]string{
+			"acct/1/pwhash": "$6$fixture$notARealPasswordHash",
+		},
+	}
+	res := Evaluate(in)
+	for _, key := range []FieldKey{"acct/1/username", "acct/1/pwhash", "disk/1/disk"} {
+		fieldOf(t, res, key)
+	}
+	for _, key := range []FieldKey{"acct/1/password", "disk/1/disk_index"} {
+		if slices.Contains(fieldKeys(res), key) {
+			t.Fatalf("未引用的参数 %s 进了表单", key)
+		}
+	}
+	in.Entered["acct/1/password"] = "Plain_Text1"
+	mustFail(t, Evaluate(in), at("param_unknown_field", "acct/1/password"))
 }

@@ -181,8 +181,16 @@ func TestHookParametersAffectNativeAnswers(t *testing.T) {
 	for _, tpl := range Templates() {
 		t.Run(tpl.ID, func(t *testing.T) {
 			in := fixtureInput(t, tpl)
-			in.Entered["network/1/hostname"] = "changed-node"
-			in.Entered["account/1/username"] = "changed-user"
+			if f, _ := tpl.Format(); f == "autoinstall" {
+				// autoinstall 的主机名来自模板参数，网络片段只引用 interface。
+				in.Entered["tpl/hostname"] = "changed-node"
+			} else {
+				in.Entered["network/1/hostname"] = "changed-node"
+			}
+			if tpl.Family != "esxi" {
+				// ESXi 的账号片段只用 rootpw，username 没有位置。
+				in.Entered["account/1/username"] = "changed-user"
+			}
 			if tpl.Family == "linux" {
 				in.Entered["packages/1/packages"] = "vim\ncurl"
 			}
