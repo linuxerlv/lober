@@ -14,6 +14,7 @@ import (
 	"github.com/lober/lober/internal/application/execution"
 	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/identity"
+	"github.com/lober/lober/internal/application/inventory"
 	appmedia "github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
@@ -89,7 +90,7 @@ func mediaControlOf(src *appmedia.Sources, sup *appmedia.Supervisor) port.Source
 }
 func taskBackendOf(m *machineBundle) tasksport.Control {
 	if m.Service != nil {
-		return execution.NewAuditedControl(m.Service)
+		return execution.NewAuditedControl(m.Service.Control)
 	}
 	return tasks.NewUnavailableControl()
 }
@@ -134,6 +135,12 @@ func identityServiceOf(st repository.Store, cfg config, clock ports.Clock) *iden
 }
 
 func auditReaderOf(st repository.Store) audit.Reader { return audit.NewReader(st) }
+
+// inventoryServiceOf 是采集应用的装配口。它的形状与 identityServiceOf 一致，身份与令牌
+// 能力只在这里构造，其他位置不得自己再建一个随机源。
+func inventoryServiceOf(st repository.Store, clock ports.Clock) *inventory.Service {
+	return inventory.New(inventory.Deps{Hosts: st, Tokens: credentials.NewTokens(), Clock: clock, Tasks: st})
+}
 
 // taskReaderOf 显式共用原任务仓储、诊断与冻结渲染能力。
 func taskReaderOf(st repository.Store, ctl tasksport.Control, renderer ports.FrozenPreview) tasks.Reader {

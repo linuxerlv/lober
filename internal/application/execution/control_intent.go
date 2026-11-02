@@ -9,13 +9,13 @@ import (
 
 // ControlBackend 保留原任务控制的四个方法和保存约定。
 type ControlBackend interface {
-	// Cancel 的八项约定唯一委托同包Service.Cancel，见 docs/contracts/machine-execution.md「控制与诊断」。
+	// Cancel 的八项约定唯一委托同包Control.Cancel，见 docs/contracts/machine-execution.md「控制与诊断」。
 	Cancel(context.Context, model.Task, repository.Audit) error
-	// Retry 的八项约定唯一委托同包Service.Retry，见 docs/contracts/machine-execution.md「控制与诊断」。
+	// Retry 的八项约定唯一委托同包Control.Retry，见 docs/contracts/machine-execution.md「控制与诊断」。
 	Retry(context.Context, model.Task, repository.Audit) error
-	// CanCancel 的八项约定唯一委托同包Service.CanCancel，见 docs/contracts/machine-execution.md「控制与诊断」。
+	// CanCancel 的八项约定唯一委托同包Control.CanCancel，见 docs/contracts/machine-execution.md「控制与诊断」。
 	CanCancel(model.Task) []model.Problem
-	// CanRetry 的八项约定唯一委托同包Service.CanRetry，见 docs/contracts/machine-execution.md「控制与诊断」。
+	// CanRetry 的八项约定唯一委托同包Control.CanRetry，见 docs/contracts/machine-execution.md「控制与诊断」。
 	CanRetry(model.Task) []model.Problem
 }
 

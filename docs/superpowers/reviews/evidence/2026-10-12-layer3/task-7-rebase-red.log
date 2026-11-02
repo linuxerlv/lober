@@ -1,7 +1,0 @@
---- FAIL: TestESXiHTTPRebaseRemovesOnlyCDROMToken (0.00s)
-    aux_test.go:170: cdromBoot rebasing: "prefix=http://ng.internal/artifacts/esxi8\nkernel=b.b00\nkernelopt=cdromBoot runweasel cdromBootExtra keep=1 ks=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/ks.cfg\nmodules=a.v00 --- b.v00\n" [] <nil>; want "prefix=http://ng.internal/artifacts/esxi8\nkernel=b.b00\nkernelopt=runweasel cdromBootExtra keep=1 ks=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/ks.cfg\nmodules=a.v00 --- b.v00\n"
---- FAIL: TestESXiRebasePreservesOriginalOptionAndPathSpacing (0.00s)
-    aux_test.go:181: spacing changed: "prefix=http://ng.internal/artifacts/esxi8\nkernel=nested/b.b00\nkernelopt=runweasel keep=1 ks=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/ks.cfg\nmodules=z/vendor.v00  option=1 --- a/module.v00\n" [] <nil>; want "prefix=http://ng.internal/artifacts/esxi8\nkernel= nested/b.b00\nkernelopt=runweasel  keep=1 ks=http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/ks.cfg\nmodules= z/vendor.v00  option=1\t---\t a/module.v00\n"
-FAIL
-FAIL	github.com/lober/lober/internal/render	0.006s
-FAIL

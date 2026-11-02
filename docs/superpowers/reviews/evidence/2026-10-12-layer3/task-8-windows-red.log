@@ -1,7 +1,0 @@
---- FAIL: TestWindowsRuntimeStaticContract (0.00s)
-    remaining_test.go:56: [] render: assembler not implemented
---- FAIL: TestWindowsAuxRequiresRealTools (0.00s)
-    remaining_test.go:80: [] render: assembler not implemented
-FAIL
-FAIL	github.com/lober/lober/internal/render	0.005s
-FAIL

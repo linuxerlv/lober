@@ -77,7 +77,7 @@ func applicationModule(pkg string) string {
 	if pkg == pkgPorts {
 		return "ports"
 	}
-	for _, name := range []string{"tasks", "hosts", "authoring", "media", "identity", "audit"} {
+	for _, name := range []string{"tasks", "hosts", "authoring", "media", "identity", "audit", "inventory"} {
 		base := modulePath + "/internal/application/" + name
 		if pkg == base || pkg == base+"/port" {
 			return name

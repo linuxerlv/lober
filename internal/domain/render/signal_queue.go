@@ -2,6 +2,7 @@ package render
 
 import (
 	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
 )
 
 // signalQueue publishes body before metadata, retries in canonical order, and
@@ -49,7 +50,7 @@ queue_signal() {
 `
 }
 
-func queuedNativeSignal(phase string) string {
-	label := map[string]string{"booted": "000-booted", "init-start": "001-init-start", "init-done": "900-init-done", "ready": "901-ready"}[phase]
-	return "queue_signal " + shQuote(label) + " " + shQuote(phase) + " ''\n"
+func queuedNativeSignal(phase model.SignalPhase) string {
+	label := map[model.SignalPhase]string{model.PhaseBooted: "000-booted", model.PhaseInitStart: "001-init-start", model.PhaseInitDone: "900-init-done", model.PhaseReady: "901-ready"}[phase]
+	return "queue_signal " + shQuote(label) + " " + shQuote(string(phase)) + " ''\n"
 }

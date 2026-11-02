@@ -1,9 +1,0 @@
-{
-  "status": "PASS",
-  "product_sha": "668a512849895ddd00310aca399d0589c9e43cf1",
-  "source_files": 446,
-  "source_manifest_sha256": "9c4ebda82850b3ba17c78239175713d4492a2df1674a19e3f4b24803e8a1e559",
-  "check": "make check",
-  "exit": 0,
-  "check_log_sha256": "3e86f4a04c9d30c1d1a74204fbce168e15a9207d916f4bb7ca4e6db02fc51166"
-}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/lober/lober/internal/application/execution"
 	executionport "github.com/lober/lober/internal/application/execution/port"
+	executionrules "github.com/lober/lober/internal/domain/execution"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/infrastructure/events"
 	"math"
@@ -32,7 +33,7 @@ func Test机器日志观察保留原有效期(t *testing.T) {
 		issued int64
 		reboot bool
 		want   int64
-	}{{1000, false, 6400}, {1000, true, 87400}, {math.MaxInt64, false, math.MinInt64 + 5399}, {-1000, false, 4400}} {
+	}{{1000, false, 1000 + executionrules.InstallLife}, {1000, true, 87400}, {math.MaxInt64, false, math.MinInt64 + executionrules.InstallLife - 1}, {-1000, false, -1000 + executionrules.InstallLife}} {
 		observe(model.Task{ID: "task", Execution: &model.Execution{Attempt: 2, IssuedAt: tc.issued, ReachedReboot: tc.reboot}}, "untouched:42")
 		if len(sink.calls) == 0 {
 			t.Fatal("未登记")
@@ -62,7 +63,7 @@ func Test执行观察小接口可直接连接日志收集器(t *testing.T) {
 	if err := c.Receive(t.Context(), "192.0.2.1:514", []byte("installer")); err != nil || len(r.calls) != 1 || r.calls[0].Attempt != 2 {
 		t.Fatal("小接口未连接", err)
 	}
-	now = 6400
+	now = 1000 + executionrules.InstallLife
 	if err := c.Receive(t.Context(), "192.0.2.1:514", []byte("expired")); err != nil || len(r.calls) != 1 {
 		t.Fatal("观察有效期改变", err)
 	}

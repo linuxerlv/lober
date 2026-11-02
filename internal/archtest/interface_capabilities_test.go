@@ -75,11 +75,24 @@ func standardNamedType(t types.Type, path, name string) bool {
 }
 
 func serverHTTPFunction(fn *types.Func) bool {
-	if fn.Pkg() == nil || fn.Pkg().Path() != "net/http" {
+	if fn == nil || fn.Pkg() == nil || fn.Pkg().Path() != "net/http" {
 		return false
 	}
 	switch transitionSymbol(fn) {
 	case "Error", "StatusText", "SetCookie", "Redirect", "NotFound", "ServeContent", "MaxBytesReader", "DetectContentType", "HandlerFunc.ServeHTTP", "Handler.ServeHTTP", "Request.Context", "Request.UserAgent", "Request.Cookie", "Request.Cookies", "Request.FormFile", "Request.ParseMultipartForm", "Request.ParseForm", "Request.FormValue", "Request.PostFormValue", "Header.Get", "Header.Set", "Header.Add", "Header.Del", "Header.Values", "ResponseWriter.Header", "ResponseWriter.Write", "ResponseWriter.WriteHeader", "Flusher.Flush":
+		return true
+	}
+	return false
+}
+
+// machineHTTPFunction 是机器入口额外需要的路由能力：只分发路径、读路径参数，
+// 不扩大控制台的许可。
+func machineHTTPFunction(fn *types.Func) bool {
+	if fn == nil || fn.Pkg() == nil || fn.Pkg().Path() != "net/http" {
+		return false
+	}
+	switch transitionSymbol(fn) {
+	case "NewServeMux", "ServeMux.HandleFunc", "Request.PathValue":
 		return true
 	}
 	return false
@@ -138,8 +151,9 @@ func interfaceCapabilityFindings(caller string, fset *token.FileSet, files []*as
 				fn, function := obj.(*types.Func)
 				_, callable := interfaceCallableSignature(obj)
 				// 两个薄适配器只接收网关或日志输入；原始业务记录不能成为本地重算规则的入口。
+				// SignalPhase 是机器协议词表，机器入口只拿它做路径到信号的纯转换，不是业务记录。
 				if (machine || events) && target == pkgModel {
-					if _, record := obj.(*types.TypeName); record {
+					if _, record := obj.(*types.TypeName); record && !(machine && symbol == "SignalPhase") {
 						bad = true
 					}
 				}
@@ -170,7 +184,14 @@ func interfaceCapabilityFindings(caller string, fset *token.FileSet, files []*as
 				}
 				if (console || machine) && callable && target == "net/http" {
 					// 标准库的函数字段也是主动能力；只有精确的服务器方法允许调用。
-					bad = bad || !function || !serverHTTPFunction(fn) && !consoleTransportMethod(fn)
+					bad = bad || !function
+					if function {
+						allowed := serverHTTPFunction(fn) || consoleTransportMethod(fn)
+						if machine {
+							allowed = allowed || machineHTTPFunction(fn)
+						}
+						bad = bad || !allowed
+					}
 				}
 				if console {
 					if function && under(target, modulePath+"/internal/application") && !migratedApplicationMethod(fn) {
@@ -198,7 +219,7 @@ func interfaceCapabilityFindings(caller string, fset *token.FileSet, files []*as
 					}
 					if target == pkgExecution {
 						switch symbol {
-						case "Gateway", "BootInput", "InstallerAnswerInput", "FileInput", "SignalInput", "BootResult", "GatewayError", "GatewayFailureKind", "LookupUnavailable", "RenderRejected", "Unauthorized", "FileNotFound", "AnswerConflict", "SignalConflict", "Gateway.BootMenu", "Gateway.InstallerAnswer", "Gateway.File", "Gateway.Signal", "GatewayError.Error", "GatewayError.Unwrap":
+						case "Gateway", "BootInput", "InstallerAnswerInput", "FileInput", "SignalInput", "BootResult", "GatewayError", "GatewayFailureKind", "LookupUnavailable", "RenderRejected", "Unauthorized", "FileNotFound", "AnswerConflict", "SignalConflict", "ReportRejected", "NotSupported", "InventoryBusy", "Gateway.BootMenu", "Gateway.InstallerAnswer", "Gateway.File", "Gateway.Signal", "Gateway.InventoryReport", "InventoryInput", "GatewayError.Error", "GatewayError.Unwrap":
 						default:
 							bad = true
 						}

@@ -1,8 +1,0 @@
-=== RUN   TestImportFormats
-=== RUN   TestImportFormats/debian
-    import_test.go:141: ready Debian ISO has no HTTP repository for the shipped preseed
---- FAIL: TestImportFormats (5.81s)
-    --- FAIL: TestImportFormats/debian (5.81s)
-FAIL
-FAIL	github.com/lober/lober/internal/iso	5.817s
-FAIL

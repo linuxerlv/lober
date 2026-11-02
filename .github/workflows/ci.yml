@@ -1,0 +1,57 @@
+# 只做基础检查：格式、静态检查、单元测试、竞态、Linux 编译、Wire 漂移和前端检查。
+# 真实数据库和装机测试在云服务器的 lobervm 实例上跑，GitHub 不连内网、不部署。
+name: ci
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - test
+      - preview
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: go
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: 后端基础检查
+        run: make check
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: 安装前端依赖
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: 前端检查
+        run: make webcheck

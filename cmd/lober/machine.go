@@ -16,6 +16,8 @@ import (
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/execution"
 	executionport "github.com/lober/lober/internal/application/execution/port"
+	"github.com/lober/lober/internal/application/inventory"
+	domaininv "github.com/lober/lober/internal/domain/inventory"
 	"github.com/lober/lober/internal/domain/repository"
 	"github.com/lober/lober/internal/infrastructure/events"
 	"github.com/lober/lober/internal/infrastructure/machinekeys"
@@ -68,12 +70,58 @@ func machineOf(st repository.Store, hub ports.Notifier, cfg config, clock ports.
 	renderer := executionport.RenderFunc(func(ctx context.Context, r executionport.RenderRequest) ([]byte, error) {
 		return files.Render(ctx, authoring.MachineRenderRequest{Task: r.Task, Kind: r.Kind, Slot: r.Slot, Values: r.Values})
 	})
-	gateway, err := execution.NewGateway(execution.GatewayDeps{Service: engine, Renderer: renderer, Endpoints: execution.Endpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, Observe: execution.NewIPObserver(collector)})
+	// 采集服务只造一次：网关要它的三项能力，HTTP 入口要它的 Submit。造两个实例会让
+	// 「网关发的令牌」和「上报时查的令牌表」分家，采集一律 401。
+	inv := inventoryServiceOf(st, clock)
+	gateway, err := execution.NewGateway(execution.GatewayDeps{Service: engine.Machine, Renderer: renderer, Endpoints: execution.Endpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, Observe: execution.NewIPObserver(collector), Inventory: inventoryBoot(inv)})
 	if err != nil {
 		return nil, err
 	}
 	handler := machine.New(machineAdapter{gateway, logger})
 	return &machineBundle{Service: engine, Handler: handler, Logs: collector}, nil
+}
+
+// inventoryAdapter 把采集服务接到执行网关的接口上。两个应用模块互不依赖，翻译在这里做。
+type inventoryAdapter struct{ svc *inventory.Service }
+
+func (a inventoryAdapter) Pending(ctx context.Context, sn string) (bool, error) {
+	return a.svc.Pending(ctx, sn)
+}
+
+func (a inventoryAdapter) Token(sn string) (string, bool) { return a.svc.Issue(sn) }
+
+func (a inventoryAdapter) Menu(sn, token string) ([]byte, error) { return a.svc.Menu(sn, token) }
+
+// Submit 只把类别翻成执行模块的哨兵错误，不做别的判断。
+func (a inventoryAdapter) Submit(ctx context.Context, sn, token string, body []byte) error {
+	_, err := a.svc.Submit(ctx, sn, token, body)
+	if err == nil {
+		return nil
+	}
+	kind, ok := domaininv.KindOf(err)
+	if !ok {
+		return err
+	}
+	switch kind {
+	case domaininv.KindUnauthorized:
+		return execution.ErrInventoryUnauthorized
+	case domaininv.KindUnknownHost:
+		return execution.ErrInventoryUnknownHost
+	case domaininv.KindBusy:
+		return execution.ErrInventoryBusy
+	case domaininv.KindRejected:
+		return execution.ErrInventoryRejected
+	}
+	return err
+}
+
+// inventoryBoot 决定接不接采集能力：镜像路径没配全时返回 nil，网关据此不给采集菜单，
+// 机器照旧从本地盘启动。这条让「没部署采集镜像」成为一个安全状态，而不是错误状态。
+func inventoryBoot(inv *inventory.Service) execution.InventoryBoot {
+	if inv == nil || !inv.Configured() {
+		return nil
+	}
+	return inventoryAdapter{svc: inv}
 }
 func (a *app) Handler() http.Handler {
 	frontend := console.WithFrontend(a.Console.Engine)
@@ -92,7 +140,7 @@ func (a *app) runMachineRecovery(ctx context.Context, logger *slog.Logger) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {
-		if err := guardMachine(func() error { return a.Machine.Service.Sweep(ctx) }); err != nil && ctx.Err() == nil {
+		if err := guardMachine(func() error { return a.Machine.Service.Sweeper.Sweep(ctx) }); err != nil && ctx.Err() == nil {
 			logger.Error("机器任务超时恢复失败")
 		}
 		select {

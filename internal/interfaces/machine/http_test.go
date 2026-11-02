@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,6 +22,7 @@ type fixtureGateway struct {
 	installer execution.InstallerAnswerInput
 	file      execution.FileInput
 	signal    execution.SignalInput
+	inventory execution.InventoryInput
 	result    execution.BootResult
 	body      []byte
 	err       error
@@ -41,6 +43,10 @@ func (f *fixtureGateway) File(_ context.Context, in execution.FileInput) ([]byte
 func (f *fixtureGateway) Signal(_ context.Context, in execution.SignalInput) error {
 	f.signal = in
 	f.received = in.Signal
+	return f.err
+}
+func (f *fixtureGateway) InventoryReport(_ context.Context, in execution.InventoryInput) error {
+	f.inventory = in
 	return f.err
 }
 func gatewayFixture(t *testing.T) (*fixtureGateway, http.Handler) {
@@ -73,20 +79,54 @@ func TestBoundedBinarySignalAndStrictQuery(t *testing.T) {
 	}
 }
 func Test机器HTTP只解析输出(t *testing.T) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "http.go", nil, 0)
+	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ast.Inspect(f, func(n ast.Node) bool {
-		if s, ok := n.(*ast.SelectorExpr); ok {
-			switch s.Sel.Name {
-			case "Snapshot", "Execution", "Credentials", "GetAuthorized", "Answer", "Preseed", "Sum256":
-				t.Errorf("HTTP仍编排任务选择、摘要或推进: %s %s", s.Sel.Name, fset.Position(s.Pos()))
-			}
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
 		}
-		return true
-	})
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if s, ok := n.(*ast.SelectorExpr); ok {
+				switch s.Sel.Name {
+				case "Snapshot", "Execution", "Credentials", "GetAuthorized", "Answer", "Preseed", "Sum256":
+					t.Errorf("HTTP仍编排任务选择、摘要或推进: %s %s", s.Sel.Name, fset.Position(s.Pos()))
+				}
+			}
+			return true
+		})
+	}
+}
+
+// 路由的边界行为属于机器协议契约：不清理路径、不重定向、不把错方法变成别的错误。
+func Test机器路由不清理路径也不重定向(t *testing.T) {
+	_, h := gatewayFixture(t)
+	for _, tc := range []struct {
+		method, path string
+		status       int
+	}{
+		{"GET", "/", 404},
+		{"GET", "/v1", 404},
+		{"GET", "/v1/", 404},
+		{"GET", "/v1/boot/", 404},
+		{"GET", "/v1/answer/task-one/token", 404},
+		{"GET", "/v1/answer/task-one/token/../ks.cfg", 404},
+		{"GET", "/v1/answer/task-one/token/./ks.cfg", 404},
+		{"GET", "/v1//answer/task-one/token/ks.cfg", 404},
+		{"GET", "/v1/signal/task-one/token/phase/extra", 405},
+		{"POST", "/v1/signal/task-one/token/phase/extra", 404},
+		{"GET", "/v1/inventory/sn/token", 404},
+	} {
+		if w := call(h, tc.method, tc.path, ""); w.Code != tc.status {
+			t.Fatalf("%s %s：得到 %d，应为 %d", tc.method, tc.path, w.Code, tc.status)
+		}
+	}
 }
 
 func Test机器HTTP按来源类别映射而不猜原因(t *testing.T) {

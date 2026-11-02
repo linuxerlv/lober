@@ -56,6 +56,10 @@ type previewConfig struct {
 	Artifacts  string `yaml:"artifacts"`
 	SMB        string `yaml:"smb"`
 	SyslogAddr string `yaml:"syslogAddr"`
+	// InventoryKernel 与 InventoryInitrd 是采集镜像在制品目录下的相对路径。两者都配了才启用
+	// 采集菜单；缺一项就当没启用，机器照旧从本地盘启动。
+	InventoryKernel string `yaml:"inventoryKernel"`
+	InventoryInitrd string `yaml:"inventoryInitrd"`
 }
 
 func loadConfig(path string) (config, error) {
