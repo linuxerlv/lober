@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -365,6 +366,123 @@ func TestBuiltinDeliveryLifecycle(t *testing.T) {
 				if r.Snapshot.Format == "autoinstall" && out != "instance-id: lober-task-task-9\n" {
 					t.Fatal("metadata instance-id mismatch")
 				}
+			}
+		})
+	}
+}
+
+func TestLinuxPackagesComeOnlyFromSnapshot(t *testing.T) {
+	parse := map[catalog.Format]func(string) []string{
+		"preseed": func(out string) []string {
+			for _, line := range strings.Split(out, "\n") {
+				if rest, ok := strings.CutPrefix(line, "d-i pkgsel/include string "); ok {
+					return strings.Fields(rest)
+				}
+			}
+			return nil
+		},
+		"kickstart": func(out string) []string {
+			block := strings.Split(strings.Split(out, "%packages\n")[1], "%end")[0]
+			var pkgs []string
+			for _, line := range strings.Split(block, "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" && !strings.HasPrefix(line, "@") {
+					pkgs = append(pkgs, line)
+				}
+			}
+			return pkgs
+		},
+		"autoinstall": func(out string) []string {
+			block := strings.Split(strings.Split(out, "  packages:\n")[1], "  late-commands:")[0]
+			var pkgs []string
+			for _, line := range strings.Split(block, "\n") {
+				line = strings.TrimSpace(line)
+				if rest, ok := strings.CutPrefix(line, "- '"); ok {
+					pkgs = append(pkgs, strings.TrimSuffix(rest, "'"))
+				}
+			}
+			return pkgs
+		},
+		"autoyast": func(out string) []string {
+			block := strings.Split(strings.Split(out, "<packages config:type=\"list\">")[1], "</packages>")[0]
+			var pkgs []string
+			for _, line := range strings.Split(block, "\n") {
+				if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "<package>"); ok {
+					pkgs = append(pkgs, strings.TrimSuffix(rest, "</package>"))
+				}
+			}
+			return pkgs
+		},
+		"agama": func(out string) []string {
+			block := strings.Split(strings.Split(out, "packages: [")[1], "],")[0]
+			var pkgs []string
+			for _, line := range strings.Split(block, "\n") {
+				line = strings.TrimSpace(line)
+				if rest, ok := strings.CutPrefix(line, "'"); ok {
+					pkgs = append(pkgs, strings.TrimSuffix(rest, "',"))
+				}
+			}
+			return pkgs
+		},
+	}
+	for _, format := range []catalog.Format{"kickstart", "preseed", "autoinstall", "autoyast", "agama"} {
+		t.Run(string(format), func(t *testing.T) {
+			tpl := templateFor(t, format)
+			in := fixtureInput(t, tpl)
+			snap, ps := snapshot.Build(in)
+			if len(ps) != 0 {
+				t.Fatal(ps)
+			}
+			var fromSnapshot []string
+			for _, slot := range snap.Slots {
+				for _, inst := range slot.Instances {
+					if inst.HookID == "builtin-packages" {
+						fromSnapshot = inst.Params["packages"].Items
+					}
+				}
+			}
+			if len(fromSnapshot) == 0 {
+				t.Fatal("快照里没有 packages 参数")
+			}
+			out := renderFixture(t, render.Request{
+				Snapshot: snap, Kind: catalog.FileAnswer, Firmware: "uefi",
+				Values: fixtureRequest(t, tpl, "uefi").Values,
+			})
+			got := parse[format](out)
+			if !slices.Equal(got, fromSnapshot) {
+				t.Fatalf("渲染的包 %q 与快照 %q 不一致", got, fromSnapshot)
+			}
+			seen := map[string]bool{}
+			for _, pkg := range got {
+				if seen[pkg] {
+					t.Fatalf("包 %q 出现了两次：%q", pkg, got)
+				}
+				seen[pkg] = true
+			}
+			for _, want := range []string{"curl", "systemd"} {
+				if !slices.Contains(got, want) {
+					t.Fatalf("默认包列表缺少 %s：%q", want, got)
+				}
+			}
+			ssh := "openssh-server"
+			if format == "autoyast" || format == "agama" {
+				ssh = "openssh"
+			}
+			if !slices.Contains(got, ssh) {
+				t.Fatalf("默认包列表缺少 %s：%q", ssh, got)
+			}
+			// 操作员改填的值必须原样替换，不再偷偷保留基础包。
+			in.Entered["packages/1/packages"] = "vim\ncurl"
+			over, ps := snapshot.Build(in)
+			if len(ps) != 0 {
+				t.Fatal(ps)
+			}
+			out = renderFixture(t, render.Request{
+				Snapshot: over, Kind: catalog.FileAnswer, Firmware: "uefi",
+				Values: fixtureRequest(t, tpl, "uefi").Values,
+			})
+			if got := parse[format](out); !slices.Equal(got, []string{"vim", "curl"}) {
+				t.Fatalf("改填后仍带出隐藏包：%q", got)
 			}
 		})
 	}

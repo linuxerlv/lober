@@ -86,13 +86,25 @@ func waitISO(t *testing.T, st repository.ISOs, id string, state model.ISOState) 
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+func builtinTemplateByID(t *testing.T, id string) model.Template {
+	t.Helper()
+	for _, tpl := range builtin.Templates() {
+		if tpl.ID == id {
+			return tpl
+		}
+	}
+	t.Fatalf("missing builtin template %s", id)
+	return model.Template{}
+}
+
 func Test装配初始管理员强制改密及内置内容(t *testing.T) {
 	a, cfg := assembled(t)
 	user, err := a.Store.GetUser(t.Context(), "admin")
 	if err != nil || !user.MustChangePassword || user.CreatedAt != assemblyAt {
 		t.Fatal("bootstrap missing", err)
 	}
-	tpl, err := a.Store.GetTemplate(t.Context(), model.TemplateKey{ID: "builtin-kickstart", Version: 3})
+	want := builtinTemplateByID(t, "builtin-kickstart")
+	tpl, err := a.Store.GetTemplate(t.Context(), model.TemplateKey{ID: want.ID, Version: want.Version})
 	if err != nil || !tpl.Builtin {
 		t.Fatal("builtin missing", err)
 	}

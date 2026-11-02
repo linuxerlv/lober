@@ -217,7 +217,7 @@ func TestHookParametersAffectNativeAnswers(t *testing.T) {
 						t.Fatal("package lines lost")
 					}
 				case "preseed":
-					if !strings.Contains(got, "openssh-server vim curl") {
+					if !strings.Contains(got, "pkgsel/include string vim curl") {
 						t.Fatal("package list join lost")
 					}
 				case "autoinstall":

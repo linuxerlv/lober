@@ -39,7 +39,6 @@
       <package>curl</package>
       <package>systemd</package>
       <package>openssh</package>
-      <package>curl</package>
     </packages>
   </software>
   <services-manager><services><enable config:type="list"><service>sshd</service></enable></services></services-manager>

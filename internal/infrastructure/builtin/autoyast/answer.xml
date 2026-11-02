@@ -15,9 +15,6 @@
   </users>
   <software>
     <packages config:type="list">
-      <package>curl</package>
-      <package>systemd</package>
-      <package>openssh</package>
       {{slot:packages}}
     </packages>
   </software>

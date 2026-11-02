@@ -59,7 +59,12 @@ func instance(name string) model.Instance {
 	// account v2 drops the Leap 15.6 schema-invalid create_home user field (D3);
 	// partition v2 inlines kickstart part commands with reqpart instead of
 	// %pre+%include, which AlmaLinux 10 parses before %pre runs (D2).
-	if name == "packages" || name == "account" || name == "partition" {
+	// packages v3 removes the hard-coded base packages: the packages parameter
+	// is now the only source, so the snapshot and the answer cannot disagree.
+	switch name {
+	case "packages":
+		version = 3
+	case "account", "partition":
 		version = 2
 	}
 	return model.Instance{HookID: "builtin-" + name, HookVersion: version}
@@ -69,6 +74,16 @@ func fixedInstance(name, param, value string, editable bool) model.Instance {
 	in := instance(name)
 	in.Bindings = map[string]model.Binding{param: {Source: model.BindingFixed, Value: value, Editable: editable}}
 	return in
+}
+
+// defaultPackages 是内置 Linux 模板给 packages 参数的默认值。SUSE 系的 SSH 服务包
+// 叫 openssh，其余 Linux 系叫 openssh-server。它现在只存在这一处：应答文件里不再
+// 写死包名，快照里的 packages 取值就是最终会装的包。
+func defaultPackages(format catalog.Format) string {
+	if format == "autoyast" || format == "agama" {
+		return "curl\nsystemd\nopenssh"
+	}
+	return "curl\nsystemd\nopenssh-server"
 }
 
 func shippedTemplates() []model.Template {
@@ -89,17 +104,18 @@ func shippedTemplates() []model.Template {
 		}
 		// Content changes ship as higher version numbers: account/partition v2
 		// rebinds every template, kickstart/preseed already carried a v2.
-		// Agama v3 改用安装器实际支持的 UTC 时区名。
-		version := 2
+		// Agama v3 改用安装器实际支持的 UTC 时区名。packages hook v3 去掉了
+		// 应答文件里的写死包，所有模板改引用 v3 并升版本。
+		version := 3 // autoinstall、autoyast、unattend、esxi
 		if format == "kickstart" || format == "preseed" || format == "agama" {
-			version = 3
+			version = 4
 		}
 		ss := series(format)
 		tpl := model.Template{ID: "builtin-" + id, Version: version, Name: "lober:" + id, State: model.VersionApproved, Builtin: true, Family: ss[0].Family(), Series: ss, Body: body(format, file), Assembly: map[string][]model.Instance{}}
 		for _, name := range []string{"partition", "network", "account", "sshkey"} {
 			tpl.Assembly[name] = []model.Instance{instance(name)}
 		}
-		tpl.Assembly["packages"] = []model.Instance{fixedInstance("packages", "packages", "curl", true)}
+		tpl.Assembly["packages"] = []model.Instance{fixedInstance("packages", "packages", defaultPackages(format), true)}
 		switch format {
 		case "preseed":
 			// A DVD tree is not a signed HTTP APT repository. Keep repository
