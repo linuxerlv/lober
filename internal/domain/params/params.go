@@ -10,6 +10,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/scan"
@@ -91,6 +92,7 @@ func Evaluate(in Input) Result {
 			ev.addInstance(slot.Name, i+1, inst)
 		}
 	}
+	ev.checkHookDependencies()
 	ev.checkEntered()
 	res := Result{Fields: ev.fields, Problems: ev.problems}
 	if len(ev.problems) == 0 {
@@ -144,7 +146,11 @@ func (ev *evaluator) addInstance(slot string, seq int, inst model.Instance) {
 	if impl.Expanded() {
 		frag, _ := scan.Scan(impl.Body)
 		refs = frag.Refs()
-		decls = fragmentParams(h.Params, refs)
+		// 只有明确是片段的实现才按引用过滤；种类不认识的按片段算必填，但展示全部声明，
+		// 免得把操作员填的值变成未知字段。
+		if impl.Kind == model.ImplFragment {
+			decls = fragmentParams(h.Params, refs)
+		}
 	}
 	key := func(param string) FieldKey { return FieldKey(model.InstanceFieldKey(slot, seq, param)) }
 	ev.addParams(func(param string) string { return model.InstanceFieldKey(slot, seq, param) }, decls, inst.Bindings, refs)
@@ -152,7 +158,7 @@ func (ev *evaluator) addInstance(slot string, seq int, inst model.Instance) {
 }
 
 // fragmentParams 返回片段实现实际引用的参数声明。片段正文没有引用到的参数不展示、
-// 不接受；脚本实现不走这里。
+// 不接受；脚本和种类不认识的实现不走这里。
 func fragmentParams(decls []model.ParamDecl, refs scan.Refs) []model.ParamDecl {
 	out := make([]model.ParamDecl, 0, len(decls))
 	for _, d := range decls {
@@ -286,6 +292,84 @@ func prefill(d model.ParamDecl, b model.Binding, bound bool, h model.Host) strin
 		return h.Attrs[b.Attr]
 	}
 	return ""
+}
+
+// checkHookDependencies 查内置 hook 之间写在说明里的依赖：sshkey 只能给 account 建的用户
+// 装公钥，两边的 username 必须是同一个。识别方式看声明：同时有 username 和 pwhash/password
+// 的是账号 hook，同时有 username 和 sshkey 类型的 key 的是密钥 hook。片段没引用的参数不会有
+// 取值（比如 autoinstall 的密钥自动挂在 identity 用户上），这种组合直接跳过。
+func (ev *evaluator) checkHookDependencies() {
+	var accounts []string
+	for _, in := range ev.instances {
+		if !isAccountHook(in.hook) {
+			continue
+		}
+		if v, ok := ev.values[in.key("username")]; ok {
+			accounts = append(accounts, v.Canonical())
+		}
+	}
+	if len(accounts) == 0 {
+		return
+	}
+	expected := slices.Clone(accounts)
+	slices.Sort(expected)
+	for _, in := range ev.instances {
+		if !isSSHKeyHook(in.hook) {
+			continue
+		}
+		key := in.key("username")
+		v, ok := ev.values[key]
+		if !ok || slices.Contains(accounts, v.Canonical()) {
+			continue
+		}
+		ev.reportAt(key, model.NewProblem("param_hook_mismatch", ev.at(key), v.Canonical(), strings.Join(expected, "、")))
+	}
+}
+
+func isAccountHook(h model.Hook) bool {
+	hasUser, hasSecret := false, false
+	for _, d := range h.Params {
+		switch d.Name {
+		case "username":
+			hasUser = true
+		case "pwhash", "password":
+			hasSecret = true
+		}
+	}
+	return hasUser && hasSecret
+}
+
+func isSSHKeyHook(h model.Hook) bool {
+	hasUser, hasKey := false, false
+	for _, d := range h.Params {
+		switch d.Name {
+		case "username":
+			hasUser = true
+		case "key":
+			hasKey = d.Type == "sshkey"
+		}
+	}
+	return hasUser && hasKey
+}
+
+// reportAt 把一个落在表单字段上的问题按字段顺序插入，保持 Problems 与表单一致；
+// 找不到字段顺序时追加到末尾。
+func (ev *evaluator) reportAt(key FieldKey, p model.Problem) {
+	pos := len(ev.problems)
+	if order, ok := ev.fieldIndex[key]; ok {
+		for i, existing := range ev.problems {
+			if existing.Subject.Kind != model.KindParam {
+				continue
+			}
+			if other, ok := ev.fieldIndex[FieldKey(existing.Subject.Path)]; ok && other > order {
+				pos = i
+				break
+			}
+		}
+	}
+	ev.problems = append(ev.problems, model.Problem{})
+	copy(ev.problems[pos+1:], ev.problems[pos:])
+	ev.problems[pos] = p
 }
 
 // checkEntered 按字典序报 Entered 里表单中没有的字段键：多半是表单旧了，模板或 ISO 已经换过。

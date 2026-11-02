@@ -840,3 +840,51 @@ func TestEvaluate片段未引用的参数不进入表单(t *testing.T) {
 	in.Entered["acct/1/password"] = "Plain_Text1"
 	mustFail(t, Evaluate(in), at("param_unknown_field", "acct/1/password"))
 }
+
+func TestEvaluate跨hook用户名不一致在建任务前拦下(t *testing.T) {
+	account := model.Hook{
+		ID: "acct", Version: 1, Name: "账号", State: model.VersionApproved,
+		Params: []model.ParamDecl{
+			{Name: "username", Type: "word", Default: "lober"},
+			{Name: "pwhash", Type: "pwhash", Required: true},
+		},
+		Impls: []model.Impl{{Family: "linux", Series: []catalog.Series{"rocky"}, Kind: model.ImplFragment,
+			Body: "user {{param:username}} {{param:pwhash}}\n"}},
+	}
+	ssh := model.Hook{
+		ID: "ssh", Version: 1, Name: "密钥", State: model.VersionApproved,
+		Params: []model.ParamDecl{
+			{Name: "username", Type: "word", Default: "lober"},
+			{Name: "key", Type: "sshkey", Required: true},
+		},
+		Impls: []model.Impl{{Family: "linux", Series: []catalog.Series{"rocky"}, Kind: model.ImplFragment,
+			Body: "{{param:username}} {{param:key}}\n"}},
+	}
+	in := Input{
+		Template: model.Template{
+			ID: "t", Version: 1, Name: "t", State: model.VersionApproved, Family: "linux",
+			Series: []catalog.Series{"rocky"}, Body: "{{slot:acct}}\n{{slot:ssh}}\n",
+			Assembly: map[string][]model.Instance{
+				"acct": {{HookID: "acct", HookVersion: 1}},
+				"ssh":  {{HookID: "ssh", HookVersion: 1}},
+			},
+		},
+		Hooks: hookMap(account, ssh),
+		ISO:   model.ISO{ID: "r", Name: "r", Family: "linux", Series: "rocky", Version: "1", Arch: "x86_64", State: model.ISOReady},
+		Host:  model.Host{SN: hostSN, Arch: "x86_64"},
+		Entered: map[FieldKey]string{
+			"acct/1/pwhash": "$6$fixture$notARealPasswordHash",
+			"ssh/1/key":     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDNaJi8uw2oGwAug7HWX7cvFNvum8Lk5qwBmH3KVfWx3 fixture",
+		},
+	}
+	mustPass(t, Evaluate(in))
+	in.Entered["acct/1/username"] = "alice"
+	in.Entered["ssh/1/username"] = "bob"
+	res := Evaluate(in)
+	mustFail(t, res, at("param_hook_mismatch", "ssh/1/username"))
+	if !strings.Contains(res.Problems[0].Message, "bob") || !strings.Contains(res.Problems[0].Message, "alice") {
+		t.Fatalf("说明没有带出两边的用户名：%s", res.Problems[0].Message)
+	}
+	in.Entered["ssh/1/username"] = "alice"
+	mustPass(t, Evaluate(in))
+}

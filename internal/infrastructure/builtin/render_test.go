@@ -42,14 +42,15 @@ func fixtureInput(t *testing.T, tpl model.Template) params.Input {
 		for i, in := range instances {
 			h := hs[model.HookKey{ID: in.HookID, Version: in.HookVersion}]
 			impl, _ := h.ImplFor(tpl.Series[0])
+			fragment := impl.Kind == model.ImplFragment
 			var refs scan.Refs
-			if impl.Expanded() {
+			if fragment {
 				res, _ := scan.Scan(impl.Body)
 				refs = res.Refs()
 			}
 			for _, d := range h.Params {
 				// 片段没引用的参数不进表单，填了会被参数求值当成未知字段。
-				if impl.Expanded() {
+				if fragment {
 					if _, ok := refs[d.Name]; !ok {
 						continue
 					}

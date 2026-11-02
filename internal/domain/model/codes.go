@@ -484,6 +484,13 @@ var codeTable = map[Code]codeSpec{
 	"render_inventory_missing": {CategoryIncomplete, 1,
 		"渲染采集菜单缺少 %[1]v",
 		"在部署配置里补上采集镜像的内核与 initrd 相对路径，以及网关与制品基地址"},
+
+	// sshkey hook 的 username 与 account hook 的 username 不一致。参数求值在向导和建任务
+	// 时都走这里，所以不用等到首启脚本 exit 67。参数：sshkey 填的用户名、account 设置的用户名
+	// （多个用顿号连好）。
+	"param_hook_mismatch": {CategoryInvalid, 2,
+		"SSH 密钥的用户名「%[1]v」与账号的用户名「%[2]v」不一致",
+		"把 sshkey hook 的 username 改成 account hook 里设置的用户名；这两个参数不会自动对齐"},
 }
 
 // ISO 层选用的固定措辞集中在代码表文件；跨包调用需要导出。
