@@ -858,7 +858,7 @@ func Test任务终态规则接入真实全模块扫描(t *testing.T) {
 	for _, file := range []string{"internal/interfaces/console/extra.go", "cmd/lober/extra.go", "internal/application/tasks/extra.go", "internal/interfaces/console/policy.go", "internal/interfaces/console/control.go", "internal/application/tasks/readfile.go", "internal/application/tasks/port/readfile.go", "internal/interfaces/console/binary_helper.go", "internal/interfaces/console/variadic_helper.go", "internal/interfaces/console/conditional_helper.go", "internal/interfaces/console/reassigned_helper.go"} {
 		found := false
 		for _, v := range got {
-			found = found || strings.Contains(v.pos, file)
+			found = found || strings.Contains(filepath.ToSlash(v.pos), file)
 		}
 		if !found {
 			t.Error("真实扫描漏掉新增文件", file, got)
