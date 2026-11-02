@@ -127,5 +127,7 @@ func sampleISO(series catalog.Series) model.ISO {
 	return model.ISO{ID: "sample-iso", Name: model.ConsoleSampleISO, Family: series.Family(), Series: series, Version: "0.0", Arch: catalog.ArchX8664, State: model.ISOReady, Artifacts: artifacts, Offers: offers}
 }
 func sampleHost() model.Host {
-	return model.Host{SN: "SAMPLE-SN", Arch: catalog.ArchX8664, Firmware: catalog.FirmwareUEFI, Attrs: map[string]string{}}
+	// 预览用的是示例主机，不是真实登记。绑定到主机的模板（例如内置采集模板把系统盘
+	// 绑到 inv_system_disk）需要这些示例属性才预览得出来；值只用于预览，不会写进任务。
+	return model.Host{SN: "SAMPLE-SN", Arch: catalog.ArchX8664, Firmware: catalog.FirmwareUEFI, Attrs: map[string]string{"inv_system_disk": "sda"}}
 }

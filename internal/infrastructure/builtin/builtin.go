@@ -76,6 +76,37 @@ func fixedInstance(name, param, value string, editable bool) model.Instance {
 	return in
 }
 
+func preseedParams() []model.ParamDecl {
+	// A DVD tree is not a signed HTTP APT repository. Keep repository selection
+	// explicit and let the installer enforce archive signatures.
+	return []model.ParamDecl{
+		{Name: "mirror_host", Label: "Debian mirror host", Type: "word", Default: "deb.debian.org"},
+		{Name: "mirror_path", Label: "Debian mirror path", Type: "word", Default: "/debian"},
+	}
+}
+
+// inventoryPreseedTemplate 是 Debian/Ubuntu 的采集变体：系统盘不再手填，锁定取自主机
+// 属性 inv_system_disk。主机没采过时报 param_attr_missing，操作员会看到“先采集”的提示，
+// 而不是悄悄按 sda 打错盘。
+func inventoryPreseedTemplate() model.Template {
+	ss := series("preseed")
+	tpl := model.Template{
+		ID: "builtin-preseed-inventory", Version: 1, Name: "lober:preseed-inventory",
+		State: model.VersionApproved, Builtin: true,
+		Family: ss[0].Family(), Series: ss, Body: body("preseed", "answer.cfg"),
+		Params: preseedParams(), Assembly: map[string][]model.Instance{},
+	}
+	for _, name := range []string{"network", "account", "sshkey"} {
+		tpl.Assembly[name] = []model.Instance{instance(name)}
+	}
+	tpl.Assembly["partition"] = []model.Instance{{
+		HookID: "builtin-partition", HookVersion: instance("partition").HookVersion,
+		Bindings: map[string]model.Binding{"disk": {Source: model.BindingAttr, Attr: "inv_system_disk"}},
+	}}
+	tpl.Assembly["packages"] = []model.Instance{fixedInstance("packages", "packages", defaultPackages("preseed"), true)}
+	return tpl
+}
+
 // defaultPackages 是内置 Linux 模板给 packages 参数的默认值。SUSE 系的 SSH 服务包
 // 叫 openssh，其余 Linux 系叫 openssh-server。它现在只存在这一处：应答文件里不再
 // 写死包名，快照里的 packages 取值就是最终会装的包。
@@ -118,12 +149,7 @@ func shippedTemplates() []model.Template {
 		tpl.Assembly["packages"] = []model.Instance{fixedInstance("packages", "packages", defaultPackages(format), true)}
 		switch format {
 		case "preseed":
-			// A DVD tree is not a signed HTTP APT repository. Keep repository
-			// selection explicit and let the installer enforce archive signatures.
-			tpl.Params = []model.ParamDecl{
-				{Name: "mirror_host", Label: "Debian mirror host", Type: "word", Default: "deb.debian.org"},
-				{Name: "mirror_path", Label: "Debian mirror path", Type: "word", Default: "/debian"},
-			}
+			tpl.Params = preseedParams()
 		case "autoinstall":
 			tpl.Params = []model.ParamDecl{{Name: "hostname", Type: "hostname", Default: "lober-node"}}
 		case "agama":
@@ -145,7 +171,7 @@ func shippedTemplates() []model.Template {
 		}
 		result = append(result, tpl)
 	}
-	return result
+	return append(result, inventoryPreseedTemplate())
 }
 
 // Templates returns the shipped template versions, with no shared maps, slices or pointers.

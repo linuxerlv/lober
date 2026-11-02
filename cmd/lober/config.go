@@ -141,5 +141,8 @@ func loadConfig(path string) (config, error) {
 	if c.ISO.PollMS < 1 || int64(c.ISO.PollMS) > math.MaxInt64/1000000 {
 		return config{}, errors.New("iso.pollMS 超出可用范围")
 	}
+	if (strings.TrimSpace(c.Preview.InventoryKernel) == "") != (strings.TrimSpace(c.Preview.InventoryInitrd) == "") {
+		return config{}, errors.New("preview.inventoryKernel 与 preview.inventoryInitrd 必须同时提供")
+	}
 	return c, nil
 }

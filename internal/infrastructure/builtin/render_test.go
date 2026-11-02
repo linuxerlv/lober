@@ -487,3 +487,47 @@ func TestLinuxPackagesComeOnlyFromSnapshot(t *testing.T) {
 		})
 	}
 }
+
+func TestInventoryPreseedUsesCollectedSystemDisk(t *testing.T) {
+	var tpl model.Template
+	for _, candidate := range Templates() {
+		if candidate.ID == "builtin-preseed-inventory" {
+			tpl = candidate
+		}
+	}
+	if tpl.ID == "" {
+		t.Fatal("缺少 builtin-preseed-inventory")
+	}
+	in := fixtureInput(t, tpl)
+	in.Host.Attrs["inv_system_disk"] = "vda"
+	snap, ps := snapshot.Build(in)
+	if len(ps) != 0 {
+		t.Fatal(ps)
+	}
+	var got string
+	for _, slot := range snap.Slots {
+		for _, inst := range slot.Instances {
+			if inst.HookID == "builtin-partition" {
+				got = inst.Params["disk"].EnvValue()
+			}
+		}
+	}
+	if got != "vda" {
+		t.Fatalf("partition.disk = %q，应为采集到的 vda", got)
+	}
+	out := renderFixture(t, render.Request{
+		Snapshot: snap, Kind: catalog.FileAnswer, Firmware: "uefi",
+		Values: fixtureRequest(t, tpl, "uefi").Values,
+	})
+	if !strings.Contains(out, "partman-auto/disk string /dev/vda") {
+		t.Fatal("应答文件没有使用采集到的系统盘")
+	}
+
+	missing := fixtureInput(t, tpl)
+	delete(missing.Host.Attrs, "inv_system_disk")
+	if _, ps := snapshot.Build(missing); len(ps) == 0 {
+		t.Fatal("主机没有采集属性时仍然生成了快照")
+	} else if ps[0].Code != "param_attr_missing" {
+		t.Fatalf("缺属性应报 param_attr_missing，得到 %v", ps)
+	}
+}
