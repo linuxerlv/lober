@@ -11,7 +11,7 @@ type Execution struct {
 	IssuedAt      int64
 	PhaseAt       int64
 	Deadline      int64
-	Stage         string
+	Stage         Stage
 	TimingRank    int
 	ReachedReboot bool
 	InitDone      bool

@@ -197,7 +197,7 @@ func TestPreseedServesBootedInstallerOnly(t *testing.T) {
 	}
 	must(t, s.Signal(ctx, task.ID, s.Token(task, execution.Install), execution.Signal{Phase: "installed"}))
 	final := s.Token(task, execution.Finalize)
-	for _, phase := range []string{"booted", "init-start", "init-done", "ready"} {
+	for _, phase := range []model.SignalPhase{model.PhaseBooted, model.PhaseInitStart, model.PhaseInitDone, model.PhaseReady} {
 		must(t, s.Signal(ctx, task.ID, final, execution.Signal{Phase: phase}))
 	}
 	if _, found, err := s.Preseed(ctx, "EXECUTION-GUEST"); err != nil || found {

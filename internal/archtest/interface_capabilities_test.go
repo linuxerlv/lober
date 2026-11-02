@@ -85,6 +85,19 @@ func serverHTTPFunction(fn *types.Func) bool {
 	return false
 }
 
+// machineHTTPFunction 是机器入口额外需要的路由能力：只分发路径、读路径参数，
+// 不扩大控制台的许可。
+func machineHTTPFunction(fn *types.Func) bool {
+	if fn.Pkg() == nil || fn.Pkg().Path() != "net/http" {
+		return false
+	}
+	switch transitionSymbol(fn) {
+	case "NewServeMux", "ServeMux.HandleFunc", "Request.PathValue":
+		return true
+	}
+	return false
+}
+
 func interfaceCapabilityFindings(caller string, fset *token.FileSet, files []*ast.File, info *types.Info) []violation {
 	console, machine, events := under(caller, pkgConsole), under(caller, pkgMachine), under(caller, pkgEvents)
 	if !console && !machine && !events {
@@ -138,8 +151,9 @@ func interfaceCapabilityFindings(caller string, fset *token.FileSet, files []*as
 				fn, function := obj.(*types.Func)
 				_, callable := interfaceCallableSignature(obj)
 				// 两个薄适配器只接收网关或日志输入；原始业务记录不能成为本地重算规则的入口。
+				// SignalPhase 是机器协议词表，机器入口只拿它做路径到信号的纯转换，不是业务记录。
 				if (machine || events) && target == pkgModel {
-					if _, record := obj.(*types.TypeName); record {
+					if _, record := obj.(*types.TypeName); record && !(machine && symbol == "SignalPhase") {
 						bad = true
 					}
 				}
@@ -170,7 +184,11 @@ func interfaceCapabilityFindings(caller string, fset *token.FileSet, files []*as
 				}
 				if (console || machine) && callable && target == "net/http" {
 					// 标准库的函数字段也是主动能力；只有精确的服务器方法允许调用。
-					bad = bad || !function || !serverHTTPFunction(fn) && !consoleTransportMethod(fn)
+					allowed := serverHTTPFunction(fn) || consoleTransportMethod(fn)
+					if machine {
+						allowed = allowed || machineHTTPFunction(fn)
+					}
+					bad = bad || !function || !allowed
 				}
 				if console {
 					if function && under(target, modulePath+"/internal/application") && !migratedApplicationMethod(fn) {

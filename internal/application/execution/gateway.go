@@ -15,19 +15,21 @@ type gateway struct{ deps GatewayDeps }
 
 // NewGateway 的八项构造约定唯一连接 docs/contracts/machine-execution.md「机器交付入口」本方法行及共同约定。
 func NewGateway(deps GatewayDeps) (Gateway, error) {
-	if deps.Service == nil || nilRenderer(deps.Renderer) {
+	if nilInterface(deps.Service) || nilInterface(deps.Renderer) {
 		return nil, errors.New("invalid machine gateway configuration")
 	}
 	return &gateway{deps: deps}, nil
 }
-func nilRenderer(r port.FrozenRenderer) bool {
-	if r == nil {
+
+// nilInterface 连“接口里装着一个空指针”也认出来。只写 v == nil 挡不住这种值。
+func nilInterface(v any) bool {
+	if v == nil {
 		return true
 	}
-	v := reflect.ValueOf(r)
-	switch v.Kind() {
+	value := reflect.ValueOf(v)
+	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
+		return value.IsNil()
 	}
 	return false
 }

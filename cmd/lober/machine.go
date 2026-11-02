@@ -73,7 +73,7 @@ func machineOf(st repository.Store, hub ports.Notifier, cfg config, clock ports.
 	// 采集服务只造一次：网关要它的三项能力，HTTP 入口要它的 Submit。造两个实例会让
 	// 「网关发的令牌」和「上报时查的令牌表」分家，采集一律 401。
 	inv := inventoryServiceOf(st, clock)
-	gateway, err := execution.NewGateway(execution.GatewayDeps{Service: engine, Renderer: renderer, Endpoints: execution.Endpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, Observe: execution.NewIPObserver(collector), Inventory: inventoryBoot(inv)})
+	gateway, err := execution.NewGateway(execution.GatewayDeps{Service: engine.Machine, Renderer: renderer, Endpoints: execution.Endpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, Observe: execution.NewIPObserver(collector), Inventory: inventoryBoot(inv)})
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +140,7 @@ func (a *app) runMachineRecovery(ctx context.Context, logger *slog.Logger) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {
-		if err := guardMachine(func() error { return a.Machine.Service.Sweep(ctx) }); err != nil && ctx.Err() == nil {
+		if err := guardMachine(func() error { return a.Machine.Service.Sweeper.Sweep(ctx) }); err != nil && ctx.Err() == nil {
 			logger.Error("机器任务超时恢复失败")
 		}
 		select {
