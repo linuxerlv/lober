@@ -300,11 +300,13 @@ func prefill(d model.ParamDecl, b model.Binding, bound bool, h model.Host) strin
 // 取值（比如 autoinstall 的密钥自动挂在 identity 用户上），这种组合直接跳过。
 func (ev *evaluator) checkHookDependencies() {
 	var accounts []string
+	seen := map[string]bool{}
 	for _, in := range ev.instances {
 		if !isAccountHook(in.hook) {
 			continue
 		}
-		if v, ok := ev.values[in.key("username")]; ok {
+		if v, ok := ev.values[in.key("username")]; ok && !seen[v.Canonical()] {
+			seen[v.Canonical()] = true
 			accounts = append(accounts, v.Canonical())
 		}
 	}
