@@ -8,12 +8,7 @@ package execution
 
 import (
 	"context"
-	"encoding/base64"
-	"errors"
-	"strconv"
 
-	"github.com/lober/lober/internal/domain/catalog"
-	executionrules "github.com/lober/lober/internal/domain/execution"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 )
@@ -35,254 +30,50 @@ type Repository interface {
 
 // Publish 的八项约定唯一委托 ports.Notifier.Publish（internal/application/ports/notification.go），本口只缩小方法集。
 type Notifier interface{ Publish(string) }
-type Service struct {
+
+// clock 是三个角色共用的时钟。测试改一处，三个角色看到的时间一起变。
+type clock struct {
+	now func() int64
+}
+
+func (c *clock) Now() int64 { return c.now() }
+
+// core 是三个角色共用的保存路径：仓储、时钟与提交后的通知。
+// 拆成独立结构体后，机器协议、用户控制和超时扫描各自只拿到自己需要的部分。
+type core struct {
 	repo     Repository
-	key      []byte
-	now      func() int64
+	clock    *clock
 	notifier Notifier
+}
+
+func (c core) commit(ctx context.Context, before, after model.Task, event repository.NewEvent, audit repository.Audit) (model.Task, error) {
+	next, _, err := c.repo.UpdateTaskExecution(ctx, before.ID, repository.TaskExpect{State: before.State, Rev: before.Rev}, after.State, after.Execution, []repository.NewEvent{event}, audit)
+	if err == nil && c.notifier != nil {
+		c.notifier.Publish(next.ID)
+	}
+	return next, err
+}
+
+// Service 把三个角色拼在一起，保留原来的调用形状。
+// 新的入口应当只依赖 Machine、Control 或 Sweeper 中自己用得到的那一个。
+type Service struct {
+	*Machine
+	*Control
+	*Sweeper
 }
 
 // New 的八项应用约定唯一连接 docs/contracts/machine-execution.md「构造、凭据与授权」的本方法说明
 // 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
 func New(repo Repository, key []byte, now func() int64, notifier Notifier) (*Service, error) {
-	if len(key) < 32 || now == nil {
-		return nil, errors.New("invalid execution configuration")
-	}
-	return &Service{repo: repo, key: append([]byte(nil), key...), now: now, notifier: notifier}, nil
-}
-func (s *Service) commit(ctx context.Context, before, after model.Task, event repository.NewEvent, audit repository.Audit) (model.Task, error) {
-	next, _, err := s.repo.UpdateTaskExecution(ctx, before.ID, repository.TaskExpect{State: before.State, Rev: before.Rev}, after.State, after.Execution, []repository.NewEvent{event}, audit)
-	if err == nil && s.notifier != nil {
-		s.notifier.Publish(next.ID)
-	}
-	return next, err
-}
-
-// Boot 的八项应用约定唯一连接 docs/contracts/machine-execution.md「引导和应答」的本方法说明
-// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (s *Service) Boot(ctx context.Context, sn string, arch catalog.Arch, firmware catalog.Firmware) (model.Task, bool, error) {
-	normalized, p := model.NormalizeSN(sn)
-	if p != nil {
-		return model.Task{}, false, nil
-	}
-	for range 8 {
-		task, found, err := s.repo.FindOpenTask(ctx, normalized)
-		if err != nil || !found {
-			return task, found, err
-		}
-		// An installed or running installer must never be booted into installation again.
-		if !executionrules.CanBoot(task) {
-			return model.Task{}, false, nil
-		}
-		at := s.now()
-		next, err := executionrules.Boot(task, arch, firmware, at)
-		if err != nil {
-			return model.Task{}, false, err
-		}
-		next, err = s.commit(ctx, task, next, repository.NewEvent{At: at, Kind: "machine.boot", Key: attemptKey(next, "boot-"+strconv.Itoa(next.Execution.BootCount)) + "-" + string(next.State), Fields: map[string]string{"arch": string(arch), "firmware": string(firmware)}}, repository.Audit{})
-		if errors.Is(err, repository.ErrConflict) {
-			return model.Task{}, false, nil
-		}
-		return next, err == nil && executionrules.BootDeliverable(next), err
-	}
-	return model.Task{}, false, repository.ErrConflict
-}
-
-// Preseed 按 SN 找可以经 DHCP bootfile 地址下发应答的任务：只有 iPXE 已引导过的
-// （booting/installing）才给；pending 的机器上还没有安装器在跑，发过去只会提前推
-// 状态机，boot 都进不去；已结束的按 FindOpenTask 的口径本来就不算开放任务。
-// Debian 的安装器在 auto 模式下会把 DHCP option 67 的 bootfile 地址当 preseed 下载，
-// 并覆盖内核命令行上的 preseed/url，所以网关需要按 SN 在这个阶段给出真实应答（D1）。
-// Preseed 的八项应用约定唯一连接 docs/contracts/machine-execution.md「引导和应答」的本方法说明
-// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (s *Service) Preseed(ctx context.Context, sn string) (model.Task, bool, error) {
-	normalized, p := model.NormalizeSN(sn)
-	if p != nil {
-		return model.Task{}, false, nil
-	}
-	task, found, err := s.repo.FindOpenTask(ctx, normalized)
-	if err != nil || !found {
-		return model.Task{}, false, err
-	}
-	if !executionrules.PreseedAvailable(task) {
-		return model.Task{}, false, nil
-	}
-	return task, true, nil
-}
-
-// GetAuthorized 的八项应用约定唯一连接 docs/contracts/machine-execution.md「构造、凭据与授权」的本方法说明
-// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (s *Service) GetAuthorized(ctx context.Context, id, token string, finalize bool) (model.Task, error) {
-	task, err := s.repo.GetTask(ctx, id)
+	sharedClock := &clock{now: now}
+	credentials, err := newCredentials(key, sharedClock)
 	if err != nil {
-		return model.Task{}, err
+		return nil, err
 	}
-	scope := Install
-	if finalize {
-		scope = Finalize
-	}
-	if err := s.Authorize(task, token, scope); err != nil {
-		return model.Task{}, err
-	}
-	return task, nil
-}
-
-// Answer 的八项应用约定唯一连接 docs/contracts/machine-execution.md「引导和应答」的本方法说明
-// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (s *Service) Answer(ctx context.Context, id, token string) (model.Task, error) {
-	for range 8 {
-		task, err := s.GetAuthorized(ctx, id, token, false)
-		if err != nil {
-			return model.Task{}, err
-		}
-		if !executionrules.InstallingNeeded(task) {
-			return task, nil
-		}
-		at := s.now()
-		next, _ := executionrules.StartInstalling(task, at)
-		next, err = s.commit(ctx, task, next, repository.NewEvent{At: at, Kind: "machine.installing", Key: attemptKey(next, "installing")}, repository.Audit{})
-		if errors.Is(err, repository.ErrConflict) {
-			continue
-		}
-		return next, err
-	}
-	return model.Task{}, repository.ErrConflict
-}
-
-// Signal 的八项应用约定唯一连接 docs/contracts/machine-execution.md「信号与超时扫描」的本方法说明
-// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (s *Service) Signal(ctx context.Context, id, token string, sig Signal) error {
-	for range 8 {
-		task, err := s.repo.GetTask(ctx, id)
-		if err != nil {
-			return err
-		}
-		scope := Install
-		if executionrules.FinalSignal(sig) {
-			scope = Finalize
-		}
-		if err := s.authorizeCredential(task, token, scope); err != nil {
-			return err
-		}
-		if !executionrules.SignalAccessAllowed(task, sig) {
-			return ErrCredential
-		}
-		at := s.now()
-		next, duplicate, err := executionrules.Advance(task, sig, at)
-		if err != nil || duplicate {
-			return err
-		}
-		event := repository.NewEvent{At: at, Kind: "machine." + sig.Phase, Key: attemptKey(next, executionrules.SignalKey(sig)), Fields: map[string]string{"slot": strconv.Itoa(sig.Slot), "timing": string(sig.Timing), "instance": strconv.Itoa(sig.Instance), "digest": sig.Digest, "rc": strconv.Itoa(sig.RC), "log_base64": base64.StdEncoding.EncodeToString(model.SafeLogTail(sig.Body))}}
-		// Event kinds use dot identifiers; phases are canonical HTTP hyphen words.
-		switch sig.Phase {
-		case "slot-start":
-			event.Kind = "slot.start"
-		case "slot-end":
-			event.Kind = "slot.end"
-		case "hook-start":
-			event.Kind = "hook.start"
-		case "hook-report":
-			event.Kind = "hook.report"
-		case "init-start":
-			event.Kind = "machine.init_start"
-		case "init-done":
-			event.Kind = "machine.init_done"
-		}
-		_, err = s.commit(ctx, task, next, event, repository.Audit{})
-		if errors.Is(err, repository.ErrConflict) {
-			continue
-		}
-		return err
-	}
-	return repository.ErrConflict
-}
-
-// CanCancel 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
-// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (*Service) CanCancel(t model.Task) []model.Problem { return executionrules.CanCancel(t) }
-
-// CanRetry 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
-// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (*Service) CanRetry(t model.Task) []model.Problem { return executionrules.CanRetry(t) }
-
-// User controls use the exact revision the user reviewed. Conflicts require refresh.
-func (s *Service) control(ctx context.Context, task model.Task, audit repository.Audit, retry bool) error {
-	if err := repository.CheckAudit(audit); err != nil {
-		return err
-	}
-	latest, err := s.repo.GetTask(ctx, task.ID)
-	if err != nil {
-		return err
-	}
-	if latest.Rev != task.Rev || latest.State != task.State {
-		return repository.ErrConflict
-	}
-	problems := executionrules.CanCancel(latest)
-	if retry {
-		problems = executionrules.CanRetry(latest)
-	}
-	if len(problems) > 0 {
-		return &repository.ProblemsError{Kind: repository.ErrRejected, Problems: problems}
-	}
-	at := s.now()
-	var next model.Task
-	kind := "cancelled"
-	if retry {
-		next, _ = executionrules.Retry(latest, at)
-		kind = "retry"
-	} else {
-		next, _ = executionrules.Cancel(latest, at)
-	}
-	_, err = s.commit(ctx, latest, next, repository.NewEvent{At: at, Kind: "machine." + kind, Key: attemptKey(next, kind)}, audit)
-	return err
-}
-
-// Cancel 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
-// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (s *Service) Cancel(ctx context.Context, t model.Task, a repository.Audit) error {
-	return s.control(ctx, t, a, false)
-}
-
-// Retry 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
-// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (s *Service) Retry(ctx context.Context, t model.Task, a repository.Audit) error {
-	return s.control(ctx, t, a, true)
-}
-
-// Sweep reads durable state on every invocation, including after process restart.
-// Sweep 的八项应用约定唯一连接 docs/contracts/machine-execution.md「信号与超时扫描」的本方法说明
-// 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (s *Service) Sweep(ctx context.Context) error {
-	q := repository.TaskQuery{States: []model.TaskState{model.TaskBooting, model.TaskInstalling, model.TaskRebooting, model.TaskInitializing}, Limit: 100}
-	for {
-		page, err := s.repo.ListTasks(ctx, q)
-		if err != nil {
-			return err
-		}
-		for _, task := range page.Items {
-			at := s.now()
-			next, timedOut := executionrules.Timeout(task, at)
-			if !timedOut {
-				continue
-			}
-			_, err := s.commit(ctx, task, next, repository.NewEvent{At: at, Kind: "machine.timeout", Key: attemptKey(task, "timeout"), Fields: map[string]string{"state": string(task.State), "stage": task.Execution.Stage}}, repository.Audit{})
-			if err != nil && !errors.Is(err, repository.ErrConflict) {
-				return err
-			}
-		}
-		if page.Next == "" {
-			return nil
-		}
-		q.Cursor = page.Next
-	}
-}
-
-// Credentials 属于执行模块，供可信机器协议入口取得当前尝试的两项凭据。
-// 输入为原任务，不规范化、不另加大小限制；无Execution时两项均为空字符串。
-// 成功始终先安装、后收尾，逐项委托Token；不重新校验状态、有效期或调用者凭据。
-// 无错误或原因代码；不读仓储、不写任务，无事务、版本冲突与提交复查。
-// 相同任务和服务密钥可重复调用，并发只读；调用期间不得修改任务，无新重试规则。
-// 无审计、通知、上下文或超时，不新增取消检查。
-func (s *Service) Credentials(task model.Task) (string, string) {
-	return s.Token(task, Install), s.Token(task, Finalize)
+	shared := core{repo: repo, clock: sharedClock, notifier: notifier}
+	return &Service{
+		Machine: &Machine{core: shared, auth: credentials},
+		Control: &Control{core: shared},
+		Sweeper: &Sweeper{core: shared},
+	}, nil
 }

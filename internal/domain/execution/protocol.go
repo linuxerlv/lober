@@ -15,7 +15,7 @@ import (
 var ErrProtocol = errors.New("machine protocol rejected")
 
 type Signal struct {
-	Phase    string
+	Phase    model.SignalPhase
 	Slot     int
 	Timing   catalog.Timing
 	Instance int
@@ -50,19 +50,19 @@ const (
 )
 
 func runtime(at int64, attempt int) *model.Execution {
-	return &model.Execution{Attempt: attempt, IssuedAt: at, PhaseAt: at, Deadline: at + bootBudget, Stage: "booting", Signals: map[string]string{}}
+	return &model.Execution{Attempt: attempt, IssuedAt: at, PhaseAt: at, Deadline: at + bootBudget, Stage: model.StageBooting, Signals: map[string]string{}}
 }
-func stage(r *model.Execution, name string, at, budget int64) {
+func stage(r *model.Execution, name model.Stage, at, budget int64) {
 	r.Stage = name
 	r.PhaseAt = at
 	r.Deadline = at + budget
-	if name == "pre" || name == "packages" || name == "post" {
+	if name == model.StagePre || name == model.StagePackages || name == model.StagePost {
 		r.Deadline = min(r.Deadline, r.IssuedAt+InstallLife)
 	}
 }
 func preComplete(task model.Task) bool {
 	for _, slot := range task.Snapshot.Slots {
-		if slot.Exec && slot.Timing == catalog.TimingPre && !seen(task.Execution, "slot-end", slot.Seq, 0) {
+		if slot.Exec && slot.Timing == catalog.TimingPre && !seen(task.Execution, model.PhaseSlotEnd, slot.Seq, 0) {
 			return false
 		}
 	}
@@ -105,7 +105,7 @@ func fingerprint(sig Signal) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
-func seen(r *model.Execution, phase string, slot, instance int) bool {
+func seen(r *model.Execution, phase model.SignalPhase, slot, instance int) bool {
 	return r.Signals[SignalKey(Signal{Phase: phase, Slot: slot, Instance: instance})] != ""
 }
 func slotsComplete(task model.Task, firstboot bool) bool {
@@ -113,7 +113,7 @@ func slotsComplete(task model.Task, firstboot bool) bool {
 		if !slot.Exec || (slot.Timing == catalog.TimingFirstboot) != firstboot {
 			continue
 		}
-		if !seen(task.Execution, "slot-end", slot.Seq, 0) {
+		if !seen(task.Execution, model.PhaseSlotEnd, slot.Seq, 0) {
 			return false
 		}
 	}
@@ -157,39 +157,39 @@ func Advance(task model.Task, sig Signal, at int64) (model.Task, bool, error) {
 			return task, false, ErrProtocol
 		}
 		if sig.Timing == catalog.TimingFirstboot {
-			if task.State != model.TaskInitializing || !seen(r, "init-start", 0, 0) {
+			if task.State != model.TaskInitializing || !seen(r, model.PhaseInitStart, 0, 0) {
 				return task, false, ErrProtocol
 			}
 		} else if task.State != model.TaskInstalling || r.ReachedReboot {
 			return task, false, ErrProtocol
 		}
 		switch sig.Phase {
-		case "slot-start":
+		case model.PhaseSlotStart:
 			if sig.Instance != 0 || sig.Digest != "" || sig.RC != 0 {
 				return task, false, ErrProtocol
 			}
 			if sig.Timing == catalog.TimingPre && r.TimingRank == 0 {
 				r.TimingRank = 1
-				stage(r, "pre", at, preBudget)
+				stage(r, model.StagePre, at, preBudget)
 			}
 			if (sig.Timing == catalog.TimingPostInstaller || sig.Timing == catalog.TimingPostTarget) && r.TimingRank < 2 {
 				r.TimingRank = 2
-				stage(r, "post", at, postBudget)
+				stage(r, model.StagePost, at, postBudget)
 			}
-		case "hook-start", "hook-report":
-			if !seen(r, "slot-start", sig.Slot, 0) || seen(r, "slot-end", sig.Slot, 0) || sig.Instance < 1 || sig.Instance > len(slot.Instances) {
+		case model.PhaseHookStart, model.PhaseHookReport:
+			if !seen(r, model.PhaseSlotStart, sig.Slot, 0) || seen(r, model.PhaseSlotEnd, sig.Slot, 0) || sig.Instance < 1 || sig.Instance > len(slot.Instances) {
 				return task, false, ErrProtocol
 			}
 			hook := slot.Instances[sig.Instance-1]
 			if sig.Digest != hook.Digest {
 				return task, false, ErrProtocol
 			}
-			if sig.Phase == "hook-start" {
-				if sig.RC != 0 || (sig.Instance > 1 && !seen(r, "hook-report", sig.Slot, sig.Instance-1)) {
+			if sig.Phase == model.PhaseHookStart {
+				if sig.RC != 0 || (sig.Instance > 1 && !seen(r, model.PhaseHookReport, sig.Slot, sig.Instance-1)) {
 					return task, false, ErrProtocol
 				}
 			} else {
-				if !seen(r, "hook-start", sig.Slot, sig.Instance) {
+				if !seen(r, model.PhaseHookStart, sig.Slot, sig.Instance) {
 					return task, false, ErrProtocol
 				}
 				if sig.RC != 0 && hook.Required {
@@ -197,12 +197,12 @@ func Advance(task model.Task, sig Signal, at int64) (model.Task, bool, error) {
 					r.Deadline = 0
 				}
 			}
-		case "slot-end":
-			if sig.Instance != 0 || sig.Digest != "" || !seen(r, "slot-start", sig.Slot, 0) {
+		case model.PhaseSlotEnd:
+			if sig.Instance != 0 || sig.Digest != "" || !seen(r, model.PhaseSlotStart, sig.Slot, 0) {
 				return task, false, ErrProtocol
 			}
 			for i := range slot.Instances {
-				if !seen(r, "hook-report", sig.Slot, i+1) {
+				if !seen(r, model.PhaseHookReport, sig.Slot, i+1) {
 					return task, false, ErrProtocol
 				}
 			}
@@ -218,14 +218,14 @@ func Advance(task model.Task, sig Signal, at int64) (model.Task, bool, error) {
 			return task, false, ErrProtocol
 		}
 		switch sig.Phase {
-		case "installed":
+		case model.PhaseInstalled:
 			if task.State != model.TaskInstalling || !slotsComplete(task, false) {
 				return task, false, ErrProtocol
 			}
 			task.State = model.TaskRebooting
 			r.ReachedReboot = true
-			stage(r, "rebooting", at, rebootBudget)
-		case "booted":
+			stage(r, model.StageRebooting, at, rebootBudget)
+		case model.PhaseBooted:
 			if task.State != model.TaskRebooting && task.State != model.TaskInstalling {
 				return task, false, ErrProtocol
 			}
@@ -235,18 +235,18 @@ func Advance(task model.Task, sig Signal, at int64) (model.Task, bool, error) {
 			task.State = model.TaskInitializing
 			r.ReachedReboot = true
 			r.TimingRank = 3
-			stage(r, "initializing", at, initializeBudget)
-		case "init-start":
+			stage(r, model.StageInitializing, at, initializeBudget)
+		case model.PhaseInitStart:
 			if task.State != model.TaskInitializing {
 				return task, false, ErrProtocol
 			}
-		case "init-done":
-			if task.State != model.TaskInitializing || !seen(r, "init-start", 0, 0) || !slotsComplete(task, true) {
+		case model.PhaseInitDone:
+			if task.State != model.TaskInitializing || !seen(r, model.PhaseInitStart, 0, 0) || !slotsComplete(task, true) {
 				return task, false, ErrProtocol
 			}
 			r.InitDone = true
-		case "ready":
-			if task.State != model.TaskInitializing || !r.InitDone || !seen(r, "init-done", 0, 0) || !slotsComplete(task, true) {
+		case model.PhaseReady:
+			if task.State != model.TaskInitializing || !r.InitDone || !seen(r, model.PhaseInitDone, 0, 0) || !slotsComplete(task, true) {
 				return task, false, ErrProtocol
 			}
 			task.State = model.TaskDone
@@ -259,8 +259,8 @@ func Advance(task model.Task, sig Signal, at int64) (model.Task, bool, error) {
 		r.Signals = map[string]string{}
 	}
 	r.Signals[key] = value
-	if sig.Phase == "slot-end" && sig.Timing == catalog.TimingPre && r.Stage == "pre" && preComplete(task) {
-		stage(r, "packages", at, packagesBudget)
+	if sig.Phase == model.PhaseSlotEnd && sig.Timing == catalog.TimingPre && r.Stage == model.StagePre && preComplete(task) {
+		stage(r, model.StagePackages, at, packagesBudget)
 	}
 	return task, false, nil
 }

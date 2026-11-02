@@ -63,8 +63,21 @@ type InventoryBoot interface {
 	Submit(context.Context, string, string, []byte) error
 }
 
+// MachineService 是网关真正用到的机器协议能力。
+// 网关不需要取消、重试或超时扫描，所以这里只声明自己用得到的六个方法。
+type MachineService interface {
+	Boot(context.Context, string, catalog.Arch, catalog.Firmware) (model.Task, bool, error)
+	Preseed(context.Context, string) (model.Task, bool, error)
+	Answer(context.Context, string, string) (model.Task, error)
+	Signal(context.Context, string, string, executionrules.Signal) error
+	GetAuthorized(context.Context, string, string, bool) (model.Task, error)
+	Credentials(model.Task) (string, string)
+}
+
+var _ MachineService = (*Machine)(nil)
+
 type GatewayDeps struct {
-	Service   *Service
+	Service   MachineService
 	Renderer  port.FrozenRenderer
 	Endpoints Endpoints
 	Observe   func(model.Task, string)

@@ -35,7 +35,7 @@ func InstallerAnswerAvailable(t model.Task) bool { return t.Snapshot.Format == "
 
 // FinalSignal 的八项纯值约定唯一连接 docs/contracts/machine-execution.md「领域纯规则」本方法行及共同约定。
 func FinalSignal(sig Signal) bool {
-	return sig.Timing == catalog.TimingFirstboot || sig.Phase == "booted" || sig.Phase == "init-start" || sig.Phase == "init-done" || sig.Phase == "ready"
+	return sig.Timing == catalog.TimingFirstboot || sig.Phase == model.PhaseBooted || sig.Phase == model.PhaseInitStart || sig.Phase == model.PhaseInitDone || sig.Phase == model.PhaseReady
 }
 
 // SignalAccessAllowed 的八项纯值约定唯一连接 docs/contracts/machine-execution.md「领域纯规则」本方法行及共同约定。

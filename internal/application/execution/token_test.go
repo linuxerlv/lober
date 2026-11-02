@@ -42,28 +42,28 @@ func TestCredentialsBindTaskAttemptScopeAndExpiry(t *testing.T) {
 	// 安装寿命 4 小时：IssuedAt 1000 之后 14400 秒整才失效，差一秒仍可用。
 	// 这一步只看凭据寿命，先把阶段期限清零，免得被 InstallAccessAllowed 先行拦下。
 	task.Execution.Deadline = 0
-	s.now = func() int64 { return 1000 + 14400 }
+	s.Machine.clock.now = func() int64 { return 1000 + 14400 }
 	if s.Authorize(task, install, Install) == nil {
 		t.Fatal("expired install accepted")
 	}
-	s.now = func() int64 { return 1000 + 14400 - 1 }
+	s.Machine.clock.now = func() int64 { return 1000 + 14400 - 1 }
 	if s.Authorize(task, install, Install) != nil {
 		t.Fatal("install rejected one second before its four-hour lifetime ends")
 	}
-	s.now = func() int64 { return 6400 }
+	s.Machine.clock.now = func() int64 { return 6400 }
 	if s.Authorize(task, final, Finalize) != nil {
 		t.Fatal("finalize expires with install")
 	}
-	s.now = func() int64 { return 87400 }
+	s.Machine.clock.now = func() int64 { return 87400 }
 	if s.Authorize(task, final, Finalize) == nil {
 		t.Fatal("expired finalize accepted")
 	}
-	s.now = func() int64 { return 1100 }
+	s.Machine.clock.now = func() int64 { return 1100 }
 	task.State = model.TaskRebooting
 	if s.Authorize(task, install, Install) == nil {
 		t.Fatal("post-reboot file access accepted")
 	}
-	if _, err := New(nil, []byte("weak"), s.now, nil); err == nil {
+	if _, err := New(nil, []byte("weak"), s.Machine.clock.now, nil); err == nil {
 		t.Fatal("short signing key accepted")
 	}
 }
@@ -113,7 +113,7 @@ func TestAuthorizationKeepsOriginalClockCallsAndOrder(t *testing.T) {
 	}
 	task := credentialTask()
 	token := s.Token(task, Install)
-	s.now = func() int64 {
+	s.Machine.clock.now = func() int64 {
 		calls++
 		if calls == 1 {
 			return 1100

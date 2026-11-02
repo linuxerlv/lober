@@ -27,7 +27,7 @@ func apply(t *testing.T, task model.Task, sig Signal) model.Task {
 	}
 	return next
 }
-func slotSignal(phase string, slot, instance int, digest string, rc int) Signal {
+func slotSignal(phase model.SignalPhase, slot, instance int, digest string, rc int) Signal {
 	timing := catalog.TimingPostTarget
 	if slot == 2 {
 		timing = catalog.TimingFirstboot

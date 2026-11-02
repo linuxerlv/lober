@@ -90,7 +90,7 @@ func mediaControlOf(src *appmedia.Sources, sup *appmedia.Supervisor) port.Source
 }
 func taskBackendOf(m *machineBundle) tasksport.Control {
 	if m.Service != nil {
-		return execution.NewAuditedControl(m.Service)
+		return execution.NewAuditedControl(m.Service.Control)
 	}
 	return tasks.NewUnavailableControl()
 }

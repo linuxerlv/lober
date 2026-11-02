@@ -167,8 +167,8 @@ func answerPart(e expansion, part catalog.SystemPart, subject model.Subject) (st
 		runner.WriteString("#!/bin/sh\nset -eu\numask 077\nDIR=/var/lib/lober\n")
 		runner.WriteString(signalQueue(gateway[0], gateway[1], "", false))
 		runner.WriteString("if [ -f \"$DIR/execution.started\" ]; then sh \"$DIR/cleanup.sh\"; exit 0; fi\ntouch \"$DIR/execution.started\"\n")
-		runner.WriteString(queuedNativeSignal("booted"))
-		runner.WriteString(queuedNativeSignal("init-start"))
+		runner.WriteString(queuedNativeSignal(model.PhaseBooted))
+		runner.WriteString(queuedNativeSignal(model.PhaseInitStart))
 		for _, slot := range e.request.Snapshot.Slots {
 			if slot.Exec && slot.Timing == "firstboot" {
 				runner.WriteString("sh /var/lib/lober/" + slotFile(e.request.Snapshot.Format, slot) + "\n")
@@ -195,7 +195,7 @@ func answerPart(e expansion, part catalog.SystemPart, subject model.Subject) (st
 		}
 		cleanup := "#!/bin/sh\nset -eu\numask 077\nDIR=/var/lib/lober\n" + signalQueue(values[0], values[1], "", false)
 		cleanup += "if [ ! -f \"$DIR/execution.completed\" ]; then flush_signals || :; exit 0; fi\n"
-		cleanup += queuedNativeSignal("init-done") + queuedNativeSignal("ready")
+		cleanup += queuedNativeSignal(model.PhaseInitDone) + queuedNativeSignal(model.PhaseReady)
 		cleanup += "flush_signals || exit 0\n"
 		cleanup += "rm -f /var/lib/lober/finalize.token /var/lib/lober/firstboot.pending /var/lib/lober/script-*.sh /var/lib/lober/hook-* /var/lib/lober/firstboot.sh /var/lib/lober/cleanup.sh\n"
 		cleanup += "rm -f /var/lib/lober/execution.started /var/lib/lober/execution.completed /etc/systemd/system/timers.target.wants/lober-signals.timer /etc/systemd/system/lober-signals.timer /etc/systemd/system/lober-signals.service\n"
@@ -214,7 +214,7 @@ func answerPart(e expansion, part catalog.SystemPart, subject model.Subject) (st
 		staging += "for DIR in /var/lib/lober " + shQuote(root+"/var/lib/lober") + "; do flush_signals; done\n"
 		// Acknowledge the irreversible boundary before the installer reboots. Keep
 		// the install credential in installer code only, never in the target runner.
-		address := catalog.SignalURL(values[0], values[1], values[2], "installed")
+		address := catalog.SignalURL(values[0], values[1], values[2], string(model.PhaseInstalled))
 		if e.request.Snapshot.Format == "preseed" {
 			staging += "wget -q -T 10 --tries=4 -O /dev/null --post-data='' " + shQuote(address) + "\n"
 		} else {
@@ -246,13 +246,13 @@ func windowsPartScript(e expansion, part catalog.SystemPart, subject model.Subje
 		return nil, []model.Problem{model.NewProblem("render_replacement_missing", subject, part)}
 	}
 	body := "$ErrorActionPreference='Stop'\n$dir=Join-Path $env:SystemDrive 'ProgramData/lober'\n$token=(Get-Content -Raw (Join-Path $dir 'finalize.token')).Trim()\n"
-	phases := []string{"booted", "init-start"}
+	phases := []model.SignalPhase{model.PhaseBooted, model.PhaseInitStart}
 	if part == "cleanup" {
-		phases = []string{"init-done", "ready"}
+		phases = []model.SignalPhase{model.PhaseInitDone, model.PhaseReady}
 	}
 	for _, phase := range phases {
 		// Token is read locally after reboot; the install token never enters this payload.
-		base := catalog.SignalURL(values[0], values[1], "TOKEN", phase)
+		base := catalog.SignalURL(values[0], values[1], "TOKEN", string(phase))
 		before, after := tokenURLParts(base)
 		body += "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 -Method Post -Uri (" + psQuote(before) + "+$token+" + psQuote(after) + ") -Body '' | Out-Null } catch {}\n"
 	}
@@ -294,14 +294,6 @@ func download(format catalog.Format, address, path string) string {
 		return "wget -O " + shQuote(path) + " " + shQuote(address) + "\n"
 	}
 	return "curl -fsS --retry 3 -o " + shQuote(path) + " " + shQuote(address) + "\n"
-}
-
-// The native runner gets its finalize credential from a protected local file.
-// Telemetry transport failure never aborts the install/firstboot script.
-func finalizeSignal(gateway, task, phase string) string {
-	address := catalog.SignalURL(gateway, task, "TOKEN", phase)
-	before, after := tokenURLParts(address)
-	return "TOKEN=$(cat /var/lib/lober/finalize.token)\ncurl -fsS -m 10 -X POST " + shQuote(before) + "\"$TOKEN\"" + shQuote(after) + " --data-binary '' >/dev/null 2>&1 || :\n"
 }
 
 func tokenURLParts(address string) (string, string) {
@@ -368,10 +360,10 @@ func esxiPart(e expansion, part catalog.SystemPart, subject model.Subject) (stri
 	switch part {
 	case "firstboot":
 		body += "mkdir -p /tmp/lober\nprintf '%s' " + shQuote(values[2]) + " > /tmp/lober/finalize.token\n"
-		body += esxiFinalizeSignal(values[0], values[1], "booted") + esxiFinalizeSignal(values[0], values[1], "init-start")
+		body += esxiFinalizeSignal(values[0], values[1], model.PhaseBooted) + esxiFinalizeSignal(values[0], values[1], model.PhaseInitStart)
 	case "cleanup":
 		body += "rm -f \"$LOBER_ESXI_NATIVE_SCRIPT\"\n"
-		body += esxiFinalizeSignal(values[0], values[1], "init-done") + esxiFinalizeSignal(values[0], values[1], "ready")
+		body += esxiFinalizeSignal(values[0], values[1], model.PhaseInitDone) + esxiFinalizeSignal(values[0], values[1], model.PhaseReady)
 		body += "rm -f /tmp/lober/finalize.token /tmp/lober/script-*.sh /tmp/lober/hook-*\n"
 	default:
 		return "", []model.Problem{model.NewProblem("render_replacement_missing", subject, part)}
@@ -390,8 +382,8 @@ func esxiNativeOwnerCheck(task string) string {
 		"[ \"${LOBER_ESXI_OWNER:-}\" = " + shQuote(marker) + " ] && [ -f \"$LOBER_ESXI_NATIVE_SCRIPT\" ] && [ ! -L \"$LOBER_ESXI_NATIVE_SCRIPT\" ] && grep -F -q " + shQuote("LOBER_ESXI_OWNER="+marker+";") + " \"$LOBER_ESXI_NATIVE_SCRIPT\" || exit 66\n"
 }
 
-func esxiFinalizeSignal(gateway, task, phase string) string {
-	address := catalog.SignalURL(gateway, task, "TOKEN", phase)
+func esxiFinalizeSignal(gateway, task string, phase model.SignalPhase) string {
+	address := catalog.SignalURL(gateway, task, "TOKEN", string(phase))
 	before, after := tokenURLParts(address)
 	return "TOKEN=$(cat /tmp/lober/finalize.token)\nwget -q -T 10 -O /dev/null --header='Content-Type: text/plain' --post-data='' " + shQuote(before) + "\"$TOKEN\"" + shQuote(after) + " >/dev/null 2>&1 || :\n"
 }
