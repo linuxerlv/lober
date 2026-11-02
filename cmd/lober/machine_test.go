@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/lober/lober/internal/application/execution"
 	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/domain/repository"
 	"io"
 	"log/slog"
 	"net/http"
@@ -105,10 +106,14 @@ func TestEnabledMachineRejectsInvalidEndpointOrUnprotectedKey(t *testing.T) {
 	}
 }
 
+// nilStore 只拿来做不需要访问数据库的组装测试：接口本身非空，方法一调就 panic。
+type nilStore struct{ repository.Store }
+
 func Test机器关闭不读取密钥启用使用原默认路径(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	clock := ports.Clock(func() int64 { return assemblyAt })
-	disabled, err := machineOf(nil, nil, config{}, clock, logger)
+	store := nilStore{}
+	disabled, err := machineOf(store, nil, config{}, clock, logger)
 	if err != nil || disabled.Service != nil || disabled.Handler != nil || disabled.Logs != nil {
 		t.Fatal("关闭分支改变", err)
 	}
@@ -116,7 +121,7 @@ func Test机器关闭不读取密钥启用使用原默认路径(t *testing.T) {
 	cfg.Machine = machineConfig{Enabled: true}
 	cfg.Preview.Gateway = "http://gateway"
 	cfg.Preview.Artifacts = "http://artifacts"
-	bundle, err := machineOf(nil, nil, cfg, clock, logger)
+	bundle, err := machineOf(store, nil, cfg, clock, logger)
 	if err != nil || bundle.Service == nil || bundle.Handler == nil || bundle.Logs == nil {
 		t.Fatal("默认路径未组装", err)
 	}
