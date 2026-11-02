@@ -75,7 +75,7 @@ func standardNamedType(t types.Type, path, name string) bool {
 }
 
 func serverHTTPFunction(fn *types.Func) bool {
-	if fn.Pkg() == nil || fn.Pkg().Path() != "net/http" {
+	if fn == nil || fn.Pkg() == nil || fn.Pkg().Path() != "net/http" {
 		return false
 	}
 	switch transitionSymbol(fn) {
@@ -88,7 +88,7 @@ func serverHTTPFunction(fn *types.Func) bool {
 // machineHTTPFunction 是机器入口额外需要的路由能力：只分发路径、读路径参数，
 // 不扩大控制台的许可。
 func machineHTTPFunction(fn *types.Func) bool {
-	if fn.Pkg() == nil || fn.Pkg().Path() != "net/http" {
+	if fn == nil || fn.Pkg() == nil || fn.Pkg().Path() != "net/http" {
 		return false
 	}
 	switch transitionSymbol(fn) {
@@ -184,11 +184,14 @@ func interfaceCapabilityFindings(caller string, fset *token.FileSet, files []*as
 				}
 				if (console || machine) && callable && target == "net/http" {
 					// 标准库的函数字段也是主动能力；只有精确的服务器方法允许调用。
-					allowed := serverHTTPFunction(fn) || consoleTransportMethod(fn)
-					if machine {
-						allowed = allowed || machineHTTPFunction(fn)
+					bad = bad || !function
+					if function {
+						allowed := serverHTTPFunction(fn) || consoleTransportMethod(fn)
+						if machine {
+							allowed = allowed || machineHTTPFunction(fn)
+						}
+						bad = bad || !allowed
 					}
-					bad = bad || !function || !allowed
 				}
 				if console {
 					if function && under(target, modulePath+"/internal/application") && !migratedApplicationMethod(fn) {
