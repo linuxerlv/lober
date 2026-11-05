@@ -20,7 +20,7 @@ import (
 	"github.com/lober/lober/internal/domain/model"
 )
 
-var answerFormats = []catalog.Format{"kickstart", "preseed", "autoinstall", "autoyast", "unattend"}
+var answerFormats = []catalog.Format{"kickstart", "preseed", "autoinstall", "unattend"}
 
 // Handwritten snapshots exercise the renderer independently of builtin content.
 func answerFixture(t *testing.T, format catalog.Format, full bool, firmware catalog.Firmware) Request {
@@ -152,7 +152,7 @@ func commandPayloads(text string) []string {
 }
 
 func TestAnswerLinuxScaffolds(t *testing.T) {
-	for _, format := range answerFormats[:4] {
+	for _, format := range answerFormats[:3] {
 		t.Run(string(format), func(t *testing.T) {
 			r := answerFixture(t, format, true, "uefi")
 			got, p, err := Render(r)

@@ -1,4 +1,0 @@
-<username>{{param:username}}</username>
-<user_password>{{param:pwhash}}</user_password>
-<encrypted config:type="boolean">true</encrypted>
-<shell>/bin/bash</shell>

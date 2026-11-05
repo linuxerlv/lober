@@ -33,7 +33,7 @@ type templateResponse struct {
 	Builtin     bool                     `json:"builtin"`
 	DerivedFrom *templateKeyResponse     `json:"derivedFrom"`
 	Family      catalog.Family           `json:"family"`
-	Series      []catalog.Series         `json:"series"`
+	Series      []string                 `json:"series"`
 	Body        string                   `json:"body"`
 	Params      []paramDeclDTO           `json:"params"`
 	Bindings    map[string]bindingDTO    `json:"bindings"`
@@ -69,7 +69,7 @@ func toTemplateResponseWithProblems(t model.Template, problems []model.Problem) 
 	if t.DerivedFrom != nil {
 		from = &templateKeyResponse{t.DerivedFrom.ID, t.DerivedFrom.Version}
 	}
-	return templateResponse{ID: t.ID, Version: t.Version, Name: t.Name, State: t.State, Author: t.Author, Approver: t.Approver, Builtin: t.Builtin, DerivedFrom: from, Family: t.Family, Series: append([]catalog.Series{}, t.Series...), Body: t.Body, Params: declsToDTO(t.Params), Bindings: bindingsToDTO(t.Bindings), Assembly: assemblyToDTO(t.Assembly), Problems: jsonProblems(problems), Rev: t.Rev}
+	return templateResponse{ID: t.ID, Version: t.Version, Name: t.Name, State: t.State, Author: t.Author, Approver: t.Approver, Builtin: t.Builtin, DerivedFrom: from, Family: t.Family, Series: seriesToResponse(t.Series), Body: t.Body, Params: declsToDTO(t.Params), Bindings: bindingsToDTO(t.Bindings), Assembly: assemblyToDTO(t.Assembly), Problems: jsonProblems(problems), Rev: t.Rev}
 }
 
 func templateViewResponse(v authoring.TemplateView) templateResponse {

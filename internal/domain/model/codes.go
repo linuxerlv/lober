@@ -273,6 +273,8 @@ var codeTable = map[Code]codeSpec{
 		"等那个任务结束，或先取消它"},
 	"task_control_state": {CategoryState, 1,
 		"当前任务状态不能%[1]v", "刷新任务后检查当前状态"},
+	"task_system_unsupported": {CategoryState, 2,
+		"任务使用的系统 %[1]v 或安装格式 %[2]v 已停止支持，不能继续或重试安装", "保留此记录供查看；需要安装时请使用仍支持的系统创建新任务"},
 	"task_retry_after_reboot": {CategoryState, 0,
 		"任务已进入重启阶段，不能重试装机", "检查目标系统与任务日志；确需重装时人工创建新任务"},
 	// ISO 不可用：获取中、导入中、已废弃，或状态不认识；导入失败不归这里，另报 iso_import_failed
@@ -484,6 +486,13 @@ var codeTable = map[Code]codeSpec{
 	"render_inventory_missing": {CategoryIncomplete, 1,
 		"渲染采集菜单缺少 %[1]v",
 		"在部署配置里补上采集镜像的内核与 initrd 相对路径，以及网关与制品基地址"},
+
+	// sshkey hook 的 username 与 account hook 的 username 不一致。参数求值在向导和建任务
+	// 时都走这里，所以不用等到首启脚本 exit 67。参数：sshkey 填的用户名、account 设置的用户名
+	// （多个用顿号连好）。
+	"param_hook_mismatch": {CategoryInvalid, 2,
+		"SSH 密钥的用户名「%[1]v」与账号的用户名「%[2]v」不一致",
+		"把 sshkey hook 的 username 改成 account hook 里设置的用户名；这两个参数不会自动对齐"},
 }
 
 // ISO 层选用的固定措辞集中在代码表文件；跨包调用需要导出。

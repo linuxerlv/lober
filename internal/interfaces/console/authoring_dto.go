@@ -26,6 +26,16 @@ type implDTO struct {
 	Interpreter catalog.Interpreter `json:"interpreter"`
 	Timings     []catalog.Timing    `json:"timings"`
 }
+
+// 响应保留历史系统名；新建和修改仍由 implDTO 限定当前支持名单。
+type implResponseDTO struct {
+	Family      catalog.Family      `json:"family"`
+	Series      []string            `json:"series"`
+	Kind        model.ImplKind      `json:"kind"`
+	Body        string              `json:"body"`
+	Interpreter catalog.Interpreter `json:"interpreter"`
+	Timings     []catalog.Timing    `json:"timings"`
+}
 type bindingDTO struct {
 	Source   model.BindingSource `json:"source"`
 	Value    string              `json:"value"`
@@ -79,6 +89,22 @@ func implsToDTO(in []model.Impl) []implDTO {
 		out[i] = implDTO(v)
 		out[i].Series = append([]catalog.Series{}, v.Series...)
 		out[i].Timings = append([]catalog.Timing{}, v.Timings...)
+	}
+	return out
+}
+
+func seriesToResponse(in []catalog.Series) []string {
+	out := make([]string, len(in))
+	for i, series := range in {
+		out[i] = string(series)
+	}
+	return out
+}
+
+func implsToResponseDTO(in []model.Impl) []implResponseDTO {
+	out := make([]implResponseDTO, len(in))
+	for i, v := range in {
+		out[i] = implResponseDTO{Family: v.Family, Series: seriesToResponse(v.Series), Kind: v.Kind, Body: v.Body, Interpreter: v.Interpreter, Timings: append([]catalog.Timing{}, v.Timings...)}
 	}
 	return out
 }

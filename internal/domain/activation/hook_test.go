@@ -296,12 +296,13 @@ func Test重叠检查不比不属于本族的系(t *testing.T) {
 // 片段按一种格式的语法写，覆盖的系必须同格式（C8）。
 func Test片段覆盖的系不同格式(t *testing.T) {
 	runEdits(t, "fragment_mixed_formats", []edit{
-		{"kickstart 与 autoyast", func(h *model.Hook) { frag(h).Series = append(frag(h).Series, "sles15") }},
-		{"autoyast 与 agama", func(h *model.Hook) { frag(h).Series = []catalog.Series{"sles15", "sles16"} }},
-		// 推不出格式就不按格式查系统值（T10-6③）：smb 在 kickstart 与 autoyast 里都不可用，照查就会连带报出
+		{"kickstart 与 preseed", func(h *model.Hook) { h.Impls = h.Impls[:1]; frag(h).Series = append(frag(h).Series, "debian") }},
+		{"preseed 与 autoinstall", func(h *model.Hook) { h.Impls = h.Impls[:1]; frag(h).Series = []catalog.Series{"debian", "ubuntu"} }},
+		// 推不出格式就不按格式查系统值（T10-6③）：smb 在 kickstart 与 preseed 里都不可用，照查就会连带报出
 		// sysvalue_not_allowed。
 		{"混格式时不查系统值", func(h *model.Hook) {
-			frag(h).Series = append(frag(h).Series, "sles15")
+			h.Impls = h.Impls[:1]
+			frag(h).Series = append(frag(h).Series, "debian")
 			frag(h).Body += "# {{sys:smb}}\n"
 		}},
 	})

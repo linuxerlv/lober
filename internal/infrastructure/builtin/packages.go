@@ -3,11 +3,11 @@ package builtin
 import "github.com/lober/lober/internal/domain/model"
 
 func packagesHook() model.Hook {
-	h := hook("packages", 2, "Additional native packages, Windows Server features, or qualified individual ESXi VIB URLs.")
+	h := hook("packages", 4, "Native packages. Built-in Linux answers default to curl, systemd and the platform SSH server; add or replace them per target. Windows takes Server features; ESXi takes qualified individual VIB URLs.")
 	h.TimeoutSec = 1800
 	h.Params = []model.ParamDecl{{Name: "packages", Type: "word", List: true, Required: true}}
 	h.Impls = []model.Impl{
-		fragment("kickstart", "packages.cfg"), fragment("preseed", "packages.cfg"), fragment("autoinstall", "packages.yaml"), fragment("autoyast", "packages.xml"), fragment("agama", "packages.jsonnet"),
+		fragment("kickstart", "packages.cfg"), fragment("preseed", "packages.cfg"), fragment("autoinstall", "packages.yaml"),
 		script("unattend", "packages.ps1", "powershell", "firstboot"), script("esxi-ks", "packages.sh", "sh", "firstboot"),
 	}
 	return h

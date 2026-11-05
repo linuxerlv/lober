@@ -69,6 +69,9 @@ func ISOUsable(iso model.ISO, hosts []model.Host) []model.Problem {
 func TemplateUsable(t model.Template, hooks map[model.HookKey]model.Hook, iso model.ISO) []model.Problem {
 	subject := model.Subject{Kind: model.KindTemplate, ID: (model.TemplateKey{ID: t.ID, Version: t.Version}).String()}
 	var out []model.Problem
+	if !t.SeriesSupported() {
+		out = append(out, model.NewProblem("template_series_invalid", subject))
+	}
 	if t.State != model.VersionApproved {
 		// 说明里给状态的称呼：中文显示名，不认识的回落到标识，空状态回落到「未知状态」（T5-1、C-7）。
 		out = append(out, model.NewProblem("template_not_approved", subject, model.StateLabel(t.State)))

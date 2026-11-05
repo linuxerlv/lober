@@ -16,7 +16,7 @@ import (
 )
 
 func TestRuntimeAllPOSIXFormats(t *testing.T) {
-	for _, format := range []catalog.Format{"kickstart", "preseed", "autoinstall", "autoyast", "agama", "esxi-ks"} {
+	for _, format := range []catalog.Format{"kickstart", "preseed", "autoinstall", "esxi-ks"} {
 		t.Run(string(format), func(t *testing.T) {
 			r := runtimeFixture("pre", runtimeInstance("printf 'executed' > \"$QA_OUTPUT\"\n", true, "sh", 3))
 			r.Snapshot.Format = format

@@ -109,6 +109,21 @@ func TestEnabledMachineRejectsInvalidEndpointOrUnprotectedKey(t *testing.T) {
 // nilStore 只拿来做不需要访问数据库的组装测试：接口本身非空，方法一调就 panic。
 type nilStore struct{ repository.Store }
 
+func TestInventoryMenuConfigIsWired(t *testing.T) {
+	cfg := config{Preview: previewConfig{
+		Gateway: "http://gateway", Artifacts: "http://artifacts",
+		InventoryKernel: "inventory/vmlinuz", InventoryInitrd: "inventory/initrd",
+	}}
+	svc := inventoryServiceOf(nilStore{}, cfg, func() int64 { return assemblyAt })
+	if !svc.Configured() {
+		t.Fatal("采集菜单配置没有传进采集服务")
+	}
+	cfg.Preview.InventoryInitrd = ""
+	if inventoryServiceOf(nilStore{}, cfg, func() int64 { return assemblyAt }).Configured() {
+		t.Fatal("只配一项也被当成已配置")
+	}
+}
+
 func Test机器关闭不读取密钥启用使用原默认路径(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	clock := ports.Clock(func() int64 { return assemblyAt })

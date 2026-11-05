@@ -19,8 +19,6 @@ part / --fstype=xfs --size=8192 --grow --ondisk=sda
 curl
 systemd
 openssh-server
-curl
-vim
 %end
 services --enabled=sshd
 %post --nochroot --interpreter=/bin/sh --erroronfail

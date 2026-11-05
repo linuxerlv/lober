@@ -107,7 +107,7 @@ func Test第二阶段与向导许可已清零(t *testing.T) {
 	}
 }
 
-func Test启动组装只委托两个初始化入口(t *testing.T) {
+func Test启动检查旧任务后只委托两个初始化入口(t *testing.T) {
 	name := filepath.Join(filepath.Dir(goModPath(t)), "cmd/lober/app.go")
 	source, err := os.ReadFile(name)
 	if err != nil {
@@ -137,6 +137,10 @@ func Test启动组装只委托两个初始化入口(t *testing.T) {
 					t.Error("启动初始化存在额外函数调用")
 					break
 				}
+				if pkg, ok := method.X.(*ast.Ident); ok && pkg.Name == "execution" && method.Sel.Name == "CheckUnfinishedTasks" {
+					calls = append(calls, "execution.CheckUnfinishedTasks")
+					break
+				}
 				receiver, ok := method.X.(*ast.SelectorExpr)
 				if !ok {
 					t.Error("启动初始化必须委托注入入口")
@@ -147,7 +151,7 @@ func Test启动组装只委托两个初始化入口(t *testing.T) {
 			return true
 		})
 	}
-	if strings.Join(calls, ",") != "Builtin.Initialise,Identity.Initialise" {
+	if strings.Join(calls, ",") != "execution.CheckUnfinishedTasks,Builtin.Initialise,Identity.Initialise" {
 		t.Fatal(calls)
 	}
 }

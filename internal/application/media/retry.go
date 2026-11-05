@@ -17,6 +17,9 @@ func (s *Sources) Retry(ctx context.Context, id string, a repository.Audit) erro
 	if err != nil {
 		return err
 	}
+	if err := checkSupportedISO(item); err != nil {
+		return err
+	}
 	if item.State != model.ISOAcquiring && item.State != model.ISOFailed {
 		return repository.ErrConflict
 	}
@@ -80,6 +83,9 @@ func (s *Sources) RequestReimport(ctx context.Context, id string, a repository.A
 	}
 	item, err := s.isos.GetISO(ctx, id)
 	if err != nil {
+		return err
+	}
+	if err := checkSupportedISO(item); err != nil {
 		return err
 	}
 	if item.State != model.ISOFailed {

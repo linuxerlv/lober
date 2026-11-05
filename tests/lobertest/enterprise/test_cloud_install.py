@@ -374,7 +374,7 @@ class CloudChecks(unittest.TestCase):
             manifest={'run_id':OWNER['run_id'],'product_sha':'a'*40,'test_sha':'b'*40,'binary_sha256':'c'*64,
                 'cloud':{'owner':OWNER,'target':TARGET_SPEC,'prepare_chain_sha256':'d'*64,
                     'short_failure_evidence_sha256':'e'*64,'guest_public_key_sha256':hashlib.sha256(key.encode()).hexdigest(),
-                    'builtin_template':{'id':'builtin-preseed','version':3,'body_sha256':hashlib.sha256(builtin.encode()).hexdigest()}}}
+                    'builtin_template':{'id':'builtin-preseed','version':5,'body_sha256':hashlib.sha256(builtin.encode()).hexdigest()}}}
             prepared={'iso':{'id':'iso-own'}};short={'owner':OWNER,'no_task_created':True,'client_stopped':True,
                 'failed_disks_preserved':True,'root_verified':True}
             class API:
@@ -386,7 +386,7 @@ class CloudChecks(unittest.TestCase):
                 def api(self,method,path,body=None,**kwargs):
                     if method=='GET' and path.startswith('/isos/'):return prepared['iso']
                     if path=='/hooks':return {**body,'id':'hook','version':1,'rev':1}
-                    if method=='GET' and path=='/templates/builtin-preseed/versions/3':return {'builtin':True,'state':'approved','body':builtin}
+                    if method=='GET' and path=='/templates/builtin-preseed/versions/5':return {'builtin':True,'state':'approved','body':builtin}
                     if path=='/templates/builtin-preseed/derive':return {'id':'template','version':1,'name':'fixture','family':'linux',
                         'series':['debian'],'body':builtin,'assembly':{},'params':[],'bindings':{},'rev':1}
                     if method=='PUT':return {**body,'id':'template','version':1}

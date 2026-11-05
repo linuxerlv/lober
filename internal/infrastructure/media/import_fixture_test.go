@@ -10,7 +10,6 @@ import (
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -66,19 +65,6 @@ func importFixture(series catalog.Series) map[string][]byte {
 		f[".disk/info"] = []byte("Ubuntu-Server 24.04.3 LTS Noble - Release amd64")
 		f["casper/vmlinuz"] = []byte("kernel")
 		f["casper/initrd"] = []byte("initrd")
-	case "autoyast", "agama":
-		product, version := "SLES", "15.6"
-		if strings.HasPrefix(string(series), "leap") {
-			product = "openSUSE"
-		}
-		if series.Format() == "agama" {
-			version = "16.0"
-			f["LiveOS/squashfs.img"] = []byte("live-root")
-		}
-		f["media.1/products"] = []byte(product + "|" + version + "|product")
-		f["repodata/repomd.xml"] = []byte("repo")
-		f["boot/x86_64/loader/linux"] = []byte("kernel")
-		f["boot/x86_64/loader/initrd"] = []byte("initrd")
 	case "unattend":
 		f["sources/install.wim"] = importWIM()
 		f["sources/boot.wim"] = []byte("bootwim")

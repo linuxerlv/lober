@@ -32,13 +32,9 @@ var planCatalog = []planFamily{
 			{"rhel", "RHEL"},
 			{"rocky", "Rocky Linux"},
 			{"almalinux", "AlmaLinux"},
-			{"openeuler", "openEuler"},
-			{"opencloudos", "OpenCloudOS"},
 		}},
 		{"preseed", "preseed", []planSeries{{"debian", "Debian"}}},
 		{"autoinstall", "autoinstall", []planSeries{{"ubuntu", "Ubuntu"}}},
-		{"autoyast", "AutoYaST", []planSeries{{"sles15", "SLES 15"}, {"leap15", "openSUSE Leap 15"}}},
-		{"agama", "Agama", []planSeries{{"sles16", "SLES 16"}, {"leap16", "openSUSE Leap 16"}}},
 	}},
 	{"windows", "Windows", []planFormat{
 		{"unattend", "unattend", []planSeries{{"windows-server", "Windows Server"}, {"windows-desktop", "Windows 桌面版"}}},
@@ -104,8 +100,8 @@ func Test取值表与计划一致(t *testing.T) {
 		t.Errorf("Families() = %q，想要 %q", got, families)
 	}
 
-	if len(formats) != 7 || len(series) != 14 {
-		t.Fatalf("抄录的取值表有 %d 种格式、%d 个系，计划是七种、十四个", len(formats), len(series))
+	if len(formats) != 5 || len(series) != 8 {
+		t.Fatalf("抄录的取值表有 %d 种格式、%d 个系，当前范围是五种、八个", len(formats), len(series))
 	}
 	gotFormats, wantFormats := slices.Sorted(slices.Values(formatTableIDs())), slices.Sorted(slices.Values(formats))
 	if !slices.Equal(gotFormats, wantFormats) {
@@ -228,12 +224,12 @@ func Test改动返回的切片不影响下一次查询(t *testing.T) {
 		}
 	})
 	t.Run("SeriesOfFormat", func(t *testing.T) {
-		got := SeriesOfFormat("autoyast")
+		got := SeriesOfFormat("kickstart")
 		for i := range got {
 			got[i] = "centos"
 		}
-		if again, want := SeriesOfFormat("autoyast"), []Series{"sles15", "leap15"}; !slices.Equal(again, want) {
-			t.Errorf("改过上一次的结果后 SeriesOfFormat(autoyast) = %q，想要 %q", again, want)
+		if again, want := SeriesOfFormat("kickstart"), []Series{"rhel", "rocky", "almalinux"}; !slices.Equal(again, want) {
+			t.Errorf("改过上一次的结果后 SeriesOfFormat(kickstart) = %q，想要 %q", again, want)
 		}
 	})
 }

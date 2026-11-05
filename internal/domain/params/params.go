@@ -10,6 +10,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/scan"
@@ -49,8 +50,9 @@ type Field struct {
 type Values map[FieldKey]model.Value
 
 // Result 是求值结果。Fields 先列模板参数，再按插槽在正文里的顺序、实例在插槽里的顺序列各实例
-// 的参数，同样的输入顺序不变。Values 只在没有问题时非空。Problems 按表单的顺序排，结构性缺失
-// 的问题排在那个实例的位置上；表单里没有的字段键排在最后，按字典序。
+// 被所选片段引用的参数；脚本实例列全部声明。同样的输入顺序不变。Values 只在没有问题时非空。
+// Problems 按表单的顺序排，结构性缺失的问题排在那个实例的位置上；表单里没有的字段键排在最后，
+// 按字典序。
 type Result struct {
 	Fields   []Field
 	Values   Values
@@ -76,7 +78,7 @@ func Evaluate(in Input) Result {
 		subject := model.Subject{Kind: model.KindTemplate, ID: templateRef(t)}
 		return Result{Problems: []model.Problem{model.NewProblem("series_not_ticked", subject, string(in.ISO.Series))}}
 	}
-	ev := evaluator{in: in, inForm: map[FieldKey]bool{}, values: Values{}}
+	ev := evaluator{in: in, inForm: map[FieldKey]bool{}, fieldIndex: map[FieldKey]int{}, values: Values{}}
 	// 正文有扫描错误时照样给出插槽与引用，那些错误归激活判定报。
 	body, _ := scan.Scan(in.Template.Body)
 	ev.addParams(model.TemplateFieldKey, in.Template.Params, in.Template.Bindings, body.Refs())
@@ -90,6 +92,7 @@ func Evaluate(in Input) Result {
 			ev.addInstance(slot.Name, i+1, inst)
 		}
 	}
+	ev.checkHookDependencies()
 	ev.checkEntered()
 	res := Result{Fields: ev.fields, Problems: ev.problems}
 	if len(ev.problems) == 0 {
@@ -101,11 +104,21 @@ func Evaluate(in Input) Result {
 // evaluator 收集一次求值的结果。inForm 记下已进表单的字段键：重名的参数只算第一次出现的，
 // 操作员填的值也按它核对。
 type evaluator struct {
-	in       Input
-	inForm   map[FieldKey]bool
-	fields   []Field
-	values   Values
-	problems []model.Problem
+	in         Input
+	inForm     map[FieldKey]bool
+	fieldIndex map[FieldKey]int
+	fields     []Field
+	values     Values
+	problems   []model.Problem
+	// instances 按求值顺序记下每个实例的 hook 和字段键，供 hook 间依赖校验用。
+	instances []evaluatedInstance
+}
+
+// evaluatedInstance 是一个已经取过实现的实例。hook 存完整声明，字段键用来找到
+// 这个实例各参数的最终取值。
+type evaluatedInstance struct {
+	hook model.Hook
+	key  func(param string) FieldKey
 }
 
 // addInstance 取插槽 slot 里第 seq 个实例所用 hook 在 ISO 的系上的实现，再把 hook 的参数列进表单。
@@ -124,12 +137,36 @@ func (ev *evaluator) addInstance(slot string, seq int, inst model.Instance) {
 	}
 	// 要展开的正文（片段）进应答文件，它引用的参数必填；脚本的参数经环境变量传入，看声明。哪些实现
 	// 算展开见 model.Impl.Expanded：种类不认识的也按片段算，多要几个必填，好过把空值渲染进应答文件。
+	//
+	// 片段没有引用到的参数不问也不要：例如 preseed 的 interface、disk_index、password 在它的片段里
+	// 没有位置，显示出来只会让操作员以为填了有用。脚本不同：参数经环境变量传入，正文里看不到引用，
+	// 全部保留。
 	var refs scan.Refs
+	decls := h.Params
 	if impl.Expanded() {
 		frag, _ := scan.Scan(impl.Body)
 		refs = frag.Refs()
+		// 只有明确是片段的实现才按引用过滤；种类不认识的按片段算必填，但展示全部声明，
+		// 免得把操作员填的值变成未知字段。
+		if impl.Kind == model.ImplFragment {
+			decls = fragmentParams(h.Params, refs)
+		}
 	}
-	ev.addParams(func(param string) string { return model.InstanceFieldKey(slot, seq, param) }, h.Params, inst.Bindings, refs)
+	key := func(param string) FieldKey { return FieldKey(model.InstanceFieldKey(slot, seq, param)) }
+	ev.addParams(func(param string) string { return model.InstanceFieldKey(slot, seq, param) }, decls, inst.Bindings, refs)
+	ev.instances = append(ev.instances, evaluatedInstance{hook: h, key: key})
+}
+
+// fragmentParams 返回片段实现实际引用的参数声明。片段正文没有引用到的参数不展示、
+// 不接受；脚本和种类不认识的实现不走这里。
+func fragmentParams(decls []model.ParamDecl, refs scan.Refs) []model.ParamDecl {
+	out := make([]model.ParamDecl, 0, len(decls))
+	for _, d := range decls {
+		if _, ok := refs[d.Name]; ok {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // addParams 把一组参数声明列进表单，字段键由 fieldKey 按参数名给出（model.TemplateFieldKey 或
@@ -175,6 +212,7 @@ func (ev *evaluator) addField(key FieldKey, d model.ParamDecl, b model.Binding, 
 	case d.Type == "enum":
 		f.Options = slices.Clone(d.Options)
 	}
+	ev.fieldIndex[key] = len(ev.fields)
 	ev.fields = append(ev.fields, f)
 
 	at := ev.at(key)
@@ -254,6 +292,86 @@ func prefill(d model.ParamDecl, b model.Binding, bound bool, h model.Host) strin
 		return h.Attrs[b.Attr]
 	}
 	return ""
+}
+
+// checkHookDependencies 查内置 hook 之间写在说明里的依赖：sshkey 只能给 account 建的用户
+// 装公钥，两边的 username 必须是同一个。识别方式看声明：同时有 username 和 pwhash/password
+// 的是账号 hook，同时有 username 和 sshkey 类型的 key 的是密钥 hook。片段没引用的参数不会有
+// 取值（比如 autoinstall 的密钥自动挂在 identity 用户上），这种组合直接跳过。
+func (ev *evaluator) checkHookDependencies() {
+	var accounts []string
+	seen := map[string]bool{}
+	for _, in := range ev.instances {
+		if !isAccountHook(in.hook) {
+			continue
+		}
+		if v, ok := ev.values[in.key("username")]; ok && !seen[v.Canonical()] {
+			seen[v.Canonical()] = true
+			accounts = append(accounts, v.Canonical())
+		}
+	}
+	if len(accounts) == 0 {
+		return
+	}
+	expected := slices.Clone(accounts)
+	slices.Sort(expected)
+	for _, in := range ev.instances {
+		if !isSSHKeyHook(in.hook) {
+			continue
+		}
+		key := in.key("username")
+		v, ok := ev.values[key]
+		if !ok || slices.Contains(accounts, v.Canonical()) {
+			continue
+		}
+		ev.reportAt(key, model.NewProblem("param_hook_mismatch", ev.at(key), v.Canonical(), strings.Join(expected, "、")))
+	}
+}
+
+func isAccountHook(h model.Hook) bool {
+	hasUser, hasSecret := false, false
+	for _, d := range h.Params {
+		switch d.Name {
+		case "username":
+			hasUser = true
+		case "pwhash", "password":
+			hasSecret = true
+		}
+	}
+	return hasUser && hasSecret
+}
+
+func isSSHKeyHook(h model.Hook) bool {
+	hasUser, hasKey := false, false
+	for _, d := range h.Params {
+		switch d.Name {
+		case "username":
+			hasUser = true
+		case "key":
+			hasKey = d.Type == "sshkey"
+		}
+	}
+	return hasUser && hasKey
+}
+
+// reportAt 把一个落在表单字段上的问题按字段顺序插入，保持 Problems 与表单一致；
+// 找不到字段顺序时追加到末尾。
+func (ev *evaluator) reportAt(key FieldKey, p model.Problem) {
+	pos := len(ev.problems)
+	if order, ok := ev.fieldIndex[key]; ok {
+		for i, existing := range ev.problems {
+			if existing.Subject.Kind != model.KindParam {
+				continue
+			}
+			if other, ok := ev.fieldIndex[FieldKey(existing.Subject.Path)]; ok && other > order {
+				pos = i
+				break
+			}
+		}
+	}
+	ev.problems = append(ev.problems, model.Problem{})
+	copy(ev.problems[pos+1:], ev.problems[pos:])
+	ev.problems[pos] = p
 }
 
 // checkEntered 按字典序报 Entered 里表单中没有的字段键：多半是表单旧了，模板或 ISO 已经换过。

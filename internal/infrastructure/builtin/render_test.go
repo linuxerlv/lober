@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -28,7 +29,11 @@ func fixtureInput(t *testing.T, tpl model.Template) params.Input {
 		hs[h.Key()] = h
 	}
 	entered := map[params.FieldKey]string{}
-	samples := map[string]string{"pwhash": "$6$fixture$notARealPasswordHash", "password": "Fixture_Pass9", "key": fixtureKey, "edition": "4", "product": "SLES", "packages": "curl\nvim"}
+	samples := map[string]string{"pwhash": "$6$fixture$notARealPasswordHash", "password": "Fixture_Pass9", "key": fixtureKey, "edition": "4"}
+	// Linux 和 Windows 的 packages 都有内置默认值，不用手填；ESXi 的 VIB 地址没有默认值。
+	if tpl.Family == "esxi" {
+		samples["packages"] = "https://depot.example.test/driver.vib"
+	}
 	for _, d := range tpl.Params {
 		if v, ok := samples[d.Name]; ok {
 			entered[params.FieldKey(model.TemplateFieldKey(d.Name))] = v
@@ -37,30 +42,39 @@ func fixtureInput(t *testing.T, tpl model.Template) params.Input {
 	for slot, instances := range tpl.Assembly {
 		for i, in := range instances {
 			h := hs[model.HookKey{ID: in.HookID, Version: in.HookVersion}]
+			impl, _ := h.ImplFor(tpl.Series[0])
+			fragment := impl.Kind == model.ImplFragment
+			var refs scan.Refs
+			if fragment {
+				res, _ := scan.Scan(impl.Body)
+				refs = res.Refs()
+			}
 			for _, d := range h.Params {
-				if v, ok := samples[d.Name]; ok {
-					if d.Name == "packages" {
-						switch tpl.Family {
-						case "windows":
-							v = "Telnet-Client"
-						case "esxi":
-							v = "https://depot.example.test/driver.vib"
-						}
+				// 片段没引用的参数不进表单，填了会被参数求值当成未知字段。
+				if fragment {
+					if _, ok := refs[d.Name]; !ok {
+						continue
 					}
-					if b, ok := in.Bindings[d.Name]; !ok || b.Editable {
-						entered[params.FieldKey(model.InstanceFieldKey(slot, i+1, d.Name))] = v
-					}
+				}
+				v, ok := samples[d.Name]
+				if !ok {
+					continue
+				}
+				if b, bound := in.Bindings[d.Name]; !bound || b.Editable {
+					entered[params.FieldKey(model.InstanceFieldKey(slot, i+1, d.Name))] = v
 				}
 			}
 		}
 	}
-	iso := model.ISO{ID: "iso-9", Name: "fixture", Series: tpl.Series[0], Version: "fixture", Arch: "amd64", Artifacts: map[string]string{"repo": "media/repo/", "iso": "media/image.iso", "winpe-busybox": "media/busybox.exe", "winpe-curl": "media/curl.exe"}, Offers: map[string][]model.Option{"editions": {{Value: "4", Label: "Server Datacenter"}}, "products": {{Value: "SLES", Label: "SLES"}, {Value: "Leap", Label: "Leap"}}}}
+	iso := model.ISO{ID: "iso-9", Name: "fixture", Series: tpl.Series[0], Version: "fixture", Arch: "amd64", Artifacts: map[string]string{"repo": "media/repo/", "iso": "media/image.iso", "winpe-busybox": "media/busybox.exe", "winpe-curl": "media/curl.exe"}, Offers: map[string][]model.Option{"editions": {{Value: "4", Label: "Server Datacenter"}}}}
 	for _, role := range catalog.RequiredRoles(iso.Series) {
 		if _, exists := iso.Artifacts[role]; !exists {
 			iso.Artifacts[role] = "media/" + role
 		}
 	}
-	return params.Input{Template: tpl, Hooks: hs, ISO: iso, Host: model.Host{SN: "TASK9-FIXTURE", Arch: "amd64"}, Entered: entered}
+	return params.Input{Template: tpl, Hooks: hs, ISO: iso,
+		Host:    model.Host{SN: "TASK9-FIXTURE", Arch: "amd64", Attrs: map[string]string{"inv_system_disk": "sda"}},
+		Entered: entered}
 }
 
 func fixtureRequest(t *testing.T, tpl model.Template, firmware catalog.Firmware) render.Request {
@@ -119,7 +133,7 @@ func TestAllBuiltinAnswersFromSnapshots(t *testing.T) {
 					}
 				}
 				f, _ := tpl.Format()
-				if f == "autoyast" || f == "unattend" {
+				if f == "unattend" {
 					d := xml.NewDecoder(strings.NewReader(got))
 					for {
 						_, err := d.Token()
@@ -132,9 +146,6 @@ func TestAllBuiltinAnswersFromSnapshots(t *testing.T) {
 					}
 				}
 				file := filepath.Join("testdata", "answers", string(f)+"-"+string(fw)+".golden")
-				if f == "agama" && tpl.Version >= 3 {
-					file = filepath.Join("testdata", "answers", fmt.Sprintf("agama-v%d-%s.golden", tpl.Version, fw))
-				}
 				if os.Getenv("LOBER_RECORD_BUILTIN") == "1" {
 					if _, err := os.Stat(file); err == nil {
 						t.Fatalf("refuse to replace existing golden %s", file)
@@ -176,8 +187,6 @@ func TestNativeInstallerContracts(t *testing.T) {
 		"kickstart":   {"reqpart", "part /boot --fstype=xfs --size=1024 --ondisk=sda", "part / --fstype=xfs --size=8192 --grow --ondisk=sda", "--disklabel=gpt", "%post --nochroot", "systemd", "openssh-server", "sshkey --username="},
 		"preseed":     {"partman-auto/choose_recipe select atomic", "partman-partitioning/default_label string gpt", "partman-auto/disk string /dev/sda", "pkgsel/include string curl systemd openssh-server", "preseed/late_command"},
 		"autoinstall": {"#cloud-config", "RAM must exceed the full ISO size", "name: direct", "path: '/dev/sda'", "ptable: gpt", "late-commands:", "install-server: true"},
-		"autoyast":    {"<device>/dev/sda</device>", "<disklabel>gpt</disklabel>", "<mount>/</mount>", "<chrooted config:type=\"boolean\">false</chrooted>", "<package>systemd</package>"},
-		"agama":       {"product: { id: 'SLES' }", "ptableType: 'gpt'", "configure: true", "generate: 'default'", "chroot: false", "method4: 'auto'"},
 		"unattend":    {"<PartitionID>3</PartitionID>", "/IMAGE/INDEX", "<Value>4</Value>", "<AutoLogon>", "<LogonCount>1</LogonCount>", "<ComputerName>lober-node</ComputerName>"},
 		"esxi-ks":     {"install --firstdisk='local' --overwritevmfs", "%firstboot --interpreter=busybox", "rootpw --iscrypted", "network --bootproto=dhcp"},
 	}
@@ -195,9 +204,6 @@ func TestNativeInstallerContracts(t *testing.T) {
 			bios.Firmware = "bios"
 			if renderFixture(t, bios) != answer {
 				t.Error("answer must use native firmware detection, not host/request default")
-			}
-			if f == "agama" && strings.Contains(answer, "init:") {
-				t.Fatal("duplicate native firstboot route")
 			}
 			if f == "unattend" {
 				if strings.Count(answer, "<FirstLogonCommands>") != 1 || strings.Count(answer, "<CommandLine>") != 1 {
@@ -220,26 +226,17 @@ func TestNativeInstallerContracts(t *testing.T) {
 	}
 }
 
-func TestAgamaProductAndWindowsEditionComeFromMedia(t *testing.T) {
-	for _, f := range []catalog.Format{"agama", "unattend"} {
-		tpl := templateFor(t, f)
-		name, offer := "product", "products"
-		if f == "unattend" {
-			name, offer = "edition", "editions"
-		}
-		found := false
-		for _, d := range tpl.Params {
-			if d.Name == name {
-				found = true
-				if d.Type != "enum" || d.Offer != offer || d.Default != "" {
-					t.Errorf("media choice has static default: %+v", d)
-				}
+func TestWindowsEditionComesFromMedia(t *testing.T) {
+	tpl := templateFor(t, "unattend")
+	for _, d := range tpl.Params {
+		if d.Name == "edition" {
+			if d.Type != "enum" || d.Offer != "editions" || d.Default != "" {
+				t.Errorf("media choice has static default: %+v", d)
 			}
-		}
-		if !found {
-			t.Errorf("no %s choice", name)
+			return
 		}
 	}
+	t.Fatal("no edition choice")
 }
 
 func decodedCommands(text string) string {
@@ -262,15 +259,12 @@ func decodedCommands(text string) string {
 }
 
 func TestLinuxFirstbootIsStagedInInstallerTarget(t *testing.T) {
-	for _, f := range []catalog.Format{"kickstart", "preseed", "autoinstall", "autoyast", "agama"} {
+	for _, f := range []catalog.Format{"kickstart", "preseed", "autoinstall"} {
 		r := fixtureRequest(t, templateFor(t, f), "uefi")
 		out := decodedCommands(renderFixture(t, r))
 		root := "/target"
 		if f == "kickstart" {
 			root = "/mnt/sysroot"
-		}
-		if f == "autoyast" || f == "agama" {
-			root = "/mnt"
 		}
 		for _, want := range []string{root + "/var/lib/lober/firstboot.sh", root + "/etc/systemd/system/lober-firstboot.service", "finalize-fixture", "sh /var/lib/lober/cleanup.sh"} {
 			if !strings.Contains(out, want) {
@@ -354,5 +348,142 @@ func TestBuiltinDeliveryLifecycle(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLinuxPackagesComeOnlyFromSnapshot(t *testing.T) {
+	parse := map[catalog.Format]func(string) []string{
+		"preseed": func(out string) []string {
+			for _, line := range strings.Split(out, "\n") {
+				if rest, ok := strings.CutPrefix(line, "d-i pkgsel/include string "); ok {
+					return strings.Fields(rest)
+				}
+			}
+			return nil
+		},
+		"kickstart": func(out string) []string {
+			block := strings.Split(strings.Split(out, "%packages\n")[1], "%end")[0]
+			var pkgs []string
+			for _, line := range strings.Split(block, "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" && !strings.HasPrefix(line, "@") {
+					pkgs = append(pkgs, line)
+				}
+			}
+			return pkgs
+		},
+		"autoinstall": func(out string) []string {
+			block := strings.Split(strings.Split(out, "  packages:\n")[1], "  late-commands:")[0]
+			var pkgs []string
+			for _, line := range strings.Split(block, "\n") {
+				line = strings.TrimSpace(line)
+				if rest, ok := strings.CutPrefix(line, "- '"); ok {
+					pkgs = append(pkgs, strings.TrimSuffix(rest, "'"))
+				}
+			}
+			return pkgs
+		},
+	}
+	for _, format := range []catalog.Format{"kickstart", "preseed", "autoinstall"} {
+		t.Run(string(format), func(t *testing.T) {
+			tpl := templateFor(t, format)
+			in := fixtureInput(t, tpl)
+			snap, ps := snapshot.Build(in)
+			if len(ps) != 0 {
+				t.Fatal(ps)
+			}
+			var fromSnapshot []string
+			for _, slot := range snap.Slots {
+				for _, inst := range slot.Instances {
+					if inst.HookID == "builtin-packages" {
+						fromSnapshot = inst.Params["packages"].Items
+					}
+				}
+			}
+			if len(fromSnapshot) == 0 {
+				t.Fatal("快照里没有 packages 参数")
+			}
+			out := renderFixture(t, render.Request{
+				Snapshot: snap, Kind: catalog.FileAnswer, Firmware: "uefi",
+				Values: fixtureRequest(t, tpl, "uefi").Values,
+			})
+			got := parse[format](out)
+			if !slices.Equal(got, fromSnapshot) {
+				t.Fatalf("渲染的包 %q 与快照 %q 不一致", got, fromSnapshot)
+			}
+			seen := map[string]bool{}
+			for _, pkg := range got {
+				if seen[pkg] {
+					t.Fatalf("包 %q 出现了两次：%q", pkg, got)
+				}
+				seen[pkg] = true
+			}
+			for _, want := range []string{"curl", "systemd"} {
+				if !slices.Contains(got, want) {
+					t.Fatalf("默认包列表缺少 %s：%q", want, got)
+				}
+			}
+			ssh := "openssh-server"
+			if !slices.Contains(got, ssh) {
+				t.Fatalf("默认包列表缺少 %s：%q", ssh, got)
+			}
+			// 操作员改填的值必须原样替换，不再偷偷保留基础包。
+			in.Entered["packages/1/packages"] = "vim\ncurl"
+			over, ps := snapshot.Build(in)
+			if len(ps) != 0 {
+				t.Fatal(ps)
+			}
+			out = renderFixture(t, render.Request{
+				Snapshot: over, Kind: catalog.FileAnswer, Firmware: "uefi",
+				Values: fixtureRequest(t, tpl, "uefi").Values,
+			})
+			if got := parse[format](out); !slices.Equal(got, []string{"vim", "curl"}) {
+				t.Fatalf("改填后仍带出隐藏包：%q", got)
+			}
+		})
+	}
+}
+
+func TestInventoryPreseedUsesCollectedSystemDisk(t *testing.T) {
+	var tpl model.Template
+	for _, candidate := range Templates() {
+		if candidate.ID == "builtin-preseed-inventory" {
+			tpl = candidate
+		}
+	}
+	if tpl.ID == "" {
+		t.Fatal("缺少 builtin-preseed-inventory")
+	}
+	in := fixtureInput(t, tpl)
+	in.Host.Attrs["inv_system_disk"] = "vda"
+	snap, ps := snapshot.Build(in)
+	if len(ps) != 0 {
+		t.Fatal(ps)
+	}
+	var got string
+	for _, slot := range snap.Slots {
+		for _, inst := range slot.Instances {
+			if inst.HookID == "builtin-partition" {
+				got = inst.Params["disk"].EnvValue()
+			}
+		}
+	}
+	if got != "vda" {
+		t.Fatalf("partition.disk = %q，应为采集到的 vda", got)
+	}
+	out := renderFixture(t, render.Request{
+		Snapshot: snap, Kind: catalog.FileAnswer, Firmware: "uefi",
+		Values: fixtureRequest(t, tpl, "uefi").Values,
+	})
+	if !strings.Contains(out, "partman-auto/disk string /dev/vda") {
+		t.Fatal("应答文件没有使用采集到的系统盘")
+	}
+
+	missing := fixtureInput(t, tpl)
+	delete(missing.Host.Attrs, "inv_system_disk")
+	if _, ps := snapshot.Build(missing); len(ps) == 0 {
+		t.Fatal("主机没有采集属性时仍然生成了快照")
+	} else if ps[0].Code != "param_attr_missing" {
+		t.Fatalf("缺属性应报 param_attr_missing，得到 %v", ps)
 	}
 }

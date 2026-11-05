@@ -12,7 +12,7 @@ import (
 
 // Answer bodies own native installer syntax and placement. Linux post-target,
 // firstboot staging and system parts run outside chroot, after target mounting:
-// kickstart %post --nochroot; preseed/Subiquity late; AutoYaST chrooted=false.
+// kickstart %post --nochroot; preseed/Subiquity late.
 // Windows firstboot/cleanup and firstboot slots share ONE native oobe command
 // chain, separated by XML-escaped &&. Separate FirstLogonCommands run concurrently.
 func renderAnswer(r Request) ([]byte, []model.Problem, error) {
@@ -27,7 +27,7 @@ func renderAnswer(r Request) ([]byte, []model.Problem, error) {
 func answerExpansion(r Request) (expansion, []model.Problem, error) {
 	e := expansion{request: r, slots: map[string]string{}, parts: map[catalog.SystemPart]string{}}
 	switch r.Snapshot.Format {
-	case "kickstart", "preseed", "autoinstall", "autoyast", "unattend", "agama", "esxi-ks":
+	case "kickstart", "preseed", "autoinstall", "unattend", "esxi-ks":
 	default:
 		return e, nil, errUnsupportedFormat
 	}
@@ -282,8 +282,6 @@ func targetRoot(format catalog.Format) string {
 	switch format {
 	case "kickstart":
 		return "/mnt/sysroot"
-	case "autoyast", "agama":
-		return "/mnt"
 	default:
 		return "/target"
 	}

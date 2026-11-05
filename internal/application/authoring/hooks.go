@@ -79,6 +79,9 @@ func (s *hooks) Create(ctx context.Context, a ports.Actor, h model.Hook) (HookVi
 	if err := a.Authorize(access.PermHookWrite); err != nil {
 		return HookView{}, err
 	}
+	if err := checkHookSupport(h); err != nil {
+		return HookView{}, err
+	}
 	h.Author = a.Username
 	saved, err := s.deps.Hooks.CreateHook(ctx, h)
 	if err != nil {
@@ -97,6 +100,12 @@ func (s *hooks) SaveDraft(ctx context.Context, a ports.Actor, h model.Hook) (Hoo
 	if err != nil {
 		return HookView{}, err
 	}
+	if err := checkHookSupport(current); err != nil {
+		return HookView{}, err
+	}
+	if err := checkHookSupport(h); err != nil {
+		return HookView{}, err
+	}
 	if h.Name != "" && h.Name != current.Name {
 		return HookView{}, repository.ErrInvalid
 	}
@@ -113,6 +122,9 @@ func (s *hooks) NewVersion(ctx context.Context, a ports.Actor, r VersionSource) 
 		return HookView{}, err
 	}
 	if err := repository.CheckVersionKey(r.ID, r.From); err != nil {
+		return HookView{}, err
+	}
+	if err := s.checkStoredSupport(ctx, model.HookKey{ID: r.ID, Version: r.From}); err != nil {
 		return HookView{}, err
 	}
 	h, err := s.deps.Hooks.NewHookVersion(ctx, r.ID, r.From, a.Username)
@@ -155,6 +167,9 @@ func (s *hooks) Submit(ctx context.Context, a ports.Actor, r HookRevision) (Hook
 	if err := checkHookRevision(r); err != nil {
 		return HookView{}, err
 	}
+	if err := s.checkStoredSupport(ctx, r.Key); err != nil {
+		return HookView{}, err
+	}
 	if err := s.deps.Hooks.SubmitHook(ctx, r.Key, r.Rev, s.audit(a, "hook.submit", "")); err != nil {
 		return HookView{}, err
 	}
@@ -165,6 +180,9 @@ func (s *hooks) Approve(ctx context.Context, a ports.Actor, r HookRevision) (Hoo
 		return HookView{}, err
 	}
 	if err := checkHookRevision(r); err != nil {
+		return HookView{}, err
+	}
+	if err := s.checkStoredSupport(ctx, r.Key); err != nil {
 		return HookView{}, err
 	}
 	if err := s.deps.Hooks.ApproveHook(ctx, r.Key, r.Rev, a.Username, s.audit(a, "hook.approve", "")); err != nil {
@@ -208,4 +226,18 @@ func (s *hooks) Validate(ctx context.Context, a ports.Actor, k model.HookKey) ([
 		return nil, err
 	}
 	return view.Problems, nil
+}
+
+func checkHookSupport(h model.Hook) error {
+	if h.SeriesSupported() {
+		return nil
+	}
+	return &repository.ProblemsError{Kind: repository.ErrRejected, Problems: []model.Problem{model.NewProblem("impl_series_invalid", model.Subject{Kind: model.KindHook, ID: h.Key().String()})}}
+}
+func (s *hooks) checkStoredSupport(ctx context.Context, key model.HookKey) error {
+	h, err := s.deps.Hooks.GetHook(ctx, key)
+	if err != nil {
+		return err
+	}
+	return checkHookSupport(h)
 }
