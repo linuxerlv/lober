@@ -87,7 +87,7 @@ func Test采集属性经内置与派生模板进入任务快照(t *testing.T) {
 		t.Fatal("任务响应泄露了口令散列")
 	}
 
-	derived := responseData[templateResponse](t, httpCall(s, "POST", "/console/v1/templates/"+builtinTpl.ID+"/derive", `{"from":1,"name":"derived-inventory"}`, admin))
+	derived := responseData[templateResponse](t, httpCall(s, "POST", "/console/v1/templates/"+builtinTpl.ID+"/derive", fmt.Sprintf(`{"from":%d,"name":"derived-inventory"}`, builtinTpl.Version), admin))
 	derived = responseData[templateResponse](t, httpCall(s, "POST", lifecyclePath("templates", derived.ID, "submit", derived.Rev), "", admin))
 	derived = responseData[templateResponse](t, httpCall(s, "POST", lifecyclePath("templates", derived.ID, "approve", derived.Rev), "", reviewer))
 	if derived.State != model.VersionApproved {

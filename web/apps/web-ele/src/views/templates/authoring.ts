@@ -1,11 +1,19 @@
 import type { Schemas } from '#/api/console/generated';
 
+import { currentSeries } from '#/api/console/catalog';
+
 type VersionMeta = Pick<
   Schemas['TemplateResponse'],
   'author' | 'builtin' | 'state'
 >;
-type HookContent = Required<Schemas['HookRequest']> & { rev: number };
-type TemplateContent = Required<Schemas['TemplateRequest']> & { rev: number };
+type HookContent = Omit<Required<Schemas['HookRequest']>, 'impls'> & {
+  impls: Schemas['HookResponse']['impls'];
+  rev: number;
+};
+type TemplateContent = Omit<Required<Schemas['TemplateRequest']>, 'series'> & {
+  series: Schemas['TemplateResponse']['series'];
+  rev: number;
+};
 
 export function authoringRights(
   row: VersionMeta,
@@ -48,14 +56,15 @@ export function replaceInstance(
 
 export function hookPayload(row: HookContent): Schemas['HookDraftRequest'] {
   const { name, description, timeoutSec, required, params, impls, rev } = row;
-  return { name, description, timeoutSec, required, params, impls, rev };
+  return { name, description, timeoutSec, required, params,
+    impls: impls?.map((impl) => ({ ...impl, series: currentSeries(impl.series) })) ?? null, rev };
 }
 
 export function templatePayload(
   row: TemplateContent,
 ): Schemas['TemplateDraftRequest'] {
   const { name, family, series, body, params, bindings, assembly, rev } = row;
-  return { name, family, series, body, params, bindings, assembly, rev };
+  return { name, family, series: currentSeries(series), body, params, bindings, assembly, rev };
 }
 
 export function newParam(): Schemas['ParamDeclDTO'] {

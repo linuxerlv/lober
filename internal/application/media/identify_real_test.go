@@ -32,12 +32,12 @@ func TestIdentifyRealISO(t *testing.T) {
 	windows := false
 	if info, err := fs.ReadFile(tree, ".disk/info"); err == nil && bytes.Contains(info, []byte("Debian GNU/Linux")) {
 		expected = "debian"
-	} else if info, err := fs.ReadFile(tree, ".treeinfo"); err == nil && bytes.Contains(info, []byte("OpenCloudOS")) {
-		expected = "opencloudos"
+	} else if info, err := fs.ReadFile(tree, ".treeinfo"); err == nil && bytes.Contains(info, []byte("Rocky Linux")) {
+		expected = "rocky"
 	} else if st, err := fs.Stat(tree, "sources/install.wim"); err == nil && st.Mode().IsRegular() {
 		windows = true
 	} else {
-		t.Skip("media is not a Debian, OpenCloudOS or Windows installation qualification target")
+		t.Skip("media is not a Debian, Rocky Linux or Windows installation qualification target")
 	}
 	found, err := Identify(t.Context(), tree)
 	if err != nil {

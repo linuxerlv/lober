@@ -28,7 +28,7 @@ type planDeliveryRow struct {
 
 // planDelivery 抄录各格式的下发清单，依据逐行注明。旧 SPEC.md 指 7355e6a 的 SPEC.md，旧系统指 9c7c374，路径
 // 与行号按它，用 git show 9c7c374:<路径> 回查。
-// 七种格式都有引导菜单、应答文件和运行脚本（渲染的四类输出，spec §4.3；每种格式都支持首次开机，正文里
+// 五种格式都有引导菜单、应答文件和运行脚本（渲染的四类输出，spec §4.3；每种格式都支持首次开机，正文里
 // 就有执行插槽），差别只在附属文件。
 var planDelivery = []planDeliveryRow{
 	{
@@ -49,20 +49,6 @@ var planDelivery = []planDeliveryRow{
 		format: "autoinstall",
 		kinds:  []FileKind{FileMenu, FileAnswer, FileAux, FileScript},
 		files:  map[FileKind]string{FileAnswer: "user-data", FileAux: "meta-data"},
-	},
-	{
-		// 旧 SPEC.md §0.3：linux + initrd + autoyast=；文件名取旧系统的 autoinst.xml
-		// （internal/core/model/render.go:111）。
-		format: "autoyast",
-		kinds:  []FileKind{FileMenu, FileAnswer, FileScript},
-		files:  map[FileKind]string{FileAnswer: "autoinst.xml"},
-	},
-	{
-		// Agama inst.auto consumes a single Jsonnet profile; no companion is needed.
-		// https://agama-project.github.io/docs/overview/unattended
-		format: "agama",
-		kinds:  []FileKind{FileMenu, FileAnswer, FileScript},
-		files:  map[FileKind]string{FileAnswer: "autoinst.jsonnet"},
 	},
 	{
 		// 旧 SPEC.md §4.5：unattend 由 WinPE 内的 startnet.cmd 去取，不烧进 WIM；应答文件名取旧系统的

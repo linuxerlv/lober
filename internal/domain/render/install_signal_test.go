@@ -8,7 +8,7 @@ import (
 )
 
 func TestLinuxInstallerAcknowledgesRebootBoundary(t *testing.T) {
-	for _, format := range []catalog.Format{"kickstart", "preseed", "autoinstall", "autoyast"} {
+	for _, format := range []catalog.Format{"kickstart", "preseed", "autoinstall"} {
 		t.Run(string(format), func(t *testing.T) {
 			r := answerFixture(t, format, true, "bios")
 			body, p, err := Render(r)

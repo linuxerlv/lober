@@ -98,6 +98,9 @@ func (s *templates) Create(ctx context.Context, a ports.Actor, h model.Template)
 	if err := a.Authorize(access.PermTemplateWrite); err != nil {
 		return TemplateView{}, err
 	}
+	if err := checkTemplateSupport(h); err != nil {
+		return TemplateView{}, err
+	}
 	h.Author = a.Username
 	saved, err := s.deps.Templates.CreateTemplate(ctx, h)
 	if err != nil {
@@ -116,6 +119,12 @@ func (s *templates) SaveDraft(ctx context.Context, a ports.Actor, h model.Templa
 	if err != nil {
 		return TemplateView{}, err
 	}
+	if err := checkTemplateSupport(current); err != nil {
+		return TemplateView{}, err
+	}
+	if err := checkTemplateSupport(h); err != nil {
+		return TemplateView{}, err
+	}
 	if h.Name != "" && h.Name != current.Name {
 		return TemplateView{}, repository.ErrInvalid
 	}
@@ -132,6 +141,9 @@ func (s *templates) NewVersion(ctx context.Context, a ports.Actor, r VersionSour
 		return TemplateView{}, err
 	}
 	if err := repository.CheckVersionKey(r.ID, r.From); err != nil {
+		return TemplateView{}, err
+	}
+	if err := s.checkStoredSupport(ctx, model.TemplateKey{ID: r.ID, Version: r.From}); err != nil {
 		return TemplateView{}, err
 	}
 	h, err := s.deps.Templates.NewTemplateVersion(ctx, r.ID, r.From, a.Username)
@@ -174,6 +186,9 @@ func (s *templates) Submit(ctx context.Context, a ports.Actor, r TemplateRevisio
 	if err := checkTemplateRevision(r); err != nil {
 		return TemplateView{}, err
 	}
+	if err := s.checkStoredSupport(ctx, r.Key); err != nil {
+		return TemplateView{}, err
+	}
 	if err := s.deps.Templates.SubmitTemplate(ctx, r.Key, r.Rev, s.audit(a, "template.submit", "")); err != nil {
 		return TemplateView{}, err
 	}
@@ -188,6 +203,9 @@ func (s *templates) Approve(ctx context.Context, a ports.Actor, r TemplateRevisi
 	}
 	release := s.deps.SelectionGuard.WriteLock()
 	defer release()
+	if err := s.checkStoredSupport(ctx, r.Key); err != nil {
+		return TemplateView{}, err
+	}
 	if err := s.deps.Templates.ApproveTemplate(ctx, r.Key, r.Rev, a.Username, s.audit(a, "template.approve", "")); err != nil {
 		return TemplateView{}, err
 	}
@@ -240,6 +258,9 @@ func (s *templates) Derive(ctx context.Context, a ports.Actor, r DeriveRequest) 
 	if err := repository.CheckVersionKey(r.From.ID, r.From.Version); err != nil {
 		return TemplateView{}, err
 	}
+	if err := s.checkStoredSupport(ctx, r.From); err != nil {
+		return TemplateView{}, err
+	}
 	t, err := s.deps.Templates.DeriveTemplate(ctx, r.From, r.Name, a.Username)
 	if err != nil {
 		return TemplateView{}, err
@@ -289,4 +310,18 @@ func cloneTemplate(t model.Template) model.Template {
 		t.Assembly = out
 	}
 	return t
+}
+
+func checkTemplateSupport(t model.Template) error {
+	if t.SeriesSupported() {
+		return nil
+	}
+	return &repository.ProblemsError{Kind: repository.ErrRejected, Problems: []model.Problem{model.NewProblem("template_series_invalid", model.Subject{Kind: model.KindTemplate, ID: (model.TemplateKey{ID: t.ID, Version: t.Version}).String()})}}
+}
+func (s *templates) checkStoredSupport(ctx context.Context, key model.TemplateKey) error {
+	t, err := s.deps.Templates.GetTemplate(ctx, key)
+	if err != nil {
+		return err
+	}
+	return checkTemplateSupport(t)
 }

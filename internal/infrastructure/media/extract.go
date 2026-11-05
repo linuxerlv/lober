@@ -118,36 +118,6 @@ func (s *ImportFiles) extract(ctx context.Context, plan port.ExtractionPlan, mai
 			return nil, err
 		}
 		roles["iso"] = "install.iso"
-	case "autoyast", "agama":
-		if err := copyImportTree(ctx, main, filepath.Join(tmp, "install")); err != nil {
-			return nil, err
-		}
-		boot := "boot/" + string(found.Arch) + "/loader/"
-		if err := file("kernel", boot+"linux", "linux", main); err != nil {
-			return nil, err
-		}
-		if err := file("initrd", boot+"initrd", "initrd", main); err != nil {
-			return nil, err
-		}
-		repo := found.RepoRoot
-		if repo == "" {
-			repo = "."
-		}
-		for _, required := range plan.RepoPaths {
-			st, e := fs.Stat(main, path.Join(repo, required))
-			if e != nil || st.IsDir() || st.Size() == 0 {
-				return nil, &port.ExtractionFault{Kind: "repository", Name: required}
-			}
-		}
-		roles["repo"] = "install/"
-		if repo != "." {
-			roles["repo"] += repo + "/"
-		}
-		if found.Format == "agama" {
-			if err := file("live-root", "LiveOS/squashfs.img", "squashfs.img", main); err != nil {
-				return nil, err
-			}
-		}
 	case "unattend":
 		return s.extractWindows(ctx, main, tmp)
 	default:

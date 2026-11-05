@@ -25,6 +25,7 @@ VM-S、同一个 lober 二进制，但换一个 schema、重新渲染配置、�
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from contextlib import contextmanager
@@ -141,13 +142,13 @@ def l2_artifact_reaper(l2_deployed: Settings):
         print(f"\n[警告] 回收 {len(collected)} 个 L2 制品集失败，guest 上会留下几 GB：{exc}")
 
 
-_RHEL_ISO_HOST_PATH = Path("D:/OpenCloudOS-9.6-x86_64-minimal.iso")
+_RHEL_ISO_HOST_PATH = Path(os.environ.get("LOBERTEST_RHEL_ISO", "D:/lober-isos/rhel.iso"))
 _GUEST_ISO_DIR = "/srv/lober/sources"
 
 
 @pytest.fixture(scope="session")
 def l2_rhel_iso_guest_path(l2_deployed: Settings) -> str:
-    """RHEL 系 ISO（OpenCloudOS）在 guest 上的路径，只依赖 `l2_deployed`。
+    """受支持的 RHEL ISO在 guest 上的路径，只依赖 `l2_deployed`。
 
     **不复用顶层 `conftest.py` 的 `family_iso_paths` fixture**：那个
     fixture 依赖 `deployed`（L1 的 `lobertest` schema），请求它会连带

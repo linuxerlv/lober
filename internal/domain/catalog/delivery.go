@@ -27,7 +27,7 @@ type deliveryRow struct {
 // 清单里（spec §5.4 第 3 步），渲染按同一个文件名写地址，文件名因此只有这一份。引导菜单走 /v1/boot，
 // 运行脚本按插槽取，都没有固定的文件名。用格式做 map 的键，理由同 capabilityTable。
 //
-// 七种格式都下发引导菜单、应答文件和运行脚本：每种格式都支持首次开机时机，正文里就有执行插槽。差别只在
+// 五种格式都下发引导菜单、应答文件和运行脚本：每种格式都支持首次开机时机，正文里就有执行插槽。差别只在
 // 附属文件。依据逐行注明：旧 SPEC.md 指 7355e6a 的 SPEC.md，旧系统指 9c7c374（当时的 main，以后会被新系统
 // 取代），路径与行号都按它，用 git show 9c7c374:<路径> 回查。
 var deliveryTable = map[Format]deliveryRow{
@@ -46,19 +46,6 @@ var deliveryTable = map[Format]deliveryRow{
 	"autoinstall": {
 		kinds: []FileKind{FileMenu, FileAnswer, FileAux, FileScript},
 		names: map[FileKind]string{FileAnswer: "user-data", FileAux: "meta-data"},
-	},
-	// 旧 SPEC.md §0.3：linux + initrd + autoyast=；文件名取旧系统的 autoinst.xml
-	// （internal/core/model/render.go:111）。
-	"autoyast": {
-		kinds: []FileKind{FileMenu, FileAnswer, FileScript},
-		names: map[FileKind]string{FileAnswer: "autoinst.xml"},
-	},
-	// Agama primary docs: https://agama-project.github.io/docs/overview/unattended
-	// inst.auto fetches/evaluates one JSON/Jsonnet profile. Lober chooses the documented
-	// autoinst.jsonnet convention; no companion file is required by this protocol.
-	"agama": {
-		kinds: []FileKind{FileMenu, FileAnswer, FileScript},
-		names: map[FileKind]string{FileAnswer: "autoinst.jsonnet"},
 	},
 	// 旧 SPEC.md §4.5：unattend 由 WinPE 内的 startnet.cmd 去取，不烧进 WIM；文件名取旧系统的 unattend.xml
 	// （internal/core/model/render.go:112）。启动脚本由 wimboot 注入（spec §8），这条路待真机核实（spec §2.2）。

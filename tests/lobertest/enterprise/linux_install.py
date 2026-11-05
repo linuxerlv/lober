@@ -22,12 +22,11 @@ if not __debug__:
 
 
 OS = {
-    'debian': ('debian', 'preseed', 2),
-    'ubuntu': ('ubuntu', 'autoinstall', 1),
-    'leap15': ('leap15', 'autoyast', 1),
-    'leap16': ('leap16', 'agama', 1),
-    'almalinux': ('almalinux', 'kickstart', 2),
-    'rocky': ('rocky', 'kickstart', 2),
+    'rhel': ('rhel', 'kickstart', 5),
+    'almalinux': ('almalinux', 'kickstart', 5),
+    'rocky': ('rocky', 'kickstart', 5),
+    'ubuntu': ('ubuntu', 'autoinstall', 4),
+    'debian': ('debian', 'preseed', 5),
 }
 SN = 'LOBER-LINUX-102'
 MAC = 'bc:24:11:92:41:78'
@@ -199,8 +198,7 @@ uname -r
         elif self.format == 'autoinstall':
             body = body.replace('- {{lober:firstboot}}', '- {{slot:qualify@firstboot}}\n    - {{lober:firstboot}}')
         else:
-            indent = '      ' if self.format == 'agama' else ''
-            body = body.replace('{{lober:firstboot}}', '{{slot:qualify@firstboot}}\n' + indent + '{{lober:firstboot}}')
+            body = body.replace('{{lober:firstboot}}', '{{slot:qualify@firstboot}}\n{{lober:firstboot}}')
         draft['body'] = body
         draft['assembly']['qualify'] = [{'hookID': hook['id'], 'hookVersion': hook['version']}]
         payload = {k: draft[k] for k in ['name', 'family', 'series', 'body', 'params', 'bindings', 'assembly', 'rev']}
@@ -215,13 +213,10 @@ uname -r
                 'attrs': {'qualification': self.qualification_tag}})
         entered = {'account/1/pwhash': self.private['guestHash'], 'sshkey/1/key': (self.root / 'guest-key.pub').read_text().strip(),
             'network/1/hostname': 'lober-' + self.system, 'network/1/interface': 'ens18',
-            'packages/1/packages': 'curl\nqemu-guest-agent'}
+            'packages/1/packages': 'curl\nsystemd\nopenssh-server\nqemu-guest-agent'}
         if self.system == 'ubuntu':
+            del entered['network/1/hostname']
             entered['tpl/hostname'] = 'lober-ubuntu'
-        if self.system == 'leap16':
-            products = media['offers'].get('products', [])
-            assert len(products) == 1, 'real Agama product inventory must resolve before creating a task'
-            entered['tpl/product'] = products[0]['value']
         selection = {'isoID': media['id'], 'templateID': template['id'], 'templateVersion': template['version']}
         params = self.api('POST', '/wizard/params', {**selection, 'hostSNs': [self.sn], 'entered': {self.sn: entered}})
         (self.run / 'params-private.json').write_text(json.dumps(params, indent=2))
@@ -313,18 +308,20 @@ printf 'HOOK_RUNS='; wc -l < /var/lib/lober-qualification/hook-runs
 printf 'AGENT='; systemctl is-active qemu-guest-agent
 printf 'CREDENTIAL_FILES='; find /var/lib/lober -maxdepth 1 -type f \\( -name '*.token' -o -name 'hook-*' -o -name 'script-*' -o -name 'firstboot.pending' \\) | wc -l
 printf 'RETAINED_AUTH_PATHS_BEGIN\\n'
-grep -rlE '/v1/(answer|signal)/[^/[:space:]]+/[A-Za-z0-9_.=-]{32,}/' /var/lib/lober /var/lib/cloud /var/log/installer /var/adm/autoinstall/cache /root 2>/dev/null || :
+grep -rlE '/v1/(answer|signal)/[^/[:space:]]+/[A-Za-z0-9_.=-]{32,}/' /var/lib/lober /var/lib/cloud /var/log/installer /root 2>/dev/null || :
 printf 'RETAINED_AUTH_PATHS_END\\n'
 ''')
         (self.run / 'guest-root.log').write_text(evidence)
         fields = dict(line.split('=', 1) for line in evidence.splitlines() if '=' in line)
         release = base64.b64decode(fields['OS_RELEASE']).decode()
-        expected_id = {'debian': 'debian', 'ubuntu': 'ubuntu', 'leap15': 'opensuse-leap',
-            'leap16': 'opensuse-leap', 'almalinux': 'almalinux', 'rocky': 'rocky'}[self.system]
+        expected_id = self.system
         identity = dict(line.split('=', 1) for line in release.splitlines() if '=' in line)
         assert identity['ID'].strip('"') == expected_id
-        expected_version = {'debian': '13', 'ubuntu': '24.04', 'leap15': '15.6',
-            'leap16': '16.0', 'almalinux': '9.8', 'rocky': '9.8'}[self.system]
+        expected_version = {'debian': '13', 'ubuntu': '24.04', 'almalinux': '9.8', 'rocky': '9.8'}
+        if self.system == 'rhel':
+            expected_version = task['snapshot']['iso']['version']
+        else:
+            expected_version = expected_version[self.system]
         assert identity['VERSION_ID'].strip('"') == expected_version
         assert fields['ROOT'].startswith('/dev/') and fields['HOOK_RUNS'] == '1' and fields['AGENT'] == 'active'
         assert fields['ROOT_UUID'], 'installed filesystem identity missing'

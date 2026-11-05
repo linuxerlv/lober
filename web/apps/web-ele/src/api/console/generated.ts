@@ -9,9 +9,8 @@ export interface Schemas {
   "CatalogArch": "x86_64" | "aarch64";
   "CatalogFamily": "linux" | "windows" | "esxi";
   "CatalogFirmware": "bios" | "uefi";
-  "CatalogFormat": "kickstart" | "preseed" | "autoinstall" | "autoyast" | "agama" | "unattend" | "esxi-ks";
   "CatalogInterpreter": string;
-  "CatalogSeries": "rhel" | "rocky" | "almalinux" | "openeuler" | "opencloudos" | "debian" | "ubuntu" | "sles15" | "leap15" | "sles16" | "leap16" | "windows-server" | "windows-desktop" | "esxi";
+  "CatalogSeries": "rhel" | "rocky" | "almalinux" | "debian" | "ubuntu" | "windows-server" | "windows-desktop" | "esxi";
   "CatalogTiming": string;
   "CsvPlan": { "rows": (Array<Schemas["CsvRow"]>) | null; "total": number; };
   "CsvRow": { "action": string; "problems": (Array<Schemas["ProblemJSON"]>) | null; "row": number; "sn": string; };
@@ -23,16 +22,17 @@ export interface Schemas {
   "HookDraftRequest": { "description"?: string; "impls"?: (Array<Schemas["ImplDTO"]>) | null; "name"?: string; "params"?: (Array<Schemas["ParamDeclDTO"]>) | null; "required"?: boolean; "rev": number; "timeoutSec"?: number; };
   "HookPage": { "items": (Array<Schemas["HookResponse"]>) | null; "next": string; "total"?: number | null; };
   "HookRequest": { "description"?: string; "impls"?: (Array<Schemas["ImplDTO"]>) | null; "name"?: string; "params"?: (Array<Schemas["ParamDeclDTO"]>) | null; "required"?: boolean; "timeoutSec"?: number; };
-  "HookResponse": { "approver": string; "author": string; "builtin": boolean; "description": string; "id": string; "impls": (Array<Schemas["ImplDTO"]>) | null; "name": string; "params": (Array<Schemas["ParamDeclDTO"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "required": boolean; "rev": number; "state": Schemas["ModelVersionState"]; "timeoutSec": number; "version": number; };
+  "HookResponse": { "approver": string; "author": string; "builtin": boolean; "description": string; "id": string; "impls": (Array<Schemas["ImplResponseDTO"]>) | null; "name": string; "params": (Array<Schemas["ParamDeclDTO"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "required": boolean; "rev": number; "state": Schemas["ModelVersionState"]; "timeoutSec": number; "version": number; };
   "HostPage": { "items": (Array<Schemas["HostResponse"]>) | null; "next": string; "total"?: number | null; };
   "HostRequest": { "arch"?: Schemas["CatalogArch"]; "attrs": ({ [key: string]: string; }) | null; "firmware"?: Schemas["CatalogFirmware"]; "rev": number; "sn": string; };
   "HostResponse": { "arch": Schemas["CatalogArch"] | ""; "attrs": ({ [key: string]: string; }) | null; "firmware": Schemas["CatalogFirmware"] | ""; "rev": number; "sn": string; };
   "ImplDTO": { "body": string; "family": Schemas["CatalogFamily"]; "interpreter": Schemas["CatalogInterpreter"]; "kind": Schemas["ModelImplKind"]; "series": (Array<Schemas["CatalogSeries"]>) | null; "timings": (Array<Schemas["CatalogTiming"]>) | null; };
+  "ImplResponseDTO": { "body": string; "family": Schemas["CatalogFamily"]; "interpreter": Schemas["CatalogInterpreter"]; "kind": Schemas["ModelImplKind"]; "series": (Array<string>) | null; "timings": (Array<Schemas["CatalogTiming"]>) | null; };
   "InstanceDTO": { "bindings": ({ [key: string]: Schemas["BindingDTO"]; }) | null; "hookID": string; "hookVersion": number; "required": boolean | null; "timeoutSec": number | null; };
   "IsoPage": { "items": (Array<Schemas["IsoResponse"]>) | null; "next": string; "total"?: number | null; };
   "IsoProgress": { "id": string; "rev": number; "sources": (Array<Schemas["SourceProgress"]>) | null; "state": Schemas["ModelISOState"]; };
   "IsoRequest": { "family": Schemas["CatalogFamily"]; "name": string; "series": Schemas["CatalogSeries"]; "sources": Array<Schemas["IsoSourceReq"]>; };
-  "IsoResponse": { "arch": Schemas["CatalogArch"]; "artifacts": ({ [key: string]: string; }) | null; "family": Schemas["CatalogFamily"]; "id": string; "name": string; "offers": ({ [key: string]: (Array<Schemas["OptionResponse"]>) | null; }) | null; "rev": number; "series": Schemas["CatalogSeries"]; "sha256": string; "state": Schemas["ModelISOState"]; "version": string; };
+  "IsoResponse": { "arch": Schemas["CatalogArch"]; "artifacts": ({ [key: string]: string; }) | null; "family": Schemas["CatalogFamily"]; "id": string; "name": string; "offers": ({ [key: string]: (Array<Schemas["OptionResponse"]>) | null; }) | null; "rev": number; "series": string; "sha256": string; "state": Schemas["ModelISOState"]; "version": string; };
   "IsoSourceReq": { "addr"?: string; "kind": Schemas["SourceKind"]; "role"?: string; "sha256"?: string; "size"?: number; };
   "LoginRequest": { "password": string; "username": string; };
   "MenuDefinition": { "id": string; "parentId": string; "permission": string; "required": boolean; "title": string; };
@@ -64,7 +64,7 @@ export interface Schemas {
   "SessionResponse": { "expiresAt": number; "token": string; "user": Schemas["UserResponse"]; };
   "SlotInfo": { "col": number; "exec": boolean; "line": number; "name": string; "timing": Schemas["CatalogTiming"]; };
   "SlotList": { "problems": (Array<Schemas["ProblemJSON"]>) | null; "slots": (Array<Schemas["SlotInfo"]>) | null; };
-  "SnapshotDTO": { "family": Schemas["CatalogFamily"]; "format": Schemas["CatalogFormat"]; "host": Schemas["SnapshotHostDTO"]; "iso": Schemas["SnapshotISODTO"]; "schema": number; "series": Schemas["CatalogSeries"]; "slots": (Array<Schemas["SnapshotSlotDTO"]>) | null; "template": Schemas["SnapshotTemplateDTO"]; };
+  "SnapshotDTO": { "family": Schemas["CatalogFamily"]; "format": string; "host": Schemas["SnapshotHostDTO"]; "iso": Schemas["SnapshotISODTO"]; "schema": number; "series": string; "slots": (Array<Schemas["SnapshotSlotDTO"]>) | null; "template": Schemas["SnapshotTemplateDTO"]; };
   "SnapshotHostDTO": { "arch": Schemas["CatalogArch"] | ""; "attrs": ({ [key: string]: string; }) | null; "firmware": Schemas["CatalogFirmware"] | ""; "sn": string; };
   "SnapshotInstanceDTO": { "body": string; "digest": string; "hookID": string; "hookName": string; "hookVersion": number; "interpreter": Schemas["CatalogInterpreter"]; "kind": Schemas["ModelImplKind"]; "params": ({ [key: string]: Schemas["SnapshotValueDTO"]; }) | null; "required": boolean; "timeoutSec": number; };
   "SnapshotISODTO": { "arch": Schemas["CatalogArch"]; "artifacts": ({ [key: string]: string; }) | null; "id": string; "name": string; "version": string; };
@@ -85,7 +85,7 @@ export interface Schemas {
   "TemplateKeyResponse": { "id": string; "version": number; };
   "TemplatePage": { "items": (Array<Schemas["TemplateResponse"]>) | null; "next": string; "total"?: number | null; };
   "TemplateRequest": { "assembly"?: ({ [key: string]: (Array<Schemas["InstanceDTO"]>) | null; }) | null; "bindings"?: ({ [key: string]: Schemas["BindingDTO"]; }) | null; "body"?: string; "family"?: Schemas["CatalogFamily"]; "name"?: string; "params"?: (Array<Schemas["ParamDeclDTO"]>) | null; "series"?: (Array<Schemas["CatalogSeries"]>) | null; };
-  "TemplateResponse": { "approver": string; "assembly": ({ [key: string]: (Array<Schemas["InstanceDTO"]>) | null; }) | null; "author": string; "bindings": ({ [key: string]: Schemas["BindingDTO"]; }) | null; "body": string; "builtin": boolean; "derivedFrom": Schemas["TemplateKeyResponse"] | null; "family": Schemas["CatalogFamily"]; "id": string; "name": string; "params": (Array<Schemas["ParamDeclDTO"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "rev": number; "series": (Array<Schemas["CatalogSeries"]>) | null; "state": Schemas["ModelVersionState"]; "version": number; };
+  "TemplateResponse": { "approver": string; "assembly": ({ [key: string]: (Array<Schemas["InstanceDTO"]>) | null; }) | null; "author": string; "bindings": ({ [key: string]: Schemas["BindingDTO"]; }) | null; "body": string; "builtin": boolean; "derivedFrom": Schemas["TemplateKeyResponse"] | null; "family": Schemas["CatalogFamily"]; "id": string; "name": string; "params": (Array<Schemas["ParamDeclDTO"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "rev": number; "series": (Array<string>) | null; "state": Schemas["ModelVersionState"]; "version": number; };
   "TemplateVersionPage": { "items": (Array<Schemas["TemplateResponse"]>) | null; };
   "UserCreateRequest": { "disabled": boolean; "displayName": string; "password": string; "role": Schemas["StoreRole"]; "username": string; };
   "UserPage": { "items": (Array<Schemas["UserResponse"]>) | null; "next": string; "total"?: number | null; };
@@ -95,7 +95,7 @@ export interface Schemas {
   "VersionPage": { "items": (Array<Schemas["HookResponse"]>) | null; };
   "WizardHostItem": { "arch": Schemas["CatalogArch"] | ""; "attrs": ({ [key: string]: string; }) | null; "firmware": Schemas["CatalogFirmware"] | ""; "problems": (Array<Schemas["ProblemJSON"]>) | null; "rev": number; "selectable": boolean; "sn": string; };
   "WizardHostPage": { "items": (Array<Schemas["WizardHostItem"]>) | null; "next": string; "total"?: number | null; };
-  "WizardISOItem": { "arch": Schemas["CatalogArch"]; "artifacts": ({ [key: string]: string; }) | null; "family": Schemas["CatalogFamily"]; "id": string; "name": string; "offers": ({ [key: string]: (Array<Schemas["OptionResponse"]>) | null; }) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "rev": number; "series": Schemas["CatalogSeries"]; "sha256": string; "state": Schemas["ModelISOState"]; "usable": boolean; "version": string; };
+  "WizardISOItem": { "arch": Schemas["CatalogArch"]; "artifacts": ({ [key: string]: string; }) | null; "family": Schemas["CatalogFamily"]; "id": string; "name": string; "offers": ({ [key: string]: (Array<Schemas["OptionResponse"]>) | null; }) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "rev": number; "series": string; "sha256": string; "state": Schemas["ModelISOState"]; "usable": boolean; "version": string; };
   "WizardISORequest": { "cursor"?: string | null; "hostSNs": Array<string>; "limit"?: number | null; "page"?: number | null; "page_size"?: number | null; };
   "WizardISOResult": { "items": (Array<Schemas["WizardISOItem"]>) | null; "next": string; "total"?: number | null; };
   "WizardParamsHost": { "fields": (Array<Schemas["ParamFieldDTO"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "sn": string; };
@@ -104,7 +104,7 @@ export interface Schemas {
   "WizardSubmitHost": { "entered"?: ({ [key: string]: string; }) | null; "sn": string; };
   "WizardSubmitRequest": { "hosts": Array<Schemas["WizardSubmitHost"]>; "isoID": string; "templateID": string; "templateVersion": number; };
   "WizardSubmitResult": { "tasks": (Array<Schemas["TaskItem"]>) | null; };
-  "WizardTemplateItem": { "approver": string; "assembly": ({ [key: string]: (Array<Schemas["InstanceDTO"]>) | null; }) | null; "author": string; "bindings": ({ [key: string]: Schemas["BindingDTO"]; }) | null; "body": string; "builtin": boolean; "derivedFrom": Schemas["TemplateKeyResponse"] | null; "family": Schemas["CatalogFamily"]; "id": string; "name": string; "params": (Array<Schemas["ParamDeclDTO"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "rev": number; "series": (Array<Schemas["CatalogSeries"]>) | null; "state": Schemas["ModelVersionState"]; "usable": boolean; "version": number; };
+  "WizardTemplateItem": { "approver": string; "assembly": ({ [key: string]: (Array<Schemas["InstanceDTO"]>) | null; }) | null; "author": string; "bindings": ({ [key: string]: Schemas["BindingDTO"]; }) | null; "body": string; "builtin": boolean; "derivedFrom": Schemas["TemplateKeyResponse"] | null; "family": Schemas["CatalogFamily"]; "id": string; "name": string; "params": (Array<Schemas["ParamDeclDTO"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "rev": number; "series": (Array<string>) | null; "state": Schemas["ModelVersionState"]; "usable": boolean; "version": number; };
   "WizardTemplateRequest": { "cursor"?: string | null; "isoID": string; "limit"?: number | null; "page"?: number | null; "page_size"?: number | null; };
   "WizardTemplateResult": { "items": (Array<Schemas["WizardTemplateItem"]>) | null; "next": string; "total"?: number | null; };
 }

@@ -19,7 +19,12 @@ func (*Control) CanCancel(t model.Task) []model.Problem { return executionrules.
 
 // CanRetry 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
 // 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (*Control) CanRetry(t model.Task) []model.Problem { return executionrules.CanRetry(t) }
+func (*Control) CanRetry(t model.Task) []model.Problem {
+	if p := taskSupportProblem(t); p != nil {
+		return []model.Problem{*p}
+	}
+	return executionrules.CanRetry(t)
+}
 
 // User controls use the exact revision the user reviewed. Conflicts require refresh.
 func (c *Control) control(ctx context.Context, task model.Task, audit repository.Audit, retry bool) error {
@@ -35,7 +40,7 @@ func (c *Control) control(ctx context.Context, task model.Task, audit repository
 	}
 	problems := executionrules.CanCancel(latest)
 	if retry {
-		problems = executionrules.CanRetry(latest)
+		problems = c.CanRetry(latest)
 	}
 	if len(problems) > 0 {
 		return &repository.ProblemsError{Kind: repository.ErrRejected, Problems: problems}

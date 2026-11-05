@@ -34,7 +34,7 @@ type isoResponse struct {
 	ID        string                      `json:"id"`
 	Name      string                      `json:"name"`
 	Family    catalog.Family              `json:"family"`
-	Series    catalog.Series              `json:"series"`
+	Series    string                      `json:"series"`
 	Version   string                      `json:"version"`
 	Arch      catalog.Arch                `json:"arch"`
 	State     model.ISOState              `json:"state"`
@@ -97,7 +97,7 @@ func toISOResponse(item model.ISO) isoResponse {
 		}
 		offers[name] = values
 	}
-	return isoResponse{item.ID, item.Name, item.Family, item.Series, item.Version, item.Arch, item.State, item.SHA256, artifacts, offers, item.Rev}
+	return isoResponse{item.ID, item.Name, item.Family, string(item.Series), item.Version, item.Arch, item.State, item.SHA256, artifacts, offers, item.Rev}
 }
 func (s *server) isoRoutes() []route {
 	return []route{

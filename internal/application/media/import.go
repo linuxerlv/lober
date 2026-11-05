@@ -41,6 +41,9 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 	if err != nil {
 		return err
 	}
+	if err := checkSupportedISO(iso); err != nil {
+		return err
+	}
 	if iso.State == model.ISOReady {
 		return repository.ErrConflict
 	}

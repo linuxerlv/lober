@@ -38,7 +38,7 @@ func (s *Sources) Recover(ctx context.Context) ([]ResumeWork, error) {
 		if err != nil {
 			return nil, err
 		}
-		if item.State == model.ISOAcquiring {
+		if item.Series.Valid() && item.State == model.ISOAcquiring {
 			out = append(out, ResumeWork{ISOID: src.ISOID, Role: src.Role, Kind: ResumeFetch})
 		}
 	}
@@ -49,6 +49,9 @@ func (s *Sources) Recover(ctx context.Context) ([]ResumeWork, error) {
 			return nil, err
 		}
 		for _, item := range page.Items {
+			if !item.Series.Valid() {
+				continue
+			}
 			sources, err := s.sources.SourcesOf(ctx, item.ID)
 			if err != nil {
 				return nil, err

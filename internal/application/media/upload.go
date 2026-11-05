@@ -31,6 +31,13 @@ func (s *Sources) Upload(ctx context.Context, id, role string, offset int64, r i
 	if offset < 0 || offset >= src.TotalSize || src.TotalSize <= 0 || r == nil {
 		return sourceRejected(id, role, isoSourceReasonChunk)
 	}
+	item, err := s.isos.GetISO(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := checkSupportedISO(item); err != nil {
+		return err
+	}
 	chunk, err := s.transfer.BeginUpload(ctx, src, offset, r)
 	if err != nil {
 		return s.problem(src, err)

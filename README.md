@@ -20,13 +20,15 @@ Lober 把这些变成：
 
 | 族 | 系 | 应答格式 |
 | --- | --- | --- |
-| Linux | RHEL、Rocky Linux、AlmaLinux、openEuler、OpenCloudOS | kickstart |
+| Linux | RHEL、Rocky Linux、AlmaLinux | kickstart |
 | Linux | Debian | preseed |
 | Linux | Ubuntu | autoinstall |
-| Linux | SLES 15、openSUSE Leap 15 | AutoYaST |
-| Linux | SLES 16、openSUSE Leap 16 | Agama |
 | Windows | Windows Server、Windows 桌面版 | unattend |
 | ESXi | ESXi | ESXi ks |
+
+旧镜像、模板和已结束任务仍可查看；已停止支持的系统不能再创建或重试安装任务。
+
+如果还有这些系统的未完成任务，新版本会拒绝启动。请先在旧版本确认客户机已安全结束安装，再通过正常任务接口处理。
 
 ## 四个核心概念
 

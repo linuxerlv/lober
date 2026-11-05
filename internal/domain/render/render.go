@@ -39,6 +39,9 @@ var errUnsupportedFormat = errors.New("render: file kind unsupported for format"
 // Errors indicate an unsupported interface request. Content Problems never
 // accompany partial output.
 func Render(r Request) ([]byte, []model.Problem, error) {
+	if !r.Snapshot.Format.Valid() {
+		return nil, nil, errUnsupportedFormat
+	}
 	if !r.Kind.Valid() {
 		return nil, nil, fmt.Errorf("render: unknown file kind %q", r.Kind)
 	}

@@ -153,5 +153,3 @@ func DiskInfo(text string) (string, catalog.Arch) {
 func UnknownSeries(format catalog.Format) error {
 	return Problem("iso_series_unrecognized", "series", fmt.Sprintf("%s (%v)", format, catalog.SeriesOfFormat(format)))
 }
-
-func ProductVersion(text string) string { return dottedVersion.FindString(text) }
