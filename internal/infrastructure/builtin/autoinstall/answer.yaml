@@ -14,9 +14,6 @@ autoinstall:
     {{slot:account}}
   {{slot:sshkey}}
   packages:
-    - curl
-    - systemd
-    - openssh-server
     {{slot:packages}}
   late-commands:
     - {{lober:firstboot}}

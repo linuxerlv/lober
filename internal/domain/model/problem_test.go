@@ -103,6 +103,9 @@ var extraCodes = map[Code]Category{
 	"inventory_disk_invalid":     CategoryInvalid,
 	"inventory_disk_duplicate":   CategoryInvalid,
 	"render_inventory_missing":   CategoryIncomplete,
+
+	// hook 间依赖：sshkey 的用户名必须与 account 的用户名一致。
+	"param_hook_mismatch": CategoryInvalid,
 }
 
 func TestCode表与附录总表逐项一致(t *testing.T) {
@@ -124,9 +127,9 @@ func TestCode表与附录总表逐项一致(t *testing.T) {
 		}
 		want[c] = cat
 	}
-	// 58 appendix + 1 acceptance + 10 fixups + 1 layer2 + 1 layer2 fixup + 10 layer3 + 11 layer4 + 2 layer5 + 2 execution + 7 inventory.
-	if len(want) != 103 {
-		t.Fatalf("附录加上追加的代码应共 103 个，测试里有 %d 个", len(want))
+	// 58 appendix + 1 acceptance + 10 fixups + 1 layer2 + 1 layer2 fixup + 10 layer3 + 11 layer4 + 2 layer5 + 2 execution + 7 inventory + 1 hook dependency.
+	if len(want) != 104 {
+		t.Fatalf("附录加上追加的代码应共 104 个，测试里有 %d 个", len(want))
 	}
 	for c, cat := range want {
 		if got := c.Category(); got != cat {

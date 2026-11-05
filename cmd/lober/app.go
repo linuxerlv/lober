@@ -137,9 +137,16 @@ func identityServiceOf(st repository.Store, cfg config, clock ports.Clock) *iden
 func auditReaderOf(st repository.Store) audit.Reader { return audit.NewReader(st) }
 
 // inventoryServiceOf 是采集应用的装配口。它的形状与 identityServiceOf 一致，身份与令牌
-// 能力只在这里构造，其他位置不得自己再建一个随机源。
-func inventoryServiceOf(st repository.Store, clock ports.Clock) *inventory.Service {
-	return inventory.New(inventory.Deps{Hosts: st, Tokens: credentials.NewTokens(), Clock: clock, Tasks: st})
+// 能力只在这里构造，其他位置不得自己再建一个随机源。采集菜单的部署参数也必须在这里
+// 传进去：只配了配置、没传给服务，机器永远拿不到采集菜单。
+func inventoryServiceOf(st repository.Store, cfg config, clock ports.Clock) *inventory.Service {
+	return inventory.New(inventory.Deps{
+		Hosts: st, Tokens: credentials.NewTokens(), Clock: clock, Tasks: st,
+		Menu: inventory.MenuEndpoints{
+			Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts,
+			Kernel: cfg.Preview.InventoryKernel, Initrd: cfg.Preview.InventoryInitrd,
+		},
+	})
 }
 
 // taskReaderOf 显式共用原任务仓储、诊断与冻结渲染能力。

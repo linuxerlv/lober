@@ -181,14 +181,29 @@ func TestHookParametersAffectNativeAnswers(t *testing.T) {
 	for _, tpl := range Templates() {
 		t.Run(tpl.ID, func(t *testing.T) {
 			in := fixtureInput(t, tpl)
-			in.Entered["network/1/hostname"] = "changed-node"
-			in.Entered["account/1/username"] = "changed-user"
+			f, _ := tpl.Format()
+			if f == "autoinstall" {
+				// autoinstall 的主机名来自模板参数，网络片段只引用 interface。
+				in.Entered["tpl/hostname"] = "changed-node"
+			} else {
+				in.Entered["network/1/hostname"] = "changed-node"
+			}
+			if tpl.Family != "esxi" {
+				// ESXi 的账号片段只用 rootpw，username 没有位置。sshkey 的用户名必须
+				// 跟着账号走，否则参数求值会报 param_hook_mismatch。
+				in.Entered["account/1/username"] = "changed-user"
+				switch f {
+				case "kickstart", "preseed", "agama":
+					in.Entered["sshkey/1/username"] = "changed-user"
+				case "unattend":
+					in.Entered["configure/2/username"] = "changed-user"
+				}
+			}
 			if tpl.Family == "linux" {
 				in.Entered["packages/1/packages"] = "vim\ncurl"
 			}
 			r := withInput(t, fixtureRequest(t, tpl, "uefi"), in)
 			got := renderFixture(t, r)
-			f, _ := tpl.Format()
 			if f != "autoinstall" && !strings.Contains(got, "changed-node") {
 				t.Fatal("hostname parameter lost")
 			}
@@ -202,7 +217,7 @@ func TestHookParametersAffectNativeAnswers(t *testing.T) {
 						t.Fatal("package lines lost")
 					}
 				case "preseed":
-					if !strings.Contains(got, "openssh-server vim curl") {
+					if !strings.Contains(got, "pkgsel/include string vim curl") {
 						t.Fatal("package list join lost")
 					}
 				case "autoinstall":

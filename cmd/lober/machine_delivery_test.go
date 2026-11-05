@@ -42,7 +42,7 @@ func TestLinuxMachineDeliversFrozenFilesAndCompletesProtocol(t *testing.T) {
 			if err = a.Initialise(); err != nil {
 				t.Fatal(err)
 			}
-			host, err := a.Store.CreateHost(t.Context(), model.Host{SN: "MACHINE-CONTRACT", Arch: "x86_64", Firmware: "bios"}, assemblyAudit("host.create"))
+			host, err := a.Store.CreateHost(t.Context(), model.Host{SN: "MACHINE-CONTRACT", Arch: "x86_64", Firmware: "bios", Attrs: map[string]string{"inv_system_disk": "sda"}}, assemblyAudit("host.create"))
 			if err != nil {
 				t.Fatal(err)
 			}

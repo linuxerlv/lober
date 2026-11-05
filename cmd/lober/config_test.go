@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,5 +79,28 @@ func Test配置拒绝缺失非法字段且错误不含秘密(t *testing.T) {
 	}
 	if _, err := loadConfig(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
 		t.Fatal("missing file accepted")
+	}
+}
+
+func Test配置采集镜像路径必须成对(t *testing.T) {
+	t.Setenv("LOBER_PG_DSN", "")
+	for _, tc := range []struct {
+		name, extra string
+		wantErr     bool
+	}{
+		{"都不配", "", false},
+		{"都配", ", inventoryKernel: 'inv/vmlinuz', inventoryInitrd: 'inv/initrd'", false},
+		{"只配内核", ", inventoryKernel: 'inv/vmlinuz'", true},
+		{"只配 initrd", ", inventoryInitrd: 'inv/initrd'", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// ISO 目录必须绝对路径；TempDir 在 Windows 和 Linux 上都是绝对路径。
+			dir := t.TempDir()
+			body := fmt.Sprintf("listen: ':8080'\npg: {dsn: 'secret-dsn'}\niso: {staging: %q, artifacts: %q, smb: %q, tools: %q}\npreview: {gateway: 'http://gw', artifacts: 'http://art'%s}\n", dir, dir, dir, dir, tc.extra)
+			_, err := loadConfig(configFile(t, body))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
+			}
+		})
 	}
 }

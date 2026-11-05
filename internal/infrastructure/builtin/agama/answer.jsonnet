@@ -6,9 +6,6 @@
   {{slot:account}}
   software: {
     packages: [
-      'curl',
-      'systemd',
-      'openssh',
       {{slot:packages}}
     ],
   },

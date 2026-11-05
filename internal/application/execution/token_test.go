@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	executionrules "github.com/lober/lober/internal/domain/execution"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 	"reflect"
@@ -253,5 +254,39 @@ func TestSweepKeepsPagesStatesAndOnlySwallowsConflicts(t *testing.T) {
 	r.pages = []repository.Page[model.Task]{{Items: []model.Task{task}}}
 	if err := s.Sweep(t.Context()); err != failed {
 		t.Fatal(err)
+	}
+}
+
+func TestSweepWarnsAtOldBudgetThenTimesOutAtLife(t *testing.T) {
+	task := credentialTask()
+	task.Execution.Deadline = task.Execution.IssuedAt + executionrules.InstallLife
+	r := &clockRepo{task: task}
+	now := task.Execution.IssuedAt + executionrules.SlowAfter
+	s, err := New(r, []byte(strings.Repeat("k", 32)), func() int64 { return now }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sweep := func(at int64) {
+		now = at
+		r.pages = []repository.Page[model.Task]{{Items: []model.Task{r.task}}}
+		if err := s.Sweep(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sweep(task.Execution.IssuedAt + executionrules.SlowAfter)
+	if r.task.State != model.TaskInstalling || !r.task.Execution.SlowWarned || len(r.events) != 1 || r.events[0].Kind != "machine.slow" {
+		t.Fatalf("90 分钟警告不对：state=%s slow=%v events=%v", r.task.State, r.task.Execution.SlowWarned, r.events)
+	}
+	writes := r.writes
+	sweep(task.Execution.IssuedAt + executionrules.SlowAfter + 1)
+	if r.writes != writes || len(r.events) != 1 {
+		t.Fatalf("重复警告：writes=%d/%d events=%v", r.writes, writes, r.events)
+	}
+	sweep(task.Execution.IssuedAt + executionrules.InstallLife)
+	if r.task.State != model.TaskFailed || len(r.events) != 2 || r.events[1].Kind != "machine.timeout" {
+		t.Fatalf("4 小时硬失败不对：state=%s events=%v", r.task.State, r.events)
+	}
+	if r.events[1].Fields["deadline"] == "" || r.events[1].Fields["issued_at"] == "" {
+		t.Fatalf("超时事件缺少期限证据：%v", r.events[1].Fields)
 	}
 }

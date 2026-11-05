@@ -288,7 +288,8 @@ func Test预览实际内置模板的全部已声明系(t *testing.T) {
 			}
 		}
 	}
-	if count != 13 {
+	// 13 个原有模板/系，加上 Debian 的采集变体。
+	if count != 14 {
 		t.Fatal("builtin coverage changed", count)
 	}
 }
@@ -325,5 +326,6 @@ func previewISOFixture(series catalog.Series) model.ISO {
 	return model.ISO{ID: "sample-iso", Name: model.ConsoleSampleISO, Family: series.Family(), Series: series, Version: "0.0", Arch: catalog.ArchX8664, State: model.ISOReady, Artifacts: artifacts, Offers: offers}
 }
 func previewHostFixture() model.Host {
-	return model.Host{SN: "SAMPLE-SN", Arch: catalog.ArchX8664, Firmware: catalog.FirmwareUEFI, Attrs: map[string]string{}}
+	// inv_system_disk 让内置采集模板也能预览；其他模板不引用它。
+	return model.Host{SN: "SAMPLE-SN", Arch: catalog.ArchX8664, Firmware: catalog.FirmwareUEFI, Attrs: map[string]string{"inv_system_disk": "sda"}}
 }

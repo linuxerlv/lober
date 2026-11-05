@@ -79,3 +79,17 @@ func Timeout(t model.Task, at int64) (model.Task, bool) {
 	t.Execution.Deadline = 0
 	return t, true
 }
+
+// Slow 在安装阶段超过 SlowAfter 时给一次警告机会。返回的任务把 SlowWarned 置为 true，
+// 调用方保存后不会再报；原任务不变。只关心仍在安装中的任务。
+func Slow(t model.Task, at int64) (model.Task, bool) {
+	if t.Execution == nil || t.State != model.TaskInstalling || t.Execution.SlowWarned || t.Execution.Deadline == 0 {
+		return t, false
+	}
+	if at < t.Execution.IssuedAt+SlowAfter {
+		return t, false
+	}
+	t = clone(t)
+	t.Execution.SlowWarned = true
+	return t, true
+}

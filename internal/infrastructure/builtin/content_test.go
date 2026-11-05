@@ -31,7 +31,7 @@ func TestCompleteInstallerManifest(t *testing.T) {
 			t.Errorf("missing installer %s", f)
 		}
 	}
-	if len(Templates()) != 7 || len(Hooks()) != 5 {
-		t.Errorf("manifest = %d templates / %d hooks; want 7 / 5", len(Templates()), len(Hooks()))
+	if len(Templates()) != 8 || len(Hooks()) != 5 {
+		t.Errorf("manifest = %d templates / %d hooks; want 8 / 5", len(Templates()), len(Hooks()))
 	}
 }
