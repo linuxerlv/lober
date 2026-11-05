@@ -6,7 +6,7 @@
 - 类别 4：同一 SN 已有活跃任务时再建 → 拒绝（409 + CodeActiveTaskExists）
 - 类别 5：固件与制品集家族不兼容 → 拒绝。**实测标 skip**：
   `model.FirmwareCompatible` 的判据表（inventory.go:109-116）里
-  rhel/debian/ubuntu/suse/windows 五个家族都同时兼容 bios 与 uefi，
+  rhel/debian/ubuntu/windows 四个家族都同时兼容 bios 与 uefi，
   唯一真正受限的是 esxi（仅 uefi），而本机没有 ESXi ISO；本机能真实
   import ready 的两个家族（rhel、debian）都不在受限之列，无法在不假绿
   的前提下触发这条规则，见 test_firmware_incompatible_host_rejected
@@ -104,8 +104,8 @@ def test_active_task_exists_rejected(console: Console, active_host_and_template)
 @pytest.mark.skip(
     reason="实测发现：model.FirmwareCompatible 的判据表"
     "（internal/core/model/inventory.go:109-116）里 rhel/debian/ubuntu/"
-    "suse/windows 五个家族都同时兼容 bios 与 uefi 两种固件——本机唯一能"
-    "真实 import ready 的两个家族（rhel、debian）都在这五个之内，无法"
+    "windows 四个家族都同时兼容 bios 与 uefi 两种固件——本机唯一能"
+    "真实 import ready 的两个家族（rhel、debian）都在这四个之内，无法"
     "通过给主机声明「另一种固件」来触发不兼容。唯一真正受限的家族是"
     "esxi（仅 uefi），而本机没有 ESXi ISO（与 test_lifecycle.py 的 esxi"
     "参数同一个 skip 原因：需 Broadcom 账号下载）。这条准入规则的判定"

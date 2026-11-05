@@ -20,7 +20,11 @@ uv sync
 uv run pytest -q
 ```
 
+当前 Linux 范围为 RHEL、AlmaLinux、Rocky Linux、Ubuntu、Debian。装机脚本只提供这五种选项，详见 [enterprise/LINUX-INSTALL.md](enterprise/LINUX-INSTALL.md)。
+
 ## 环境变量
 
 `config.load()` 支持通过环境变量覆盖默认值，前缀 `LOBERTEST_`，例如
 `LOBERTEST_SSH_HOST=10.20.20.2`。字段列表见 `src/lobertest/config.py`。
+
+旧 L1/L2 客户端的 RHEL 介质由 `LOBERTEST_RHEL_ISO` 指定；默认路径为 `D:/lober-isos/rhel.iso`。没有介质时跳过，不能用其他发行版冒充 RHEL。

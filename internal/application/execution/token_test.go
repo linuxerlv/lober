@@ -70,7 +70,7 @@ func TestCredentialsBindTaskAttemptScopeAndExpiry(t *testing.T) {
 }
 
 func credentialTask() model.Task {
-	return model.Task{ID: "task-one", State: model.TaskInstalling, Execution: &model.Execution{Attempt: 1, IssuedAt: 1000, Deadline: 6400}}
+	return model.Task{ID: "task-one", State: model.TaskInstalling, Snapshot: model.Snapshot{Family: "linux", Series: "rocky", Format: "kickstart"}, Execution: &model.Execution{Attempt: 1, IssuedAt: 1000, Deadline: 6400}}
 }
 
 func TestAuthorizationKeepsOriginalClockCallsAndOrder(t *testing.T) {
@@ -214,7 +214,7 @@ func TestBootConflictAndEightRoundLimitsStayUnchanged(t *testing.T) {
 	r := &clockRepo{task: credentialTask(), commitErr: repository.ErrConflict}
 	r.task.State = model.TaskPending
 	r.task.Execution = nil
-	r.task.Snapshot = model.Snapshot{Series: "rocky", ISO: model.SnapshotISO{Arch: "x86_64"}}
+	r.task.Snapshot = model.Snapshot{Family: "linux", Format: "kickstart", Series: "rocky", ISO: model.SnapshotISO{Arch: "x86_64"}}
 	n := &clockNotify{}
 	s, _ := New(r, []byte(strings.Repeat("k", 32)), func() int64 { return 1100 }, n)
 	if _, found, err := s.Boot(t.Context(), "SN-ONE", "x86_64", "bios"); err != nil || found || r.writes != 1 || r.reads != 1 || len(n.ids) != 0 {
@@ -240,7 +240,7 @@ func TestBootConflictAndEightRoundLimitsStayUnchanged(t *testing.T) {
 func TestSweepKeepsPagesStatesAndOnlySwallowsConflicts(t *testing.T) {
 	task := credentialTask()
 	task.Execution.Deadline = 1100
-	r := &clockRepo{task: task, commitErr: repository.ErrConflict, pages: []repository.Page[model.Task]{{Items: []model.Task{task}, Next: "next"}, {Items: []model.Task{{ID: "empty"}}}}}
+	r := &clockRepo{task: task, commitErr: repository.ErrConflict, pages: []repository.Page[model.Task]{{Items: []model.Task{task}, Next: "next"}, {Items: []model.Task{{ID: "empty", Snapshot: model.Snapshot{Family: "linux", Series: "rocky", Format: "kickstart"}}}}}}
 	calls := 0
 	s, _ := New(r, []byte(strings.Repeat("k", 32)), func() int64 { calls++; return 1100 }, nil)
 	if err := s.Sweep(t.Context()); err != nil || calls != 2 || r.writes != 1 || len(r.queries) != 2 || r.queries[0].Limit != 100 || r.queries[1].Cursor != "next" {

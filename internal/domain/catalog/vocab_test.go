@@ -10,8 +10,8 @@ func Test全局词表与登记表逐项一致(t *testing.T) {
 		name      string
 		got, want any
 	}{
-		{"formats", AllFormats(), []Format{"kickstart", "preseed", "autoinstall", "autoyast", "agama", "unattend", "esxi-ks"}},
-		{"series", AllSeries(), []Series{"rhel", "rocky", "almalinux", "openeuler", "opencloudos", "debian", "ubuntu", "sles15", "leap15", "sles16", "leap16", "windows-server", "windows-desktop", "esxi"}},
+		{"formats", AllFormats(), []Format{"kickstart", "preseed", "autoinstall", "unattend", "esxi-ks"}},
+		{"series", AllSeries(), []Series{"rhel", "rocky", "almalinux", "debian", "ubuntu", "windows-server", "windows-desktop", "esxi"}},
 		{"timings", AllTimings(), []Timing{"pre", "post-installer", "post-target", "firstboot"}},
 		{"interpreters", AllInterpreters(), []Interpreter{"sh", "bash", "cmd", "powershell"}},
 		{"parts", AllSystemParts(), []SystemPart{"syslog", "firstboot", "cleanup"}},

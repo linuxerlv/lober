@@ -16,10 +16,9 @@ import (
 )
 
 func TestRemainingMenuGolden(t *testing.T) {
-	for _, series := range []catalog.Series{"sles15", "sles16", "windows-server"} {
+	for _, series := range []catalog.Series{"windows-server"} {
 		t.Run(string(series), func(t *testing.T) {
 			r := menuFixture(series, "uefi")
-			r.Snapshot.ISO.Artifacts["live-root"] = "agama/LiveOS/squashfs.img"
 			for _, role := range []string{"wimboot", "bcd", "boot-sdi", "boot-wim", "winpeshl", "winpe-busybox", "winpe-curl"} {
 				r.Snapshot.ISO.Artifacts[role] = "windows/" + role
 			}
@@ -37,20 +36,6 @@ func TestRemainingMenuGolden(t *testing.T) {
 		})
 	}
 }
-func TestAgamaAnswerDelivery(t *testing.T) {
-	name, ok := catalog.DeliveryFileName("agama", catalog.FileAnswer)
-	if !ok || name != "autoinst.jsonnet" {
-		t.Fatalf("canonical Agama filename=%q,%v", name, ok)
-	}
-	r := menuFixture("sles16", "uefi")
-	r.Kind = catalog.FileAnswer
-	r.Snapshot.Template.Body = "{ product: { id: 'SLES' }, scripts: { pre: [] } }\n"
-	got, p, e := Render(r)
-	if e != nil || len(p) != 0 || string(got) != r.Snapshot.Template.Body {
-		t.Fatalf("%s %v %v", got, p, e)
-	}
-}
-
 func TestWindowsRuntimeStaticContract(t *testing.T) {
 	i := runtimeInstance("@echo off\r\nexit /b 0\r\n", true, "cmd", 3)
 	i.Params = map[string]model.SnapshotValue{"text": {Type: "text", Items: []string{"汉字 ' \" % ! & <>\nlast\n"}}}
@@ -177,7 +162,7 @@ func TestRemainingMenuRequiresAllNativeInputs(t *testing.T) {
 	for _, tc := range []struct {
 		series catalog.Series
 		roles  []string
-	}{{"sles15", []string{"kernel", "initrd", "repo"}}, {"sles16", []string{"kernel", "initrd", "repo", "live-root"}}, {"windows-server", []string{"wimboot", "bcd", "boot-sdi", "boot-wim", "winpeshl", "winpe-busybox", "winpe-curl"}}} {
+	}{{"windows-server", []string{"wimboot", "bcd", "boot-sdi", "boot-wim", "winpeshl", "winpe-busybox", "winpe-curl"}}} {
 		for _, role := range tc.roles {
 			t.Run(string(tc.series)+"/"+role, func(t *testing.T) {
 				r := menuFixture(tc.series, "bios")

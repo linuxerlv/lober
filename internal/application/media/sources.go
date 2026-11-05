@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/lober/lober/internal/application/media/port"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
@@ -57,6 +58,9 @@ func (s *Sources) register(ctx context.Context, item model.ISO, kind, addr, role
 	}
 	current, err := s.isos.GetISO(ctx, item.ID)
 	if err != nil {
+		return err
+	}
+	if err := checkSupportedISO(current); err != nil {
 		return err
 	}
 	if current.State != model.ISOAcquiring && !(current.State == model.ISOFailed && role != "") {
@@ -207,4 +211,12 @@ func (s *Sources) Progress(ctx context.Context, id string) (AcquisitionProgress,
 		out.Sources = append(out.Sources, p)
 	}
 	return out, nil
+}
+
+// 历史镜像仍可查看；停用发行版不能再下载或导入。
+func checkSupportedISO(item model.ISO) error {
+	if !item.Series.Valid() {
+		return fmt.Errorf("不再支持发行版 %q: %w", item.Series, repository.ErrInvalid)
+	}
+	return nil
 }

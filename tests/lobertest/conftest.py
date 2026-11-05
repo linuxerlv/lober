@@ -16,6 +16,7 @@ collection_modifyitems` 也做不到——它只在收集阶段跑一次，发�
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -199,15 +200,9 @@ def deployed(settings: Settings, repo_root: Path, tmp_path_factory: pytest.TempP
     return settings
 
 
-# 六家族里两个本机有真实 ISO 的家族，及其在 Windows 宿主上的路径。
-#
-# **本任务实测确认，不是计划原文的假设：** 计划原文说 `D:/qemu-vm/isos`
-# 下有 OpenCloudOS 与 Debian 的 ISO，实测该目录根本不存在
-# （`config.iso_dir` 的默认值从未被真正验证过）。真实存在的 ISO 在
-# `D:/` 与 `D:/lober-isos/` 下。没有 ubuntu/suse/windows/esxi 的 ISO
-# ——这四个家族在 test_lifecycle.py 的参数表里标 pytest.mark.skip。
+# 旧客户端仅保留受支持介质入口；RHEL 路径可用 LOBERTEST_RHEL_ISO 指定。
 _HOST_ISO_PATHS = {
-    "rhel": Path("D:/OpenCloudOS-9.6-x86_64-minimal.iso"),
+    "rhel": Path(os.environ.get("LOBERTEST_RHEL_ISO", "D:/lober-isos/rhel.iso")),
     "debian": Path("D:/lober-isos/debian-netinst.iso"),
 }
 
@@ -225,7 +220,7 @@ def _ensure_iso_pushed(ssh: SSH, local_path: Path, guest_filename: str) -> str:
     **本任务第一次真跑 L1 才发现的事实**：`import_artifact` 的
     `sourcePath` 由 lober 进程自己在 guest 内 `open()`（导入 job 跑在
     guest 内的 lober 进程里，不是测试进程），Windows 宿主路径
-    （`D:/OpenCloudOS-9.6-x86_64-minimal.iso`）对 guest 而言毫无意义——
+    （例如 `D:/lober-isos/rhel.iso`）对 guest 而言毫无意义——
     实测直接报 `open D:/...: no such file or directory`。计划契约的
     `import_artifact(source_path, name)` 签名本身没错，错的是调用方
     （本文件）传入的 source_path 必须先是一个 guest 路径，这条约束在
@@ -309,7 +304,7 @@ def artifact_reaper(deployed: Settings):
 def family_iso_paths(deployed: Settings) -> dict[str, str]:
     """把本机真实存在的 ISO 推到 guest 一次，返回 {家族名: guest 路径}。
 
-    只包含本机真实有 ISO 的家族（目前 rhel/debian）——没有 ISO 的家族
+    只返回配置路径中实际存在的 RHEL/Debian 介质——没有 ISO 的家族
     根本不会调用这个 fixture 的返回值（它们在参数化层面已经 skip），
     这里也不应该为它们放一个不存在的路径进字典误导调用方。
     """
@@ -360,6 +355,8 @@ def ready_rhel_artifact_id(
     由 `artifact_reaper` 回收（见它的文档：为什么只能在基础设施层删、为什么
     不做孤儿探测）。
     """
+    if "rhel" not in family_iso_paths:
+        pytest.skip("没有受支持的 RHEL ISO；请配置 LOBERTEST_RHEL_ISO")
     artifact_id = console.import_artifact(family_iso_paths["rhel"], "lobertest-shared-rhel-artifact")
     artifact_reaper(artifact_id)
     console.wait_artifact_ready(artifact_id, timeout=600)

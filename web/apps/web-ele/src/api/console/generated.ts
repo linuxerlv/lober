@@ -9,9 +9,9 @@ export interface Schemas {
   "CatalogArch": "x86_64" | "aarch64";
   "CatalogFamily": "linux" | "windows" | "esxi";
   "CatalogFirmware": "bios" | "uefi";
-  "CatalogFormat": "kickstart" | "preseed" | "autoinstall" | "autoyast" | "agama" | "unattend" | "esxi-ks";
+  "CatalogFormat": "kickstart" | "preseed" | "autoinstall" | "unattend" | "esxi-ks";
   "CatalogInterpreter": string;
-  "CatalogSeries": "rhel" | "rocky" | "almalinux" | "openeuler" | "opencloudos" | "debian" | "ubuntu" | "sles15" | "leap15" | "sles16" | "leap16" | "windows-server" | "windows-desktop" | "esxi";
+  "CatalogSeries": "rhel" | "rocky" | "almalinux" | "debian" | "ubuntu" | "windows-server" | "windows-desktop" | "esxi";
   "CatalogTiming": string;
   "CsvPlan": { "rows": (Array<Schemas["CsvRow"]>) | null; "total": number; };
   "CsvRow": { "action": string; "problems": (Array<Schemas["ProblemJSON"]>) | null; "row": number; "sn": string; };

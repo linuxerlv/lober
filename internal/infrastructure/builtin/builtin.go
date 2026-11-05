@@ -12,7 +12,7 @@ import (
 
 // Bodies are compiled data. Reading this embed.FS never accesses a host filesystem.
 //
-//go:embed kickstart preseed autoinstall autoyast agama unattend esxi
+//go:embed kickstart preseed autoinstall unattend esxi
 var bodies embed.FS
 
 var hooks = []model.Hook{partitionHook(), packagesHook(), networkHook(), accountHook(), sshkeyHook()}
@@ -55,17 +55,13 @@ func hook(name string, version int, description string) model.Hook {
 }
 
 func instance(name string) model.Instance {
-	version := 1
-	// account v2 drops the Leap 15.6 schema-invalid create_home user field (D3);
-	// partition v2 inlines kickstart part commands with reqpart instead of
-	// %pre+%include, which AlmaLinux 10 parses before %pre runs (D2).
-	// packages v3 removes the hard-coded base packages: the packages parameter
-	// is now the only source, so the snapshot and the answer cannot disagree.
+	version := 2
+	// 共享组件缩减了支持范围，模板统一引用新版本。
 	switch name {
 	case "packages":
-		version = 3
+		version = 4
 	case "account", "partition":
-		version = 2
+		version = 3
 	}
 	return model.Instance{HookID: "builtin-" + name, HookVersion: version}
 }
@@ -91,7 +87,7 @@ func preseedParams() []model.ParamDecl {
 func inventoryPreseedTemplate() model.Template {
 	ss := series("preseed")
 	tpl := model.Template{
-		ID: "builtin-preseed-inventory", Version: 1, Name: "lober:preseed-inventory",
+		ID: "builtin-preseed-inventory", Version: 2, Name: "lober:preseed-inventory",
 		State: model.VersionApproved, Builtin: true,
 		Family: ss[0].Family(), Series: ss, Body: body("preseed", "answer.cfg"),
 		Params: preseedParams(), Assembly: map[string][]model.Instance{},
@@ -103,57 +99,45 @@ func inventoryPreseedTemplate() model.Template {
 		HookID: "builtin-partition", HookVersion: instance("partition").HookVersion,
 		Bindings: map[string]model.Binding{"disk": {Source: model.BindingAttr, Attr: "inv_system_disk"}},
 	}}
-	tpl.Assembly["packages"] = []model.Instance{fixedInstance("packages", "packages", defaultPackages("preseed"), true)}
+	tpl.Assembly["packages"] = []model.Instance{fixedInstance("packages", "packages", defaultPackages(), true)}
 	return tpl
 }
 
-// defaultPackages 是内置 Linux 模板给 packages 参数的默认值。SUSE 系的 SSH 服务包
-// 叫 openssh，其余 Linux 系叫 openssh-server。它现在只存在这一处：应答文件里不再
-// 写死包名，快照里的 packages 取值就是最终会装的包。
-func defaultPackages(format catalog.Format) string {
-	if format == "autoyast" || format == "agama" {
-		return "curl\nsystemd\nopenssh"
-	}
+// defaultPackages 是内置 Linux 模板的默认包列表。
+func defaultPackages() string {
 	return "curl\nsystemd\nopenssh-server"
 }
 
 func shippedTemplates() []model.Template {
 	var result []model.Template
-	for _, format := range []catalog.Format{"kickstart", "preseed", "autoinstall", "autoyast", "agama", "unattend", "esxi-ks"} {
+	for _, format := range []catalog.Format{"kickstart", "preseed", "autoinstall", "unattend", "esxi-ks"} {
 		file := "answer.cfg"
 		switch format {
 		case "autoinstall":
 			file = "answer.yaml"
-		case "autoyast", "unattend":
+		case "unattend":
 			file = "answer.xml"
-		case "agama":
-			file = "answer.jsonnet"
 		}
 		id := string(format)
 		if format == "esxi-ks" {
 			id = "esxi"
 		}
-		// Content changes ship as higher version numbers: account/partition v2
-		// rebinds every template, kickstart/preseed already carried a v2.
-		// Agama v3 改用安装器实际支持的 UTC 时区名。packages hook v3 去掉了
-		// 应答文件里的写死包，所有模板改引用 v3 并升版本。
-		version := 3 // autoinstall、autoyast、unattend、esxi
-		if format == "kickstart" || format == "preseed" || format == "agama" {
-			version = 4
+		// 模板改用新版共享组件，已有版本内容保持不变。
+		version := 4
+		if format == "kickstart" || format == "preseed" {
+			version = 5
 		}
 		ss := series(format)
 		tpl := model.Template{ID: "builtin-" + id, Version: version, Name: "lober:" + id, State: model.VersionApproved, Builtin: true, Family: ss[0].Family(), Series: ss, Body: body(format, file), Assembly: map[string][]model.Instance{}}
 		for _, name := range []string{"partition", "network", "account", "sshkey"} {
 			tpl.Assembly[name] = []model.Instance{instance(name)}
 		}
-		tpl.Assembly["packages"] = []model.Instance{fixedInstance("packages", "packages", defaultPackages(format), true)}
+		tpl.Assembly["packages"] = []model.Instance{fixedInstance("packages", "packages", defaultPackages(), true)}
 		switch format {
 		case "preseed":
 			tpl.Params = preseedParams()
 		case "autoinstall":
 			tpl.Params = []model.ParamDecl{{Name: "hostname", Type: "hostname", Default: "lober-node"}}
-		case "agama":
-			tpl.Params = []model.ParamDecl{{Name: "product", Type: "enum", Offer: "products"}}
 		case "unattend":
 			tpl.Params = []model.ParamDecl{{Name: "edition", Type: "enum", Offer: "editions"}}
 			// The native pre-hook and InstallTo must name the same disk. This shipped
