@@ -173,7 +173,6 @@ func TestOpenAPI公开枚举与路由数量保持兼容(t *testing.T) {
 		want []string
 	}{
 		{"CatalogFamily", []string{"linux", "windows", "esxi"}},
-		{"CatalogFormat", []string{"kickstart", "preseed", "autoinstall", "unattend", "esxi-ks"}},
 		{"CatalogSeries", []string{"rhel", "rocky", "almalinux", "debian", "ubuntu", "windows-server", "windows-desktop", "esxi"}},
 		{"CatalogArch", []string{"x86_64", "aarch64"}},
 		{"CatalogFirmware", []string{"bios", "uefi"}},

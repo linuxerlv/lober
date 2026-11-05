@@ -33,7 +33,7 @@ type hookResponse struct {
 	TimeoutSec  int                `json:"timeoutSec"`
 	Required    bool               `json:"required"`
 	Params      []paramDeclDTO     `json:"params"`
-	Impls       []implDTO          `json:"impls"`
+	Impls       []implResponseDTO  `json:"impls"`
 	Problems    []problemJSON      `json:"problems"`
 	Rev         int64              `json:"rev"`
 }
@@ -63,7 +63,7 @@ type nameRequest struct {
 
 func toHookResponse(view authoring.HookView) hookResponse {
 	h := view.Hook
-	return hookResponse{ID: h.ID, Version: h.Version, Name: h.Name, Description: h.Description, State: h.State, Author: h.Author, Approver: h.Approver, Builtin: h.Builtin, TimeoutSec: h.TimeoutSec, Required: h.Required, Params: declsToDTO(h.Params), Impls: implsToDTO(h.Impls), Problems: jsonProblems(view.Problems), Rev: h.Rev}
+	return hookResponse{ID: h.ID, Version: h.Version, Name: h.Name, Description: h.Description, State: h.State, Author: h.Author, Approver: h.Approver, Builtin: h.Builtin, TimeoutSec: h.TimeoutSec, Required: h.Required, Params: declsToDTO(h.Params), Impls: implsToResponseDTO(h.Impls), Problems: jsonProblems(view.Problems), Rev: h.Rev}
 }
 func hookResponses(hs []authoring.HookView) []hookResponse {
 	out := make([]hookResponse, len(hs))

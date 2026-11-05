@@ -23,6 +23,7 @@ import {
 } from 'element-plus';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
+import { allSeries as series } from '#/api/console/catalog';
 import * as api from '#/api/console/hook';
 import { errorMessage, problemsOf } from '#/api/console/problem';
 import ListPagination from '#/components/console/ListPagination.vue';
@@ -276,16 +277,6 @@ function addImpl() {
   });
 }
 const families: Schemas['CatalogFamily'][] = ['linux', 'windows', 'esxi'];
-const series: Schemas['CatalogSeries'][] = [
-  'rhel',
-  'rocky',
-  'almalinux',
-  'debian',
-  'ubuntu',
-  'windows-server',
-  'windows-desktop',
-  'esxi',
-];
 onMounted(() => load());
 watch(visible, (open) => { if (!open) { ++editorToken; busy.value = false; errors.value = []; } }, { flush: 'sync' });
 onBeforeUnmount(() => { ++editorToken; ++sequence; pagination.reset(); });

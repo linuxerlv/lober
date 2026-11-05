@@ -39,6 +39,7 @@ import {
   registerISOSourceApi,
   uploadISOChunkApi,
 } from '#/api/console/artifact';
+import { seriesByFamily } from '#/api/console/catalog';
 import { errorMessage, problemsOf, referencesOf } from '#/api/console/problem';
 import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
@@ -62,17 +63,7 @@ const labels: Record<string, string> = {
 };
 const families: ISOCreateParams['family'][] = ['linux', 'windows', 'esxi'];
 // Display catalog choices only; the server owns media and compatibility checks.
-const series: Record<string, ISOCreateParams['series'][]> = {
-  linux: [
-    'rhel',
-    'rocky',
-    'almalinux',
-    'debian',
-    'ubuntu',
-  ],
-  windows: ['windows-server', 'windows-desktop'],
-  esxi: ['esxi'],
-};
+const series = seriesByFamily;
 const filters = reactive<{
   family: '' | ISOCreateParams['family'];
   state: string;
