@@ -61,7 +61,11 @@ func openAPIDocument(routes []route) map[string]any {
 			success = responseEnvelope(success, 0)
 		}
 		responses["200"] = map[string]any{"description": "Success", "content": map[string]any{media: map[string]any{"schema": success}}}
-		for _, status := range []int{400, 401, 403, 404, 409, 422, 500} {
+		statuses := []int{400, 401, 403, 404, 409, 422, 500}
+		if r.req != nil && r.requestMedia != "application/octet-stream" {
+			statuses = append(statuses, 413)
+		}
+		for _, status := range statuses {
 			data := any(map[string]any{"type": "object", "nullable": true, "enum": []any{nil}})
 			if status == 409 || status == 422 {
 				data = map[string]any{"oneOf": []any{problem, batch, map[string]any{"type": "object", "nullable": true, "enum": []any{nil}}}}

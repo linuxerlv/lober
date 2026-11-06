@@ -1,7 +1,6 @@
 package console
 
 import (
-	"io"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -149,9 +148,8 @@ func (s *server) importHosts(c *gin.Context) {
 		}
 		dryRun = raw == "true"
 	}
-	data, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
+	data, ok := readRequestBody(c, hostCSVLimit)
+	if !ok {
 		return
 	}
 	result, ok := Write(c, func() (hosts.ImportResult, error) {
