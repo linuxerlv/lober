@@ -2,12 +2,27 @@ package iso
 
 import (
 	"context"
+	"github.com/lober/lober/internal/application/media/port"
 	"github.com/lober/lober/internal/domain/model"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestBeginPublishExposesOnlyPublicationMethods(t *testing.T) {
+	begin, ok := reflect.TypeFor[port.Transfer]().MethodByName("BeginPublish")
+	if !ok {
+		t.Fatal("缺少 BeginPublish")
+	}
+	session := begin.Type.Out(0)
+	for _, name := range []string{"Resume", "Open", "Step"} {
+		if _, ok := session.MethodByName(name); ok {
+			t.Errorf("发布会话不应提供下载方法 %s", name)
+		}
+	}
+}
 
 func Test镜像传输暂存完整片后才写确认文件(t *testing.T) {
 	dir := t.TempDir()

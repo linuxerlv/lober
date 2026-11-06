@@ -12,14 +12,7 @@ import (
 )
 
 // 首次启动数据单独下发，避免把凭据和钩子留在 ESXi 保留的原生脚本里。
-func renderESXiStage(r Request) ([]byte, []model.Problem, error) {
-	if r.Snapshot.Format != "esxi-ks" {
-		return nil, nil, errUnsupportedFormat
-	}
-	e, problems, err := answerExpansion(r)
-	if err != nil || len(problems) != 0 {
-		return nil, problems, err
-	}
+func esxiStage(e expansion) []byte {
 	var b strings.Builder
 	b.WriteString("case ${LOBER_ESXI_STAGE_ACTION:-} in\n")
 	for _, part := range []catalog.SystemPart{"firstboot", "cleanup"} {
@@ -27,7 +20,7 @@ func renderESXiStage(r Request) ([]byte, []model.Problem, error) {
 			b.WriteString(string(part) + ")\n" + command + "\n;;\n")
 		}
 	}
-	for _, slot := range r.Snapshot.Slots {
+	for _, slot := range e.request.Snapshot.Slots {
 		if !slot.Exec || slot.Timing != "firstboot" {
 			continue
 		}
@@ -36,7 +29,7 @@ func renderESXiStage(r Request) ([]byte, []model.Problem, error) {
 		}
 	}
 	b.WriteString("*) exit 66;;\nesac\n")
-	return []byte(b.String()), nil, nil
+	return []byte(b.String())
 }
 
 var esxiFirstbootHeader = regexp.MustCompile(`(?m)^%firstboot(?:[ \t]|\r?$)`)
@@ -103,11 +96,11 @@ func esxiNativeSupervisor(task, stagePath, stageDir, digest string, actions []es
 	return b.String()
 }
 
-func renderESXiAnswer(r Request, e expansion) ([]byte, []model.Problem, error) {
+func renderESXiAnswer(e expansion) ([]byte, []model.Problem, error) {
 	if _, ok := e.parts["firstboot"]; !ok {
-		b, problems := e.expand(r.Snapshot.Template.Body, r.Snapshot.Template.Params, model.Subject{Kind: "template", ID: templateRef(r.Snapshot.Template)})
-		return b, problems, nil
+		return expandAnswerTemplate(e)
 	}
+	r := e.request
 	subject := model.Subject{Kind: "template", ID: templateRef(r.Snapshot.Template)}
 	if _, ok := e.parts["cleanup"]; !ok {
 		return nil, []model.Problem{model.NewProblem("render_replacement_missing", subject, "cleanup")}, nil
@@ -116,11 +109,7 @@ func renderESXiAnswer(r Request, e expansion) ([]byte, []model.Problem, error) {
 	if len(problems) != 0 {
 		return nil, problems, nil
 	}
-	stage, problems, err := renderESXiStage(r)
-	if err != nil || len(problems) != 0 {
-		return nil, problems, err
-	}
-	digest := sha256.Sum256(stage)
+	digest := sha256.Sum256(esxiStage(e))
 	digestText := fmt.Sprintf("%x", digest)
 	stagePath, stageDir := esxiStagePaths(values[1])
 	tempDir := esxiTemporaryStageDir(values[1])

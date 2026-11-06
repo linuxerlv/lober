@@ -48,9 +48,9 @@ type Hooks interface {
 	GetHooks(context.Context, []model.HookKey) (map[model.HookKey]model.Hook, error)
 }
 type Tasks interface {
-	// FindOpenTask 的八项保存约定唯一委托 repository.Tasks.FindOpenTask
+	// FindOpenHosts 的八项保存约定唯一委托 repository.Tasks.FindOpenHosts
 	// （internal/domain/repository/tasks.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。
-	FindOpenTask(context.Context, string) (model.Task, bool, error)
+	FindOpenHosts(context.Context, []string) (map[string]bool, error)
 	// CreateCurrentTasks 在同一事务中确认当前模板并写任务及审计，成功才允许通知。
 	// CreateCurrentTasks 的八项保存约定唯一委托 repository.CurrentTaskCreator.CreateCurrentTasks
 	// （internal/domain/repository/current_tasks.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。

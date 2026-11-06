@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"sync"
@@ -22,6 +23,7 @@ type wizardStore struct {
 	versions      []model.Template
 	hooks         map[model.HookKey]model.Hook
 	open          map[string]bool
+	openLookups   [][]string
 	hostPage      repository.Page[model.Host]
 	isoPage       repository.Page[model.ISO]
 	templatePage  repository.Page[model.Template]
@@ -67,8 +69,40 @@ func (f *wizardStore) ListTemplateVersions(context.Context, string) ([]model.Tem
 func (f *wizardStore) GetHooks(context.Context, []model.HookKey) (map[model.HookKey]model.Hook, error) {
 	return f.hooks, f.called("hooks")
 }
-func (f *wizardStore) FindOpenTask(_ context.Context, sn string) (model.Task, bool, error) {
-	return model.Task{}, f.open[sn], f.called("open:" + sn)
+func (f *wizardStore) FindOpenHosts(_ context.Context, sns []string) (map[string]bool, error) {
+	f.openLookups = append(f.openLookups, slices.Clone(sns))
+	open := make(map[string]bool)
+	for _, sn := range sns {
+		if f.open[sn] {
+			open[sn] = true
+		}
+	}
+	return open, f.called("open-hosts")
+}
+
+func TestWizardLooksUpOpenHostsInOneBatch(t *testing.T) {
+	f, d, _, _ := applicationFixture()
+	f.hostPage.Items = nil
+	for i := range 100 {
+		h := model.Host{SN: fmt.Sprintf("SN-%03d", i), Arch: "x86_64", Firmware: "uefi"}
+		f.hostPage.Items = append(f.hostPage.Items, h)
+	}
+	f.open["SN-050"] = true
+	w := NewWizard(d)
+	page, err := w.Hosts(t.Context(), operator, HostRequest{Limit: 100})
+	if err != nil || len(page.Items) != 100 {
+		t.Fatalf("主机列表长度=%d，错误=%v", len(page.Items), err)
+	}
+	if len(f.openLookups) != 1 || len(f.openLookups[0]) != 100 || len(f.calls) != 2 {
+		t.Fatalf("100 台主机应只批量查询一次，实际查询次数=%d", len(f.calls)-1)
+	}
+	if len(page.Items[0].Problems) != 0 || len(page.Items[50].Problems) != 1 || page.Items[50].Problems[0].Code != "host_has_open_task" {
+		t.Fatal("忙闲结果与主机不匹配")
+	}
+	f.hostPage.Items = nil
+	if _, err := w.Hosts(t.Context(), operator, HostRequest{}); err != nil || len(f.openLookups) != 1 {
+		t.Fatal("空页不应查询任务", err)
+	}
 }
 func (f *wizardStore) CreateCurrentTasks(ctx context.Context, ts []model.Task, a repository.Audit) ([]model.Task, error) {
 	if err := f.called("create-current"); err != nil {
@@ -195,7 +229,7 @@ func Test应用参数顺序缺失和重复编号(t *testing.T) {
 	if len(got.Hosts[1].Problems) != 0 || len(got.Hosts[0].Fields) != 1 {
 		t.Fatal(got)
 	}
-	if n := len(slices.DeleteFunc(slices.Clone(f.calls), func(v string) bool { return v != "open:SN-2" })); n != 1 {
+	if len(f.openLookups) != 1 || !slices.Contains(f.openLookups[0], "SN-2") {
 		t.Fatal(f.calls)
 	}
 }

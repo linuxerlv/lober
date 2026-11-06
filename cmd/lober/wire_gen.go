@@ -60,7 +60,7 @@ func newApp(ctx context.Context, cfg config, clock ports.Clock, logger *slog.Log
 	reader := auditReaderOf(mainLoggingStore)
 	tasksReader := taskReaderOf(mainLoggingStore, control, frozenPreview)
 	eventReader := taskEventsOf(mainLoggingStore, notifier)
-	deps := consoleDepsOf(registry, clock, logger, wizard, hooks, templates, editor, controller, hostsRegistry, service, reader, tasksReader, eventReader)
+	deps := consoleDepsOf(registry, clock, logger, wizard, hooks, templates, editor, controller, hostsRegistry, service, reader, tasksReader, eventReader, mainMachineBundle, cfg)
 	server := console.New(deps)
 	bootstrapper := builtinBootstrapperOf(mainLoggingStore)
 	mainApp := appOf(ctx, cfg, clock, logger, mainLoggingStore, server, sources, sourceControl, supervisor, deletion, mainMachineBundle, service, bootstrapper)

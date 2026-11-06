@@ -130,9 +130,9 @@ func TestKickstartPythonPayloadPreservesShellBytes(t *testing.T) {
 
 func TestKickstartSyslogOmitsUnsupportedLevel(t *testing.T) {
 	r := answerFixture(t, "kickstart", false, "bios")
-	e, problems, err := answerExpansion(r)
-	if err != nil || len(problems) != 0 {
-		t.Fatalf("answer expansion: %v %v", problems, err)
+	e, problems := installerFor(r.Snapshot.Format).answerExpansion(r)
+	if len(problems) != 0 {
+		t.Fatalf("answer expansion: %v", problems)
 	}
 	if got, want := e.parts["syslog"], "logging --host=10.10.0.1 --port=514"; got != want {
 		t.Fatalf("Kickstart syslog directive = %q, want %q", got, want)
@@ -217,9 +217,9 @@ func TestAnswerAddressesAndOneLine(t *testing.T) {
 	for _, format := range answerFormats {
 		t.Run(string(format), func(t *testing.T) {
 			r := answerFixture(t, format, true, "bios")
-			e, p, err := answerExpansion(r)
-			if err != nil || len(p) != 0 {
-				t.Fatalf("%v %v", p, err)
+			e, p := installerFor(r.Snapshot.Format).answerExpansion(r)
+			if len(p) != 0 {
+				t.Fatal(p)
 			}
 			for _, part := range format.RequiredParts() {
 				if e.parts[part] == "" {
@@ -272,9 +272,9 @@ func TestAnswerAddressesAndOneLine(t *testing.T) {
 
 func TestAnswerFirstbootStagesWithoutExecuting(t *testing.T) {
 	r := answerFixture(t, "kickstart", true, "bios")
-	e, p, err := answerExpansion(r)
-	if err != nil || len(p) != 0 {
-		t.Fatalf("%v %v", p, err)
+	e, p := installerFor(r.Snapshot.Format).answerExpansion(r)
+	if len(p) != 0 {
+		t.Fatal(p)
 	}
 	payload := commandPayloads(e.slots["firstboot"])[0]
 	dir := filepath.ToSlash(t.TempDir())

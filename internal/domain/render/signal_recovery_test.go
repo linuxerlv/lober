@@ -63,7 +63,7 @@ func TestFirstbootRetainsCredentialsAndReplaysSignalsWithoutRerunningHooks(t *te
 		}
 	}
 	for _, part := range []catalog.SystemPart{"firstboot", "cleanup"} {
-		command, p := answerPart(expansion{request: r}, part, model.Subject{})
+		command, p := linuxAnswerPart(expansion{request: r}, part, model.Subject{})
 		if len(p) != 0 {
 			t.Fatal(p)
 		}

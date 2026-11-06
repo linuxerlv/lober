@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/lober/lober/internal/infrastructure/identity"
+	"maps"
 	"slices"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -69,13 +70,19 @@ func (s *Store) createTasks(ctx context.Context, ts []model.Task, a repository.A
 		if err != nil {
 			return err
 		}
+		if current {
+			for i, host := range in.Hosts {
+				if !hostSnapshotCurrent(host, ts[i].Snapshot.Host) {
+					return errorf(repository.ErrConflict, "主机 %s 的装机属性已变更，请刷新后再建任务", host.SN)
+				}
+			}
+		}
 		for _, r := range rows {
 			err := tx.Omit(clause.Associations).Create(&r).Error
 			if err == nil {
 				continue
 			}
-			// 第 4 步的兜底：失败的任务正在重试、还没提交时，准入看不到它（推进不锁主机），插入要等它提交才撞上。结果按准入
-			// 看得到它时的给，与第 3 步报的同形
+			// 唯一索引是最后一道检查，撞上时沿用准入的问题格式。
 			if openTaskTaken(err) {
 				in.OpenTask[r.HostSN] = true
 				if be := repository.BatchProblems(in, nil); be != nil {
@@ -96,6 +103,11 @@ func (s *Store) createTasks(ctx context.Context, ts []model.Task, a repository.A
 		}
 	}
 	return out, nil
+}
+
+// 向导在事务外求值。任意属性都可能被已有模板引用，保存前按锁内读到的完整数据复核。
+func hostSnapshotCurrent(h model.Host, snapshot model.SnapshotHost) bool {
+	return h.Arch == snapshot.Arch && h.Firmware == snapshot.Firmware && maps.Equal(h.Attrs, snapshot.Attrs)
 }
 
 // lockCurrentTemplate 先锁身份，再用下一条查询读取最新版本事实；等审批提交后也能读到它的新状态。
@@ -219,7 +231,7 @@ func lockHosts(tx *gorm.DB, sns []string) (map[string]hostRow, error) {
 }
 
 // openTasksOf 在事务 tx 里查 sns 这几台主机里哪些已有未结束的任务。调用方锁着这几台主机，同时给它们建任务的另一批要等本
-// 事务结束，提交了的这里都看得到；失败任务的重试不锁主机，没提交的看不到，由 idx_tasks_open 兜底。
+// 事务结束，提交了的这里都看得到。重试也先锁主机，数据库仍以 idx_tasks_open 兜底。
 func openTasksOf(tx *gorm.DB, sns []string) (map[string]bool, error) {
 	open := map[string]bool{}
 	for chunk := range slices.Chunk(sns, batchSize) {
@@ -233,6 +245,15 @@ func openTasksOf(tx *gorm.DB, sns []string) (map[string]bool, error) {
 		}
 	}
 	return open, nil
+}
+
+func (s *Store) FindOpenHosts(ctx context.Context, sns []string) (map[string]bool, error) {
+	for _, sn := range sns {
+		if err := repository.CheckSN(sn); err != nil {
+			return nil, err
+		}
+	}
+	return openTasksOf(s.read(ctx), sns)
 }
 
 // GetTask 见 repository.Tasks。
@@ -332,24 +353,32 @@ func (s *Store) TransitionTaskByUser(ctx context.Context, id string, expect repo
 	return s.transition(ctx, id, expect, to, events, &a)
 }
 
-// transition 是两种推进共用的部分，a 为 nil 时不写审计（系统发起的推进）。先查 ID、目标状态与事件（repository.CheckTransition）；
-// 再给任务行加写锁、比对期望值，追加事件，用一条 UPDATE 写下状态、Rev 与事件的计数，最后写审计。一步推进合不合规矩不在这里
-// 判断，那是第 7 层状态机的事。
-//
-// C31 不先查：推进不锁主机，先查的话，别人刚建、还没提交的任务查不到，两边就都落了库。推进到未结束的状态时由 idx_tasks_open
-// 挡住，撞上时整个推进回滚，问题与准入判定报的相同（repository.OpenTaskProblems）。
+// transition 保存不带执行数据的状态更新。执行更新在调用共用流程前校验自己的运行记录。
 func (s *Store) transition(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState, events []repository.NewEvent, a *repository.Audit) (model.Task, []repository.Appended, error) {
 	if err := repository.CheckTransition(id, to, events); err != nil {
 		return model.Task{}, nil, err
 	}
+	task, appended, err := s.persistTransition(ctx, id, expect, to, "", events, a)
+	if err != nil {
+		return model.Task{}, nil, err
+	}
+	return task, appended, nil
+}
+
+// persistTransition 在一个事务里核对任务版本，保存状态、事件和审计。
+// 结束的任务重新打开时先锁主机，与建任务、采集保持相同锁顺序。
+func (s *Store) persistTransition(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState, execution string, events []repository.NewEvent, a *repository.Audit) (model.Task, []repository.Appended, error) {
 	var row taskRow
 	var appended []repository.Appended
 	err := s.write(ctx, func(tx *gorm.DB) error {
 		var err error
-		if row, err = lockTask(tx, id); err != nil {
+		if row, err = lockTaskForTransition(tx, id, expect.State, to); err != nil {
 			return err
 		}
 		if row.State != string(expect.State) || row.Rev != expect.Rev {
+			if execution != "" {
+				return repository.ErrConflict
+			}
 			return errorf(repository.ErrConflict, "任务 %s 现为 %s、Rev %d，期望的是 %s、Rev %d：重读之后再判断",
 				id, row.State, row.Rev, expect.State, expect.Rev)
 		}
@@ -357,7 +386,12 @@ func (s *Store) transition(ctx context.Context, id string, expect repository.Tas
 			return err
 		}
 		row.State, row.Rev = string(to), row.Rev+1
-		if err := tx.Model(&taskRow{ID: id}).Select("state", "rev", "last_seq").Updates(&row).Error; err != nil {
+		columns := []string{"state", "rev", "last_seq"}
+		if execution != "" {
+			row.Execution = execution
+			columns = append(columns, "execution")
+		}
+		if err := tx.Model(&taskRow{ID: id}).Select(columns).Updates(&row).Error; err != nil {
 			if openTaskTaken(err) {
 				return repository.OpenTaskProblems(row.HostSN)
 			}
@@ -372,10 +406,24 @@ func (s *Store) transition(ctx context.Context, id string, expect repository.Tas
 		return model.Task{}, nil, translate(err, false, nil)
 	}
 	t, err := row.task()
-	if err != nil {
-		return model.Task{}, nil, err
+	return t, appended, err
+}
+
+func lockTaskForTransition(tx *gorm.DB, id string, from, to model.TaskState) (taskRow, error) {
+	if from.Finished() && !to.Finished() {
+		// host_sn 从建任务起固定。先锁主机，再锁任务，避免与建任务或采集反向等待。
+		var ref taskRow
+		switch err := tx.Select("host_sn").Where("id = ?", id).Take(&ref).Error; {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			return taskRow{}, taskNotFound(id)
+		case err != nil:
+			return taskRow{}, err
+		}
+		if _, err := lockHosts(tx, []string{ref.HostSN}); err != nil {
+			return taskRow{}, err
+		}
 	}
-	return t, appended, nil
+	return lockTask(tx, id)
 }
 
 // lockTask 在事务 tx 里给任务 id 加写锁并取出它，不存在报 ErrNotFound。推进与追加事件都先锁它：同一个任务上的这两种写入因此

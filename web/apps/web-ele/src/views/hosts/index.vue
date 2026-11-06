@@ -3,7 +3,7 @@ import type { AttributeRow } from './inventory-state';
 
 import type { HostListItem } from '#/api/console/host';
 
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 
 import { Page } from '@vben/common-ui';
 import { useAccessStore } from '@vben/stores';
@@ -29,6 +29,7 @@ import {
   deleteHostApi,
   getHostListApi,
   previewHostCSVApi,
+  requestHostInventoryApi,
   updateHostApi,
 } from '#/api/console/host';
 import { errorMessage, problemsOf, referencesOf } from '#/api/console/problem';
@@ -36,7 +37,7 @@ import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
 import { NumberedPage } from '#/composables/numbered-page';
 
-import { attributesOf, CsvImportSession } from './inventory-state';
+import { attributesOf, CsvImportSession, isInventoryControlAttribute } from './inventory-state';
 
 defineOptions({ name: 'HostsIndex' });
 const access = useAccessStore();
@@ -61,7 +62,7 @@ const [Grid, gridApi] = useVbenVxeGrid<HostListItem>({
         slots: { default: 'attrs' },
       },
       { field: 'rev', title: '修订', width: 80 },
-      { title: '操作', width: 160, slots: { default: 'action' } },
+      { title: '操作', width: 230, slots: { default: 'action' } },
     ],
     maxHeight: 520,
     pagerConfig: { enabled: false },
@@ -119,10 +120,9 @@ function openHost(host?: HostListItem) {
     attrs: {},
     rev: host?.rev ?? 0,
   });
-  attrs.value = Object.entries(host?.attrs ?? {}).map(([key, value]) => ({
-    key,
-    value,
-  }));
+  attrs.value = Object.entries(host?.attrs ?? {})
+    .filter(([key]) => !isInventoryControlAttribute(key))
+    .map(([key, value]) => ({ key, value }));
   editorOpen.value = true;
 }
 async function saveHost() {
@@ -164,58 +164,96 @@ async function removeHost(host: HostListItem) {
     failure.value = error;
   }
 }
+const inventoryRequests = reactive(new Set<string>());
+async function requestInventory(sn: string) {
+  if (!canWrite.value || inventoryRequests.has(sn)) return;
+  inventoryRequests.add(sn);
+  failure.value = undefined;
+  try {
+    await requestHostInventoryApi(sn);
+    ElMessage.success('硬件采集请求已登记');
+    void gridApi.reload();
+  } catch (error) {
+    failure.value = error;
+  } finally {
+    inventoryRequests.delete(sn);
+  }
+}
 const csvOpen = ref(false);
 const csvText = ref('');
 const csvName = ref('');
 const csvBusy = ref(false);
 const confirmed = ref(false);
 const csv = reactive(new CsvImportSession());
+const canCommitCSV = computed(
+  () => csvOpen.value && canWrite.value && !csvBusy.value &&
+    confirmed.value && csv.canConfirm,
+);
+watch(csvOpen, (open) => {
+  if (open) return;
+  csv.select();
+  confirmed.value = false;
+  csvBusy.value = false;
+}, { flush: 'sync' });
 function openCSV() {
   csvText.value = '';
   csvName.value = '';
-  csv.select(new Uint8Array());
-  confirmed.value = false;
   failure.value = undefined;
   csvOpen.value = true;
 }
 function changeCSVText(value: string) {
   csvName.value = '';
-  csv.select(new TextEncoder().encode(value));
   confirmed.value = false;
+  failure.value = undefined;
+  csv.select(new TextEncoder().encode(value));
 }
 async function selectCSV(event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0];
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
   if (!file) return;
+  input.value = '';
   csvText.value = '';
   csvName.value = file.name;
-  csv.select(new Uint8Array(await file.arrayBuffer()));
   confirmed.value = false;
+  failure.value = undefined;
+  const reading = csv.selectFile(() => file.arrayBuffer());
+  const version = csv.version;
+  try {
+    await reading;
+  } catch (error) {
+    if (version === csv.version) failure.value = error;
+  }
 }
 async function previewCSV() {
+  if (!csvOpen.value || !csv.ready || csvBusy.value) return;
+  const version = csv.version;
   csvBusy.value = true;
   failure.value = undefined;
   confirmed.value = false;
   try {
     await csv.preview(previewHostCSVApi);
   } catch (error) {
-    failure.value = error;
+    if (version === csv.version) failure.value = error;
   } finally {
-    csvBusy.value = false;
+    if (version === csv.version) csvBusy.value = false;
   }
 }
 async function commitCSV() {
-  if (!canWrite.value || csvBusy.value) return;
+  if (!canCommitCSV.value) return;
+  const version = csv.version;
   csvBusy.value = true;
   failure.value = undefined;
   try {
     await csv.commit(commitHostCSVApi, confirmed.value);
-    csvOpen.value = false;
-    ElMessage.success('CSV 已整体导入');
+    if (version === csv.version) {
+      csvOpen.value = false;
+      ElMessage.success('CSV 已整体导入');
+    }
     void gridApi.reload();
   } catch (error) {
-    failure.value = error;
+    if (version === csv.version) failure.value = error;
   } finally {
-    csvBusy.value = false;
+    if (version === csv.version) csvBusy.value = false;
   }
 }
 </script>
@@ -282,6 +320,14 @@ async function commitCSV() {
       </template>
       <template #action="{ row }">
         <ElButton v-if="canWrite" link @click="openHost(row)">编辑</ElButton>
+        <ElButton
+          v-if="canWrite"
+          link
+          :loading="inventoryRequests.has(row.sn)"
+          @click="requestInventory(row.sn)"
+        >
+          请求硬件采集
+        </ElButton>
         <ElButton v-if="canWrite" link type="danger" @click="removeHost(row)">
           删除
         </ElButton>
@@ -422,7 +468,7 @@ async function commitCSV() {
         placeholder="sn,arch,firmware,rack&#10;SN001,,,R1"
         @input="changeCSVText"
       />
-      <ElButton class="my-3" :loading="csvBusy" @click="previewCSV">
+      <ElButton class="my-3" :disabled="!csv.ready" :loading="csvBusy" @click="previewCSV">
         预览 CSV（不写入）
       </ElButton>
       <ElTable v-if="csv.plan" :data="csv.plan.rows ?? []" max-height="320">
@@ -439,9 +485,7 @@ async function commitCSV() {
         v-if="csv.plan"
         v-model="confirmed"
         class="mt-3"
-        :disabled="
-          csvBusy || (csv.plan.rows ?? []).some((row) => row.action === 'error')
-        "
+        :disabled="csvBusy || !csv.canConfirm"
       >
         已核对 {{ csv.plan.total }} 行，确认整体导入本次预览的 CSV
       </ElCheckbox>
@@ -449,7 +493,7 @@ async function commitCSV() {
         <ElButton :disabled="csvBusy" @click="csvOpen = false">关闭</ElButton>
         <ElButton
           type="primary"
-          :disabled="!confirmed || !csv.plan"
+          :disabled="!canCommitCSV"
           :loading="csvBusy"
           @click="commitCSV"
         >
