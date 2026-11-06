@@ -58,6 +58,46 @@ describe('host maintenance state', () => {
     await pending;
     await expect(session.commit(vi.fn(), true)).rejects.toThrow('预览');
   });
+  it('keeps the newer file when an older read finishes later', async () => {
+    const session = new CsvImportSession();
+    let finishOld!: (bytes: ArrayBuffer) => void;
+    const old = session.selectFile(() => new Promise((resolve) => { finishOld = resolve; }));
+    const newer = new Uint8Array([2]);
+    await session.selectFile(async () => newer.buffer);
+    finishOld(new Uint8Array([1]).buffer);
+    await old;
+
+    const preview = vi.fn().mockResolvedValue({ total: 1, rows: [] });
+    await session.preview(preview);
+    expect(preview).toHaveBeenCalledExactlyOnceWith(newer);
+  });
+
+  it('discards failed file reads and ignores old results after text or dialog changes', async () => {
+    const session = new CsvImportSession();
+    session.select(new Uint8Array([1]));
+    await session.preview(async () => ({ total: 1, rows: [] }));
+    await expect(session.selectFile(async () => { throw new Error('读取失败'); })).rejects.toThrow('读取失败');
+    const commit = vi.fn();
+    await expect(session.commit(commit, true)).rejects.toThrow('预览');
+
+    const text = new TextEncoder().encode('sn\ntext\n');
+    let fail!: (reason: Error) => void;
+    const old = session.selectFile(() => new Promise((_resolve, reject) => { fail = reject; }));
+    session.select(text);
+    fail(new Error('旧文件读取失败'));
+    await expect(old).resolves.toBeUndefined();
+    await session.preview(async () => ({ total: 1, rows: [] }));
+    await session.commit(commit, true);
+    expect(commit).toHaveBeenCalledExactlyOnceWith(text);
+
+    let finish!: (bytes: ArrayBuffer) => void;
+    const closed = session.selectFile(() => new Promise((resolve) => { finish = resolve; }));
+    session.select(new Uint8Array());
+    finish(new Uint8Array([2]).buffer);
+    await closed;
+    await expect(session.preview(vi.fn())).rejects.toThrow('请选择');
+  });
+
   it('resets cursor on a new search and discards late responses', async () => {
     const page = new CursorPage<{ sn: string }>();
     let resolve!: (value: { items: { sn: string }[]; next: string }) => void;
