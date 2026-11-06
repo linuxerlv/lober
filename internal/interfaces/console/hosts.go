@@ -66,12 +66,14 @@ func (s *server) hostRoutes() []route {
 }
 func (s *server) requestInventory(c *gin.Context) {
 	service := s.deps.Inventory
-	if service == nil || !service.Configured() {
+	if service == nil {
 		Fail(c, 422, nil, "未配置硬件采集镜像")
 		return
 	}
 	host, err := service.Request(c.Request.Context(), actorOf(c), c.Param("sn"))
 	switch {
+	case errors.Is(err, inventory.ErrMenuUnconfigured):
+		Fail(c, 422, nil, "未配置硬件采集镜像")
 	case errors.Is(err, inventory.ErrUnknownHost):
 		Fail(c, 404, nil, model.ConsoleNotFound)
 	case errors.Is(err, inventory.ErrHostBusy):

@@ -121,6 +121,8 @@ func issueForTest(s *Service, sn string) (string, bool) {
 
 type fakeTokens struct{ n int }
 
+var configuredMenu = MenuEndpoints{Gateway: "http://gateway.invalid", Artifacts: "http://artifacts.invalid", Kernel: "kernel", Initrd: "initrd"}
+
 func (f *fakeTokens) NewToken() (string, error) {
 	f.n++
 	return strings.Repeat(string(rune('a'+f.n%6)), 64), nil
@@ -129,7 +131,7 @@ func (f *fakeTokens) NewToken() (string, error) {
 func seededService(host model.Host) (*Service, *fakeHosts, *int64) {
 	hosts := newFakeHosts(host)
 	now := int64(1000)
-	s := New(Deps{Hosts: hosts, Tokens: &fakeTokens{}, Clock: func() int64 { return now }})
+	s := New(Deps{Hosts: hosts, Tokens: &fakeTokens{}, Clock: func() int64 { return now }, Menu: configuredMenu})
 	return s, hosts, &now
 }
 
@@ -180,7 +182,7 @@ func Test请求采集要求主机已登记(t *testing.T) {
 func Test有打开的任务时不许请求采集(t *testing.T) {
 	hosts := newFakeHosts(sampleHost())
 	hosts.busy = true
-	s := New(Deps{Hosts: hosts, Tokens: &fakeTokens{}, Clock: func() int64 { return 1000 }})
+	s := New(Deps{Hosts: hosts, Tokens: &fakeTokens{}, Clock: func() int64 { return 1000 }, Menu: configuredMenu})
 	if _, err := s.Request(context.Background(), adminActor(), "SN-1"); !errors.Is(err, ErrHostBusy) {
 		t.Fatalf("想要 ErrHostBusy，得到 %v", err)
 	}
@@ -352,7 +354,7 @@ func Test值不合法带上问题清单(t *testing.T) {
 
 func Test有打开的任务时拒收上报(t *testing.T) {
 	hosts := newFakeHosts(sampleHost())
-	s := New(Deps{Hosts: hosts, Tokens: &fakeTokens{}, Clock: func() int64 { return 1000 }})
+	s := New(Deps{Hosts: hosts, Tokens: &fakeTokens{}, Clock: func() int64 { return 1000 }, Menu: configuredMenu})
 	if _, err := s.Request(context.Background(), adminActor(), "SN-1"); err != nil {
 		t.Fatal(err)
 	}
