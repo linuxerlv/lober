@@ -125,8 +125,8 @@ func hostRegistryOf(st repository.Store, clock ports.Clock) hosts.Registry {
 func mediaRegistryOf(st repository.Store, src port.SourceControl, j *appmedia.Deletion, clock ports.Clock) appmedia.Registry {
 	return appmedia.NewRegistry(appmedia.Deps{ISOs: st, Sources: st, Control: src, Deletion: j, Clock: clock})
 }
-func consoleDepsOf(mediaRegistry appmedia.Registry, clock ports.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, controller tasks.Controller, hostRegistry hosts.Registry, identityService *identity.Service, auditReader audit.Reader, taskReader tasks.Reader, taskEvents tasks.EventReader) console.Deps {
-	return console.Deps{TaskReader: taskReader, TaskEvents: taskEvents, HostRegistry: hostRegistry, MediaRegistry: mediaRegistry, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, AuditReader: auditReader, Identity: identityService, TaskController: controller, Clock: clock, Logger: logger}
+func consoleDepsOf(mediaRegistry appmedia.Registry, clock ports.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, controller tasks.Controller, hostRegistry hosts.Registry, identityService *identity.Service, auditReader audit.Reader, taskReader tasks.Reader, taskEvents tasks.EventReader, machine *machineBundle, cfg config) console.Deps {
+	return console.Deps{TaskReader: taskReader, TaskEvents: taskEvents, HostRegistry: hostRegistry, Inventory: machine.Inventory, MediaRegistry: mediaRegistry, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, AuditReader: auditReader, Identity: identityService, TaskController: controller, Clock: clock, Logger: logger, LoginBodyLimit: cfg.LoginMaxBytes}
 }
 func appOf(ctx context.Context, cfg config, clock ports.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, src *appmedia.Sources, ctl port.SourceControl, s *appmedia.Supervisor, j *appmedia.Deletion, m *machineBundle, identityService *identity.Service, builtinBootstrapper authoring.Bootstrapper) *app {
 	return &app{Builtin: builtinBootstrapper, Identity: identityService, Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Sources: src, Control: ctl, Supervisor: s, Deletion: j, Machine: m}
@@ -144,7 +144,7 @@ func auditReaderOf(st repository.Store) audit.Reader { return audit.NewReader(st
 // 传进去：只配了配置、没传给服务，机器永远拿不到采集菜单。
 func inventoryServiceOf(st repository.Store, cfg config, clock ports.Clock) *inventory.Service {
 	return inventory.New(inventory.Deps{
-		Hosts: st, Tokens: credentials.NewTokens(), Clock: clock, Tasks: st,
+		Hosts: st, Tokens: credentials.NewTokens(), Clock: clock,
 		Menu: inventory.MenuEndpoints{
 			Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts,
 			Kernel: cfg.Preview.InventoryKernel, Initrd: cfg.Preview.InventoryInitrd,

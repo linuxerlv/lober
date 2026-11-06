@@ -87,7 +87,7 @@ func TestPanic兜底回500且不泄露令牌(t *testing.T) {
 		t.Fatal("panic secret escaped")
 	}
 }
-func Test查询令牌只允许SSE且Authorization优先(t *testing.T) {
+func Test任务事件流只接受Authorization令牌(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	token, _ := seedHTTPUser(t, s, st, "alice", model.RoleViewer)
 	s.server.installRoutes(s, []route{{method: "GET", path: "/console/v1/probe/sse/:id", perm: PermTaskRead, tag: "probe", summary: "Stream probe", stream: true, handle: func(c *gin.Context) { Ok(c, true) }}})
@@ -98,8 +98,11 @@ func Test查询令牌只允许SSE且Authorization优先(t *testing.T) {
 	if w := httpCall(s, "GET", "/console/v1/probe/stream?access_token="+token, "", ""); w.Code != 401 {
 		t.Fatal("path suffix bypassed descriptor")
 	}
-	if w := httpCall(s, "GET", "/console/v1/probe/sse/id?access_token="+token, "", ""); w.Code != 200 {
-		t.Fatal(w.Body.String())
+	if w := httpCall(s, "GET", "/console/v1/probe/sse/id?access_token="+token, "", ""); w.Code != 401 {
+		t.Fatal("事件流仍接受查询令牌", w.Code)
+	}
+	if w := httpCall(s, "GET", "/console/v1/probe/sse/id", "", token); w.Code != 200 {
+		t.Fatal("事件流不接受请求头令牌", w.Code)
 	}
 	if w := httpCall(s, "GET", "/console/v1/probe/sse/id?access_token="+token, "", "wrong"); w.Code != 401 {
 		t.Fatal("header bypassed")

@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"strconv"
 	"strings"
 
 	"github.com/lober/lober/internal/domain/catalog"
@@ -98,7 +97,16 @@ func SelectFile(snapshot model.Snapshot, name string) (FrozenFile, error) {
 		return FrozenFile{Kind: catalog.FileESXiStage}, nil
 	}
 	for _, slot := range snapshot.Slots {
-		if slot.Exec && name == "scripts/"+strconv.Itoa(slot.Seq)+".sh" {
+		if !slot.Exec {
+			continue
+		}
+		path, ok := catalog.DeliveryScriptPath(snapshot.Format, slot.Seq)
+		if !ok {
+			continue
+		}
+		// Windows 的旧下载地址也指向同一个插槽。
+		legacyWindowsPath := snapshot.Format == catalog.FormatUnattend && name == strings.TrimSuffix(path, ".cmd")+".sh"
+		if name == path || legacyWindowsPath {
 			return FrozenFile{Kind: catalog.FileScript, Slot: slot.Name}, nil
 		}
 	}

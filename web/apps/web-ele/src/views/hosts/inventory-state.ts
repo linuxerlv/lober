@@ -4,11 +4,21 @@ export interface AttributeRow {
   key: string;
   value: string;
 }
+const inventoryControlAttributes = new Set([
+  'inv_collected_at',
+  'inv_in_flight_at',
+  'inv_request_id',
+  'inv_requested_at',
+]);
+export function isInventoryControlAttribute(key: string) {
+  return inventoryControlAttributes.has(key);
+}
 export function attributesOf(rows: AttributeRow[]): Record<string, string> {
   const result: Record<string, string> = Object.create(null);
   for (const row of rows) {
     const key = row.key.trim();
     if (!key) throw new Error('属性名不能为空');
+    if (isInventoryControlAttribute(key)) throw new Error(`采集状态由系统更新：${key}`);
     if (Object.hasOwn(result, key)) throw new Error(`属性名重复：${key}`);
     result[key] = row.value;
   }
@@ -19,25 +29,44 @@ export class CsvImportSession {
   bytes: Uint8Array | undefined;
   plan: CSVPlan | undefined;
   version = 0;
+  get canConfirm() {
+    return this.ready && !!this.plan &&
+      !(this.plan.rows ?? []).some((row) => row.action === 'error');
+  }
+  get ready() {
+    return !!this.bytes?.length;
+  }
   async commit<T>(run: (bytes: Uint8Array) => Promise<T>, confirmed: boolean) {
-    if (!this.plan || !this.bytes) throw new Error('请先预览当前 CSV');
+    if (!this.plan || !this.bytes?.length) throw new Error('请先预览当前 CSV');
     if (!confirmed) throw new Error('请明确确认导入');
-    if ((this.plan.rows ?? []).some((row) => row.action === 'error'))
+    if (!this.canConfirm)
       throw new Error('请修正所有错误后重新预览');
+    const version = this.version;
     const result = await run(this.bytes);
-    this.plan = undefined;
+    if (version === this.version) this.plan = undefined;
     return result;
   }
   async preview(run: (bytes: Uint8Array) => Promise<CSVPlan>) {
     if (!this.bytes?.length) throw new Error('请选择 CSV 文件或输入 CSV 文本');
     const version = this.version;
+    this.plan = undefined;
     const plan = await run(this.bytes);
     if (version === this.version) this.plan = plan;
   }
-  select(bytes: Uint8Array) {
+  select(bytes?: Uint8Array) {
     this.version++;
-    this.bytes = bytes.slice();
+    this.bytes = bytes?.slice();
     this.plan = undefined;
+  }
+  async selectFile(read: () => Promise<ArrayBuffer>) {
+    this.select();
+    const version = this.version;
+    try {
+      const bytes = await read();
+      if (version === this.version) this.bytes = new Uint8Array(bytes);
+    } catch (error) {
+      if (version === this.version) throw error;
+    }
   }
 }
 

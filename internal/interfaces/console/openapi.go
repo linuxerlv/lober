@@ -61,7 +61,11 @@ func openAPIDocument(routes []route) map[string]any {
 			success = responseEnvelope(success, 0)
 		}
 		responses["200"] = map[string]any{"description": "Success", "content": map[string]any{media: map[string]any{"schema": success}}}
-		for _, status := range []int{400, 401, 403, 404, 409, 422, 500} {
+		statuses := []int{400, 401, 403, 404, 409, 422, 500}
+		if r.req != nil && r.requestMedia != "application/octet-stream" {
+			statuses = append(statuses, 413)
+		}
+		for _, status := range statuses {
 			data := any(map[string]any{"type": "object", "nullable": true, "enum": []any{nil}})
 			if status == 409 || status == 422 {
 				data = map[string]any{"oneOf": []any{problem, batch, map[string]any{"type": "object", "nullable": true, "enum": []any{nil}}}}
@@ -79,9 +83,6 @@ func openAPIDocument(routes []route) map[string]any {
 			op["security"] = []any{}
 		} else {
 			op["security"] = []any{map[string]any{"BearerAuth": []string{}}}
-		}
-		if r.stream {
-			op["security"] = []any{map[string]any{"BearerAuth": []string{}}, map[string]any{"StreamToken": []string{}}}
 		}
 		parameters := make([]any, 0)
 		for _, p := range strings.Split(r.path, "/") {
@@ -139,7 +140,7 @@ func openAPIDocument(routes []route) map[string]any {
 		}
 		item[strings.ToLower(r.method)] = op
 	}
-	return map[string]any{"openapi": "3.0.3", "info": map[string]any{"title": "Lober console", "version": "1.0.0"}, "paths": paths, "components": map[string]any{"schemas": b.defs, "securitySchemes": map[string]any{"BearerAuth": map[string]any{"type": "http", "scheme": "bearer"}, "StreamToken": map[string]any{"type": "apiKey", "in": "query", "name": "access_token"}}}}
+	return map[string]any{"openapi": "3.0.3", "info": map[string]any{"title": "Lober console", "version": "1.0.0"}, "paths": paths, "components": map[string]any{"schemas": b.defs, "securitySchemes": map[string]any{"BearerAuth": map[string]any{"type": "http", "scheme": "bearer"}}}}
 }
 func responseEnvelope(data any, code int) map[string]any {
 	return map[string]any{"type": "object", "required": []string{"code", "data", "message"}, "properties": map[string]any{"code": map[string]any{"type": "integer", "enum": []int{code}}, "data": data, "message": map[string]any{"type": "string"}}}

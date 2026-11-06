@@ -188,7 +188,7 @@ func TestOpenAPI公开枚举与路由数量保持兼容(t *testing.T) {
 	for _, item := range doc["paths"].(map[string]any) {
 		count += len(item.(map[string]any))
 	}
-	if count != 75 {
+	if count != 76 {
 		t.Fatalf("公开路由数量改变：%d", count)
 	}
 }

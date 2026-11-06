@@ -1,52 +1,31 @@
-import type { ConsoleRole, ConsoleSessionUser } from './session';
-
-import type { NumberedPageParams } from '#/composables/numbered-page';
+import type { Paths, Schemas } from './generated';
 
 import { requestClient } from '#/api/request';
-export interface ProfileInput {
-  displayName: string;
-  email: string;
-  avatar: string;
-  bio: string;
-  rev: number;
+
+export type User = Schemas['UserResponse'];
+export type UserCreate = Schemas['UserCreateRequest'];
+
+type UserQuery = Pick<Paths['/console/v1/users']['get']['query'], 'page' | 'page_size'>;
+type AccountHttp = Pick<typeof requestClient, 'delete' | 'get' | 'post' | 'put'>;
+
+function userPath(username: string) {
+  return `/users/${encodeURIComponent(username)}`;
 }
-export interface AccountInput {
-  username: string;
-  displayName: string;
-  role: ConsoleRole;
-  password: string;
-}
-export interface AccountUpdate {
-  displayName: string;
-  role: ConsoleRole;
-  disabled: boolean;
-  rev: number;
-  password?: string;
-}
-interface AccountHttp {
-  get<T>(path: string): Promise<T>;
-  post<T>(path: string, data: unknown): Promise<T>;
-  put<T>(path: string, data: unknown): Promise<T>;
-}
+
 export function createAccountsApi(client: AccountHttp) {
   return {
-    list: ({ page = 1, page_size = 20 }: Partial<NumberedPageParams> = {}) =>
-      client.get<{ items: ConsoleSessionUser[]; next: string; total: number }>(
-        `/users?page=${page}&page_size=${page_size}`,
-      ),
-    profile: (data: ProfileInput) =>
-      client.put<ConsoleSessionUser>('/user/profile', data),
-    create: (data: AccountInput) =>
-      client.post<ConsoleSessionUser>('/users', data),
-    update: (username: string, data: AccountUpdate) =>
-      client.put<ConsoleSessionUser>(
-        `/users/${encodeURIComponent(username)}`,
-        data,
-      ),
+    list: ({ page = 1, page_size = 20 }: UserQuery = {}) =>
+      client.get<Schemas['UserPage']>('/users', { params: { page, page_size } }),
+    profile: (data: Schemas['ProfileRequest']) =>
+      client.put<User>('/user/profile', data),
+    create: (data: UserCreate) => client.post<User>('/users', data),
+    update: (username: string, data: Schemas['UserUpdateRequest']) =>
+      client.put<User>(userPath(username), data),
+    disable: (username: string) => client.delete<null>(userPath(username)),
   };
 }
 export const accountsApi = createAccountsApi(requestClient);
-export const roleLabels: Record<ConsoleRole, string> = {
+export const roleLabels: Record<Schemas['StoreRole'], string> = {
   viewer: '只读用户',
   operator: '运维操作员',
   'hook-author': '脚本与模板作者',

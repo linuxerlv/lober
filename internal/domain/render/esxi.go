@@ -1,10 +1,10 @@
 package render
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -12,30 +12,18 @@ import (
 	"github.com/lober/lober/internal/domain/model"
 )
 
-func renderAux(r Request) ([]byte, []model.Problem, error) {
-	switch r.Snapshot.Format {
-	case "unattend":
-		return renderWindowsAux(r)
-	case "autoinstall":
-		values, problems := assemblerValues(r, "task")
-		if len(problems) != 0 {
-			return nil, problems, nil
-		}
-		return []byte(fmt.Sprintf("instance-id: lober-task-%s\n", values["task"])), nil, nil
-	case "esxi-ks":
-		if p := bootSnapshotProblems(r); len(p) != 0 {
-			return nil, p, nil
-		}
-		return renderESXiBootConfig(r)
-	default:
-		return nil, nil, errUnsupportedFormat
-	}
+func esxiMenu(m menuInput) string {
+	config, _ := m.answerURL(catalog.FileAux)
+	return fmt.Sprintf("kernel %s -c %s\n", m.artifacts["mboot"], config)
 }
 
 // Rebase the original ISO config for HTTP. All lines, unknown fields, module
 // order, nested paths, options and line endings survive. Prefix applies only to
 // relative file tokens, so only their leading ISO-root slash is removed.
 func renderESXiBootConfig(r Request) ([]byte, []model.Problem, error) {
+	if p := bootSnapshotProblems(r); len(p) != 0 {
+		return nil, p, nil
+	}
 	invalid := func() ([]byte, []model.Problem, error) {
 		return nil, []model.Problem{model.NewProblem("render_esxi_bootcfg_invalid", model.Subject{Kind: "iso", ID: r.Snapshot.ISO.ID, Path: "boot.cfg"})}, nil
 	}
@@ -208,92 +196,91 @@ func esxiKernelOptions(value, ks string) string {
 	return text
 }
 
-// startnet is selected by the real injected winpeshl.ini. Stock WinPE HTTP/PS
-// availability is never assumed. setup /m copies the local $1 OEM tree only
-// after target partitioning; pre hooks run only from windowsPE answer commands.
-func renderWindowsAux(r Request) ([]byte, []model.Problem, error) {
-	if p := bootSnapshotProblems(r); len(p) != 0 {
-		return nil, p, nil
-	}
-	values, p := assemblerValues(r, "gateway", "task", "token", "finalize-token", "smb", "artifacts")
-	tools := map[string]string{}
-	for _, role := range catalog.RequiredRoles(r.Snapshot.Series) {
-		value, problem := artifactURL(r, values["artifacts"], role)
-		tools[role] = value
-		if problem != nil {
-			p = append(p, *problem)
-		}
-	}
-	subject := model.Subject{Kind: "template", ID: templateRef(r.Snapshot.Template)}
-	parts := map[catalog.SystemPart][]byte{}
-	for _, part := range []catalog.SystemPart{"firstboot", "cleanup"} {
-		body, problems := windowsPartScript(expansion{request: r}, part, subject)
-		parts[part] = body
-		p = append(p, problems...)
-	}
-	if len(p) != 0 {
-		return nil, p, nil
-	}
-	var body strings.Builder
-	body.WriteString("#!/bin/sh\nset -eu\numask 077\nDIR=X:/lober\nOEM='X:/lober-oem/$1/ProgramData/lober'\nmkdir -p \"$DIR\" \"$OEM\"\n")
+func esxiEncodedShell(body string) string {
+	wrapped := `if [ "$LOBER_IFS_SET" = 1 ]; then IFS=$LOBER_OLD_IFS; else unset IFS; fi
+[ "$LOBER_OLD_GLOB" = 1 ] || set +f
+unset LOBER_OLD_IFS LOBER_IFS_SET LOBER_OLD_GLOB LOBER_ESXI_CODE LOBER_ESXI_HASH
+` + body
+	digest := sha256.Sum256([]byte(strings.TrimRight(wrapped, "\n")))
+	return "(LOBER_OLD_IFS=${IFS-};case ${IFS+x} in x) LOBER_IFS_SET=1;; *) LOBER_IFS_SET=0;; esac;" +
+		"case $- in *f*) LOBER_OLD_GLOB=1;; *) LOBER_OLD_GLOB=0;; esac;IFS=;set -f;LOBER_ESXI_CODE=$(echo " + base64.StdEncoding.EncodeToString([]byte(wrapped)) +
+		" | openssl base64 -d -A)||exit 127;LOBER_ESXI_HASH=$(printf %s $LOBER_ESXI_CODE | sha256sum)||exit 127;case $LOBER_ESXI_HASH in " +
+		fmt.Sprintf("%x", digest) + "*) :;; *) exit 65;; esac;eval $LOBER_ESXI_CODE)"
+}
 
-	body.WriteString("curl() { \"$DIR/curl.exe\" \"$@\"; }\n")
-	for _, role := range catalog.RequiredRoles(r.Snapshot.Series) {
-		var filename string
-		switch role {
-		case "winpe-busybox":
-			filename = "busybox.exe"
-		case "winpe-curl":
-			filename = "curl.exe"
-		default:
-			continue
-		}
-		body.WriteString(download("unattend", tools[role], "$OEM/"+filename))
+func esxiAnswerSlot(e expansion, slot model.SnapshotSlot, subject model.Subject) (string, []model.Problem) {
+	if slot.Timing != "firstboot" {
+		return shellAnswerSlot(e, slot, subject)
 	}
-	text := body.String()
-	text = strings.ReplaceAll(text, shQuote("$OEM/busybox.exe"), "\"$OEM/busybox.exe\"")
-	text = strings.ReplaceAll(text, shQuote("$OEM/curl.exe"), "\"$OEM/curl.exe\"")
-	body.Reset()
-	body.WriteString(text)
-	name, _ := catalog.DeliveryFileName("unattend", catalog.FileAnswer)
-	body.WriteString(download("unattend", catalog.AnswerURL(values["gateway"], values["task"], values["token"], name), "X:/lober/"+name))
-	body.WriteString("printf '%s' " + shQuote(values["finalize-token"]) + " > \"$OEM/finalize.token\"\n")
-	for _, part := range []catalog.SystemPart{"firstboot", "cleanup"} {
-		body.WriteString("printf '%s' " + shQuote(base64.StdEncoding.EncodeToString(parts[part])) + " | base64 -d > \"$OEM/" + windowsPartFile(part) + "\"\n")
+	// ESXi 按顺序执行原生首次启动段。冻结载荷由安装阶段存放到受保护的系统卷。
+	wrapper, p := posixRuntime(e.request, slot, false)
+	if len(p) != 0 {
+		return "", p
 	}
-	for _, slot := range r.Snapshot.Slots {
-		if !slot.Exec {
-			continue
-		}
-		destination := "$DIR/" + slotFile("unattend", slot)
-		if slot.Timing == "firstboot" {
-			destination = "$OEM/" + slotFile("unattend", slot)
-		}
-		fetch := download("unattend", catalog.AnswerURL(values["gateway"], values["task"], values["token"], "scripts/"+strconv.Itoa(slot.Seq)+".cmd"), destination)
-		fetch = strings.ReplaceAll(fetch, shQuote(destination), "\""+destination+"\"")
-		body.WriteString(fetch)
-		if slot.Timing == "firstboot" {
-			for _, instance := range slot.Instances {
-				path := "$OEM/" + hookFile(instance)
-				fetch := download("unattend", catalog.AnswerURL(values["gateway"], values["task"], values["token"], "hooks/"+instance.Digest), path)
-				fetch = strings.ReplaceAll(fetch, shQuote(path), "\""+path+"\"")
-				if instance.Required {
-					body.WriteString(fetch)
-				} else {
-					body.WriteString("(\n" + fetch + ") || :\n")
-				}
-			}
-		}
+	var b strings.Builder
+	b.WriteString("set -eu\numask 077\nmkdir -p /tmp/lober\n")
+	b.WriteString(encodedFile("/tmp/lober/"+slotFile("esxi-ks", slot), []byte(wrapper)))
+	for _, instance := range slot.Instances {
+		b.WriteString(encodedFile("/tmp/lober/"+hookFile(instance), []byte(instance.Body)))
 	}
-	// CMD arguments here are only paths and a safe smb value; free hook params
-	// remain in the encoded runtime and never participate in command parsing.
-	share := strings.ReplaceAll(values["smb"], "\\", "/")
-	body.WriteString("net.exe use " + shQuote(strings.ReplaceAll(share, "/", "\\")) + "\n")
-	setup := windowsNativeCommand("\"%LOBER_SETUP%\" /unattend:X:/lober/" + name + " /m:X:/lober-oem")
-	body.WriteString("printf '%s' " + shQuote(base64.StdEncoding.EncodeToString([]byte(setup))) + " | base64 -d > \"$DIR/setup-launch.cmd\"\n")
-	body.WriteString("LOBER_SETUP=" + shQuote(strings.ReplaceAll(share+"/setup.exe", "/", "\\")) + "\nLOBER_NATIVE_RC_FILE=\"$DIR/setup-result.rc\"\nexport LOBER_SETUP LOBER_NATIVE_RC_FILE\ncmd.exe /d /v:off /c \"$DIR/setup-launch.cmd\"\nRC=$(cat \"$LOBER_NATIVE_RC_FILE\") || exit 125\nprintf '%s' \"$RC\" > \"$DIR/startup.rc\"\nexit 0\n")
-	// Bootstrap has only ASCII target paths and invokes the injected interpreter.
-	bootstrap := windowsShellFile(body.String(), "X:/lober", "startup")
-	bootstrap = strings.Replace(bootstrap, "set \"LOBER_DIR=X:/lober\"\r\n", "wpeinit\r\nif errorlevel 1 exit /b %errorlevel%\r\nmkdir X:\\lober\r\ncopy /y \"%SystemRoot%\\System32\\busybox.exe\" X:\\lober\\busybox.exe >nul\r\nif errorlevel 1 exit /b %errorlevel%\r\ncopy /y \"%SystemRoot%\\System32\\curl.exe\" X:\\lober\\curl.exe >nul\r\nif errorlevel 1 exit /b %errorlevel%\r\nset \"LOBER_DIR=X:/lober\"\r\n", 1)
-	return []byte(bootstrap), nil, nil
+	b.WriteString("sh " + shQuote("/tmp/lober/"+slotFile("esxi-ks", slot)) + "\n")
+	return esxiEncodedShell(b.String()), nil
+}
+
+func encodedFile(path string, body []byte) string {
+	return "printf '%s' " + shQuote(base64.StdEncoding.EncodeToString(body)) + " | openssl base64 -d -A > " + shQuote(path) + "\n"
+}
+
+func esxiPart(e expansion, part catalog.SystemPart, subject model.Subject) (string, []model.Problem) {
+	keys := []catalog.SystemValue{"gateway", "task"}
+	if part == "firstboot" {
+		keys = append(keys, "finalize-token")
+	}
+	values, p := answerValues(e, subject, keys...)
+	if len(p) != 0 {
+		return "", p
+	}
+	body := "set -eu\numask 077\n" + esxiNativeOwnerCheck(values[1])
+	switch part {
+	case "firstboot":
+		body += "mkdir -p /tmp/lober\nprintf '%s' " + shQuote(values[2]) + " > /tmp/lober/finalize.token\n"
+		body += esxiFinalizeSignal(values[0], values[1], model.PhaseBooted) + esxiFinalizeSignal(values[0], values[1], model.PhaseInitStart)
+	case "cleanup":
+		stage, directory := esxiStagePaths(values[1])
+		body += "[ \"${LOBER_ESXI_STAGE_PATH:-}\" = " + shQuote(stage) + " ] && [ -f \"$LOBER_ESXI_STAGE_PATH\" ] && [ ! -L \"$LOBER_ESXI_STAGE_PATH\" ] && [ ! -L " + shQuote(directory) + " ] || exit 66\n"
+		body += "TOKEN=$(cat /tmp/lober/finalize.token)\n"
+		body += "rm -f \"$LOBER_ESXI_STAGE_PATH\"\nrmdir " + shQuote(directory) + "\n"
+		body += "rm -f /tmp/lober/finalize.token /tmp/lober/script-*.sh /tmp/lober/hook-* /tmp/lober/.owner\nrmdir /tmp/lober\n"
+		body += esxiFinalizeSignalWithToken(values[0], values[1], model.PhaseInitDone) + esxiFinalizeSignalWithToken(values[0], values[1], model.PhaseReady)
+	default:
+		return "", []model.Problem{model.NewProblem("render_replacement_missing", subject, part)}
+	}
+	prefix := ""
+	if part == "firstboot" {
+		prefix += "LOBER_ESXI_NATIVE_SCRIPT=$0;LOBER_ESXI_OWNER=" + esxiNativeMarker(values[1]) + ";export LOBER_ESXI_NATIVE_SCRIPT LOBER_ESXI_OWNER;"
+	}
+	return prefix + esxiEncodedShell(body), nil
+}
+
+func esxiNativeMarker(task string) string { return "lober-esxi-firstboot-" + task }
+
+func esxiNativeOwnerCheck(task string) string {
+	marker := esxiNativeMarker(task)
+	return "which grep >/dev/null 2>&1 || exit 127\ncase ${LOBER_ESXI_NATIVE_SCRIPT:-} in /*) ;; *) exit 66;; esac\n" +
+		"[ \"${LOBER_ESXI_OWNER:-}\" = " + shQuote(marker) + " ] && [ -f \"$LOBER_ESXI_NATIVE_SCRIPT\" ] && [ ! -L \"$LOBER_ESXI_NATIVE_SCRIPT\" ] && grep -F -q " + shQuote("LOBER_ESXI_OWNER="+marker+";") + " \"$LOBER_ESXI_NATIVE_SCRIPT\" || exit 66\n"
+}
+
+func esxiFinalizeSignal(gateway, task string, phase model.SignalPhase) string {
+	return "TOKEN=$(cat /tmp/lober/finalize.token)\n" + esxiFinalizeSignalWithToken(gateway, task, phase)
+}
+
+func esxiFinalizeSignalWithToken(gateway, task string, phase model.SignalPhase) string {
+	address := catalog.SignalURL(gateway, task, "TOKEN", string(phase))
+	before, after := tokenURLParts(address)
+	return "address=" + shQuote(before) + "\"$TOKEN\"" + shQuote(after) + "\nbody=\n" + esxiHTTPPost() + " >/dev/null 2>&1 || :\n"
+}
+
+// ESXi 自带的 wget 不支持 POST；用系统自带的 Python 保留二进制内容。
+func esxiHTTPPost() string {
+	return `LOBER_SIGNAL_URL="$address" LOBER_SIGNAL_BODY="$body" python3 -c 'import os,urllib.request; p=os.environ["LOBER_SIGNAL_BODY"]; b=open(p,"rb").read() if p else b""; req=urllib.request.Request(os.environ["LOBER_SIGNAL_URL"],data=b,headers={"Content-Type":"text/plain"},method="POST"); urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req,timeout=10).close()'`
 }

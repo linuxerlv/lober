@@ -26,7 +26,11 @@ func (s *server) authRoutes() []route {
 }
 func (s *server) login(c *gin.Context) {
 	var req loginRequest
-	if !Bind(c, &req) {
+	limit := s.deps.LoginBodyLimit
+	if limit == 0 {
+		limit = DefaultLoginBodyLimit
+	}
+	if !bindJSON(c, &req, limit) {
 		return
 	}
 	result, ok := Get(c, func() (identity.SessionResult, error) {

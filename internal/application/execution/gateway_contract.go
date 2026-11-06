@@ -53,10 +53,8 @@ type Endpoints struct{ Gateway, Artifacts, SMB, SyslogAddr string }
 //
 // 全部方法为空时网关不给采集菜单，机器照旧从本地盘启动——这是没启用采集时的正常状态。
 type InventoryBoot interface {
-	// Pending 报告这台主机此刻该不该进采集镜像。它自己会查登记、请求标记与进行中超时。
-	Pending(context.Context, string) (bool, error)
-	// Token 为这次采集发一个一次性令牌。
-	Token(string) (string, bool)
+	// ClaimToken 检查登记、忙闲和采集批次，并为同一批次发令牌。无可用批次返回空串。
+	ClaimToken(context.Context, string) (string, error)
 	// Menu 产出采集菜单的 iPXE 文本。
 	Menu(sn, token string) ([]byte, error)
 	// Submit 接收一份上报的正文，成功时返回零值错误。错误分类由采集模块定义。

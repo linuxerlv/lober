@@ -1,11 +1,12 @@
 package console
 
 import (
-	"io"
+	"errors"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/application/hosts"
+	"github.com/lober/lober/internal/application/inventory"
 	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 )
@@ -60,6 +61,27 @@ func (s *server) hostRoutes() []route {
 		{method: "GET", path: "/console/v1/hosts/:sn", perm: PermHostRead, tag: "hosts", summary: "Get host", resp: hostResponse{}, handle: s.getHost},
 		{method: "PUT", path: "/console/v1/hosts/:sn", perm: PermHostWrite, audit: "host.update", tag: "hosts", summary: "Replace host", req: hostRequest{}, resp: hostResponse{}, handle: s.updateHost},
 		{method: "DELETE", path: "/console/v1/hosts/:sn", perm: PermHostWrite, audit: "host.delete", tag: "hosts", summary: "Delete host", query: revisionQuery{}, handle: s.deleteHost},
+		{method: "POST", path: "/console/v1/hosts/:sn/inventory/request", perm: PermHostWrite, audit: "host.inventory_request", tag: "hosts", summary: "Request hardware inventory", resp: hostResponse{}, handle: s.requestInventory},
+	}
+}
+func (s *server) requestInventory(c *gin.Context) {
+	service := s.deps.Inventory
+	if service == nil {
+		Fail(c, 422, nil, "未配置硬件采集镜像")
+		return
+	}
+	host, err := service.Request(c.Request.Context(), actorOf(c), c.Param("sn"))
+	switch {
+	case errors.Is(err, inventory.ErrMenuUnconfigured):
+		Fail(c, 422, nil, "未配置硬件采集镜像")
+	case errors.Is(err, inventory.ErrUnknownHost):
+		Fail(c, 404, nil, model.ConsoleNotFound)
+	case errors.Is(err, inventory.ErrHostBusy):
+		Fail(c, 409, nil, "主机有未结束的装机任务，暂不能请求采集")
+	case err != nil:
+		RespondError(c, err)
+	default:
+		Ok(c, toHostResponse(host))
 	}
 }
 func (s *server) listHosts(c *gin.Context) {
@@ -149,9 +171,8 @@ func (s *server) importHosts(c *gin.Context) {
 		}
 		dryRun = raw == "true"
 	}
-	data, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
+	data, ok := readRequestBody(c, hostCSVLimit)
+	if !ok {
 		return
 	}
 	result, ok := Write(c, func() (hosts.ImportResult, error) {

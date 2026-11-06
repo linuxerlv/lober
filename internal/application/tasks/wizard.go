@@ -36,13 +36,13 @@ func (w *wizard) Hosts(ctx context.Context, actor ports.Actor, req HostRequest) 
 	if err != nil {
 		return HostPage{}, err
 	}
+	open, err := w.openHosts(ctx, page.Items)
+	if err != nil {
+		return HostPage{}, err
+	}
 	items := make([]HostChoice, len(page.Items))
 	for i, h := range page.Items {
-		_, open, err := w.deps.Tasks.FindOpenTask(ctx, h.SN)
-		if err != nil {
-			return HostPage{}, err
-		}
-		items[i] = HostChoice{Host: h, Problems: admission.HostSelectable(h, open)}
+		items[i] = HostChoice{Host: h, Problems: admission.HostSelectable(h, open[h.SN])}
 	}
 	return HostPage{Items: items, Next: page.Next, Total: page.Total}, nil
 }

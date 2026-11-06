@@ -193,8 +193,8 @@ func Test镜像额外源普通错误仍按原分类(t *testing.T) {
 			if readErr != nil || current.State != model.ISOFailed || current.Rev != before.Rev+1 {
 				t.Fatal("普通错误没有按原行为记录失败", current, readErr)
 			}
-			if mustSource(t, s, before.ID, "").Error != err.Error() {
-				t.Error("普通错误没有保存到主来源")
+			if got := mustSource(t, s, before.ID, "").Error; got != "附加镜像缺失、不完整或与主镜像不匹配" {
+				t.Errorf("主来源未保存固定失败原因：%q", got)
 			}
 			if step.closed != 1 || tc.at > 0 && (step.reached != 1 || !step.digested) {
 				t.Fatalf("普通错误的读取或关闭边界不对：%+v", step)

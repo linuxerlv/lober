@@ -5,7 +5,6 @@ import (
 
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
-	"gorm.io/gorm"
 )
 
 func (s *Store) UpdateTaskExecution(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState,
@@ -32,36 +31,9 @@ func (s *Store) UpdateTaskExecution(ctx context.Context, id string, expect repos
 	if err != nil || len(encoded) > 4<<20 {
 		return model.Task{}, nil, repository.ErrInvalid
 	}
-	var row taskRow
-	var appended []repository.Appended
-	err = s.write(ctx, func(tx *gorm.DB) error {
-		var err error
-		row, err = lockTask(tx, id)
-		if err != nil {
-			return err
-		}
-		if row.State != string(expect.State) || row.Rev != expect.Rev {
-			return repository.ErrConflict
-		}
-		appended, err = appendEvents(tx, &row, events)
-		if err != nil {
-			return err
-		}
-		row.State, row.Rev, row.Execution = string(to), row.Rev+1, encoded
-		if err := tx.Model(&taskRow{ID: id}).Select("state", "rev", "last_seq", "execution").Updates(&row).Error; err != nil {
-			if openTaskTaken(err) {
-				return repository.OpenTaskProblems(row.HostSN)
-			}
-			return err
-		}
-		if audited {
-			return addAudits(tx, audit, "task", id)
-		}
-		return nil
-	})
-	if err != nil {
-		return model.Task{}, nil, translate(err, false, nil)
+	var entry *repository.Audit
+	if audited {
+		entry = &audit
 	}
-	task, err := row.task()
-	return task, appended, err
+	return s.persistTransition(ctx, id, expect, to, encoded, events, entry)
 }
