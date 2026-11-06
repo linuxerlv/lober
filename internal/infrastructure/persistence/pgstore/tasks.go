@@ -69,13 +69,19 @@ func (s *Store) createTasks(ctx context.Context, ts []model.Task, a repository.A
 		if err != nil {
 			return err
 		}
+		if current {
+			for i, host := range in.Hosts {
+				if !hostSnapshotCurrent(host, ts[i].Snapshot.Host) {
+					return errorf(repository.ErrConflict, "主机 %s 的装机属性已变更，请刷新后再建任务", host.SN)
+				}
+			}
+		}
 		for _, r := range rows {
 			err := tx.Omit(clause.Associations).Create(&r).Error
 			if err == nil {
 				continue
 			}
-			// 第 4 步的兜底：失败的任务正在重试、还没提交时，准入看不到它（推进不锁主机），插入要等它提交才撞上。结果按准入
-			// 看得到它时的给，与第 3 步报的同形
+			// 唯一索引是最后一道检查，撞上时沿用准入的问题格式。
 			if openTaskTaken(err) {
 				in.OpenTask[r.HostSN] = true
 				if be := repository.BatchProblems(in, nil); be != nil {
@@ -96,6 +102,24 @@ func (s *Store) createTasks(ctx context.Context, ts []model.Task, a repository.A
 		}
 	}
 	return out, nil
+}
+
+// 向导在事务外求值。只有真正影响装机的数据变化才要求重新提交，采集进度本身不算。
+func hostSnapshotCurrent(h model.Host, snapshot model.SnapshotHost) bool {
+	if h.Arch != snapshot.Arch || h.Firmware != snapshot.Firmware {
+		return false
+	}
+	for key, value := range h.Attrs {
+		if got, ok := snapshot.Attrs[key]; !model.IsInventoryControlAttr(key) && (!ok || got != value) {
+			return false
+		}
+	}
+	for key := range snapshot.Attrs {
+		if _, ok := h.Attrs[key]; !model.IsInventoryControlAttr(key) && !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // lockCurrentTemplate 先锁身份，再用下一条查询读取最新版本事实；等审批提交后也能读到它的新状态。

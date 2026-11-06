@@ -50,3 +50,26 @@ func TestInventorySerializesWithTaskRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCurrentTaskRejectsHostChangedByInventory(t *testing.T) {
+	s := pgtest.OpenStore(t)
+	f := newFixture(t, s)
+	host := mustTaskHosts(t, s, "INV-SNAPSHOT")[0]
+	stale := f.newTasks(t, host)
+	current, err := s.UpdateInventory(t.Context(), host.SN, func(h model.Host, _ bool) (repository.InventoryChange, error) {
+		if h.Attrs == nil {
+			h.Attrs = map[string]string{}
+		}
+		h.Attrs["inv_system_disk"] = "sdb"
+		return repository.InventoryChange{Attrs: h.Attrs, Audit: anAudit("host.inventory")}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateCurrentTasks(t.Context(), stale, anAudit("task.create")); !errors.Is(err, repository.ErrConflict) {
+		t.Fatalf("不应按旧磁盘数据创建任务：%v", err)
+	}
+	if _, err := s.CreateCurrentTasks(t.Context(), f.newTasks(t, current), anAudit("task.create")); err != nil {
+		t.Fatal("新快照应允许创建任务", err)
+	}
+}
