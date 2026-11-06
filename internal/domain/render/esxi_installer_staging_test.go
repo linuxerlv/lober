@@ -125,6 +125,13 @@ func TestESXiInstallerStagesFrozenPayloadAndRejectsUnsafeTargets(t *testing.T) {
 			pre = strings.ReplaceAll(pre, "/tmp/"+name, temporary)
 			post = strings.ReplaceAll(post, "/tmp/"+name, temporary)
 			post = strings.ReplaceAll(post, "/vmfs/volumes/OSDATA-*", filepath.Join(volumes, "OSDATA-*"))
+			// BusyBox 可能优先使用内置命令，测试替身必须指定完整路径。
+			pre = strings.ReplaceAll(pre, "timeout -t ", shQuote(filepath.Join(bin, "timeout"))+" -t ")
+			pre = strings.ReplaceAll(pre, "stat -", shQuote(filepath.Join(bin, "stat"))+" -")
+			post = strings.ReplaceAll(post, "stat -", shQuote(filepath.Join(bin, "stat"))+" -")
+			if strings.HasPrefix(scenario, "post") {
+				post = strings.ReplaceAll(post, "cp ", shQuote(filepath.Join(bin, "cp"))+" ")
+			}
 			run := func(script string) error {
 				cmd := exec.Command(busybox, "sh", "-s")
 				cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
@@ -224,3 +231,4 @@ func TestESXiInstallerStagesFrozenPayloadAndRejectsUnsafeTargets(t *testing.T) {
 		})
 	}
 }
+
