@@ -26,6 +26,14 @@ Lober 把这些变成：
 | Windows | Windows Server、Windows 桌面版 | unattend |
 | ESXi | ESXi | ESXi ks |
 
+ESXi 7、8、9 可从安装镜像的 `boot.cfg` 读取完整构建版本，并提取网络安装文件。
+目前只支持 x86_64、UEFI。内置模板依赖首次启动脚本，使用时需关闭安全启动。
+本地镜像导入和启动配置验证不代表客户机实际安装通过；正式使用前应在隔离测试机完成安装验证。
+
+真实镜像测试使用 `LOBER_TEST_ESXI7_ISO`、`LOBER_TEST_ESXI8_ISO`、`LOBER_TEST_ESXI9_ISO` 指定本地路径，
+运行 `go test ./internal/application/media -run TestImportRealESXi -count=1 -v`。
+当前测试分别核对 7.0.3-0.135.24585291、8.0.3-0.102.25595708、9.0.2-0100.25595025；另需配置 PostgreSQL 测试库。
+
 旧镜像、模板和已结束任务仍可查看；已停止支持的系统不能再创建或重试安装任务。
 
 如果还有这些系统的未完成任务，新版本会拒绝启动。请先在旧版本确认客户机已安全结束安装，再通过正常任务接口处理。

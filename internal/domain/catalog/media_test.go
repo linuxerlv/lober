@@ -49,7 +49,7 @@ var pendingMedia = []struct {
 	{"almalinux", ".treeinfo 里的实际 name= 字样"},
 	{"debian", ".disk/info 的版本与架构取法"},
 	{"ubuntu", ".disk/info 的版本与架构取法"},
-	{"esxi", "ISO 内的版本识别依据；首版明确不能 ready"},
+	{"esxi", "7、8、9 的真实镜像导入已验证；网络开机、安装和首次启动回报仍需隔离测试机核实"},
 }
 
 func Test介质目录与计划一致(t *testing.T) {
