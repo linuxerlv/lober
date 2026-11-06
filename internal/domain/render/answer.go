@@ -1,7 +1,9 @@
 package render
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -124,7 +126,7 @@ func answerSlot(e expansion, slot model.SnapshotSlot, subject model.Subject) (st
 		b.WriteString("sh " + shQuote(local) + "\n")
 	}
 	if e.request.Snapshot.Format == "esxi-ks" {
-		return "command -v base64||exit 127;" + encodedShell(b.String()), nil
+		return esxiEncodedShell(b.String()), nil
 	}
 	return installerShellPayload(e.request.Snapshot.Format, b.String()), nil
 }
@@ -322,6 +324,18 @@ func encodedShell(body string) string {
 	return "echo " + base64.StdEncoding.EncodeToString([]byte(body)) + " | base64 -d | sh"
 }
 
+func esxiEncodedShell(body string) string {
+	wrapped := `if [ "$LOBER_IFS_SET" = 1 ]; then IFS=$LOBER_OLD_IFS; else unset IFS; fi
+[ "$LOBER_OLD_GLOB" = 1 ] || set +f
+unset LOBER_OLD_IFS LOBER_IFS_SET LOBER_OLD_GLOB LOBER_ESXI_CODE LOBER_ESXI_HASH
+` + body
+	digest := sha256.Sum256([]byte(strings.TrimRight(wrapped, "\n")))
+	return "(LOBER_OLD_IFS=${IFS-};case ${IFS+x} in x) LOBER_IFS_SET=1;; *) LOBER_IFS_SET=0;; esac;" +
+		"case $- in *f*) LOBER_OLD_GLOB=1;; *) LOBER_OLD_GLOB=0;; esac;IFS=;set -f;LOBER_ESXI_CODE=$(echo " + base64.StdEncoding.EncodeToString([]byte(wrapped)) +
+		" | openssl base64 -d -A)||exit 127;LOBER_ESXI_HASH=$(printf %s $LOBER_ESXI_CODE | sha256sum)||exit 127;case $LOBER_ESXI_HASH in " +
+		fmt.Sprintf("%x", digest) + "*) :;; *) exit 65;; esac;eval $LOBER_ESXI_CODE)"
+}
+
 // ESXi persists native %firstboot sections itself, once and in file order. The
 // frozen payloads live IN those sections, not in a Linux installer staging path.
 // Secure Boot suppresses %firstboot: layer7 must reject that configuration when
@@ -338,11 +352,11 @@ func esxiFirstbootSlot(e expansion, slot model.SnapshotSlot, subject model.Subje
 		b.WriteString(encodedFile("/tmp/lober/"+hookFile(instance), []byte(instance.Body)))
 	}
 	b.WriteString("sh " + shQuote("/tmp/lober/"+slotFile("esxi-ks", slot)) + "\n")
-	return "command -v base64||exit 127;" + encodedShell(b.String()), nil
+	return esxiEncodedShell(b.String()), nil
 }
 
 func encodedFile(path string, body []byte) string {
-	return "printf '%s' " + shQuote(base64.StdEncoding.EncodeToString(body)) + " | base64 -d > " + shQuote(path) + "\n"
+	return "printf '%s' " + shQuote(base64.StdEncoding.EncodeToString(body)) + " | openssl base64 -d -A > " + shQuote(path) + "\n"
 }
 
 func esxiPart(e expansion, part catalog.SystemPart, subject model.Subject) (string, []model.Problem) {
@@ -366,22 +380,28 @@ func esxiPart(e expansion, part catalog.SystemPart, subject model.Subject) (stri
 	default:
 		return "", []model.Problem{model.NewProblem("render_replacement_missing", subject, part)}
 	}
-	prefix := "command -v base64||exit 127;"
+	prefix := ""
 	if part == "firstboot" {
 		prefix += "LOBER_ESXI_NATIVE_SCRIPT=$0;LOBER_ESXI_OWNER=" + esxiNativeMarker(values[1]) + ";export LOBER_ESXI_NATIVE_SCRIPT LOBER_ESXI_OWNER;"
 	}
-	return prefix + encodedShell(body), nil
+	return prefix + esxiEncodedShell(body), nil
 }
 
 func esxiNativeMarker(task string) string { return "lober-esxi-firstboot-" + task }
+
 func esxiNativeOwnerCheck(task string) string {
 	marker := esxiNativeMarker(task)
-	return "command -v grep >/dev/null 2>&1 || exit 127\ncase ${LOBER_ESXI_NATIVE_SCRIPT:-} in /*) ;; *) exit 66;; esac\n" +
+	return "which grep >/dev/null 2>&1 || exit 127\ncase ${LOBER_ESXI_NATIVE_SCRIPT:-} in /*) ;; *) exit 66;; esac\n" +
 		"[ \"${LOBER_ESXI_OWNER:-}\" = " + shQuote(marker) + " ] && [ -f \"$LOBER_ESXI_NATIVE_SCRIPT\" ] && [ ! -L \"$LOBER_ESXI_NATIVE_SCRIPT\" ] && grep -F -q " + shQuote("LOBER_ESXI_OWNER="+marker+";") + " \"$LOBER_ESXI_NATIVE_SCRIPT\" || exit 66\n"
 }
 
 func esxiFinalizeSignal(gateway, task string, phase model.SignalPhase) string {
 	address := catalog.SignalURL(gateway, task, "TOKEN", string(phase))
 	before, after := tokenURLParts(address)
-	return "TOKEN=$(cat /tmp/lober/finalize.token)\nwget -q -T 10 -O /dev/null --header='Content-Type: text/plain' --post-data='' " + shQuote(before) + "\"$TOKEN\"" + shQuote(after) + " >/dev/null 2>&1 || :\n"
+	return "TOKEN=$(cat /tmp/lober/finalize.token)\naddress=" + shQuote(before) + "\"$TOKEN\"" + shQuote(after) + "\nbody=\n" + esxiHTTPPost() + " >/dev/null 2>&1 || :\n"
+}
+
+// ESXi 自带的 wget 不支持 POST；用系统自带的 Python 保留二进制内容。
+func esxiHTTPPost() string {
+	return `LOBER_SIGNAL_URL="$address" LOBER_SIGNAL_BODY="$body" python3 -c 'import os,urllib.request; p=os.environ["LOBER_SIGNAL_BODY"]; b=open(p,"rb").read() if p else b""; req=urllib.request.Request(os.environ["LOBER_SIGNAL_URL"],data=b,headers={"Content-Type":"text/plain"},method="POST"); urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req,timeout=10).close()'`
 }

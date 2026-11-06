@@ -50,11 +50,13 @@ func posixRuntime(r Request, slot model.SnapshotSlot, windows bool) (string, []m
 			b.WriteString(applet + "() { \"$DIR/busybox.exe\" " + applet + " \"$@\"; }\n")
 		}
 		b.WriteString("curl() { \"$DIR/curl.exe\" \"$@\"; }\n[ -f \"$DIR/curl.exe\" ] || exit 127\n")
+	} else if esxi {
+		b.WriteString("for tool in sha256sum sleep mktemp tail cat openssl setsid; do which \"$tool\" >/dev/null 2>&1 || exit 127; done\n")
 	} else {
 		b.WriteString("for tool in sha256sum sleep mktemp tail cat base64; do command -v \"$tool\" >/dev/null 2>&1 || exit 127; done\n")
 	}
 	if esxi {
-		b.WriteString("command -v setsid >/dev/null 2>&1 || exit 127\nsetsid sh -c 'kill -0 -$$' || exit 125\n")
+		b.WriteString("setsid sh -c 'kill -0 -$$' || exit 125\n")
 	}
 	b.WriteString("mkdir -p \"$DIR\" || exit $?\n")
 	if slot.Timing == "firstboot" {
@@ -148,7 +150,11 @@ signal slot-start 0 0 '' ''
 			b.WriteString("printf '%s' " + shQuote(base64.StdEncoding.EncodeToString([]byte(windowsNativeLauncher(instance.Interpreter)))) + " | base64 -d > \"$NATIVE_LAUNCH\" || exit $?\n")
 		}
 		launcher := runtimeLauncher(instance, windows)
-		b.WriteString("printf '%s' " + shQuote(base64.StdEncoding.EncodeToString([]byte(launcher))) + " | base64 -d > \"$WORK/launch-" + n + ".sh\" || exit $?\n")
+		decoder := "base64 -d"
+		if esxi {
+			decoder = "openssl base64 -d -A"
+		}
+		b.WriteString("printf '%s' " + shQuote(base64.StdEncoding.EncodeToString([]byte(launcher))) + " | " + decoder + " > \"$WORK/launch-" + n + ".sh\" || exit $?\n")
 		program := "sh"
 		if windows {
 			program = "\"$DIR/busybox.exe\" sh -X"
@@ -218,7 +224,7 @@ func runtimeSignalFunction(r Request, slot model.SnapshotSlot, values map[catalo
 	before, after := tokenURLParts(address)
 	after = strings.TrimSuffix(after, "PHASE")
 	transport := "curl -fsS -m 10 -X POST -H 'Content-Type: text/plain' \"$address\" --data-binary \"$body\""
-	wgetSignal := r.Snapshot.Format == "esxi-ks" || (r.Snapshot.Format == "preseed" && (slot.Timing == "pre" || slot.Timing == "post-installer"))
+	wgetSignal := r.Snapshot.Format == "preseed" && (slot.Timing == "pre" || slot.Timing == "post-installer")
 	if wgetSignal {
 		transport = "wget -q -T 10 -O /dev/null --header='Content-Type: text/plain' --post-file=\"$body\" \"$address\""
 	}
@@ -230,6 +236,10 @@ func runtimeSignalFunction(r Request, slot model.SnapshotSlot, values map[catalo
 	body := "if [ -n \"$body\" ]; then body=\"@$body\"; fi"
 	if wgetSignal {
 		body = "if [ -z \"$body\" ]; then body=\"$WORK/empty\"; : > \"$body\"; fi"
+	}
+	if r.Snapshot.Format == "esxi-ks" {
+		body = ":"
+		transport = esxiHTTPPost()
 	}
 	return fmt.Sprintf(`signal() {
  phase=$1; instance=$2; rc=$3; digest=$4; body=$5
