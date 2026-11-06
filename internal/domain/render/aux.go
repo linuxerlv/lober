@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -269,7 +268,8 @@ func renderWindowsAux(r Request) ([]byte, []model.Problem, error) {
 		if slot.Timing == "firstboot" {
 			destination = "$OEM/" + slotFile("unattend", slot)
 		}
-		fetch := download("unattend", catalog.AnswerURL(values["gateway"], values["task"], values["token"], "scripts/"+strconv.Itoa(slot.Seq)+".cmd"), destination)
+		path, _ := catalog.DeliveryScriptPath(r.Snapshot.Format, slot.Seq)
+		fetch := download("unattend", catalog.AnswerURL(values["gateway"], values["task"], values["token"], path), destination)
 		fetch = strings.ReplaceAll(fetch, shQuote(destination), "\""+destination+"\"")
 		body.WriteString(fetch)
 		if slot.Timing == "firstboot" {

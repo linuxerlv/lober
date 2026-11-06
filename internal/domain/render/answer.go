@@ -111,7 +111,8 @@ func answerSlot(e expansion, slot model.SnapshotSlot, subject model.Subject) (st
 	}
 	var b strings.Builder
 	b.WriteString("set -eu\numask 077\nmkdir -p " + shQuote(parentPath(local)) + "\n")
-	b.WriteString(download(e.request.Snapshot.Format, catalog.AnswerURL(values[0], values[1], values[2], "scripts/"+strconv.Itoa(slot.Seq)+".sh"), local))
+	path, _ := catalog.DeliveryScriptPath(e.request.Snapshot.Format, slot.Seq)
+	b.WriteString(download(e.request.Snapshot.Format, catalog.AnswerURL(values[0], values[1], values[2], path), local))
 	if slot.Timing == "firstboot" {
 		for _, instance := range slot.Instances {
 			path := root + "/var/lib/lober/" + hookFile(instance)
