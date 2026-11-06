@@ -80,17 +80,25 @@ func (w *wizard) selectionFacts(ctx context.Context, req Selection) (model.Templ
 	}
 	return t, iso, hooks, nil
 }
-func (w *wizard) batch(ctx context.Context, t model.Template, iso model.ISO, hooks map[model.HookKey]model.Hook, hosts []model.Host, missing []string) (admission.BatchResult, error) {
-	open := map[string]bool{}
+func (w *wizard) openHosts(ctx context.Context, hosts []model.Host) (map[string]bool, error) {
+	if len(hosts) == 0 {
+		return nil, nil
+	}
+	sns := make([]string, 0, len(hosts))
+	seen := make(map[string]bool, len(hosts))
 	for _, h := range hosts {
-		if _, done := open[h.SN]; done {
-			continue
+		if !seen[h.SN] {
+			seen[h.SN] = true
+			sns = append(sns, h.SN)
 		}
-		_, has, err := w.deps.Tasks.FindOpenTask(ctx, h.SN)
-		if err != nil {
-			return admission.BatchResult{}, err
-		}
-		open[h.SN] = has
+	}
+	return w.deps.Tasks.FindOpenHosts(ctx, sns)
+}
+
+func (w *wizard) batch(ctx context.Context, t model.Template, iso model.ISO, hooks map[model.HookKey]model.Hook, hosts []model.Host, missing []string) (admission.BatchResult, error) {
+	open, err := w.openHosts(ctx, hosts)
+	if err != nil {
+		return admission.BatchResult{}, err
 	}
 	result := admission.Batch(admission.BatchInput{Hosts: hosts, OpenTask: open, ISO: iso, Template: t, Hooks: hooks})
 	seen := map[string]bool{}

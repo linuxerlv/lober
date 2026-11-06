@@ -233,11 +233,7 @@ func (s *Sources) failImport(ctx context.Context, id string, cause error) {
 	if e != nil || !ok {
 		return
 	}
-	text := cause.Error()
-	if len(text) > 4096 || !model.StorableText(text) {
-		text = "import failed"
-	}
-	src.Error = text
+	src.Error = importFailureMessage(cause)
 	s.sources.SaveSource(ctx, src, repository.Audit{})
 }
 

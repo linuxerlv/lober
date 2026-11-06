@@ -25,7 +25,7 @@ func parseHostCSV(data []byte) (ImportPlan, []model.Host, error) {
 	for i, name := range header {
 		name = strings.TrimSpace(name)
 		header[i] = name
-		if seenHeaders[name] || (!slices.Contains(model.HostReservedAttrs(), name) && !model.ValidAttrKey(name)) {
+		if seenHeaders[name] || model.IsInventoryControlAttr(name) || (!slices.Contains(model.HostReservedAttrs(), name) && !model.ValidAttrKey(name)) {
 			return ImportPlan{}, nil, &CSVFileError{Message: fmt.Sprintf(model.ConsoleCSVHeader, name)}
 		}
 		seenHeaders[name] = true

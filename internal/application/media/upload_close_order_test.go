@@ -33,7 +33,7 @@ func (s *closeOrderTransfer) BeginUpload(ctx context.Context, src model.Source, 
 	}
 	return &closeOrderUpload{u, s}, nil
 }
-func (s *closeOrderTransfer) BeginPublish(ctx context.Context, src model.Source) (port.FetchSession, error) {
+func (s *closeOrderTransfer) BeginPublish(ctx context.Context, src model.Source) (port.PublishSession, error) {
 	*s.order = append(*s.order, "publish")
 	return s.Transfer.BeginPublish(ctx, src)
 }

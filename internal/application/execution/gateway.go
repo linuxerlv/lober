@@ -69,15 +69,11 @@ func (g *gateway) inventoryMenu(ctx context.Context, sn string) (BootResult, err
 	if boot == nil {
 		return BootResult{}, nil
 	}
-	pending, err := boot.Pending(ctx, sn)
+	token, err := boot.ClaimToken(ctx, sn)
 	if err != nil {
 		return BootResult{}, gatewayFailure(LookupUnavailable, err)
 	}
-	if !pending {
-		return BootResult{}, nil
-	}
-	token, ok := boot.Token(sn)
-	if !ok {
+	if token == "" {
 		// 令牌发不出来（随机源不可用）时不给菜单：给了也没有可用的上报凭据，
 		// 机器会跑完采集却传不上来。
 		return BootResult{}, nil

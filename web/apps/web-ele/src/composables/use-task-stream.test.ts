@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   computeBackoffDelayMs,
-  isTerminalPhase,
-  isTerminalTaskState,
   parseSseFrame,
 } from './use-task-stream';
 
@@ -32,39 +30,14 @@ describe('computeBackoffDelayMs', () => {
   });
 });
 
-describe('isTerminalTaskState / isTerminalPhase', () => {
-  it('treats done and failed as terminal', () => {
-    expect(isTerminalTaskState('done')).toBe(true);
-    expect(isTerminalTaskState('failed')).toBe(true);
-    expect(isTerminalPhase('done')).toBe(true);
-    expect(isTerminalPhase('failed')).toBe(true);
-  });
-
-  it('treats every other state/phase as non-terminal', () => {
-    for (const value of [
-      'pending',
-      'booting',
-      'initializing',
-      'rebooting',
-      'pre',
-      'packages',
-      'post',
-      'firstboot',
-    ]) {
-      expect(isTerminalTaskState(value)).toBe(false);
-      expect(isTerminalPhase(value)).toBe(false);
-    }
-  });
-});
-
 describe('parseSseFrame', () => {
   it('parses a single-line data frame with id and event', () => {
     const frame = parseSseFrame(
-      'id: 110\nevent: task-event\ndata: {"seq":110,"phase":"done"}',
+      'id: 110\nevent: task\ndata: {"seq":110,"kind":"done"}',
     );
     expect(frame).toEqual({
-      data: '{"seq":110,"phase":"done"}',
-      event: 'task-event',
+      data: '{"seq":110,"kind":"done"}',
+      event: 'task',
       id: '110',
     });
   });

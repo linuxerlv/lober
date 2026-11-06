@@ -220,12 +220,13 @@ func TestImportRejectsAndCleans(t *testing.T) {
 		series catalog.Series
 		change func(map[string][]byte)
 		code   model.Code
+		public string
 	}{
-		{"repo", "rocky", func(f map[string][]byte) { delete(f, "media/AppStream/repodata/repomd.xml") }, "iso_repo_incomplete"},
-		{"kernel", "ubuntu", func(f map[string][]byte) { delete(f, "casper/vmlinuz") }, "iso_artifact_missing"},
-		{"esxi", "esxi", func(map[string][]byte) {}, "iso_version_missing"},
-		{"series", "rhel", func(map[string][]byte) {}, "iso_series_mismatch"},
-		{"netboot", "debian", func(map[string][]byte) {}, "iso_extra_source_invalid"},
+		{"repo", "rocky", func(f map[string][]byte) { delete(f, "media/AppStream/repodata/repomd.xml") }, "iso_repo_incomplete", "安装镜像的仓库不完整"},
+		{"kernel", "ubuntu", func(f map[string][]byte) { delete(f, "casper/vmlinuz") }, "iso_artifact_missing", "安装镜像缺少必需文件"},
+		{"esxi", "esxi", func(map[string][]byte) {}, "iso_version_missing", "无法识别安装镜像的版本或架构"},
+		{"series", "rhel", func(map[string][]byte) {}, "iso_series_mismatch", "安装镜像的系统类型与登记不一致"},
+		{"netboot", "debian", func(map[string][]byte) {}, "iso_extra_source_invalid", "附加镜像缺失、不完整或与主镜像不匹配"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, db := importSetup(t)
@@ -244,6 +245,13 @@ func TestImportRejectsAndCleans(t *testing.T) {
 			got, err := db.GetISO(t.Context(), i.ID)
 			if err != nil || got.State != model.ISOFailed {
 				t.Fatal(got, err)
+			}
+			if got := mustSource(t, s, i.ID, "").Error; got != c.public {
+				t.Errorf("失败记录为 %q，期望固定文案 %q", got, c.public)
+			}
+			progress, err := s.service().Progress(t.Context(), i.ID)
+			if err != nil || len(progress.Sources) != 1 || progress.Sources[0].Error != c.public {
+				t.Fatalf("进度没有公开导入原因：%+v, %v", progress, err)
 			}
 			n := 0
 			fs.WalkDir(os.DirFS(s.dirs.Artifacts), ".", func(p string, d fs.DirEntry, err error) error {

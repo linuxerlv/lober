@@ -1,6 +1,9 @@
 package catalog
 
-import "slices"
+import (
+	"slices"
+	"strconv"
+)
 
 // FileKind 是网关给机器下发、由渲染产出的文件种类。hook 脚本不在其中：
 // 它不经渲染，网关按快照里的摘要从仓储取出直接下发，与格式无关（spec §6.2 第 5 条）。
@@ -88,4 +91,16 @@ func DeliveryFiles(f Format) []FileKind {
 func DeliveryFileName(f Format, k FileKind) (string, bool) {
 	name, ok := deliveryTable[f].names[k]
 	return name, ok
+}
+
+// DeliveryScriptPath 按快照里的插槽序号给出脚本下载路径。格式不下发脚本时返回 false。
+func DeliveryScriptPath(format Format, seq int) (string, bool) {
+	if !slices.Contains(deliveryTable[format].kinds, FileScript) {
+		return "", false
+	}
+	ext := ".sh"
+	if format == FormatUnattend {
+		ext = ".cmd"
+	}
+	return "scripts/" + strconv.Itoa(seq) + ext, true
 }

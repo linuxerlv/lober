@@ -58,6 +58,9 @@ func migratedApplicationMethod(fn *types.Func) bool {
 	if target == modulePath+"/internal/application/identity" {
 		return identityConsoleSymbol(symbol)
 	}
+	if target == modulePath+"/internal/application/inventory" {
+		return symbol == "Requester.Request"
+	}
 	if target == pkgAuditApp {
 		return symbol == "Reader.List" || symbol == "Reader.ExportCSV"
 	}

@@ -96,7 +96,7 @@ exit 7
 				r.Values["finalize-token"] = "native-finalize-independent"
 				r.Snapshot.Slots = []model.SnapshotSlot{{Seq: 9, Name: "nine", Exec: true, Timing: "firstboot", Instances: []model.SnapshotInstance{a}}, {Seq: 2, Name: "two", Exec: true, Timing: "firstboot", Instances: []model.SnapshotInstance{b}}}
 				for _, part := range []catalog.SystemPart{"firstboot", "cleanup"} {
-					command, p := answerPart(expansion{request: r}, part, model.Subject{})
+					command, p := linuxAnswerPart(expansion{request: r}, part, model.Subject{})
 					if len(p) != 0 {
 						t.Fatal(p)
 					}

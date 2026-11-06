@@ -161,6 +161,7 @@ it('creates an account in a modal, blocks closing while saving and refreshes the
     displayName: '王五',
     role: 'viewer',
     password: 'initial-password',
+    disabled: false,
   });
   const cancel = Array.from(dialog.querySelectorAll('button')).find((button) =>
     button.textContent?.includes('取消'),

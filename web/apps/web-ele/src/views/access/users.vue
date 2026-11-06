@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { ConsoleRole, ConsoleSessionUser } from '#/api/console/session';
+import type { User } from '#/api/console/accounts';
+import type { Schemas } from '#/api/console/generated';
 
 import { computed, onMounted, reactive, ref } from 'vue';
 
@@ -29,7 +30,7 @@ const { can, refresh } = useConsoleAccess();
 const allowed = computed(
   () => auth.sessionUser?.role === 'admin' && can('user:manage'),
 );
-const page = reactive(new NumberedPage<ConsoleSessionUser>());
+const page = reactive(new NumberedPage<User>());
 const editing = ref(false);
 const error = ref('');
 const items = computed(() => page.items);
@@ -39,12 +40,12 @@ const saving = ref(false);
 const form = reactive({
   username: '',
   displayName: '',
-  role: 'viewer' as ConsoleRole,
+  role: 'viewer' as Schemas['StoreRole'],
   password: '',
   disabled: false,
   rev: 0,
 });
-const descriptions: Record<ConsoleRole, string> = {
+const descriptions: Record<Schemas['StoreRole'], string> = {
   viewer: '读取业务数据，不能执行写入操作',
   operator: '主机维护、任务创建与控制',
   'hook-author': '编写并提交脚本和模板',
@@ -68,7 +69,7 @@ function changePageSize(value: number) {
   page.setPageSize(value);
   void load();
 }
-function edit(user?: ConsoleSessionUser) {
+function edit(user?: User) {
   Object.assign(
     form,
     user
@@ -117,6 +118,7 @@ async function save() {
         displayName: form.displayName,
         role: form.role,
         password: form.password,
+        disabled: false,
       });
     else
       await accountsApi.update(form.username, {
@@ -181,7 +183,7 @@ onMounted(() => load());
         </ElTableColumn>
         <ElTableColumn label="角色" min-width="180">
           <template #default="{ row }">
-            <ElTag>{{ roleLabels[row.role as ConsoleRole] }}</ElTag>
+            <ElTag>{{ roleLabels[row.role as Schemas['StoreRole']] }}</ElTag>
           </template>
         </ElTableColumn>
         <ElTableColumn label="状态" width="110">
@@ -194,7 +196,7 @@ onMounted(() => load());
         <ElTableColumn label="操作" width="100">
           <template #default="{ row }">
             <ElButton
-              @click="edit(row as ConsoleSessionUser)"
+              @click="edit(row as User)"
               :disabled="saving"
             >
               编辑

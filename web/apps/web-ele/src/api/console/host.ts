@@ -30,6 +30,9 @@ export function deleteHostApi(sn: string, rev: number) {
     params: { rev },
   });
 }
+export function requestHostInventoryApi(sn: string) {
+  return requestClient.post<HostListItem>(`/hosts/${encodeURIComponent(sn)}/inventory/request`);
+}
 export function previewHostCSVApi(bytes: Uint8Array) {
   return requestClient.post<CSVPlan>('/hosts/import', bytes, {
     headers: { 'Content-Type': 'text/csv' },
