@@ -187,7 +187,7 @@ func (s *Sources) Progress(ctx context.Context, id string) (AcquisitionProgress,
 	}
 	out := AcquisitionProgress{State: item.State, Sources: make([]AcquisitionSourceProgress, 0, len(sources))}
 	for _, src := range sources {
-		p := AcquisitionSourceProgress{Role: src.Role, Kind: src.Kind, State: src.State, Fetched: src.Fetched, TotalSize: src.TotalSize, Error: publicSourceError(src.Error)}
+		p := AcquisitionSourceProgress{Role: src.Role, Kind: src.Kind, State: src.State, Fetched: src.Fetched, TotalSize: src.TotalSize, Error: publicSourceError(src)}
 		if src.State != model.SourceFetched && src.TotalSize > 0 {
 			if src.Kind == model.SourceUpload {
 				ranges, err := s.sources.RangesOf(ctx, id, src.Role)
