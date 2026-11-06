@@ -235,6 +235,15 @@ func openTasksOf(tx *gorm.DB, sns []string) (map[string]bool, error) {
 	return open, nil
 }
 
+func (s *Store) FindOpenHosts(ctx context.Context, sns []string) (map[string]bool, error) {
+	for _, sn := range sns {
+		if err := repository.CheckSN(sn); err != nil {
+			return nil, err
+		}
+	}
+	return openTasksOf(s.read(ctx), sns)
+}
+
 // GetTask 见 repository.Tasks。
 func (s *Store) GetTask(ctx context.Context, id string) (model.Task, error) {
 	if err := repository.CheckID(id); err != nil {
