@@ -115,6 +115,16 @@ fi
 	if e := os.WriteFile(filepath.Join(bin, "curl"), []byte(fake), 0700); e != nil {
 		t.Fatal(e)
 	}
+	if r.Snapshot.Format == "esxi-ks" {
+		fakePython := `#!/bin/sh
+printf '%s\n' "$LOBER_SIGNAL_URL" >> "$QA_TELEMETRY"
+if [ -n "$LOBER_SIGNAL_BODY" ]; then cat "$LOBER_SIGNAL_BODY" >> "$QA_BODY"; fi
+[ "$QA_TRANSPORT_FAIL" = 0 ] || exit 7
+`
+		if e := os.WriteFile(filepath.Join(bin, "python3"), []byte(fakePython), 0700); e != nil {
+			t.Fatal(e)
+		}
+	}
 	script := renderRuntime(t, r)
 	// Real HTTP/client qualification lives in TestDebianInstallerLifecycleHTTP.
 	// This policy harness intentionally substitutes its failure-capable transport.

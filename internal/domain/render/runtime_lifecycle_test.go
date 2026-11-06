@@ -1,6 +1,7 @@
 package render
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -209,6 +210,16 @@ exit 7
 			if e := os.WriteFile(filepath.Join(bin, "wget"), []byte(fake), 0700); e != nil {
 				t.Fatal(e)
 			}
+			python := "#!/bin/sh\nprintf '%s\\n' \"$LOBER_SIGNAL_URL\" >> \"$QA_SIGNALS\"\nexit 7\n"
+			if e := os.WriteFile(filepath.Join(bin, "python3"), []byte(python), 0700); e != nil {
+				t.Fatal(e)
+			}
+			if e := os.WriteFile(filepath.Join(bin, "esxcli"), []byte("#!/bin/sh\nexit 0\n"), 0700); e != nil {
+				t.Fatal(e)
+			}
+			if e := os.MkdirAll(filepath.Join(d, "firewall"), 0700); e != nil {
+				t.Fatal(e)
+			}
 			first := runtimeInstance("printf '%s' \"$LOBER_PARAM_TEXT\" >> \"$QA_OUTPUT\"\nexit 41\n", false, "sh", 3)
 			hostile := "原样 '% ! \" ; $()\n"
 			first.Params = map[string]model.SnapshotValue{"text": {Type: "text", Items: []string{hostile}}}
@@ -262,6 +273,14 @@ exit 7
 			if !failure && !os.IsNotExist(e) {
 				t.Fatal("success token retained")
 			}
+			if !failure {
+				for _, pattern := range []string{"script-*.sh", "hook-*"} {
+					matches, err := filepath.Glob(filepath.Join(local, pattern))
+					if err != nil || len(matches) != 0 {
+						t.Fatalf("temporary payloads retained: %v %v", matches, err)
+					}
+				}
+			}
 			_, e = os.Stat(path)
 			if failure && e != nil {
 				t.Fatal("failed native section removed")
@@ -278,7 +297,7 @@ exit 7
 // hook bytes stay untouched, so the generated SHA256 check verifies them.
 func rewriteESXiTestPaths(t *testing.T, body, local string) string {
 	t.Helper()
-	pattern := regexp.MustCompile(`printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d > '([^']+)'`)
+	pattern := regexp.MustCompile(`printf '%s' '([A-Za-z0-9+/=]+)' \| openssl base64 -d -A > '([^']+)'`)
 	body = pattern.ReplaceAllStringFunc(body, func(match string) string {
 		groups := pattern.FindStringSubmatch(match)
 		if !strings.HasPrefix(groups[2], "/tmp/lober/script-") {
@@ -291,6 +310,7 @@ func rewriteESXiTestPaths(t *testing.T, body, local string) string {
 		rewritten := strings.ReplaceAll(string(decoded), "/tmp/lober", local)
 		return strings.Replace(match, groups[1], base64.StdEncoding.EncodeToString([]byte(rewritten)), 1)
 	})
+	body = strings.ReplaceAll(body, "/etc/vmware/firewall", filepath.Join(filepath.Dir(local), "firewall"))
 	return strings.ReplaceAll(body, "/tmp/lober", local)
 }
 
@@ -339,15 +359,16 @@ func TestESXiCleanupRejectsUnownedNativeSection(t *testing.T) {
 
 func rewriteESXiEncodedCommands(t *testing.T, body, local string) string {
 	t.Helper()
-	pattern := regexp.MustCompile(`echo ([A-Za-z0-9+/=]+) \| base64 -d \| sh`)
+	pattern := regexp.MustCompile(`(LOBER_(?:ESXI|FW)_CODE=\$\(echo )([A-Za-z0-9+/=]+)( \| openssl base64 -d -A\)\|\|exit 127;.*?case \$LOBER_(?:ESXI|FW)_HASH in )([0-9a-f]{64})`)
 	return pattern.ReplaceAllStringFunc(body, func(match string) string {
 		groups := pattern.FindStringSubmatch(match)
-		decoded, e := base64.StdEncoding.DecodeString(groups[1])
+		decoded, e := base64.StdEncoding.DecodeString(groups[2])
 		if e != nil {
 			t.Fatal(e)
 		}
 		rewritten := rewriteESXiTestPaths(t, string(decoded), local)
-		return strings.Replace(match, groups[1], base64.StdEncoding.EncodeToString([]byte(rewritten)), 1)
+		digest := sha256.Sum256([]byte(strings.TrimRight(rewritten, "\n")))
+		return groups[1] + base64.StdEncoding.EncodeToString([]byte(rewritten)) + groups[3] + fmt.Sprintf("%x", digest)
 	})
 }
 

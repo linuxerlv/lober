@@ -117,7 +117,7 @@ func TestESXiNativeFirstbootOffline(t *testing.T) {
 	}
 	payloads := commandPayloads(string(b))
 	if len(payloads) != 3 {
-		t.Fatalf("want firstboot,slot,cleanup payloads: %d", len(payloads))
+		t.Fatalf("want firstboot, slot, cleanup payloads: %d", len(payloads))
 	}
 	script := strings.Join(payloads, "\n")
 	if strings.Contains(script, r.Values["token"]) || strings.Contains(script, "systemd") || strings.Contains(script, "/var/lib/lober") || strings.Contains(script, "hooks/") {

@@ -141,9 +141,13 @@ func TestKickstartSyslogOmitsUnsupportedLevel(t *testing.T) {
 
 func commandPayloads(text string) []string {
 	var out []string
-	pattern := regexp.MustCompile(`echo ([A-Za-z0-9+/=]+) \| (?:base64 -d|/usr/libexec/platform-python -m base64 -d) \| sh`)
+	pattern := regexp.MustCompile(`(?:echo ([A-Za-z0-9+/=]+) \| (?:base64 -d|/usr/libexec/platform-python -m base64 -d) \| sh|LOBER_ESXI_CODE=\$\(echo ([A-Za-z0-9+/=]+) \| openssl base64 -d -A\))`)
 	for _, match := range pattern.FindAllStringSubmatch(text, -1) {
-		b, err := base64.StdEncoding.DecodeString(match[1])
+		value := match[1]
+		if value == "" {
+			value = match[2]
+		}
+		b, err := base64.StdEncoding.DecodeString(value)
 		if err == nil {
 			out = append(out, string(b))
 		}
