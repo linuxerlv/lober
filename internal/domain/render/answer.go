@@ -22,9 +22,6 @@ func renderAnswer(r Request) ([]byte, []model.Problem, error) {
 	if err != nil || len(problems) != 0 {
 		return nil, problems, err
 	}
-	if r.Snapshot.Format == "esxi-ks" {
-		return renderESXiAnswer(r, e)
-	}
 	b, problems := e.expand(r.Snapshot.Template.Body, r.Snapshot.Template.Params, model.Subject{Kind: "template", ID: templateRef(r.Snapshot.Template)})
 	return b, problems, nil
 }
@@ -339,7 +336,10 @@ unset LOBER_OLD_IFS LOBER_IFS_SET LOBER_OLD_GLOB LOBER_ESXI_CODE LOBER_ESXI_HASH
 		fmt.Sprintf("%x", digest) + "*) :;; *) exit 65;; esac;eval $LOBER_ESXI_CODE)"
 }
 
-// ESXi 按顺序执行原生首次启动段。冻结载荷由安装阶段存放到受保护的系统卷。
+// ESXi persists native %firstboot sections itself, once and in file order. The
+// frozen payloads live IN those sections, not in a Linux installer staging path.
+// Secure Boot suppresses %firstboot: layer7 must reject that configuration when
+// the task requires firstboot. This code does not certify any real ESXi image.
 func esxiFirstbootSlot(e expansion, slot model.SnapshotSlot, subject model.Subject) (string, []model.Problem) {
 	wrapper, p := posixRuntime(e.request, slot, false)
 	if len(p) != 0 {
@@ -374,12 +374,9 @@ func esxiPart(e expansion, part catalog.SystemPart, subject model.Subject) (stri
 		body += "mkdir -p /tmp/lober\nprintf '%s' " + shQuote(values[2]) + " > /tmp/lober/finalize.token\n"
 		body += esxiFinalizeSignal(values[0], values[1], model.PhaseBooted) + esxiFinalizeSignal(values[0], values[1], model.PhaseInitStart)
 	case "cleanup":
-		stage, directory := esxiStagePaths(values[1])
-		body += "[ \"${LOBER_ESXI_STAGE_PATH:-}\" = " + shQuote(stage) + " ] && [ -f \"$LOBER_ESXI_STAGE_PATH\" ] && [ ! -L \"$LOBER_ESXI_STAGE_PATH\" ] && [ ! -L " + shQuote(directory) + " ] || exit 66\n"
-		body += "TOKEN=$(cat /tmp/lober/finalize.token)\n"
-		body += "rm -f \"$LOBER_ESXI_STAGE_PATH\"\nrmdir " + shQuote(directory) + "\n"
-		body += "rm -f /tmp/lober/finalize.token /tmp/lober/script-*.sh /tmp/lober/hook-* /tmp/lober/.owner\nrmdir /tmp/lober\n"
-		body += esxiFinalizeSignalWithToken(values[0], values[1], model.PhaseInitDone) + esxiFinalizeSignalWithToken(values[0], values[1], model.PhaseReady)
+		body += "rm -f \"$LOBER_ESXI_NATIVE_SCRIPT\"\n"
+		body += esxiFinalizeSignal(values[0], values[1], model.PhaseInitDone) + esxiFinalizeSignal(values[0], values[1], model.PhaseReady)
+		body += "rm -f /tmp/lober/finalize.token /tmp/lober/script-*.sh /tmp/lober/hook-*\n"
 	default:
 		return "", []model.Problem{model.NewProblem("render_replacement_missing", subject, part)}
 	}
@@ -399,13 +396,9 @@ func esxiNativeOwnerCheck(task string) string {
 }
 
 func esxiFinalizeSignal(gateway, task string, phase model.SignalPhase) string {
-	return "TOKEN=$(cat /tmp/lober/finalize.token)\n" + esxiFinalizeSignalWithToken(gateway, task, phase)
-}
-
-func esxiFinalizeSignalWithToken(gateway, task string, phase model.SignalPhase) string {
 	address := catalog.SignalURL(gateway, task, "TOKEN", string(phase))
 	before, after := tokenURLParts(address)
-	return "address=" + shQuote(before) + "\"$TOKEN\"" + shQuote(after) + "\nbody=\n" + esxiHTTPPost() + " >/dev/null 2>&1 || :\n"
+	return "TOKEN=$(cat /tmp/lober/finalize.token)\naddress=" + shQuote(before) + "\"$TOKEN\"" + shQuote(after) + "\nbody=\n" + esxiHTTPPost() + " >/dev/null 2>&1 || :\n"
 }
 
 // ESXi 自带的 wget 不支持 POST；用系统自带的 Python 保留二进制内容。

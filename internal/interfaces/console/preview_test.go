@@ -154,7 +154,7 @@ func (d diskBootConfig) ReadESXiBootConfig(_ context.Context, item model.Snapsho
 func Test预览ESXi使用真实原始配置且未知示例不可用(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	token := adminHTTP(t, s, st)
-	tpl, err := st.CreateTemplate(t.Context(), model.Template{Name: "esxi-preview", Author: "admin", Family: "esxi", Series: []catalog.Series{"esxi"}, Body: "vmaccepteula\nreboot\n%firstboot --interpreter=busybox\n{{lober:firstboot}}\n{{lober:cleanup}}\n"})
+	tpl, err := st.CreateTemplate(t.Context(), model.Template{Name: "esxi-preview", Author: "admin", Family: "esxi", Series: []catalog.Series{"esxi"}, Body: "{{lober:firstboot}}\n{{lober:cleanup}}\n"})
 	if err != nil {
 		t.Fatal(err)
 	}

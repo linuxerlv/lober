@@ -93,10 +93,6 @@ func SelectFile(snapshot model.Snapshot, name string) (FrozenFile, error) {
 	if aux != "" && name == aux {
 		return FrozenFile{Kind: catalog.FileAux}, nil
 	}
-	stage, _ := catalog.DeliveryFileName(snapshot.Format, catalog.FileESXiStage)
-	if stage != "" && name == stage {
-		return FrozenFile{Kind: catalog.FileESXiStage}, nil
-	}
 	for _, slot := range snapshot.Slots {
 		if slot.Exec && name == "scripts/"+strconv.Itoa(slot.Seq)+".sh" {
 			return FrozenFile{Kind: catalog.FileScript, Slot: slot.Name}, nil

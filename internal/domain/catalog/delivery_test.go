@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// planFileKinds 是文件种类的标识，期望值写死在测试里，理由同 timing_test.go 的词表。
+// planFileKinds 是四类文件的标识，期望值写死在测试里，理由同 timing_test.go 的词表。
 var planFileKinds = []struct {
 	kind FileKind
 	id   string
@@ -15,7 +15,6 @@ var planFileKinds = []struct {
 	{FileAnswer, "answer"},
 	{FileAux, "aux"},
 	{FileScript, "script"},
-	{FileESXiStage, "esxi-firstboot-stage"},
 }
 
 // planDeliveryRow 是下发清单的一行。kinds 按 FileKind 的固定次序写（引导菜单、应答文件、附属文件、运行
@@ -63,8 +62,8 @@ var planDelivery = []planDeliveryRow{
 		// 旧 SPEC.md §4.5：mboot.efi -c …/boot.cfg；boot.cfg 的 ks= 再指向应答文件，旧系统叫它 ks.cfg
 		// （internal/gateway/answer.go:176、internal/gateway/esxi_bootcfg.go:55）。
 		format: "esxi-ks",
-		kinds:  []FileKind{FileMenu, FileAnswer, FileAux, FileScript, FileESXiStage},
-		files:  map[FileKind]string{FileAnswer: "ks.cfg", FileAux: "boot.cfg", FileESXiStage: "esxi-firstboot.sh"},
+		kinds:  []FileKind{FileMenu, FileAnswer, FileAux, FileScript},
+		files:  map[FileKind]string{FileAnswer: "ks.cfg", FileAux: "boot.cfg"},
 	},
 }
 
@@ -82,8 +81,8 @@ var pendingDeliveryNames = []deliveryCell{}
 // 同样要有依据。真加上的时候，「待定的种类确实还没下发」会先报红，逼着补依据、从这里删掉。
 var pendingDeliveryKinds = []deliveryCell{}
 
-func Test文件种类覆盖渲染输出(t *testing.T) {
-	// hook 脚本不在里面：它不经渲染，网关按快照里的摘要直接下发，与格式无关
+func Test文件种类就是渲染的四类输出(t *testing.T) {
+	// 四类输出见 spec §4.3。hook 脚本不在里面：它不经渲染，网关按快照里的摘要直接下发，与格式无关
 	// （spec §6.2 第 5 条）。
 	var planned []FileKind
 	for _, p := range planFileKinds {
@@ -131,9 +130,9 @@ func Test下发清单恰好覆盖目录里的格式且每格合法(t *testing.T)
 		listed = append(listed, f)
 		checkCell(t, "DeliveryFiles("+string(f)+")", r.kinds)
 		for k, name := range r.names {
-			// 引导菜单走 /v1/boot，运行脚本按插槽取，其余文件按名称获取。
-			if k != FileAnswer && k != FileAux && k != FileESXiStage {
-				t.Errorf("格式 %q 给 %q 登记了不应存在的文件名 %q", f, k, name)
+			// 只有应答文件与附属文件经 /v1/answer 按文件名取；引导菜单走 /v1/boot，运行脚本按插槽取。
+			if k != FileAnswer && k != FileAux {
+				t.Errorf("格式 %q 给 %q 登记了文件名 %q，只有 answer 与 aux 有文件名", f, k, name)
 			}
 			if !slices.Contains(r.kinds, k) {
 				t.Errorf("格式 %q 给不下发的 %q 登记了文件名 %q", f, k, name)
