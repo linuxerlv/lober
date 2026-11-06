@@ -6,8 +6,8 @@ const client = vi.hoisted(() => ({
   delete: vi.fn(),
 }));
 vi.mock('#/api/request', () => ({ requestClient: client }));
-import { exportAudit } from '../console/audit';
 import { accountsApi } from '../console/accounts';
+import { exportAudit } from '../console/audit';
 import { loginApi, logoutApi } from './auth';
 import { getUserInfoApi, toUserInfo } from './user';
 
