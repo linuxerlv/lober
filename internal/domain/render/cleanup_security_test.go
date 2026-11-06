@@ -24,7 +24,7 @@ func TestPreseedCleanupRedactsInstallerAuthenticationURLs(t *testing.T) {
 	t.Run("bash", func(t *testing.T) {
 		r := answerFixture(t, "preseed", true, "uefi")
 		r.Values["token"] = installToken
-		command, problems := answerPart(expansion{request: r}, "cleanup", model.Subject{Kind: "template", ID: "fixture"})
+		command, problems := linuxAnswerPart(expansion{request: r}, "cleanup", model.Subject{Kind: "template", ID: "fixture"})
 		if len(problems) != 0 {
 			t.Fatal(problems)
 		}

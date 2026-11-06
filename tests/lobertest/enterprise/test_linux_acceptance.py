@@ -3,13 +3,41 @@ import copy
 import base64
 import unittest
 import json
+import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
-from linux_install import Campaign, SN, require_hook_failure, require_network_first, require_owned_serial
+from linux_install import Campaign, OS, SN, require_hook_failure, require_network_first, require_owned_serial
 
 
 class LinuxAcceptanceChecks(unittest.TestCase):
+    def test_current_campaign_uses_only_supported_linux_and_current_templates(self):
+        self.assertEqual(OS, {
+            'rhel': ('rhel', 'kickstart', 5),
+            'almalinux': ('almalinux', 'kickstart', 5),
+            'rocky': ('rocky', 'kickstart', 5),
+            'ubuntu': ('ubuntu', 'autoinstall', 4),
+            'debian': ('debian', 'preseed', 5),
+        })
+
+    def assert_retired_os_rejected(self, entry):
+        for system in ('leap15', 'leap16', 'sles15', 'sles16', 'openeuler', 'opencloudos'):
+            with self.subTest(entry=entry, system=system):
+                result = subprocess.run([
+                    sys.executable, str(Path(__file__).with_name(entry)), 'prepare',
+                    '--state-dir', 'missing-state-fixture', '--os', system,
+                ], capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('invalid choice', result.stderr)
+
+    def test_retired_os_is_rejected_before_reading_state(self):
+        self.assert_retired_os_rejected('linux_install.py')
+
+    @unittest.skipUnless(sys.platform == 'linux', 'WSL 工具依赖 Linux 文件锁')
+    def test_wsl_rejects_retired_os_before_reading_state(self):
+        self.assert_retired_os_rejected('wsl_install.py')
+
     def test_cancelled_task_stops_wait_without_sleeping(self):
         campaign = object.__new__(Campaign)
         campaign.system, campaign.negative = 'debian', False

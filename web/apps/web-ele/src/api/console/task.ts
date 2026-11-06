@@ -20,6 +20,6 @@ export const taskAPI = {
     }),
 };
 
-export function taskStreamURL(base: string, id: string, token: string, after: number) {
-  return `${base.replace(/\/$/, '')}/tasks/${encodeURIComponent(id)}/stream?${new URLSearchParams({ access_token: token, after_seq: String(after) })}`;
+export function taskStreamURL(base: string, id: string) {
+  return `${base.replace(/\/$/, '')}/tasks/${encodeURIComponent(id)}/stream`;
 }

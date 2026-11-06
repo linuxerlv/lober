@@ -27,6 +27,11 @@ type Service struct {
 
 var _ Access = (*Service)(nil)
 
+// 2048 字节即使每字节都转义成 6 字节，仍能放进 16 KiB 的登录正文。
+const maxNewPasswordBytes = 2048
+
+var ErrPasswordTooLong = errors.New("new password exceeds console limit")
+
 // NewService 要求五项依赖均非nil，否则 panic；直接使用传入的同一个会话表。
 // 构造不读取时钟或仓储；凭据锁由此实例独占，后续写入成功后才在写锁内撤销会话。
 func NewService(d Deps) *Service {
@@ -38,6 +43,9 @@ func NewService(d Deps) *Service {
 
 // 新口令校验先于外部计算；能力层的同类错误继续沿用原保存错误。
 func (s *Service) hashPassword(password string) (string, error) {
+	if len(password) > maxNewPasswordBytes {
+		return "", ErrPasswordTooLong
+	}
 	if !access.ValidPasswordText(password) {
 		return "", repository.ErrInvalid
 	}

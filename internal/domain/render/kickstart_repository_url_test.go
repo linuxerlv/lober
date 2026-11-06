@@ -68,12 +68,12 @@ func TestKickstartMenuRepositoryURLPreservesStage2(t *testing.T) {
 }
 
 func TestOtherAnswerFormatsPreserveDirectoryRepositoryURL(t *testing.T) {
-	for _, format := range []catalog.Format{"preseed", "autoinstall", "autoyast", "unattend"} {
+	for _, format := range []catalog.Format{"preseed", "autoinstall", "unattend"} {
 		t.Run(string(format), func(t *testing.T) {
 			r := answerFixture(t, format, false, "uefi")
 			r.Snapshot.ISO.Artifacts["repo"] = "media/install/"
 			comment, want := "# repo={{sys:repo}} iso={{sys:iso}}\n", "# repo=http://ng.internal/artifacts/media/install/ iso=http://ng.internal/artifacts/fixture/image.iso\n"
-			if format == "autoyast" || format == "unattend" {
+			if format == "unattend" {
 				comment = "<!-- repo={{sys:repo}} iso={{sys:iso}} -->\n"
 				want = "<!-- repo=http://ng.internal/artifacts/media/install/ iso=http://ng.internal/artifacts/fixture/image.iso -->\n"
 			}

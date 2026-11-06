@@ -27,10 +27,6 @@ func TestIdentifyFormatsAndSeries(t *testing.T) {
 	}{
 		{"debian", "preseed", "13.6.0", map[string]string{".disk/info": `Debian GNU/Linux 13.6.0 "Trixie" - Official amd64 NETINST Binary-1 with firmware-1 20250803-13:06`, "dists/trixie/Release": ""}},
 		{"ubuntu", "autoinstall", "24.04.3", map[string]string{".disk/info": `Ubuntu-Server 24.04.3 LTS "Noble Numbat" - Release amd64 (20250819)`, "dists/noble/Release": ""}},
-		{"sles15", "autoyast", "15.6", map[string]string{"media.1/products": "SLES|15.6|SUSE Linux Enterprise Server", "repodata/repomd.xml": "", "boot/x86_64/loader/linux": ""}},
-		{"leap15", "autoyast", "15.6", map[string]string{"media.1/products": "openSUSE|15.6|Leap", "repodata/repomd.xml": "", "boot/x86_64/loader/linux": ""}},
-		{"sles16", "agama", "16.0", map[string]string{"media.1/products": "SLES|16.0|Server", "repodata/repomd.xml": "", "boot/x86_64/loader/linux": "", "LiveOS/squashfs.img": ""}},
-		{"leap16", "agama", "16.0", map[string]string{"media.1/products": "openSUSE|16.0|Leap", "repodata/repomd.xml": "", "boot/x86_64/loader/linux": "", "LiveOS/squashfs.img": ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Identify(context.Background(), identifyTree(tc.files))
@@ -39,9 +35,9 @@ func TestIdentifyFormatsAndSeries(t *testing.T) {
 			}
 		})
 	}
-	for _, tc := range []struct{ name, product string }{{"rhel", "Red Hat Enterprise Linux"}, {"rocky", "Rocky Linux"}, {"almalinux", "AlmaLinux"}, {"openeuler", "openEuler"}, {"opencloudos", "OpenCloudOS"}} {
+	for _, tc := range []struct{ name, product string }{{"rhel", "Red Hat Enterprise Linux"}, {"rocky", "Rocky Linux"}, {"almalinux", "AlmaLinux"}} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Identify(context.Background(), identifyTree(map[string]string{".treeinfo": "[other]\nversion=1\n[general]\nname=" + tc.product + "\nversion=9.6\narch=aarch64\n", "media.1/products": "SLES|15.6", "repodata/repomd.xml": ""}))
+			got, err := Identify(context.Background(), identifyTree(map[string]string{".treeinfo": "[other]\nversion=1\n[general]\nname=" + tc.product + "\nversion=9.6\narch=aarch64\n", ".disk/info": "Ubuntu-Server 24.04.3 LTS - Release amd64"}))
 			if err != nil || got.Series != catalog.Series(tc.name) || got.Format != "kickstart" || got.Version != "9.6" || got.Arch != "aarch64" {
 				t.Fatalf("got %+v, %v", got, err)
 			}
@@ -69,7 +65,6 @@ func TestIdentifyFailures(t *testing.T) {
 		{"unsafe-version", map[string]string{".treeinfo": "[general]\nname=Rocky Linux\nversion=../bad\narch=x86_64"}, "iso_version_missing"},
 		{"unknown-arch", map[string]string{".treeinfo": "[general]\nname=Rocky Linux\nversion=9.6\narch=ppc64le"}, "iso_version_missing"},
 		{"esxi-version-unresolved", map[string]string{"boot.cfg": "title=Loading ESXi installer 8.0", "efi/boot/bootx64.efi": ""}, "iso_version_missing"},
-		{"suse-without-loader", map[string]string{"media.1/products": "SLES|15.6", "repodata/repomd.xml": ""}, "iso_version_missing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Identify(context.Background(), identifyTree(tc.files))
@@ -146,10 +141,9 @@ func TestIdentifyWindowsRejectsIncompleteImageAndUnsafeOffers(t *testing.T) {
 	}
 }
 
-func TestIdentifyProductsAndDiskArmArchitecture(t *testing.T) {
+func TestIdentifyDiskArmArchitecture(t *testing.T) {
 	for _, files := range []map[string]string{
 		{".disk/info": "Ubuntu-Server 24.04.3 LTS - Release arm64 (20250819)"},
-		{"media.1/products": "SLES|15.6|Server", "repodata/repomd.xml": "", "boot/aarch64/loader/linux": ""},
 	} {
 		got, err := Identify(context.Background(), identifyTree(files))
 		if err != nil || got.Arch != "aarch64" {

@@ -118,38 +118,33 @@ func (s *ImportFiles) extract(ctx context.Context, plan port.ExtractionPlan, mai
 			return nil, err
 		}
 		roles["iso"] = "install.iso"
-	case "autoyast", "agama":
+	case "unattend":
+		return s.extractWindows(ctx, main, tmp)
+	case "esxi-ks":
+		if len(plan.ESXiFiles) == 0 {
+			return nil, &port.ExtractionFault{Kind: "artifact", Name: "boot.cfg"}
+		}
+		files := append([]string{"boot.cfg", "efi/boot/bootx64.efi"}, plan.ESXiFiles...)
+		for _, name := range files {
+			if !safeImportRel(name) {
+				return nil, &port.ExtractionFault{Kind: "artifact", Name: name}
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			st, err := fs.Stat(main, name)
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return nil, err
+			}
+			if err != nil || !st.Mode().IsRegular() || st.Size() == 0 {
+				return nil, &port.ExtractionFault{Kind: "artifact", Name: name}
+			}
+		}
 		if err := copyImportTree(ctx, main, filepath.Join(tmp, "install")); err != nil {
 			return nil, err
 		}
-		boot := "boot/" + string(found.Arch) + "/loader/"
-		if err := file("kernel", boot+"linux", "linux", main); err != nil {
-			return nil, err
-		}
-		if err := file("initrd", boot+"initrd", "initrd", main); err != nil {
-			return nil, err
-		}
-		repo := found.RepoRoot
-		if repo == "" {
-			repo = "."
-		}
-		for _, required := range plan.RepoPaths {
-			st, e := fs.Stat(main, path.Join(repo, required))
-			if e != nil || st.IsDir() || st.Size() == 0 {
-				return nil, &port.ExtractionFault{Kind: "repository", Name: required}
-			}
-		}
-		roles["repo"] = "install/"
-		if repo != "." {
-			roles["repo"] += repo + "/"
-		}
-		if found.Format == "agama" {
-			if err := file("live-root", "LiveOS/squashfs.img", "squashfs.img", main); err != nil {
-				return nil, err
-			}
-		}
-	case "unattend":
-		return s.extractWindows(ctx, main, tmp)
+		roles["mboot"] = "install/efi/boot/bootx64.efi"
+		roles["esxi-tree"] = "install/"
 	default:
 		return nil, &port.ExtractionFault{Kind: "format", Name: string(found.Format)}
 	}

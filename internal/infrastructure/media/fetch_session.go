@@ -88,7 +88,10 @@ func (s *fetchSession) Step(ctx context.Context) (int64, bool, error) {
 		return s.offset, true, nil
 	}
 	if readErr != nil {
-		return s.offset, false, readErr
+		if errors.Is(readErr, io.ErrUnexpectedEOF) && ctx.Err() == nil {
+			return s.offset, false, io.ErrUnexpectedEOF
+		}
+		return s.offset, false, remoteFault(ctx, port.RemoteFetchFailed)
 	}
 	if n == 0 {
 		return s.offset, false, io.ErrNoProgress

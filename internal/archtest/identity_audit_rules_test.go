@@ -24,7 +24,7 @@ const ruleIdentityAudit rule = "身份和审计只能通过已声明的入口使
 func identityConsoleSymbol(symbol string) bool {
 	switch symbol {
 	case "Registry", "Principal", "LoginCommand", "SessionResult", "UserView", "Operation", "AccessRequest", "UserQuery", "UserPage", "CreateUserCommand", "UpdateUserCommand", "PasswordCommand", "ProfileCommand", "MenuDefinition", "RoleMenuView", "MenuList", "SaveMenusCommand",
-		"ErrLoginFailed", "ErrBadRequest", "ErrSelfDisable", "ErrInitialPasswordUnchanged", "General", "UserInfo", "Logout", "ChangePassword", "LegacySelfUpdate", "KnownPermission",
+		"ErrLoginFailed", "ErrBadRequest", "ErrSelfDisable", "ErrInitialPasswordUnchanged", "ErrPasswordTooLong", "General", "UserInfo", "Logout", "ChangePassword", "LegacySelfUpdate", "KnownPermission",
 		"PermAnyUser", "PermHostRead", "PermISORead", "PermHookRead", "PermTemplateRead", "PermTaskRead", "PermHostWrite", "PermTaskCreate", "PermTaskCancel", "PermTaskRetry", "PermHookWrite", "PermTemplateWrite", "PermHookApprove", "PermTemplateApprove", "PermISOWrite", "PermUserManage", "PermAuditRead",
 		"Access.Login", "Access.Logout", "Access.CurrentUser", "Access.Authenticate", "Access.Authorize", "Access.StreamAuthorized", "Accounts.ListUsers", "Accounts.CreateUser", "Accounts.UpdateUser", "Accounts.DisableUser", "Accounts.ChangePassword", "Accounts.UpdateProfile", "Menus.ListRoleMenus", "Menus.SaveRoleMenus", "Principal.Actor", "PublicRoles":
 		return true

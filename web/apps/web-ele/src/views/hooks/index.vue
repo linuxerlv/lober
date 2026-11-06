@@ -23,11 +23,13 @@ import {
 } from 'element-plus';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
+import { allSeries as series } from '#/api/console/catalog';
 import * as api from '#/api/console/hook';
 import { errorMessage, problemsOf } from '#/api/console/problem';
 import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
 import { NumberedPage } from '#/composables/numbered-page';
+import { useAuthoringEditor } from '#/composables/use-authoring-editor';
 
 import { authoringRights, hookPayload } from '../templates/authoring';
 import ParamEditor from '../templates/ParamEditor.vue';
@@ -43,16 +45,13 @@ const user = useUserStore();
 const canWrite = computed(() => access.accessCodes.includes('hook:write'));
 const selected = ref<HookForm>();
 const visible = ref(false);
-const busy = ref(false);
 const prefix = ref('');
 const state = ref('');
 const appliedFilters = { prefix: '', state: undefined as string | undefined };
 const pagination = reactive(new NumberedPage<Hook>());
 const errors = ref<Schemas['ProblemJSON'][]>([]);
 const versions = ref<Hook[]>([]);
-const reason = ref('');
 let sequence = 0;
-let editorToken = 0;
 const rights = computed(() =>
   selected.value
     ? authoringRights(
@@ -97,11 +96,19 @@ function report(error: unknown) {
   errors.value = problemsOf(error);
   ElMessage.error(errorMessage(error));
 }
-function currentEditor(token: number, row: Pick<Hook, 'id' | 'version'>) {
-  return token === editorToken && visible.value && selected.value?.id === row.id && selected.value.version === row.version;
-}
+const editor = useAuthoringEditor<Hook>({
+  assign,
+  change: api.hookLifecycleApi,
+  refresh: () => load(),
+  report,
+  rights,
+  save,
+  selected,
+  visible,
+});
+const { busy, currentEditor, lifecycle, reason, run } = editor;
 async function load(reset = false) {
-  const owner = editorToken;
+  const owner = editor.token;
   if (reset) {
     Object.assign(appliedFilters, { prefix: prefix.value, state: state.value || undefined });
     pagination.reset();
@@ -113,7 +120,7 @@ async function load(reset = false) {
     if (token !== sequence) return;
     grid.setGridOptions({ data: page.items });
   } catch (error) {
-    if (token === sequence && owner === editorToken) report(error);
+    if (token === sequence && owner === editor.token) report(error);
   }
 }
 function changePage(page: number) {
@@ -130,27 +137,21 @@ function assign(row: Hook) {
   reason.value = '';
 }
 async function open(row: Hook) {
-  const token = ++editorToken;
+  const token = editor.invalidate();
   visible.value = true;
-  busy.value = true;
   selected.value = undefined;
-  try {
+  await run(async () => {
     const [detail, page] = await Promise.all([
       api.getHookApi(row.id, row.version),
       api.getHookVersionsApi(row.id),
     ]);
-    if (token !== editorToken) return;
+    if (token !== editor.token) return;
     assign(detail);
     versions.value = page.items ?? [];
-  } catch (error) {
-    if (token === editorToken) report(error);
-  } finally {
-    if (token === editorToken) busy.value = false;
-  }
+  });
 }
 function create() {
-  ++editorToken;
-  busy.value = false;
+  editor.invalidate();
   assign({
     id: '',
     version: 1,
@@ -175,7 +176,7 @@ async function selectVersion(n: number) {
   if (row) await open({ ...row, version: n });
 }
 async function save() {
-  const token = editorToken;
+  const token = editor.token;
   const row = selected.value;
   if (!row || !editable.value) return false;
   const payload = hookPayload(row);
@@ -189,25 +190,14 @@ async function save() {
   if (!currentEditor(token, saved)) return false;
   versions.value = page.items ?? [];
   await load();
-  if (token !== editorToken) return false;
+  if (token !== editor.token) return false;
   ElMessage.success('草稿已保存');
   return true;
 }
-async function run(action: () => Promise<unknown>) {
-  const token = editorToken;
-  busy.value = true;
-  try {
-    await action();
-  } catch (error) {
-    if (token === editorToken && error !== 'cancel' && error !== 'close') report(error);
-  } finally {
-    if (token === editorToken) busy.value = false;
-  }
-}
 async function validate() {
-  const token = editorToken;
+  const token = editor.token;
   if (editable.value && !(await save())) return;
-  if (token !== editorToken) return;
+  if (token !== editor.token) return;
   const row = selected.value;
   if (!row) return;
   const result = await api.validateHookApi(row.id, row.version);
@@ -215,35 +205,9 @@ async function validate() {
   errors.value = result.problems ?? [];
   if (!errors.value.length) ElMessage.success('校验通过');
 }
-async function lifecycle(
-  action: 'approve' | 'deprecate' | 'reject' | 'submit',
-) {
-  if (!(action === 'submit' ? rights.value?.submit : action === 'deprecate' ? rights.value?.deprecate : rights.value?.review)) return;
-  const token = editorToken;
-  if (action === 'reject' && !reason.value.trim()) {
-    ElMessage.warning('请填写驳回理由');
-    return;
-  }
-  if (action === 'submit' && !(await save())) return;
-  if (token !== editorToken) return;
-  const row = selected.value;
-  if (!row) return;
-  const changed = await api.hookLifecycleApi(
-      row.id,
-      row.version,
-      row.rev,
-      action,
-      reason.value,
-  );
-  if (!currentEditor(token, row)) return;
-  assign(changed);
-  await load();
-  if (token !== editorToken) return;
-  ElMessage.success('状态已更新');
-}
 async function newVersion() {
   if (!rights.value?.newVersion) return;
-  const token = editorToken;
+  const token = editor.token;
   const row = selected.value;
   if (!row) return;
   const changed = await api.newHookVersionApi(row.id, row.version);
@@ -255,7 +219,7 @@ async function newVersion() {
   await load();
 }
 async function remove() {
-  const token = editorToken;
+  const token = editor.token;
   const row = selected.value;
   if (!row) return;
   await ElMessageBox.confirm('删除这个草稿版本？', '删除草稿');
@@ -276,25 +240,9 @@ function addImpl() {
   });
 }
 const families: Schemas['CatalogFamily'][] = ['linux', 'windows', 'esxi'];
-const series: Schemas['CatalogSeries'][] = [
-  'rhel',
-  'rocky',
-  'almalinux',
-  'openeuler',
-  'opencloudos',
-  'debian',
-  'ubuntu',
-  'sles15',
-  'leap15',
-  'sles16',
-  'leap16',
-  'windows-server',
-  'windows-desktop',
-  'esxi',
-];
 onMounted(() => load());
-watch(visible, (open) => { if (!open) { ++editorToken; busy.value = false; errors.value = []; } }, { flush: 'sync' });
-onBeforeUnmount(() => { ++editorToken; ++sequence; pagination.reset(); });
+watch(visible, (open) => { if (!open) { editor.invalidate(); errors.value = []; } }, { flush: 'sync' });
+onBeforeUnmount(() => { editor.invalidate(); ++sequence; pagination.reset(); });
 </script>
 <template>
   <Page

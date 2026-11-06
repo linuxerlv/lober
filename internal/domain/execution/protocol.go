@@ -33,10 +33,14 @@ func clone(task model.Task) model.Task {
 	return task
 }
 
-// InstallLife 是一次安装尝试从开始到结束允许的最长时间，4 小时。安装器下载软件包要经过公网，
-// 网络不稳时几十分钟都可能，旧值 90 分钟会把正常装机误判成超时；超时后任务变成失败，
-// 安装器最后一步取首启脚本又被拒，整台机器白装。
+// InstallLife 是一次安装尝试的硬上限，4 小时。它只是慢网络的兜底，不是某次
+// late_command 下载失败的修复：失败原因要另看安装器和网关日志。安装满 SlowAfter
+// （旧版 90 分钟预算）还没结束时先发警告，让人在 4 小时硬失败之前就能发现异常。
 const InstallLife = 14400
+
+// SlowAfter 是旧版安装预算 90 分钟。超过它仍未装完时写一条 machine.slow 警告，
+// 但任务不因此失败；真正的失败点仍是 InstallLife。
+const SlowAfter = 5400
 
 // 各阶段自己的时长预算；pre、packages、post 三个安装阶段的实际期限还要受 InstallLife 封顶，
 // 所以「总时长不超过 4 小时」这一条只写在 stage 里。

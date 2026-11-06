@@ -22,9 +22,9 @@ Windows 观察文件由本轮受控 PowerShell 采样生成，包含 Unix 时间
 
 本轮环境的私有状态位于 `/home/dev/lober-linux-20261018`。其中 instance.json、instance-private.json、candidate.json、owned-pve-resources.json、pve-session.json、guest-key / .pub 以及 import-SERIES.json 须先准备并校验。不得提交这些私有状态、认证材料、安装应答、serial 原文或数据库备份。
 
-先完成产品验证并经 dev → test 集成，再冻结候选。真实 ISO 必须从发行方获取，校验实际字节并经产品 API 导入；Debian 使用含所需包的 DVD-1 与同版 mini。Leap16 必须从真实介质解析 Agama 产品选择，脚本遇到缺少或不唯一的产品列表会停止，不能手填猜测 ID。
+先完成产品验证并经 dev → test 集成，再冻结候选。真实 ISO 必须从发行方获取，校验实际字节并经产品 API 导入；Debian 使用含所需包的 DVD-1 与同版 mini。
 
-Debian 新任务派生自 preseed v2。该版本使用显式镜像参数，默认从 `deb.debian.org/debian` 下载并执行 Debian 原生归档签名校验；安装网络须可访问该源。`mirror_host` / `mirror_path` 可改为已受安装器信任的内部签名仓库。DVD 整体签名通过不代表其解包目录具备 HTTP APT 仓库签名，不能启用 `allow_unauthenticated` 来绕过。旧 preseed v1 的冻结版本保留，不能通过修改旧版本修复已创建的任务。
+当前使用内置发布 v8：RHEL、AlmaLinux、Rocky 使用 kickstart v5，Ubuntu 使用 autoinstall v4，Debian 使用 preseed v5。Debian 新任务派生自 preseed v5。该版本使用显式镜像参数，默认从 `deb.debian.org/debian` 下载并执行 Debian 原生归档签名校验；安装网络须可访问该源。`mirror_host` / `mirror_path` 可改为已受安装器信任的内部签名仓库。DVD 整体签名通过不代表其解包目录具备 HTTP APT 仓库签名，不能启用 `allow_unauthenticated` 来绕过。旧 preseed v1 的冻结版本保留，不能通过修改旧版本修复已创建的任务。
 
 工具自身的回归测试验证取消状态、精确 hook 失败归因、网络优先引导和序列号识别；这些检查通过不代表任何 Linux 已完成实际安装。真实结果仅以绑定候选源码和二进制的逐系统验收证据为准。
 
@@ -38,9 +38,11 @@ python3 tests/lobertest/enterprise/linux_install.py wait --state-dir /home/dev/l
 python3 tests/lobertest/enterprise/linux_install.py qualify --state-dir /home/dev/lober-linux-20261018 --os debian
 ```
 
-支持的 --os：debian、ubuntu、leap15、leap16、almalinux、rocky。Ubuntu 本轮 ISO 约 4GB，目标须配置 8GiB RAM；其他系统本轮使用 4GiB。顺序复用专用目标磁盘之前须保存前一轮证据并停止目标。不得对其他 VM / 磁盘运行装机。
+支持的 --os：rhel、almalinux、rocky、ubuntu、debian。Ubuntu 本轮 ISO 约 4GB，目标须配置 8GiB RAM；其他系统本轮使用 4GiB。顺序复用专用目标磁盘之前须保存前一轮证据并停止目标。不得对其他 VM / 磁盘运行装机。
 
-prepare 经两名不同角色用户审批派生模板和必需 firstboot hook，添加 qemu-guest-agent 包用于 root 级验收，不增加 root SSH 密钥。该 hook 记录运行次数并启动 guest agent；常规 SSH 使用内置账号与公钥链。不能用派生模板的结果替代未经相应配置的其他模板兼容性结论。
+RHEL 的安装版本按任务中冻结的介质版本核对；其他系统仍使用本轮文档指定的介质版本。增加脚本选项不代表已完成 RHEL 真机验收。
+
+prepare 经两名不同角色用户审批派生模板和必需 firstboot hook，显式保留 curl、systemd、openssh-server 并添加 qemu-guest-agent 包用于 root 级验收，不增加 root SSH 密钥。该 hook 记录运行次数并启动 guest agent；常规 SSH 使用内置账号与公钥链。不能用派生模板的结果替代未经相应配置的其他模板兼容性结论。
 
 只有 qualify 全部通过，result.json 才写 PASS：真实服务器 done、正确发行版/版本、根文件系统来自专用磁盘、SSH 网络可用、必需 hook 一次执行、运行及安装器/Cloud-init 残留凭据检查、再次经网络引导后回到已安装磁盘且不重跑 hook。证据绑定产品/test/binary/harness 哈希与两次 boot_id。TERMINAL 仅表示服务端终态，不能当作装机 PASS。
 

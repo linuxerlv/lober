@@ -20,7 +20,7 @@ import (
 	"github.com/lober/lober/internal/domain/model"
 )
 
-var answerFormats = []catalog.Format{"kickstart", "preseed", "autoinstall", "autoyast", "unattend"}
+var answerFormats = []catalog.Format{"kickstart", "preseed", "autoinstall", "unattend"}
 
 // Handwritten snapshots exercise the renderer independently of builtin content.
 func answerFixture(t *testing.T, format catalog.Format, full bool, firmware catalog.Firmware) Request {
@@ -130,9 +130,9 @@ func TestKickstartPythonPayloadPreservesShellBytes(t *testing.T) {
 
 func TestKickstartSyslogOmitsUnsupportedLevel(t *testing.T) {
 	r := answerFixture(t, "kickstart", false, "bios")
-	e, problems, err := answerExpansion(r)
-	if err != nil || len(problems) != 0 {
-		t.Fatalf("answer expansion: %v %v", problems, err)
+	e, problems := installerFor(r.Snapshot.Format).answerExpansion(r)
+	if len(problems) != 0 {
+		t.Fatalf("answer expansion: %v", problems)
 	}
 	if got, want := e.parts["syslog"], "logging --host=10.10.0.1 --port=514"; got != want {
 		t.Fatalf("Kickstart syslog directive = %q, want %q", got, want)
@@ -141,9 +141,13 @@ func TestKickstartSyslogOmitsUnsupportedLevel(t *testing.T) {
 
 func commandPayloads(text string) []string {
 	var out []string
-	pattern := regexp.MustCompile(`echo ([A-Za-z0-9+/=]+) \| (?:base64 -d|/usr/libexec/platform-python -m base64 -d) \| sh`)
+	pattern := regexp.MustCompile(`(?:echo ([A-Za-z0-9+/=]+) \| (?:base64 -d|/usr/libexec/platform-python -m base64 -d) \| sh|LOBER_ESXI_CODE=\$\(echo ([A-Za-z0-9+/=]+) \| openssl base64 -d -A\))`)
 	for _, match := range pattern.FindAllStringSubmatch(text, -1) {
-		b, err := base64.StdEncoding.DecodeString(match[1])
+		value := match[1]
+		if value == "" {
+			value = match[2]
+		}
+		b, err := base64.StdEncoding.DecodeString(value)
 		if err == nil {
 			out = append(out, string(b))
 		}
@@ -152,7 +156,7 @@ func commandPayloads(text string) []string {
 }
 
 func TestAnswerLinuxScaffolds(t *testing.T) {
-	for _, format := range answerFormats[:4] {
+	for _, format := range answerFormats[:3] {
 		t.Run(string(format), func(t *testing.T) {
 			r := answerFixture(t, format, true, "uefi")
 			got, p, err := Render(r)
@@ -213,9 +217,9 @@ func TestAnswerAddressesAndOneLine(t *testing.T) {
 	for _, format := range answerFormats {
 		t.Run(string(format), func(t *testing.T) {
 			r := answerFixture(t, format, true, "bios")
-			e, p, err := answerExpansion(r)
-			if err != nil || len(p) != 0 {
-				t.Fatalf("%v %v", p, err)
+			e, p := installerFor(r.Snapshot.Format).answerExpansion(r)
+			if len(p) != 0 {
+				t.Fatal(p)
 			}
 			for _, part := range format.RequiredParts() {
 				if e.parts[part] == "" {
@@ -268,9 +272,9 @@ func TestAnswerAddressesAndOneLine(t *testing.T) {
 
 func TestAnswerFirstbootStagesWithoutExecuting(t *testing.T) {
 	r := answerFixture(t, "kickstart", true, "bios")
-	e, p, err := answerExpansion(r)
-	if err != nil || len(p) != 0 {
-		t.Fatalf("%v %v", p, err)
+	e, p := installerFor(r.Snapshot.Format).answerExpansion(r)
+	if len(p) != 0 {
+		t.Fatal(p)
 	}
 	payload := commandPayloads(e.slots["firstboot"])[0]
 	dir := filepath.ToSlash(t.TempDir())

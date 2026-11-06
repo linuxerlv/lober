@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// planFileKinds 是四类文件的标识，期望值写死在测试里，理由同 timing_test.go 的词表。
+// planFileKinds 是文件种类的标识，期望值写死在测试里，理由同 timing_test.go 的词表。
 var planFileKinds = []struct {
 	kind FileKind
 	id   string
@@ -15,6 +15,7 @@ var planFileKinds = []struct {
 	{FileAnswer, "answer"},
 	{FileAux, "aux"},
 	{FileScript, "script"},
+	{FileESXiStage, "esxi-firstboot-stage"},
 }
 
 // planDeliveryRow 是下发清单的一行。kinds 按 FileKind 的固定次序写（引导菜单、应答文件、附属文件、运行
@@ -28,7 +29,7 @@ type planDeliveryRow struct {
 
 // planDelivery 抄录各格式的下发清单，依据逐行注明。旧 SPEC.md 指 7355e6a 的 SPEC.md，旧系统指 9c7c374，路径
 // 与行号按它，用 git show 9c7c374:<路径> 回查。
-// 七种格式都有引导菜单、应答文件和运行脚本（渲染的四类输出，spec §4.3；每种格式都支持首次开机，正文里
+// 五种格式都有引导菜单、应答文件和运行脚本（渲染的四类输出，spec §4.3；每种格式都支持首次开机，正文里
 // 就有执行插槽），差别只在附属文件。
 var planDelivery = []planDeliveryRow{
 	{
@@ -51,20 +52,6 @@ var planDelivery = []planDeliveryRow{
 		files:  map[FileKind]string{FileAnswer: "user-data", FileAux: "meta-data"},
 	},
 	{
-		// 旧 SPEC.md §0.3：linux + initrd + autoyast=；文件名取旧系统的 autoinst.xml
-		// （internal/core/model/render.go:111）。
-		format: "autoyast",
-		kinds:  []FileKind{FileMenu, FileAnswer, FileScript},
-		files:  map[FileKind]string{FileAnswer: "autoinst.xml"},
-	},
-	{
-		// Agama inst.auto consumes a single Jsonnet profile; no companion is needed.
-		// https://agama-project.github.io/docs/overview/unattended
-		format: "agama",
-		kinds:  []FileKind{FileMenu, FileAnswer, FileScript},
-		files:  map[FileKind]string{FileAnswer: "autoinst.jsonnet"},
-	},
-	{
 		// 旧 SPEC.md §4.5：unattend 由 WinPE 内的 startnet.cmd 去取，不烧进 WIM；应答文件名取旧系统的
 		// unattend.xml（internal/core/model/render.go:112）。启动脚本由 wimboot 注入（spec §8），这条路待真机核实
 		// （spec §2.2）。
@@ -76,8 +63,8 @@ var planDelivery = []planDeliveryRow{
 		// 旧 SPEC.md §4.5：mboot.efi -c …/boot.cfg；boot.cfg 的 ks= 再指向应答文件，旧系统叫它 ks.cfg
 		// （internal/gateway/answer.go:176、internal/gateway/esxi_bootcfg.go:55）。
 		format: "esxi-ks",
-		kinds:  []FileKind{FileMenu, FileAnswer, FileAux, FileScript},
-		files:  map[FileKind]string{FileAnswer: "ks.cfg", FileAux: "boot.cfg"},
+		kinds:  []FileKind{FileMenu, FileAnswer, FileAux, FileScript, FileESXiStage},
+		files:  map[FileKind]string{FileAnswer: "ks.cfg", FileAux: "boot.cfg", FileESXiStage: "esxi-firstboot.sh"},
 	},
 }
 
@@ -95,8 +82,8 @@ var pendingDeliveryNames = []deliveryCell{}
 // 同样要有依据。真加上的时候，「待定的种类确实还没下发」会先报红，逼着补依据、从这里删掉。
 var pendingDeliveryKinds = []deliveryCell{}
 
-func Test文件种类就是渲染的四类输出(t *testing.T) {
-	// 四类输出见 spec §4.3。hook 脚本不在里面：它不经渲染，网关按快照里的摘要直接下发，与格式无关
+func Test文件种类覆盖渲染输出(t *testing.T) {
+	// hook 脚本不在里面：它不经渲染，网关按快照里的摘要直接下发，与格式无关
 	// （spec §6.2 第 5 条）。
 	var planned []FileKind
 	for _, p := range planFileKinds {
@@ -144,9 +131,9 @@ func Test下发清单恰好覆盖目录里的格式且每格合法(t *testing.T)
 		listed = append(listed, f)
 		checkCell(t, "DeliveryFiles("+string(f)+")", r.kinds)
 		for k, name := range r.names {
-			// 只有应答文件与附属文件经 /v1/answer 按文件名取；引导菜单走 /v1/boot，运行脚本按插槽取。
-			if k != FileAnswer && k != FileAux {
-				t.Errorf("格式 %q 给 %q 登记了文件名 %q，只有 answer 与 aux 有文件名", f, k, name)
+			// 引导菜单走 /v1/boot，运行脚本按插槽取，其余文件按名称获取。
+			if k != FileAnswer && k != FileAux && k != FileESXiStage {
+				t.Errorf("格式 %q 给 %q 登记了不应存在的文件名 %q", f, k, name)
 			}
 			if !slices.Contains(r.kinds, k) {
 				t.Errorf("格式 %q 给不下发的 %q 登记了文件名 %q", f, k, name)

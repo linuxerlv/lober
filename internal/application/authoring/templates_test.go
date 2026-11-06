@@ -133,17 +133,25 @@ func Test模板应用审批使用同一个选择锁(t *testing.T) {
 				} else {
 					_, err = s.Deprecate(ctx, a, r)
 				}
-				want := []string{"read-lock", "read-unlock", "write-lock", "write"}
-				if failure != "write" && failure != "cancel" {
+				want := []string{"read-lock", "read-unlock", "write-lock"}
+				precheckFailed := op == "approve" && (failure == "reload" || failure == "reload-cancel" || failure == "cancel")
+				if op == "approve" {
 					want = append(want, "reload")
-					if failure != "reload" && failure != "reload-cancel" {
-						want = append(want, "hooks")
+				}
+				if !precheckFailed {
+					want = append(want, "write")
+					if failure != "write" && failure != "cancel" {
+						want = append(want, "reload")
+						if failure != "reload" && failure != "reload-cancel" {
+							want = append(want, "hooks")
+						}
 					}
 				}
 				want = append(want, "write-unlock")
 				if !reflect.DeepEqual(events, want) {
 					t.Fatalf("顺序=%v want=%v", events, want)
 				}
+
 				wantErr := failed
 				if failure == "cancel" || failure == "reload-cancel" || failure == "hooks-cancel" {
 					wantErr = context.Canceled
@@ -151,10 +159,14 @@ func Test模板应用审批使用同一个选择锁(t *testing.T) {
 				if failure == "" {
 					wantErr = nil
 				}
-				if !errors.Is(err, wantErr) || p.writes != 1 {
+				wantWrites := 1
+				if precheckFailed {
+					wantWrites = 0
+				}
+				if !errors.Is(err, wantErr) || p.writes != wantWrites {
 					t.Fatal(err, p.writes)
 				}
-				if p.audit.Actor != "reviewer" || p.audit.Action != "template."+op || p.audit.At != 1790000000 {
+				if p.writes > 0 && (p.audit.Actor != "reviewer" || p.audit.Action != "template."+op || p.audit.At != 1790000000) {
 					t.Fatal(p.audit)
 				}
 			})

@@ -31,11 +31,6 @@ func Identify(ctx context.Context, fsys port.MediaView) (Identified, error) {
 	if err := ctx.Err(); err != nil {
 		return out, err
 	}
-	// Real SUSE DVDs also carry .treeinfo. Resolve their product metadata before
-	// the generic Anaconda marker, including Agama's nested install/ repository.
-	if suse, matched, err := identifySUSELayout(ctx, fsys); matched || err != nil {
-		return suse, err
-	}
 	for _, f := range catalog.Formats() {
 		media, _ := catalog.FormatMedia(f)
 		ok, err := identifyMarkers(ctx, fsys, media.Markers)
@@ -107,28 +102,13 @@ func Identify(ctx context.Context, fsys port.MediaView) (Identified, error) {
 			return out, err
 		}
 		out.Version, out.Arch = mediarules.DiskInfo(text)
-	case catalog.ProbeProducts:
-		text, err := identifyText(ctx, fsys, "media.1/products")
+	case catalog.ProbeBootCfg:
+		text, err := identifyText(ctx, fsys, "boot.cfg")
 		if err != nil {
 			return out, err
 		}
-		out.Version = mediarules.ProductVersion(text)
-		for _, arch := range []catalog.Arch{"x86_64", "aarch64"} {
-			info, err := fsys.Stat(ctx, "boot/"+string(arch)+"/loader")
-			if err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return out, err
-			}
-			if err == nil && info.IsDir {
-				if out.Arch != "" {
-					out.Arch = ""
-					break
-				}
-				out.Arch = arch
-			}
-		}
-	case catalog.ProbeBootCfg:
+		out.Version = mediarules.ESXiVersion(text)
 		out.Arch = "x86_64" // The catalog marker guarantees bootx64.efi.
-		// No verified version source exists for ESXi; never infer one from title.
 	case catalog.ProbeWIM:
 		var err error
 		out, err = mediarules.CheckEditions(out, images)
@@ -153,15 +133,12 @@ func identifyMarkers(ctx context.Context, fsys port.MediaView, markers []catalog
 		name := strings.TrimSuffix(marker.Path, "/")
 		info, err := fsys.Stat(ctx, name)
 		if errors.Is(err, fs.ErrNotExist) {
-			if marker.Absent {
-				continue
-			}
 			return false, nil
 		}
 		if err != nil {
 			return false, err
 		}
-		if marker.Absent || strings.HasSuffix(marker.Path, "/") && !info.IsDir {
+		if strings.HasSuffix(marker.Path, "/") && !info.IsDir {
 			return false, nil
 		}
 		if len(marker.Contains) > 0 {
@@ -186,11 +163,7 @@ func identifyText(ctx context.Context, fsys port.MediaView, name string) (string
 }
 
 func identifyGeneral(ctx context.Context, fsys port.MediaView) (map[string]string, error) {
-	return identifyGeneralAt(ctx, fsys, ".treeinfo")
-}
-
-func identifyGeneralAt(ctx context.Context, fsys port.MediaView, name string) (map[string]string, error) {
-	text, err := identifyText(ctx, fsys, name)
+	text, err := identifyText(ctx, fsys, ".treeinfo")
 	if err != nil {
 		return nil, err
 	}

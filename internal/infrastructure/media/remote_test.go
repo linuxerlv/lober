@@ -3,8 +3,10 @@ package iso
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,103 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestRemoteFailureOmitsCredentials(t *testing.T) {
+	const address = "http://mirror.private.invalid/medium.iso?signature=demo-secret"
+	const unavailable = "无法下载镜像"
+	lookup := func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("192.0.2.10")}, nil
+	}
+	lookupFailure := func(context.Context, string) ([]netip.Addr, error) {
+		return nil, &net.DNSError{Err: "lookup failed", Name: "mirror.private.invalid"}
+	}
+	checkSafe := func(t *testing.T, message string) {
+		t.Helper()
+		for _, private := range []string{"mirror.private.invalid", "192.0.2.10", "demo-secret", "redirect-secret"} {
+			if strings.Contains(message, private) {
+				t.Fatalf("错误暴露地址或凭据：%q", message)
+			}
+		}
+	}
+	t.Run("register DNS", func(t *testing.T) {
+		s, item := sourceFixture(t, "rocky")
+		s.transfer.resolver = lookupFailure
+		err := s.Register(t.Context(), item, "url", address, "", 0, "", sourceAudit())
+		if err == nil {
+			t.Fatal("地址无法解析，仍登记成功")
+		}
+		checkSafe(t, err.Error())
+		if !errors.Is(err, repository.ErrInvalid) {
+			t.Fatalf("登记未返回固定的地址错误：%v", err)
+		}
+		if _, exists, err := s.store.GetSource(t.Context(), item.ID, ""); err != nil || exists {
+			t.Fatalf("登记失败后仍有来源记录：exists=%v, err=%v", exists, err)
+		}
+	})
+	for _, tc := range []struct {
+		name, want string
+		configure  func(*testing.T, *acquisitionFixture)
+	}{
+		{"parse", "镜像来源不合法", nil},
+		{"DNS", unavailable, func(_ *testing.T, s *acquisitionFixture) {
+			s.transfer.resolver = lookupFailure
+		}},
+		{"dial", unavailable, func(_ *testing.T, s *acquisitionFixture) {
+			s.transfer.dialContext = func(_ context.Context, _, addr string) (net.Conn, error) {
+				return nil, fmt.Errorf("connection refused at %s", addr)
+			}
+		}},
+		{"TLS", unavailable, func(t *testing.T, s *acquisitionFixture) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("接受了不受信任的证书") }))
+			t.Cleanup(server.Close)
+			s.transfer.dialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+			}
+		}},
+		{"redirect", unavailable, func(t *testing.T, s *acquisitionFixture) {
+			sourceHTTP(t, s, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Location", "http://mirror.private.invalid/%zz?token=redirect-secret")
+				w.WriteHeader(http.StatusFound)
+			})
+		}},
+		{"HTTP status", "镜像服务器返回 HTTP 503", func(t *testing.T, s *acquisitionFixture) {
+			sourceHTTP(t, s, func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "demo-secret", http.StatusServiceUnavailable)
+			})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, item := sourceFixture(t, "rocky")
+			s.transfer.resolver = lookup
+			if tc.name == "parse" {
+				// 直接存入旧地址，模拟曾绕过登记校验的记录。
+				mustSourceSave(t, s, model.Source{ISOID: item.ID, Kind: model.SourceRemote, URL: strings.Replace(address, "/medium", "/%zzmedium", 1), State: model.SourcePending})
+			} else {
+				addr := address
+				if tc.name == "TLS" {
+					addr = strings.Replace(address, "http:", "https:", 1)
+				}
+				if err := s.Register(t.Context(), item, "url", addr, "", 0, "", sourceAudit()); err != nil {
+					t.Fatal(err)
+				}
+				tc.configure(t, s)
+			}
+			if err := s.FetchOne(t.Context(), item.ID, ""); err == nil {
+				t.Fatal("下载没有报告失败")
+			} else {
+				checkSafe(t, err.Error())
+			}
+			src := mustSource(t, s, item.ID, "")
+			if src.State != model.SourceFailed || src.Error != tc.want {
+				t.Fatalf("失败记录 state=%q, error=%q, want error=%q", src.State, src.Error, tc.want)
+			}
+			progress, err := s.Progress(t.Context(), item.ID)
+			if err != nil || len(progress.Sources) != 1 || progress.Sources[0].Error != tc.want {
+				t.Fatalf("进度错误：%+v, %v", progress, err)
+			}
+		})
+	}
+}
 
 func TestRemoteTLSPinnedAddressRetainsSNIAndVerification(t *testing.T) {
 	s, item := sourceFixture(t, "rocky")

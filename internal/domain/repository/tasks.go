@@ -29,6 +29,8 @@ type Tasks interface {
 	// 任务：按 SN 查找的方法里只有它查。网关不能把漏了规范化当成「没有任务」，否则机器会从本地盘启动、任务一直等着
 	// （见 Hosts 的说明）。
 	FindOpenTask(ctx context.Context, sn string) (model.Task, bool, error)
+	// FindOpenHosts 批量查询哪些规范主机编号有未结束任务。只返回忙碌的主机，不读取任务快照。
+	FindOpenHosts(ctx context.Context, sns []string) (map[string]bool, error)
 	// ListTasks 共用doc.go的可信调用、空值、错误、重复、原子保存、并发与取消边界；只读，不写审计或通知，无提交复查。
 	// 分页、筛选、顺序及Total遵守types.go对应Query与Page；先检查分页再解本对象游标。
 	ListTasks(ctx context.Context, q TaskQuery) (Page[model.Task], error)

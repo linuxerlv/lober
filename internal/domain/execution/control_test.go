@@ -80,3 +80,28 @@ func TestTimeoutAtEqualityDoesNotMutateInput(t *testing.T) {
 		}
 	}
 }
+
+func TestSlowWarnsOnceAtOldInstallBudget(t *testing.T) {
+	base := model.Task{State: model.TaskInstalling, Execution: &model.Execution{
+		Attempt: 1, IssuedAt: 1000, Deadline: 1000 + InstallLife, Signals: map[string]string{},
+	}}
+	if _, ok := Slow(base, 1000+SlowAfter-1); ok {
+		t.Fatal("提前警告了")
+	}
+	got, ok := Slow(base, 1000+SlowAfter)
+	if !ok || !got.Execution.SlowWarned || base.Execution.SlowWarned {
+		t.Fatalf("第一次警告不对：ok=%v got=%+v base=%+v", ok, got.Execution, base.Execution)
+	}
+	if _, ok := Slow(got, 1000+SlowAfter+1); ok {
+		t.Fatal("第二次又警告")
+	}
+	for _, task := range []model.Task{
+		{State: model.TaskInstalling},
+		{State: model.TaskDone, Execution: &model.Execution{IssuedAt: 1000, Deadline: 1}},
+		{State: model.TaskInstalling, Execution: &model.Execution{IssuedAt: 1000, Deadline: 0}},
+	} {
+		if _, ok := Slow(task, 1<<40); ok {
+			t.Fatalf("不该警告：%+v", task)
+		}
+	}
+}

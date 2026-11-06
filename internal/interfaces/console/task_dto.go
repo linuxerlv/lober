@@ -54,8 +54,8 @@ type snapshotSlotDTO struct {
 type snapshotDTO struct {
 	Schema   int                 `json:"schema"`
 	Family   catalog.Family      `json:"family"`
-	Series   catalog.Series      `json:"series"`
-	Format   catalog.Format      `json:"format"`
+	Series   string              `json:"series"`
+	Format   string              `json:"format"`
 	Host     snapshotHostDTO     `json:"host"`
 	ISO      snapshotISODTO      `json:"iso"`
 	Template snapshotTemplateDTO `json:"template"`
@@ -76,10 +76,22 @@ type taskItem struct {
 	CanRetry        []problemJSON   `json:"canRetry"`
 }
 
+// redactedValue 是任务快照里凭据类参数的固定替代值。任务接口对所有有 task:read 的
+// 角色开放；口令散列和明文密码不需要给他们看。机器网关不经过这个 DTO，装机照常拿原值。
+const redactedValue = "[redacted]"
+
+func secretParam(name string, typ model.ParamType) bool {
+	return name == "password" || name == "pwhash" || typ == "pwhash"
+}
+
 func snapshotValues(in map[string]model.SnapshotValue) map[string]snapshotValueDTO {
 	out := make(map[string]snapshotValueDTO, len(in))
 	for key, v := range in {
-		out[key] = snapshotValueDTO{v.Type, v.List, append([]string{}, v.Items...)}
+		items := append([]string{}, v.Items...)
+		if secretParam(key, v.Type) {
+			items = []string{redactedValue}
+		}
+		out[key] = snapshotValueDTO{v.Type, v.List, items}
 	}
 	return out
 }
@@ -99,7 +111,7 @@ func snapshotToDTO(s model.Snapshot) snapshotDTO {
 		}
 		slots[i] = snapshotSlotDTO{slot.Seq, slot.Name, slot.Exec, slot.Timing, instances}
 	}
-	return snapshotDTO{Schema: s.Schema, Family: s.Family, Series: s.Series, Format: s.Format, Host: snapshotHostDTO{s.Host.SN, s.Host.Arch, s.Host.Firmware, stringMap(s.Host.Attrs)}, ISO: snapshotISODTO{s.ISO.ID, s.ISO.Name, s.ISO.Version, s.ISO.Arch, stringMap(s.ISO.Artifacts)}, Template: snapshotTemplateDTO{s.Template.ID, s.Template.Version, s.Template.Name, s.Template.Body, snapshotValues(s.Template.Params)}, Slots: slots}
+	return snapshotDTO{Schema: s.Schema, Family: s.Family, Series: string(s.Series), Format: string(s.Format), Host: snapshotHostDTO{s.Host.SN, s.Host.Arch, s.Host.Firmware, stringMap(s.Host.Attrs)}, ISO: snapshotISODTO{s.ISO.ID, s.ISO.Name, s.ISO.Version, s.ISO.Arch, stringMap(s.ISO.Artifacts)}, Template: snapshotTemplateDTO{s.Template.ID, s.Template.Version, s.Template.Name, s.Template.Body, snapshotValues(s.Template.Params)}, Slots: slots}
 }
 func toTaskItem(t model.Task) taskItem {
 	return taskItem{t.ID, t.HostSN, t.ISOID, t.TemplateID, t.TemplateVersion, t.State, snapshotToDTO(t.Snapshot), t.CreatedBy, t.CreatedAt, t.Rev, []problemJSON{}, []problemJSON{}}

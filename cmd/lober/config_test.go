@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,7 @@ tls:
   cert: "/etc/lober/cert.pem"
   key: "/etc/lober/key.pem"
 sessionTTLHours: 3
+loginMaxBytes: 32768
 seedAdmin: "seed-private-password"
 iso:
   staging: "/srv/lober/staging"
@@ -43,6 +45,9 @@ preview:
 	}
 	if cfg.Listen != ":8080" || cfg.PG.DSN != "file-private-dsn" || cfg.PG.MaxConns != 4 || cfg.SessionTTLHours != 3 || cfg.SeedAdmin != "seed-private-password" || cfg.ISO.Staging != "/srv/lober/staging" || len(cfg.ISO.LocalRoots) != 1 || cfg.Preview.Gateway != "https://gateway.example.test" {
 		t.Fatal("configuration values lost")
+	}
+	if cfg.LoginMaxBytes != 32768 {
+		t.Fatal("登录上限未读取")
 	}
 	t.Setenv("LOBER_PG_DSN", "environment-private-dsn")
 	cfg, err = loadConfig(path)
@@ -63,6 +68,8 @@ func Test配置拒绝缺失非法字段且错误不含秘密(t *testing.T) {
 		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\nunknown: 'private-password'\n",
 		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\nsessionTTLHours: -1\n",
 		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\nsessionTTLHours: 9223372036854775807\n",
+		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\nloginMaxBytes: 16383\n",
+		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\nloginMaxBytes: 4194305\n",
 		"listen: ':8080'\npg: {dsn: 'secret-dsn', maxConns: -1}\n",
 		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\nlog: {level: nonsense}\n",
 		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\ntls: {cert: '/only/cert'}\n",
@@ -78,5 +85,28 @@ func Test配置拒绝缺失非法字段且错误不含秘密(t *testing.T) {
 	}
 	if _, err := loadConfig(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
 		t.Fatal("missing file accepted")
+	}
+}
+
+func Test配置采集镜像路径必须成对(t *testing.T) {
+	t.Setenv("LOBER_PG_DSN", "")
+	for _, tc := range []struct {
+		name, extra string
+		wantErr     bool
+	}{
+		{"都不配", "", false},
+		{"都配", ", inventoryKernel: 'inv/vmlinuz', inventoryInitrd: 'inv/initrd'", false},
+		{"只配内核", ", inventoryKernel: 'inv/vmlinuz'", true},
+		{"只配 initrd", ", inventoryInitrd: 'inv/initrd'", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// ISO 目录必须绝对路径；TempDir 在 Windows 和 Linux 上都是绝对路径。
+			dir := t.TempDir()
+			body := fmt.Sprintf("listen: ':8080'\npg: {dsn: 'secret-dsn'}\niso: {staging: %q, artifacts: %q, smb: %q, tools: %q}\npreview: {gateway: 'http://gw', artifacts: 'http://art'%s}\n", dir, dir, dir, dir, tc.extra)
+			_, err := loadConfig(configFile(t, body))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
+			}
+		})
 	}
 }

@@ -123,26 +123,6 @@ var capabilityTable = map[Format]capabilityRow{
 		parts:  []SystemPart{"firstboot", "cleanup"},
 		values: []SystemValue{"repo", "iso", "gateway", "task", "sn", "lbrace"},
 	},
-	"autoyast": {
-		interpreters: map[Timing][]Interpreter{
-			"pre":            {"sh", "bash"},
-			"post-installer": {"sh", "bash"},
-			"post-target":    {"sh", "bash"},
-			"firstboot":      {"sh", "bash"},
-		},
-		parts:  []SystemPart{"firstboot", "cleanup"},
-		values: []SystemValue{"repo", "gateway", "task", "sn", "lbrace"},
-	},
-	"agama": {
-		interpreters: map[Timing][]Interpreter{
-			"pre":            {"sh", "bash"},
-			"post-installer": {"sh", "bash"},
-			"post-target":    {"sh", "bash"},
-			"firstboot":      {"sh", "bash"},
-		},
-		parts:  []SystemPart{"firstboot", "cleanup"},
-		values: []SystemValue{"repo", "gateway", "task", "sn", "lbrace"},
-	},
 	// 装前跑在安装 ISO 自带的 WinPE 里，既没有 PowerShell，也没有 HTTP 客户端（spec §8）。
 	// 不要因为「以后能解决」就先写上 powershell：激活判定照这张表放行，脚本要到 WinPE 里才失败。
 	"unattend": {

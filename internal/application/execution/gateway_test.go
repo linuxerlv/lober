@@ -81,7 +81,7 @@ func gatewayFixture(t *testing.T) (*gatewayRepo, http.Handler) {
 	t.Helper()
 	body := "echo frozen\n"
 	digest := sha256.Sum256([]byte(body))
-	f := &gatewayRepo{task: model.Task{ID: "task-one", HostSN: "SN-ONE", State: model.TaskBooting, Execution: &model.Execution{Attempt: 1, IssuedAt: 1000, Deadline: 1900, Signals: map[string]string{}}, Snapshot: model.Snapshot{Format: "kickstart", Series: "rocky", ISO: model.SnapshotISO{Arch: "x86_64"}, Slots: []model.SnapshotSlot{{Seq: 2, Name: "init", Exec: true, Timing: "firstboot", Instances: []model.SnapshotInstance{{Digest: hex.EncodeToString(digest[:]), Body: body}}}}}}}
+	f := &gatewayRepo{task: model.Task{ID: "task-one", HostSN: "SN-ONE", State: model.TaskBooting, Execution: &model.Execution{Attempt: 1, IssuedAt: 1000, Deadline: 1900, Signals: map[string]string{}}, Snapshot: model.Snapshot{Family: "linux", Format: "kickstart", Series: "rocky", ISO: model.SnapshotISO{Arch: "x86_64"}, Slots: []model.SnapshotSlot{{Seq: 2, Name: "init", Exec: true, Timing: "firstboot", Instances: []model.SnapshotInstance{{Digest: hex.EncodeToString(digest[:]), Body: body}}}}}}}
 	var err error
 	f.service, err = execution.New(f, []byte(strings.Repeat("k", 32)), func() int64 { return 1000 }, nil)
 	must(t, err)
@@ -120,6 +120,30 @@ func TestCanonicalFrozenFileRouting(t *testing.T) {
 		t.Fatal("digest mismatch served")
 	}
 }
+
+func TestNonWindowsFrozenSlotKeepsShellDownloadPath(t *testing.T) {
+	for _, series := range []catalog.Series{"rocky", "debian", "ubuntu", "esxi"} {
+		t.Run(string(series), func(t *testing.T) {
+			f, h := gatewayFixture(t)
+			f.task.Snapshot.Family, f.task.Snapshot.Series, f.task.Snapshot.Format = series.Family(), series, series.Format()
+			for _, tc := range []struct {
+				token, path string
+				status      int
+				body        string
+			}{
+				{f.install, "scripts/2.sh", http.StatusOK, "script:init"},
+				{f.install, "scripts/2.cmd", http.StatusNotFound, "Not Found\n"},
+				{f.install, "scripts/3.sh", http.StatusNotFound, "Not Found\n"},
+				{f.final, "scripts/2.sh", http.StatusForbidden, "Forbidden\n"},
+			} {
+				w := call(h, http.MethodGet, "/v1/answer/task-one/"+tc.token+"/"+tc.path, "")
+				if w.Code != tc.status || w.Body.String() != tc.body {
+					t.Errorf("下载 %s 得到 %d %q，预期 %d %q", tc.path, w.Code, w.Body.String(), tc.status, tc.body)
+				}
+			}
+		})
+	}
+}
 func TestBootWithoutTaskReturnsLocalBootAndCanonicalPlatform(t *testing.T) {
 	f, h := gatewayFixture(t)
 	f.task = model.Task{}
@@ -139,6 +163,7 @@ func TestBootWithoutTaskReturnsLocalBootAndCanonicalPlatform(t *testing.T) {
 func TestBootServesPreseedAnswerToDebianInstallerAgent(t *testing.T) {
 	f, h := gatewayFixture(t)
 	f.task.Snapshot.Format = "preseed"
+	f.task.Snapshot.Series = "debian"
 	callUA := func(agent, sn string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest("GET", "/v1/boot?sn="+sn+"&arch=x86_64&firmware=bios", nil)
@@ -159,10 +184,12 @@ func TestBootServesPreseedAnswerToDebianInstallerAgent(t *testing.T) {
 	}
 	// 不给安装：无任务、别的 SN、非 preseed 格式都保持本地盘引导。
 	f.task.Snapshot.Format = "kickstart"
+	f.task.Snapshot.Series = "rocky"
 	if w := callUA("debian-installer", "SN-ONE"); w.Code != 200 || !strings.Contains(w.Body.String(), "sanboot") {
 		t.Fatal("non-preseed format must not install", w.Code, w.Body)
 	}
 	f.task.Snapshot.Format = "preseed"
+	f.task.Snapshot.Series = "debian"
 	if w := callUA("debian-installer", "SN-OTHER"); w.Code != 200 || !strings.Contains(w.Body.String(), "sanboot") {
 		t.Fatal("unknown SN must not install", w.Code, w.Body)
 	}
@@ -228,6 +255,7 @@ func Test机器入口错误来源与状态保持(t *testing.T) {
 			for _, transport := range []bool{false, true} {
 				f, _ := gatewayFixture(t)
 				f.task.Snapshot.Format = "preseed"
+				f.task.Snapshot.Series = "debian"
 				if tc.configure != nil {
 					tc.configure(f)
 				}
@@ -295,6 +323,7 @@ func Test机器应答渲染后取消不泄出正文(t *testing.T) {
 		t.Run(map[bool]string{false: "file", true: "installer"}[installer], func(t *testing.T) {
 			f, _ := gatewayFixture(t)
 			f.task.Snapshot.Format = "preseed"
+			f.task.Snapshot.Series = "debian"
 			observed := 0
 			h := f.handler(t, port.RenderFunc(func(ctx context.Context, _ port.RenderRequest) ([]byte, error) {
 				must(t, f.service.Cancel(ctx, f.task, repository.Audit{Actor: "tester", Action: "task.cancel", At: 1000}))
@@ -364,6 +393,7 @@ func Test机器入口保留观察时机与双重验证(t *testing.T) {
 				}
 			case strings.HasPrefix(name, "installer"):
 				f.task.Snapshot.Format = "preseed"
+				f.task.Snapshot.Series = "debian"
 				if strings.Contains(name, "Answer") {
 					f.readError = errors.New("answer read")
 				}
@@ -414,6 +444,7 @@ func Test机器交付顺序与冻结值(t *testing.T) {
 	for _, installer := range []bool{false, true} {
 		f, _ := gatewayFixture(t)
 		f.task.Snapshot.Format = "preseed"
+		f.task.Snapshot.Series = "debian"
 		render := port.RenderFunc(func(ctx context.Context, r port.RenderRequest) ([]byte, error) {
 			f.order = append(f.order, "render")
 			if r.Task.ID != f.task.ID || r.Values["token"] != f.install || r.Values["finalize-token"] != f.final || r.Values["gateway"] != "http://gateway" || r.Values["artifacts"] != "http://artifacts" || r.Values["smb"] != "smb" || r.Values["syslog-addr"] != "syslog" || r.Values["task"] != f.task.ID || r.Values["sn"] != f.task.HostSN {

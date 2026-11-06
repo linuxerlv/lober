@@ -12,7 +12,7 @@ import (
 
 // Bodies are compiled data. Reading this embed.FS never accesses a host filesystem.
 //
-//go:embed kickstart preseed autoinstall autoyast agama unattend esxi
+//go:embed kickstart preseed autoinstall unattend esxi
 var bodies embed.FS
 
 var hooks = []model.Hook{partitionHook(), packagesHook(), networkHook(), accountHook(), sshkeyHook()}
@@ -55,12 +55,13 @@ func hook(name string, version int, description string) model.Hook {
 }
 
 func instance(name string) model.Instance {
-	version := 1
-	// account v2 drops the Leap 15.6 schema-invalid create_home user field (D3);
-	// partition v2 inlines kickstart part commands with reqpart instead of
-	// %pre+%include, which AlmaLinux 10 parses before %pre runs (D2).
-	if name == "packages" || name == "account" || name == "partition" {
-		version = 2
+	version := 2
+	// 共享组件缩减了支持范围，模板统一引用新版本。
+	switch name {
+	case "packages":
+		version = 4
+	case "account", "partition":
+		version = 3
 	}
 	return model.Instance{HookID: "builtin-" + name, HookVersion: version}
 }
@@ -71,47 +72,72 @@ func fixedInstance(name, param, value string, editable bool) model.Instance {
 	return in
 }
 
+func preseedParams() []model.ParamDecl {
+	// A DVD tree is not a signed HTTP APT repository. Keep repository selection
+	// explicit and let the installer enforce archive signatures.
+	return []model.ParamDecl{
+		{Name: "mirror_host", Label: "Debian mirror host", Type: "word", Default: "deb.debian.org"},
+		{Name: "mirror_path", Label: "Debian mirror path", Type: "word", Default: "/debian"},
+	}
+}
+
+// inventoryPreseedTemplate 是 Debian/Ubuntu 的采集变体：系统盘不再手填，锁定取自主机
+// 属性 inv_system_disk。主机没采过时报 param_attr_missing，操作员会看到“先采集”的提示，
+// 而不是悄悄按 sda 打错盘。
+func inventoryPreseedTemplate() model.Template {
+	ss := series("preseed")
+	tpl := model.Template{
+		ID: "builtin-preseed-inventory", Version: 2, Name: "lober:preseed-inventory",
+		State: model.VersionApproved, Builtin: true,
+		Family: ss[0].Family(), Series: ss, Body: body("preseed", "answer.cfg"),
+		Params: preseedParams(), Assembly: map[string][]model.Instance{},
+	}
+	for _, name := range []string{"network", "account", "sshkey"} {
+		tpl.Assembly[name] = []model.Instance{instance(name)}
+	}
+	tpl.Assembly["partition"] = []model.Instance{{
+		HookID: "builtin-partition", HookVersion: instance("partition").HookVersion,
+		Bindings: map[string]model.Binding{"disk": {Source: model.BindingAttr, Attr: "inv_system_disk"}},
+	}}
+	tpl.Assembly["packages"] = []model.Instance{fixedInstance("packages", "packages", defaultPackages(), true)}
+	return tpl
+}
+
+// defaultPackages 是内置 Linux 模板的默认包列表。
+func defaultPackages() string {
+	return "curl\nsystemd\nopenssh-server"
+}
+
 func shippedTemplates() []model.Template {
 	var result []model.Template
-	for _, format := range []catalog.Format{"kickstart", "preseed", "autoinstall", "autoyast", "agama", "unattend", "esxi-ks"} {
+	for _, format := range []catalog.Format{"kickstart", "preseed", "autoinstall", "unattend", "esxi-ks"} {
 		file := "answer.cfg"
 		switch format {
 		case "autoinstall":
 			file = "answer.yaml"
-		case "autoyast", "unattend":
+		case "unattend":
 			file = "answer.xml"
-		case "agama":
-			file = "answer.jsonnet"
 		}
 		id := string(format)
 		if format == "esxi-ks" {
 			id = "esxi"
 		}
-		// Content changes ship as higher version numbers: account/partition v2
-		// rebinds every template, kickstart/preseed already carried a v2.
-		// Agama v3 改用安装器实际支持的 UTC 时区名。
-		version := 2
-		if format == "kickstart" || format == "preseed" || format == "agama" {
-			version = 3
+		// 模板改用新版共享组件，已有版本内容保持不变。
+		version := 4
+		if format == "kickstart" || format == "preseed" {
+			version = 5
 		}
 		ss := series(format)
 		tpl := model.Template{ID: "builtin-" + id, Version: version, Name: "lober:" + id, State: model.VersionApproved, Builtin: true, Family: ss[0].Family(), Series: ss, Body: body(format, file), Assembly: map[string][]model.Instance{}}
 		for _, name := range []string{"partition", "network", "account", "sshkey"} {
 			tpl.Assembly[name] = []model.Instance{instance(name)}
 		}
-		tpl.Assembly["packages"] = []model.Instance{fixedInstance("packages", "packages", "curl", true)}
+		tpl.Assembly["packages"] = []model.Instance{fixedInstance("packages", "packages", defaultPackages(), true)}
 		switch format {
 		case "preseed":
-			// A DVD tree is not a signed HTTP APT repository. Keep repository
-			// selection explicit and let the installer enforce archive signatures.
-			tpl.Params = []model.ParamDecl{
-				{Name: "mirror_host", Label: "Debian mirror host", Type: "word", Default: "deb.debian.org"},
-				{Name: "mirror_path", Label: "Debian mirror path", Type: "word", Default: "/debian"},
-			}
+			tpl.Params = preseedParams()
 		case "autoinstall":
 			tpl.Params = []model.ParamDecl{{Name: "hostname", Type: "hostname", Default: "lober-node"}}
-		case "agama":
-			tpl.Params = []model.ParamDecl{{Name: "product", Type: "enum", Offer: "products"}}
 		case "unattend":
 			tpl.Params = []model.ParamDecl{{Name: "edition", Type: "enum", Offer: "editions"}}
 			// The native pre-hook and InstallTo must name the same disk. This shipped
@@ -129,7 +155,7 @@ func shippedTemplates() []model.Template {
 		}
 		result = append(result, tpl)
 	}
-	return result
+	return append(result, inventoryPreseedTemplate())
 }
 
 // Templates returns the shipped template versions, with no shared maps, slices or pointers.

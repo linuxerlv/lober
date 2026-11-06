@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/lober/lober/internal/application/audit"
+	"github.com/lober/lober/internal/application/inventory"
 	"github.com/lober/lober/internal/domain/access"
 	"io"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
+	"github.com/lober/lober/internal/infrastructure/credentials"
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 )
 
@@ -124,6 +126,10 @@ func (f auditedISOSource) FreeSpace(context.Context) (int64, int64, error) {
 
 func Test每条正式审计路由都写入正确操作者和目标(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
+	s.server.deps.Inventory = inventory.New(inventory.Deps{
+		Hosts: st, Tokens: credentials.NewTokens(), Clock: s.server.deps.Clock,
+		Menu: inventory.MenuEndpoints{Gateway: "http://gateway.invalid", Artifacts: "http://artifacts.invalid", Kernel: "kernel", Initrd: "initrd"},
+	})
 	admin := adminHTTP(t, s, st)
 	reviewer := reviewerHTTP(t, s, st)
 	setMedia(s, st, st, auditedISOSource{st}, &mockISODeletion{st: st})
@@ -207,7 +213,8 @@ func Test每条正式审计路由都写入正确操作者和目标(t *testing.T)
 	run("user.disable", "DELETE", "/console/v1/users/carol", "", admin, "user", "carol")
 	run("host.create", "POST", "/console/v1/hosts", `{"sn":"SN-AUDIT","arch":"x86_64","firmware":"uefi"}`, admin, "host", "SN-AUDIT")
 	run("host.update", "PUT", "/console/v1/hosts/SN-AUDIT", `{"sn":"SN-AUDIT","arch":"x86_64","rev":1}`, admin, "host", "SN-AUDIT")
-	run("host.delete", "DELETE", "/console/v1/hosts/SN-AUDIT?rev=2", "", admin, "host", "SN-AUDIT")
+	run("host.inventory_request", "POST", "/console/v1/hosts/SN-AUDIT/inventory/request", "", admin, "host", "SN-AUDIT")
+	run("host.delete", "DELETE", "/console/v1/hosts/SN-AUDIT?rev=3", "", admin, "host", "SN-AUDIT")
 	run("host.import", "POST", "/console/v1/hosts/import", "sn,arch\nSN-IMPORT,x86_64\n", admin, "host", "SN-IMPORT")
 	acquired := run("iso.create", "POST", "/console/v1/isos", `{"name":"audit-acquiring","family":"linux","series":"rocky","sources":[{"kind":"upload","size":3}]}`, admin, "iso", "")
 	acquiredID := acquired["id"].(string)

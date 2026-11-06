@@ -2,41 +2,35 @@
 import { computed, ref } from 'vue';
 
 import { Page } from '@vben/common-ui';
-import { useAccessStore, useUserStore } from '@vben/stores';
+import { useUserStore } from '@vben/stores';
 
 import { ElAlert, ElButton, ElForm, ElFormItem, ElInput } from 'element-plus';
 
 import { errorMessage, problemsOf } from '#/api/console/problem';
-import { updateUser } from '#/api/console/user';
-import { getUserInfoApi } from '#/api/core/user';
+import { changePasswordApi } from '#/api/core/auth';
 import ProblemList from '#/components/console/ProblemList.vue';
 import { useAuthStore } from '#/store';
 
 const userStore = useUserStore();
 const auth = useAuthStore();
+const currentPassword = ref('');
 const password = ref('');
 const confirmation = ref('');
 const busy = ref(false);
 const failure = ref<unknown>();
 const matches = computed(
-  () => password.value.length > 0 && password.value === confirmation.value,
+  () => !!currentPassword.value && !!password.value && password.value === confirmation.value,
 );
 async function save() {
   if (!matches.value || busy.value) return;
   busy.value = true;
   failure.value = undefined;
   try {
-    const user = await getUserInfoApi();
-    await updateUser(user.username, {
-      displayName: user.displayName,
-      role: user.role,
-      disabled: user.disabled,
-      rev: user.rev,
-      password: password.value,
+    await changePasswordApi({
+      currentPassword: currentPassword.value,
+      newPassword: password.value,
     });
-    // Password changes revoke every session, including this one.
-    useAccessStore().setAccessToken(null);
-    await auth.logout(false);
+    await auth.clearSession(false);
   } catch (error) {
     failure.value = error;
   } finally {
@@ -60,6 +54,14 @@ async function save() {
       :closable="false"
     /><ProblemList :problems="problemsOf(failure)" />
     <ElForm class="max-w-lg" label-width="100px" @submit.prevent="save">
+      <ElFormItem label="当前密码">
+        <ElInput
+          v-model="currentPassword"
+          type="password"
+          autocomplete="current-password"
+          show-password
+        />
+      </ElFormItem>
 <ElFormItem label="新密码">
 <ElInput
           v-model="password"

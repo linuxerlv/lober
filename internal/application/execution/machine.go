@@ -41,6 +41,9 @@ func (m *Machine) Boot(ctx context.Context, sn string, arch catalog.Arch, firmwa
 		if err != nil || !found {
 			return task, found, err
 		}
+		if err := checkTaskSupport(task); err != nil {
+			return model.Task{}, false, err
+		}
 		// An installed or running installer must never be booted into installation again.
 		if !executionrules.CanBoot(task) {
 			return model.Task{}, false, nil
@@ -75,6 +78,9 @@ func (m *Machine) Preseed(ctx context.Context, sn string) (model.Task, bool, err
 	if err != nil || !found {
 		return model.Task{}, false, err
 	}
+	if err := checkTaskSupport(task); err != nil {
+		return model.Task{}, false, err
+	}
 	if !executionrules.PreseedAvailable(task) {
 		return model.Task{}, false, nil
 	}
@@ -86,6 +92,9 @@ func (m *Machine) Preseed(ctx context.Context, sn string) (model.Task, bool, err
 func (m *Machine) GetAuthorized(ctx context.Context, id, token string, finalize bool) (model.Task, error) {
 	task, err := m.repo.GetTask(ctx, id)
 	if err != nil {
+		return model.Task{}, err
+	}
+	if err := checkTaskSupport(task); err != nil {
 		return model.Task{}, err
 	}
 	scope := Install
@@ -126,6 +135,9 @@ func (m *Machine) Signal(ctx context.Context, id, token string, sig Signal) erro
 	for range 8 {
 		task, err := m.repo.GetTask(ctx, id)
 		if err != nil {
+			return err
+		}
+		if err := checkTaskSupport(task); err != nil {
 			return err
 		}
 		scope := Install

@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net/http"
 	"slices"
 	"unicode/utf8"
 )
@@ -70,6 +71,9 @@ func RespondError(c *gin.Context, err error) {
 	}
 
 	switch {
+	case errors.Is(err, identity.ErrPasswordTooLong):
+		Fail(c, 400, nil, "新密码不能超过 2048 字节")
+		return
 	case errors.Is(err, tasks.ErrControlUnavailable):
 		Fail(c, 422, nil, model.ConsoleTaskControlUnavailable)
 		return
@@ -168,24 +172,44 @@ func Judge(c *gin.Context, ps []model.Problem) bool {
 	return false
 }
 
-// Bind accepts exactly one JSON value and checks declared required fields.
-func Bind(c *gin.Context, v any) bool {
+const (
+	DefaultLoginBodyLimit = 16 << 10
+	MaxLoginBodyLimit     = jsonBodyLimit
+	jsonBodyLimit         = 4 << 20
+	hostCSVLimit          = 16 << 20
+)
+
+func readRequestBody(c *gin.Context, limit int64) ([]byte, bool) {
 	if c.Request.Body == nil {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
-		return false
+		return nil, false
 	}
-	d := json.NewDecoder(c.Request.Body)
-	var raw json.RawMessage
-	if err := d.Decode(&raw); err != nil || !utf8.Valid(raw) {
+	if c.Request.ContentLength > limit {
+		Fail(c, http.StatusRequestEntityTooLarge, nil, "请求内容超过大小限制")
+		return nil, false
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, limit))
+	var oversized *http.MaxBytesError
+	if errors.As(err, &oversized) {
+		Fail(c, http.StatusRequestEntityTooLarge, nil, "请求内容超过大小限制")
+		return nil, false
+	}
+	if err != nil {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
+		return nil, false
+	}
+	return body, true
+}
+
+// Bind 读取一个完整的 JSON 值，并校验必填字段。
+func Bind(c *gin.Context, v any) bool { return bindJSON(c, v, jsonBodyLimit) }
+
+func bindJSON(c *gin.Context, v any, limit int64) bool {
+	body, ok := readRequestBody(c, limit)
+	if !ok {
 		return false
 	}
-	var extra any
-	if err := d.Decode(&extra); !errors.Is(err, io.EOF) {
-		Fail(c, 400, nil, model.ConsoleBadRequest)
-		return false
-	}
-	if err := json.Unmarshal(raw, v); err != nil {
+	if !utf8.Valid(body) || json.Unmarshal(body, v) != nil {
 		Fail(c, 400, nil, model.ConsoleBadRequest)
 		return false
 	}

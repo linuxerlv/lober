@@ -1,7 +1,6 @@
 package builtin
 
 import (
-	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
@@ -113,8 +112,6 @@ func TestNativeProposalUsesRequestedDisk(t *testing.T) {
 	for f, want := range map[catalog.Format]string{
 		"preseed":     "partman-auto/disk string /dev/nvme0n1",
 		"autoinstall": "path: '/dev/nvme0n1'",
-		"autoyast":    "<device>/dev/nvme0n1</device>",
-		"agama":       "search: '/dev/nvme0n1'",
 	} {
 		t.Run(string(f), func(t *testing.T) {
 			tpl := templateFor(t, f)
@@ -134,7 +131,7 @@ func TestNativeProposalUsesRequestedDisk(t *testing.T) {
 }
 
 func TestLinuxSSHHookConsumesEnvironmentAndWritesProtectedKey(t *testing.T) {
-	for _, f := range []catalog.Format{"preseed", "agama"} {
+	for _, f := range []catalog.Format{"preseed"} {
 		t.Run(string(f), func(t *testing.T) {
 			h := sshkeyHook()
 			impl, _ := h.ImplFor(series(f)[0])
@@ -181,14 +178,29 @@ func TestHookParametersAffectNativeAnswers(t *testing.T) {
 	for _, tpl := range Templates() {
 		t.Run(tpl.ID, func(t *testing.T) {
 			in := fixtureInput(t, tpl)
-			in.Entered["network/1/hostname"] = "changed-node"
-			in.Entered["account/1/username"] = "changed-user"
+			f, _ := tpl.Format()
+			if f == "autoinstall" {
+				// autoinstall 的主机名来自模板参数，网络片段只引用 interface。
+				in.Entered["tpl/hostname"] = "changed-node"
+			} else {
+				in.Entered["network/1/hostname"] = "changed-node"
+			}
+			if tpl.Family != "esxi" {
+				// ESXi 的账号片段只用 rootpw，username 没有位置。sshkey 的用户名必须
+				// 跟着账号走，否则参数求值会报 param_hook_mismatch。
+				in.Entered["account/1/username"] = "changed-user"
+				switch f {
+				case "kickstart", "preseed":
+					in.Entered["sshkey/1/username"] = "changed-user"
+				case "unattend":
+					in.Entered["configure/2/username"] = "changed-user"
+				}
+			}
 			if tpl.Family == "linux" {
 				in.Entered["packages/1/packages"] = "vim\ncurl"
 			}
 			r := withInput(t, fixtureRequest(t, tpl, "uefi"), in)
 			got := renderFixture(t, r)
-			f, _ := tpl.Format()
 			if f != "autoinstall" && !strings.Contains(got, "changed-node") {
 				t.Fatal("hostname parameter lost")
 			}
@@ -202,20 +214,12 @@ func TestHookParametersAffectNativeAnswers(t *testing.T) {
 						t.Fatal("package lines lost")
 					}
 				case "preseed":
-					if !strings.Contains(got, "openssh-server vim curl") {
+					if !strings.Contains(got, "pkgsel/include string vim curl") {
 						t.Fatal("package list join lost")
 					}
 				case "autoinstall":
 					if !strings.Contains(got, "- 'vim'\n    - 'curl'") {
 						t.Fatal("package YAML values lost")
-					}
-				case "autoyast":
-					if !strings.Contains(got, "<package>vim</package>") {
-						t.Fatal("package XML lost")
-					}
-				case "agama":
-					if !strings.Contains(got, "'vim',") {
-						t.Fatal("package Jsonnet lost")
 					}
 				}
 			}
@@ -229,19 +233,13 @@ func TestEverySeriesAndMediaChoicesBuild(t *testing.T) {
 			t.Run(string(s), func(t *testing.T) {
 				in := fixtureInput(t, tpl)
 				in.ISO.Series = s
-				if s == "leap16" {
-					in.Entered["tpl/product"] = "Leap"
-				}
 				snap, ps := snapshot.Build(in)
 				if len(ps) != 0 {
 					t.Fatalf("snapshot: %v", ps)
 				}
 				r := fixtureRequest(t, tpl, "uefi")
 				r.Snapshot = snap
-				out := renderFixture(t, r)
-				if s == "leap16" && !strings.Contains(out, "product: { id: 'Leap' }") {
-					t.Fatal("Leap ISO got SLES profile")
-				}
+				renderFixture(t, r)
 			})
 		}
 	}
@@ -259,12 +257,6 @@ func TestEverySeriesAndMediaChoicesBuild(t *testing.T) {
 		if _, ps := snapshot.Build(in); len(ps) == 0 {
 			t.Fatalf("%s accepted absent media edition", version)
 		}
-	}
-	tpl := templateFor(t, "agama")
-	in := fixtureInput(t, tpl)
-	delete(in.ISO.Offers, "products")
-	if _, ps := snapshot.Build(in); len(ps) == 0 {
-		t.Fatal("Agama accepted media without product inventory")
 	}
 }
 
@@ -284,34 +276,6 @@ func TestBuiltinCredentialsHaveNoPublicDefault(t *testing.T) {
 		if _, ps := snapshot.Build(in); len(ps) == 0 {
 			t.Fatalf("%s installs with no supplied credentials", tpl.ID)
 		}
-	}
-}
-
-func TestAutoYaSTNativeUserAndKey(t *testing.T) {
-	tpl := templateFor(t, "autoyast")
-	in := fixtureInput(t, tpl)
-	in.Entered["account/1/username"] = "native-user"
-	r := withInput(t, fixtureRequest(t, tpl, "uefi"), in)
-	out := renderFixture(t, r)
-	var profile struct {
-		Users []struct {
-			Name     string   `xml:"username"`
-			Password string   `xml:"user_password"`
-			Keys     []string `xml:"authorized_keys>listentry"`
-		} `xml:"users>user"`
-	}
-	if err := xml.Unmarshal([]byte(out), &profile); err != nil {
-		t.Fatal(err)
-	}
-	if len(profile.Users) != 2 {
-		t.Fatalf("want locked root and native user, got %d", len(profile.Users))
-	}
-	if profile.Users[0].Name != "root" || profile.Users[0].Password != "!" {
-		t.Fatal("root account must be explicitly locked")
-	}
-	u := profile.Users[1]
-	if u.Name != "native-user" || len(u.Keys) != 1 || u.Keys[0] != fixtureKey {
-		t.Fatalf("key not attached to configured native user: %+v", u)
 	}
 }
 

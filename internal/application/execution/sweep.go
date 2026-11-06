@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"strconv"
 
 	executionrules "github.com/lober/lober/internal/domain/execution"
 	"github.com/lober/lober/internal/domain/model"
@@ -23,12 +24,37 @@ func (s *Sweeper) Sweep(ctx context.Context) error {
 			return err
 		}
 		for _, task := range page.Items {
+			if err := checkTaskSupport(task); err != nil {
+				return err
+			}
 			at := s.clock.Now()
 			next, timedOut := executionrules.Timeout(task, at)
-			if !timedOut {
+			if timedOut {
+				_, err := s.commit(ctx, task, next, repository.NewEvent{
+					At: at, Kind: "machine.timeout", Key: attemptKey(task, "timeout"),
+					Fields: map[string]string{
+						"state": string(task.State), "stage": string(task.Execution.Stage),
+						"issued_at": strconv.FormatInt(task.Execution.IssuedAt, 10),
+						"deadline":  strconv.FormatInt(task.Execution.Deadline, 10),
+					},
+				}, repository.Audit{})
+				if err != nil && !errors.Is(err, repository.ErrConflict) {
+					return err
+				}
 				continue
 			}
-			_, err := s.commit(ctx, task, next, repository.NewEvent{At: at, Kind: "machine.timeout", Key: attemptKey(task, "timeout"), Fields: map[string]string{"state": string(task.State), "stage": string(task.Execution.Stage)}}, repository.Audit{})
+			next, slow := executionrules.Slow(task, at)
+			if !slow {
+				continue
+			}
+			_, err := s.commit(ctx, task, next, repository.NewEvent{
+				At: at, Kind: "machine.slow", Key: attemptKey(task, "slow"),
+				Fields: map[string]string{
+					"state": string(task.State), "stage": string(task.Execution.Stage),
+					"issued_at": strconv.FormatInt(task.Execution.IssuedAt, 10),
+					"deadline":  strconv.FormatInt(task.Execution.Deadline, 10),
+				},
+			}, repository.Audit{})
 			if err != nil && !errors.Is(err, repository.ErrConflict) {
 				return err
 			}

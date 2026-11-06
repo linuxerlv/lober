@@ -47,7 +47,7 @@ func (s *registry) sourceProgress(ctx context.Context, source model.Source) (Sou
 		if ranges == nil {
 			ranges = []model.Range{}
 		}
-		return SourceProgress{source.Role, source.Kind, source.TotalSize, source.Fetched, source.State, source.Error, source.Rev, ranges}, nil
+		return SourceProgress{source.Role, source.Kind, source.TotalSize, source.Fetched, source.State, publicSourceError(source), source.Rev, ranges}, nil
 	}
 	return SourceProgress{}, repository.ErrConflict
 }

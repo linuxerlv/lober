@@ -6,8 +6,7 @@ type Family string
 // Format 是应答格式，决定执行时机、解释器、系统部件这些能力。一种格式只属于一个族。
 type Format string
 
-// Series 是系，发行版一级：ISO 声明它，模板勾选它。每个系属于一个族、对应一种格式；
-// 同一发行版跨大版本换了安装器的拆成两个系，所以 SLES 和 openSUSE Leap 都按 15、16 分开。
+// Series 是发行版标识：镜像声明它，模板勾选它。每个发行版属于一个族、对应一种格式。
 type Series string
 
 // 下面三张表就是全部取值。标识会写进数据库和 URL，发布后不能改名；显示名只给界面看。
@@ -39,13 +38,11 @@ var familyTable = []familyRow{
 }
 
 // formatTable 里格式的显示名照 spec §2.1 与 C1 的写法，界面与文档才对得上：kickstart、
-// preseed、autoinstall、unattend 就是标识本身，另三种是 AutoYaST、Agama、ESXi ks。
+// preseed、autoinstall、unattend 就是标识本身；ESXi 显示为 ESXi ks。
 var formatTable = []formatRow{
 	{FormatKickstart, FamilyLinux, "kickstart"},
 	{FormatPreseed, FamilyLinux, "preseed"},
 	{FormatAutoinstall, FamilyLinux, "autoinstall"},
-	{FormatAutoyast, FamilyLinux, "AutoYaST"},
-	{FormatAgama, FamilyLinux, "Agama"},
 	{FormatUnattend, FamilyWindows, "unattend"},
 	{FormatESXiKS, FamilyESXi, "ESXi ks"},
 }
@@ -55,14 +52,8 @@ var seriesTable = []seriesRow{
 	{SeriesRHEL, FormatKickstart, "RHEL"},
 	{SeriesRocky, FormatKickstart, "Rocky Linux"},
 	{SeriesAlmalinux, FormatKickstart, "AlmaLinux"},
-	{SeriesOpeneuler, FormatKickstart, "openEuler"},
-	{SeriesOpencloudos, FormatKickstart, "OpenCloudOS"},
 	{SeriesDebian, FormatPreseed, "Debian"},
 	{SeriesUbuntu, FormatAutoinstall, "Ubuntu"},
-	{SeriesSLES15, FormatAutoyast, "SLES 15"},
-	{SeriesLeap15, FormatAutoyast, "openSUSE Leap 15"},
-	{SeriesSLES16, FormatAgama, "SLES 16"},
-	{SeriesLeap16, FormatAgama, "openSUSE Leap 16"},
 	{SeriesWinServer, FormatUnattend, "Windows Server"},
 	{SeriesWinDesktop, FormatUnattend, "Windows 桌面版"},
 	{SeriesESXi, FormatESXiKS, "ESXi"},

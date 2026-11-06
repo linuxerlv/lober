@@ -1,7 +1,6 @@
 package render
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 
@@ -9,10 +8,21 @@ import (
 	"github.com/lober/lober/internal/domain/model"
 )
 
-// renderMenu assembles executable iPXE for all seven formats.
+type menuInput struct {
+	format    catalog.Format
+	values    map[catalog.SystemValue]string
+	artifacts map[string]string
+}
+
+func (m menuInput) answerURL(kind catalog.FileKind) (url, name string) {
+	name, _ = catalog.DeliveryFileName(m.format, kind)
+	return catalog.AnswerURL(m.values["gateway"], m.values["task"], m.values["token"], name), name
+}
+
+// renderMenu assembles executable iPXE for all supported formats.
 // Layer 7 supplies the actual firmware; optional registration metadata is not
 // a substitute. The gateway owns actual architecture and on-disk checks.
-func renderMenu(r Request) ([]byte, []model.Problem, error) {
+func (f installer) renderMenu(r Request) ([]byte, []model.Problem, error) {
 	if !r.Firmware.Valid() {
 		return nil, []model.Problem{model.NewProblem("render_firmware_invalid", model.Subject{Kind: "host", ID: r.Snapshot.Host.SN, Path: "firmware"}, r.Firmware)}, nil
 	}
@@ -22,66 +32,30 @@ func renderMenu(r Request) ([]byte, []model.Problem, error) {
 	if !slices.Contains(r.Snapshot.Series.Firmwares(), r.Firmware) {
 		return nil, []model.Problem{model.NewProblem("firmware_mismatch", model.Subject{Kind: "host", ID: r.Snapshot.Host.SN, Path: "firmware"}, r.Snapshot.Series.Label(), r.Firmware.Label())}, nil
 	}
-	switch r.Snapshot.Format {
-	case "kickstart", "preseed", "autoinstall", "esxi-ks", "autoyast", "agama", "unattend":
-	default:
-		return nil, nil, errUnsupportedFormat
-	}
 	keys := []catalog.SystemValue{"gateway", "artifacts", "task", "token"}
-	if r.Snapshot.Format == "kickstart" {
-		keys = append(keys, "syslog-addr", "repo")
-	}
-	if r.Snapshot.Format == "autoyast" || r.Snapshot.Format == "agama" {
-		keys = append(keys, "repo")
-	}
-	if r.Snapshot.Format == "autoinstall" {
-		keys = append(keys, "iso")
-	}
-	values, problems := assemblerValues(r, keys...)
+	values, problems := assemblerValues(r, append(keys, f.extraMenuValues...)...)
 	if len(problems) != 0 {
 		return nil, problems, nil
 	}
-	roles := catalog.RequiredRoles(r.Snapshot.Series)
+	artifacts, problems := requiredArtifacts(r, values["artifacts"])
+	if len(problems) != 0 {
+		return nil, problems, nil
+	}
+	body := f.menu(menuInput{format: r.Snapshot.Format, values: values, artifacts: artifacts})
+	return []byte("#!ipxe\n" + body + "boot\n"), nil, nil
+}
+
+func requiredArtifacts(r Request, base string) (map[string]string, []model.Problem) {
 	artifacts := map[string]string{}
-	for _, role := range roles {
-		value, p := artifactURL(r, values["artifacts"], role)
+	var problems []model.Problem
+	for _, role := range catalog.RequiredRoles(r.Snapshot.Series) {
+		value, p := artifactURL(r, base, role)
 		artifacts[role] = value
 		if p != nil {
 			problems = append(problems, *p)
 		}
 	}
-	if len(problems) != 0 {
-		return nil, problems, nil
-	}
-	file := catalog.FileAnswer
-	if r.Snapshot.Format == "esxi-ks" {
-		file = catalog.FileAux
-	}
-	name, _ := catalog.DeliveryFileName(r.Snapshot.Format, file)
-	answer := catalog.AnswerURL(values["gateway"], values["task"], values["token"], name)
-	const console = "console=tty0 console=ttyS0,115200n8"
-	var body string
-	switch r.Snapshot.Format {
-	case "kickstart":
-		body = fmt.Sprintf("kernel %s \\\n  inst.stage2=%s \\\n  inst.repo=%s \\\n  inst.ks=%s inst.cmdline inst.notmux ip=dhcp \\\n  %s inst.syslog=%s\ninitrd %s\n", artifacts["kernel"], artifacts["stage2"], values["repo"], answer, console, values["syslog-addr"], artifacts["initrd"])
-	case "preseed":
-		body = fmt.Sprintf("kernel %s auto=true priority=critical \\\n  preseed/url=%s \\\n  %s\ninitrd %s\n", artifacts["kernel"], answer, console, artifacts["initrd"])
-	case "autoinstall":
-		seed := catalog.AnswerURL(values["gateway"], values["task"], values["token"], "")
-		// 避免首次配置程序把安装镜像再次当成配置下载。
-		body = fmt.Sprintf("kernel %s autoinstall ip=dhcp url=%s cloud-config-url=/dev/null ds=nocloud-net;s=%s %s ---\ninitrd %s\n", artifacts["kernel"], values["iso"], seed, console, artifacts["initrd"])
-	case "autoyast":
-		body = fmt.Sprintf("kernel %s install=%s autoyast=%s %s\ninitrd %s\n", artifacts["kernel"], values["repo"], answer, console, artifacts["initrd"])
-	case "agama":
-		body = fmt.Sprintf("kernel %s root=live:%s ip=dhcp rd.neednet=1 inst.install_url=%s inst.auto=%s %s\ninitrd %s\n", artifacts["kernel"], artifacts["live-root"], values["repo"], answer, console, artifacts["initrd"])
-	case "unattend":
-		aux, _ := catalog.DeliveryFileName(r.Snapshot.Format, catalog.FileAux)
-		startup := catalog.AnswerURL(values["gateway"], values["task"], values["token"], aux)
-		body = fmt.Sprintf("kernel %s\ninitrd %s %s\ninitrd %s winpeshl.ini\ninitrd %s busybox.exe\ninitrd %s curl.exe\ninitrd %s BCD\ninitrd %s boot.sdi\ninitrd %s boot.wim\n", artifacts["wimboot"], startup, aux, artifacts["winpeshl"], artifacts["winpe-busybox"], artifacts["winpe-curl"], artifacts["bcd"], artifacts["boot-sdi"], artifacts["boot-wim"])
-	case "esxi-ks":
-		body = fmt.Sprintf("kernel %s -c %s\n", artifacts["mboot"], answer)
-	}
-	return []byte("#!ipxe\n" + body + "boot\n"), nil, nil
+	return artifacts, problems
 }
 
 func bootSnapshotProblems(r Request) []model.Problem {

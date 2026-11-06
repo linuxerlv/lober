@@ -1,10 +1,7 @@
 """L2 装机层：真的把系统装到一台 QEMU 目标机上。
 
-**本文件当前只做计划任务 9 的类别 1（RHEL BIOS，最小成功线）与类别 4
-（失败路径的证据完整性），不做类别 2（RHEL UEFI）/3（Debian/Ubuntu/
-openSUSE）——team-lead 的 brief 明确要求"只做 RHEL BIOS 这一个家族，
-不要做 UEFI、不要做其余家族"，先证明一台能装成。**
-
+本文件保留旧客户端的 RHEL BIOS 成功线与失败路径检查。
+它不覆盖其他系统或固件，也不作为当前产品验收入口。
 与 L1（`tests/l1_api/test_lifecycle.py`）的主链路步骤一致（建 host →
 导制品集 → 建模板 → 建 hook → 建任务 → 取 iPXE 菜单），唯一的本质区别
 是：L1 到"取应答文件"就结束（纯 API 断言，从未有真实机器执行那份应答
@@ -183,7 +180,7 @@ def test_rhel_bios_install_completes(
     target_launcher,
     vms_ssh,
 ) -> None:
-    """RHEL（OpenCloudOS）BIOS 家族真实装机，两条独立证据齐全。
+    """RHEL BIOS 真实装机，两条独立证据齐全。
 
     步骤与 L1 的 `test_family_full_lifecycle` 一致到"建任务"这一步
     （建 host 带磁盘清单 → 导入并等 ready → 建模板到 active → 建 hook
@@ -299,7 +296,8 @@ def test_rhel_bios_install_completes(
     with target.ssh(vms_ssh, target_ip, timeout=30) as target_ssh:
         os_release = target_ssh.run("cat /etc/os-release")
         os_release.check("读取 /etc/os-release")
-        assert "opencloudos" in os_release.stdout.lower() or "rhel" in os_release.stdout.lower(), (
+        identity = dict(line.split("=", 1) for line in os_release.stdout.splitlines() if "=" in line)
+        assert identity.get("ID", "").strip('"') == "rhel", (
             f"/etc/os-release 内容与期望的 RHEL 系家族不符：{os_release.stdout!r}"
         )
 

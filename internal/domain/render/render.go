@@ -35,10 +35,51 @@ type Request struct {
 
 var errUnsupportedFormat = errors.New("render: file kind unsupported for format")
 
+// installer 把同一安装格式的菜单、附属文件和应答步骤放在一起选择。
+type installer struct {
+	menu            func(menuInput) string
+	extraMenuValues []catalog.SystemValue
+	aux             func(Request) ([]byte, []model.Problem, error)
+	slot            func(expansion, model.SnapshotSlot, model.Subject) (string, []model.Problem)
+	part            func(expansion, catalog.SystemPart, model.Subject) (string, []model.Problem)
+	finishAnswer    func(expansion) ([]byte, []model.Problem, error)
+	stage           func(expansion) []byte
+}
+
+func installerFor(format catalog.Format) installer {
+	switch format {
+	case catalog.FormatKickstart:
+		return installer{
+			menu: kickstartMenu, extraMenuValues: []catalog.SystemValue{"syslog-addr", "repo"},
+			slot: shellAnswerSlot, part: linuxAnswerPart,
+		}
+	case catalog.FormatPreseed:
+		return installer{menu: preseedMenu, slot: shellAnswerSlot, part: linuxAnswerPart}
+	case catalog.FormatAutoinstall:
+		return installer{
+			menu: autoinstallMenu, extraMenuValues: []catalog.SystemValue{"iso"},
+			aux: renderNoCloudMetadata, slot: shellAnswerSlot, part: linuxAnswerPart,
+		}
+	case catalog.FormatUnattend:
+		return installer{menu: windowsMenu, aux: renderWindowsAux, slot: windowsAnswerSlot, part: windowsPart}
+	case catalog.FormatESXiKS:
+		return installer{
+			menu: esxiMenu, aux: renderESXiBootConfig,
+			slot: esxiAnswerSlot, part: esxiPart, finishAnswer: renderESXiAnswer, stage: esxiStage,
+		}
+	default:
+		return installer{}
+	}
+}
+
 // Render returns one complete file, or content Problems with no partial bytes.
 // Errors indicate an unsupported interface request. Content Problems never
 // accompany partial output.
 func Render(r Request) ([]byte, []model.Problem, error) {
+	format := installerFor(r.Snapshot.Format)
+	if format.menu == nil {
+		return nil, nil, errUnsupportedFormat
+	}
 	if !r.Kind.Valid() {
 		return nil, nil, fmt.Errorf("render: unknown file kind %q", r.Kind)
 	}
@@ -79,15 +120,25 @@ func Render(r Request) ([]byte, []model.Problem, error) {
 	}
 	switch r.Kind {
 	case catalog.FileMenu:
-		return renderMenu(r)
+		return format.renderMenu(r)
 	case catalog.FileAnswer:
-		return renderAnswer(r)
+		return format.renderAnswer(r)
 	case catalog.FileAux:
-		return renderAux(r)
+		if format.aux != nil {
+			return format.aux(r)
+		}
 	case catalog.FileScript:
 		return renderScript(r)
+	case catalog.FileESXiStage:
+		if format.stage != nil {
+			e, problems := format.answerExpansion(r)
+			if len(problems) != 0 {
+				return nil, problems, nil
+			}
+			return format.stage(e), nil, nil
+		}
 	}
-	panic("unreachable file kind")
+	return nil, nil, errUnsupportedFormat
 }
 
 func reservedValues(r Request) []model.Problem {

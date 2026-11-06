@@ -49,7 +49,8 @@ func TestNativeTCPInstallerLogsThroughServeListener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tpl, err := a.Store.GetTemplate(t.Context(), model.TemplateKey{ID: "builtin-kickstart", Version: 3})
+	builtinTpl := builtinTemplateByID(t, "builtin-kickstart")
+	tpl, err := a.Store.GetTemplate(t.Context(), model.TemplateKey{ID: builtinTpl.ID, Version: builtinTpl.Version})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,12 +22,14 @@ import {
 } from 'element-plus';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
+import { allSeries } from '#/api/console/catalog';
 import { getHookApi } from '#/api/console/hook';
 import { errorMessage, problemsOf } from '#/api/console/problem';
 import * as api from '#/api/console/template';
 import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
 import { NumberedPage } from '#/composables/numbered-page';
+import { useAuthoringEditor } from '#/composables/use-authoring-editor';
 
 import { authoringRights, replaceInSlot, templatePayload } from './authoring';
 import BindingEditor from './BindingEditor.vue';
@@ -54,7 +56,6 @@ const user = useUserStore();
 const canWrite = computed(() => access.accessCodes.includes('template:write'));
 const selected = ref<TemplateForm>();
 const visible = ref(false);
-const busy = ref(false);
 const prefix = ref('');
 const state = ref('');
 const appliedFilters = { prefix: '', state: undefined as string | undefined };
@@ -63,7 +64,6 @@ const errors = ref<Schemas['ProblemJSON'][]>([]);
 const versions = ref<Template[]>([]);
 const slots = ref<Schemas['SlotInfo'][]>([]);
 const hookMap = ref<Record<string, Hook>>({});
-const reason = ref('');
 const deriveName = ref('');
 const sourceDiff = ref<Schemas['SourceDiffResponse']>();
 const candidateDialog = ref(false);
@@ -107,7 +107,6 @@ const unknownSlots = computed(() =>
   ),
 );
 let listToken = 0;
-let editorToken = 0;
 let candidateToken = 0;
 const [Grid, grid] = useVbenVxeGrid<Template>({
   class: 'h-auto',
@@ -140,11 +139,22 @@ function report(error: unknown) {
   errors.value = problemsOf(error);
   ElMessage.error(errorMessage(error));
 }
-function currentEditor(token: number, row: Pick<Template, 'id' | 'version'>) {
-  return token === editorToken && visible.value && selected.value?.id === row.id && selected.value.version === row.version;
-}
+const editor = useAuthoringEditor<Template>({
+  assign,
+  change: api.templateLifecycleApi,
+  refresh: async (token) => {
+    await refreshDetails(token);
+    if (token === editor.token) await load();
+  },
+  report,
+  rights,
+  save,
+  selected,
+  visible,
+});
+const { busy, currentEditor, lifecycle, reason, run } = editor;
 async function load(reset = false) {
-  const owner = editorToken;
+  const owner = editor.token;
   if (reset) {
     Object.assign(appliedFilters, { prefix: prefix.value, state: state.value || undefined });
     pagination.reset();
@@ -156,7 +166,7 @@ async function load(reset = false) {
     if (token !== listToken) return;
     grid.setGridOptions({ data: page.items });
   } catch (error) {
-    if (token === listToken && owner === editorToken) report(error);
+    if (token === listToken && owner === editor.token) report(error);
   }
 }
 function changePage(page: number) {
@@ -196,7 +206,7 @@ function hookKey(instance: Schemas['InstanceDTO']) {
 function hookOf(instance: Schemas['InstanceDTO']) {
   return hookMap.value[hookKey(instance)];
 }
-async function refreshDetails(token = editorToken) {
+async function refreshDetails(token = editor.token) {
   const row = selected.value;
   if (!row?.id) return;
   const [v, s, d] = await Promise.all([
@@ -226,28 +236,22 @@ async function refreshDetails(token = editorToken) {
   );
 }
 async function open(row: Template) {
-  const token = ++editorToken;
+  const token = editor.invalidate();
   candidateDialog.value = false;
   previewDialog.value = false;
   visible.value = true;
-  busy.value = true;
   selected.value = undefined;
   slots.value = [];
   sourceDiff.value = undefined;
-  try {
+  await run(async () => {
     const item = await api.getTemplateApi(row.id, row.version);
-    if (token !== editorToken) return;
+    if (token !== editor.token) return;
     assign(item);
     await refreshDetails(token);
-  } catch (error) {
-    if (token === editorToken) report(error);
-  } finally {
-    if (token === editorToken) busy.value = false;
-  }
+  });
 }
 function create() {
-  ++editorToken;
-  busy.value = false;
+  editor.invalidate();
   candidateDialog.value = false;
   previewDialog.value = false;
   assign({
@@ -274,7 +278,7 @@ function create() {
   visible.value = true;
 }
 async function save() {
-  const token = editorToken;
+  const token = editor.token;
   const row = selected.value;
   if (!row || !editable.value) return false;
   const data = templatePayload(row);
@@ -285,22 +289,11 @@ async function save() {
   if (!currentEditor(token, row)) return false;
   assign(saved);
   await refreshDetails(token);
-  if (token !== editorToken) return false;
+  if (token !== editor.token) return false;
   await load();
-  if (token !== editorToken) return false;
+  if (token !== editor.token) return false;
   ElMessage.success('草稿已保存，插槽已由服务端刷新');
   return true;
-}
-async function run(action: () => Promise<unknown>) {
-  const token = editorToken;
-  busy.value = true;
-  try {
-    await action();
-  } catch (error) {
-    if (token === editorToken && error !== 'cancel' && error !== 'close') report(error);
-  } finally {
-    if (token === editorToken) busy.value = false;
-  }
 }
 async function changeVersion(n: number) {
   const row = selected.value;
@@ -309,19 +302,19 @@ async function changeVersion(n: number) {
 }
 async function newVersion() {
   if (!rights.value?.newVersion) return;
-  const token = editorToken;
+  const token = editor.token;
   const row = selected.value;
   if (!row) return;
   const changed = await api.newTemplateVersionApi(row.id, row.version);
   if (!currentEditor(token, row)) return;
   assign(changed);
   await refreshDetails(token);
-  if (token !== editorToken) return;
+  if (token !== editor.token) return;
   await load();
 }
 async function derive() {
   if (!rights.value?.derive) return;
-  const token = editorToken;
+  const token = editor.token;
   const row = selected.value;
   if (!row || !deriveName.value.trim()) return;
   const changed = await api.deriveTemplateApi(row.id, {
@@ -332,15 +325,15 @@ async function derive() {
   assign(changed);
   deriveName.value = '';
   await refreshDetails(token);
-  if (token !== editorToken) return;
+  if (token !== editor.token) return;
   await load();
-  if (token !== editorToken) return;
+  if (token !== editor.token) return;
   ElMessage.success('已派生为独立草稿');
 }
 async function validate() {
-  const token = editorToken;
+  const token = editor.token;
   if (editable.value && !(await save())) return;
-  if (token !== editorToken) return;
+  if (token !== editor.token) return;
   const row = selected.value;
   if (!row) return;
   const result = await api.validateTemplateApi(row.id, row.version);
@@ -348,36 +341,8 @@ async function validate() {
   errors.value = result.problems ?? [];
   if (!errors.value.length) ElMessage.success('校验通过');
 }
-async function lifecycle(
-  action: 'approve' | 'deprecate' | 'reject' | 'submit',
-) {
-  if (!(action === 'submit' ? rights.value?.submit : action === 'deprecate' ? rights.value?.deprecate : rights.value?.review)) return;
-  const token = editorToken;
-  if (action === 'reject' && !reason.value.trim()) {
-    ElMessage.warning('请填写驳回理由');
-    return;
-  }
-  if (action === 'submit' && !(await save())) return;
-  if (token !== editorToken) return;
-  const row = selected.value;
-  if (!row) return;
-  const changed = await api.templateLifecycleApi(
-      row.id,
-      row.version,
-      row.rev,
-      action,
-      reason.value,
-  );
-  if (!currentEditor(token, row)) return;
-  assign(changed);
-  await refreshDetails(token);
-  if (token !== editorToken) return;
-  await load();
-  if (token !== editorToken) return;
-  ElMessage.success('状态已更新');
-}
 async function remove() {
-  const token = editorToken;
+  const token = editor.token;
   const row = selected.value;
   if (!row) return;
   await ElMessageBox.confirm('删除这个草稿版本？', '删除草稿');
@@ -395,7 +360,7 @@ function move(name: string, index: number, delta: number) {
   [items[index], items[target]] = [items[target]!, items[index]!];
 }
 async function pickHook(slot: string, index: number) {
-  const token = editorToken;
+  const token = editor.token;
   candidateSlot.value = slot;
   candidateIndex.value = index;
   candidatePrefix.value = '';
@@ -405,12 +370,12 @@ async function pickHook(slot: string, index: number) {
   candidateProblems.value = [];
   if (editable.value && !(await save())) return;
   await nextTick();
-  if (token !== editorToken) return;
+  if (token !== editor.token) return;
   candidateDialog.value = true;
   await candidates(true);
 }
 async function candidates(reset = false) {
-  const owner = editorToken;
+  const owner = editor.token;
   const row = selected.value;
   if (!row) return;
   if (reset) {
@@ -430,7 +395,7 @@ async function candidates(reset = false) {
       ...params,
     }));
   } catch (error) {
-    if (token === candidateToken && owner === editorToken) {
+    if (token === candidateToken && owner === editor.token) {
       candidateProblems.value = problemsOf(error);
       ElMessage.error(errorMessage(error));
     }
@@ -457,15 +422,15 @@ function choose(candidate: Schemas['HookCandidateResponse']) {
   ElMessage.success('已更新装配，保存草稿后生效');
 }
 async function preview() {
-  const token = editorToken;
+  const token = editor.token;
   if (editable.value && !(await save())) return;
-  if (token !== editorToken) return;
+  if (token !== editor.token) return;
   previewResult.value = undefined;
   previewForm.value = { hostSN: '', isoID: '', entered: {} };
   previewDialog.value = true;
 }
 async function renderPreview() {
-  const token = editorToken;
+  const token = editor.token;
   const context = previewToken;
   const row = selected.value;
   if (!row || !previewReady.value) return;
@@ -474,10 +439,10 @@ async function renderPreview() {
   const entered = Object.fromEntries(previewFields.value.filter((field) => !field.locked && previewForm.value.entered?.[field.key] !== undefined).map((field) => [field.key, previewForm.value.entered![field.key]!]));
   try {
     const result = await api.previewTemplateApi(row.id, row.version, { ...previewForm.value, entered });
-    if (token !== editorToken || context !== previewToken || !previewDialog.value) return;
+    if (token !== editor.token || context !== previewToken || !previewDialog.value) return;
     previewResult.value = result;
   } catch (error) {
-    if (token === editorToken && context === previewToken && previewDialog.value) report(error);
+    if (token === editor.token && context === previewToken && previewDialog.value) report(error);
   }
 }
 async function loadPreviewParams(token: number, owner: number) {
@@ -486,15 +451,15 @@ async function loadPreviewParams(token: number, owner: number) {
   const context = { hostSN: previewForm.value.hostSN, isoID: previewForm.value.isoID, series: previewForm.value.series, firmware: previewForm.value.firmware };
   try {
     const result = await api.getPreviewParamsApi(row.id, row.version, context);
-    if (token !== previewToken || owner !== editorToken || !previewDialog.value) return;
+    if (token !== previewToken || owner !== editor.token || !previewDialog.value) return;
     previewFields.value = result.fields ?? [];
     previewSamples.value = result.sample ?? [];
     errors.value = result.problems ?? [];
     previewReady.value = true;
   } catch (error) {
-    if (token === previewToken && owner === editorToken && previewDialog.value) report(error);
+    if (token === previewToken && owner === editor.token && previewDialog.value) report(error);
   } finally {
-    if (token === previewToken && owner === editorToken) previewLoading.value = false;
+    if (token === previewToken && owner === editor.token) previewLoading.value = false;
   }
 }
 function comparison(row: null | Template) {
@@ -514,29 +479,13 @@ function comparison(row: null | Template) {
     : '';
 }
 const families: Schemas['CatalogFamily'][] = ['linux', 'windows', 'esxi'];
-const allSeries: Schemas['CatalogSeries'][] = [
-  'rhel',
-  'rocky',
-  'almalinux',
-  'openeuler',
-  'opencloudos',
-  'debian',
-  'ubuntu',
-  'sles15',
-  'leap15',
-  'sles16',
-  'leap16',
-  'windows-server',
-  'windows-desktop',
-  'esxi',
-];
 onMounted(() => load());
-watch(visible, (open) => { if (!open) { ++editorToken; busy.value = false; candidateDialog.value = false; previewDialog.value = false; errors.value = []; } }, { flush: 'sync' });
+watch(visible, (open) => { if (!open) { editor.invalidate(); candidateDialog.value = false; previewDialog.value = false; errors.value = []; } }, { flush: 'sync' });
 watch(candidateDialog, (open) => { if (!open) { ++candidateToken; candidatePagination.reset(); } }, { flush: 'sync' });
 watch(() => previewForm.value.isoID, () => { previewForm.value.series = undefined; }, { flush: 'sync' });
 watch(() => [previewDialog.value, previewForm.value.hostSN, previewForm.value.isoID, previewForm.value.series, previewForm.value.firmware, selected.value?.id, selected.value?.version], (_context, _old, cleanup) => {
   const token = ++previewToken;
-  const owner = editorToken;
+  const owner = editor.token;
   previewFields.value = []; previewSamples.value = []; previewForm.value.entered = {};
   previewResult.value = undefined; previewReady.value = false; previewLoading.value = false;
   if (!previewDialog.value || !visible.value) return;
@@ -544,7 +493,7 @@ watch(() => [previewDialog.value, previewForm.value.hostSN, previewForm.value.is
   const timer = setTimeout(() => { void loadPreviewParams(token, owner); }, 200);
   cleanup(() => clearTimeout(timer));
 }, { flush: 'sync' });
-onBeforeUnmount(() => { ++editorToken; ++listToken; ++candidateToken; ++previewToken; pagination.reset(); candidatePagination.reset(); });
+onBeforeUnmount(() => { editor.invalidate(); ++listToken; ++candidateToken; ++previewToken; pagination.reset(); candidatePagination.reset(); });
 </script>
 <template>
   <Page

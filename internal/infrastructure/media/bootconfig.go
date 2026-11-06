@@ -20,7 +20,11 @@ func (b *BootConfigReader) ReadESXiBootConfig(ctx context.Context, s model.Snaps
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	repo := strings.TrimSuffix(s.Artifacts["repo"], "/")
+	repo := strings.TrimSuffix(s.Artifacts["esxi-tree"], "/")
+	// 兼容旧任务已冻结的地址；新导入的镜像统一使用 esxi-tree。
+	if repo == "" {
+		repo = strings.TrimSuffix(s.Artifacts["repo"], "/")
+	}
 	if !fs.ValidPath(repo) || repo == "." || strings.ContainsAny(repo, "\\:") {
 		return "", errors.New("missing immutable ESXi repository")
 	}

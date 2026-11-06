@@ -184,3 +184,24 @@ it('replaces an incomplete reference in the same position and can append without
     timeoutSec: null,
   });
 });
+
+
+describe('历史记录的保存边界', () => {
+  it.each(['sles15', 'leap15', 'sles16', 'leap16', 'openeuler', 'opencloudos'])(
+    '模板保留 %s 的显示值，但保存前要求移除', (retired) => {
+      const row = { name: 'old', family: 'linux' as const, series: ['rocky', retired],
+        body: '', params: [], bindings: {}, assembly: {}, rev: 1 };
+      expect(() => templatePayload(row)).toThrow(retired);
+      expect(row.series).toEqual(['rocky', retired]);
+    },
+  );
+  it.each(['sles15', 'leap15', 'sles16', 'leap16', 'openeuler', 'opencloudos'])(
+    '组件保留 %s 的显示值，但保存前要求移除', (retired) => {
+      const row = { name: 'old', description: '', timeoutSec: 30, required: true, params: [], rev: 1,
+        impls: [{ family: 'linux' as const, series: ['rocky', retired], kind: 'fragment' as const,
+          body: '', interpreter: 'sh' as const, timings: [] }] };
+      expect(() => hookPayload(row)).toThrow(retired);
+      expect(row.impls[0]!.series).toEqual(['rocky', retired]);
+    },
+  );
+});
