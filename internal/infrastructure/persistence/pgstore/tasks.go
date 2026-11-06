@@ -341,15 +341,21 @@ func (s *Store) TransitionTaskByUser(ctx context.Context, id string, expect repo
 	return s.transition(ctx, id, expect, to, events, &a)
 }
 
-// transition 是两种推进共用的部分，a 为 nil 时不写审计（系统发起的推进）。先查 ID、目标状态与事件（repository.CheckTransition）；
-// 再给任务行加写锁、比对期望值，追加事件，用一条 UPDATE 写下状态、Rev 与事件的计数，最后写审计。一步推进合不合规矩不在这里
-// 判断，那是第 7 层状态机的事。
-//
-// 结束的任务重新打开时与建任务、采集共用主机锁。idx_tasks_open 仍负责阻止同一主机出现多个未结束任务。
+// transition 保存不带执行数据的状态更新。执行更新在调用共用流程前校验自己的运行记录。
 func (s *Store) transition(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState, events []repository.NewEvent, a *repository.Audit) (model.Task, []repository.Appended, error) {
 	if err := repository.CheckTransition(id, to, events); err != nil {
 		return model.Task{}, nil, err
 	}
+	task, appended, err := s.persistTransition(ctx, id, expect, to, "", events, a)
+	if err != nil {
+		return model.Task{}, nil, err
+	}
+	return task, appended, nil
+}
+
+// persistTransition 在一个事务里核对任务版本，保存状态、事件和审计。
+// 结束的任务重新打开时先锁主机，与建任务、采集保持相同锁顺序。
+func (s *Store) persistTransition(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState, execution string, events []repository.NewEvent, a *repository.Audit) (model.Task, []repository.Appended, error) {
 	var row taskRow
 	var appended []repository.Appended
 	err := s.write(ctx, func(tx *gorm.DB) error {
@@ -358,6 +364,9 @@ func (s *Store) transition(ctx context.Context, id string, expect repository.Tas
 			return err
 		}
 		if row.State != string(expect.State) || row.Rev != expect.Rev {
+			if execution != "" {
+				return repository.ErrConflict
+			}
 			return errorf(repository.ErrConflict, "任务 %s 现为 %s、Rev %d，期望的是 %s、Rev %d：重读之后再判断",
 				id, row.State, row.Rev, expect.State, expect.Rev)
 		}
@@ -365,7 +374,12 @@ func (s *Store) transition(ctx context.Context, id string, expect repository.Tas
 			return err
 		}
 		row.State, row.Rev = string(to), row.Rev+1
-		if err := tx.Model(&taskRow{ID: id}).Select("state", "rev", "last_seq").Updates(&row).Error; err != nil {
+		columns := []string{"state", "rev", "last_seq"}
+		if execution != "" {
+			row.Execution = execution
+			columns = append(columns, "execution")
+		}
+		if err := tx.Model(&taskRow{ID: id}).Select(columns).Updates(&row).Error; err != nil {
 			if openTaskTaken(err) {
 				return repository.OpenTaskProblems(row.HostSN)
 			}
@@ -380,10 +394,7 @@ func (s *Store) transition(ctx context.Context, id string, expect repository.Tas
 		return model.Task{}, nil, translate(err, false, nil)
 	}
 	t, err := row.task()
-	if err != nil {
-		return model.Task{}, nil, err
-	}
-	return t, appended, nil
+	return t, appended, err
 }
 
 func lockTaskForTransition(tx *gorm.DB, id string, from, to model.TaskState) (taskRow, error) {
