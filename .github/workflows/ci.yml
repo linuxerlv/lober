@@ -22,6 +22,20 @@ jobs:
     name: go
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: lober_ci
+          POSTGRES_PASSWORD: lober_ci_temporary
+          POSTGRES_DB: lober_ci
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U lober_ci -d lober_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
@@ -31,6 +45,8 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: 后端基础检查
+        env:
+          LOBER_TEST_PG_DSN: postgres://lober_ci:lober_ci_temporary@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/lober_ci?sslmode=disable
         run: make check
 
   web:
@@ -55,3 +71,4 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: 前端检查
         run: make webcheck
+
