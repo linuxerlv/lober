@@ -4,10 +4,11 @@ import { createAccountsApi } from './accounts';
 it('requests a numbered account page without cursor or limit', async () => {
   const calls: string[] = [];
   const client = {
-    get: async <T>(path: string) => {
-      calls.push(path);
+    get: async <T>(path: string, options?: { params?: Record<string, unknown> }) => {
+      calls.push(path + '?' + new URLSearchParams(Object.entries(options?.params ?? {}).map(([key, value]) => [key, String(value)])));
       return { items: [], total: 67, next: '' } as T;
     },
+    delete: async <T>() => null as T,
     post: async <T>() => null as T,
     put: async <T>() => null as T,
   };
@@ -25,6 +26,10 @@ it('uses own-profile endpoint and carries account revisions and fixed roles', as
     get: async <T>(path: string) => {
       calls.push(['GET', path]);
       return { items: [], next: '' } as T;
+    },
+    delete: async <T>(path: string) => {
+      calls.push(['DELETE', path]);
+      return null as T;
     },
     put: async <T>(path: string, data: unknown) => {
       calls.push(['PUT', path, data]);
@@ -54,7 +59,9 @@ it('uses own-profile endpoint and carries account revisions and fixed roles', as
     displayName: '李四',
     role: 'viewer',
     password: 'temporary',
+    disabled: false,
   });
+  await api.disable('a/b #');
   expect(calls).toEqual([
     [
       'PUT',
@@ -74,7 +81,9 @@ it('uses own-profile endpoint and carries account revisions and fixed roles', as
         displayName: '李四',
         role: 'viewer',
         password: 'temporary',
+        disabled: false,
       },
     ],
+    ['DELETE', '/users/a%2Fb%20%23'],
   ]);
 });

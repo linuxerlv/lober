@@ -41,14 +41,16 @@ vi.mock('#/api/console/audit', () => ({
   },
   exportAudit: vi.fn(),
 }));
-vi.mock('#/api/console/user', () => ({
-  listUsers: async (query: Record<string, unknown>) => {
-    fixtures.otherQueries.push(query);
-    return { items: [{ username: `user-${query.page}`, rev: 1, role: 'viewer', disabled: false }], total: 42 };
+vi.mock('#/api/console/accounts', () => ({
+  accountsApi: {
+    list: async (query: Record<string, unknown>) => {
+      fixtures.otherQueries.push(query);
+      return { items: [{ username: `user-${query.page}`, rev: 1, role: 'viewer', disabled: false }], total: 42 };
+    },
+    create: vi.fn(),
+    update: vi.fn(),
+    disable: vi.fn(),
   },
-  createUser: vi.fn(),
-  updateUser: vi.fn(),
-  disableUser: vi.fn(),
 }));
 vi.mock('#/components/console/ListPagination.vue', async () => {
   const { defineComponent, h } = await import('vue');

@@ -7,7 +7,7 @@ const client = vi.hoisted(() => ({
 }));
 vi.mock('#/api/request', () => ({ requestClient: client }));
 import { exportAudit } from '../console/audit';
-import { updateUser } from '../console/user';
+import { accountsApi } from '../console/accounts';
 import { loginApi, logoutApi } from './auth';
 import { getUserInfoApi, toUserInfo } from './user';
 
@@ -50,7 +50,7 @@ describe('real authentication and administration contracts', () => {
     });
   });
   it('encodes user paths and exports through the complete server CSV endpoint', async () => {
-    await updateUser('a/b #', {
+    await accountsApi.update('a/b #', {
       role: 'viewer',
       displayName: '',
       disabled: false,

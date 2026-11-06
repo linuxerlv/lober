@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { User, UserCreate } from '#/api/console/user';
+import type { User, UserCreate } from '#/api/console/accounts';
 
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 
@@ -21,12 +21,7 @@ import {
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { errorMessage, problemsOf } from '#/api/console/problem';
-import {
-  createUser,
-  disableUser,
-  listUsers,
-  updateUser,
-} from '#/api/console/user';
+import { accountsApi } from '#/api/console/accounts';
 import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
 import { NumberedPage } from '#/composables/numbered-page';
@@ -57,7 +52,7 @@ async function refresh() {
   const run = ++generation;
   failure.value = undefined;
   try {
-    const page = await pagination.load(listUsers);
+    const page = await pagination.load(accountsApi.list);
     if (run === generation) grid.setGridOptions({ data: page.items });
   } catch (error) {
     if (run === generation) failure.value = error;
@@ -112,11 +107,11 @@ async function save() {
   failure.value = undefined;
   try {
     if (editing.value)
-      await updateUser(editing.value.username, {
+      await accountsApi.update(editing.value.username, {
         ...form,
         rev: editing.value.rev,
       });
-    else await createUser({ ...form });
+    else await accountsApi.create({ ...form });
     open.value = false;
     refresh();
   } catch (error) {
@@ -135,7 +130,7 @@ async function disable(user: User) {
     return;
   }
   try {
-    await disableUser(user.username);
+    await accountsApi.disable(user.username);
     refresh();
   } catch (error) {
     failure.value = error;
