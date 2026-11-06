@@ -84,11 +84,9 @@ func machineOf(st repository.Store, hub ports.Notifier, cfg config, clock ports.
 // inventoryAdapter 把采集服务接到执行网关的接口上。两个应用模块互不依赖，翻译在这里做。
 type inventoryAdapter struct{ svc *inventory.Service }
 
-func (a inventoryAdapter) Pending(ctx context.Context, sn string) (bool, error) {
-	return a.svc.Pending(ctx, sn)
+func (a inventoryAdapter) ClaimToken(ctx context.Context, sn string) (string, error) {
+	return a.svc.ClaimToken(ctx, sn)
 }
-
-func (a inventoryAdapter) Token(sn string) (string, bool) { return a.svc.Issue(sn) }
 
 func (a inventoryAdapter) Menu(sn, token string) ([]byte, error) { return a.svc.Menu(sn, token) }
 

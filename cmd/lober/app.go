@@ -144,7 +144,7 @@ func auditReaderOf(st repository.Store) audit.Reader { return audit.NewReader(st
 // 传进去：只配了配置、没传给服务，机器永远拿不到采集菜单。
 func inventoryServiceOf(st repository.Store, cfg config, clock ports.Clock) *inventory.Service {
 	return inventory.New(inventory.Deps{
-		Hosts: st, Tokens: credentials.NewTokens(), Clock: clock, Tasks: st,
+		Hosts: st, Tokens: credentials.NewTokens(), Clock: clock,
 		Menu: inventory.MenuEndpoints{
 			Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts,
 			Kernel: cfg.Preview.InventoryKernel, Initrd: cfg.Preview.InventoryInitrd,

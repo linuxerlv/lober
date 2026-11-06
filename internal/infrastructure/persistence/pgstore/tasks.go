@@ -219,7 +219,7 @@ func lockHosts(tx *gorm.DB, sns []string) (map[string]hostRow, error) {
 }
 
 // openTasksOf 在事务 tx 里查 sns 这几台主机里哪些已有未结束的任务。调用方锁着这几台主机，同时给它们建任务的另一批要等本
-// 事务结束，提交了的这里都看得到；失败任务的重试不锁主机，没提交的看不到，由 idx_tasks_open 兜底。
+// 事务结束，提交了的这里都看得到。重试也先锁主机，数据库仍以 idx_tasks_open 兜底。
 func openTasksOf(tx *gorm.DB, sns []string) (map[string]bool, error) {
 	open := map[string]bool{}
 	for chunk := range slices.Chunk(sns, batchSize) {
@@ -345,8 +345,7 @@ func (s *Store) TransitionTaskByUser(ctx context.Context, id string, expect repo
 // 再给任务行加写锁、比对期望值，追加事件，用一条 UPDATE 写下状态、Rev 与事件的计数，最后写审计。一步推进合不合规矩不在这里
 // 判断，那是第 7 层状态机的事。
 //
-// C31 不先查：推进不锁主机，先查的话，别人刚建、还没提交的任务查不到，两边就都落了库。推进到未结束的状态时由 idx_tasks_open
-// 挡住，撞上时整个推进回滚，问题与准入判定报的相同（repository.OpenTaskProblems）。
+// 结束的任务重新打开时与建任务、采集共用主机锁。idx_tasks_open 仍负责阻止同一主机出现多个未结束任务。
 func (s *Store) transition(ctx context.Context, id string, expect repository.TaskExpect, to model.TaskState, events []repository.NewEvent, a *repository.Audit) (model.Task, []repository.Appended, error) {
 	if err := repository.CheckTransition(id, to, events); err != nil {
 		return model.Task{}, nil, err
@@ -355,7 +354,7 @@ func (s *Store) transition(ctx context.Context, id string, expect repository.Tas
 	var appended []repository.Appended
 	err := s.write(ctx, func(tx *gorm.DB) error {
 		var err error
-		if row, err = lockTask(tx, id); err != nil {
+		if row, err = lockTaskForTransition(tx, id, expect.State, to); err != nil {
 			return err
 		}
 		if row.State != string(expect.State) || row.Rev != expect.Rev {
@@ -385,6 +384,23 @@ func (s *Store) transition(ctx context.Context, id string, expect repository.Tas
 		return model.Task{}, nil, err
 	}
 	return t, appended, nil
+}
+
+func lockTaskForTransition(tx *gorm.DB, id string, from, to model.TaskState) (taskRow, error) {
+	if from.Finished() && !to.Finished() {
+		// host_sn 从建任务起固定。先锁主机，再锁任务，避免与建任务或采集反向等待。
+		var ref taskRow
+		switch err := tx.Select("host_sn").Where("id = ?", id).Take(&ref).Error; {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			return taskRow{}, taskNotFound(id)
+		case err != nil:
+			return taskRow{}, err
+		}
+		if _, err := lockHosts(tx, []string{ref.HostSN}); err != nil {
+			return taskRow{}, err
+		}
+	}
+	return lockTask(tx, id)
 }
 
 // lockTask 在事务 tx 里给任务 id 加写锁并取出它，不存在报 ErrNotFound。推进与追加事件都先锁它：同一个任务上的这两种写入因此

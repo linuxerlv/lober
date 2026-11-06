@@ -13,7 +13,6 @@ import (
 
 	"github.com/lober/lober/internal/application/inventory/port"
 	"github.com/lober/lober/internal/application/ports"
-	"github.com/lober/lober/internal/domain/access"
 	domaininv "github.com/lober/lober/internal/domain/inventory"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/render"
@@ -41,6 +40,8 @@ var (
 // 采集状态属性的键。写在主机属性里，让「要不要给采集菜单」在进程重启后仍然可判断——
 // 令牌本身在内存里，会丢；判断依据必须在库里。
 const (
+	// AttrRequestID 标记一次采集请求，同一秒内重新发起也会换批。
+	AttrRequestID = "inv_request_id"
 	// AttrCollectedAt 是上次采集成功的时间戳（Unix 秒）。有这个键就说明采过了。
 	AttrCollectedAt = "inv_collected_at"
 	// AttrRequested 是「重新采集」请求的时间戳。比 AttrCollectedAt 新才需要再采。
@@ -54,9 +55,6 @@ type Deps struct {
 	Hosts  port.Hosts
 	Tokens port.Tokens
 	Clock  ports.Clock
-	// Tasks 只用来判断这台主机有没有打开的任务。nil 时按「没有任务」处理，
-	// 只用于不需要这道检查的测试。
-	Tasks port.OpenTasks
 	// Menu 是渲染采集菜单要的部署参数：网关基地址、制品基地址、内核与 initrd 的相对路径。
 	Menu MenuEndpoints
 }
@@ -74,11 +72,10 @@ func (m MenuEndpoints) Configured() bool {
 
 // Service 发放令牌、接收上报。
 type Service struct {
-	hosts    port.Hosts
-	keys     port.Tokens
-	now      ports.Clock
-	openTask func(context.Context, string) (bool, error)
-	menu     MenuEndpoints
+	hosts port.Hosts
+	keys  port.Tokens
+	now   ports.Clock
+	menu  MenuEndpoints
 
 	mu     sync.Mutex
 	grants map[string]grant // 键是规范化后的 SN
@@ -86,6 +83,7 @@ type Service struct {
 
 // grant 是一台主机当前的采集授权。
 type grant struct {
+	batch   string
 	token   string
 	expires int64
 }
@@ -95,161 +93,12 @@ func New(d Deps) *Service {
 	if d.Hosts == nil || d.Tokens == nil || d.Clock == nil {
 		panic("采集应用缺少必要能力")
 	}
-	openTask := func(context.Context, string) (bool, error) { return false, nil }
-	if d.Tasks != nil {
-		openTask = func(ctx context.Context, sn string) (bool, error) {
-			_, open, err := d.Tasks.FindOpenTask(ctx, sn)
-			return open, err
-		}
-	}
-	return &Service{hosts: d.Hosts, keys: d.Tokens, now: d.Clock, openTask: openTask, menu: d.Menu, grants: map[string]grant{}}
-}
-
-// Request 为一次采集写请求标记。调用方是控制台的「更新配置」按钮。
-//
-// 只写属性，不发令牌：令牌在机器来取采集菜单时才发（见 Issue），这样「点了更新配置」
-// 和「机器还没重启」之间隔多久都不会丢。连点两次只是刷新时间戳。
-func (s *Service) Request(ctx context.Context, a ports.Actor, rawSN string) (model.Host, error) {
-	if err := a.Authorize(access.PermHostWrite); err != nil {
-		return model.Host{}, err
-	}
-	sn, err := model.NormalizeSN(rawSN)
-	if err != nil {
-		return model.Host{}, err
-	}
-	host, err := s.hosts.GetHost(ctx, sn)
-	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return model.Host{}, ErrUnknownHost
-		}
-		return model.Host{}, err
-	}
-	open, err := s.openTask(ctx, sn)
-	if err != nil {
-		return model.Host{}, err
-	}
-	if open {
-		return model.Host{}, ErrHostBusy
-	}
-	at := s.now()
-	host.Attrs = cloneAttrs(host.Attrs)
-	// 请求时刻必须严格晚于上次采集时刻，否则同一秒内「采完再点更新配置」会被判成没有新请求。
-	// 撞上同一秒时往后挪一秒：这是个先后标记，不是精确时间戳。
-	requested := at
-	if collected, ok := atoi(host.Attrs[AttrCollectedAt]); ok && requested <= collected {
-		requested = collected + 1
-	}
-	host.Attrs[AttrRequested] = strconv.FormatInt(requested, 10)
-	delete(host.Attrs, AttrInFlight)
-	updated, err := s.hosts.UpdateHost(ctx, host, repository.Audit{Actor: a.Username, Action: "host.inventory_request", At: at})
-	if err != nil {
-		return model.Host{}, err
-	}
-	s.revoke(sn)
-	return updated, nil
-}
-
-// Issue 供网关在给出采集菜单时取令牌：已有未过期的就复用，否则现发一个。
-//
-// 不写库：它只在「已经该采了」的前提下补发令牌，该不该采由 Pending 判断。
-func (s *Service) Issue(sn string) (string, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	at := s.now()
-	if g, ok := s.grants[sn]; ok && at < g.expires {
-		return g.token, true
-	}
-	token, err := s.keys.NewToken()
-	if err != nil {
-		return "", false
-	}
-	s.grants[sn] = grant{token: token, expires: at + TokenLife}
-	return token, true
-}
-
-// Pending 判断这台主机现在该不该进采集镜像。
-//
-// 条件全部满足才进：登记过、没有打开的任务、有采集请求且尚未完成、进行中标记没超时。
-// 超时的处理是「作废这次请求」，不是「继续等」——网络长期不通时机器会一直重启，作废才能停下来。
-func (s *Service) Pending(ctx context.Context, rawSN string) (bool, error) {
-	sn, err := model.NormalizeSN(rawSN)
-	if err != nil {
-		return false, nil
-	}
-	host, err := s.hosts.GetHost(ctx, sn)
-	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return false, nil
-		}
-		return false, err
-	}
-	requested, hasRequest := atoi(host.Attrs[AttrRequested])
-	if !hasRequest {
-		return false, nil
-	}
-	collected, hasCollected := atoi(host.Attrs[AttrCollectedAt])
-	// 采过了，且请求不晚于上次采集：没有新请求，不进。
-	if hasCollected && requested <= collected {
-		return false, nil
-	}
-	open, err := s.openTask(ctx, sn)
-	if err != nil || open {
-		return false, err
-	}
-	inFlight, hasInFlight := atoi(host.Attrs[AttrInFlight])
-	if !hasInFlight {
-		// 还没开始：这是第一次进采集镜像，打标记。
-		return s.claim(ctx, sn, requested)
-	}
-	if s.now()-inFlight < TokenLife {
-		return true, nil
-	}
-	// 进行中标记超时：作废这次请求，别再让机器无限重启。
-	if err := s.abandon(ctx, sn, collected); err != nil {
-		return false, err
-	}
-	return false, nil
-}
-
-// claim 在第一次给采集菜单时打「进行中」标记。打标记失败就不给菜单：没有标记的话
-// 一小时后就无法判断这次采集是不是卡住了。
-func (s *Service) claim(ctx context.Context, sn string, requested int64) (bool, error) {
-	host, err := s.hosts.GetHost(ctx, sn)
-	if err != nil {
-		return false, err
-	}
-	host.Attrs = cloneAttrs(host.Attrs)
-	host.Attrs[AttrInFlight] = strconv.FormatInt(s.now(), 10)
-	if _, err := s.hosts.UpdateHost(ctx, host, repository.Audit{Actor: "inventory", Action: "host.inventory_claim", At: s.now()}); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-// abandon 把超时的请求作废：请求时刻退回上次采集的时刻，没有采集记录就整体删掉。
-func (s *Service) abandon(ctx context.Context, sn string, collected int64) error {
-	host, err := s.hosts.GetHost(ctx, sn)
-	if err != nil {
-		return err
-	}
-	host.Attrs = cloneAttrs(host.Attrs)
-	delete(host.Attrs, AttrInFlight)
-	if collected > 0 {
-		host.Attrs[AttrRequested] = strconv.FormatInt(collected, 10)
-	} else {
-		delete(host.Attrs, AttrRequested)
-	}
-	if _, err := s.hosts.UpdateHost(ctx, host, repository.Audit{Actor: "inventory", Action: "host.inventory_abandon", At: s.now()}); err != nil {
-		return err
-	}
-	s.revoke(sn)
-	return nil
+	return &Service{hosts: d.Hosts, keys: d.Tokens, now: d.Clock, menu: d.Menu, grants: map[string]grant{}}
 }
 
 // Submit 校验一份上报并写进主机登记。
 //
-// 顺序：查令牌 → 解析与校验 → 读主机 → 查有没有打开的任务 → 合并属性 → 写回。
-// 令牌先查，不成立的请求不碰库。
+// 先查令牌，再解析正文。锁内复查批次与忙闲，并合并最新的主机属性。
 func (s *Service) Submit(ctx context.Context, rawSN, token string, body []byte) (model.Host, error) {
 	sn, err := model.NormalizeSN(rawSN)
 	if err != nil {
@@ -276,37 +125,32 @@ func (s *Service) Submit(ctx context.Context, rawSN, token string, body []byte) 
 		return model.Host{}, kinded(domaininv.KindRejected, &RejectedError{Problems: problems})
 	}
 
-	open, err := s.openTask(ctx, sn)
-	if err != nil {
-		return model.Host{}, err
-	}
-	if open {
-		return model.Host{}, kinded(domaininv.KindBusy, ErrHostBusy)
-	}
-	host, err := s.hosts.GetHost(ctx, sn)
-	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return model.Host{}, kinded(domaininv.KindUnknownHost, ErrUnknownHost)
+	updated, err := s.hosts.UpdateInventory(ctx, sn, func(current model.Host, busy bool) (repository.InventoryChange, error) {
+		at := s.now()
+		if current.Attrs[AttrRequestID] != g.batch {
+			return repository.InventoryChange{}, kinded(domaininv.KindUnauthorized, ErrNoToken)
 		}
-		return model.Host{}, err
-	}
-	host.Attrs = cloneAttrs(host.Attrs)
-	for k, v := range result.Attrs {
-		host.Attrs[k] = v
-	}
-	host.Attrs[AttrCollectedAt] = strconv.FormatInt(at, 10)
-	delete(host.Attrs, AttrInFlight)
-	delete(host.Attrs, AttrRequested)
-	updated, err := s.hosts.UpdateHost(ctx, host, repository.Audit{
-		Actor:  "inventory",
-		Action: "host.inventory",
-		Detail: "system_disk=" + result.SystemDisk,
-		At:     at,
+		if at >= g.expires {
+			return repository.InventoryChange{}, kinded(domaininv.KindUnauthorized, ErrTokenExpired)
+		}
+		if busy {
+			return repository.InventoryChange{}, kinded(domaininv.KindBusy, ErrHostBusy)
+		}
+		attrs := cloneAttrs(current.Attrs)
+		for k, v := range result.Attrs {
+			attrs[k] = v
+		}
+		attrs[AttrCollectedAt] = strconv.FormatInt(at, 10)
+		clearRequest(attrs)
+		return inventoryChange(attrs, "inventory", "host.inventory", "system_disk="+result.SystemDisk, at), nil
 	})
+	if errors.Is(err, repository.ErrNotFound) {
+		return model.Host{}, kinded(domaininv.KindUnknownHost, ErrUnknownHost)
+	}
 	if err != nil {
 		return model.Host{}, err
 	}
-	s.revoke(sn)
+	s.revoke(sn, g.batch)
 	return updated, nil
 }
 
@@ -320,10 +164,12 @@ type RejectedError struct{ Problems []model.Problem }
 
 func (e *RejectedError) Error() string { return "inventory report rejected" }
 
-func (s *Service) revoke(sn string) {
+func (s *Service) revoke(sn, batch string) {
 	s.mu.Lock()
-	delete(s.grants, sn)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if g, ok := s.grants[sn]; ok && g.batch == batch {
+		delete(s.grants, sn)
+	}
 }
 
 func cloneAttrs(m map[string]string) map[string]string {

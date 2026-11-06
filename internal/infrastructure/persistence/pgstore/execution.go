@@ -36,7 +36,7 @@ func (s *Store) UpdateTaskExecution(ctx context.Context, id string, expect repos
 	var appended []repository.Appended
 	err = s.write(ctx, func(tx *gorm.DB) error {
 		var err error
-		row, err = lockTask(tx, id)
+		row, err = lockTaskForTransition(tx, id, expect.State, to)
 		if err != nil {
 			return err
 		}
