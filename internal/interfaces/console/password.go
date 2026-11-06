@@ -12,7 +12,9 @@ type passwordRequest struct {
 
 func (s *server) changePassword(c *gin.Context) {
 	var req passwordRequest
-	if !Bind(c, &req) {
+	// 迁移长旧密码时，正文还要装得下新密码和字段名。
+	limit := max(int64(jsonBodyLimit), s.deps.LoginBodyLimit+DefaultLoginBodyLimit)
+	if !bindJSON(c, &req, limit) {
 		return
 	}
 	if err := s.deps.Identity.ChangePassword(c.Request.Context(), principalOf(c), identity.PasswordCommand{CurrentPassword: req.CurrentPassword, NewPassword: req.NewPassword}); err != nil {

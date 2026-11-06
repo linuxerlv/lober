@@ -95,8 +95,6 @@ func TestOrdinaryJSONBodyBoundary(t *testing.T) {
 
 func TestLegacyLongPasswordCanBeRotated(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
-	old := strings.Repeat("a", 17<<10)
-	seedAuthUser(t, st, "legacy", model.RoleViewer, old)
 	payload := func(v any) string {
 		b, err := json.Marshal(v)
 		if err != nil {
@@ -104,6 +102,8 @@ func TestLegacyLongPasswordCanBeRotated(t *testing.T) {
 		}
 		return string(b)
 	}
+	old := strings.Repeat("a", MaxLoginBodyLimit-len(payload(loginRequest{Username: "legacy"})))
+	seedAuthUser(t, st, "legacy", model.RoleViewer, old)
 	login := func(pw string) *httptest.ResponseRecorder {
 		return httpCall(s, http.MethodPost, "/console/v1/auth/login", payload(loginRequest{Username: "legacy", Password: pw}), "")
 	}
