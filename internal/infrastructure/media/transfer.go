@@ -49,7 +49,7 @@ func (t *Transfer) ValidateSource(ctx context.Context, src model.Source) (model.
 		}
 		ips, err := t.lookup(ctx, req.URL.Hostname())
 		if err != nil {
-			return src, err
+			return src, remoteFault(ctx, port.URLRejected)
 		}
 		if err = CheckURL(req.URL, ips); err != nil {
 			return src, err
@@ -80,11 +80,11 @@ func (t *Transfer) BeginFetch(ctx context.Context, src model.Source) (port.Fetch
 	}
 	return &fetchSession{transfer: t, src: src, offset: src.Fetched, total: src.TotalSize}, nil
 }
-func (t *Transfer) BeginPublish(ctx context.Context, src model.Source) (port.FetchSession, error) {
+func (t *Transfer) BeginPublish(ctx context.Context, src model.Source) (port.PublishSession, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &fetchSession{transfer: t, src: src, offset: src.Fetched, total: src.TotalSize}, nil
+	return &fetchSession{transfer: t, src: src}, nil
 }
 func (t *Transfer) restorePublication(src model.Source) error {
 	if src.Kind == model.SourceLocal || src.State != model.SourceFetching {

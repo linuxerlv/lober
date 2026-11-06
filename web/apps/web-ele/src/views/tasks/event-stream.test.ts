@@ -1,7 +1,7 @@
 /* eslint-disable vue/one-component-per-file -- 只替换外部网络和显示适配器，运行真实详情页。 */
 import type { Task, TaskEvent } from '#/api/console/task';
 
-import { createApp, nextTick } from 'vue';
+import { createApp, nextTick, reactive } from 'vue';
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
@@ -9,12 +9,16 @@ const io = vi.hoisted(() => ({
   events: vi.fn(),
   get: vi.fn(),
   grid: vi.fn(),
-  streamURL: vi.fn(),
+  clearSession: vi.fn(),
+  retry: vi.fn(),
 }));
-vi.mock('vue-router', () => ({ useRoute: () => ({ params: { id: 'task-1' } }) }));
+const route = reactive({ params: { id: 'task-1' } });
+const access = reactive({ accessToken: 'test-token', accessCodes: ['task:retry'] });
+vi.mock('vue-router', () => ({ useRoute: () => route }));
 vi.mock('@vben/stores', () => ({
-  useAccessStore: () => ({ accessToken: 'test-token', accessCodes: [] }),
+  useAccessStore: () => access,
 }));
+vi.mock('#/store', () => ({ useAuthStore: () => ({ clearSession: io.clearSession }) }));
 vi.mock('@vben/hooks', () => ({ useAppConfig: () => ({ apiURL: '/console/v1' }) }));
 vi.mock('@vben/common-ui', async () => {
   const { defineComponent, h } = await import('vue');
@@ -31,15 +35,16 @@ vi.mock('element-plus', async () => {
     ElButton: slot('button'),
     ElCard: slot('section'),
     ElDialog: slot('dialog'),
-    ElMessageBox: { confirm: vi.fn() },
+    ElMessageBox: { confirm: async () => {} },
     ElTabPane: slot('div'),
     ElTabs: slot('div'),
     ElTag: slot('span'),
   };
 });
-vi.mock('#/api/console/task', () => ({
-  taskAPI: { events: io.events, get: io.get },
-  taskStreamURL: io.streamURL,
+vi.mock('#/api/request', () => ({ requestClient: {} }));
+vi.mock('#/api/console/task', async (load) => ({
+  ...await load<typeof import('#/api/console/task')>(),
+  taskAPI: { events: io.events, get: io.get, retry: io.retry },
 }));
 vi.mock('#/adapter/vxe-table', async () => {
   const { defineComponent, h, ref } = await import('vue');
@@ -81,20 +86,23 @@ vi.mock('#/components/console/ListPagination.vue', async () => {
 
 import Detail from './detail.vue';
 
-class Stream extends EventTarget {
+class Stream {
   static instances: Stream[] = [];
-  close = vi.fn();
-  onerror: (() => void) | null = null;
-  onopen: (() => void) | null = null;
+  controller!: ReadableStreamDefaultController<Uint8Array>;
 
-  constructor(readonly url: string) {
-    super();
+  constructor(readonly url: string, readonly init: RequestInit) {
     Stream.instances.push(this);
   }
 
+  response() {
+    return new Response(new ReadableStream<Uint8Array>({
+      start: (controller) => { this.controller = controller; },
+    }), { headers: { 'Content-Type': 'text/event-stream' } });
+  }
+
   send(event: unknown) {
-    // 关闭后仍可主动投递，用来检查已排队的旧回调不会更新离开的页面。
-    this.dispatchEvent(new MessageEvent('task', { data: JSON.stringify(event) }));
+    const seq = (event as { seq: number }).seq;
+    this.controller.enqueue(new TextEncoder().encode(`id: ${seq}\nevent: task\ndata: ${JSON.stringify(event)}\n\n`));
   }
 }
 
@@ -120,12 +128,14 @@ let unmount: (() => void) | undefined;
 beforeEach(() => {
   vi.useFakeTimers();
   vi.resetAllMocks();
-  vi.stubGlobal('EventSource', Stream);
+  route.params.id = 'task-1';
+  access.accessToken = 'test-token';
   Stream.instances = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => new Stream(url, init).response()));
+  io.clearSession.mockImplementation(async () => { access.accessToken = ''; });
   io.get.mockResolvedValue(task());
   io.events.mockResolvedValue({ items: Array.from({ length: 200 }, (_, index) => event(index + 1)) });
-  io.streamURL.mockImplementation((base: string, id: string, token: string, after: number) =>
-    `${base}/tasks/${id}/stream?access_token=${token}&after_seq=${after}`);
+
 });
 afterEach(() => {
   unmount?.();
@@ -149,10 +159,11 @@ async function mountDetail() {
   await flushPage();
   expect(node.querySelector('output')?.textContent).toBe('1/20/200');
   expect(io.events).toHaveBeenCalledWith('task-1', 0);
-  expect(io.streamURL).toHaveBeenCalledWith('/console/v1', 'task-1', 'test-token', 200);
   const source = Stream.instances[0]!;
   expect(source).toBeDefined();
-  source.onopen?.();
+  expect(source.url).toBe('/console/v1/tasks/task-1/stream');
+  expect(new Headers(source.init.headers).get('Authorization')).toBe('Bearer test-token');
+  expect(new Headers(source.init.headers).get('Last-Event-ID')).toBe('0');
   await nextTick();
   expect(node.textContent).toContain('实时连接已建立');
   io.get.mockClear();
@@ -172,7 +183,7 @@ function visibleEvents(node: HTMLElement): TaskEvent[] {
 }
 
 function click(node: HTMLElement, text: string) {
-  const button = [...node.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === text);
+  const button = [...node.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.trim() === text);
   expect(button).toBeDefined();
   button!.click();
 }
@@ -267,7 +278,7 @@ it('closes the source and cancels pending updates on unmount, including late mes
   await nextTick();
   unmount!();
   unmount = undefined;
-  expect(source.close).toHaveBeenCalledTimes(1);
+  expect(source.init.signal?.aborted).toBe(true);
   expect(vi.getTimerCount()).toBe(0);
   const reads = io.get.mock.calls.length;
   const grids = io.grid.mock.calls.length;
@@ -336,7 +347,7 @@ it('keeps one slow task read in flight, follows it with the latest state, and st
   expect(maxInFlight).toBe(1);
   unmount!();
   unmount = undefined;
-  expect(source.close).toHaveBeenCalledTimes(1);
+  expect(source.init.signal?.aborted).toBe(true);
   expect(vi.getTimerCount()).toBe(0);
   const grids = io.grid.mock.calls.length;
   finishRead('failed');
@@ -345,4 +356,122 @@ it('keeps one slow task read in flight, follows it with the latest state, and st
   expect(io.get).toHaveBeenCalledTimes(3);
   expect(io.grid).toHaveBeenCalledTimes(grids);
   expect(node.textContent).toBe('');
+});
+
+
+it('merges a late fallback page with a reconnected stream and resumes from the last accepted event', async () => {
+  const { node, source } = await mountDetail();
+  let finishRead!: (page: { items: TaskEvent[] }) => void;
+  io.events.mockImplementationOnce(() => new Promise((resolve) => { finishRead = resolve; }));
+  click(node, '补读后续事件');
+  expect(io.events).toHaveBeenLastCalledWith('task-1', 200);
+  source.send(event(201));
+  source.controller.close();
+  await flushPage();
+  await vi.advanceTimersByTimeAsync(999);
+  expect(Stream.instances).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1);
+  const reconnected = Stream.instances[1]!;
+  expect(new Headers(reconnected.init.headers).get('Last-Event-ID')).toBe('201');
+  reconnected.send(event(202));
+  reconnected.send(event(203));
+  finishRead({ items: [event(201), event(202)] });
+  await vi.advanceTimersByTimeAsync(120);
+  await goToPage(node, 11);
+  expect(visibleEvents(node)).toEqual([event(201), event(202), event(203)]);
+});
+
+it('stops reconnecting and clears the expired session on 401', async () => {
+  const { source } = await mountDetail();
+  vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 401 }));
+  source.controller.close();
+  await flushPage();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(io.clearSession).toHaveBeenCalledOnce();
+  expect(fetch).toHaveBeenCalledTimes(2);
+  const reads = io.events.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(io.events).toHaveBeenCalledTimes(reads);
+});
+
+it('aborts the old request when changing tasks or signing out, and ignores late events and pages', async () => {
+  const { node, source } = await mountDetail();
+  let finishRead!: (page: { items: TaskEvent[] }) => void;
+  io.events
+    .mockImplementationOnce(() => new Promise((resolve) => { finishRead = resolve; }))
+    .mockResolvedValueOnce({ items: [{ ...event(1), taskID: 'task-2' }] });
+  click(node, '补读后续事件');
+  route.params.id = 'task-2';
+  expect(source.init.signal?.aborted).toBe(true);
+  finishRead({ items: [event(201)] });
+  source.send(event(202));
+  await flushPage();
+  const current = Stream.instances[1]!;
+  expect(current.url).toBe('/console/v1/tasks/task-2/stream');
+  expect(io.events).toHaveBeenLastCalledWith('task-2', 0);
+  expect(visibleEvents(node).map((item) => item.taskID)).toEqual(['task-2']);
+
+  access.accessToken = '';
+  expect(current.init.signal?.aborted).toBe(true);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it('keeps receiving logs after retrying a failed task', async () => {
+  const { node, source } = await mountDetail();
+  io.get.mockResolvedValue(task('failed'));
+  source.send({ ...event(201), kind: 'failed' });
+  await vi.advanceTimersByTimeAsync(120);
+  await flushPage();
+  expect(node.textContent).toContain('失败');
+  io.retry.mockResolvedValue(task('installing'));
+  io.events.mockResolvedValueOnce({ items: [event(202)] });
+  click(node, '重试任务');
+  await flushPage();
+  expect(io.retry).toHaveBeenCalledExactlyOnceWith('task-1');
+  source.send(event(203));
+  await vi.advanceTimersByTimeAsync(120);
+  await goToPage(node, 11);
+  expect(visibleEvents(node).map((item) => item.seq)).toEqual([201, 202, 203]);
+  expect(fetch).toHaveBeenCalledOnce();
+});
+
+
+it('deduplicates live events while the first event page is pending', async () => {
+  let finishFirst!: (page: { items: TaskEvent[] }) => void;
+  io.events.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }));
+  const node = document.createElement('div');
+  document.body.append(node);
+  const app = createApp(Detail);
+  app.mount(node);
+  unmount = () => app.unmount();
+
+  const source = Stream.instances[0]!;
+  expect(source).toBeDefined();
+  source.send(event(1));
+  source.send(event(2));
+  await vi.advanceTimersByTimeAsync(120);
+  expect(visibleEvents(node)).toEqual([event(1), event(2)]);
+  finishFirst({ items: [event(1), event(2)] });
+  await flushPage();
+  expect(visibleEvents(node)).toEqual([event(1), event(2)]);
+});
+
+it('ignores an old request returning 401 after credentials change', async () => {
+  let finishOld!: (response: Response) => void;
+  vi.mocked(fetch).mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }));
+  const node = document.createElement('div');
+  document.body.append(node);
+  const app = createApp(Detail);
+  app.mount(node);
+  unmount = () => app.unmount();
+  const oldInit = vi.mocked(fetch).mock.calls[0]?.[1];
+  expect(oldInit?.signal?.aborted).toBe(false);
+  access.accessToken = 'new-test-token';
+  expect(oldInit?.signal?.aborted).toBe(true);
+  finishOld(new Response(null, { status: 401 }));
+  await flushPage();
+  expect(io.clearSession).not.toHaveBeenCalled();
+  expect(new Headers(Stream.instances[0]?.init.headers).get('Authorization')).toBe('Bearer new-test-token');
 });

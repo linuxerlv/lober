@@ -120,6 +120,30 @@ func TestCanonicalFrozenFileRouting(t *testing.T) {
 		t.Fatal("digest mismatch served")
 	}
 }
+
+func TestNonWindowsFrozenSlotKeepsShellDownloadPath(t *testing.T) {
+	for _, series := range []catalog.Series{"rocky", "debian", "ubuntu", "esxi"} {
+		t.Run(string(series), func(t *testing.T) {
+			f, h := gatewayFixture(t)
+			f.task.Snapshot.Family, f.task.Snapshot.Series, f.task.Snapshot.Format = series.Family(), series, series.Format()
+			for _, tc := range []struct {
+				token, path string
+				status      int
+				body        string
+			}{
+				{f.install, "scripts/2.sh", http.StatusOK, "script:init"},
+				{f.install, "scripts/2.cmd", http.StatusNotFound, "Not Found\n"},
+				{f.install, "scripts/3.sh", http.StatusNotFound, "Not Found\n"},
+				{f.final, "scripts/2.sh", http.StatusForbidden, "Forbidden\n"},
+			} {
+				w := call(h, http.MethodGet, "/v1/answer/task-one/"+tc.token+"/"+tc.path, "")
+				if w.Code != tc.status || w.Body.String() != tc.body {
+					t.Errorf("下载 %s 得到 %d %q，预期 %d %q", tc.path, w.Code, w.Body.String(), tc.status, tc.body)
+				}
+			}
+		})
+	}
+}
 func TestBootWithoutTaskReturnsLocalBootAndCanonicalPlatform(t *testing.T) {
 	f, h := gatewayFixture(t)
 	f.task = model.Task{}
