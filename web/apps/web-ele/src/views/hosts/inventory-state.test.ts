@@ -18,6 +18,12 @@ describe('host maintenance state', () => {
       ]),
     ).toThrow('重复');
   });
+  it('rejects hand-entered inventory control markers but keeps other inventory attributes', () => {
+    for (const key of ['inv_request_id', 'inv_requested_at', 'inv_in_flight_at', 'inv_collected_at']) {
+      expect(() => attributesOf([{ key: ` ${key} `, value: '1' }])).toThrow('采集状态由系统更新');
+    }
+    expect(attributesOf([{ key: 'inv_cpu', value: 'sample' }])).toEqual({ inv_cpu: 'sample' });
+  });
   it('requires a successful dry-run and explicit confirmation of the same bytes', async () => {
     const session = new CsvImportSession();
     const commit = vi.fn();

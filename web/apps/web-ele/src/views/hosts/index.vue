@@ -29,6 +29,7 @@ import {
   deleteHostApi,
   getHostListApi,
   previewHostCSVApi,
+  requestHostInventoryApi,
   updateHostApi,
 } from '#/api/console/host';
 import { errorMessage, problemsOf, referencesOf } from '#/api/console/problem';
@@ -36,7 +37,7 @@ import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
 import { NumberedPage } from '#/composables/numbered-page';
 
-import { attributesOf, CsvImportSession } from './inventory-state';
+import { attributesOf, CsvImportSession, isInventoryControlAttribute } from './inventory-state';
 
 defineOptions({ name: 'HostsIndex' });
 const access = useAccessStore();
@@ -61,7 +62,7 @@ const [Grid, gridApi] = useVbenVxeGrid<HostListItem>({
         slots: { default: 'attrs' },
       },
       { field: 'rev', title: '修订', width: 80 },
-      { title: '操作', width: 160, slots: { default: 'action' } },
+      { title: '操作', width: 230, slots: { default: 'action' } },
     ],
     maxHeight: 520,
     pagerConfig: { enabled: false },
@@ -119,10 +120,9 @@ function openHost(host?: HostListItem) {
     attrs: {},
     rev: host?.rev ?? 0,
   });
-  attrs.value = Object.entries(host?.attrs ?? {}).map(([key, value]) => ({
-    key,
-    value,
-  }));
+  attrs.value = Object.entries(host?.attrs ?? {})
+    .filter(([key]) => !isInventoryControlAttribute(key))
+    .map(([key, value]) => ({ key, value }));
   editorOpen.value = true;
 }
 async function saveHost() {
@@ -162,6 +162,21 @@ async function removeHost(host: HostListItem) {
     void gridApi.reload();
   } catch (error) {
     failure.value = error;
+  }
+}
+const inventoryRequests = reactive(new Set<string>());
+async function requestInventory(sn: string) {
+  if (!canWrite.value || inventoryRequests.has(sn)) return;
+  inventoryRequests.add(sn);
+  failure.value = undefined;
+  try {
+    await requestHostInventoryApi(sn);
+    ElMessage.success('硬件采集请求已登记');
+    void gridApi.reload();
+  } catch (error) {
+    failure.value = error;
+  } finally {
+    inventoryRequests.delete(sn);
   }
 }
 const csvOpen = ref(false);
@@ -305,6 +320,14 @@ async function commitCSV() {
       </template>
       <template #action="{ row }">
         <ElButton v-if="canWrite" link @click="openHost(row)">编辑</ElButton>
+        <ElButton
+          v-if="canWrite"
+          link
+          :loading="inventoryRequests.has(row.sn)"
+          @click="requestInventory(row.sn)"
+        >
+          请求硬件采集
+        </ElButton>
         <ElButton v-if="canWrite" link type="danger" @click="removeHost(row)">
           删除
         </ElButton>

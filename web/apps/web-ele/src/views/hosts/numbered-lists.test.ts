@@ -8,11 +8,13 @@ import { useAccessStore } from '@vben/stores';
 import { createPinia } from 'pinia';
 import { afterEach, expect, it, vi } from 'vitest';
 
-const io = vi.hoisted(() => ({ commit: vi.fn(), hosts: vi.fn(), isos: vi.fn(), preview: vi.fn() }));
+const io = vi.hoisted(() => ({ commit: vi.fn(), hosts: vi.fn(), isos: vi.fn(), preview: vi.fn(), requestInventory: vi.fn(), update: vi.fn() }));
 vi.mock('#/api/console/host', () => ({
   commitHostCSVApi: io.commit,
   getHostListApi: io.hosts,
   previewHostCSVApi: io.preview,
+  requestHostInventoryApi: io.requestInventory,
+  updateHostApi: io.update,
 }));
 vi.mock('#/api/console/artifact', () => ({ getArtifactSetListApi: io.isos }));
 vi.mock('@vben/common-ui', () => ({
@@ -34,12 +36,15 @@ vi.mock('#/adapter/vxe-table', () => ({
     };
     return [
       defineComponent({
-        setup() {
+        setup(_, { slots }) {
           onMounted(reload);
           return () =>
             h('div', [
               h('button', { onClick: reload }, '刷新表格'),
               h('pre', JSON.stringify(rows.value)),
+              ...rows.value.flatMap((row) =>
+                row && typeof row === 'object' && 'sn' in row ? slots.action?.({ row }) ?? [] : [],
+              ),
             ]);
         },
       }),
@@ -210,4 +215,67 @@ it('invalidates a confirmed preview as soon as another file is chosen', async ()
   await vi.waitFor(() => expect(button('确认导入')?.disabled).toBe(false));
   button('确认导入')!.click();
   await vi.waitFor(() => expect(io.commit).toHaveBeenCalledExactlyOnceWith(bytes('B')));
+});
+
+
+it('requests host inventory only with write access and refreshes after success', async () => {
+  const row = { sn: 'inventory-host', rev: 1, attrs: {} };
+  io.hosts.mockResolvedValue({ items: [row], total: 1, next: '' });
+  const button = (el: HTMLElement) => [...el.querySelectorAll('button')]
+    .find((item) => item.textContent?.trim() === '请求硬件采集');
+  const viewer = mount(Hosts);
+  await vi.waitFor(() => expect(viewer.textContent).toContain('inventory-host'));
+  expect(button(viewer)).toBeUndefined();
+
+  const editor = mount(Hosts, true);
+  await vi.waitFor(() => expect(button(editor)).toBeDefined());
+  io.requestInventory.mockRejectedValueOnce(new Error('主机有未结束任务'));
+  button(editor)!.click();
+  await vi.waitFor(() => expect(editor.textContent).toContain('主机有未结束任务'));
+  expect(io.hosts).toHaveBeenCalledTimes(2);
+
+  io.requestInventory.mockResolvedValueOnce(row);
+  button(editor)!.click();
+  button(editor)!.click();
+  await vi.waitFor(() => expect(io.hosts).toHaveBeenCalledTimes(3));
+  expect(io.requestInventory.mock.calls).toEqual([['inventory-host'], ['inventory-host']]);
+  expect(editor.textContent).not.toContain('主机有未结束任务');
+});
+
+it('keeps hardware data editable but leaves inventory request markers out of host updates', async () => {
+  io.hosts.mockResolvedValue({
+    items: [{
+      sn: 'editable-host',
+      rev: 1,
+      attrs: {
+        inv_request_id: 'request',
+        inv_requested_at: '1',
+        inv_in_flight_at: '2',
+        inv_collected_at: '3',
+        inv_cpu: 'sample cpu',
+      },
+    }],
+    total: 1,
+    next: '',
+  });
+  io.update.mockResolvedValue({});
+  const el = mount(Hosts, true);
+  const edit = await vi.waitFor(() => {
+    const button = [...el.querySelectorAll('button')].find((item) => item.textContent?.trim() === '编辑');
+    expect(button).toBeDefined();
+    return button!;
+  });
+  edit.click();
+  const name = await vi.waitFor(() => {
+    const input = el.querySelector<HTMLInputElement>('[aria-label="属性名 1"]');
+    expect(input).toBeTruthy();
+    return input!;
+  });
+  expect(name.value).toBe('inv_cpu');
+  expect(el.querySelector('[aria-label="属性名 2"]')).toBeNull();
+  const save = [...el.querySelectorAll('button')].find((button) => button.textContent?.trim() === '保存主机')!;
+  save.click();
+  await vi.waitFor(() => expect(io.update).toHaveBeenCalledExactlyOnceWith('editable-host', {
+    sn: 'editable-host', rev: 1, attrs: { inv_cpu: 'sample cpu' },
+  }));
 });

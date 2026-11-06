@@ -4,11 +4,21 @@ export interface AttributeRow {
   key: string;
   value: string;
 }
+const inventoryControlAttributes = new Set([
+  'inv_collected_at',
+  'inv_in_flight_at',
+  'inv_request_id',
+  'inv_requested_at',
+]);
+export function isInventoryControlAttribute(key: string) {
+  return inventoryControlAttributes.has(key);
+}
 export function attributesOf(rows: AttributeRow[]): Record<string, string> {
   const result: Record<string, string> = Object.create(null);
   for (const row of rows) {
     const key = row.key.trim();
     if (!key) throw new Error('属性名不能为空');
+    if (isInventoryControlAttribute(key)) throw new Error(`采集状态由系统更新：${key}`);
     if (Object.hasOwn(result, key)) throw new Error(`属性名重复：${key}`);
     result[key] = row.value;
   }

@@ -91,3 +91,9 @@ describe('inventory HTTP contracts', () => {
     expect(http.get).toHaveBeenCalledWith('/hosts', { params });
   });
 });
+
+
+it('requests inventory using the encoded host path with no request body', async () => {
+  await hosts.requestHostInventoryApi('A/B #');
+  expect(http.post).toHaveBeenCalledWith('/hosts/A%2FB%20%23/inventory/request');
+});
