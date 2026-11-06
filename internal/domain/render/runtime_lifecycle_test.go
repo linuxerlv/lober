@@ -552,7 +552,7 @@ func TestESXiFirstbootRejectsPreexistingTemporarySymlink(t *testing.T) {
 	}
 }
 
-func relocateESXiCommands(t *testing.T, body, local, oldDir, newDir, oldDigest, newDigest string) string {
+func relocateESXiCommands(t *testing.T, body, local, oldDir, newDir, oldDigest, newDigest string, statCommand ...string) string {
 	t.Helper()
 	pattern := regexp.MustCompile(`(LOBER_(?:ESXI|FW)_CODE=\$\(echo )([A-Za-z0-9+/=]+)( \| openssl base64 -d -A\)\|\|exit 127;.*?case \$LOBER_(?:ESXI|FW)_HASH in )([0-9a-f]{64})`)
 	result := pattern.ReplaceAllStringFunc(body, func(match string) string {
@@ -563,6 +563,9 @@ func relocateESXiCommands(t *testing.T, body, local, oldDir, newDir, oldDigest, 
 		}
 		rewritten := rewriteESXiTestPaths(t, string(decoded), local)
 		rewritten = strings.ReplaceAll(rewritten, oldDir, newDir)
+		if len(statCommand) != 0 {
+			rewritten = strings.ReplaceAll(rewritten, "stat -", statCommand[0]+" -")
+		}
 		if oldDigest != "" {
 			rewritten = strings.ReplaceAll(rewritten, oldDigest, newDigest)
 		}
@@ -571,6 +574,9 @@ func relocateESXiCommands(t *testing.T, body, local, oldDir, newDir, oldDigest, 
 	})
 	result = strings.ReplaceAll(result, oldDir, newDir)
 	result = strings.ReplaceAll(result, "/tmp/lober", local)
+	if len(statCommand) != 0 {
+		result = strings.ReplaceAll(result, "stat -", statCommand[0]+" -")
+	}
 	if oldDigest != "" {
 		result = strings.ReplaceAll(result, oldDigest, newDigest)
 	}
