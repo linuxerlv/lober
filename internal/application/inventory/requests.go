@@ -11,6 +11,12 @@ import (
 	"github.com/lober/lober/internal/domain/repository"
 )
 
+// Requester 是控制台发起采集所需的能力。
+type Requester interface {
+	Configured() bool
+	Request(context.Context, ports.Actor, string) (model.Host, error)
+}
+
 func (s *Service) Request(ctx context.Context, a ports.Actor, rawSN string) (model.Host, error) {
 	if err := a.Authorize(access.PermHostWrite); err != nil {
 		return model.Host{}, err

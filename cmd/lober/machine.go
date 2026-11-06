@@ -27,9 +27,10 @@ import (
 )
 
 type machineBundle struct {
-	Service *execution.Service
-	Handler http.Handler
-	Logs    *events.Collector
+	Service   *execution.Service
+	Handler   http.Handler
+	Logs      *events.Collector
+	Inventory inventory.Requester
 }
 type machineAdapter struct {
 	execution.Gateway
@@ -70,15 +71,14 @@ func machineOf(st repository.Store, hub ports.Notifier, cfg config, clock ports.
 	renderer := executionport.RenderFunc(func(ctx context.Context, r executionport.RenderRequest) ([]byte, error) {
 		return files.Render(ctx, authoring.MachineRenderRequest{Task: r.Task, Kind: r.Kind, Slot: r.Slot, Values: r.Values})
 	})
-	// 采集服务只造一次：网关要它的三项能力，HTTP 入口要它的 Submit。造两个实例会让
-	// 「网关发的令牌」和「上报时查的令牌表」分家，采集一律 401。
+	// 控制台请求与机器的领取、上报共用同一个采集服务和令牌表。
 	inv := inventoryServiceOf(st, cfg, clock)
 	gateway, err := execution.NewGateway(execution.GatewayDeps{Service: engine.Machine, Renderer: renderer, Endpoints: execution.Endpoints{Gateway: cfg.Preview.Gateway, Artifacts: cfg.Preview.Artifacts, SMB: cfg.Preview.SMB, SyslogAddr: cfg.Preview.SyslogAddr}, Observe: execution.NewIPObserver(collector), Inventory: inventoryBoot(inv)})
 	if err != nil {
 		return nil, err
 	}
 	handler := machine.New(machineAdapter{gateway, logger})
-	return &machineBundle{Service: engine, Handler: handler, Logs: collector}, nil
+	return &machineBundle{Service: engine, Handler: handler, Logs: collector, Inventory: inv}, nil
 }
 
 // inventoryAdapter 把采集服务接到执行网关的接口上。两个应用模块互不依赖，翻译在这里做。

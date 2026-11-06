@@ -7,6 +7,7 @@ import (
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/identity"
+	"github.com/lober/lober/internal/application/inventory"
 	"github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
 	"github.com/lober/lober/internal/application/tasks"
@@ -18,6 +19,7 @@ import (
 
 type Deps struct {
 	HostRegistry      hosts.Registry
+	Inventory         inventory.Requester
 	HookAuthoring     authoring.Hooks
 	TemplateAuthoring authoring.Templates
 	AuthoringEditor   authoring.Editor

@@ -51,15 +51,16 @@ func hostContractError(t *testing.T, w *httptest.ResponseRecorder, status int, p
 }
 
 // 固定手写的入口集合，防止迁移时漏路由、改权限或错记审计动作。
-func Test主机六入口契约(t *testing.T) {
+func Test主机七入口契约(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	want := map[string][2]string{
-		"GET /console/v1/hosts":         {"host:read", ""},
-		"GET /console/v1/hosts/:sn":     {"host:read", ""},
-		"POST /console/v1/hosts":        {"host:write", "host.create"},
-		"PUT /console/v1/hosts/:sn":     {"host:write", "host.update"},
-		"DELETE /console/v1/hosts/:sn":  {"host:write", "host.delete"},
-		"POST /console/v1/hosts/import": {"host:write", "host.import"},
+		"GET /console/v1/hosts":                        {"host:read", ""},
+		"GET /console/v1/hosts/:sn":                    {"host:read", ""},
+		"POST /console/v1/hosts":                       {"host:write", "host.create"},
+		"PUT /console/v1/hosts/:sn":                    {"host:write", "host.update"},
+		"DELETE /console/v1/hosts/:sn":                 {"host:write", "host.delete"},
+		"POST /console/v1/hosts/import":                {"host:write", "host.import"},
+		"POST /console/v1/hosts/:sn/inventory/request": {"host:write", "host.inventory_request"},
 	}
 	got := map[string][2]string{}
 	for _, rt := range s.Routes() {

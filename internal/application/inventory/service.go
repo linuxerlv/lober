@@ -41,13 +41,13 @@ var (
 // 令牌本身在内存里，会丢；判断依据必须在库里。
 const (
 	// AttrRequestID 标记一次采集请求，同一秒内重新发起也会换批。
-	AttrRequestID = "inv_request_id"
+	AttrRequestID = model.InventoryRequestID
 	// AttrCollectedAt 是上次采集成功的时间戳（Unix 秒）。有这个键就说明采过了。
-	AttrCollectedAt = "inv_collected_at"
+	AttrCollectedAt = model.InventoryCollectedAt
 	// AttrRequested 是「重新采集」请求的时间戳。比 AttrCollectedAt 新才需要再采。
-	AttrRequested = "inv_requested_at"
+	AttrRequested = model.InventoryRequestedAt
 	// AttrInFlight 是采集进行中的标记时间戳。超过 TokenLife 自动视为作废，避免机器无限重启。
-	AttrInFlight = "inv_in_flight_at"
+	AttrInFlight = model.InventoryInFlightAt
 )
 
 // Deps 是本模块的构造依赖。

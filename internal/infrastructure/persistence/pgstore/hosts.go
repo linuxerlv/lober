@@ -3,6 +3,7 @@ package pgstore
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 
@@ -20,8 +21,25 @@ var hostColumns = []string{"arch", "firmware", "attrs", "rev"}
 // 登没登记，同时登记同一个 SN 的另一次写入插不进中间。
 var upsertHost = clause.OnConflict{
 	Columns: []clause.Column{{Name: "sn"}},
-	DoUpdates: append(clause.AssignmentColumns([]string{"arch", "firmware", "attrs"}),
+	DoUpdates: append(clause.AssignmentColumns([]string{"arch", "firmware"}),
+		clause.Assignment{Column: clause.Column{Name: "attrs"}, Value: importedHostAttrs()},
 		clause.Assignment{Column: clause.Column{Name: "rev"}, Value: gorm.Expr("hosts.rev + 1")}),
+}
+
+// 冲突更新时从数据库当前行保留采集标记，包括导入开始后才写入的请求。
+func importedHostAttrs() clause.Expr {
+	keys := model.InventoryControlAttrs()
+	parts := make([]string, len(keys))
+	args := make([]any, 0, len(keys)*3)
+	for _, key := range keys {
+		args = append(args, key)
+	}
+	for i, key := range keys {
+		parts[i] = "CAST(? AS text), hosts.attrs -> CAST(? AS text)"
+		args = append(args, key, key)
+	}
+	return gorm.Expr("CASE WHEN jsonb_exists_any(hosts.attrs, ARRAY["+strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",")+"]::text[]) "+
+		"THEN COALESCE(NULLIF(excluded.attrs, 'null'::jsonb), '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object("+strings.Join(parts, ", ")+")) ELSE excluded.attrs END", args...)
 }
 
 // CreateHost 见 repository.Hosts。SN 已登记由主键报出来，不先查：先查再插，两次同时登记就都查不到。
@@ -66,6 +84,27 @@ func (s *Store) UpdateHost(ctx context.Context, h model.Host, a repository.Audit
 		if err != nil {
 			return err
 		}
+		current, err := cur.host()
+		if err != nil {
+			return err
+		}
+		attrs := maps.Clone(h.Attrs)
+		for _, key := range model.InventoryControlAttrs() {
+			old, exists := current.Attrs[key]
+			if value, sent := attrs[key]; sent && (!exists || value != old) {
+				return errorf(repository.ErrInvalid, "采集属性 %s 不能手工修改", key)
+			}
+			if exists {
+				if attrs == nil {
+					attrs = map[string]string{}
+				}
+				attrs[key] = old
+			}
+		}
+		row.Attrs, err = encodeJSON(attrs)
+		if err != nil {
+			return err
+		}
 		row.Rev = cur.Rev + 1
 		if err := tx.Model(&hostRow{SN: h.SN}).Select(hostColumns).Updates(&row).Error; err != nil {
 			return err
@@ -96,6 +135,11 @@ func (s *Store) ImportHosts(ctx context.Context, hs []model.Host, a repository.A
 		if err != nil {
 			return nil, err
 		}
+		for key := range h.Attrs {
+			if model.IsInventoryControlAttr(key) {
+				return nil, errorf(repository.ErrInvalid, "采集属性 %s 不能手工导入", key)
+			}
+		}
 		rows[i], sns[i] = row, h.SN
 	}
 	sorted := hostLockOrder(rows, func(r hostRow) string { return r.SN })
@@ -105,18 +149,19 @@ func (s *Store) ImportHosts(ctx context.Context, hs []model.Host, a repository.A
 				return err
 			}
 		}
-		revs := make(map[string]int64, len(hs))
+		stored := make(map[string]hostRow, len(hs))
 		for chunk := range slices.Chunk(sns, batchSize) {
 			var got []hostRow
-			if err := tx.Select("sn", "rev").Where("sn IN ?", chunk).Find(&got).Error; err != nil {
+			if err := tx.Select("sn", "rev", "attrs").Where("sn IN ?", chunk).Find(&got).Error; err != nil {
 				return err
 			}
 			for _, r := range got {
-				revs[r.SN] = r.Rev
+				stored[r.SN] = r
 			}
 		}
 		for i := range rows {
-			rows[i].Rev = revs[rows[i].SN]
+			current := stored[rows[i].SN]
+			rows[i].Rev, rows[i].Attrs = current.Rev, current.Attrs
 		}
 		return addAudits(tx, a, "host", sns...)
 	})

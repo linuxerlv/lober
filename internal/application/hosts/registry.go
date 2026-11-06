@@ -49,6 +49,11 @@ func (s *registry) Create(ctx context.Context, a ports.Actor, h model.Host) (mod
 		return model.Host{}, err
 	}
 	h.SN = sn
+	for key := range h.Attrs {
+		if model.IsInventoryControlAttr(key) {
+			return model.Host{}, repository.ErrInvalid
+		}
+	}
 	return s.deps.Hosts.CreateHost(ctx, h, s.audit(a, "host.create"))
 }
 func (s *registry) Update(ctx context.Context, a ports.Actor, r UpdateRequest) (model.Host, error) {
