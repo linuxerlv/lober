@@ -5,7 +5,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 const io = vi.hoisted(() => ({ events: vi.fn() }));
 vi.mock('vue-router', () => ({ useRoute: () => ({ params: { id: 'task-1' } }) }));
-vi.mock('@vben/stores', () => ({ useAccessStore: () => ({ accessToken: '', accessCodes: [] }) }));
+vi.mock('@vben/stores', () => ({ useAccessStore: () => ({ accessToken: 'test-token', accessCodes: [] }) }));
+vi.mock('#/store', () => ({ useAuthStore: () => ({ clearSession: vi.fn() }) }));
 vi.mock('@vben/hooks', () => ({ useAppConfig: () => ({ apiURL: '' }) }));
 vi.mock('@vben/common-ui', async () => {
   const { defineComponent, h } = await import('vue');
@@ -46,8 +47,9 @@ vi.mock('#/components/console/ListPagination.vue', async () => {
 import Detail from './detail.vue';
 
 let stop: (() => void) | undefined;
-afterEach(() => { stop?.(); document.body.innerHTML = ''; vi.resetAllMocks(); });
+afterEach(() => { stop?.(); document.body.innerHTML = ''; vi.resetAllMocks(); vi.unstubAllGlobals(); });
 it('pages buffered events without losing the server replay cursor or jumping on new events', async () => {
+  vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
   io.events.mockResolvedValueOnce({ items: Array.from({ length: 45 }, (_, n) => ({ seq: n + 1, kind: 'boot' })) });
   const node = document.createElement('div');
   document.body.append(node);

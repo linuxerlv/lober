@@ -2,7 +2,7 @@
 import type { Schemas } from '#/api/console/generated';
 import type { Task, TaskEvent } from '#/api/console/task';
 
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
 import { useRoute } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
@@ -25,6 +25,8 @@ import { errorMessage, problemsOf } from '#/api/console/problem';
 import { taskAPI, taskStreamURL } from '#/api/console/task';
 import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { useTaskStream } from '#/composables/use-task-stream';
+import { useAuthStore } from '#/store';
 
 import { eventDetails } from './event-details';
 import { taskStateLabels } from './task-state';
@@ -33,25 +35,24 @@ import { mergeEvents } from './wizard-state';
 defineOptions({ name: 'TasksDetail' });
 const route = useRoute();
 const access = useAccessStore();
+const auth = useAuthStore();
 const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
-const id = String(route.params.id);
+const id = computed(() => String(route.params.id ?? ''));
 const task = ref<Task>();
 const error = ref('');
 const problems = ref<Schemas['ProblemJSON'][]>([]);
 const events = ref<TaskEvent[]>([]);
 const eventPage = ref(1);
 const eventPageSize = ref(20);
-const connected = ref(false);
+const stream = shallowRef<ReturnType<typeof useTaskStream>>();
+const connected = computed(() => stream.value?.state.value === 'open');
 const preview = ref<Schemas['PreviewResponse']>();
 const showPreview = ref(false);
 const busy = ref(false);
-let source: EventSource | undefined;
-let poll: ReturnType<typeof setInterval> | undefined;
+type Session = { id: string; reloading: boolean; reloadPending: boolean };
+let session: Session | undefined;
 let eventFlush: ReturnType<typeof setTimeout> | undefined;
 const pendingEvents = new Map<number, TaskEvent>();
-let active = true;
-let reloading = false;
-let reloadPending = false;
 const [EventGrid, eventGrid] = useVbenVxeGrid<TaskEvent>({
   gridOptions: {
     columns: [
@@ -81,29 +82,26 @@ function failed(reason: unknown) {
   problems.value = problemsOf(reason);
 }
 async function reload() {
-  if (!active) return;
-  if (reloading) {
-    reloadPending = true;
+  const current = session;
+  if (!current) return;
+  if (current.reloading) {
+    current.reloadPending = true;
     return;
   }
-  reloading = true;
+  current.reloading = true;
   try {
     do {
-      reloadPending = false;
+      current.reloadPending = false;
       try {
-        const result = await taskAPI.get(id);
-        if (active) task.value = result;
+        const result = await taskAPI.get(current.id);
+        if (current === session) task.value = result;
       } catch (reason) {
-        if (active) failed(reason);
+        if (current === session) failed(reason);
       }
-    } while (active && reloadPending);
+    } while (current === session && current.reloadPending);
   } finally {
-    reloading = false;
+    current.reloading = false;
   }
-}
-function append(incoming: TaskEvent[]) {
-  if (!active) return;
-  events.value = mergeEvents(events.value, incoming);
 }
 function queueEvent(event: TaskEvent) {
   pendingEvents.set(event.seq, event);
@@ -111,10 +109,8 @@ function queueEvent(event: TaskEvent) {
   // 新消息不推迟本批处理，持续到达时也会定时展示。
   eventFlush = setTimeout(() => {
     eventFlush = undefined;
-    if (!active) return;
-    const incoming = [...pendingEvents.values()];
+    events.value = mergeEvents(events.value, [...pendingEvents.values()]);
     pendingEvents.clear();
-    append(incoming);
     void reload();
   }, 100);
 }
@@ -126,42 +122,23 @@ function changeEventSize(size: number) {
   eventPageSize.value = size;
   eventPage.value = 1;
 }
-async function loadEvents() {
-  if (!active) return;
-  try {
-    const page = await taskAPI.events(id, events.value.at(-1)?.seq ?? 0);
-    append(page.items ?? []);
-  } catch (reason) {
-    if (active) failed(reason);
-  }
+function lastEventSeq() {
+  return events.value.at(-1)?.seq ?? 0;
 }
-function connect() {
-  source?.close();
-  if (!access.accessToken) return;
-  source = new EventSource(
-    taskStreamURL(apiURL, id, access.accessToken, events.value.at(-1)?.seq ?? 0),
-  );
-  source.onopen = () => {
-    if (active) connected.value = true;
-  };
-  source.onerror = () => {
-    if (active) connected.value = false;
-  };
-  source.addEventListener('task', (message) => {
-    if (!active) return;
-    try {
-      const event: TaskEvent = JSON.parse((message as MessageEvent<string>).data);
-      if (event.taskID === id && Number.isSafeInteger(event.seq) && event.seq > 0) {
-        queueEvent(event);
-      }
-    } catch {
-      connected.value = false;
-    }
-  });
+async function loadEvents() {
+  const current = session;
+  if (!current) return;
+  try {
+    const page = await taskAPI.events(current.id, lastEventSeq());
+    if (current === session) events.value = mergeEvents(events.value, page.items ?? []);
+  } catch (reason) {
+    if (current === session) failed(reason);
+  }
 }
 async function control(retry: boolean) {
   const permission=retry?'task:retry':'task:cancel';
-  if (!access.accessCodes.includes(permission) || busy.value || !task.value) return;
+  const current = session;
+  if (!current || !access.accessCodes.includes(permission) || busy.value || !task.value) return;
   try {
     await ElMessageBox.confirm(
       retry ? '重试会沿用原任务快照，目标机下次引导可能重新安装。确认重试？' : '确认取消该任务？',
@@ -171,48 +148,75 @@ async function control(retry: boolean) {
   } catch {
     return;
   }
-  if (!access.accessCodes.includes(permission)) return;
+  if (current !== session || busy.value || !access.accessCodes.includes(permission)) return;
   busy.value = true;
   error.value = '';
   problems.value = [];
   try {
-    task.value = await (retry ? taskAPI.retry(id) : taskAPI.cancel(id));
+    const result = await (retry ? taskAPI.retry(current.id) : taskAPI.cancel(current.id));
+    if (current !== session) return;
+    task.value = result;
     await loadEvents();
   } catch (reason) {
-    failed(reason);
+    if (current === session) failed(reason);
   } finally {
-    busy.value = false;
+    if (current === session) busy.value = false;
   }
 }
 async function renderPreview() {
+  const current = session;
+  if (!current || busy.value) return;
   busy.value = true;
   try {
-    preview.value = await taskAPI.preview(id);
+    const result = await taskAPI.preview(current.id);
+    if (current !== session) return;
+    preview.value = result;
     showPreview.value = true;
   } catch (reason) {
-    failed(reason);
+    if (current === session) failed(reason);
   } finally {
-    busy.value = false;
+    if (current === session) busy.value = false;
   }
 }
-onMounted(async () => {
-  await reload();
-  await loadEvents();
-  if (!active) return;
-  connect();
-  poll = setInterval(() => {
+watch([id, () => access.accessToken], ([taskId, token], _old, cleanup) => {
+  task.value = undefined;
+  error.value = '';
+  problems.value = [];
+  events.value = [];
+  eventPage.value = 1;
+  preview.value = undefined;
+  showPreview.value = false;
+  busy.value = false;
+  if (!taskId || !token) return;
+
+  const current: Session = { id: taskId, reloading: false, reloadPending: false };
+  session = current;
+  void reload();
+  void loadEvents();
+  stream.value = useTaskStream({
+    after: lastEventSeq,
+    onEvent: queueEvent,
+    onUnauthorized: () => {
+      if (session === current && access.accessToken === token) void auth.clearSession();
+    },
+    taskId,
+    token,
+    url: taskStreamURL(apiURL, taskId),
+  });
+  const poll = setInterval(() => {
     void reload();
     if (!connected.value) void loadEvents();
   }, 5000);
-});
-onBeforeUnmount(() => {
-  active = false;
-  reloadPending = false;
-  pendingEvents.clear();
-  if (eventFlush !== undefined) clearTimeout(eventFlush);
-  source?.close();
-  if (poll) clearInterval(poll);
-});
+  cleanup(() => {
+    session = undefined;
+    stream.value?.stop();
+    stream.value = undefined;
+    clearInterval(poll);
+    clearTimeout(eventFlush);
+    eventFlush = undefined;
+    pendingEvents.clear();
+  });
+}, { immediate: true, flush: 'sync' });
 </script>
 
 <template>
