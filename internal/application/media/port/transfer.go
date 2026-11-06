@@ -74,6 +74,7 @@ type FaultKind string
 
 const (
 	URLRejected         FaultKind = "url_rejected"
+	RemoteFetchFailed   FaultKind = "remote_fetch_failed"
 	PathRejected        FaultKind = "path_rejected"
 	ChunkRejected       FaultKind = "chunk_rejected"
 	ContentMismatch     FaultKind = "content_mismatch"
@@ -84,6 +85,7 @@ const (
 // Fault 是外部操作失败的事实。业务问题及状态由应用决定。
 type Fault struct {
 	Kind                   FaultKind
+	HTTPStatus             int
 	Role, Expected, Actual string
 	Cause                  error
 }

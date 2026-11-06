@@ -62,7 +62,7 @@ func (s *fetchSession) openRemote(ctx context.Context) (port.FetchInfo, error) {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.src.URL, nil)
 	if err != nil {
-		return port.FetchInfo{}, err
+		return port.FetchInfo{}, remoteFault(ctx, port.URLRejected)
 	}
 	req.Header.Set("Accept-Encoding", "identity")
 	if offset > 0 {
@@ -74,12 +74,12 @@ func (s *fetchSession) openRemote(ctx context.Context) (port.FetchInfo, error) {
 		if errors.As(err, &f) && f.Kind == port.URLRejected {
 			removeErr := os.Remove(s.transfer.stagingPath(s.src.ISOID, s.src.Role))
 			if removeErr != nil && !os.IsNotExist(removeErr) {
-				return port.FetchInfo{}, errors.Join(err, removeErr)
+				return port.FetchInfo{}, errors.Join(fault(port.URLRejected), removeErr)
 			}
 			s.offset = 0
 			return port.FetchInfo{Offset: 0, TotalSize: s.total, Reset: true}, fault(port.URLRejected)
 		}
-		return port.FetchInfo{}, err
+		return port.FetchInfo{}, remoteFault(ctx, port.RemoteFetchFailed)
 	}
 	s.body = resp.Body
 	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && encoding != "identity" {
@@ -108,7 +108,7 @@ func (s *fetchSession) openRemote(ctx context.Context) (port.FetchInfo, error) {
 		offset = 0
 		s.total = max(resp.ContentLength, 0)
 	default:
-		return port.FetchInfo{}, fmt.Errorf("fetch source: HTTP %d", resp.StatusCode)
+		return port.FetchInfo{}, &port.Fault{Kind: port.RemoteFetchFailed, HTTPStatus: resp.StatusCode}
 	}
 	if err = os.MkdirAll(s.transfer.dirs.Staging, 0700); err != nil {
 		return port.FetchInfo{}, err
@@ -129,4 +129,12 @@ func (s *fetchSession) openRemote(ctx context.Context) (port.FetchInfo, error) {
 	}
 	s.offset = offset
 	return port.FetchInfo{Offset: offset, TotalSize: s.total, Reset: offset == 0}, nil
+}
+
+// 网络错误可能带上完整链接、域名或地址。保留错误类别和取消信号。
+func remoteFault(ctx context.Context, kind port.FaultKind) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fault(kind)
 }

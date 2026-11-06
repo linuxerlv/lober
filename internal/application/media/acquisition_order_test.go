@@ -326,7 +326,7 @@ func Test镜像获取会话每条退出路径关闭(t *testing.T) {
 			}
 			if stage == "step" {
 				current, _, e := db.GetSource(t.Context(), item.ID, "")
-				if e != nil || current.Fetched != 3 || !strings.Contains(current.Error, "unexpected EOF") {
+				if e != nil || current.Fetched != 3 || current.Error != "镜像下载中断" {
 					t.Fatal("读取失败丢失已同步位置或错误", current, e)
 				}
 			}

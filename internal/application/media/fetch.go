@@ -70,6 +70,8 @@ func (s *Sources) problemTree(src model.Source, err error) (error, bool) {
 	switch f.Kind {
 	case port.URLRejected:
 		return sourceRejected(src.ISOID, src.Role, isoSourceReasonURL), true
+	case port.RemoteFetchFailed:
+		return remoteFetchError{status: f.HTTPStatus}, true
 	case port.PathRejected:
 		return sourceRejected(src.ISOID, src.Role, isoSourceReasonLocal), true
 	case port.ChunkRejected:
@@ -218,6 +220,6 @@ func (s *Sources) failFetch(ctx context.Context, src model.Source, cause error) 
 		return
 	}
 	current.State = model.SourceFailed
-	current.Error = cause.Error()
+	current.Error = sourceFailureMessage(cause)
 	_, _ = s.sources.SaveSource(cleanup, current, repository.Audit{})
 }

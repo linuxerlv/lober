@@ -49,7 +49,7 @@ func (t *Transfer) ValidateSource(ctx context.Context, src model.Source) (model.
 		}
 		ips, err := t.lookup(ctx, req.URL.Hostname())
 		if err != nil {
-			return src, err
+			return src, remoteFault(ctx, port.URLRejected)
 		}
 		if err = CheckURL(req.URL, ips); err != nil {
 			return src, err
