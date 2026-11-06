@@ -12,6 +12,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -304,7 +306,14 @@ func Test任务SSE补读分页丢通知续读及断开退订(t *testing.T) {
 	}
 	srv := httptest.NewServer(s.Engine)
 	defer srv.Close()
-	req, _ := http.NewRequestWithContext(t.Context(), "GET", srv.URL+"/console/v1/tasks/"+task.ID+"/stream", nil)
+	upstream, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(httputil.NewSingleHostReverseProxy(upstream))
+	defer proxy.Close()
+	streamURL := proxy.URL + "/console/v1/tasks/" + task.ID + "/stream"
+	req, _ := http.NewRequestWithContext(t.Context(), "GET", streamURL, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -337,7 +346,7 @@ func Test任务SSE补读分页丢通知续读及断开退订(t *testing.T) {
 		t.Fatal(e)
 	}
 	resp.Body.Close()
-	req, _ = http.NewRequestWithContext(t.Context(), "GET", srv.URL+"/console/v1/tasks/"+task.ID+"/stream", nil)
+	req, _ = http.NewRequestWithContext(t.Context(), "GET", streamURL, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Last-Event-ID", "206")
 	resumed, err := http.DefaultClient.Do(req)
