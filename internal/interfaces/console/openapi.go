@@ -84,9 +84,6 @@ func openAPIDocument(routes []route) map[string]any {
 		} else {
 			op["security"] = []any{map[string]any{"BearerAuth": []string{}}}
 		}
-		if r.stream {
-			op["security"] = []any{map[string]any{"BearerAuth": []string{}}, map[string]any{"StreamToken": []string{}}}
-		}
 		parameters := make([]any, 0)
 		for _, p := range strings.Split(r.path, "/") {
 			if strings.HasPrefix(p, ":") || strings.HasPrefix(p, "*") {
@@ -143,7 +140,7 @@ func openAPIDocument(routes []route) map[string]any {
 		}
 		item[strings.ToLower(r.method)] = op
 	}
-	return map[string]any{"openapi": "3.0.3", "info": map[string]any{"title": "Lober console", "version": "1.0.0"}, "paths": paths, "components": map[string]any{"schemas": b.defs, "securitySchemes": map[string]any{"BearerAuth": map[string]any{"type": "http", "scheme": "bearer"}, "StreamToken": map[string]any{"type": "apiKey", "in": "query", "name": "access_token"}}}}
+	return map[string]any{"openapi": "3.0.3", "info": map[string]any{"title": "Lober console", "version": "1.0.0"}, "paths": paths, "components": map[string]any{"schemas": b.defs, "securitySchemes": map[string]any{"BearerAuth": map[string]any{"type": "http", "scheme": "bearer"}}}}
 }
 func responseEnvelope(data any, code int) map[string]any {
 	return map[string]any{"type": "object", "required": []string{"code", "data", "message"}, "properties": map[string]any{"code": map[string]any{"type": "integer", "enum": []int{code}}, "data": data, "message": map[string]any{"type": "string"}}}

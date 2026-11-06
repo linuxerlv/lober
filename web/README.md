@@ -32,7 +32,7 @@ server {
         proxy_http_version 1.1;
         proxy_buffering off;
         proxy_read_timeout 1h;
-        client_max_body_size 8m;
+        client_max_body_size 16m;
     }
     location = /openapi.json {
         proxy_pass http://127.0.0.1:18080;
@@ -58,6 +58,10 @@ server {
 ## 当前接口与能力边界
 
 认证使用 `/console/v1/auth/login` 的 `{token,expiresAt,user}`；当前资料 `/user/info`；本人资料 `PUT /user/profile`；本人改密 `POST /auth/password`。权限来自当前用户的 `permissions`，不调用不存在的 `/auth/codes` 或 refresh 接口。
+
+登录正文上限为 16 KiB，其他普通 JSON 为 4 MiB，主机表格导入为 16 MiB。超过上限返回 413。镜像分片按上传范围单独校验，代理的大小限制仍需容纳所用的分片。
+
+任务实时日志通过 `Authorization: Bearer <token>` 鉴权，断线后可用 `Last-Event-ID` 续读。独立托管控制台时，先更新前端和外部调用方，再上线停用查询参数凭据的后端。升级后刷新仍打开的旧控制台页面。
 
 业务视图使用主机键 `sn`、ISO `/isos`、脚本/模板版本路径及 rev。报表页提供真实审计查询和 CSV 导出。独立报表统计、磁盘 dry-run 及第 7 层真实任务控制尚未提供；页面说明边界，后端错误不会被当作成功。
 

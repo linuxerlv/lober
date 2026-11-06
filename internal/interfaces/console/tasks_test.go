@@ -304,7 +304,8 @@ func Test任务SSE补读分页丢通知续读及断开退订(t *testing.T) {
 	}
 	srv := httptest.NewServer(s.Engine)
 	defer srv.Close()
-	req, _ := http.NewRequestWithContext(t.Context(), "GET", srv.URL+"/console/v1/tasks/"+task.ID+"/stream?access_token="+token, nil)
+	req, _ := http.NewRequestWithContext(t.Context(), "GET", srv.URL+"/console/v1/tasks/"+task.ID+"/stream", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -399,7 +400,8 @@ func Test任务SSE连接期间复查禁用改密及会话过期(t *testing.T) {
 	for _, reason := range []string{"disabled", "password", "expired"} {
 		t.Run(reason, func(t *testing.T) {
 			// Resume beyond the tail, so only a newly appended event could leak.
-			req, _ := http.NewRequestWithContext(t.Context(), "GET", srv.URL+"/console/v1/tasks/"+task.ID+"/stream?after_seq=100&access_token="+token, nil)
+			req, _ := http.NewRequestWithContext(t.Context(), "GET", srv.URL+"/console/v1/tasks/"+task.ID+"/stream?after_seq=100", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				t.Fatal(err)

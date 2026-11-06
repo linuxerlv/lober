@@ -68,7 +68,6 @@ func (s *server) clock() int64 { return s.deps.Clock() }
 
 const ctxPrincipal = "console.principal"
 const ctxActor = "console.actor"
-const ctxStream = "console.stream"
 
 func principalOf(c *gin.Context) identity.Principal {
 	v, _ := c.Get(ctxPrincipal)
@@ -108,24 +107,14 @@ func (s *server) requestLog() gin.HandlerFunc {
 	}
 }
 func bearerToken(c *gin.Context) string {
-	if header := c.GetHeader("Authorization"); header != "" {
-		parts := strings.Fields(header)
-		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			return ""
-		}
-		return parts[1]
+	parts := strings.Fields(c.GetHeader("Authorization"))
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
 	}
-	allowed, _ := c.Get(ctxStream)
-	if c.Request.Method == "GET" && allowed == true {
-		return c.Query("access_token")
-	}
-	return ""
+	return parts[1]
 }
 func (s *server) authenticate() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if rt, ok := s.index[c.Request.Method+" "+c.FullPath()]; ok {
-			c.Set(ctxStream, rt.stream)
-		}
 		if s.deps.Identity == nil {
 			Fail(c, 500, nil, model.ConsoleInternal)
 			return

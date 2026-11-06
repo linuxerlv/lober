@@ -128,14 +128,14 @@ func Test身份十三入口契约与强制改密矩阵(t *testing.T) {
 			}
 		}
 	}
-	// 不创建长连接：不存在的任务返回404，证明查询令牌只在事件流通过认证。
+	// 不存在的任务返回 404，只有携带有效请求头的请求才会查任务。
 	token, _ := seedHTTPUser(t, s, st, "querytoken", model.RoleViewer)
 	for _, tc := range []struct {
 		path, header string
 		status       int
 	}{
 		{"/console/v1/user/info?access_token=" + token, "", 401},
-		{"/console/v1/tasks/missing/stream?access_token=" + token, "", 404},
+		{"/console/v1/tasks/missing/stream?access_token=" + token, "", 401},
 		{"/console/v1/tasks/missing/stream?access_token=" + token, "Basic invalid", 401},
 		{"/console/v1/tasks/missing/stream?access_token=invalid", "Bearer " + token, 404},
 	} {
