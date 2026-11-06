@@ -39,3 +39,23 @@ func TestProgressHidesStoredSourceErrorDetails(t *testing.T) {
 		}
 	}
 }
+
+func TestProgressKeepsKnownImportFailureWithoutDetails(t *testing.T) {
+	const secret = "https://mirror.private.invalid/medium.iso?signature=demo-secret"
+	for _, tc := range []struct{ stored, want string }{
+		{"iso_extra_source_invalid（iso image source.netboot）：附加来源 netboot 缺失、不完整或与主介质的平台和版本不符", "附加镜像缺失、不完整或与主镜像不匹配"},
+		{model.NewProblem("iso_artifact_missing", model.Subject{Kind: "iso", ID: "image", Path: secret}, secret).Error(), "安装镜像缺少必需文件"},
+		{"open " + secret, "镜像导入失败"},
+		{"安装镜像缺少必需文件", "安装镜像缺少必需文件"},
+		{"", ""},
+	} {
+		f := &fixture{source: model.Source{ISOID: "image", Kind: model.SourceRemote, State: model.SourceFetched, Rev: 1, Error: tc.stored}}
+		p, err := setup(f).Progress(t.Context(), admin, "image")
+		if err != nil || len(p.Sources) != 1 || p.Sources[0].Error != tc.want {
+			t.Errorf("进度错误：%+v, %v；期望错误 %q", p, err, tc.want)
+		}
+		if f.source.Error != tc.stored {
+			t.Fatal("读进度时改写了旧记录")
+		}
+	}
+}

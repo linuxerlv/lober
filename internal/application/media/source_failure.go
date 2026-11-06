@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 )
 
@@ -48,9 +49,16 @@ func sourceFailureMessage(cause error) string {
 }
 
 // 旧记录可能包含原始链接。进度只展示固定文案和合法的数字状态码。
-func publicSourceError(stored string) string {
+func publicSourceError(source model.Source) string {
+	stored := source.Error
+	if stored == "" {
+		return ""
+	}
+	if source.State == model.SourceFetched {
+		return publicImportError(stored)
+	}
 	switch stored {
-	case "", sourceFailed, sourceInvalid, sourceDigestMismatch, sourceInterrupted, sourceUnavailable:
+	case sourceFailed, sourceInvalid, sourceDigestMismatch, sourceInterrupted, sourceUnavailable:
 		return stored
 	}
 	if suffix, ok := strings.CutPrefix(stored, sourceHTTPStatus); ok && len(suffix) == 3 {
