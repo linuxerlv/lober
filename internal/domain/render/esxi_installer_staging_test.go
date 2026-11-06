@@ -231,4 +231,3 @@ func TestESXiInstallerStagesFrozenPayloadAndRejectsUnsafeTargets(t *testing.T) {
 		})
 	}
 }
-
