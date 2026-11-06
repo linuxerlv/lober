@@ -12,19 +12,6 @@ import (
 	"github.com/lober/lober/internal/domain/model"
 )
 
-func agamaFixture(t *testing.T) Request {
-	t.Helper()
-	r := menuFixture("sles16", "uefi")
-	r.Kind = catalog.FileAnswer
-	r.Values["finalize-token"] = "finalize-independent"
-	template, e := os.ReadFile("testdata/agama.tmpl")
-	if e != nil {
-		t.Fatal(e)
-	}
-	r.Snapshot.Template.Body = string(template)
-	r.Snapshot.Slots = []model.SnapshotSlot{{Seq: 1, Name: "product", Instances: []model.SnapshotInstance{{Kind: model.ImplFragment, Body: "product: { id: '{{param:product}}' },", Params: map[string]model.SnapshotValue{"product": {Type: "enum", Items: []string{"SLES"}}}}}}, {Seq: 2, Name: "pre", Exec: true, Timing: "pre", Instances: []model.SnapshotInstance{runtimeInstance("printf 'pre'\n", true, "sh", 3)}}, {Seq: 3, Name: "firstboot", Exec: true, Timing: "firstboot", Instances: []model.SnapshotInstance{runtimeInstance("printf 'firstboot'\n", true, "bash", 3)}}}
-	return r
-}
 func windowsAuxFixture() Request {
 	r := menuFixture("windows-server", "uefi")
 	r.Kind = catalog.FileAux
@@ -53,7 +40,7 @@ func TestTask8NewAnswerAuxScriptGoldens(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		r    Request
-	}{{"agama-answer.golden", agamaFixture(t)}, {"startnet.cmd.golden", windowsAuxFixture()}, {"esxi-answer.golden", esxiAnswerFixture()}, {"script-posix.golden", posix}, {"script-unattend.cmd.golden", win}} {
+	}{{"startnet.cmd.golden", windowsAuxFixture()}, {"esxi-answer.golden", esxiAnswerFixture()}, {"script-posix.golden", posix}, {"script-unattend.cmd.golden", win}} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, p, e := Render(tc.r)
 			if e != nil || len(p) != 0 {
@@ -67,22 +54,6 @@ func TestTask8NewAnswerAuxScriptGoldens(t *testing.T) {
 				t.Fatalf("golden mismatch %s", tc.name)
 			}
 		})
-	}
-}
-func TestAgamaPostStagesOneNativeRunner(t *testing.T) {
-	r := agamaFixture(t)
-	body, p, e := Render(r)
-	if e != nil || len(p) != 0 {
-		t.Fatalf("%v %v", p, e)
-	}
-	if strings.Contains(string(body), "init:") || !strings.Contains(string(body), "chroot: false") {
-		t.Fatal("duplicate native firstboot or wrong installer context")
-	}
-	for _, script := range commandPayloads(string(body)) {
-		syntaxCheck(t, script)
-		if strings.Contains(script, "/target") || strings.Contains(script, "/mnt/sysroot") {
-			t.Fatal("Agama target is /mnt")
-		}
 	}
 }
 func TestWindowsAuxStagesExactOwnedPowerShellFiles(t *testing.T) {

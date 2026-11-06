@@ -328,7 +328,7 @@ func Test模板的族或系不对时照查不依赖格式的问题(t *testing.T)
 // 所勾的系要同格式，正文按这种格式写（C13）；推不出格式，按格式、按系的检查同样跳过。
 func Test模板勾的系不同格式(t *testing.T) {
 	runTplEdits(t, "template_mixed_formats", []tplEdit{
-		{"kickstart 与 autoyast", func(tpl *model.Template, _ hookSet) { tpl.Series = append(tpl.Series, "sles15") }},
+		{"kickstart 与 preseed", func(tpl *model.Template, _ hookSet) { tpl.Series = append(tpl.Series, "debian") }},
 		{"preseed 与 autoinstall", func(tpl *model.Template, _ hookSet) {
 			tpl.Series = []catalog.Series{"debian", "ubuntu"}
 		}},

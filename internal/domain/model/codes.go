@@ -273,6 +273,8 @@ var codeTable = map[Code]codeSpec{
 		"等那个任务结束，或先取消它"},
 	"task_control_state": {CategoryState, 1,
 		"当前任务状态不能%[1]v", "刷新任务后检查当前状态"},
+	"task_system_unsupported": {CategoryState, 2,
+		"任务使用的系统 %[1]v 或安装格式 %[2]v 已停止支持，不能继续或重试安装", "保留此记录供查看；需要安装时请使用仍支持的系统创建新任务"},
 	"task_retry_after_reboot": {CategoryState, 0,
 		"任务已进入重启阶段，不能重试装机", "检查目标系统与任务日志；确需重装时人工创建新任务"},
 	// ISO 不可用：获取中、导入中、已废弃，或状态不认识；导入失败不归这里，另报 iso_import_failed

@@ -16,10 +16,9 @@ import (
 )
 
 func TestRemainingMenuGolden(t *testing.T) {
-	for _, series := range []catalog.Series{"sles15", "sles16", "windows-server"} {
+	for _, series := range []catalog.Series{"windows-server"} {
 		t.Run(string(series), func(t *testing.T) {
 			r := menuFixture(series, "uefi")
-			r.Snapshot.ISO.Artifacts["live-root"] = "agama/LiveOS/squashfs.img"
 			for _, role := range []string{"wimboot", "bcd", "boot-sdi", "boot-wim", "winpeshl", "winpe-busybox", "winpe-curl"} {
 				r.Snapshot.ISO.Artifacts[role] = "windows/" + role
 			}
@@ -37,20 +36,6 @@ func TestRemainingMenuGolden(t *testing.T) {
 		})
 	}
 }
-func TestAgamaAnswerDelivery(t *testing.T) {
-	name, ok := catalog.DeliveryFileName("agama", catalog.FileAnswer)
-	if !ok || name != "autoinst.jsonnet" {
-		t.Fatalf("canonical Agama filename=%q,%v", name, ok)
-	}
-	r := menuFixture("sles16", "uefi")
-	r.Kind = catalog.FileAnswer
-	r.Snapshot.Template.Body = "{ product: { id: 'SLES' }, scripts: { pre: [] } }\n"
-	got, p, e := Render(r)
-	if e != nil || len(p) != 0 || string(got) != r.Snapshot.Template.Body {
-		t.Fatalf("%s %v %v", got, p, e)
-	}
-}
-
 func TestWindowsRuntimeStaticContract(t *testing.T) {
 	i := runtimeInstance("@echo off\r\nexit /b 0\r\n", true, "cmd", 3)
 	i.Params = map[string]model.SnapshotValue{"text": {Type: "text", Items: []string{"汉字 ' \" % ! & <>\nlast\n"}}}
@@ -130,9 +115,18 @@ func TestESXiNativeFirstbootOffline(t *testing.T) {
 	if e != nil || len(p) != 0 {
 		t.Fatalf("%v %v", p, e)
 	}
-	payloads := commandPayloads(string(b))
+	native := commandPayloads(string(b))
+	if len(native) != 3 {
+		t.Fatalf("want firstboot, slot, cleanup launchers: %d", len(native))
+	}
+	r.Kind = catalog.FileESXiStage
+	stage, p, e := Render(r)
+	if e != nil || len(p) != 0 {
+		t.Fatalf("stage: %v %v", p, e)
+	}
+	payloads := commandPayloads(string(stage))
 	if len(payloads) != 3 {
-		t.Fatalf("want firstboot,slot,cleanup payloads: %d", len(payloads))
+		t.Fatalf("want firstboot, slot, cleanup payloads: %d", len(payloads))
 	}
 	script := strings.Join(payloads, "\n")
 	if strings.Contains(script, r.Values["token"]) || strings.Contains(script, "systemd") || strings.Contains(script, "/var/lib/lober") || strings.Contains(script, "hooks/") {
@@ -142,9 +136,9 @@ func TestESXiNativeFirstbootOffline(t *testing.T) {
 		t.Fatal("independent finalize missing")
 	}
 	syntaxCheck(t, script)
-	// Native installer owns persistence of these encoded bytes in %firstboot.
+	// 原生首次启动脚本不包含钩子，受保护载荷保留完整的原始内容。
 	instance := r.Snapshot.Slots[0].Instances[0]
-	if !strings.Contains(payloads[1], base64.StdEncoding.EncodeToString([]byte(instance.Body))) {
+	if !strings.Contains(script, base64.StdEncoding.EncodeToString([]byte(instance.Body))) {
 		t.Fatal("hook bytes rewritten/not embedded")
 	}
 }
@@ -177,7 +171,7 @@ func TestRemainingMenuRequiresAllNativeInputs(t *testing.T) {
 	for _, tc := range []struct {
 		series catalog.Series
 		roles  []string
-	}{{"sles15", []string{"kernel", "initrd", "repo"}}, {"sles16", []string{"kernel", "initrd", "repo", "live-root"}}, {"windows-server", []string{"wimboot", "bcd", "boot-sdi", "boot-wim", "winpeshl", "winpe-busybox", "winpe-curl"}}} {
+	}{{"windows-server", []string{"wimboot", "bcd", "boot-sdi", "boot-wim", "winpeshl", "winpe-busybox", "winpe-curl"}}} {
 		for _, role := range tc.roles {
 			t.Run(string(tc.series)+"/"+role, func(t *testing.T) {
 				r := menuFixture(tc.series, "bios")

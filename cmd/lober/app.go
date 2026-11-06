@@ -45,6 +45,9 @@ type app struct {
 }
 
 func (a *app) Initialise() error {
+	if err := execution.CheckUnfinishedTasks(a.Context, a.Store); err != nil {
+		return err
+	}
 	if err := a.Builtin.Initialise(a.Context); err != nil {
 		return err
 	}

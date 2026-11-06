@@ -25,8 +25,8 @@ type sample struct {
 	params []ParamRef
 }
 
-// 七种格式各一份，按该格式的真实写法排版：YAML 的缩进与列表项、XML 的元素、preseed
-// 只能写一行的指令、Jsonnet 的引号与尾逗号。扫描不看格式，同一套规则要在七种语法里
+// 五种格式各一份，按该格式的真实写法排版：YAML 的缩进与列表项、XML 的元素、preseed
+// 只能写一行的指令。扫描不看格式，同一套规则要在五种语法里
 // 都切对。样例照各格式的能力表写（必需部件各一次，只用支持的时机和可用的系统值），
 // 免得测的是现实里不会出现的正文。
 var samples = []sample{
@@ -66,28 +66,6 @@ var samples = []sample{
 		params: []ParamRef{{Name: "hostname"}, {Name: "pkgs"}},
 	},
 	{
-		format: "autoyast", file: "autoyast.xml",
-		slots: []Slot{
-			{Name: "分区"},
-			{Name: "装前", Exec: true, Timing: "pre"},
-			{Name: "装后", Exec: true, Timing: "post-target"},
-		},
-		parts:  []catalog.SystemPart{"firstboot", "cleanup"},
-		sys:    []catalog.SystemValue{"repo"},
-		params: []ParamRef{{Name: "hostname"}, {Name: "pkgs"}},
-	},
-	{
-		format: "agama", file: "agama.jsonnet",
-		slots: []Slot{
-			{Name: "分区"},
-			{Name: "装前", Exec: true, Timing: "pre"},
-			{Name: "装后", Exec: true, Timing: "post-target"},
-		},
-		parts:  []catalog.SystemPart{"firstboot", "cleanup"},
-		sys:    []catalog.SystemValue{"repo"},
-		params: []ParamRef{{Name: "hostname"}, {Name: "pkgs"}},
-	},
-	{
 		format: "unattend", file: "unattend.xml",
 		slots: []Slot{
 			{Name: "分区"},
@@ -114,7 +92,7 @@ var samples = []sample{
 	},
 }
 
-func Test七种格式的样例扫出预期的占位符(t *testing.T) {
+func Test五种格式的样例扫出预期的占位符(t *testing.T) {
 	var covered []catalog.Format
 	for _, s := range samples {
 		covered = append(covered, s.format)

@@ -292,8 +292,11 @@ func (p *hookReadFailure) SubmitHook(ctx context.Context, k model.HookKey, rev i
 	p.writes++
 	return p.Hooks.SubmitHook(ctx, k, rev, a)
 }
-func (p *hookReadFailure) GetHook(context.Context, model.HookKey) (model.Hook, error) {
+func (p *hookReadFailure) GetHook(ctx context.Context, k model.HookKey) (model.Hook, error) {
 	p.reads++
+	if p.reads == 1 {
+		return p.Hooks.GetHook(ctx, k)
+	}
 	return model.Hook{}, p.failure
 }
 func Test组件状态写后补读失败不重试(t *testing.T) {
@@ -307,7 +310,7 @@ func Test组件状态写后补读失败不重试(t *testing.T) {
 	ticks := 0
 	s := NewHooks(HookDeps{Hooks: p, Clock: func() int64 { ticks++; return 1790000000 }})
 	got, err := s.Submit(t.Context(), ports.Actor{Username: "author", Role: model.RoleHookAuthor}, HookRevision{Key: h.Key(), Rev: h.Rev})
-	if !errors.Is(err, failed) || p.writes != 1 || p.reads != 1 || ticks != 1 || !reflect.DeepEqual(got, HookView{}) {
+	if !errors.Is(err, failed) || p.writes != 1 || p.reads != 2 || ticks != 1 || !reflect.DeepEqual(got, HookView{}) {
 		t.Fatalf("got=%+v err=%v writes=%d reads=%d ticks=%d", got, err, p.writes, p.reads, ticks)
 	}
 	stored, err := st.GetHook(t.Context(), h.Key())

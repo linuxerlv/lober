@@ -119,8 +119,6 @@ func sampleISO(series catalog.Series) model.ISO {
 	}
 	offers := map[string][]model.Option{}
 	switch series.Format() {
-	case catalog.FormatAgama:
-		offers["products"] = []model.Option{{Value: "ExampleProduct", Label: "示例产品"}}
 	case catalog.FormatUnattend:
 		offers["editions"] = []model.Option{{Value: "ExampleEdition", Label: "示例版本"}}
 	}

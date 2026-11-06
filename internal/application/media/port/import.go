@@ -56,6 +56,8 @@ type ExtractionPlan struct {
 	ISO                      model.ISO
 	Identified               mediarules.Identified
 	RepoPaths, RequiredRoles []string
+	// ESXiFiles 由应用层核对原始 boot.cfg 后给出，文件层只负责检查和复制。
+	ESXiFiles []string
 }
 
 // 即使发布一半失败也返回已发布事实；应用确认数据库结果后才可撤销。

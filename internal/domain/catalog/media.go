@@ -10,7 +10,6 @@ import (
 type Marker struct {
 	Path     string
 	Contains []string
-	Absent   bool // 为真时要求该路径不存在，用于区分传统 SUSE 与 live 介质。
 }
 
 // ExtraSource 是一个系要求的附加介质。现在只有 Debian 的 netboot 包；它与主介质必须同版本，
@@ -27,7 +26,6 @@ type ProbeKind string
 const (
 	ProbeTreeinfo ProbeKind = "treeinfo"
 	ProbeDiskInfo ProbeKind = "diskinfo"
-	ProbeProducts ProbeKind = "products"
 	ProbeBootCfg  ProbeKind = "bootcfg"
 	ProbeWIM      ProbeKind = "wim"
 )
@@ -54,14 +52,11 @@ type seriesMediaRow struct {
 	roles        []string
 }
 
-// formatMediaTable 的顺序就是识别顺序。kickstart 必须在 SUSE 之前，Ubuntu 必须在 Debian
-// 之前；否则同一张介质可能被错误地归到后一个格式。
+// formatMediaTable 的顺序就是识别顺序。Ubuntu 必须在 Debian 之前，避免识别成其他格式。
 var formatMediaTable = []formatMediaRow{
 	{"kickstart", []Marker{{Path: ".treeinfo"}}},
 	{"autoinstall", []Marker{{Path: ".disk/info", Contains: []string{"Ubuntu"}}}},
 	{"preseed", []Marker{{Path: ".disk/info", Contains: []string{"Debian"}}, {Path: "dists/"}}},
-	{"autoyast", []Marker{{Path: "repodata/repomd.xml"}, {Path: "media.1/products"}, {Path: "LiveOS/squashfs.img", Absent: true}}},
-	{"agama", []Marker{{Path: "repodata/repomd.xml"}, {Path: "media.1/products"}, {Path: "LiveOS/squashfs.img"}}},
 	{"esxi-ks", []Marker{{Path: "boot.cfg"}, {Path: "efi/boot/bootx64.efi"}}},
 	{"unattend", []Marker{{Path: "sources/install.wim"}}},
 }
@@ -70,14 +65,8 @@ var seriesMediaTable = []seriesMediaRow{
 	{"rhel", []Marker{{Path: ".treeinfo", Contains: []string{"Red Hat Enterprise Linux"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
 	{"rocky", []Marker{{Path: ".treeinfo", Contains: []string{"Rocky Linux"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
 	{"almalinux", []Marker{{Path: ".treeinfo", Contains: []string{"AlmaLinux"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
-	{"openeuler", []Marker{{Path: ".treeinfo", Contains: []string{"openEuler"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
-	{"opencloudos", []Marker{{Path: ".treeinfo", Contains: []string{"OpenCloudOS"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
 	{"debian", nil, nil, ProbeDiskInfo, nil, &ExtraSource{Role: "netboot", SameVersion: true, RolesFromExtra: []string{"kernel", "initrd"}}, []string{"kernel", "initrd", "repo"}},
 	{"ubuntu", nil, nil, ProbeDiskInfo, nil, nil, []string{"kernel", "initrd", "iso"}},
-	{"sles15", []Marker{{Path: "media.1/products", Contains: []string{"SLES"}}}, nil, ProbeProducts, []string{"repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "repo"}},
-	{"leap15", []Marker{{Path: "media.1/products", Contains: []string{"openSUSE"}}}, nil, ProbeProducts, []string{"repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "repo"}},
-	{"sles16", []Marker{{Path: "media.1/products", Contains: []string{"SLES"}}, {Path: "LiveOS/squashfs.img"}}, nil, ProbeProducts, []string{"repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "live-root", "repo"}},
-	{"leap16", []Marker{{Path: "media.1/products", Contains: []string{"openSUSE"}}, {Path: "LiveOS/squashfs.img"}}, nil, ProbeProducts, []string{"repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "live-root", "repo"}},
 	{"windows-server", nil, []string{"Server"}, ProbeWIM, nil, nil, []string{"wimboot", "bcd", "boot-sdi", "boot-wim", "winpeshl", "winpe-busybox", "winpe-curl"}},
 	{"windows-desktop", nil, nil, ProbeWIM, nil, nil, []string{"wimboot", "bcd", "boot-sdi", "boot-wim", "winpeshl", "winpe-busybox", "winpe-curl"}},
 	{"esxi", nil, nil, ProbeBootCfg, nil, nil, []string{"mboot", "esxi-tree"}},
@@ -172,7 +161,7 @@ func seriesMediaOf(s Series) (seriesMediaRow, bool) {
 func cloneMarkers(in []Marker) []Marker {
 	out := make([]Marker, len(in))
 	for i, marker := range in {
-		out[i] = Marker{Path: marker.Path, Contains: slices.Clone(marker.Contains), Absent: marker.Absent}
+		out[i] = Marker{Path: marker.Path, Contains: slices.Clone(marker.Contains)}
 	}
 	return out
 }

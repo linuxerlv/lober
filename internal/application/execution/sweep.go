@@ -24,6 +24,9 @@ func (s *Sweeper) Sweep(ctx context.Context) error {
 			return err
 		}
 		for _, task := range page.Items {
+			if err := checkTaskSupport(task); err != nil {
+				return err
+			}
 			at := s.clock.Now()
 			next, timedOut := executionrules.Timeout(task, at)
 			if timedOut {

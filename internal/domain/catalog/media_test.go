@@ -23,8 +23,6 @@ var mediaFormats = []struct {
 	{"kickstart", []Marker{{Path: ".treeinfo"}}},
 	{"autoinstall", []Marker{{Path: ".disk/info", Contains: []string{"Ubuntu"}}}},
 	{"preseed", []Marker{{Path: ".disk/info", Contains: []string{"Debian"}}, {Path: "dists/"}}},
-	{"autoyast", []Marker{{Path: "repodata/repomd.xml"}, {Path: "media.1/products"}, {Path: "LiveOS/squashfs.img", Absent: true}}},
-	{"agama", []Marker{{Path: "repodata/repomd.xml"}, {Path: "media.1/products"}, {Path: "LiveOS/squashfs.img"}}},
 	{"esxi-ks", []Marker{{Path: "boot.cfg"}, {Path: "efi/boot/bootx64.efi"}}},
 	{"unattend", []Marker{{Path: "sources/install.wim"}}},
 }
@@ -33,14 +31,8 @@ var mediaSeries = []mediaExpectation{
 	{"rhel", "kickstart", []Marker{{Path: ".treeinfo", Contains: []string{"Red Hat Enterprise Linux"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
 	{"rocky", "kickstart", []Marker{{Path: ".treeinfo", Contains: []string{"Rocky Linux"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
 	{"almalinux", "kickstart", []Marker{{Path: ".treeinfo", Contains: []string{"AlmaLinux"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
-	{"openeuler", "kickstart", []Marker{{Path: ".treeinfo", Contains: []string{"openEuler"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
-	{"opencloudos", "kickstart", []Marker{{Path: ".treeinfo", Contains: []string{"OpenCloudOS"}}}, nil, ProbeTreeinfo, []string{"BaseOS/repodata/repomd.xml", "AppStream/repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "stage2", "repo"}},
 	{"debian", "preseed", nil, nil, ProbeDiskInfo, nil, &ExtraSource{Role: "netboot", SameVersion: true, RolesFromExtra: []string{"kernel", "initrd"}}, []string{"kernel", "initrd", "repo"}},
 	{"ubuntu", "autoinstall", nil, nil, ProbeDiskInfo, nil, nil, []string{"kernel", "initrd", "iso"}},
-	{"sles15", "autoyast", []Marker{{Path: "media.1/products", Contains: []string{"SLES"}}}, nil, ProbeProducts, []string{"repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "repo"}},
-	{"leap15", "autoyast", []Marker{{Path: "media.1/products", Contains: []string{"openSUSE"}}}, nil, ProbeProducts, []string{"repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "repo"}},
-	{"sles16", "agama", []Marker{{Path: "media.1/products", Contains: []string{"SLES"}}, {Path: "LiveOS/squashfs.img"}}, nil, ProbeProducts, []string{"repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "live-root", "repo"}},
-	{"leap16", "agama", []Marker{{Path: "media.1/products", Contains: []string{"openSUSE"}}, {Path: "LiveOS/squashfs.img"}}, nil, ProbeProducts, []string{"repodata/repomd.xml"}, nil, []string{"kernel", "initrd", "live-root", "repo"}},
 	{"windows-server", "unattend", nil, []string{"Server"}, ProbeWIM, nil, nil, []string{"wimboot", "bcd", "boot-sdi", "boot-wim", "winpeshl", "winpe-busybox", "winpe-curl"}},
 	{"windows-desktop", "unattend", nil, nil, ProbeWIM, nil, nil, []string{"wimboot", "bcd", "boot-sdi", "boot-wim", "winpeshl", "winpe-busybox", "winpe-curl"}},
 	{"esxi", "esxi-ks", nil, nil, ProbeBootCfg, nil, nil, []string{"mboot", "esxi-tree"}},
@@ -55,15 +47,9 @@ var pendingMedia = []struct {
 	{"rhel", ".treeinfo 里的实际 name= 字样"},
 	{"rocky", ".treeinfo 里的实际 name= 字样"},
 	{"almalinux", ".treeinfo 里的实际 name= 字样"},
-	{"openeuler", ".treeinfo 里的实际 name= 字样"},
-	{"opencloudos", ".treeinfo 里的实际 name= 字样"},
 	{"debian", ".disk/info 的版本与架构取法"},
 	{"ubuntu", ".disk/info 的版本与架构取法"},
-	{"sles15", "media.1/products 的产品名与版本字段"},
-	{"leap15", "media.1/products 的产品名与版本字段"},
-	{"sles16", "media.1/products 的版本字段"},
-	{"leap16", "media.1/products 的版本字段"},
-	{"esxi", "ISO 内的版本识别依据；首版明确不能 ready"},
+	{"esxi", "7、8、9 的真实镜像导入已验证；网络开机、安装和首次启动回报仍需隔离测试机核实"},
 }
 
 func Test介质目录与计划一致(t *testing.T) {
@@ -132,7 +118,7 @@ func Test介质目录完整且引用合法(t *testing.T) {
 			t.Errorf("系 %q 没有介质事实，后续导入不会有识别与制品规则", row.id)
 		}
 	}
-	for _, probe := range []ProbeKind{ProbeTreeinfo, ProbeDiskInfo, ProbeProducts, ProbeBootCfg, ProbeWIM} {
+	for _, probe := range []ProbeKind{ProbeTreeinfo, ProbeDiskInfo, ProbeBootCfg, ProbeWIM} {
 		if !probes[probe] {
 			t.Errorf("介质表没有使用 probe %q", probe)
 		}
@@ -206,7 +192,7 @@ func equalMarkers(got, want []Marker) bool {
 		return false
 	}
 	for i := range got {
-		if got[i].Path != want[i].Path || got[i].Absent != want[i].Absent || !slices.Equal(got[i].Contains, want[i].Contains) {
+		if got[i].Path != want[i].Path || !slices.Equal(got[i].Contains, want[i].Contains) {
 			return false
 		}
 	}

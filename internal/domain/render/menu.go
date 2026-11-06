@@ -9,7 +9,7 @@ import (
 	"github.com/lober/lober/internal/domain/model"
 )
 
-// renderMenu assembles executable iPXE for all seven formats.
+// renderMenu assembles executable iPXE for all supported formats.
 // Layer 7 supplies the actual firmware; optional registration metadata is not
 // a substitute. The gateway owns actual architecture and on-disk checks.
 func renderMenu(r Request) ([]byte, []model.Problem, error) {
@@ -23,16 +23,13 @@ func renderMenu(r Request) ([]byte, []model.Problem, error) {
 		return nil, []model.Problem{model.NewProblem("firmware_mismatch", model.Subject{Kind: "host", ID: r.Snapshot.Host.SN, Path: "firmware"}, r.Snapshot.Series.Label(), r.Firmware.Label())}, nil
 	}
 	switch r.Snapshot.Format {
-	case "kickstart", "preseed", "autoinstall", "esxi-ks", "autoyast", "agama", "unattend":
+	case "kickstart", "preseed", "autoinstall", "esxi-ks", "unattend":
 	default:
 		return nil, nil, errUnsupportedFormat
 	}
 	keys := []catalog.SystemValue{"gateway", "artifacts", "task", "token"}
 	if r.Snapshot.Format == "kickstart" {
 		keys = append(keys, "syslog-addr", "repo")
-	}
-	if r.Snapshot.Format == "autoyast" || r.Snapshot.Format == "agama" {
-		keys = append(keys, "repo")
 	}
 	if r.Snapshot.Format == "autoinstall" {
 		keys = append(keys, "iso")
@@ -70,10 +67,6 @@ func renderMenu(r Request) ([]byte, []model.Problem, error) {
 		seed := catalog.AnswerURL(values["gateway"], values["task"], values["token"], "")
 		// 避免首次配置程序把安装镜像再次当成配置下载。
 		body = fmt.Sprintf("kernel %s autoinstall ip=dhcp url=%s cloud-config-url=/dev/null ds=nocloud-net;s=%s %s ---\ninitrd %s\n", artifacts["kernel"], values["iso"], seed, console, artifacts["initrd"])
-	case "autoyast":
-		body = fmt.Sprintf("kernel %s install=%s autoyast=%s %s\ninitrd %s\n", artifacts["kernel"], values["repo"], answer, console, artifacts["initrd"])
-	case "agama":
-		body = fmt.Sprintf("kernel %s root=live:%s ip=dhcp rd.neednet=1 inst.install_url=%s inst.auto=%s %s\ninitrd %s\n", artifacts["kernel"], artifacts["live-root"], values["repo"], answer, console, artifacts["initrd"])
 	case "unattend":
 		aux, _ := catalog.DeliveryFileName(r.Snapshot.Format, catalog.FileAux)
 		startup := catalog.AnswerURL(values["gateway"], values["task"], values["token"], aux)

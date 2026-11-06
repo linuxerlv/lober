@@ -154,7 +154,7 @@ func (d diskBootConfig) ReadESXiBootConfig(_ context.Context, item model.Snapsho
 func Test预览ESXi使用真实原始配置且未知示例不可用(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
 	token := adminHTTP(t, s, st)
-	tpl, err := st.CreateTemplate(t.Context(), model.Template{Name: "esxi-preview", Author: "admin", Family: "esxi", Series: []catalog.Series{"esxi"}, Body: "{{lober:firstboot}}\n{{lober:cleanup}}\n"})
+	tpl, err := st.CreateTemplate(t.Context(), model.Template{Name: "esxi-preview", Author: "admin", Family: "esxi", Series: []catalog.Series{"esxi"}, Body: "vmaccepteula\nreboot\n%firstboot --interpreter=busybox\n{{lober:firstboot}}\n{{lober:cleanup}}\n"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,8 +288,8 @@ func Test预览实际内置模板的全部已声明系(t *testing.T) {
 			}
 		}
 	}
-	// 13 个原有模板/系，加上 Debian 的采集变体。
-	if count != 14 {
+	// 五种 Linux、Windows Server、ESXi，加上 Debian 的采集变体。
+	if count != 8 {
 		t.Fatal("builtin coverage changed", count)
 	}
 }
@@ -318,8 +318,6 @@ func previewISOFixture(series catalog.Series) model.ISO {
 	}
 	offers := map[string][]model.Option{}
 	switch series.Format() {
-	case catalog.FormatAgama:
-		offers["products"] = []model.Option{{Value: "ExampleProduct", Label: "示例产品"}}
 	case catalog.FormatUnattend:
 		offers["editions"] = []model.Option{{Value: "ExampleEdition", Label: "示例版本"}}
 	}

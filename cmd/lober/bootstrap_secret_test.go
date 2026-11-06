@@ -72,6 +72,10 @@ func (b *startupIdentity) Initialise(ctx context.Context, seed string) error {
 // 旧组装循环仍能完成，避免以空指针崩溃冒充行为失败。
 type startupLegacyStore struct{ repository.Store }
 
+func (*startupLegacyStore) ListTasks(context.Context, repository.TaskQuery) (repository.Page[model.Task], error) {
+	return repository.Page[model.Task]{}, nil
+}
+
 func (*startupLegacyStore) EnsureBuiltinHook(context.Context, model.Hook) error         { return nil }
 func (*startupLegacyStore) EnsureBuiltinTemplate(context.Context, model.Template) error { return nil }
 func Test启动先内置内容后身份初始化(t *testing.T) {

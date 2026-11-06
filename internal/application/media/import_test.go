@@ -71,19 +71,6 @@ func importFixture(series catalog.Series) map[string][]byte {
 		f[".disk/info"] = []byte("Ubuntu-Server 24.04.3 LTS Noble - Release amd64")
 		f["casper/vmlinuz"] = []byte("kernel")
 		f["casper/initrd"] = []byte("initrd")
-	case "autoyast", "agama":
-		product, version := "SLES", "15.6"
-		if strings.HasPrefix(string(series), "leap") {
-			product = "openSUSE"
-		}
-		if series.Format() == "agama" {
-			version = "16.0"
-			f["LiveOS/squashfs.img"] = []byte("live-root")
-		}
-		f["media.1/products"] = []byte(product + "|" + version + "|product")
-		f["repodata/repomd.xml"] = []byte("repo")
-		f["boot/x86_64/loader/linux"] = []byte("kernel")
-		f["boot/x86_64/loader/initrd"] = []byte("initrd")
 	case "unattend":
 		f["sources/install.wim"] = importWIM()
 		f["sources/boot.wim"] = []byte("bootwim")
@@ -146,7 +133,7 @@ func TestDebianRepositoryDiscoversSuiteAndMatchesArchitecture(t *testing.T) {
 	}
 }
 func TestImportFormats(t *testing.T) {
-	for _, series := range []catalog.Series{"rocky", "debian", "ubuntu", "sles15", "leap15", "sles16", "leap16", "windows-server"} {
+	for _, series := range []catalog.Series{"rocky", "debian", "ubuntu", "windows-server"} {
 		t.Run(string(series), func(t *testing.T) {
 			s, db := importSetup(t)
 			i, err := db.CreateISO(t.Context(), model.ISO{Name: string(series), Family: series.Family(), Series: series}, importAudit())

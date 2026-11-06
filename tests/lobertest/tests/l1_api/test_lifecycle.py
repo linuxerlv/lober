@@ -1,4 +1,4 @@
-"""L1 主链路：六家族参数化，跑在 VM-S 的真实 Linux 部署上。
+"""L1 旧客户端主链路：受支持系统参数化，跑在 VM-S 的真实 Linux 部署上。
 
 建 host（带磁盘清单）→ 导制品集并轮询 ready → 建模板并流转到 active →
 建 hook 并审批到 active（两步：draft→review 由作者、review→active 由
@@ -11,14 +11,14 @@ URL 取应答文件。
 参数表——现在七个 bash 脚本各写一遍同样的流程，改一个端点要改七处，
 这个参数表就是用来消掉它的。
 
-**ISO 制品现状（本任务实测确认，不是计划原文的假设）：** 计划原文说
-`D:/qemu-vm/isos` 下有 OpenCloudOS 与 Debian 的 ISO，实测该目录根本不
-存在（`config.iso_dir` 的默认值从未被真正验证过）。真实存在的 ISO 在
-`D:/` 与 `D:/lober-isos/` 下：`D:/OpenCloudOS-9.6-x86_64-minimal.iso`
-（`.treeinfo` 判据下识别为 rhel 家族，OpenCloudOS 是 RHEL 系
-anaconda-based 发行版）、`D:/lober-isos/debian-netinst.iso`。没有
-ubuntu/suse/windows/esxi 的 ISO——这四个家族在参数表里标
-`pytest.mark.skip` 并写明缺什么、从哪能拿到，不降低断言让它假绿。
+当前 RHEL 介质由 `LOBERTEST_RHEL_ISO` 指定，默认查找
+`D:/lober-isos/rhel.iso`。未提供受支持介质时跳过；Ubuntu、Windows、ESXi
+仍需各自准备真实介质。这个旧客户端不能作为当前产品验收入口。
+
+历史观察：早期测试实际使用过 `D:/OpenCloudOS-9.6-x86_64-minimal.iso`
+和 `D:/lober-isos/debian-netinst.iso`，原计划中的 `D:/qemu-vm/isos`
+并不存在。OpenCloudOS 当时被识别为 RHEL；当前已停用该发行版，不能复用
+那份介质继续测试。这个历史观察不表示当前 RHEL 已验收。
 
 **`import_artifact` 的 `sourcePath` 必须是 guest 路径，不是 Windows
 宿主路径**（另一处本任务实测才暴露的事实）：导入 job 跑在 guest 内的
@@ -95,15 +95,6 @@ FAMILIES = [
     ),
     pytest.param(
         None,
-        id="suse",
-        marks=pytest.mark.skip(
-            reason="缺 openSUSE ISO。本机未找到任何 suse 相关 ISO，可从"
-            "https://get.opensuse.org/ 下载 Leap 或 Tumbleweed 的网络安装"
-            "介质（NET install）放到 D:/lober-isos/ 下后移除本 skip。"
-        ),
-    ),
-    pytest.param(
-        None,
         id="windows",
         marks=pytest.mark.skip(
             reason="缺 Windows 安装介质与配套制品（wimboot / BCD /"
@@ -153,12 +144,14 @@ def test_family_full_lifecycle(
     family_iso_paths: dict[str, str],
     artifact_reaper,
 ) -> None:
-    """类别 1-3：六个家族各走完整主链路；应答文件形态按家族断言；iPXE
+    """类别 1-3：保留系统各走完整主链路；应答文件形态按家族断言；iPXE
     菜单含 `#!ipxe` 首行与 boot 命令（`99b6ca7`、`4e32ed9` 的回归护栏）。
 
     ISO 路径不存在的家族在参数化层面已经 skip（见 FAMILIES 表的
     `pytest.mark.skip`），pytest 对被 skip 的参数不会执行本函数体，
     因此这里不需要额外判断 case 是否有效。"""
+    if case.family not in family_iso_paths:
+        pytest.skip(f"没有受支持的 {case.family} ISO")
     sn = f"lobertest-{case.family}-sn"
     mac = _family_mac(case.family)
 
@@ -241,7 +234,6 @@ _FAMILY_MAC_SUFFIX = {
     "rhel": "01",
     "debian": "02",
     "ubuntu": "03",
-    "suse": "04",
     "windows": "05",
     "esxi": "06",
 }

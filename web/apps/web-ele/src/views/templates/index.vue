@@ -22,6 +22,7 @@ import {
 } from 'element-plus';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
+import { allSeries } from '#/api/console/catalog';
 import { getHookApi } from '#/api/console/hook';
 import { errorMessage, problemsOf } from '#/api/console/problem';
 import * as api from '#/api/console/template';
@@ -514,22 +515,6 @@ function comparison(row: null | Template) {
     : '';
 }
 const families: Schemas['CatalogFamily'][] = ['linux', 'windows', 'esxi'];
-const allSeries: Schemas['CatalogSeries'][] = [
-  'rhel',
-  'rocky',
-  'almalinux',
-  'openeuler',
-  'opencloudos',
-  'debian',
-  'ubuntu',
-  'sles15',
-  'leap15',
-  'sles16',
-  'leap16',
-  'windows-server',
-  'windows-desktop',
-  'esxi',
-];
 onMounted(() => load());
 watch(visible, (open) => { if (!open) { ++editorToken; busy.value = false; candidateDialog.value = false; previewDialog.value = false; errors.value = []; } }, { flush: 'sync' });
 watch(candidateDialog, (open) => { if (!open) { ++candidateToken; candidatePagination.reset(); } }, { flush: 'sync' });

@@ -20,13 +20,27 @@ Lober 把这些变成：
 
 | 族 | 系 | 应答格式 |
 | --- | --- | --- |
-| Linux | RHEL、Rocky Linux、AlmaLinux、openEuler、OpenCloudOS | kickstart |
+| Linux | RHEL、Rocky Linux、AlmaLinux | kickstart |
 | Linux | Debian | preseed |
 | Linux | Ubuntu | autoinstall |
-| Linux | SLES 15、openSUSE Leap 15 | AutoYaST |
-| Linux | SLES 16、openSUSE Leap 16 | Agama |
 | Windows | Windows Server、Windows 桌面版 | unattend |
 | ESXi | ESXi | ESXi ks |
+
+ESXi 7、8、9 可从安装镜像的 `boot.cfg` 读取完整构建版本，并提取网络安装文件。
+目前只支持 x86_64、UEFI。内置模板依赖首次启动脚本，使用时需关闭安全启动。
+首次启动时，ESXi 必须能访问 Lober 服务地址。请提前确认网络和防火墙允许访问该地址；跨网段访问或使用非标准端口时尤其需要检查。程序不会修改 ESXi 的防火墙规则。
+安装前会下载首次启动所需的钩子和凭据，安装完成后将它们放入权限受限的系统数据卷。首次启动时即使网络暂时中断，已下载的钩子仍可执行；状态回报需要网络。
+当前只支持识别到一块磁盘、一个 `OSDATA-*` 系统数据卷的安装环境。该卷须为 `vmfs6l` 类型，且首次启动后的 `/scratch` 须指向该卷。模板须将首次启动步骤放在同一个 `%firstboot` 段。条件不满足时任务会停止；多磁盘、多系统卷或自定义 `/scratch` 尚未验证。
+请勿在自定义模板正文中直接写入密码或其他敏感内容，因为 ESXi 可能保留安装脚本和日志。程序只负责保护由 Lober 管理的钩子数据和收尾凭据。首次启动成功或已校验的钩子报错时会清理这些数据；断电、载荷校验失败或被强制结束时，受限目录可能需要人工检查。
+本地镜像导入和启动配置验证不代表客户机实际安装通过；正式使用前应在隔离测试机完成安装验证。
+
+真实镜像测试使用 `LOBER_TEST_ESXI7_ISO`、`LOBER_TEST_ESXI8_ISO`、`LOBER_TEST_ESXI9_ISO` 指定本地路径，
+运行 `go test ./internal/application/media -run TestImportRealESXi -count=1 -v`。
+当前测试分别核对 7.0.3-0.135.24585291、8.0.3-0.102.25595708、9.0.2-0100.25595025；另需配置 PostgreSQL 测试库。
+
+旧镜像、模板和已结束任务仍可查看；已停止支持的系统不能再创建或重试安装任务。
+
+如果还有这些系统的未完成任务，新版本会拒绝启动。请先在旧版本确认客户机已安全结束安装，再通过正常任务接口处理。
 
 ## 四个核心概念
 

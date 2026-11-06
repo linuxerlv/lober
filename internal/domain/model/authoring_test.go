@@ -235,11 +235,11 @@ func TestTemplateFormat(t *testing.T) {
 	}{
 		{"没勾系", nil, "", false},
 		{"勾一个", []catalog.Series{"debian"}, "preseed", true},
-		{"勾同格式的多个", []catalog.Series{"rhel", "rocky", "almalinux", "openeuler", "opencloudos"}, "kickstart", true},
+		{"勾同格式的多个", []catalog.Series{"rhel", "rocky", "almalinux"}, "kickstart", true},
 		{"勾同格式的两个 Windows 系", []catalog.Series{"windows-server", "windows-desktop"}, "unattend", true},
 		{"勾了不同格式的", []catalog.Series{"rocky", "debian"}, "", false},
-		{"同族不同格式", []catalog.Series{"sles15", "sles16"}, "", false}, // AutoYaST 与 Agama
-		{"不同格式的系排在后面", []catalog.Series{"leap16", "sles16", "ubuntu"}, "", false},
+		{"同族不同格式", []catalog.Series{"debian", "ubuntu"}, "", false}, // preseed 与 autoinstall
+		{"不同格式的系排在后面", []catalog.Series{"rhel", "rocky", "ubuntu"}, "", false},
 		{"未知的系", []catalog.Series{"centos"}, "", false},
 		{"混进大小写不同的写法", []catalog.Series{"rocky", "Rocky"}, "", false},
 	}

@@ -117,28 +117,6 @@ var planCapabilities = []planCapability{
 		values: []SystemValue{"repo", "iso", "gateway", "task", "sn", "lbrace"},
 	},
 	{
-		format: "autoyast",
-		timings: []planTimingCap{
-			{"pre", []Interpreter{"sh", "bash"}},
-			{"post-installer", []Interpreter{"sh", "bash"}},
-			{"post-target", []Interpreter{"sh", "bash"}},
-			{"firstboot", []Interpreter{"sh", "bash"}},
-		},
-		parts:  []SystemPart{"firstboot", "cleanup"},
-		values: []SystemValue{"repo", "gateway", "task", "sn", "lbrace"},
-	},
-	{
-		format: "agama",
-		timings: []planTimingCap{
-			{"pre", []Interpreter{"sh", "bash"}},
-			{"post-installer", []Interpreter{"sh", "bash"}},
-			{"post-target", []Interpreter{"sh", "bash"}},
-			{"firstboot", []Interpreter{"sh", "bash"}},
-		},
-		parts:  []SystemPart{"firstboot", "cleanup"},
-		values: []SystemValue{"repo", "gateway", "task", "sn", "lbrace"},
-	},
-	{
 		// 装前跑在安装 ISO 自带的 WinPE 里，没有 PowerShell（spec §8）。这一格照「只有 cmd」
 		// 登记，不因为「以后能解决」就先写上 powershell（计划任务 3 的风险）。
 		format: "unattend",

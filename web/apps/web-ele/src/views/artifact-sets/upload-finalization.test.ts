@@ -147,6 +147,22 @@ async function assertChunk(file: File, start: number, end: number) {
   expect(await (call[2] as Blob).arrayBuffer()).toEqual(await file.slice(start, end).arrayBuffer());
 }
 
+describe('Linux 支持范围', () => {
+  it('新建镜像只提供五种 Linux', async () => {
+    const node = document.createElement('div');
+    document.body.append(node);
+    const app = createApp(Index);
+    app.mount(node);
+    unmount = () => app.unmount();
+    await nextTick();
+    click(node, '新建 ISO');
+    await nextTick();
+    const options = [...node.querySelectorAll<HTMLOptionElement>('select[aria-label="ISO 系"] option')]
+      .map((item) => item.value);
+    expect(options).toEqual(['rhel', 'rocky', 'almalinux', 'debian', 'ubuntu']);
+  });
+});
+
 describe('normal page upload finalization recovery', () => {
   it.each([1, chunkSize, chunkSize + 3, 2 * chunkSize])(
     'replays exactly the original last chunk for a verified complete fetching source of %i bytes',
