@@ -85,6 +85,19 @@ func posixRuntime(r Request, slot model.SnapshotSlot, windows bool) (string, []m
 }
 `)
 	}
+	if esxi {
+		b.WriteString(`process=
+watchdog=
+stop_esxi_hook() {
+ [ -z "${process:-}" ] || kill_tree "$process"
+ [ -z "${watchdog:-}" ] || kill -TERM "$watchdog" 2>/dev/null || :
+ exit "$1"
+}
+trap 'stop_esxi_hook 129' HUP
+trap 'stop_esxi_hook 130' INT
+trap 'stop_esxi_hook 143' TERM
+`)
+	}
 	b.WriteString("run_bounded() {\n seconds=$1; shift\n ")
 	if esxi {
 		b.WriteString("setsid ")
@@ -109,10 +122,12 @@ func posixRuntime(r Request, slot model.SnapshotSlot, windows bool) (string, []m
   if ! kill -0 "$watchdog" 2>/dev/null; then
    kill_tree "$process"; wait "$process" 2>/dev/null || :
    wait "$watchdog" 2>/dev/null || :
+   process=; watchdog=
    return 125
   fi
  done
  if wait "$process"; then status=0; else status=$?; fi
+ process=
  kill -TERM "$watchdog" 2>/dev/null || :
 `)
 	} else {
@@ -124,7 +139,7 @@ func posixRuntime(r Request, slot model.SnapshotSlot, windows bool) (string, []m
 	}
 	b.WriteString(" wait \"$watchdog\" 2>/dev/null || :\n")
 	if esxi {
-		b.WriteString(" rm -f \"$WORK/watchdog-ready\"\n")
+		b.WriteString(" watchdog=\n rm -f \"$WORK/watchdog-ready\"\n")
 	}
 	b.WriteString(` if [ -f "$WORK/timed-out" ]; then status=124; fi
  rm -f "$WORK/timed-out"

@@ -89,6 +89,8 @@ func Render(r Request) ([]byte, []model.Problem, error) {
 		return renderAux(r)
 	case catalog.FileScript:
 		return renderScript(r)
+	case catalog.FileESXiStage:
+		return renderESXiStage(r)
 	}
 	panic("unreachable file kind")
 }
