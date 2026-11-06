@@ -235,4 +235,3 @@ func TestESXiDuplicateFirstbootDoesNotRemoveActiveStage(t *testing.T) {
 		t.Fatal("completed firstboot left the stage")
 	}
 }
-
