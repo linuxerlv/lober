@@ -122,6 +122,10 @@ func TestInventoryMenuConfigIsWired(t *testing.T) {
 	if inventoryServiceOf(nilStore{}, cfg, func() int64 { return assemblyAt }).Configured() {
 		t.Fatal("只配一项也被当成已配置")
 	}
+	cfg.Preview.InventoryKernel, cfg.Preview.InventoryInitrd = "  ", "\t"
+	if inventoryServiceOf(nilStore{}, cfg, func() int64 { return assemblyAt }).Configured() {
+		t.Fatal("空白采集配置不应启用")
+	}
 }
 
 func Test机器关闭不读取密钥启用使用原默认路径(t *testing.T) {

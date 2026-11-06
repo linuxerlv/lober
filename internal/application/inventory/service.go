@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/lober/lober/internal/application/inventory/port"
@@ -67,7 +68,8 @@ type MenuEndpoints struct {
 
 // Configured 报告四项部署参数是不是都配齐了。
 func (m MenuEndpoints) Configured() bool {
-	return m.Gateway != "" && m.Artifacts != "" && m.Kernel != "" && m.Initrd != ""
+	return strings.TrimSpace(m.Gateway) != "" && strings.TrimSpace(m.Artifacts) != "" &&
+		strings.TrimSpace(m.Kernel) != "" && strings.TrimSpace(m.Initrd) != ""
 }
 
 // Service 发放令牌、接收上报。
@@ -100,7 +102,7 @@ func New(d Deps) *Service {
 //
 // 先查令牌，再解析正文。锁内复查批次与忙闲，并合并最新的主机属性。
 func (s *Service) Submit(ctx context.Context, rawSN, token string, body []byte) (model.Host, error) {
-	sn, err := model.NormalizeSN(rawSN)
+	sn, err := model.InventoryReportSN(rawSN)
 	if err != nil {
 		return model.Host{}, kinded(domaininv.KindUnauthorized, ErrNoToken)
 	}

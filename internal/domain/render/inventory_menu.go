@@ -34,6 +34,10 @@ func RenderInventoryMenu(r InventoryMenuRequest) ([]byte, []model.Problem, error
 			return nil, []model.Problem{p}, nil
 		}
 	}
+	sn, err := model.InventoryMachineSN(r.SN)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	kernel := catalog.ArtifactURL(r.Artifacts, r.Kernel)
 	initrd := catalog.ArtifactURL(r.Artifacts, r.Initrd)
@@ -45,7 +49,7 @@ func RenderInventoryMenu(r InventoryMenuRequest) ([]byte, []model.Problem, error
 	b.WriteString("#!ipxe\n")
 	b.WriteString("kernel " + kernel + " ip=dhcp \\\n")
 	b.WriteString("  lober.gateway=" + r.Gateway + " \\\n")
-	b.WriteString("  lober.sn=" + r.SN + " \\\n")
+	b.WriteString("  lober.sn=" + sn + " \\\n")
 	b.WriteString("  lober.inventory_token=" + r.Token + " \\\n")
 	b.WriteString("  " + console + "\n")
 	b.WriteString("initrd " + initrd + "\n")

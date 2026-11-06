@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -35,7 +36,8 @@ func TestConsoleInventoryRequestReachesMachineReport(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := a.Store.CreateHost(t.Context(), model.Host{SN: "INVENTORY-E2E", Attrs: map[string]string{"rack": "r1"}}, assemblyAudit("host.create")); err != nil {
+	const sn = "INVENTORY E2E"
+	if _, err := a.Store.CreateHost(t.Context(), model.Host{SN: sn, Attrs: map[string]string{"rack": "r1"}}, assemblyAudit("host.create")); err != nil {
 		t.Fatal(err)
 	}
 	handler := a.Handler()
@@ -56,8 +58,8 @@ func TestConsoleInventoryRequestReachesMachineReport(t *testing.T) {
 		}
 		return reply.Data.Token
 	}
-	const hostPath = "/console/v1/hosts/INVENTORY-E2E"
-	const requestPath = hostPath + "/inventory/request"
+	hostPath := "/console/v1/hosts/" + url.PathEscape(sn)
+	requestPath := hostPath + "/inventory/request"
 	viewer, operator := login("viewer"), login("operator")
 	if w := call(http.MethodPost, requestPath, "", viewer); w.Code != http.StatusForbidden {
 		t.Fatal("只读用户请求采集", w.Code)
@@ -69,19 +71,20 @@ func TestConsoleInventoryRequestReachesMachineReport(t *testing.T) {
 	if w := call(http.MethodPut, hostPath, `{"rev":2,"attrs":{"rack":"r2"}}`, operator); w.Code != http.StatusOK {
 		t.Fatal("主机编辑失败", w.Code, w.Body.String())
 	}
-	if w := call(http.MethodPost, "/console/v1/hosts/import", "sn,rack\nINVENTORY-E2E,r3\n", operator); w.Code != http.StatusOK {
+	if w := call(http.MethodPost, "/console/v1/hosts/import", "sn,rack\n"+sn+",r3\n", operator); w.Code != http.StatusOK {
 		t.Fatal("主机导入失败", w.Code, w.Body.String())
 	}
-	if w := call(http.MethodPost, "/console/v1/hosts/import", "sn,inv_request_id\nINVENTORY-E2E,forged\n", operator); w.Code != http.StatusBadRequest {
+	if w := call(http.MethodPost, "/console/v1/hosts/import", "sn,inv_request_id\n"+sn+",forged\n", operator); w.Code != http.StatusBadRequest {
 		t.Fatal("采集控制列未拒绝", w.Code)
 	}
-	boot := call(http.MethodGet, "/v1/boot?sn=INVENTORY-E2E&arch=x86_64&firmware=bios", "", "")
+	boot := call(http.MethodGet, "/v1/boot?sn="+url.QueryEscape("\n"+strings.ToLower(sn)+"\n")+"&arch=x86_64&firmware=bios", "", "")
 	match := regexp.MustCompile(`lober\.inventory_token=([0-9a-f]{64})`).FindStringSubmatch(boot.Body.String())
-	if boot.Code != http.StatusOK || len(match) != 2 {
+	serial := regexp.MustCompile(`lober\.sn=(~[0-9A-Za-z_-]+) `).FindStringSubmatch(boot.Body.String())
+	if boot.Code != http.StatusOK || len(match) != 2 || len(serial) != 2 {
 		t.Fatal("机器没有领到采集令牌", boot.Code)
 	}
 	const report = `{"firmware":"bios","cpu":{"model":"fixture","cores":2},"memory_mib":1024,"disks":[{"name":"sda","bytes":8589934592}]}`
-	path := "/v1/inventory/INVENTORY-E2E/" + match[1]
+	path := "/v1/inventory/" + serial[1] + "/" + match[1]
 	if w := call(http.MethodPost, path, report, ""); w.Code != http.StatusNoContent {
 		t.Fatal("采集上报失败", w.Code, w.Body.String())
 	}
