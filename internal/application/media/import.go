@@ -140,6 +140,17 @@ func (s *Sources) Import(ctx context.Context, id string) (err error) {
 		return err
 	} // claims SHA256 before any publication
 	plan := port.ExtractionPlan{ISO: iso, Identified: found, RepoPaths: catalog.RepoPaths(iso.Series), RequiredRoles: catalog.RequiredRoles(iso.Series)}
+	if found.Format == "esxi-ks" {
+		text, e := identifyText(ctx, tree, "boot.cfg")
+		if e != nil {
+			return identifyErrorForISO(id, e)
+		}
+		files, ok := mediarules.ESXiBootFiles(text)
+		if !ok {
+			return importProblem(id, "iso_artifact_missing", "artifacts.esxi-tree", "boot.cfg")
+		}
+		plan.ESXiFiles = files
+	}
 	plan, err = planKickstartRepository(ctx, tree, plan)
 	if err != nil {
 		return err

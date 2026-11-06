@@ -103,8 +103,12 @@ func Identify(ctx context.Context, fsys port.MediaView) (Identified, error) {
 		}
 		out.Version, out.Arch = mediarules.DiskInfo(text)
 	case catalog.ProbeBootCfg:
+		text, err := identifyText(ctx, fsys, "boot.cfg")
+		if err != nil {
+			return out, err
+		}
+		out.Version = mediarules.ESXiVersion(text)
 		out.Arch = "x86_64" // The catalog marker guarantees bootx64.efi.
-		// No verified version source exists for ESXi; never infer one from title.
 	case catalog.ProbeWIM:
 		var err error
 		out, err = mediarules.CheckEditions(out, images)
