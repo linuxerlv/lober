@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/lober/lober/internal/infrastructure/identity"
+	"maps"
 	"slices"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -104,22 +105,9 @@ func (s *Store) createTasks(ctx context.Context, ts []model.Task, a repository.A
 	return out, nil
 }
 
-// 向导在事务外求值。只有真正影响装机的数据变化才要求重新提交，采集进度本身不算。
+// 向导在事务外求值。任意属性都可能被已有模板引用，保存前按锁内读到的完整数据复核。
 func hostSnapshotCurrent(h model.Host, snapshot model.SnapshotHost) bool {
-	if h.Arch != snapshot.Arch || h.Firmware != snapshot.Firmware {
-		return false
-	}
-	for key, value := range h.Attrs {
-		if got, ok := snapshot.Attrs[key]; !model.IsInventoryControlAttr(key) && (!ok || got != value) {
-			return false
-		}
-	}
-	for key := range snapshot.Attrs {
-		if _, ok := h.Attrs[key]; !model.IsInventoryControlAttr(key) && !ok {
-			return false
-		}
-	}
-	return true
+	return h.Arch == snapshot.Arch && h.Firmware == snapshot.Firmware && maps.Equal(h.Attrs, snapshot.Attrs)
 }
 
 // lockCurrentTemplate 先锁身份，再用下一条查询读取最新版本事实；等审批提交后也能读到它的新状态。

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/lober/lober/internal/interfaces/console"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,6 +20,7 @@ type config struct {
 	Log             logConfig `yaml:"log"`
 	TLS             tlsConfig `yaml:"tls"`
 	SessionTTLHours int64     `yaml:"sessionTTLHours"`
+	LoginMaxBytes   int64     `yaml:"loginMaxBytes"`
 	// SeedAdmin is the bootstrap password for username admin. The stored user
 	// must change it before any operational API is available.
 	SeedAdmin string        `yaml:"seedAdmin"`
@@ -94,6 +96,9 @@ func loadConfig(path string) (config, error) {
 	}
 	if c.SessionTTLHours < 0 || c.SessionTTLHours > math.MaxInt64/3600 {
 		return config{}, errors.New("sessionTTLHours 超出可用范围")
+	}
+	if c.LoginMaxBytes != 0 && (c.LoginMaxBytes < console.DefaultLoginBodyLimit || c.LoginMaxBytes > console.MaxLoginBodyLimit) {
+		return config{}, errors.New("loginMaxBytes 必须为 0 或在 16384 至 4194304 字节之间")
 	}
 	if c.PG.MaxConns == 0 {
 		c.PG.MaxConns = 16

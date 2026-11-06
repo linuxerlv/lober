@@ -28,6 +28,7 @@ tls:
   cert: "/etc/lober/cert.pem"
   key: "/etc/lober/key.pem"
 sessionTTLHours: 3
+loginMaxBytes: 32768
 seedAdmin: "seed-private-password"
 iso:
   staging: "/srv/lober/staging"
@@ -44,6 +45,9 @@ preview:
 	}
 	if cfg.Listen != ":8080" || cfg.PG.DSN != "file-private-dsn" || cfg.PG.MaxConns != 4 || cfg.SessionTTLHours != 3 || cfg.SeedAdmin != "seed-private-password" || cfg.ISO.Staging != "/srv/lober/staging" || len(cfg.ISO.LocalRoots) != 1 || cfg.Preview.Gateway != "https://gateway.example.test" {
 		t.Fatal("configuration values lost")
+	}
+	if cfg.LoginMaxBytes != 32768 {
+		t.Fatal("登录上限未读取")
 	}
 	t.Setenv("LOBER_PG_DSN", "environment-private-dsn")
 	cfg, err = loadConfig(path)
@@ -64,6 +68,8 @@ func Test配置拒绝缺失非法字段且错误不含秘密(t *testing.T) {
 		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\nunknown: 'private-password'\n",
 		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\nsessionTTLHours: -1\n",
 		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\nsessionTTLHours: 9223372036854775807\n",
+		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\nloginMaxBytes: 16383\n",
+		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\nloginMaxBytes: 4194305\n",
 		"listen: ':8080'\npg: {dsn: 'secret-dsn', maxConns: -1}\n",
 		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\nlog: {level: nonsense}\n",
 		"listen: ':8080'\npg: {dsn: 'secret-dsn'}\ntls: {cert: '/only/cert'}\n",

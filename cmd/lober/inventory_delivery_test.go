@@ -36,7 +36,7 @@ func TestConsoleInventoryRequestReachesMachineReport(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	const sn = "INVENTORY E2E"
+	const sn = "INVENTORY E2E/A+%"
 	if _, err := a.Store.CreateHost(t.Context(), model.Host{SN: sn, Attrs: map[string]string{"rack": "r1"}}, assemblyAudit("host.create")); err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/lober/lober/internal/application/tasks"
 	"github.com/lober/lober/internal/domain/model"
 	"log/slog"
+	"net/url"
 	"runtime/debug"
 	"strings"
 )
@@ -32,6 +33,7 @@ type Deps struct {
 	Identity          identity.Registry
 	Clock             ports.Clock
 	Logger            *slog.Logger
+	LoginBodyLimit    int64
 }
 type Server struct {
 	Engine *gin.Engine
@@ -58,11 +60,28 @@ func New(d Deps) *Server {
 	}
 	s := &server{deps: d, logger: d.Logger, index: make(map[string]route)}
 	out := &Server{Engine: gin.New(), server: s}
+	// 主机序列号允许斜杠，路由先按编码后的路径分段，再解开参数。
+	out.Engine.UseRawPath = true
+	out.Engine.UnescapePathValues = false
 	s.owner = out
-	out.Engine.Use(s.recoverPanic(), s.requestLog())
+	out.Engine.Use(s.recoverPanic(), s.requestLog(), decodePathParams)
 	out.Engine.NoRoute(func(c *gin.Context) { Fail(c, 404, nil, model.ConsoleNotFound) })
 	s.installRoutes(out, s.allRoutes())
 	return out
+}
+
+func decodePathParams(c *gin.Context) {
+	if c.Request.URL.RawPath != "" {
+		for i := range c.Params {
+			value, err := url.PathUnescape(c.Params[i].Value)
+			if err != nil {
+				Fail(c, 400, nil, model.ConsoleBadRequest)
+				return
+			}
+			c.Params[i].Value = value
+		}
+	}
+	c.Next()
 }
 func (s *server) clock() int64 { return s.deps.Clock() }
 

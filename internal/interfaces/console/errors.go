@@ -71,6 +71,9 @@ func RespondError(c *gin.Context, err error) {
 	}
 
 	switch {
+	case errors.Is(err, identity.ErrPasswordTooLong):
+		Fail(c, 400, nil, "新密码不能超过 2048 字节")
+		return
 	case errors.Is(err, tasks.ErrControlUnavailable):
 		Fail(c, 422, nil, model.ConsoleTaskControlUnavailable)
 		return
@@ -170,9 +173,10 @@ func Judge(c *gin.Context, ps []model.Problem) bool {
 }
 
 const (
-	loginBodyLimit = 16 << 10
-	jsonBodyLimit  = 4 << 20
-	hostCSVLimit   = 16 << 20
+	DefaultLoginBodyLimit = 16 << 10
+	MaxLoginBodyLimit     = jsonBodyLimit
+	jsonBodyLimit         = 4 << 20
+	hostCSVLimit          = 16 << 20
 )
 
 func readRequestBody(c *gin.Context, limit int64) ([]byte, bool) {
