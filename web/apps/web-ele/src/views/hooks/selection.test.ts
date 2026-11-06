@@ -6,6 +6,9 @@ import { createApp, h, nextTick, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { afterEach, expect, it, vi } from 'vitest';
 
+import { hookLifecycleApi, updateHookApi } from '#/api/console/hook';
+import { templateLifecycleApi, updateTemplateApi } from '#/api/console/template';
+
 import AuditPage from '../audit/index.vue';
 import TasksPage from '../tasks/index.vue';
 import TemplatesPage from '../templates/index.vue';
@@ -66,18 +69,13 @@ vi.mock('#/components/console/ListPagination.vue', async () => {
     }),
   };
 });
+const permissions = [
+  'hook:read', 'hook:write', 'hook:approve',
+  'template:read', 'template:write', 'template:approve', 'user:manage',
+];
+const accessCodes = ref(permissions);
 vi.mock('@vben/stores', () => ({
-  useAccessStore: () => ({
-    accessCodes: [
-      'hook:read',
-      'hook:write',
-      'hook:approve',
-      'template:read',
-      'template:write',
-      'template:approve',
-      'user:manage',
-    ],
-  }),
+  useAccessStore: () => ({ get accessCodes() { return accessCodes.value; } }),
   useUserStore: () => ({ userInfo: { username: 'reviewer' } }),
 }));
 vi.mock('@vben/common-ui', async () => {
@@ -224,10 +222,10 @@ vi.mock('#/api/console/hook', () => ({
   getHookApi: (id: string) =>
     new Promise((resolve) => fixtures.pending.set(id, resolve)),
   getHookVersionsApi: async () => ({ items: [] }),
-  updateHookApi: () =>
-    new Promise((resolve) => fixtures.pending.set('mutation', resolve)),
-  hookLifecycleApi: () =>
-    new Promise((resolve) => fixtures.pending.set('mutation', resolve)),
+  updateHookApi: vi.fn(() =>
+    new Promise((resolve) => fixtures.pending.set('mutation', resolve))),
+  hookLifecycleApi: vi.fn(() =>
+    new Promise((resolve) => fixtures.pending.set('mutation', resolve))),
 }));
 let unmount: (() => void) | undefined;
 afterEach(() => {
@@ -241,6 +239,7 @@ afterEach(() => {
   fixtures.candidateQueries.length = 0;
   fixtures.slots.length = 0;
   vi.clearAllMocks();
+  accessCodes.value = permissions;
 });
 async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -344,10 +343,10 @@ vi.mock('#/api/console/template', () => ({
     current: null,
     changed: false,
   }),
-  updateTemplateApi: () =>
-    new Promise((resolve) => fixtures.pending.set('mutation', resolve)),
-  templateLifecycleApi: () =>
-    new Promise((resolve) => fixtures.pending.set('mutation', resolve)),
+  updateTemplateApi: vi.fn(() =>
+    new Promise((resolve) => fixtures.pending.set('mutation', resolve))),
+  templateLifecycleApi: vi.fn(() =>
+    new Promise((resolve) => fixtures.pending.set('mutation', resolve))),
   deriveTemplateApi: () =>
     new Promise((resolve) => fixtures.pending.set('mutation', resolve)),
   getPreviewParamsApi: (
@@ -387,6 +386,72 @@ function template(): Schemas['TemplateResponse'] {
     problems: [],
   };
 }
+async function openDraft(kind: 'hook' | 'template', state = 'draft') {
+  const root = document.createElement('div');
+  document.body.append(root);
+  const app = createApp(kind === 'hook' ? HooksPage : TemplatesPage);
+  app.mount(root);
+  unmount = () => app.unmount();
+  await settle();
+  const button = (label: string) => [...root.querySelectorAll('button')]
+    .find((item) => item.textContent?.trim() === label)!;
+  button('查看 / 编辑').click();
+  const row = { ...(kind === 'hook' ? hook('first') : template()), state };
+  fixtures.pending.get(kind === 'hook' ? 'first' : 'template:get')!(row);
+  await settle();
+  return { button, root, row };
+}
+
+it.each(['hook', 'template'] as const)('does not submit a %s when its draft fails to save', async (kind) => {
+  const { button } = await openDraft(kind);
+  const update = vi.mocked(kind === 'hook' ? updateHookApi : updateTemplateApi);
+  const action = kind === 'hook' ? hookLifecycleApi : templateLifecycleApi;
+  update.mockRejectedValueOnce(new Error('保存失败'));
+  button('提交审批').click();
+  await settle();
+  expect(update).toHaveBeenCalledOnce();
+  expect(action).not.toHaveBeenCalled();
+  expect(ElMessage.error).toHaveBeenCalledWith('保存失败');
+});
+
+it.each(['hook', 'template'] as const)('submits the saved %s revision once and respects current permissions', async (kind) => {
+  const { button, row } = await openDraft(kind);
+  const update = kind === 'hook' ? updateHookApi : updateTemplateApi;
+  const action = kind === 'hook' ? hookLifecycleApi : templateLifecycleApi;
+  const submit = button('提交审批');
+  submit.click();
+  submit.click();
+  expect(update).toHaveBeenCalledOnce();
+  expect(action).not.toHaveBeenCalled();
+  fixtures.pending.get('mutation')!({ ...row, rev: 5 });
+  await settle();
+  expect(action).toHaveBeenCalledExactlyOnceWith('first', 1, 5, 'submit', '');
+  fixtures.pending.get('mutation')!({ ...row, rev: 6 });
+  await settle();
+
+  button('提交审批').click();
+  accessCodes.value = permissions.filter((code) => code !== `${kind}:write`);
+  fixtures.pending.get('mutation')!({ ...row, rev: 7 });
+  await settle();
+  expect(action).toHaveBeenCalledOnce();
+});
+
+it.each(['hook', 'template'] as const)('requires a reason before rejecting a %s', async (kind) => {
+  const { button, root, row } = await openDraft(kind, 'review');
+  const action = kind === 'hook' ? hookLifecycleApi : templateLifecycleApi;
+  expect(button('驳回').disabled).toBe(true);
+  button('驳回').click();
+  expect(action).not.toHaveBeenCalled();
+  const input = root.querySelector<HTMLInputElement>('[placeholder^="驳回理由"]')!;
+  input.value = '请补全脚本说明';
+  input.dispatchEvent(new Event('input'));
+  await nextTick();
+  button('驳回').click();
+  expect(action).toHaveBeenCalledExactlyOnceWith('first', 1, 4, 'reject', '请补全脚本说明');
+  fixtures.pending.get('mutation')!({ ...row, state: 'draft' });
+  await settle();
+});
+
 it.each(['hook', 'template'] as const)(
   'requests numbered %s pages, resets search/page size, and displays the server total',
   async (kind) => {
