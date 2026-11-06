@@ -75,6 +75,7 @@ export function parseSseFrame(
 interface UseTaskStreamOptions {
   after: () => number;
   onEvent: (event: TaskEvent) => void;
+  onRejected: (status: 403 | 404) => void;
   onUnauthorized: () => void;
   taskId: string;
   token: string;
@@ -108,6 +109,11 @@ export function useTaskStream(options: UseTaskStreamOptions) {
       if (response.status === 401) {
         stop();
         options.onUnauthorized();
+        return;
+      }
+      if (response.status === 403 || response.status === 404) {
+        stop();
+        options.onRejected(response.status);
         return;
       }
       if (response.ok && response.body) {

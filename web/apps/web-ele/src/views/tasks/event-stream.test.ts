@@ -395,6 +395,35 @@ it('stops reconnecting and clears the expired session on 401', async () => {
   expect(io.events).toHaveBeenCalledTimes(reads);
 });
 
+it.each([
+  [403, '没有权限读取任务事件'],
+  [404, '任务不存在'],
+])('stops automatic and manual event reads after a %s stream response', async (status, message) => {
+  const { node, source } = await mountDetail();
+  let failFallback!: (error: Error) => void;
+  io.events.mockImplementationOnce(() => new Promise((_resolve, reject) => { failFallback = reject; }));
+  click(node, '补读后续事件');
+
+  vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status }));
+  source.controller.close();
+  await flushPage();
+  await vi.advanceTimersByTimeAsync(1000);
+
+  expect(node.querySelector('aside')?.getAttribute('title')).toBe(message);
+  expect(node.textContent).toContain('日志连接已停止');
+  failFallback(new Error('此前补读失败'));
+  await flushPage();
+  expect(node.querySelector('aside')?.getAttribute('title')).toBe(message);
+
+  const reads = io.events.mock.calls.length;
+  click(node, '补读后续事件');
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(io.events).toHaveBeenCalledTimes(reads);
+  expect(io.get).not.toHaveBeenCalled();
+  expect(io.clearSession).not.toHaveBeenCalled();
+});
+
 it('aborts the old request when changing tasks or signing out, and ignores late events and pages', async () => {
   const { node, source } = await mountDetail();
   let finishRead!: (page: { items: TaskEvent[] }) => void;
