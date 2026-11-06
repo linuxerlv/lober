@@ -40,6 +40,7 @@ const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
 const id = computed(() => String(route.params.id ?? ''));
 const task = ref<Task>();
 const error = ref('');
+const streamError = ref('');
 const problems = ref<Schemas['ProblemJSON'][]>([]);
 const events = ref<TaskEvent[]>([]);
 const eventPage = ref(1);
@@ -127,12 +128,12 @@ function lastEventSeq() {
 }
 async function loadEvents() {
   const current = session;
-  if (!current) return;
+  if (!current || streamError.value) return;
   try {
     const page = await taskAPI.events(current.id, lastEventSeq());
-    if (current === session) events.value = mergeEvents(events.value, page.items ?? []);
+    if (current === session && !streamError.value) events.value = mergeEvents(events.value, page.items ?? []);
   } catch (reason) {
-    if (current === session) failed(reason);
+    if (current === session && !streamError.value) failed(reason);
   }
 }
 async function control(retry: boolean) {
@@ -181,6 +182,7 @@ async function renderPreview() {
 watch([id, () => access.accessToken], ([taskId, token], _old, cleanup) => {
   task.value = undefined;
   error.value = '';
+  streamError.value = '';
   problems.value = [];
   events.value = [];
   eventPage.value = 1;
@@ -196,6 +198,11 @@ watch([id, () => access.accessToken], ([taskId, token], _old, cleanup) => {
   stream.value = useTaskStream({
     after: lastEventSeq,
     onEvent: queueEvent,
+    onRejected: (status) => {
+      if (session !== current) return;
+      streamError.value = status === 403 ? '没有权限读取任务事件' : '任务不存在';
+      clearInterval(poll);
+    },
     onUnauthorized: () => {
       if (session === current && access.accessToken === token) void auth.clearSession();
     },
@@ -221,14 +228,14 @@ watch([id, () => access.accessToken], ([taskId, token], _old, cleanup) => {
 
 <template>
   <Page :title="`任务 ${id}`" description="查看固化快照、服务端事件与操作限制。">
-    <ElAlert v-if="error" :title="error" type="error" :closable="false" class="mb-3" />
+    <ElAlert v-if="streamError || error" :title="streamError || error" type="error" :closable="false" class="mb-3" />
     <ProblemList :problems="problems" />
     <ElCard v-if="task" class="mb-4">
       <div class="mb-3 flex flex-wrap items-center gap-4">
         <strong>{{ task.hostSN }}</strong>
         <ElTag>{{ taskStateLabels[task.state] }}</ElTag>
         <ElTag :type="connected ? 'success' : 'info'">
-          {{ connected ? '实时连接已建立' : '正在重连，定时补读事件' }}
+          {{ streamError ? '日志连接已停止' : connected ? '实时连接已建立' : '正在重连，定时补读事件' }}
         </ElTag>
         <ElButton @click="reload">刷新</ElButton>
         <ElButton :loading="busy" @click="renderPreview">查看下发文件</ElButton>
@@ -274,7 +281,7 @@ watch([id, () => access.accessToken], ([taskId, token], _old, cleanup) => {
         @page-change="eventPage = $event"
         @size-change="changeEventSize"
       />
-      <ElButton @click="loadEvents">补读后续事件</ElButton>
+      <ElButton :disabled="!!streamError" @click="loadEvents">补读后续事件</ElButton>
     </ElCard>
     <ElCard v-if="task" class="mt-4" header="固化参数与 hook">
       <div v-for="slot in task.snapshot.slots" :key="slot.seq" class="mb-3">
