@@ -138,7 +138,7 @@ func renderESXiAnswer(r Request, e expansion) ([]byte, []model.Problem, error) {
 		"[ \"$(stat -c %u:%a \"$D\")\" = 0:700 ] && [ \"$(stat -c %u:%a \"$D/stage.sh\")\" = 0:600 ] || exit 66\n" +
 		"TARGET=\nCREATED=0\ntrap 's=$?; if [ \"$s\" -ne 0 ]; then if [ \"$CREATED\" -eq 1 ]; then rm -f \"$TARGET/stage.sh\" || :; rmdir \"$TARGET\" 2>/dev/null || :; fi; rm -f \"$D/stage.sh\" || :; rmdir \"$D\" 2>/dev/null || :; fi' EXIT\n" +
 		"trap 'exit 129' HUP\ntrap 'exit 130' INT\ntrap 'exit 143' TERM\n" +
-		"LOBER_DEVICES=$(esxcli storage core device list) || exit 66\n" +
+		"LOBER_DEVICES=$(localcli storage core device list) || exit 66\n" +
 		"LOBER_DISKS=$(printf '%s\\n' \"$LOBER_DEVICES\" | awk '/^[[:space:]]*Device Type:[[:space:]]*Direct-Access[[:space:]]*$/ { n++ } END { print n+0 }') || exit 66\n" +
 		"[ \"$LOBER_DISKS\" -eq 1 ] || exit 66\n" +
 		"COUNT=0\nVOLUME=\nfor CANDIDATE in /vmfs/volumes/OSDATA-*; do\n [ -d \"$CANDIDATE\" ] || continue\n COUNT=$((COUNT + 1))\n VOLUME=$CANDIDATE\ndone\n" +

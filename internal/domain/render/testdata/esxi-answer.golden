@@ -32,7 +32,7 @@ trap 's=$?; if [ "$s" -ne 0 ]; then if [ "$CREATED" -eq 1 ]; then rm -f "$TARGET
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-LOBER_DEVICES=$(esxcli storage core device list) || exit 66
+LOBER_DEVICES=$(localcli storage core device list) || exit 66
 LOBER_DISKS=$(printf '%s\n' "$LOBER_DEVICES" | awk '/^[[:space:]]*Device Type:[[:space:]]*Direct-Access[[:space:]]*$/ { n++ } END { print n+0 }') || exit 66
 [ "$LOBER_DISKS" -eq 1 ] || exit 66
 COUNT=0

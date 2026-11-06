@@ -45,17 +45,18 @@ func TestESXiInstallerStagesFrozenPayloadAndRejectsUnsafeTargets(t *testing.T) {
 				fsType = "vfat"
 			}
 			commands := map[string]string{
-				"timeout": "#!/bin/sh\n[ \"$1\" = -t ] || exit 125\nshift\nexec /usr/bin/timeout \"$@\"\n",
-				"stat":    "#!/bin/sh\nif [ \"$1\" = -f ]; then echo " + fsType + "; elif [ \"$1\" = -c ]; then printf '0:%s\\n' \"$(/usr/bin/stat -c %a \"$3\")\"; else exit 125; fi\n",
-				"esxcli":  "#!/bin/sh\n[ \"$*\" = 'storage core device list' ] || exit 125\nprintf '%s\\n' '   Device Type: Direct-Access'\n",
+				"timeout":  "#!/bin/sh\n[ \"$1\" = -t ] || exit 125\nshift\nexec /usr/bin/timeout \"$@\"\n",
+				"stat":     "#!/bin/sh\nif [ \"$1\" = -f ]; then echo " + fsType + "; elif [ \"$1\" = -c ]; then printf '0:%s\\n' \"$(/usr/bin/stat -c %a \"$3\")\"; else exit 125; fi\n",
+				"esxcli":   "#!/bin/sh\necho installer-service-unavailable >&2\nexit 1\n",
+				"localcli": "#!/bin/sh\n[ \"$*\" = 'storage core device list' ] || exit 125\nprintf '%s\\n' '   Device Type: Direct-Access'\n",
 			}
 			switch scenario {
 			case "nodisk":
-				commands["esxcli"] = "#!/bin/sh\nexit 0\n"
+				commands["localcli"] = "#!/bin/sh\nexit 0\n"
 			case "multidisk":
-				commands["esxcli"] = "#!/bin/sh\nprintf '%s\\n' '   Device Type: Direct-Access' '   Device Type: Direct-Access'\n"
+				commands["localcli"] = "#!/bin/sh\nprintf '%s\\n' '   Device Type: Direct-Access' '   Device Type: Direct-Access'\n"
 			case "diskquery":
-				commands["esxcli"] = "#!/bin/sh\nprintf '%s\\n' '   Device Type: Direct-Access'\nexit 1\n"
+				commands["localcli"] = "#!/bin/sh\nprintf '%s\\n' '   Device Type: Direct-Access'\nexit 1\n"
 			}
 			if strings.HasPrefix(scenario, "pre") {
 				signal := strings.ToUpper(strings.TrimPrefix(scenario, "pre"))
