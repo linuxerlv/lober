@@ -115,7 +115,16 @@ func TestESXiNativeFirstbootOffline(t *testing.T) {
 	if e != nil || len(p) != 0 {
 		t.Fatalf("%v %v", p, e)
 	}
-	payloads := commandPayloads(string(b))
+	native := commandPayloads(string(b))
+	if len(native) != 3 {
+		t.Fatalf("want firstboot, slot, cleanup launchers: %d", len(native))
+	}
+	r.Kind = catalog.FileESXiStage
+	stage, p, e := Render(r)
+	if e != nil || len(p) != 0 {
+		t.Fatalf("stage: %v %v", p, e)
+	}
+	payloads := commandPayloads(string(stage))
 	if len(payloads) != 3 {
 		t.Fatalf("want firstboot, slot, cleanup payloads: %d", len(payloads))
 	}
@@ -127,9 +136,9 @@ func TestESXiNativeFirstbootOffline(t *testing.T) {
 		t.Fatal("independent finalize missing")
 	}
 	syntaxCheck(t, script)
-	// Native installer owns persistence of these encoded bytes in %firstboot.
+	// 原生首次启动脚本不包含钩子，受保护载荷保留完整的原始内容。
 	instance := r.Snapshot.Slots[0].Instances[0]
-	if !strings.Contains(payloads[1], base64.StdEncoding.EncodeToString([]byte(instance.Body))) {
+	if !strings.Contains(script, base64.StdEncoding.EncodeToString([]byte(instance.Body))) {
 		t.Fatal("hook bytes rewritten/not embedded")
 	}
 }
