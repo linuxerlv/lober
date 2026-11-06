@@ -175,7 +175,7 @@ func (s *Sources) FetchOne(ctx context.Context, id, role string) (err error) {
 	}
 	return s.finishFetch(ctx, src, session)
 }
-func (s *Sources) finishFetch(ctx context.Context, src model.Source, session port.FetchSession) error {
+func (s *Sources) finishFetch(ctx context.Context, src model.Source, session port.PublishSession) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

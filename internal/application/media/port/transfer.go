@@ -14,7 +14,7 @@ type Transfer interface {
 	// BeginFetch 的八项能力约定唯一连接 docs/contracts/media.md 第10节「Transfer.BeginFetch」行及该节共同边界。
 	BeginFetch(context.Context, model.Source) (FetchSession, error)
 	// BeginPublish 的八项能力约定唯一连接 docs/contracts/media.md 第10节「Transfer.BeginPublish」行及该节共同边界。
-	BeginPublish(context.Context, model.Source) (FetchSession, error)
+	BeginPublish(context.Context, model.Source) (PublishSession, error)
 	// BeginUpload 的八项能力约定唯一连接 docs/contracts/media.md 第10节「Transfer.BeginUpload」行及该节共同边界。
 	BeginUpload(context.Context, model.Source, int64, io.Reader) (UploadSession, error)
 	// ParkRetry 的八项能力约定唯一连接 docs/contracts/media.md 第10节「Transfer.ParkRetry」行及该节共同边界。
@@ -32,14 +32,18 @@ type VerifiedContent struct {
 }
 
 // Resume 和 Step 只报告已落盘长度；Open 返回 Reset 时，错误也携带需要保存的归零事实。
-// Verify 后应用须重读版本才能 Publish；保存失败时 Restore 恢复断点。
 type FetchSession interface {
+	PublishSession
 	// Resume 的八项能力约定唯一连接 docs/contracts/media.md 第10节「FetchSession.Resume」行及该节共同边界。
 	Resume(context.Context) (int64, error)
 	// Open 的八项能力约定唯一连接 docs/contracts/media.md 第10节「FetchSession.Open」行及该节共同边界。
 	Open(context.Context) (FetchInfo, error)
 	// Step 的八项能力约定唯一连接 docs/contracts/media.md 第10节「FetchSession.Step」行及该节共同边界。
 	Step(context.Context) (int64, bool, error)
+}
+
+// Verify 后应用须重读版本才能 Publish；保存失败时 Restore 恢复断点。
+type PublishSession interface {
 	// Verify 的八项能力约定唯一连接 docs/contracts/media.md 第10节「FetchSession.Verify」行及该节共同边界。
 	Verify(context.Context) (VerifiedContent, error)
 	// Publish 的八项能力约定唯一连接 docs/contracts/media.md 第10节「FetchSession.Publish」行及该节共同边界。

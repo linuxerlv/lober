@@ -58,21 +58,21 @@ type heldTransfer struct {
 	closes                    atomic.Int32
 }
 
-func (s *heldTransfer) BeginPublish(ctx context.Context, src model.Source) (port.FetchSession, error) {
+func (s *heldTransfer) BeginPublish(ctx context.Context, src model.Source) (port.PublishSession, error) {
 	f, e := s.Transfer.BeginPublish(ctx, src)
 	if e != nil {
 		return nil, e
 	}
-	return &heldSession{FetchSession: f, owner: s}, nil
+	return &heldSession{PublishSession: f, owner: s}, nil
 }
 
 type heldSession struct {
-	port.FetchSession
+	port.PublishSession
 	owner *heldTransfer
 }
 
 func (s *heldSession) Verify(ctx context.Context) (port.VerifiedContent, error) {
-	v, e := s.FetchSession.Verify(ctx)
+	v, e := s.PublishSession.Verify(ctx)
 	if e != nil {
 		return v, e
 	}
@@ -85,7 +85,7 @@ func (s *heldSession) Verify(ctx context.Context) (port.VerifiedContent, error) 
 	}
 }
 func (s *heldSession) Publish(ctx context.Context) error {
-	if e := s.FetchSession.Publish(ctx); e != nil {
+	if e := s.PublishSession.Publish(ctx); e != nil {
 		return e
 	}
 	if s.owner.published != nil {
@@ -98,7 +98,7 @@ func (s *heldSession) Publish(ctx context.Context) error {
 	}
 	return nil
 }
-func (s *heldSession) Close() error { s.owner.closes.Add(1); return s.FetchSession.Close() }
+func (s *heldSession) Close() error { s.owner.closes.Add(1); return s.PublishSession.Close() }
 func Test镜像取消与最后片发布两方向竞争(t *testing.T) {
 	for _, name := range []string{"取消先提交", "改名后取消先提交", "完成先提交"} {
 		cancelFirst := name != "完成先提交"
