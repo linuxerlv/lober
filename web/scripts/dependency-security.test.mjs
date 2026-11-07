@@ -156,6 +156,8 @@ test('real Knip still detects an unused manifest dependency', async () => {
 const requestRequire = createRequire(new URL('../packages/effects/request/package.json', import.meta.url));
 const axiosRequire = createRequire(requestRequire.resolve('axios'));
 const redirects = axiosRequire('follow-redirects');
+const localesRequire = createRequire(new URL('../packages/locales/package.json', import.meta.url));
+const { createI18n } = localesRequire('vue-i18n');
 const formRequire = createRequire(new URL('../packages/@core/ui-kit/form-ui/package.json', import.meta.url));
 const z = formRequire('zod');
 const viteConfigRequire = createRequire(new URL('../internal/vite-config/package.json', import.meta.url));
@@ -224,6 +226,38 @@ test('跨站跳转移除数组中的认证、Cookie和自定义敏感头', async
     }
     assert.equal(headers['x-public'], 'keep');
   });
+});
+
+test('跨站跳转也会移除其他执行环境传入的敏感头', async () => {
+  await withRedirectServers(async (base) => {
+    const names = runInNewContext("['X-Api-Key']");
+    for (const headers of [
+      { 'X-Api-Key': 'fixture', 'X-Public': 'keep' },
+      ['X-Api-Key', 'fixture', 'X-Public', 'keep'],
+    ]) {
+      const received = await redirectHeaders(`${base}/cross`, headers, names);
+      assert.equal(received['x-api-key'], undefined);
+      assert.equal(received['x-public'], 'keep');
+    }
+  });
+});
+
+test('翻译结果不会保留可执行嵌入文档的属性', async () => {
+  const i18n = createI18n({
+    legacy: false, locale: 'en', escapeParameter: true,
+    messages: { en: { message: '<iframe srcdoc="<b>fixture</b>"></iframe>' } },
+  });
+  const result = i18n.global.t('message');
+  const { Window } = await import('happy-dom');
+  const window = new Window();
+  try {
+    window.document.body.innerHTML = result;
+    const frame = window.document.querySelector('iframe');
+    assert.ok(frame);
+    assert.equal(frame.hasAttribute('srcdoc'), false);
+  } finally {
+    window.close();
+  }
 });
 
 test('跨站跳转按字面名称移除带特殊字符的敏感头', async () => {
