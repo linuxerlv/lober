@@ -54,13 +54,13 @@ func TestESXiFirstbootTerminatingOuterScriptCleansAndStopsHook(t *testing.T) {
 	}
 	_, originalDir := esxiStagePaths(r.Values["task"])
 	oldDigest := fmt.Sprintf("%x", sha256.Sum256(stage))
-	stage = []byte(relocateESXiCommands(t, string(stage), local, originalDir, stageDir, "", ""))
+	stage = []byte(relocateESXiCommands(t, string(stage), local, originalDir, stageDir, "", "", shQuote(filepath.Join(bin, "stat"))))
 	newDigest := fmt.Sprintf("%x", sha256.Sum256(stage))
 	stagePath := filepath.Join(stageDir, "stage.sh")
 	if err := os.WriteFile(stagePath, stage, 0600); err != nil {
 		t.Fatal(err)
 	}
-	native = relocateESXiCommands(t, native, local, originalDir, stageDir, oldDigest, newDigest)
+	native = relocateESXiCommands(t, native, local, originalDir, stageDir, oldDigest, newDigest, shQuote(filepath.Join(bin, "stat")))
 	path := filepath.Join(d, "native.sh")
 	if err := os.WriteFile(path, []byte(native), 0600); err != nil {
 		t.Fatal(err)
@@ -172,13 +172,13 @@ func TestESXiDuplicateFirstbootDoesNotRemoveActiveStage(t *testing.T) {
 	}
 	_, originalDir := esxiStagePaths(r.Values["task"])
 	oldDigest := fmt.Sprintf("%x", sha256.Sum256(stage))
-	stage = []byte(relocateESXiCommands(t, string(stage), local, originalDir, stageDir, "", ""))
+	stage = []byte(relocateESXiCommands(t, string(stage), local, originalDir, stageDir, "", "", shQuote(filepath.Join(bin, "stat"))))
 	newDigest := fmt.Sprintf("%x", sha256.Sum256(stage))
 	stagePath := filepath.Join(stageDir, "stage.sh")
 	if err := os.WriteFile(stagePath, stage, 0600); err != nil {
 		t.Fatal(err)
 	}
-	native = relocateESXiCommands(t, native, local, originalDir, stageDir, oldDigest, newDigest)
+	native = relocateESXiCommands(t, native, local, originalDir, stageDir, oldDigest, newDigest, shQuote(filepath.Join(bin, "stat")))
 	path := filepath.Join(d, "native.sh")
 	if err := os.WriteFile(path, []byte(native), 0600); err != nil {
 		t.Fatal(err)
