@@ -61,6 +61,11 @@ func TestRemoteFailureOmitsCredentials(t *testing.T) {
 				return nil, fmt.Errorf("connection refused at %s", addr)
 			}
 		}},
+		{"dial timeout", "镜像下载超时", func(_ *testing.T, s *acquisitionFixture) {
+			s.transfer.dialContext = func(_ context.Context, _, addr string) (net.Conn, error) {
+				return nil, &net.DNSError{Err: "timed out", Name: addr, IsTimeout: true}
+			}
+		}},
 		{"TLS", unavailable, func(t *testing.T, s *acquisitionFixture) {
 			server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("接受了不受信任的证书") }))
 			t.Cleanup(server.Close)
@@ -108,6 +113,28 @@ func TestRemoteFailureOmitsCredentials(t *testing.T) {
 			progress, err := s.Progress(t.Context(), item.ID)
 			if err != nil || len(progress.Sources) != 1 || progress.Sources[0].Error != tc.want {
 				t.Fatalf("进度错误：%+v, %v", progress, err)
+			}
+		})
+	}
+}
+
+func TestIsNetworkTimeout(t *testing.T) {
+	timeout := &net.DNSError{Err: "timed out", IsTimeout: true}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"timeout", timeout, true},
+		{"wrapped timeout", fmt.Errorf("wrapper: %w", timeout), true},
+		{"joined timeout", errors.Join(errors.New("refused"), timeout), true},
+		{"other error", errors.New("refused"), false},
+		{"cancelled", context.Canceled, false},
+		{"nil", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isNetworkTimeout(tc.err); got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
 	}

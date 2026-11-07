@@ -79,6 +79,7 @@ type FaultKind string
 const (
 	URLRejected         FaultKind = "url_rejected"
 	RemoteFetchFailed   FaultKind = "remote_fetch_failed"
+	RemoteFetchTimeout  FaultKind = "remote_fetch_timeout"
 	PathRejected        FaultKind = "path_rejected"
 	ChunkRejected       FaultKind = "chunk_rejected"
 	ContentMismatch     FaultKind = "content_mismatch"
