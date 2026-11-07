@@ -72,6 +72,8 @@ func (s *Sources) problemTree(src model.Source, err error) (error, bool) {
 		return sourceRejected(src.ISOID, src.Role, isoSourceReasonURL), true
 	case port.RemoteFetchFailed:
 		return remoteFetchError{status: f.HTTPStatus}, true
+	case port.RemoteFetchTimeout:
+		return remoteFetchError{timeout: true}, true
 	case port.PathRejected:
 		return sourceRejected(src.ISOID, src.Role, isoSourceReasonLocal), true
 	case port.ChunkRejected:
