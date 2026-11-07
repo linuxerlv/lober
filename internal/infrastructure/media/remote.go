@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/lober/lober/internal/application/media/port"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -79,6 +80,9 @@ func (s *fetchSession) openRemote(ctx context.Context) (port.FetchInfo, error) {
 			s.offset = 0
 			return port.FetchInfo{Offset: 0, TotalSize: s.total, Reset: true}, fault(port.URLRejected)
 		}
+		if ctx.Err() == nil && isNetworkTimeout(err) {
+			return port.FetchInfo{}, fault(port.RemoteFetchTimeout)
+		}
 		return port.FetchInfo{}, remoteFault(ctx, port.RemoteFetchFailed)
 	}
 	s.body = resp.Body
@@ -129,6 +133,24 @@ func (s *fetchSession) openRemote(ctx context.Context) (port.FetchInfo, error) {
 	}
 	s.offset = offset
 	return port.FetchInfo{Offset: offset, TotalSize: s.total, Reset: offset == 0}, nil
+}
+
+func isNetworkTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if group, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, cause := range group.Unwrap() {
+			if isNetworkTimeout(cause) {
+				return true
+			}
+		}
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok && isNetworkTimeout(wrapped.Unwrap()) {
+		return true
+	}
+	networkErr, ok := err.(net.Error)
+	return ok && networkErr.Timeout()
 }
 
 // 网络错误可能带上完整链接、域名或地址。保留错误类别和取消信号。
