@@ -1,7 +1,7 @@
 # 依赖安全补丁
 
-`deepmerge@4.3.1.patch` 修复 GHSA-gcqx-w48m-w2h4：合并结果用自有数据属性保存键，避免 `__proto__` 触发原型设置器。补丁覆盖源码、CommonJS 和 UMD 发布入口，保留普通对象及数组合并行为。
+`@rollup__plugin-node-resolve@16.0.3.patch` 将插件复制默认配置的唯一一次 `deepmerge({}, defaults)` 调用改为 Node 原生 `structuredClone(defaults)`，覆盖 CommonJS 和 ESM 两个入口。
 
-上游尚无已发布修复版。安装由 pnpm 自动应用补丁并核对锁文件中的补丁校验值；升级该依赖时重新核对补丁是否仍有必要。扫描器可能仍按原始版本报告此公告，不应直接忽略告警。
+默认配置只含普通对象、数组、字符串和布尔值。项目要求的 Node 22.18/24.12 均支持原生深复制。通过限定在该插件的依赖覆盖移除 deepmerge，不影响其他包，也不设置扫描忽略规则。
 
-回归测试位于 `scripts/dependency-security.test.mjs`，从实际构建插件解析依赖并检查合并结果及原型。
+安装由 pnpm 自动应用补丁并核对锁文件中的校验值；升级插件时需重新核对调用方式和补丁。回归测试位于 `scripts/dependency-security.test.mjs`，验证插件两种入口的默认配置及真实包解析构建。

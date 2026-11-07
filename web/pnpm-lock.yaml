@@ -482,6 +482,7 @@ overrides:
   zod@4: 4.6.6
   glob@>=9 <15: 14.0.2
   minimatch@>=7 <12: 11.0.1
+  '@rollup/plugin-node-resolve@16.0.3>deepmerge': '-'
   js-yaml@4: ^4.3.2
   postcss-selector-parser@7: ^7.1.6
   '@tailwindcss/typography>postcss-selector-parser': ^7.1.6
@@ -491,7 +492,7 @@ overrides:
   undici@7: ^7.29.1
 
 patchedDependencies:
-  deepmerge@4.3.1: 68445c52874c9e7fafe0b9d4748f37a5b6b5e7718be55d636b79eebf4f5ad413
+  '@rollup/plugin-node-resolve@16.0.3': b81e978e1d012f35856ef1a5cc126c4fc65548e41ba1dfaab1fea3a8fc425fe0
 
 importers:
 
@@ -6062,10 +6063,6 @@ packages:
 
   deep-is@0.1.4:
     resolution: {integrity: sha512-oIPzksmTg4/MriiaYGO+okXDT7ztn/w3Eptv/+gSIdMdKsJo0u4CfYNFJPy+4SKMuCqGw2wxnA+URMg3t8a/bQ==}
-
-  deepmerge@4.3.1:
-    resolution: {integrity: sha512-3sUqbMEc77XqpdNO7FRyRog+eW3ph+GYCbj+rK+uYyRMuwsVy0rMiVtPn+QJlKFvWP/1PYpapqYn0Me2knFn+A==}
-    engines: {node: '>=0.10.0'}
 
   default-browser-id@5.0.1:
     resolution: {integrity: sha512-x1VCxdX4t+8wVfd1so/9w+vQ4vx7lKd2Qp5tDRutErwmR85OgmfX7RlLRMWafRMY7hbEiXIbudNrjOAPa/hL8Q==}
@@ -11939,11 +11936,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@rollup/plugin-node-resolve@16.0.3(rollup@4.62.5)':
+  '@rollup/plugin-node-resolve@16.0.3(patch_hash=b81e978e1d012f35856ef1a5cc126c4fc65548e41ba1dfaab1fea3a8fc425fe0)(rollup@4.62.5)':
     dependencies:
       '@rollup/pluginutils': 5.4.0(rollup@4.62.5)
       '@types/resolve': 1.20.2
-      deepmerge: 4.3.1(patch_hash=68445c52874c9e7fafe0b9d4748f37a5b6b5e7718be55d636b79eebf4f5ad413)
       is-module: 1.0.0
       resolve: 1.22.12
     optionalDependencies:
@@ -13795,8 +13791,6 @@ snapshots:
   deep-extend@0.6.0: {}
 
   deep-is@0.1.4: {}
-
-  deepmerge@4.3.1(patch_hash=68445c52874c9e7fafe0b9d4748f37a5b6b5e7718be55d636b79eebf4f5ad413): {}
 
   default-browser-id@5.0.1: {}
 
@@ -17561,7 +17555,7 @@ snapshots:
       '@babel/preset-env': 7.29.7(@babel/core@7.29.7(supports-color@10.2.2))(supports-color@10.2.2)
       '@babel/runtime': 7.29.7
       '@rollup/plugin-babel': 6.1.0(@babel/core@7.29.7(supports-color@10.2.2))(rollup@4.62.5)(supports-color@10.2.2)
-      '@rollup/plugin-node-resolve': 16.0.3(rollup@4.62.5)
+      '@rollup/plugin-node-resolve': 16.0.3(patch_hash=b81e978e1d012f35856ef1a5cc126c4fc65548e41ba1dfaab1fea3a8fc425fe0)(rollup@4.62.5)
       '@rollup/plugin-replace': 6.0.3(rollup@4.62.5)
       '@rollup/plugin-terser': 1.0.0(rollup@4.62.5)
       '@trickfilm400/rollup-plugin-off-main-thread': 3.0.0-pre1
