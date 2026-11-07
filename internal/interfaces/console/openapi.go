@@ -62,6 +62,9 @@ func openAPIDocument(routes []route) map[string]any {
 		}
 		responses["200"] = map[string]any{"description": "Success", "content": map[string]any{media: map[string]any{"schema": success}}}
 		statuses := []int{400, 401, 403, 404, 409, 422, 500}
+		if r.method == "POST" && r.path == "/console/v1/auth/login" {
+			statuses = append(statuses, 429)
+		}
 		if r.req != nil && r.requestMedia != "application/octet-stream" {
 			statuses = append(statuses, 413)
 		}
