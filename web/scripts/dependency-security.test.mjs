@@ -166,21 +166,44 @@ const workboxRequire = createRequire(pwaRequire.resolve('workbox-build'));
 const terserPath = workboxRequire.resolve('@rollup/plugin-terser');
 const serialize = createRequire(terserPath)('serialize-javascript');
 const Ajv = workboxRequire('ajv');
-const mergeRequire = createRequire(workboxRequire.resolve('@rollup/plugin-node-resolve'));
-const merge = mergeRequire('deepmerge');
+const nodeResolve = workboxRequire('@rollup/plugin-node-resolve');
 const nodeGlob = workboxRequire('glob');
 const eslintRequire = createRequire(new URL('../internal/lint-configs/eslint-config/package.json', import.meta.url));
 const minimatchPath = createRequire(eslintRequire.resolve('eslint')).resolve('minimatch');
 const uri = createRequire(workboxRequire.resolve('ajv'))('fast-uri');
 
-test('对象合并不会通过原型键增加继承属性', () => {
-  const input = JSON.parse('{"__proto__":{"injected":"fixture"},"safe":{"value":1}}');
-  for (const result of [merge(Object.create(null), input), merge(input, {})]) {
-    assert.equal(Object.getPrototypeOf(result), Object.prototype);
-    assert.equal(result.injected, undefined);
-    assert.deepEqual(result.safe, { value: 1 });
+test('解析插件两种入口保留独立冻结的默认配置', async () => {
+  const { pathToFileURL } = await import('node:url');
+  const esmPath = join(dirname(workboxRequire.resolve('@rollup/plugin-node-resolve')), '../es/index.js');
+  const esm = await import(pathToFileURL(esmPath).href);
+  for (const plugin of [nodeResolve, esm]) {
+    assert.deepEqual(plugin.DEFAULTS.extensions, ['.mjs', '.js', '.json', '.node']);
+    assert.deepEqual(plugin.DEFAULTS.moduleDirectories, ['node_modules']);
+    assert.ok(Object.isFrozen(plugin.DEFAULTS));
+    assert.ok(Object.isFrozen(plugin.DEFAULTS.extensions));
+    const extensions = ['.fixture'];
+    assert.equal(plugin.nodeResolve({ extensions }).name, 'node-resolve');
+    assert.equal(Object.isFrozen(extensions), false);
   }
-  assert.deepEqual(merge({ list: [1] }, { list: [2] }), { list: [1, 2] });
+});
+
+test('真实解析插件仍能解析并构建本地依赖包', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'lober-resolve-'));
+  let bundle;
+  try {
+    await mkdir(join(dir, 'node_modules/fixture'), { recursive: true });
+    await writeFile(join(dir, 'node_modules/fixture/package.json'), JSON.stringify({ name: 'fixture', main: 'index.mjs' }));
+    await writeFile(join(dir, 'node_modules/fixture/index.mjs'), 'export default "resolved-fixture";');
+    const entry = join(dir, 'entry.mjs');
+    await writeFile(entry, 'import value from "fixture"; export default value;');
+    bundle = await workboxRequire('rollup').rollup({ input: entry, plugins: [nodeResolve()] });
+    const result = await bundle.generate({ format: 'es' });
+    assert.ok(result.output[0].code.includes('resolved-fixture'));
+    assert.ok(!result.output[0].code.includes('from "fixture"'));
+  } finally {
+    await bundle?.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('复杂文件匹配模式不会无限放大计算', () => {
