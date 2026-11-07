@@ -2,7 +2,7 @@ package console
 
 import (
 	"crypto/sha256"
-	"net"
+	"net/netip"
 	"strings"
 	"sync"
 )
@@ -44,12 +44,11 @@ func loginIncrement(w loginWindow, now int64) loginWindow {
 func loginKey(value string) [32]byte { return sha256.Sum256([]byte(value)) }
 
 func (l *loginLimits) peer(remote string) int64 {
-	host, _, err := net.SplitHostPort(remote)
-	if err != nil {
-		host = remote
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		host = ip.String()
+	host := remote
+	if address, err := netip.ParseAddrPort(remote); err == nil {
+		host = address.Addr().Unmap().String()
+	} else if address, err := netip.ParseAddr(remote); err == nil {
+		host = address.Unmap().String()
 	}
 	key := loginKey(host)
 	l.mu.Lock()
