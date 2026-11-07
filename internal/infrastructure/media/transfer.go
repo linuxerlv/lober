@@ -14,6 +14,7 @@ import (
 
 type Transfer struct {
 	dirs        Dirs
+	timeouts    downloadTimeouts
 	resolver    func(context.Context, string) ([]netip.Addr, error)
 	dialContext func(context.Context, string, string) (net.Conn, error)
 }
@@ -22,7 +23,7 @@ var _ port.Transfer = (*Transfer)(nil)
 
 func NewTransfer(d Dirs) *Transfer {
 	d.LocalRoots = append([]string(nil), d.LocalRoots...)
-	return &Transfer{dirs: d, resolver: func(ctx context.Context, host string) ([]netip.Addr, error) {
+	return &Transfer{dirs: d, timeouts: defaultDownloadTimeouts(), resolver: func(ctx context.Context, host string) ([]netip.Addr, error) {
 		return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	}, dialContext: (&net.Dialer{}).DialContext}
 }

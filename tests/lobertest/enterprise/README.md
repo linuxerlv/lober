@@ -57,7 +57,7 @@ events 的 eventgen.sh 仅在 enterprise 随机 schema 中向 pending 的 ENTERP
 浏览器还会延迟真实 REST 事件响应，等待同一 seq 经 SSE 显示后再放行 REST，验证两通道重叠不增加重复行。
 recovery 需要免密 sudo mount/umount/iptables；使用独立 8 MiB tmpfs、本实例 DB 代理和自身随机来源端口。
 TCP 超时用只匹配该来源地址/端口的 OUTPUT DROP 规则制造；finally 删除原规则，不改共享服务或默认策略。
-该超时依赖真实内核连接超时，单例预算 170 秒；来源失败后按实际契约显式 retry，崩溃中的 fetching 则重启续传。
+服务限制连接等待为 10 秒，单例预算 45 秒；来源失败后按实际契约显式 retry，崩溃中的 fetching 则重启续传。
 不得用 HTTP 408 响应代替 TCP 超时验收。临时配置为 0600，不应复制到公共报告。
 
 控制面覆盖五角色真实 HTTP、认证与权限撤销、CSV 原子性、CAS、并发唯一性、模板审批、
