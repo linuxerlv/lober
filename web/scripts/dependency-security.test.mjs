@@ -166,7 +166,54 @@ const workboxRequire = createRequire(pwaRequire.resolve('workbox-build'));
 const terserPath = workboxRequire.resolve('@rollup/plugin-terser');
 const serialize = createRequire(terserPath)('serialize-javascript');
 const Ajv = workboxRequire('ajv');
+const mergeRequire = createRequire(workboxRequire.resolve('@rollup/plugin-node-resolve'));
+const merge = mergeRequire('deepmerge');
+const nodeGlob = workboxRequire('glob');
+const eslintRequire = createRequire(new URL('../internal/lint-configs/eslint-config/package.json', import.meta.url));
+const minimatchPath = createRequire(eslintRequire.resolve('eslint')).resolve('minimatch');
 const uri = createRequire(workboxRequire.resolve('ajv'))('fast-uri');
+
+test('对象合并不会通过原型键增加继承属性', () => {
+  const input = JSON.parse('{"__proto__":{"injected":"fixture"},"safe":{"value":1}}');
+  for (const result of [merge(Object.create(null), input), merge(input, {})]) {
+    assert.equal(Object.getPrototypeOf(result), Object.prototype);
+    assert.equal(result.injected, undefined);
+    assert.deepEqual(result.safe, { value: 1 });
+  }
+  assert.deepEqual(merge({ list: [1] }, { list: [2] }), { list: [1, 2] });
+});
+
+test('复杂文件匹配模式不会无限放大计算', () => {
+  const code = `const {Minimatch}=require(${JSON.stringify(minimatchPath)});new Minimatch('a/**/../'.repeat(20)+'fixture',{optimizationLevel:2});`;
+  const result = spawnSync(process.execPath, ['-e', code], { timeout: 3000, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+});
+
+test('文件搜索取消后停止读取新目录', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'lober-abort-'));
+  const fs = await import('node:fs');
+  const abort = new AbortController();
+  let reads = 0;
+  try {
+    for (let i = 0; i < 12; i++) {
+      await mkdir(join(dir, `d${i}`));
+      await writeFile(join(dir, `d${i}`, 'file.txt'), 'fixture');
+    }
+    await assert.rejects(nodeGlob.glob('**/*', { cwd: dir, signal: abort.signal, fs: {
+      ...fs, readdir(path, options, callback) {
+        reads++;
+        fs.readdir(path, options, (error, entries) => {
+          if (!abort.signal.aborted) abort.abort(new Error('fixture abort'));
+          callback(error, entries);
+        });
+      },
+    } }), /fixture abort/);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(reads, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 async function withRedirectServers(run) {
   const collector = createServer((req, res) => res.end(JSON.stringify(req.headers)));
