@@ -32,6 +32,7 @@ minimumReleaseAge: 0
 overrides:
   '@ast-grep/napi': 'catalog:'
   '@ctrl/tinycolor': 'catalog:'
+  '@intlify/shared@>=11.1.10 <11.4.14': ^11.4.14
   clsx: 'catalog:'
   pinia: 'catalog:'
   vue: 'catalog:'
