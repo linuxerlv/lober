@@ -41,11 +41,12 @@ type Server struct {
 	routes []RouteInfo
 }
 type server struct {
-	deps   Deps
-	logger *slog.Logger
-	index  map[string]route
-	routes []route
-	owner  *Server
+	loginLimits *loginLimits
+	deps        Deps
+	logger      *slog.Logger
+	index       map[string]route
+	routes      []route
+	owner       *Server
 }
 
 func New(d Deps) *Server {
@@ -58,7 +59,7 @@ func New(d Deps) *Server {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
-	s := &server{deps: d, logger: d.Logger, index: make(map[string]route)}
+	s := &server{deps: d, logger: d.Logger, index: make(map[string]route), loginLimits: newLoginLimits(d.Clock)}
 	out := &Server{Engine: gin.New(), server: s}
 	// 主机序列号允许斜杠，路由先按编码后的路径分段，再解开参数。
 	out.Engine.UseRawPath = true
