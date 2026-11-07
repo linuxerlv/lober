@@ -16,12 +16,19 @@ const (
 	sourceDigestMismatch = "镜像内容与登记的校验值不符"
 	sourceInterrupted    = "镜像下载中断"
 	sourceUnavailable    = "无法下载镜像"
+	sourceTimeout        = "镜像下载超时"
 	sourceHTTPStatus     = "镜像服务器返回 HTTP "
 )
 
-type remoteFetchError struct{ status int }
+type remoteFetchError struct {
+	status  int
+	timeout bool
+}
 
 func (e remoteFetchError) Error() string {
+	if e.timeout {
+		return sourceTimeout
+	}
 	if e.status >= 100 && e.status <= 599 {
 		return sourceHTTPStatus + strconv.Itoa(e.status)
 	}
@@ -58,7 +65,7 @@ func publicSourceError(source model.Source) string {
 		return publicImportError(stored)
 	}
 	switch stored {
-	case sourceFailed, sourceInvalid, sourceDigestMismatch, sourceInterrupted, sourceUnavailable:
+	case sourceFailed, sourceInvalid, sourceDigestMismatch, sourceInterrupted, sourceUnavailable, sourceTimeout:
 		return stored
 	}
 	if suffix, ok := strings.CutPrefix(stored, sourceHTTPStatus); ok && len(suffix) == 3 {
