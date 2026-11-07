@@ -35,7 +35,7 @@ class EventTests(EnterpriseServiceFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, 'Restricted event producer failed')
         return json.loads(result.stdout)
 
-    def stream(self, task, token=None, after=0, last=None, query_token=False):
+    def stream(self, task, token=None, after=0, last=None, query_token=False, expected_status=200):
         connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=9)
         self.addCleanup(connection.close)
         headers = {}
@@ -49,8 +49,9 @@ class EventTests(EnterpriseServiceFixture, unittest.TestCase):
             headers['Last-Event-ID'] = str(last)
         connection.request('GET', '/console/v1/tasks/' + task['id'] + '/stream?' + urllib.parse.urlencode(query), headers=headers)
         response = connection.getresponse()
-        self.assertEqual(response.status, 200)
-        self.assertTrue(response.getheader('Content-Type').startswith('text/event-stream'))
+        self.assertEqual(response.status, expected_status)
+        if expected_status == 200:
+            self.assertTrue(response.getheader('Content-Type').startswith('text/event-stream'))
         return response
 
     def event(self, response):
@@ -76,7 +77,9 @@ class EventTests(EnterpriseServiceFixture, unittest.TestCase):
         self.assertEqual([item['Seq'] for item in rows], list(range(1, 206)))
         replay = self.append(task, 1, 205)
         self.assertTrue(all(item['Duplicate'] for item in replay))
-        response = self.stream(task, query_token=True)
+        rejected = self.stream(task, query_token=True, expected_status=401)
+        rejected.close()
+        response = self.stream(task)
         self.assertEqual([self.event(response)['seq'] for _ in range(205)], list(range(1, 206)))
         response.close()
         resumed = self.stream(task, after=0, last=200)
