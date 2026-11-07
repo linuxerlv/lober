@@ -22,6 +22,20 @@ jobs:
     name: go
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: lober_ci
+          POSTGRES_PASSWORD: lober_ci_temporary
+          POSTGRES_DB: lober_ci
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U lober_ci -d lober_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
@@ -30,8 +44,19 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: 准备脚本测试工具
+        run: |
+          if ! command -v busybox >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y busybox
+          fi
       - name: 后端基础检查
-        run: make check
+        env:
+          LOBER_TEST_PG_DSN: postgres://lober_ci:lober_ci_temporary@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/lober_ci?sslmode=disable
+        run: |
+          export LOBER_TEST_BASH="$(command -v bash)"
+          export LOBER_TEST_BUSYBOX="$(command -v busybox)"
+          make check
 
   web:
     name: web
@@ -55,3 +80,4 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: 前端检查
         run: make webcheck
+
