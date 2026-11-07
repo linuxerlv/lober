@@ -38,7 +38,7 @@
     "test:console": "vitest run --config apps/web-ele/vitest.config.ts --maxWorkers=2",
     "test:shared": "vitest run --config vitest.config.ts packages --maxWorkers=2",
     "check:console": "pnpm check:console-types && pnpm --filter @vben/web-ele typecheck && pnpm lint:console && pnpm test:console && pnpm test:shared && pnpm test:dependencies && pnpm build:ele",
-    "test:dependencies": "node --test --test-concurrency=1 scripts/dependency-security.test.mjs scripts/router-consumer.test.mjs",
+    "test:dependencies": "node --test --test-concurrency=1 scripts/dependency-security.test.mjs scripts/devtool-security.test.mjs scripts/router-consumer.test.mjs",
     "dev:ele": "pnpm -F @vben/web-ele run dev",
     "format": "vsh lint --format",
     "lint": "vsh lint",
