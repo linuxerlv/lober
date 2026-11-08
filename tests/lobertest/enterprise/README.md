@@ -17,6 +17,8 @@ pg_dump；浏览器用锁文件对应 Playwright 和 Linux Chromium headless she
 fixturegen.sh 复用 isotest.Image 生成明确标注的合成介质，经过真实上传/识别/导入，
 用于接口集成，不证明任何真实发行版可安装。
 
+内置模板的一次性发布记录不属于普通测试。仅在确需新增不可变发布快照时，在仓库根目录显式执行 `go run ./internal/infrastructure/builtin/testdata/release-recorder -dir ./internal/infrastructure/builtin/testdata -write`；该命令会写入发布快照及缺失的指纹，不应为消除跳过而运行。
+
 运行前从 test 分支冻结源码并构建含真实前端资源的二进制。以下环境变量必须显式设置：
 
 - LOBER_TEST_PG_DSN：能创建/删除独立测试 schema 的连接串，通过受限文件加载。
@@ -50,6 +52,18 @@ release profile 缺少真实介质、PXE/状态机、真实安装、容量长稳
 control-smoke 通过只代表该明确子集通过；它不是计划中的完整控制面或发布验收。
 control-complete 在 smoke 基础上要求真实浏览器业务、事件传输和控制面故障恢复三套结果。
 名称只指 profiles.json 列出的集合；导入发布/删除的精确崩溃时刻、全部安全/容量/升级场景仍需单独资格证据。
+
+### 真实镜像读取证据
+
+`real_media_evidence.py` 只读原始镜像，并用独立测试数据库和临时目录执行 ESXi 7、8、9 导入以及 Debian、Rocky 或 Windows 镜像的识别和读取；它不启动设备，也不执行安装。运行前分别设置 `LOBER_TEST_ESXI7_ISO`、`LOBER_TEST_ESXI8_ISO`、`LOBER_TEST_ESXI9_ISO`、`LOBER_TEST_REAL_ISO` 和 `LOBER_TEST_PG_DSN`。先从可信来源确认四个镜像的 SHA256，将四个变量名到小写 SHA256 的映射存入私有 JSON 文件；本工具只校验实际字节与该文件一致，不验证校验值的来源。预留足够的临时空间，ESXi 测试会复制和解包镜像。
+
+```bash
+python3 tests/lobertest/enterprise/real_media_evidence.py --output /private/run/logs \
+  --manifest /private/run/candidate.json --product-sha PRODUCT_SHA \
+  --checksums /private/run/media-sha256.json
+```
+
+工具校验固定候选、二进制、源码和镜像哈希，保存逐项测试原始事件，生成与候选、日志和运行批次绑定的 `real_media.json`。缺文件、校验值不符、缺测试、失败或跳过时不能通过。此结果只证明读取和导入，不证明真实设备、网络启动或实际安装；其他 release 证据仍须分别完成。
 
 flows 使用当前构建的真实表单、独立登录会话和后端；旧请求隔离只延迟实际服务响应，不伪造业务响应。
 events 的 eventgen.sh 仅在 enterprise 随机 schema 中向 pending 的 ENTERPRISE 主机任务追加 test.transport
