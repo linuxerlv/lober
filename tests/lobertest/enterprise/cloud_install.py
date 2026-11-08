@@ -2856,11 +2856,11 @@ uname -m
                    'interpreter': 'sh', 'timings': ['firstboot']}]}, token=author)
     hook = api.approve('hooks', hook, author, approver)
     builtin = manifest['cloud']['builtin_template']
-    require(builtin['id'] == 'builtin-preseed' and builtin['version'] == 5, '本候选必须使用已核对的 Debian 内置模板 v5')
-    native = api.api('GET', '/templates/builtin-preseed/versions/5')
+    require(builtin['id'] == 'builtin-preseed' and builtin['version'] == 6, '本候选必须使用已核对的 Debian 内置模板 v6')
+    native = api.api('GET', '/templates/builtin-preseed/versions/6')
     require(native['builtin'] is True and native['state'] == 'approved'
             and hashlib.sha256(native['body'].encode()).hexdigest() == builtin['body_sha256'], '当前服务的内置模板与冻结值不符')
-    draft = api.api('POST', '/templates/builtin-preseed/derive', {'from': 5, 'name': manifest['run_id']}, token=author)
+    draft = api.api('POST', '/templates/builtin-preseed/derive', {'from': 6, 'name': manifest['run_id']}, token=author)
     require(draft['body'].count('{{lober:firstboot}}') == 1, '当前内置模板与预期不同，应重新审查')
     draft['body'] = draft['body'].replace('{{lober:firstboot}}', '{{slot:qualify@firstboot}} && {{lober:firstboot}}')
     draft['assembly']['qualify'] = [{'hookID': hook['id'], 'hookVersion': hook['version']}]

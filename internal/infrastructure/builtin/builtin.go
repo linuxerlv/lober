@@ -58,6 +58,10 @@ func instance(name string) model.Instance {
 	version := 2
 	// 共享组件缩减了支持范围，模板统一引用新版本。
 	switch name {
+	case "network":
+		version = 4
+	case "sshkey":
+		version = 3
 	case "packages":
 		version = 4
 	case "account", "partition":
@@ -87,7 +91,7 @@ func preseedParams() []model.ParamDecl {
 func inventoryPreseedTemplate() model.Template {
 	ss := series("preseed")
 	tpl := model.Template{
-		ID: "builtin-preseed-inventory", Version: 2, Name: "lober:preseed-inventory",
+		ID: "builtin-preseed-inventory", Version: 3, Name: "lober:preseed-inventory",
 		State: model.VersionApproved, Builtin: true,
 		Family: ss[0].Family(), Series: ss, Body: body("preseed", "answer.cfg"),
 		Params: preseedParams(), Assembly: map[string][]model.Instance{},
@@ -123,9 +127,9 @@ func shippedTemplates() []model.Template {
 			id = "esxi"
 		}
 		// 模板改用新版共享组件，已有版本内容保持不变。
-		version := 4
+		version := 5
 		if format == "kickstart" || format == "preseed" {
-			version = 5
+			version = 6
 		}
 		ss := series(format)
 		tpl := model.Template{ID: "builtin-" + id, Version: version, Name: "lober:" + id, State: model.VersionApproved, Builtin: true, Family: ss[0].Family(), Series: ss, Body: body(format, file), Assembly: map[string][]model.Instance{}}

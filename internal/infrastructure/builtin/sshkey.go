@@ -16,7 +16,7 @@ func linuxSSHKey(format catalog.Format) model.Impl {
 }
 
 func sshkeyHook() model.Hook {
-	h := hook("sshkey", 2, "SSH public key access. Match username to the account hook. Windows requires OpenSSH Server; only Server 2025 is guaranteed by the content contract.")
+	h := hook("sshkey", 3, "SSH public key access. Match username to the account hook. Windows requires OpenSSH Server; only Server 2025 is guaranteed by the content contract.")
 	h.Params = []model.ParamDecl{{Name: "username", Type: "word", Default: "lober"}, {Name: "key", Type: "sshkey", Required: true}}
 	h.Impls = []model.Impl{
 		fragment("kickstart", "sshkey.cfg"), linuxSSHKey("preseed"), fragment("autoinstall", "sshkey.yaml"),
