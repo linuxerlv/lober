@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/xml"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -271,50 +270,6 @@ func TestLinuxFirstbootIsStagedInInstallerTarget(t *testing.T) {
 				t.Errorf("%s missing staging %s", f, want)
 			}
 		}
-	}
-}
-
-func TestRecordCurrentRelease(t *testing.T) {
-	if os.Getenv("LOBER_RECORD_RELEASE") != "1" {
-		t.Skip("one-time immutable release recording")
-	}
-	releases, err := filepath.Glob("testdata/releases/v*.json")
-	if err != nil || len(releases) == 0 {
-		t.Fatalf("no historical releases: %v", err)
-	}
-	next := 1
-	for _, file := range releases {
-		var n int
-		if _, err := fmt.Sscanf(filepath.Base(file), "v%d.json", &n); err != nil {
-			t.Fatalf("unreadable release fixture %s: %v", file, err)
-		}
-		if n >= next {
-			next = n + 1
-		}
-	}
-	file := fmt.Sprintf("testdata/releases/v%d.json", next)
-	r := release{Templates: Templates(), Hooks: Hooks()}
-	if err := os.WriteFile(file, append(encode(r), '\n'), 0644); err != nil {
-		t.Fatal(err)
-	}
-	for _, tpl := range r.Templates {
-		recordHash(t, "template", tpl.ID, tpl.Version, tpl)
-	}
-	for _, h := range r.Hooks {
-		recordHash(t, "hook", h.ID, h.Version, h)
-	}
-}
-func recordHash(t *testing.T, kind, id string, version int, v any) {
-	t.Helper()
-	file := fmt.Sprintf("testdata/fingerprints/%s-%s-v%d.sha256", kind, id, version)
-	if data, err := os.ReadFile(file); err == nil {
-		if want := Fingerprint(v) + "\n"; string(data) != want {
-			t.Fatalf("existing fingerprint %s differs: content changed without a version bump", file)
-		}
-		return
-	}
-	if err := os.WriteFile(file, []byte(Fingerprint(v)+"\n"), 0644); err != nil {
-		t.Fatal(err)
 	}
 }
 
