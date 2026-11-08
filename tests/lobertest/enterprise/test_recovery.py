@@ -136,7 +136,7 @@ class RecoveryTests(EnterpriseServiceFixture, unittest.TestCase):
         subprocess.run(command + ['-A'] + rule, check=True, capture_output=True, timeout=10)
         try:
             item = self.register(payload, 'url', server.url)
-            deadline = time.monotonic() + 170
+            deadline = time.monotonic() + 45
             while time.monotonic() < deadline:
                 progress = self.assert_status(self.admin('GET', '/isos/' + item['id'] + '/progress'), 200)
                 if any(source['state'] == 'failed' for source in progress['sources']):
@@ -144,9 +144,9 @@ class RecoveryTests(EnterpriseServiceFixture, unittest.TestCase):
                 time.sleep(.5)
             self.assertNotEqual(progress['state'], 'ready')
             self.assertEqual(server.requests, [], 'Faulted TCP connection reached the HTTP server')
-            self.assertTrue(any(source['state'] == 'failed' and
-                ('timed out' in source['error'] or 'timeout' in source['error']) for source in progress['sources']),
-                'Real TCP connect did not reach a persisted timeout within 170 seconds')
+            self.assertTrue(any(source['state'] == 'failed' and source['error'] == '无法下载镜像'
+                for source in progress['sources']),
+                'Dropped TCP connection did not produce a sanitized failure within 45 seconds')
         finally:
             subprocess.run(command + ['-D'] + rule, check=True, capture_output=True, timeout=10)
         self.assert_status(self.admin('POST', '/isos/' + item['id'] + '/retry'), 200)
