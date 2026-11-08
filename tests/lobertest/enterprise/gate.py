@@ -1,4 +1,9 @@
 """Fail-closed gate for explicit suite profiles; uses only the standard library."""
+import sys
+
+if __name__ == "__main__" and not sys.flags.isolated:
+    raise SystemExit("请使用 python3 -I 运行门禁")
+
 import argparse
 import hashlib
 import json
@@ -6,8 +11,45 @@ from pathlib import Path
 import re
 
 
+def load_verified_module(path, expected, name):
+    import importlib.util
+    source = Path(path).read_bytes()
+    if hashlib.sha256(source).hexdigest() != expected:
+        raise ValueError("checker source changed")
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(name)
+    sys.modules[name] = module
+    try:
+        exec(compile(source, str(path), "exec"), module.__dict__)
+    except BaseException:
+        if previous is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
+        raise
+    return module
+
+
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def evaluate_release_profile(required, manifest, source):
+    problems = []
+    mandatory = {"backend", "frontend", "gate", "control", "flows", "events", "recovery",
+                 "fuzz_iso", "fuzz_wim", "security_scan", "frontend_audit", "real_media",
+                 "pxe_state", "real_install", "capacity_soak", "supported_upgrade"}
+    if not isinstance(required, list) or not mandatory.issubset(set(required)):
+        problems.append("release profile is missing required suites")
+    for name in ("tests/lobertest/enterprise/gate.py", "tests/lobertest/enterprise/profiles.json"):
+        path = Path(source) / name
+        try:
+            if path.is_symlink() or digest(path) != manifest.get("files", {}).get(name):
+                problems.append("gate/profile source absent or changed: " + name)
+        except OSError:
+            problems.append("gate/profile source absent or changed: " + name)
+    return problems
 
 
 def atomic_json(path, value):
@@ -61,6 +103,8 @@ def evaluate(required, results, product_sha, manifest=None):
         return ["Invalid or empty required-suite profile"]
     for name in required:
         row = results.get(name)
+        if name == "supported_upgrade":
+            problems.append("supported_upgrade: supported-version verification is not implemented")
         if not isinstance(row, dict):
             problems.append(f"{name}: required result missing")
             continue
@@ -81,7 +125,8 @@ def evaluate(required, results, product_sha, manifest=None):
                 problems.append(f"{name}: run identity mismatch")
             if row.get("manifest_sha256") != manifest.get("_sha256"):
                 problems.append(f"{name}: build manifest mismatch")
-            if name in ("control", "gate", "flows", "events", "recovery", "real_media"):
+            if name in ("control", "gate", "flows", "events", "recovery", "real_media",
+                        "pxe_state", "real_install", "capacity_soak", "supported_upgrade"):
                 if row.get("test_sha") != manifest.get("test_sha"):
                     problems.append(f"{name}: test source identity mismatch")
                 if row.get("binary_sha256") != manifest.get("binary_sha256"):
@@ -113,7 +158,27 @@ def main():
     problems = evaluate(required, results, args.product_sha, manifest)
     if manifest.get("product_sha") != args.product_sha or not manifest.get("run_id"):
         problems.append("Frozen product/run identity mismatch")
-    problems += validate_candidate(manifest, Path(__file__).resolve().parents[3], manifest.get("binary", ""))
+    source = Path(__file__).resolve().parents[3]
+    candidate_problems = validate_candidate(manifest, source, manifest.get("binary", ""))
+    if args.profile == "release":
+        candidate_problems += evaluate_release_profile(required, manifest, source)
+    problems += candidate_problems
+    def passed(name):
+        return isinstance(results.get(name), dict) and results[name].get("status") == "PASS"
+    if not candidate_problems and any(passed(name) for name in ("pxe_state", "real_install", "capacity_soak")):
+        try:
+            sys.modules["gate"] = sys.modules[__name__]
+            capacity_name = "tests/lobertest/enterprise/production_capacity.py"
+            verifier_name = "tests/lobertest/enterprise/installation_evidence.py"
+            capacity = load_verified_module(source / capacity_name, manifest["files"][capacity_name], "production_capacity")
+            verifier = load_verified_module(source / verifier_name, manifest["files"][verifier_name], "installation_evidence")
+            if passed("capacity_soak"):
+                problems += ["capacity: " + problem for problem in
+                             verifier.verify_capacity(manifest, source, capacity.BASE, args.manifest)]
+            elif any(passed(name) for name in ("pxe_state", "real_install")):
+                problems += ["installation: " + problem for problem in verifier.verify_installation(manifest, source, capacity.BASE)]
+        except (ImportError, KeyError, OSError, TypeError, ValueError):
+            problems.append("installation: verifier unavailable or invalid")
     for name, row in results.items():
         if not isinstance(row, dict) or not isinstance(row.get("evidence"), str):
             continue

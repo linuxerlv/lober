@@ -36,9 +36,9 @@ python3 tests/lobertest/enterprise/run.py control --output /private/run/logs --p
 python3 tests/lobertest/enterprise/run.py flows --output /private/run/logs --product-sha PRODUCT_SHA --test-sha TEST_SHA --manifest /private/run/candidate.json > /private/run/logs/flows.log 2>&1
 python3 tests/lobertest/enterprise/run.py events --output /private/run/logs --product-sha PRODUCT_SHA --test-sha TEST_SHA --manifest /private/run/candidate.json > /private/run/logs/events.log 2>&1
 python3 tests/lobertest/enterprise/run.py recovery --output /private/run/logs --product-sha PRODUCT_SHA --test-sha TEST_SHA --manifest /private/run/candidate.json > /private/run/logs/recovery.log 2>&1
-python3 tests/lobertest/enterprise/gate.py --profile control-smoke --results /private/run/logs --product-sha PRODUCT_SHA --manifest /private/run/candidate.json
-python3 tests/lobertest/enterprise/gate.py --profile control-complete --results /private/run/logs --product-sha PRODUCT_SHA --manifest /private/run/candidate.json
-python3 tests/lobertest/enterprise/gate.py --profile release --results /private/run/logs --product-sha PRODUCT_SHA --manifest /private/run/candidate.json
+python3 -I tests/lobertest/enterprise/gate.py --profile control-smoke --results /private/run/logs --product-sha PRODUCT_SHA --manifest /private/run/candidate.json
+python3 -I tests/lobertest/enterprise/gate.py --profile control-complete --results /private/run/logs --product-sha PRODUCT_SHA --manifest /private/run/candidate.json
+python3 -I tests/lobertest/enterprise/gate.py --profile release --results /private/run/logs --product-sha PRODUCT_SHA --manifest /private/run/candidate.json
 ```
 
 每条命令独立记录退出码；目录预先创建。backend/frontend 结果须由相应实际门禁退出码和
@@ -64,6 +64,25 @@ python3 tests/lobertest/enterprise/real_media_evidence.py --output /private/run/
 ```
 
 工具校验固定候选、二进制、源码和镜像哈希，保存逐项测试原始事件，生成与候选、日志和运行批次绑定的 `real_media.json`。缺文件、校验值不符、缺测试、失败或跳过时不能通过。此结果只证明读取和导入，不证明真实设备、网络启动或实际安装；其他 release 证据仍须分别完成。
+
+### 网络启动、实际安装和长稳原件接入
+
+`installation_evidence.py` 只读检查已存在的验收原件，不启动客户机、不安装系统、不产生负载。它复用容量检查器中的真实安装检查，要求同一轮冻结的两台并行和两台串行安装资料，检查实际网络抓包、客户身份、任务状态、重复启动以及关联原件；单纯 PASS、合成测试或少于完整四次安装不能通过。该严格范围不是所有发行版和硬件的覆盖结论。
+
+冻结清单中的 `capacity.run_identity_file` 和 `run_identity_sha256` 须绑定共同身份合同；`capacity.concurrent_installation.path` 和 `sha256` 须绑定该轮安装比较原件。合同中的检查器及其四个辅助文件必须与本候选源码字节一致，且位于 Lober 专用私有目录。将正式候选清单、代码与程序冻结后执行：
+
+```bash
+python3 -I tests/lobertest/enterprise/installation_evidence.py --kind installation \
+  --manifest /private/run/candidate.json --output /private/run/logs --product-sha PRODUCT_SHA
+```
+
+成功时生成 `pxe_state.json` 和 `real_install.json`；企业门禁再次只读检查原件，原件丢失、被更改或跨轮次均拒绝通过。检查器和辅助文件从校验过的源码字节加载，不使用字节码缓存。没有真实原件时生成失败结果，不会执行安装。
+
+本节的证据入口和 `gate.py` 必须使用 `python3 -I`，以免本地同名模块被提前导入。现有 `run.py`、`real_media_evidence.py` 和 `production_deployment.py` 仍采用普通模块导入，尚未获得相同保护；其结果必须在可信的测试目录与 Python 环境运行，不能把本节的保护推广到这些入口。
+
+长稳接入需在候选冻结前额外写入 `capacity.profile_file` 和 `capacity.evidence_root`，前者必须与 `capacity.profile_sha256` 匹配，后者指向专用目录下包含 seed、normal、burst、soak 的原始记录目录。执行同一命令并将 `--kind installation` 改为 `--kind capacity`。程序重新读取阶段原件并复用正式容量检查，包括完整规模、24 小时采样、状态不变量和真实并发安装；仅凭报告标签不够。门禁再次检查原件。负载执行和实际安装分别需要授权，本命令不会替代或自动启动这些步骤。
+
+`supported_upgrade` 目前没有已确认的受支持旧版本清单和验收器，门禁明确拒绝此项通过标签。确认版本范围并完成可重复升级验收器及其验证后才能移除该限制；不得使用模拟记录冒充升级验收。
 
 flows 使用当前构建的真实表单、独立登录会话和后端；旧请求隔离只延迟实际服务响应，不伪造业务响应。
 events 的 eventgen.sh 仅在 enterprise 随机 schema 中向 pending 的 ENTERPRISE 主机任务追加 test.transport

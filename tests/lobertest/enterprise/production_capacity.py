@@ -28,6 +28,26 @@ import urllib.request
 import uuid
 
 BASE = Path('/home/dev/lober-production-qualification-20261025')
+
+
+def load_verified_module(path, expected, name):
+    import importlib.util
+    source = Path(path).read_bytes()
+    if hashlib.sha256(source).hexdigest() != expected:
+        raise ValueError('checker source changed')
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(name)
+    sys.modules[name] = module
+    try:
+        exec(compile(source, str(path), 'exec'), module.__dict__)
+    except BaseException:
+        if previous is None: sys.modules.pop(name, None)
+        else: sys.modules[name] = previous
+        raise
+    return module
+
+
 CATEGORIES = ('host_list', 'host_detail', 'task_list', 'task_detail', 'create_read',
               'upload_import', 'event_reconnect', 'idle_observation')
 READ_CATEGORIES = CATEGORIES[:4]
@@ -454,7 +474,6 @@ def installation_problems(report, identity, root, contract=None):
             raise ValueError('reviewed common checker/target contract missing')
         for k in ('run_id', 'product_sha', 'test_sha', 'binary_sha256', 'run_identity_sha256'):
             if report.get(k) != identity.get(k) or not identity.get(k): raise ValueError('installation identity mismatch')
-        import importlib.util
         groups = []
         task_sets = []
         for name in ('parallel', 'serial'):
@@ -468,8 +487,8 @@ def installation_problems(report, identity, root, contract=None):
                 if (not checker.is_relative_to(BASE) or sha(checker) != checker_ref['sha256']
                         or contract['installation_checkers'].get(str(checker)) != checker_ref['sha256']):
                     raise ValueError('external checker not frozen/reviewed in common identity')
-                spec = importlib.util.spec_from_file_location('frozen_capacity_install_checker_'+checker_ref['sha256'], checker)
-                module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+                module = load_verified_module(checker, checker_ref['sha256'],
+                                              'frozen_capacity_install_checker_'+checker_ref['sha256'])
                 for k in ('run_id', 'product_sha', 'test_sha', 'binary_sha256', 'run_identity_sha256'):
                     if case.get(k) != identity[k]: raise ValueError('case identity mismatch')
                 files = case['files']
@@ -664,6 +683,74 @@ def check_phase(profile, identity, row, samples, requests, downloads, expected_p
                 require(tail.get('processes', {}).get(role, {}).get(field, math.inf)
                         <= idle.get(role, {}).get(field, -math.inf)+tolerance, 'burst failed idle recovery')
     return list(dict.fromkeys(problems))
+
+
+def assess_capacity(self):
+    problems, phase_results, phase_digests = [], {}, {}
+    phase_ids, previous_end, frozen_baseline = set(), None, None
+    for phase in ('seed', 'normal', 'burst', 'soak'):
+        root = self.output_root/phase
+        path = root/'result.json'
+        if not path.is_file(): problems.append(phase+': result absent'); continue
+        row = json.loads(path.read_text())
+        phase_digests[phase] = sha(path)
+        if any(row.get(k) != v for k, v in self.identity.items()): problems.append(phase+': identity mismatch')
+        for name, expected in row.get('evidence', {}).items():
+            file = (root/name).resolve()
+            if not file.is_relative_to(root) or not file.is_file() or sha(file) != expected:
+                problems.append(phase+': evidence missing/changed')
+        required = {'command.json', 'registry.json', 'lifecycle.jsonl', 'requests.jsonl',
+                    'samples.jsonl', 'downloads.jsonl', 'processes.jsonl', 'database.jsonl', 'lanes.jsonl', 'sessions.jsonl'}
+        if not required <= set(row.get('evidence', {})): problems.append(phase+': raw evidence absent')
+        if not required <= {p.name for p in root.iterdir() if p.is_file()}: continue
+        def records(filename): return bound_rows(root/filename, self.identity, phase, row.get('phase_id'))
+        lifecycle = list(read_rows(root/'lifecycle.jsonl'))
+        for filename in ('lifecycle.jsonl', 'requests.jsonl', 'samples.jsonl', 'downloads.jsonl', 'processes.jsonl', 'database.jsonl', 'lanes.jsonl', 'sessions.jsonl'):
+            for _ in records(filename): pass
+        problems += [phase+': '+e for e in stage_bundle_problems(phase, self.identity, row,
+            json.loads((root/'command.json').read_text()), json.loads((root/'registry.json').read_text()), lifecycle)]
+        if row.get('phase_id') in phase_ids: problems.append('phase_id reused across stages')
+        phase_ids.add(row.get('phase_id'))
+        if previous_end is not None and row.get('started_at', -1) < previous_end: problems.append('stage order/overlap invalid')
+        previous_end = row.get('ended_at', math.inf)
+        if phase == 'seed':
+            if (row.get('status') != 'COMPLETED' or row.get('dataset', {}).get('hosts', 0) < 10000
+                    or row.get('dataset', {}).get('historical_tasks', 0) < 100000
+                    or row.get('actual_install_success') != 0): problems.append('seed incomplete')
+            problems += seed_evidence_problems(row.get('dataset', {}), read_rows(root/'requests.jsonl'), read_rows(root/'database.jsonl'))
+            frozen_baseline = row.get('dataset')
+            if not (self.output_root/'seed-baseline.json').is_file() or sha(self.output_root/'seed-baseline.json') != row.get('baseline_sha256'):
+                problems.append('frozen seed baseline original missing/changed')
+            continue
+        if not (root/'samples.jsonl').is_file(): continue
+        all_samples = list(read_rows(root/'samples.jsonl'))
+        # 启动前资源记录不在计时覆盖内；独立保存但不混入正式分钟采样。
+        samples = [s for s in all_samples if s.get('measurement') == 'qualification']
+        window = row.get('window', {})
+        requests = request_summary(r for r in read_rows(root/'requests.jsonl')
+            if r.get('window_id') == window.get('id') and window.get('start', math.inf) <= r.get('at', -1) < window.get('end', -math.inf))
+        downloads = download_summary(read_rows(root/'downloads.jsonl'), row.get('artifact_size'), row.get('artifact_sha256'))
+        found = check_phase(self.profile, self.identity, row, samples, requests, downloads, expected_phase=phase)
+        if window and phase == row.get('phase'):
+            found += activity_evidence_problems(row, read_rows(root/'requests.jsonl'))
+            found += periodic_jobs_problems(row, read_rows(root/'requests.jsonl'), lifecycle, self.c['imports'][phase])
+            active_window = {**window, 'end': window['start']+300} if phase == 'burst' else window
+            multiplier = 2 if phase == 'burst' else 1
+            found += lane_evidence_problems((r for r in read_rows(root/'lanes.jsonl') if r.get('transport') == 'download'), active_window, 4*multiplier, progress=True)
+            found += event_lane_problems((r for r in read_rows(root/'lanes.jsonl') if r.get('transport') == 'event'), active_window, 50*multiplier)
+        for current in (row.get('invariants_before', {}), row.get('invariants_after', {})):
+            found += invariant_chain_problems(frozen_baseline or {}, current)
+        problems += [phase+': '+p for p in found]
+        phase_results[phase] = {'requests': requests, 'downloads': downloads}
+    concurrent = self.c.get('concurrent_installation')
+    # 本工具不创建装机结果；两台真实并发装机必须有单独冻结的检查器结论。
+    if not concurrent: problems.append('real concurrent installation evidence absent')
+    else:
+        p = private_file(concurrent['path'], BASE)
+        report = json.loads(p.read_text())
+        if sha(p) != concurrent['sha256']: problems.append('concurrent original changed')
+        problems += installation_problems(report, self.identity, p.parent, self.common_identity)
+    return problems, phase_results, phase_digests
 
 
 class Driver:
@@ -1674,70 +1761,7 @@ class Driver:
 
     def evaluate(self):
         self.acquire()
-        problems, phase_results, phase_digests = [], {}, {}
-        phase_ids, previous_end, frozen_baseline = set(), None, None
-        for phase in ('seed', 'normal', 'burst', 'soak'):
-            root = self.output_root/phase
-            path = root/'result.json'
-            if not path.is_file(): problems.append(phase+': result absent'); continue
-            row = json.loads(path.read_text())
-            phase_digests[phase] = sha(path)
-            if any(row.get(k) != v for k, v in self.identity.items()): problems.append(phase+': identity mismatch')
-            for name, expected in row.get('evidence', {}).items():
-                file = (root/name).resolve()
-                if not file.is_relative_to(root) or not file.is_file() or sha(file) != expected:
-                    problems.append(phase+': evidence missing/changed')
-            required = {'command.json', 'registry.json', 'lifecycle.jsonl', 'requests.jsonl',
-                        'samples.jsonl', 'downloads.jsonl', 'processes.jsonl', 'database.jsonl', 'lanes.jsonl', 'sessions.jsonl'}
-            if not required <= set(row.get('evidence', {})): problems.append(phase+': raw evidence absent')
-            if not required <= {p.name for p in root.iterdir() if p.is_file()}: continue
-            def records(filename): return bound_rows(root/filename, self.identity, phase, row.get('phase_id'))
-            lifecycle = list(read_rows(root/'lifecycle.jsonl'))
-            for filename in ('lifecycle.jsonl', 'requests.jsonl', 'samples.jsonl', 'downloads.jsonl', 'processes.jsonl', 'database.jsonl', 'lanes.jsonl', 'sessions.jsonl'):
-                for _ in records(filename): pass
-            problems += [phase+': '+e for e in stage_bundle_problems(phase, self.identity, row,
-                json.loads((root/'command.json').read_text()), json.loads((root/'registry.json').read_text()), lifecycle)]
-            if row.get('phase_id') in phase_ids: problems.append('phase_id reused across stages')
-            phase_ids.add(row.get('phase_id'))
-            if previous_end is not None and row.get('started_at', -1) < previous_end: problems.append('stage order/overlap invalid')
-            previous_end = row.get('ended_at', math.inf)
-            if phase == 'seed':
-                if (row.get('status') != 'COMPLETED' or row.get('dataset', {}).get('hosts', 0) < 10000
-                        or row.get('dataset', {}).get('historical_tasks', 0) < 100000
-                        or row.get('actual_install_success') != 0): problems.append('seed incomplete')
-                problems += seed_evidence_problems(row.get('dataset', {}), read_rows(root/'requests.jsonl'), read_rows(root/'database.jsonl'))
-                frozen_baseline = row.get('dataset')
-                if not (self.output_root/'seed-baseline.json').is_file() or sha(self.output_root/'seed-baseline.json') != row.get('baseline_sha256'):
-                    problems.append('frozen seed baseline original missing/changed')
-                continue
-            if not (root/'samples.jsonl').is_file(): continue
-            all_samples = list(read_rows(root/'samples.jsonl'))
-            # 启动前资源记录不在计时覆盖内；独立保存但不混入正式分钟采样。
-            samples = [s for s in all_samples if s.get('measurement') == 'qualification']
-            window = row.get('window', {})
-            requests = request_summary(r for r in read_rows(root/'requests.jsonl')
-                if r.get('window_id') == window.get('id') and window.get('start', math.inf) <= r.get('at', -1) < window.get('end', -math.inf))
-            downloads = download_summary(read_rows(root/'downloads.jsonl'), row.get('artifact_size'), row.get('artifact_sha256'))
-            found = check_phase(self.profile, self.identity, row, samples, requests, downloads, expected_phase=phase)
-            if window and phase == row.get('phase'):
-                found += activity_evidence_problems(row, read_rows(root/'requests.jsonl'))
-                found += periodic_jobs_problems(row, read_rows(root/'requests.jsonl'), lifecycle, self.c['imports'][phase])
-                active_window = {**window, 'end': window['start']+300} if phase == 'burst' else window
-                multiplier = 2 if phase == 'burst' else 1
-                found += lane_evidence_problems((r for r in read_rows(root/'lanes.jsonl') if r.get('transport') == 'download'), active_window, 4*multiplier, progress=True)
-                found += event_lane_problems((r for r in read_rows(root/'lanes.jsonl') if r.get('transport') == 'event'), active_window, 50*multiplier)
-            for current in (row.get('invariants_before', {}), row.get('invariants_after', {})):
-                found += invariant_chain_problems(frozen_baseline or {}, current)
-            problems += [phase+': '+p for p in found]
-            phase_results[phase] = {'requests': requests, 'downloads': downloads}
-        concurrent = self.c.get('concurrent_installation')
-        # 本工具不创建装机结果；两台真实并发装机必须有单独冻结的检查器结论。
-        if not concurrent: problems.append('real concurrent installation evidence absent')
-        else:
-            p = private_file(concurrent['path'], BASE)
-            report = json.loads(p.read_text())
-            if sha(p) != concurrent['sha256']: problems.append('concurrent original changed')
-            problems += installation_problems(report, self.identity, p.parent, self.common_identity)
+        problems, phase_results, phase_digests = assess_capacity(self)
         write_once(self.phase_dir/'evaluation.json', {**self.identity, 'phase_result_sha256': phase_digests,
                    'problems': problems, 'latency_distributions': phase_results})
         write_once(self.phase_dir/'capacity_soak.json', {**self.identity,
