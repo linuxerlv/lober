@@ -49,20 +49,25 @@ func (v validatedTransport) RoundTrip(req *http.Request) (*http.Response, error)
 			port = "80"
 		}
 	}
-	tr := &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true, DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-		var errs []error
-		for _, ip := range ips {
-			conn, e := v.sources.dialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-			if e == nil {
-				return conn, nil
+	limits := v.sources.timeouts
+	tr := &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true,
+		TLSHandshakeTimeout: limits.tlsHandshake, ResponseHeaderTimeout: limits.responseHeader,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			ctx, cancel := context.WithTimeout(ctx, limits.connect)
+			defer cancel()
+			var errs []error
+			for _, ip := range ips {
+				conn, e := v.sources.dialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+				if e == nil {
+					return idleTimeoutConn{Conn: conn, idle: limits.readIdle}, nil
+				}
+				errs = append(errs, e)
+				if ctx.Err() != nil {
+					break
+				}
 			}
-			errs = append(errs, e)
-			if ctx.Err() != nil {
-				break
-			}
-		}
-		return nil, errors.Join(errs...)
-	}}
+			return nil, errors.Join(errs...)
+		}}
 	resp, err := tr.RoundTrip(req)
 	tr.CloseIdleConnections()
 	return resp, err
@@ -72,6 +77,8 @@ func (s *Transfer) lookup(ctx context.Context, host string) ([]netip.Addr, error
 	if ip, err := netip.ParseAddr(host); err == nil {
 		return []netip.Addr{ip}, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, s.timeouts.lookup)
+	defer cancel()
 	return s.resolver(ctx, host)
 }
 

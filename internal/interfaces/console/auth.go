@@ -3,6 +3,7 @@ package console
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/application/identity"
+	"strconv"
 )
 
 type loginRequest struct {
@@ -25,6 +26,13 @@ func (s *server) authRoutes() []route {
 	}
 }
 func (s *server) login(c *gin.Context) {
+	if s.loginLimits != nil {
+		if wait := s.loginLimits.peer(c.Request.RemoteAddr); wait > 0 {
+			c.Header("Retry-After", strconv.FormatInt(wait, 10))
+			Fail(c, 429, nil, "登录请求过多，请稍后重试")
+			return
+		}
+	}
 	var req loginRequest
 	limit := s.deps.LoginBodyLimit
 	if limit == 0 {
@@ -32,6 +40,15 @@ func (s *server) login(c *gin.Context) {
 	}
 	if !bindJSON(c, &req, limit) {
 		return
+	}
+	if s.loginLimits != nil {
+		release, wait := s.loginLimits.acquire(req.Username)
+		if wait > 0 {
+			c.Header("Retry-After", strconv.FormatInt(wait, 10))
+			Fail(c, 429, nil, "登录请求过多，请稍后重试")
+			return
+		}
+		defer release()
 	}
 	result, ok := Get(c, func() (identity.SessionResult, error) {
 		return s.deps.Identity.Login(c.Request.Context(), identity.LoginCommand{Username: req.Username, Password: req.Password})
