@@ -24,7 +24,7 @@ Windows 观察文件由本轮受控 PowerShell 采样生成，包含 Unix 时间
 
 先完成产品验证并经 dev → test 集成，再冻结候选。真实 ISO 必须从发行方获取，校验实际字节并经产品 API 导入；Debian 使用含所需包的 DVD-1 与同版 mini。
 
-当前使用内置发布 v8：RHEL、AlmaLinux、Rocky 使用 kickstart v5，Ubuntu 使用 autoinstall v4，Debian 使用 preseed v5。Debian 新任务派生自 preseed v5。该版本使用显式镜像参数，默认从 `deb.debian.org/debian` 下载并执行 Debian 原生归档签名校验；安装网络须可访问该源。`mirror_host` / `mirror_path` 可改为已受安装器信任的内部签名仓库。DVD 整体签名通过不代表其解包目录具备 HTTP APT 仓库签名，不能启用 `allow_unauthenticated` 来绕过。旧 preseed v1 的冻结版本保留，不能通过修改旧版本修复已创建的任务。
+当前使用内置发布 v9：RHEL、AlmaLinux、Rocky 使用 kickstart v6，Ubuntu 使用 autoinstall v5，Debian 使用 preseed v6。Debian 新任务派生自 preseed v6。该版本使用显式镜像参数，默认从 `deb.debian.org/debian` 下载并执行 Debian 原生归档签名校验；安装网络须可访问该源。`mirror_host` / `mirror_path` 可改为已受安装器信任的内部签名仓库。DVD 整体签名通过不代表其解包目录具备 HTTP APT 仓库签名，不能启用 `allow_unauthenticated` 来绕过。旧 preseed v1 的冻结版本保留，不能通过修改旧版本修复已创建的任务。
 
 工具自身的回归测试验证取消状态、精确 hook 失败归因、网络优先引导和序列号识别；这些检查通过不代表任何 Linux 已完成实际安装。真实结果仅以绑定候选源码和二进制的逐系统验收证据为准。
 

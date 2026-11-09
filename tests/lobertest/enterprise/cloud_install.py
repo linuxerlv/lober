@@ -31,6 +31,26 @@ import xml.etree.ElementTree as ET
 
 
 PURPOSE = 'production-qualification-20261025'
+
+
+def load_verified_module(path, expected, name):
+    import importlib.util
+    source = Path(path).read_bytes()
+    if hashlib.sha256(source).hexdigest() != expected:
+        raise ValueError('checker source changed')
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(name)
+    sys.modules[name] = module
+    try:
+        exec(compile(source, str(path), 'exec'), module.__dict__)
+    except BaseException:
+        if previous is None: sys.modules.pop(name, None)
+        else: sys.modules[name] = previous
+        raise
+    return module
+
+
 BASE = '/var/lib/libvirt/images/lober-pq-20261025'
 VM_BASE = '/home/dev/lober-production-qualification-20261025'
 TARGET = 'lober-pq25-linux01'
@@ -913,13 +933,11 @@ def check_qualification(value, negative=False, target=None, bindings=None):
 
 def check_qualification_originals(value,target,bindings):
     """实际资格/容量汇总都重读原件，不仅相信JSON里的成功布尔值。"""
-    import importlib.util
     modules={}
     for name in ('cloud_packet_capture','cloud_capture_session','cloud_guest_identity'):
         path=Path(__file__).with_name(name+'.py')
         require(not path.is_symlink() and bindings['helpers'].get(str(path.resolve()))==sha256(path),'汇总helper不是共同合同版本')
-        spec=importlib.util.spec_from_file_location(name,path);module=importlib.util.module_from_spec(spec)
-        sys.modules[name]=module;spec.loader.exec_module(module);modules[name]=module
+        modules[name]=load_verified_module(path,bindings['helpers'][str(path.resolve())],name)
     manifest=bindings['manifest'];require(manifest_target(manifest)==target,'资格目标和冻结manifest不同')
     inputs=value['input_files']
     prepared=bound_json(inputs['prepare']['path'],manifest['cloud']['prepare_chain_sha256'])
@@ -2838,11 +2856,11 @@ uname -m
                    'interpreter': 'sh', 'timings': ['firstboot']}]}, token=author)
     hook = api.approve('hooks', hook, author, approver)
     builtin = manifest['cloud']['builtin_template']
-    require(builtin['id'] == 'builtin-preseed' and builtin['version'] == 5, '本候选必须使用已核对的 Debian 内置模板 v5')
-    native = api.api('GET', '/templates/builtin-preseed/versions/5')
+    require(builtin['id'] == 'builtin-preseed' and builtin['version'] == 6, '本候选必须使用已核对的 Debian 内置模板 v6')
+    native = api.api('GET', '/templates/builtin-preseed/versions/6')
     require(native['builtin'] is True and native['state'] == 'approved'
             and hashlib.sha256(native['body'].encode()).hexdigest() == builtin['body_sha256'], '当前服务的内置模板与冻结值不符')
-    draft = api.api('POST', '/templates/builtin-preseed/derive', {'from': 5, 'name': manifest['run_id']}, token=author)
+    draft = api.api('POST', '/templates/builtin-preseed/derive', {'from': 6, 'name': manifest['run_id']}, token=author)
     require(draft['body'].count('{{lober:firstboot}}') == 1, '当前内置模板与预期不同，应重新审查')
     draft['body'] = draft['body'].replace('{{lober:firstboot}}', '{{slot:qualify@firstboot}} && {{lober:firstboot}}')
     draft['assembly']['qualify'] = [{'hookID': hook['id'], 'hookVersion': hook['version']}]
