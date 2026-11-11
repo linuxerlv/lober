@@ -329,7 +329,14 @@ class Candidate:
                               LOBER_ENTERPRISE_UI_SCRIPT=str(scripts / "ui.mjs"),
                               LOBER_ENTERPRISE_PLAYWRIGHT=str(self.build / "web/node_modules/playwright/index.mjs"))
         passed = not (fixture_code or browser_code)
+        recovery_launcher = self.environ.get("LOBER_CI_RECOVERY_LAUNCHER")
         for suite in SUITES:
+            if suite == "recovery" and recovery_launcher:
+                launcher = admin_executable(recovery_launcher, self.root)
+                code = self.command(suite, ["/usr/bin/sudo", "-n", launcher, self.sha],
+                                    env=self.env, timeout=540)
+                passed = passed and code == 0
+                continue
             if suite == "recovery" and not isolated_recovery_namespace(self.environ):
                 reason = "故障演练需要本阶段的隔离网络命名空间"
                 (self.logs / "recovery.log").write_text(reason + "\n", encoding="utf-8")

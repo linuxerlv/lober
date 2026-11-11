@@ -1,0 +1,2 @@
+lober-ci-dev ALL=(root) NOPASSWD: /opt/lober-ci/ops/ci/dev-app-control
+lober-ci-dev ALL=(root) NOPASSWD: /opt/lober-ci/ops/ci/recovery-launch ^[0-9a-f]{40}$

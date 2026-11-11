@@ -1,0 +1,21 @@
+[Unit]
+Description=Independent Lober development deployment
+Requires=lober-ci-db@dev-app.service
+After=lober-ci-db@dev-app.service
+
+[Service]
+User=lober-ci-dev-app
+Group=lober-ci-dev-app
+ExecStart=/var/lib/lober-ci-dev-app-release/current -config /etc/lober-ci-dev-app.json
+StateDirectory=lober-ci-dev-app-data
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/lober-ci-dev-app-data
+UMask=0077
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+InaccessiblePaths=-/var/lib/lober -/var/lib/lober-ci-dev -/var/lib/lober-ci-test
+NoNewPrivileges=yes
+IPAddressDeny=any
+IPAddressAllow=localhost
+Restart=on-failure

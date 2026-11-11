@@ -140,6 +140,21 @@ if __name__ == "__main__":
     unittest.main()
 
 class RecoveryIsolationTests(unittest.TestCase):
+    def test_dev_recovery_invokes_configured_supervisor_without_test_secrets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = worker.Candidate("dev", Path(temporary), "1" * 40, "", {
+                "LOBER_CI_RECOVERY_LAUNCHER": "/admin/recovery-launch",
+                "LOBER_TEST_PG_DSN": "private",
+            })
+            candidate.logs.mkdir(parents=True)
+            with (patch.object(worker, "admin_executable", return_value=Path("/admin/recovery-launch")),
+                  patch.object(candidate, "evidence"),
+                  patch.object(candidate, "command", return_value=0) as command):
+                self.assertTrue(candidate.enterprise())
+            invocation = next(call for call in command.call_args_list if call.args[0] == "recovery")
+            self.assertEqual(invocation.args[1], ["/usr/bin/sudo", "-n", Path("/admin/recovery-launch"), candidate.sha])
+            self.assertNotIn("LOBER_TEST_PG_DSN", invocation.kwargs["env"])
+
     def test_faults_require_a_configured_namespace(self):
         self.assertFalse(worker.isolated_recovery_namespace({}))
         self.assertFalse(worker.isolated_recovery_namespace({
