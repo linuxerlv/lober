@@ -221,6 +221,21 @@ class CapacityCheckerTests(unittest.TestCase):
 
 class ReviewBoundaryTests(unittest.TestCase):
     """审查反例。这里只构造检查器输入，不生成任何资格结果。"""
+    def test_history_task_cancellation_uses_created_revision(self):
+        driver = object.__new__(cap.Driver)
+        driver.c = {'dataset': {'selection': {'isoID': 'fixture-iso'}, 'entered': {}}}
+        created = {'id': 'fixture-task', 'rev': 3, 'snapshot': {'schema': 1}}
+        driver.request = Mock(side_effect=[
+            {'tasks': [created]},
+            {**created, 'rev': 4, 'state': 'cancelled'},
+        ])
+
+        self.assertEqual(driver.history_task('fixture-token', 'SN-FIXTURE'), 'fixture-task')
+
+        driver.request.assert_called_with(
+            'POST', '/tasks/fixture-task/cancel', 'fixture-token', {'rev': 3}, category='seed',
+        )
+
     def test_http_error_records_only_safe_category_and_codes(self):
         summary = cap.error_summary({'code': 422, 'message': '第 7 层（状态机）尚未实现，暂不能取消或重试任务',
                                      'data': {'problems': [{'code': 'task_control_state'}]}}, 422)

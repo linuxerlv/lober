@@ -268,9 +268,11 @@ func Test每条正式审计路由都写入正确操作者和目标(t *testing.T)
 	liveISO := readyISO(t, st, "audit-task-iso", "rocky")
 	responseData[hostResponse](t, httpCall(s, "POST", "/console/v1/hosts", `{"sn":"SN-TASK","arch":"x86_64","firmware":"uefi"}`, admin))
 	created := run("task.create", "POST", "/console/v1/wizard/tasks", fmt.Sprintf(`{"isoID":%q,"templateID":%q,"templateVersion":1,"hosts":[{"sn":"SN-TASK"}]}`, liveISO.ID, approvedTemplate), admin, "task", "")
-	taskID := created["tasks"].([]any)[0].(map[string]any)["id"].(string)
+	task := created["tasks"].([]any)[0].(map[string]any)
+	taskID := task["id"].(string)
 	for _, op := range []string{"cancel", "retry"} {
-		run("task."+op, "POST", "/console/v1/tasks/"+taskID+"/"+op, "", admin, "task", taskID)
+		body := fmt.Sprintf(`{"rev":%d}`, int64(task["rev"].(float64)))
+		task = run("task."+op, "POST", "/console/v1/tasks/"+taskID+"/"+op, body, admin, "task", taskID)
 	}
 	run("template.deprecate", "POST", lifecyclePath("templates", approvedTemplate, "deprecate", 5), "", reviewer, "template", approvedTemplate+"@1")
 	run("user.password.change", "POST", "/console/v1/auth/password", `{"currentPassword":"admin password","newPassword":"replacement admin password"}`, admin, "user", "admin")

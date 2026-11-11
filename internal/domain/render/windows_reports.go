@@ -1,0 +1,141 @@
+package render
+
+import "github.com/lober/lober/internal/domain/catalog"
+
+func windowsReportScript(gateway, task string) []byte {
+	before, after := tokenURLParts(catalog.SignalURL(gateway, task, "TOKEN", ""))
+	return windowsPowerShellBytes("$reportBase = " + psQuote(before) + "\n$reportSeparator = " + psQuote(after) + "\n" + windowsReportFunctions)
+}
+
+// PowerShell 阶段和 BusyBox 插槽共用同一队列。正文先落盘，报告地址文件最后改名，
+// 这样补报进程只会看到写完的记录。收尾凭据始终从本机读取。
+const windowsReportFunctions = `$reportDir = $PSScriptRoot
+$reportQueue = Join-Path $reportDir 'outbox-finalize'
+$tokenFile = Join-Path $reportDir 'finalize.token'
+$readyReceipt = Join-Path $reportDir 'ready.accepted'
+$lockFile = Join-Path $reportDir 'reports.lock'
+$replayTask = 'LoberReportReplay'
+
+function Register-ReportReplay {
+    # 只让系统账户和管理员修改定时任务要运行的脚本。
+    & (Join-Path $env:WINDIR 'System32/icacls.exe') $reportDir '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not protect the Lober report directory.' }
+
+    $now = Get-Date
+    $start = $now.AddMinutes(1).ToString('s')
+    $end = $now.AddDays(1).ToString('s')
+    $command = [Security.SecurityElement]::Escape((Join-Path $PSHOME 'powershell.exe'))
+    $arguments = [Security.SecurityElement]::Escape(('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -Replay' -f (Join-Path $reportDir 'cleanup.ps1')))
+    $xml = @"
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+    <Triggers>
+        <BootTrigger><EndBoundary>$end</EndBoundary><Delay>PT30S</Delay></BootTrigger>
+        <TimeTrigger>
+            <StartBoundary>$start</StartBoundary>
+            <EndBoundary>$end</EndBoundary>
+            <Repetition><Interval>PT1M</Interval><Duration>P1D</Duration></Repetition>
+        </TimeTrigger>
+    </Triggers>
+    <Principals>
+        <Principal id="Lober"><UserId>S-1-5-18</UserId></Principal>
+    </Principals>
+    <Settings>
+        <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+        <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+        <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+        <StartWhenAvailable>true</StartWhenAvailable>
+        <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+        <DeleteExpiredTaskAfter>PT1H</DeleteExpiredTaskAfter>
+    </Settings>
+    <Actions Context="Lober"><Exec><Command>$command</Command><Arguments>$arguments</Arguments></Exec></Actions>
+</Task>
+"@
+    Register-ScheduledTask -TaskName $replayTask -Xml $xml -User 'SYSTEM' -Force | Out-Null
+}
+
+function Write-Report([string]$label, [string]$request) {
+    [IO.Directory]::CreateDirectory($reportQueue) | Out-Null
+    $entry = Join-Path $reportQueue $label
+    if ([IO.File]::Exists("$entry.meta")) { return }
+    [IO.File]::WriteAllBytes("$entry.body", [byte[]]@())
+    [IO.File]::WriteAllText("$entry.$PID.tmp", $request)
+    [IO.File]::Move("$entry.$PID.tmp", "$entry.meta")
+}
+
+function Remove-ReportFiles {
+    Get-ChildItem -LiteralPath $reportDir -File | Where-Object {
+        $_.Name -like 'script-*.cmd' -or $_.Name -like 'hook-*'
+    } | Remove-Item -Force
+    foreach ($relative in @('Panther/Unattend.xml', 'Panther/Unattend/Unattend.xml')) {
+        $answer = Join-Path $env:WINDIR $relative
+        if (Test-Path -LiteralPath $answer) { Remove-Item -LiteralPath $answer -Force }
+    }
+    if (Test-Path -LiteralPath $reportQueue) { Remove-Item -LiteralPath $reportQueue -Force -Recurse }
+    if (Test-Path -LiteralPath $tokenFile) { Remove-Item -LiteralPath $tokenFile -Force }
+    if (Get-ScheduledTask -TaskName $replayTask -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $replayTask -Confirm:$false
+    }
+    foreach ($name in @('firstboot.ps1', 'cleanup.ps1', 'reports.ps1', 'ready.accepted')) {
+        $file = Join-Path $reportDir $name
+        if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force }
+    }
+}
+
+function Send-Reports {
+    if (-not ([IO.File]::Exists($tokenFile) -or [IO.File]::Exists($readyReceipt))) { return }
+    try {
+        $lock = [IO.File]::Open($lockFile, 'OpenOrCreate', 'ReadWrite', 'None')
+    } catch [IO.IOException] {
+        return
+    }
+    try {
+        if (-not [IO.File]::Exists($readyReceipt)) {
+            if (-not ([IO.File]::Exists($tokenFile) -and [IO.Directory]::Exists($reportQueue))) { return }
+            $token = [IO.File]::ReadAllText($tokenFile).Trim()
+            foreach ($record in (Get-ChildItem -LiteralPath $reportQueue -Filter '*.meta' -File | Sort-Object Name)) {
+                $body = [IO.Path]::ChangeExtension($record.FullName, '.body')
+                $address = $reportBase + $token + $reportSeparator + [IO.File]::ReadAllText($record.FullName).Trim()
+                try {
+                    $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 -MaximumRedirection 0 -Method Post -Uri $address -ContentType 'text/plain' -InFile $body
+                } catch {
+                    return
+                }
+                if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) { return }
+                if ($record.Name -eq '901-ready.meta') {
+                    # 清理完成前保留服务器的确认记录。
+                    [IO.File]::Move($record.FullName, $readyReceipt)
+                } else {
+                    [IO.File]::Delete($record.FullName)
+                }
+                [IO.File]::Delete($body)
+            }
+        }
+        if (-not [IO.File]::Exists($readyReceipt)) { return }
+        Remove-ReportFiles
+    } finally {
+        $lock.Dispose()
+    }
+    Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue
+}
+`
+
+const windowsSlotReportQueue = `queue_signal() {
+ q_label=$1; q_request=$2; q_body=$3
+ mkdir -p "$DIR/outbox-finalize" || return 1
+ q_entry="$DIR/outbox-finalize/$q_label"
+ if [ -f "$q_entry.meta" ]; then return 0; fi
+ if [ -n "$q_body" ]; then cp "$q_body" "$q_entry.body.tmp.$$" || return 1; else : > "$q_entry.body.tmp.$$" || return 1; fi
+ mv "$q_entry.body.tmp.$$" "$q_entry.body" || return 1
+ printf '%s' "$q_request" > "$q_entry.meta.tmp.$$" || return 1
+ mv "$q_entry.meta.tmp.$$" "$q_entry.meta"
+}
+`
+
+// WinPE 的队列在重启后不可用。成功进入下一阶段前，先确认当前队列已经送达。
+const windowsInstallerFlushReports = ` reported=1
+ for delay in 0 1 2; do
+  sleep "$delay" || break
+  if flush_signals; then reported=0; break; fi
+ done
+ if [ "$status" -eq 0 ] && [ "$reported" -ne 0 ]; then status=125; fi
+`

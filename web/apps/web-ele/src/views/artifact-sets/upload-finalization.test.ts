@@ -119,7 +119,7 @@ async function mountPage() {
   return node;
 }
 function select(node: HTMLElement, file: File) {
-  const input = node.querySelector<HTMLInputElement>('input[aria-label="主 ISO续传文件"]');
+  const input = node.querySelector<HTMLInputElement>('input[type="file"]');
   expect(input).not.toBeNull();
   Object.defineProperty(input!, 'files', { configurable: true, value: [file] });
   input!.dispatchEvent(new Event('change'));
@@ -235,23 +235,31 @@ describe('normal page upload finalization recovery', () => {
     click(node, '重试获取');
     await vi.waitFor(() => expect(node.textContent).toContain('已确认 0 段'));
     expect(io.operate).toHaveBeenCalledWith('iso-1', 'retry');
+    expect(node.textContent).toContain('选择文件上传');
 
     await selectAndWait(node, correct);
     await assertChunk(correct, 0, correct.size);
   });
 
-  it('服务器已有部分分片时，拒绝混入同大小的另一份文件', async () => {
-    const original = new File(['original!'], 'rocky.iso');
-    const changed = new File(['modified!'], 'rocky.iso');
-    const node = await mountPage();
-    await beginOriginalUpload(node, original);
-    source.fetched = 3;
-    source.ranges = [{ start: 0, length: 3 }];
+  it.each([
+    { state: 'fetching', fetched: 3, ranges: [{ start: 0, length: 3 }] },
+    { state: 'fetching', fetched: 0, ranges: [] },
+    { state: 'pending', fetched: 0, ranges: [{ start: 0, length: 3 }] },
+    { state: 'pending', fetched: 3, ranges: [] },
+  ])(
+    '拒绝混入同大小的另一份文件（$state，已接收 $fetched 字节，区间 $ranges）',
+    async (progress) => {
+      const original = new File(['original!'], 'rocky.iso');
+      const changed = new File(['modified!'], 'rocky.iso');
+      const node = await mountPage();
+      await beginOriginalUpload(node, original);
+      source = { ...source, ...progress };
 
-    await selectAndWait(node, changed);
-    expect(io.upload).not.toHaveBeenCalled();
-    expect(node.textContent).toContain('内容与原上传文件不一致');
-  });
+      await selectAndWait(node, changed);
+      expect(io.upload).not.toHaveBeenCalled();
+      expect(node.textContent).toContain('内容与原上传文件不一致');
+    },
+  );
 
   it.each(['changed bytes', 'changed size', 'missing browser identity'])(
     'refuses complete-range recovery with %s',

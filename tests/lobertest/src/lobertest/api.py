@@ -324,7 +324,7 @@ class Console:
         for task in tasks:
             if task.get("state") in terminal_states:
                 continue
-            self.call("POST", f"/tasks/{task['id']}/cancel", json={})
+            self.call("POST", f"/tasks/{task['id']}/cancel", json={"rev": task["rev"]})
             cancelled.append(task["id"])
         return cancelled
 

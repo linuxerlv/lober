@@ -18,6 +18,7 @@ type fetchOutcomeStore struct {
 	repository.Store
 	committed, unreadable, lost bool
 	cancel                      context.CancelFunc
+	unreadableOnce              bool
 }
 
 func (s *fetchOutcomeStore) SaveSource(ctx context.Context, src model.Source, audit repository.Audit) (model.Source, error) {
@@ -37,6 +38,10 @@ func (s *fetchOutcomeStore) SaveSource(ctx context.Context, src model.Source, au
 }
 
 func (s *fetchOutcomeStore) GetSource(ctx context.Context, id, role string) (model.Source, bool, error) {
+	if s.lost && s.unreadableOnce {
+		s.unreadableOnce = false
+		return model.Source{}, false, errors.New("首次核对结果时无法读取数据库")
+	}
 	if s.lost && s.unreadable {
 		return model.Source{}, false, errors.New("暂时无法读取数据库")
 	}
@@ -49,12 +54,14 @@ func TestFetchReconcilesLostCommitAcknowledgment(t *testing.T) {
 		committed  bool
 		unreadable bool
 		cancelled  bool
+		transient  bool
 	}{
 		{name: "已提交", committed: true},
 		{name: "已提交但读取失败", committed: true, unreadable: true},
 		{name: "已提交但原请求取消", committed: true, cancelled: true},
 		{name: "确认未提交"},
 		{name: "未提交但读取失败", unreadable: true},
+		{name: "未提交且仅首次读取失败", transient: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture, db := importSetup(t)
@@ -66,7 +73,7 @@ func TestFetchReconcilesLostCommitAcknowledgment(t *testing.T) {
 			if err := fixture.Register(t.Context(), item, "upload", "", "", int64(len(data)), "", importAudit()); err != nil {
 				t.Fatal(err)
 			}
-			store := &fetchOutcomeStore{Store: db, committed: tc.committed, unreadable: tc.unreadable}
+			store := &fetchOutcomeStore{Store: db, committed: tc.committed, unreadable: tc.unreadable, unreadableOnce: tc.transient}
 			fixture.store = store
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
@@ -82,7 +89,7 @@ func TestFetchReconcilesLostCommitAcknowledgment(t *testing.T) {
 				t.Errorf("未确认提交成功时应保留原错误：%v", err)
 			}
 			final := fixture.finalPath(item.ID, "")
-			preserveFinal := tc.committed || tc.unreadable
+			preserveFinal := tc.committed || tc.unreadable || tc.transient
 			path := final
 			missing := final + ".part"
 			if !preserveFinal {
@@ -97,12 +104,16 @@ func TestFetchReconcilesLostCommitAcknowledgment(t *testing.T) {
 			}
 			// 恢复数据库连接后，已提交的内容可以直接导入；未知且未提交的内容可重放收尾。
 			fixture.store = db
-			if !tc.committed && tc.unreadable {
+			if !tc.committed && (tc.unreadable || tc.transient) {
+				current, _, err := db.GetSource(t.Context(), item.ID, "")
+				if err != nil || current.State != model.SourceFetching {
+					t.Fatal("结果不明时应保留可继续上传的状态", current.State, err)
+				}
 				if err := fixture.Upload(t.Context(), item.ID, "", 0, bytes.NewReader(data), repository.Audit{}); err != nil {
 					t.Fatal("连接恢复后不能继续上传", err)
 				}
 			}
-			if tc.committed || tc.unreadable {
+			if tc.committed || tc.unreadable || tc.transient {
 				if err := fixture.Import(t.Context(), item.ID); err != nil {
 					t.Fatal("保存结果恢复后不能导入", err)
 				}

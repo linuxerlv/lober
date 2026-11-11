@@ -75,8 +75,8 @@ func Test任务控制拒绝越权且不读取(t *testing.T) {
 		if a.MustChangePassword {
 			want = ports.ErrPasswordChangeRequired
 		}
-		for _, op := range []func(context.Context, ports.Actor, string) (TaskChoice, error){c.Cancel, c.Retry} {
-			if _, err := op(t.Context(), a, "raw"); !errors.Is(err, want) {
+		for _, op := range []func(context.Context, ports.Actor, string, int64) (TaskChoice, error){c.Cancel, c.Retry} {
+			if _, err := op(t.Context(), a, "raw", 7); !errors.Is(err, want) {
 				t.Fatal(a, err)
 			}
 		}
@@ -92,7 +92,7 @@ func Test任务控制不存在先于不可用(t *testing.T) {
 		*calls = append(*calls, "get")
 		return model.Task{}, repository.ErrNotFound
 	})
-	if _, err := NewController(d).Cancel(t.Context(), operator, "missing"); !errors.Is(err, repository.ErrNotFound) || !reflect.DeepEqual(*calls, []string{"get"}) {
+	if _, err := NewController(d).Cancel(t.Context(), operator, "missing", 7); !errors.Is(err, repository.ErrNotFound) || !reflect.DeepEqual(*calls, []string{"get"}) {
 		t.Fatal(err, *calls)
 	}
 	u := NewUnavailableControl()
@@ -114,7 +114,7 @@ func Test任务控制保留版本审计与顺序(t *testing.T) {
 			if action == "retry" {
 				op = c.Retry
 			}
-			got, err := op(t.Context(), ports.Actor{Username: "trusted", Role: role}, "raw")
+			got, err := op(t.Context(), ports.Actor{Username: "trusted", Role: role}, "raw", 7)
 			want := []string{"get:raw", "clock", action, "get:stored", "publish:stored", "canCancel:stored", "canRetry:stored"}
 			if err != nil || !reflect.DeepEqual(*calls, want) || b.got.Rev != 7 || b.got.State != model.TaskFailed || b.audit != (ports.AuditIntent{Actor: "trusted", Action: "task." + action, At: 42}) || got.Task.ID != "stored" || got.Task.Rev != 8 || got.Task.State != model.TaskPending || len(got.CanCancel) != 1 {
 				t.Fatal(err, *calls, b.got, b.audit, got)
@@ -132,7 +132,7 @@ func Test任务控制提交后读取失败不额外通知(t *testing.T) {
 			if reads == 2 {
 				return model.Task{}, readErr
 			}
-			return model.Task{ID: "stored"}, nil
+			return model.Task{ID: "stored", Rev: 7}, nil
 		})
 		b.commit = func() { backendPublishes++ }
 		d.Notifier = controlNotifier(func(string) { appPublishes++ })
@@ -141,7 +141,7 @@ func Test任务控制提交后读取失败不额外通知(t *testing.T) {
 		if retry {
 			op = c.Retry
 		}
-		_, err := op(t.Context(), operator, "raw")
+		_, err := op(t.Context(), operator, "raw", 7)
 		if !errors.Is(err, readErr) || backendPublishes != 1 || appPublishes != 0 {
 			t.Fatal(err, backendPublishes, appPublishes)
 		}
@@ -159,7 +159,7 @@ func Test任务控制后端失败不重读不补发(t *testing.T) {
 				op = c.Retry
 				action = "retry"
 			}
-			if _, err := op(t.Context(), operator, "raw"); !errors.Is(err, sentinel) || !reflect.DeepEqual(*calls, []string{"get:raw", "clock", action}) {
+			if _, err := op(t.Context(), operator, "raw", 7); !errors.Is(err, sentinel) || !reflect.DeepEqual(*calls, []string{"get:raw", "clock", action}) {
 				t.Fatal(err, *calls)
 			}
 		}
@@ -177,7 +177,7 @@ func Test任务控制提交后取消仍重读补发及诊断(t *testing.T) {
 		if retry {
 			op = c.Retry
 		}
-		if _, err := op(ctx, operator, "raw"); err != nil || backendPublishes != 1 || len(*calls) != 7 || (*calls)[4] != "publish:stored" {
+		if _, err := op(ctx, operator, "raw", 7); err != nil || backendPublishes != 1 || len(*calls) != 7 || (*calls)[4] != "publish:stored" {
 			t.Fatal(err, backendPublishes, *calls)
 		}
 	}
