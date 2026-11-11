@@ -285,6 +285,8 @@ class Candidate:
     def backend(self):
         if not self.test_env.get("LOBER_TEST_PG_DSN"):
             raise ValueError("必须为本阶段配置专用测试数据库 LOBER_TEST_PG_DSN")
+        # 安装脚本测试会替换 /var/lib/lober，临时路径必须避开这个前缀。
+        backend_env = {**self.test_env, "TMPDIR": "/tmp"}
         checks = [
             ("backend-static", ["make", "fmt", "vet", "cross", "gen", "archcheck"]),
             ("backend-unit", ["go", "test", "-json", "-count=1", "./..."]),
@@ -295,7 +297,7 @@ class Candidate:
         problems = []
         with (self.logs / "backend.log").open("wb") as combined:
             for name, argv in checks:
-                codes[name] = self.command(name, argv, env=self.test_env)
+                codes[name] = self.command(name, argv, env=backend_env)
                 raw = (self.logs / (name + ".log")).read_bytes()
                 combined.write(raw)
                 combined.write(f"\n{name} exit_code={codes[name]}\n".encode())

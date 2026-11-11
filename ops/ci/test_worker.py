@@ -80,6 +80,18 @@ class WorkerTests(unittest.TestCase):
             self.assertNotIn(key, env)
         self.assertEqual(env["HOME"], "/var/lib/lober-ci-test")
 
+    def test_backend_commands_use_service_private_tmp(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = worker.Candidate("test", Path(temporary), "1" * 40, "", {
+                "LOBER_TEST_PG_DSN": "fixture",
+            })
+            candidate.logs.mkdir(parents=True)
+            with patch.object(candidate, "command", side_effect=RuntimeError("stop after first command")) as command:
+                with self.assertRaisesRegex(RuntimeError, "stop after first command"):
+                    candidate.backend()
+            self.assertEqual(command.call_args.kwargs["env"]["TMPDIR"], "/tmp")
+            self.assertEqual(candidate.test_env["TMPDIR"], str(candidate.path / "scratch"))
+
     def test_test_retry_preserves_handoff_and_stays_blocked_on_release_gate(self):
         with tempfile.TemporaryDirectory() as temporary:
             candidate = worker.Candidate("test", Path(temporary), "1" * 40, "", {})
