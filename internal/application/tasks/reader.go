@@ -128,13 +128,12 @@ func (r *reader) Preview(ctx context.Context, actor ports.Actor, id string, req 
 	return PreviewResult{Files: files, Sample: sample, Problems: ps}, nil
 }
 
-// IsCredentialParam 识别口令类型，以及内置模板和钩子使用的口令参数名。
-func IsCredentialParam(name string, typ model.ParamType) bool {
+// isCredentialParam 识别口令类型，以及内置模板和钩子使用的口令参数名。
+func isCredentialParam(name string, typ model.ParamType) bool {
 	return name == "password" || name == "pwhash" || typ == "password" || typ == "pwhash"
 }
 
-// RedactedCredential 是控制台用来替代任务凭据的文本。
-const RedactedCredential = "[redacted]"
+const redactedCredential = "[redacted]"
 
 // 复制脱敏需要改写的字段。机器渲染继续使用原快照。
 func previewSnapshot(s model.Snapshot) model.Snapshot {
@@ -154,10 +153,10 @@ func previewSnapshot(s model.Snapshot) model.Snapshot {
 func previewParams(params map[string]model.SnapshotValue) map[string]model.SnapshotValue {
 	sample := maps.Clone(params)
 	for name, value := range sample {
-		if IsCredentialParam(name, value.Type) {
+		if isCredentialParam(name, value.Type) {
 			value.Items = slices.Clone(value.Items)
 			for i := range value.Items {
-				value.Items[i] = RedactedCredential
+				value.Items[i] = redactedCredential
 			}
 			sample[name] = value
 		}

@@ -76,12 +76,20 @@ type taskItem struct {
 	CanRetry        []problemJSON   `json:"canRetry"`
 }
 
+// redactedValue 是任务快照里凭据类参数的固定替代值。任务接口对所有有 task:read 的
+// 角色开放；口令散列和明文密码不需要给他们看。机器网关不经过这个 DTO，装机照常拿原值。
+const redactedValue = "[redacted]"
+
+func secretParam(name string, typ model.ParamType) bool {
+	return name == "password" || name == "pwhash" || typ == "pwhash"
+}
+
 func snapshotValues(in map[string]model.SnapshotValue) map[string]snapshotValueDTO {
 	out := make(map[string]snapshotValueDTO, len(in))
 	for key, v := range in {
 		items := append([]string{}, v.Items...)
-		if tasks.IsCredentialParam(key, v.Type) {
-			items = []string{tasks.RedactedCredential}
+		if secretParam(key, v.Type) {
+			items = []string{redactedValue}
 		}
 		out[key] = snapshotValueDTO{v.Type, v.List, items}
 	}
