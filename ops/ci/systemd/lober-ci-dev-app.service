@@ -2,6 +2,7 @@
 Description=Independent Lober development deployment
 Requires=lober-ci-db@dev-app.service
 After=lober-ci-db@dev-app.service
+ConditionFileIsExecutable=/var/lib/lober-ci-dev-app-release/current
 
 [Service]
 User=lober-ci-dev-app
@@ -19,3 +20,6 @@ NoNewPrivileges=yes
 IPAddressDeny=any
 IPAddressAllow=localhost
 Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
