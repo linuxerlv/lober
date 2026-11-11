@@ -77,7 +77,7 @@ jobs:
         working-directory: tests/lobertest
         run: >-
           uv run --locked pytest tests/test_api.py
-          enterprise/test_cloud_install.py
+          enterprise/test_cloud_install.py::CloudChecks::test_qualify_entry_uses_parsed_exchange_and_replays_original_body_only
           enterprise/test_linux_acceptance.py
           enterprise/test_production_capacity.py
 
