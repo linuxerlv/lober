@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const io = vi.hoisted(() => ({
   get: vi.fn(),
+  operate: vi.fn(),
   progress: vi.fn(),
   upload: vi.fn(),
   reload: vi.fn(),
@@ -63,7 +64,7 @@ vi.mock('#/api/console/artifact', () => ({
   getArtifactSetListApi: vi.fn(),
   getISOApi: io.get,
   getISOProgressApi: io.progress,
-  operateISOApi: vi.fn(),
+  operateISOApi: io.operate,
   registerISOSourceApi: vi.fn(),
   uploadISOChunkApi: io.upload,
 }));
@@ -206,6 +207,50 @@ describe('normal page upload finalization recovery', () => {
     source.ranges = [{ start: 6, length: 3 }, { start: 0, length: 3 }];
     await selectAndWait(node, file);
     await assertChunk(file, 3, 6);
+  });
+
+  it('重试清空失败上传后，可在同一浏览器上传同大小的正确文件', async () => {
+    source.state = 'pending';
+    const wrong = new File(['wrongfile'], 'rocky.iso');
+    const correct = new File(['rightfile'], 'rocky.iso');
+    const node = await mountPage();
+
+    io.upload.mockImplementationOnce(async () => {
+      source = {
+        ...source,
+        fetched: wrong.size,
+        ranges: [{ start: 0, length: wrong.size }],
+        state: 'failed',
+      };
+      throw new Error('完整文件校验失败');
+    });
+    await selectAndWait(node, wrong);
+    expect(node.textContent).toContain('完整文件校验失败');
+    expect(node.textContent).toContain('已确认 1 段');
+    io.upload.mockClear();
+
+    io.operate.mockImplementationOnce(async () => {
+      source = { ...source, fetched: 0, ranges: [], state: 'pending' };
+    });
+    click(node, '重试获取');
+    await vi.waitFor(() => expect(node.textContent).toContain('已确认 0 段'));
+    expect(io.operate).toHaveBeenCalledWith('iso-1', 'retry');
+
+    await selectAndWait(node, correct);
+    await assertChunk(correct, 0, correct.size);
+  });
+
+  it('服务器已有部分分片时，拒绝混入同大小的另一份文件', async () => {
+    const original = new File(['original!'], 'rocky.iso');
+    const changed = new File(['modified!'], 'rocky.iso');
+    const node = await mountPage();
+    await beginOriginalUpload(node, original);
+    source.fetched = 3;
+    source.ranges = [{ start: 0, length: 3 }];
+
+    await selectAndWait(node, changed);
+    expect(io.upload).not.toHaveBeenCalled();
+    expect(node.textContent).toContain('内容与原上传文件不一致');
   });
 
   it.each(['changed bytes', 'changed size', 'missing browser identity'])(

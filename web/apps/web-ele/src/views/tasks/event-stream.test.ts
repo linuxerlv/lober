@@ -10,6 +10,7 @@ const io = vi.hoisted(() => ({
   get: vi.fn(),
   grid: vi.fn(),
   clearSession: vi.fn(),
+  confirm: vi.fn(),
   retry: vi.fn(),
 }));
 const route = reactive({ params: { id: 'task-1' } });
@@ -35,7 +36,7 @@ vi.mock('element-plus', async () => {
     ElButton: slot('button'),
     ElCard: slot('section'),
     ElDialog: slot('dialog'),
-    ElMessageBox: { confirm: async () => {} },
+    ElMessageBox: { confirm: io.confirm },
     ElTabPane: slot('div'),
     ElTabs: slot('div'),
     ElTag: slot('span'),
@@ -133,6 +134,7 @@ beforeEach(() => {
   Stream.instances = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => new Stream(url, init).response()));
   io.clearSession.mockImplementation(async () => { access.accessToken = ''; });
+  io.confirm.mockResolvedValue(undefined);
   io.get.mockResolvedValue(task());
   io.events.mockResolvedValue({ items: Array.from({ length: 200 }, (_, index) => event(index + 1)) });
 
@@ -466,6 +468,28 @@ it('keeps receiving logs after retrying a failed task', async () => {
   expect(fetch).toHaveBeenCalledOnce();
 });
 
+it('sends the revision shown when the retry confirmation opened', async () => {
+  io.get.mockResolvedValue({ ...task('failed'), rev: 7 });
+  const { node, source } = await mountDetail();
+  let confirm!: () => void;
+  io.confirm.mockImplementationOnce(() => new Promise<void>((resolve) => {
+    confirm = resolve;
+  }));
+  io.retry.mockResolvedValue({ ...task('installing'), rev: 9 });
+
+  click(node, '重试任务');
+  expect(io.confirm).toHaveBeenCalledOnce();
+  expect(io.retry).not.toHaveBeenCalled();
+  io.get.mockResolvedValue({ ...task('pending'), rev: 8 });
+  source.send(event(201));
+  await vi.advanceTimersByTimeAsync(120);
+  await flushPage();
+  expect(node.textContent).toContain('等待机器引导');
+
+  confirm();
+  await flushPage();
+  expect(io.retry).toHaveBeenCalledExactlyOnceWith('task-1', 7);
+});
 
 it('deduplicates live events while the first event page is pending', async () => {
   let finishFirst!: (page: { items: TaskEvent[] }) => void;

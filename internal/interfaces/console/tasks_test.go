@@ -130,6 +130,58 @@ func (f *taskControlFixture) Retry(ctx context.Context, task model.Task, a ports
 func (f *taskControlFixture) CanCancel(model.Task) []model.Problem { return f.block }
 func (f *taskControlFixture) CanRetry(model.Task) []model.Problem  { return f.block }
 
+func Test任务控制拒绝旧版本(t *testing.T) {
+	for _, action := range []string{"cancel", "retry"} {
+		t.Run(action, func(t *testing.T) {
+			s, st, token, task, _ := taskFixture(t)
+			ctl := &taskControlFixture{st: st}
+			setTaskControl(s, ctl)
+			path := "/console/v1/tasks/" + task.ID
+			cancelled := responseData[taskItem](t, httpCall(s, "POST", path+"/cancel", fmt.Sprintf(`{"rev":%d}`, task.Rev), token))
+			if cancelled.State != model.TaskCancelled || cancelled.Rev <= task.Rev {
+				t.Fatalf("有效版本取消后的状态为 %s，版本为 %d", cancelled.State, cancelled.Rev)
+			}
+			current := cancelled
+			if action == "cancel" {
+				current = responseData[taskItem](t, httpCall(s, "POST", path+"/retry", fmt.Sprintf(`{"rev":%d}`, cancelled.Rev), token))
+				if current.State != model.TaskPending || current.Rev <= cancelled.Rev {
+					t.Fatalf("有效版本重试后的状态为 %s，版本为 %d", current.State, current.Rev)
+				}
+			}
+
+			calls := len(ctl.calls)
+			w := httpCall(s, "POST", path+"/"+action, fmt.Sprintf(`{"rev":%d}`, task.Rev), token)
+			if w.Code != http.StatusConflict {
+				t.Errorf("旧版本请求得到 %d，期望 409", w.Code)
+			}
+			got, err := st.GetTask(t.Context(), task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.State != current.State || got.Rev != current.Rev || len(ctl.calls) != calls {
+				t.Errorf("旧版本请求触发了任务操作，状态为 %s，版本为 %d", got.State, got.Rev)
+			}
+		})
+	}
+}
+
+func Test任务控制要求正整数版本(t *testing.T) {
+	s, st, token, task, _ := taskFixture(t)
+	ctl := &taskControlFixture{st: st, reject: repository.ErrConflict}
+	setTaskControl(s, ctl)
+	for _, action := range []string{"cancel", "retry"} {
+		for _, body := range []string{"", `{}`, `{"rev":0}`, `{"rev":-1}`, `{"rev":1.5}`, `{"rev":"1"}`, `{"rev":9223372036854775808}`} {
+			w := httpCall(s, "POST", "/console/v1/tasks/"+task.ID+"/"+action, body, token)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("%s 收到请求体 %q 后返回 %d，期望 400", action, body, w.Code)
+			}
+		}
+	}
+	if len(ctl.calls) != 0 {
+		t.Error("非法版本请求触发了任务操作")
+	}
+}
+
 func Test任务控制委托审计及错误隔离(t *testing.T) {
 	s, st, token, task, _ := taskFixture(t)
 	ctl := &taskControlFixture{st: st}
@@ -247,6 +299,58 @@ func Test任务预览只使用固化快照及引用删除保护(t *testing.T) {
 	frozen := responseData[previewResponse](t, httpCall(s, "POST", path, `{"firmware":"uefi"}`, token))
 	if !reflect.DeepEqual(first, frozen) {
 		t.Fatal("preview depended on live records", frozen)
+	}
+}
+
+func Test只读用户的任务预览隐藏模板和插槽凭据(t *testing.T) {
+	s, st, _, task, _ := taskFixture(t)
+	viewer, _ := seedHTTPUser(t, s, st, "preview_viewer", model.RoleViewer)
+	// 直接保存含旧式密码参数的快照，复现历史任务。
+	frozen := task.Snapshot
+	frozen.Host.SN = "SN-3"
+	frozen.Template.Body += "# {{param:password}} {{param:root_hash}}\n{{slot:account}}\n"
+	frozen.Template.Params["password"] = model.SnapshotValue{Type: "word", Items: []string{"template-password-fixture"}}
+	frozen.Template.Params["root_hash"] = model.SnapshotValue{Type: "pwhash", Items: []string{"$6$template$fixture"}}
+	frozen.Slots = append(frozen.Slots, model.SnapshotSlot{Seq: len(frozen.Slots) + 1, Name: "account", Instances: []model.SnapshotInstance{{
+		Kind: model.ImplFragment,
+		Body: "# user {{param:name}} {{param:credential}}\n",
+		Params: map[string]model.SnapshotValue{
+			"name":       {Type: "word", Items: []string{"visible-account"}},
+			"credential": {Type: "password", Items: []string{"fragment-password-fixture"}},
+		},
+	}}})
+	created, err := st.CreateTasks(t.Context(), []model.Task{{
+		HostSN: "SN-3", ISOID: task.ISOID, TemplateID: task.TemplateID, TemplateVersion: task.TemplateVersion,
+		Snapshot: frozen, CreatedBy: "admin", CreatedAt: fixedAt,
+	}}, repository.Audit{Actor: "admin", Action: "task.create", At: fixedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := created[0]
+	w := httpCall(s, "POST", "/console/v1/tasks/"+stored.ID+"/preview", `{}`, viewer)
+	got := responseData[previewResponse](t, w)
+	if len(got.Problems) != 0 || len(got.Files) < 2 {
+		t.Fatal("未生成预览文件")
+	}
+	for _, fixture := range []string{"template-password-fixture", "$6$template$fixture", "fragment-password-fixture"} {
+		if strings.Contains(w.Body.String(), fixture) {
+			t.Errorf("任务预览泄露了测试凭据 %q", fixture)
+		}
+	}
+	if !strings.Contains(w.Body.String(), "visible-account") || !strings.Contains(w.Body.String(), "node fixed") {
+		t.Error("任务预览丢失了普通参数")
+	}
+	for _, file := range got.Files {
+		if !file.Sample {
+			t.Errorf("文件 %s 缺少样例标记", file.Name)
+		}
+	}
+	after, err := st.GetTask(t.Context(), stored.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Rev != stored.Rev || !reflect.DeepEqual(after.Snapshot, stored.Snapshot) {
+		t.Error("预览修改了数据库里的任务快照")
 	}
 }
 
