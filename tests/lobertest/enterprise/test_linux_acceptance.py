@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from linux_install import Campaign, OS, SN, require_hook_failure, require_network_first, require_owned_serial
 
 
@@ -52,6 +52,25 @@ class LinuxAcceptanceChecks(unittest.TestCase):
                     campaign.wait()
             result = json.loads((campaign.run / 'result.json').read_text())
             self.assertEqual((result['status'], result['state']), ('FAIL', 'cancelled'))
+
+    def test_retry_rejection_uses_terminal_task_revision(self):
+        campaign = object.__new__(Campaign)
+        campaign.system, campaign.negative = 'debian', True
+        campaign.task = lambda: {
+            'id': 'failed-fixture', 'state': 'failed', 'rev': 12,
+            'canRetry': [{'code': 'task_retry_after_reboot'}],
+            'snapshot': {'slots': [{'name': 'qualify', 'seq': 6, 'exec': True, 'timing': 'firstboot',
+                'instances': [{'required': True, 'digest': 'a' * 64}]}]},
+        }
+        campaign.events = lambda task: [{'kind': 'hook.report', 'fields': {
+            'slot': '6', 'instance': '1', 'timing': 'firstboot', 'digest': 'a' * 64, 'rc': '41',
+        }}]
+        campaign.api = Mock(return_value={'problems': [{'code': 'task_retry_after_reboot'}]})
+        campaign.save = Mock()
+        with TemporaryDirectory() as folder:
+            campaign.run = Path(folder)
+            campaign.wait()
+        campaign.api.assert_called_once_with('POST', '/tasks/failed-fixture/retry', {'rev': 12}, expected=422)
 
     def test_pve_encoded_serial_keeps_machine_identity(self):
         require_owned_serial({'smbios1': 'uuid=example,serial=' + SN})

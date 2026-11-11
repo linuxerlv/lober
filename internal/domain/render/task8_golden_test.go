@@ -63,14 +63,20 @@ func TestWindowsAuxStagesExactOwnedPowerShellFiles(t *testing.T) {
 		t.Fatalf("%v %v", p, e)
 	}
 	native := decodeWindowsRuntime(t, string(b))
+	scripts := map[string][]byte{
+		"reports.ps1": windowsReportScript(r.Values["gateway"], r.Values["task"]),
+	}
 	for _, part := range []catalog.SystemPart{"firstboot", "cleanup"} {
 		want, problems := windowsPartScript(expansion{request: r}, part, model.Subject{})
 		if len(problems) != 0 {
 			t.Fatal(problems)
 		}
-		line := "printf '%s' " + shQuote(base64.StdEncoding.EncodeToString(want)) + " | base64 -d > \"$OEM/" + windowsPartFile(part) + "\""
+		scripts[windowsPartFile(part)] = want
+	}
+	for name, want := range scripts {
+		line := "printf '%s' " + shQuote(base64.StdEncoding.EncodeToString(want)) + " | base64 -d > \"$OEM/" + name + "\""
 		if !strings.Contains(native, line) {
-			t.Fatalf("owned %s bytes not staged", part)
+			t.Fatalf("owned %s bytes not staged", name)
 		}
 	}
 	if strings.Contains(native, "powershell.exe") {

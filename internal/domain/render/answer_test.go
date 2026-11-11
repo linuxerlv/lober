@@ -329,9 +329,9 @@ func TestAnswerFirstbootStagesWithoutExecuting(t *testing.T) {
 func TestPowerShellStagedBytesNonBMP(t *testing.T) {
 	r := answerFixture(t, "unattend", true, "uefi")
 	r.Values["gateway"] += "/机器-🐧"
-	data, p := windowsPartScript(expansion{request: r}, "firstboot", model.Subject{})
-	if len(p) != 0 || !bytes.HasPrefix(data, []byte{0xef, 0xbb, 0xbf}) || !strings.Contains(string(data), "机器-🐧/v1/signal/") {
-		t.Fatalf("staged UTF8 BOM payload lost Unicode: %q %v", data, p)
+	data := windowsReportScript(r.Values["gateway"], r.Values["task"])
+	if !bytes.HasPrefix(data, []byte{0xef, 0xbb, 0xbf}) || !strings.Contains(string(data), "机器-🐧/v1/signal/") {
+		t.Fatalf("staged UTF8 BOM payload lost Unicode: %q", data)
 	}
 	// FileAux transports script bytes through base64 on WinPE, without asking
 	// stock WinPE to run PowerShell. Assert the exact staged file roundtrip.
@@ -421,13 +421,19 @@ func TestAnswerWindowsNativeFirstboot(t *testing.T) {
 
 func TestAnswerWindowsStagedPartsGolden(t *testing.T) {
 	r := answerFixture(t, "unattend", true, "uefi")
+	scripts := map[string][]byte{
+		"reports.ps1": windowsReportScript(r.Values["gateway"], r.Values["task"]),
+	}
 	for _, part := range []catalog.SystemPart{"firstboot", "cleanup"} {
-		t.Run(string(part), func(t *testing.T) {
-			got, p := windowsPartScript(expansion{request: r}, part, model.Subject{})
-			if len(p) != 0 {
-				t.Fatal(p)
-			}
-			path := filepath.Join("testdata", "unattend-"+windowsPartFile(part)+".golden")
+		got, p := windowsPartScript(expansion{request: r}, part, model.Subject{})
+		if len(p) != 0 {
+			t.Fatal(p)
+		}
+		scripts[windowsPartFile(part)] = got
+	}
+	for name, got := range scripts {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join("testdata", "unattend-"+name+".golden")
 			if os.Getenv("LOBER_UPDATE_GOLDEN") == "1" {
 				if err := os.WriteFile(path, got, 0644); err != nil {
 					t.Fatal(err)
@@ -439,17 +445,10 @@ func TestAnswerWindowsStagedPartsGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !bytes.Equal(got, want) {
-				t.Fatalf("native staged %s changed", part)
+				t.Fatalf("native staged %s changed", name)
 			}
 			if !bytes.HasPrefix(got, []byte{0xef, 0xbb, 0xbf}) || strings.Contains(string(got), "install-tok-fixed") {
 				t.Fatal("invalid native staged bytes/credential")
-			}
-			phase := "/booted"
-			if part == "cleanup" {
-				phase = "/ready"
-			}
-			if !strings.Contains(string(got), phase) || !strings.Contains(string(got), "finalize.token") {
-				t.Fatal("native firstboot phase/credential missing")
 			}
 		})
 	}
@@ -552,17 +551,10 @@ func TestAnswerAllRenderedURLKinds(t *testing.T) {
 			}
 			all := string(got) + "\n" + strings.Join(commandPayloads(string(got)), "\n")
 			if format == "unattend" {
-				for _, part := range []catalog.SystemPart{"firstboot", "cleanup"} {
-					data, p := windowsPartScript(expansion{request: r}, part, model.Subject{})
-					if len(p) != 0 {
-						t.Fatal(p)
-					}
-					all += "\n" + string(data)
-				}
+				all += "\n" + string(windowsReportScript(r.Values["gateway"], r.Values["task"]))
 			}
 			// Join literal URL segments with the independently issued runtime value.
 			all = strings.ReplaceAll(all, "'\"$TOKEN\"'", "finalize-tok-fixed")
-			all = strings.ReplaceAll(all, "'+$token+'", "finalize-tok-fixed")
 			matches := regexp.MustCompile(`http://(?:gw|ng)\.internal/[^\s'"<)]+`).FindAllString(all, -1)
 			if len(matches) == 0 {
 				t.Fatal("no decoded URLs")

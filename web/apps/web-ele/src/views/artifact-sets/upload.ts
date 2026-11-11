@@ -1,5 +1,8 @@
 import type { Schemas } from '#/api/console/generated';
 
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
+
 export function missingChunks(
   total: number,
   ranges: Schemas['SourceRange'][],
@@ -31,8 +34,14 @@ export function missingChunks(
   return result;
 }
 
-// Hash every byte in bounded memory. Persist this identity before uploading so a
-// file selected after a page reload cannot silently mix different source bytes.
+async function digestSHA256(data: Uint8Array<ArrayBuffer>) {
+  const subtle = globalThis.crypto?.subtle;
+  return subtle
+    ? new Uint8Array(await subtle.digest('SHA-256', data))
+    : sha256(data);
+}
+
+// 逐片计算摘要，再对拼接后的摘要计算 SHA-256，以兼容浏览器中已有的记录。
 export async function verifyReselectedFile(
   file: Blob,
   total: number,
@@ -42,15 +51,11 @@ export async function verifyReselectedFile(
   const digests: Uint8Array[] = [];
   for (let start = 0; start < file.size; start += 4 * 1024 * 1024) {
     const data = await file.slice(start, start + 4 * 1024 * 1024).arrayBuffer();
-    digests.push(new Uint8Array(await crypto.subtle.digest('SHA-256', data)));
+    digests.push(await digestSHA256(new Uint8Array(data)));
   }
   const combined = new Uint8Array(digests.length * 32);
   digests.forEach((digest, index) => combined.set(digest, index * 32));
-  const identity = [
-    ...new Uint8Array(await crypto.subtle.digest('SHA-256', combined)),
-  ]
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
+  const identity = bytesToHex(await digestSHA256(combined));
   if (expected && expected !== identity)
     throw new Error('所选文件内容与原上传文件不一致，请重新选择原文件');
   return identity;

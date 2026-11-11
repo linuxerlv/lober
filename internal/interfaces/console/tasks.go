@@ -51,6 +51,9 @@ type streamHeaders struct {
 type taskPreviewRequest struct {
 	Firmware catalog.Firmware `json:"firmware,omitempty"`
 }
+type taskControlRequest struct {
+	Rev int64 `json:"rev" binding:"required,gt=0"`
+}
 
 func (s *server) taskRoutes() []route {
 	return []route{
@@ -58,8 +61,8 @@ func (s *server) taskRoutes() []route {
 		{method: "GET", path: "/console/v1/tasks/:id", perm: PermTaskRead, tag: "tasks", summary: "Read frozen task and control diagnostics", resp: taskItem{}, handle: s.getTask},
 		{method: "GET", path: "/console/v1/tasks/:id/events", perm: PermTaskRead, tag: "tasks", summary: "Read committed events after a sequence", query: eventQuery{}, resp: eventPage{}, handle: s.listEvents},
 		{method: "GET", path: "/console/v1/tasks/:id/stream", perm: PermTaskRead, tag: "tasks", summary: "Stream committed events with resume and polling recovery", query: streamQuery{}, headers: streamHeaders{}, stream: true, handle: s.taskStream},
-		{method: "POST", path: "/console/v1/tasks/:id/cancel", perm: PermTaskCancel, audit: "task.cancel", tag: "tasks", summary: "Delegate cancellation to task state machine", resp: taskItem{}, handle: s.cancelTask},
-		{method: "POST", path: "/console/v1/tasks/:id/retry", perm: PermTaskRetry, audit: "task.retry", tag: "tasks", summary: "Delegate retry to task state machine", resp: taskItem{}, handle: s.retryTask},
+		{method: "POST", path: "/console/v1/tasks/:id/cancel", perm: PermTaskCancel, audit: "task.cancel", tag: "tasks", summary: "Cancel a task at the supplied positive revision", req: taskControlRequest{}, resp: taskItem{}, handle: s.cancelTask},
+		{method: "POST", path: "/console/v1/tasks/:id/retry", perm: PermTaskRetry, audit: "task.retry", tag: "tasks", summary: "Retry a task at the supplied positive revision", req: taskControlRequest{}, resp: taskItem{}, handle: s.retryTask},
 		{method: "POST", path: "/console/v1/tasks/:id/preview", perm: PermTaskRead, tag: "tasks", summary: "Render frozen task snapshot with sample credentials", req: taskPreviewRequest{}, resp: previewResponse{}, handle: s.previewTask},
 	}
 }
@@ -201,11 +204,15 @@ func (s *server) taskStream(c *gin.Context) {
 	}
 }
 func (s *server) controlTask(c *gin.Context, retry bool) {
+	var req taskControlRequest
+	if !Bind(c, &req) {
+		return
+	}
 	result, ok := Get(c, func() (tasks.TaskChoice, error) {
 		if retry {
-			return s.deps.TaskController.Retry(c.Request.Context(), actorOf(c), c.Param("id"))
+			return s.deps.TaskController.Retry(c.Request.Context(), actorOf(c), c.Param("id"), req.Rev)
 		}
-		return s.deps.TaskController.Cancel(c.Request.Context(), actorOf(c), c.Param("id"))
+		return s.deps.TaskController.Cancel(c.Request.Context(), actorOf(c), c.Param("id"), req.Rev)
 	})
 	if ok {
 		Ok(c, toTaskChoiceItem(result))
