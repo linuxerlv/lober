@@ -137,6 +137,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--product-sha", required=True)
     parser.add_argument("--kind", choices=("installation", "capacity"), default="installation")
+    parser.add_argument("--qualification-root", type=Path, default=capacity.BASE)
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.product_sha):
         parser.error("product-sha must be a full Git SHA")
@@ -154,9 +155,9 @@ def main():
             problems.append("candidate identity mismatch")
         if not problems:
             if args.kind == "installation":
-                problems += verify_installation(manifest, source, capacity.BASE)
+                problems += verify_installation(manifest, source, args.qualification_root)
             else:
-                problems += verify_capacity(manifest, source, capacity.BASE, args.manifest)
+                problems += verify_capacity(manifest, source, args.qualification_root, args.manifest)
         log = args.output / (args.kind + "-verification.log")
         log.write_text(json.dumps({"product_sha": args.product_sha, "run_id": manifest["run_id"],
                                    "manifest_sha256": digest(args.manifest), "problems": problems},

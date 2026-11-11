@@ -1,0 +1,72 @@
+# 在 lobervm 上运行 Lober 流水线
+
+`dev` 和 `test` 在同一台 Linux 虚拟机运行。执行器定期查询 GitHub，从对应分支下载确切提交。每个阶段有自己的系统账号、状态目录、工具缓存、测试数据库账号和数据目录。状态回报使用第三个账号。
+
+## 安装前
+
+- 准备 Python 3.12 或更新版本、Git、Go、Make、Node、pnpm、BusyBox、debconf、`govulncheck`、PostgreSQL 客户端工具和 Chromium 运行依赖。Go 与 Node 版本按候选仓库要求。将工具放在管理员维护的路径里，给两个执行器配置各自的缓存。
+- 为两个执行器创建专用 PostgreSQL 数据库和账号。该账号只访问自己的测试库，允许创建和清理测试使用的数据库模式。已运行的开发服务使用另一份数据库和账号。
+- `recovery` 会模拟磁盘满和网络超时，具体权限见 [企业测试说明](../../tests/lobertest/enterprise/README.md)。为每个阶段准备专用网络命名空间，通过 systemd 的 `NetworkNamespacePath` 接入，并配置同一命名空间中的测试来源地址。执行器会核对自身命名空间。故障注入只授予受限的挂载和防火墙权限。缺少隔离或权限时，检查保持失败。
+- 开发环境部署和冒烟分别接入管理员维护的两个可执行文件。两者都会收到候选程序绝对路径和完整提交号。部署入口须复核目标环境、程序校验值和正在运行的任务，并通过已有开发部署服务完成备份、切换和恢复。部署权限由部署服务持有。冒烟入口检查实际运行的版本、启动、登录和关键接口。任一入口缺失或退出码非零时，`dev-ready` 保持未通过。
+
+## 安装执行器
+
+用管理员账号从审查过的提交安装文件。以下命令在该源码目录运行。专用账号的家目录分别设为 `/var/lib/lober-ci-dev` 和 `/var/lib/lober-ci-test`。
+
+```sh
+for stage in dev test; do
+  sudo useradd --system --user-group --no-create-home \
+    --home-dir "/var/lib/lober-ci-$stage" --shell /usr/sbin/nologin "lober-ci-$stage"
+done
+sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin lober-ci-report
+
+sudo install -d -m 0755 /opt/lober-ci/ops/ci /opt/lober-ci/tests/lobertest/enterprise
+sudo install -d -m 0750 -o root -g lober-ci-report /etc/lober-ci
+sudo install -m 0644 ops/ci/{worker,verify,report}.py /opt/lober-ci/ops/ci/
+sudo install -m 0755 ops/ci/{app-token,verify-as-stage} /opt/lober-ci/ops/ci/
+sudo install -m 0644 tests/lobertest/enterprise/{gate.py,profiles.json,production_capacity.py,installation_evidence.py,cloud_install.py,cloud_packet_capture.py,cloud_capture_session.py,cloud_guest_identity.py,cloud_no_task_probe.py} /opt/lober-ci/tests/lobertest/enterprise/
+sudo install -m 0644 ops/ci/systemd/*.service ops/ci/systemd/*.timer /etc/systemd/system/
+sudo visudo -cf ops/ci/systemd/lober-ci-report.sudoers
+sudo install -m 0440 ops/ci/systemd/lober-ci-report.sudoers /etc/sudoers.d/lober-ci-report
+sudo systemctl daemon-reload
+```
+
+为 `/etc/lober-ci/dev.env` 和 `/etc/lober-ci/test.env` 配置下面的变量，文件由管理员持有且权限为 `0600`。数据库连接串保存在配置文件里。
+
+| 变量 | 阶段 | 用途 |
+| --- | --- | --- |
+| `LOBER_CI_REPOSITORY` | 两者 | `https://github.com/linuxerlv/lober.git` |
+| `PATH` | 两者 | 管理员维护的工具目录，包括锁定的 Go、Node、pnpm 和漏洞扫描工具 |
+| `LOBER_TEST_PG_DSN` | 两者 | 对应阶段独立测试数据库的连接串 |
+| `LOBER_CI_RECOVERY_NETNS` | 两者 | 本阶段专用网络命名空间路径，例如 `/run/netns/lober-ci-dev` |
+| `LOBER_ENTERPRISE_VM_IP` | 两者 | 对应隔离测试环境的地址，用于故障测试的临时来源服务 |
+| `LOBER_CI_DEV_DEPLOY`、`LOBER_CI_DEV_SMOKE` | dev | 管理员维护的开发环境部署和冒烟程序绝对路径 |
+| `LOBER_CI_MEDIA_CHECKSUMS`、`LOBER_TEST_ESXI7_ISO`、`LOBER_TEST_ESXI8_ISO`、`LOBER_TEST_ESXI9_ISO`、`LOBER_TEST_REAL_ISO` | test | 可信来源校验值清单及四张镜像的绝对路径 |
+| `LOBER_CI_CAPACITY_MANIFEST` | test | 准备完成后的容量配置文件，内容是候选清单中的 `capacity` 对象 |
+| `PLAYWRIGHT_BROWSERS_PATH` | 可选 | 本阶段的浏览器缓存路径 |
+
+启动对应服务可以先单轮执行。确认日志和独立资源后再启动定时器。
+
+```sh
+sudo systemctl start lober-ci-worker@dev.service
+sudo systemctl start lober-ci-worker@test.service
+sudo systemctl enable --now lober-ci-worker@dev.timer lober-ci-worker@test.timer
+journalctl -u lober-ci-worker@dev.service -u lober-ci-worker@test.service
+```
+
+每轮产物放在 `/var/lib/lober-ci-<阶段>/<完整提交号>/`。查看 `execution.json` 和 `logs/`。需要重跑时，给对应服务的 `ExecStart` 加 `--retry` 后执行单轮，再移除临时覆盖配置。
+
+真实镜像、装机和长稳测试按 [企业测试说明](../../tests/lobertest/enterprise/README.md) 准备。先让执行器冻结程序和本轮编号。然后依据 `candidate.json` 准备原件身份文件和安装原件，将原件放入同一候选下的私有 `qualification/` 目录，由 `lober-ci-test` 持有。配置 `LOBER_CI_CAPACITY_MANIFEST` 后重跑一次，绑定容量配置并更新同一轮的自动检查。容量负载和最终证据引用冻结后的清单。使用 `installation_evidence.py --qualification-root <本轮 qualification 目录>` 检查装机和长稳原件，输出写入同一轮 `logs/`。真实装机和长稳执行器仍需现场准备，旧版升级验收器仍待实现。缺少任一结果时完整发布检查失败。
+
+执行器只处理已合入受保护分支的代码。阶段账号负责生成该阶段的测试证据，管理员负责审查候选执行入口和保护该账号。GitHub 回报账号使用管理员安装的检查器复核结果。
+
+## 接上 GitHub 合并拦截
+
+1. 把 GitHub 应用安装到该仓库。应用需有读取代码和合并请求、写入提交状态的权限。将应用私钥保存在仅状态回报账号可读的文件，权限设为 `0400`。在 `/etc/lober-ci/report.env` 配置 `LOBER_CI_GITHUB_REPOSITORY=linuxerlv/lober`、`LOBER_CI_APP_ID`、`LOBER_CI_INSTALLATION_ID`、`LOBER_CI_APP_KEY` 和 `LOBER_CI_STATUS_CREATOR_ID`。最后一项是应用机器人账号的数字 ID，可用 `gh api 'users/应用名%5Bbot%5D' --jq .id` 查询。
+2. 执行 `sudo systemctl start lober-ci-report.service` 检查回报，再启用 `lober-ci-report.timer`。回报程序只处理当前同仓库的 `dev → test` 和 `test → preview` 合并请求，校验 GitHub 试合并提交的两个父提交和文件内容。它只给匹配的试合并提交回报状态。证据缺失时回报失败。
+3. 在 `preview` 的保护设置中加上必过检查 `enterprise-release`，来源限定为该 GitHub 应用。接通 `dev` 部署后，在 `test` 的保护设置中同样加入 `dev-ready`。保留已有 `go`、`web`、独立审批和讨论解决要求。
+4. 演练一个缺证据的候选，确认合并按钮被拦截。更换源提交或目标提交，确认旧的试合并结果无法放行新的请求。GitHub 要求来源分支包含目标分支最新提交时，首次晋级和之后的分支历史衔接需要按仓库流程处理，先验证规则配置与预期的合并方式兼容。
+
+本地复核脚本可运行 `python3 -B -m unittest discover -s ops/ci`。实际产品测试和 GitHub 合并检查的验收在指定环境执行。
+
+[GitHub 应用令牌](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app) · [GitHub 分支保护](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)

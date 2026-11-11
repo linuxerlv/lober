@@ -140,6 +140,8 @@ def main():
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--product-sha", required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--source-root", type=Path, help="Candidate source when using an installed verifier")
+    parser.add_argument("--qualification-root", type=Path, help="Private installation and capacity evidence directory")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.product_sha):
         parser.error("product-sha must be the full frozen Git SHA")
@@ -158,31 +160,43 @@ def main():
     problems = evaluate(required, results, args.product_sha, manifest)
     if manifest.get("product_sha") != args.product_sha or not manifest.get("run_id"):
         problems.append("Frozen product/run identity mismatch")
-    source = Path(__file__).resolve().parents[3]
+    source = (args.source_root or Path(__file__).resolve().parents[3]).resolve()
     candidate_problems = validate_candidate(manifest, source, manifest.get("binary", ""))
     if args.profile == "release":
         candidate_problems += evaluate_release_profile(required, manifest, source)
     problems += candidate_problems
     def passed(name):
         return isinstance(results.get(name), dict) and results[name].get("status") == "PASS"
-    if not candidate_problems and any(passed(name) for name in ("pxe_state", "real_install", "capacity_soak")):
-        try:
-            sys.modules["gate"] = sys.modules[__name__]
-            capacity_name = "tests/lobertest/enterprise/production_capacity.py"
-            verifier_name = "tests/lobertest/enterprise/installation_evidence.py"
-            capacity = load_verified_module(source / capacity_name, manifest["files"][capacity_name], "production_capacity")
-            verifier = load_verified_module(source / verifier_name, manifest["files"][verifier_name], "installation_evidence")
-            if passed("capacity_soak"):
-                problems += ["capacity: " + problem for problem in
-                             verifier.verify_capacity(manifest, source, capacity.BASE, args.manifest)]
-            elif any(passed(name) for name in ("pxe_state", "real_install")):
-                problems += ["installation: " + problem for problem in verifier.verify_installation(manifest, source, capacity.BASE)]
-        except (ImportError, KeyError, OSError, TypeError, ValueError):
-            problems.append("installation: verifier unavailable or invalid")
     for name, row in results.items():
         if not isinstance(row, dict) or not isinstance(row.get("evidence"), str):
             continue
         problems += [f"{name}: {problem}" for problem in validate_evidence(row, root)]
+    if not problems and any(passed(name) for name in ("pxe_state", "real_install", "capacity_soak")):
+        try:
+            sys.modules["gate"] = sys.modules[__name__]
+            trusted = Path(__file__).resolve().parent
+            module_names = (
+                "production_capacity.py", "installation_evidence.py", "cloud_install.py",
+                "cloud_packet_capture.py", "cloud_capture_session.py",
+                "cloud_guest_identity.py", "cloud_no_task_probe.py",
+            )
+            files = manifest["files"]
+            expected = {name: files["tests/lobertest/enterprise/" + name] for name in module_names}
+            if any(digest(trusted / name) != expected[name] for name in module_names):
+                raise ValueError("installed checker differs from candidate")
+            capacity = load_verified_module(trusted / "production_capacity.py",
+                                            expected["production_capacity.py"], "production_capacity")
+            verifier = load_verified_module(trusted / "installation_evidence.py",
+                                            expected["installation_evidence.py"], "installation_evidence")
+            qualification_root = args.qualification_root or capacity.BASE
+            if passed("capacity_soak"):
+                problems += ["capacity: " + problem for problem in
+                             verifier.verify_capacity(manifest, source, qualification_root, args.manifest)]
+            elif any(passed(name) for name in ("pxe_state", "real_install")):
+                problems += ["installation: " + problem for problem in
+                             verifier.verify_installation(manifest, source, qualification_root)]
+        except (ImportError, KeyError, OSError, TypeError, ValueError):
+            problems.append("installation: verifier unavailable or invalid")
     print(json.dumps({"profile": args.profile, "product_sha": args.product_sha,
                       "status": "FAIL" if problems else "PASS", "problems": problems}, indent=2))
     return 1 if problems else 0
