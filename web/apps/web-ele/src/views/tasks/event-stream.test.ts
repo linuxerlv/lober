@@ -10,10 +10,11 @@ const io = vi.hoisted(() => ({
   get: vi.fn(),
   grid: vi.fn(),
   clearSession: vi.fn(),
-  retry: vi.fn(),
+  confirm: vi.fn(),
+  post: vi.fn(),
 }));
 const route = reactive({ params: { id: 'task-1' } });
-const access = reactive({ accessToken: 'test-token', accessCodes: ['task:retry'] });
+const access = reactive({ accessToken: 'test-token', accessCodes: ['task:cancel', 'task:retry'] });
 vi.mock('vue-router', () => ({ useRoute: () => route }));
 vi.mock('@vben/stores', () => ({
   useAccessStore: () => access,
@@ -35,17 +36,20 @@ vi.mock('element-plus', async () => {
     ElButton: slot('button'),
     ElCard: slot('section'),
     ElDialog: slot('dialog'),
-    ElMessageBox: { confirm: async () => {} },
+    ElMessageBox: { confirm: io.confirm },
     ElTabPane: slot('div'),
     ElTabs: slot('div'),
     ElTag: slot('span'),
   };
 });
-vi.mock('#/api/request', () => ({ requestClient: {} }));
-vi.mock('#/api/console/task', async (load) => ({
-  ...await load<typeof import('#/api/console/task')>(),
-  taskAPI: { events: io.events, get: io.get, retry: io.retry },
-}));
+vi.mock('#/api/request', () => ({ requestClient: { post: io.post } }));
+vi.mock('#/api/console/task', async (load) => {
+  const original = await load<typeof import('#/api/console/task')>();
+  return {
+    ...original,
+    taskAPI: { ...original.taskAPI, events: io.events, get: io.get },
+  };
+});
 vi.mock('#/adapter/vxe-table', async () => {
   const { defineComponent, h, ref } = await import('vue');
   return {
@@ -133,6 +137,7 @@ beforeEach(() => {
   Stream.instances = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => new Stream(url, init).response()));
   io.clearSession.mockImplementation(async () => { access.accessToken = ''; });
+  io.confirm.mockResolvedValue(undefined);
   io.get.mockResolvedValue(task());
   io.events.mockResolvedValue({ items: Array.from({ length: 200 }, (_, index) => event(index + 1)) });
 
@@ -454,11 +459,11 @@ it('keeps receiving logs after retrying a failed task', async () => {
   await vi.advanceTimersByTimeAsync(120);
   await flushPage();
   expect(node.textContent).toContain('失败');
-  io.retry.mockResolvedValue(task('installing'));
+  io.post.mockResolvedValue(task('installing'));
   io.events.mockResolvedValueOnce({ items: [event(202)] });
   click(node, '重试任务');
   await flushPage();
-  expect(io.retry).toHaveBeenCalledExactlyOnceWith('task-1');
+  expect(io.post).toHaveBeenCalledExactlyOnceWith('/tasks/task-1/retry', { rev: 1 });
   source.send(event(203));
   await vi.advanceTimersByTimeAsync(120);
   await goToPage(node, 11);
@@ -466,6 +471,31 @@ it('keeps receiving logs after retrying a failed task', async () => {
   expect(fetch).toHaveBeenCalledOnce();
 });
 
+it.each([
+  ['cancel', '取消任务'],
+  ['retry', '重试任务'],
+])('sends the revision shown when the %s confirmation opened', async (action, button) => {
+  io.get.mockResolvedValue({ ...task('failed'), rev: 7 });
+  const { node, source } = await mountDetail();
+  let finishConfirmation!: () => void;
+  io.confirm.mockImplementationOnce(() => new Promise<void>((resolve) => {
+    finishConfirmation = resolve;
+  }));
+  io.post.mockResolvedValue({ ...task('installing'), rev: 9 });
+
+  click(node, button);
+  expect(io.confirm).toHaveBeenCalledOnce();
+  expect(io.post).not.toHaveBeenCalled();
+  io.get.mockResolvedValue({ ...task('pending'), rev: 8 });
+  source.send(event(201));
+  await vi.advanceTimersByTimeAsync(120);
+  await flushPage();
+  expect(node.textContent).toContain('等待机器引导');
+
+  finishConfirmation();
+  await flushPage();
+  expect(io.post).toHaveBeenCalledExactlyOnceWith(`/tasks/task-1/${action}`, { rev: 7 });
+});
 
 it('deduplicates live events while the first event page is pending', async () => {
   let finishFirst!: (page: { items: TaskEvent[] }) => void;

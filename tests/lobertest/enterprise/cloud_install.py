@@ -3327,7 +3327,7 @@ def qualify(config, manifest, output):
               and row['response_status']==200 and row['response_body_sha256']==localboot]
     require(len(matching)==1,'缺本客户同流GET/200完整本地盘响应')
     before_events = api.events(task['id'])
-    retry = api.api('POST', '/tasks/' + task['id'] + '/retry', expected=422)
+    retry = api.api('POST', '/tasks/' + task['id'] + '/retry', {'rev': task['rev']}, expected=422)
     retry_ok = any(p['code'] == 'task_retry_after_reboot' for p in retry['problems'])
     helper=load_cloud_helper('cloud_capture_session',manifest)
     install_receipt=bound_json(config['install_capture_receipt_file'],manifest['cloud']['install_capture_receipt_sha256'])

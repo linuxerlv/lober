@@ -137,9 +137,10 @@ async function loadEvents() {
   }
 }
 async function control(retry: boolean) {
-  const permission=retry?'task:retry':'task:cancel';
+  const permission = retry ? 'task:retry' : 'task:cancel';
   const current = session;
   if (!current || !access.accessCodes.includes(permission) || busy.value || !task.value) return;
+  const rev = task.value.rev;
   try {
     await ElMessageBox.confirm(
       retry ? '重试会沿用原任务快照，目标机下次引导可能重新安装。确认重试？' : '确认取消该任务？',
@@ -154,7 +155,7 @@ async function control(retry: boolean) {
   error.value = '';
   problems.value = [];
   try {
-    const result = await (retry ? taskAPI.retry(current.id) : taskAPI.cancel(current.id));
+    const result = await (retry ? taskAPI.retry(current.id, rev) : taskAPI.cancel(current.id, rev));
     if (current !== session) return;
     task.value = result;
     await loadEvents();

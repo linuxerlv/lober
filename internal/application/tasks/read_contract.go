@@ -44,7 +44,7 @@ type Reader interface {
 	// 快照只取已保存任务，不读取当前主机、镜像、模板或组件。
 	Get(context.Context, ports.Actor, string) (TaskChoice, error)
 	// Preview 先检查非空请求固件，再查任务；空值回退快照，再回退UEFI并追加firmware样例标签。
-	// 只向渲染器传原快照及查回的任务编号；先返回渲染错误，再交问题，成功才追加标签并标记文件。
+	// 渲染用隐藏凭据的快照副本和原任务编号。成功才追加标签并标记文件。
 	Preview(context.Context, ports.Actor, string, PreviewRequest) (PreviewResult, error)
 }
 type ReaderDeps struct {

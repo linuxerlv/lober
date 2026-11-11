@@ -2,6 +2,7 @@ package console
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/domain/access"
@@ -62,7 +63,8 @@ func Test审计取当前用户路由动作与注入时钟(t *testing.T) {
 	now.Store(fixedAt + 42)
 	backend := &taskControlFixture{st: st}
 	setTaskControl(s, backend)
-	if w := httpCall(s, "POST", "/console/v1/tasks/"+task.ID+"/cancel", `{"actor":"forged","action":"forged","detail":"reason","at":1}`, token); w.Code != 200 {
+	body := fmt.Sprintf(`{"rev":%d,"actor":"forged","action":"forged","detail":"reason","at":1}`, task.Rev)
+	if w := httpCall(s, "POST", "/console/v1/tasks/"+task.ID+"/cancel", body, token); w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
 	if len(backend.calls) != 1 {

@@ -1,4 +1,5 @@
 # 只做基础检查：格式、静态检查、单元测试、竞态、Linux 编译、Wire 漂移和前端检查。
+# 客户端检查只用合成应答，不连接部署环境，也不代替企业验收。
 # 真实数据库和装机测试在云服务器的 lobervm 实例上跑，GitHub 不连内网、不部署。
 name: ci
 
@@ -57,6 +58,28 @@ jobs:
           export LOBER_TEST_BASH="$(command -v bash)"
           export LOBER_TEST_BUSYBOX="$(command -v busybox)"
           make check
+
+  clients:
+    name: clients
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+      - name: 安装测试工具
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.12.15'
+      - name: 安装锁定的测试依赖
+        working-directory: tests/lobertest
+        run: uv sync --locked --python 3.12
+      - name: 验证任务控制调用方
+        working-directory: tests/lobertest
+        run: >-
+          uv run --locked pytest tests/test_api.py
+          enterprise/test_cloud_install.py::CloudChecks::test_qualify_entry_uses_parsed_exchange_and_replays_original_body_only
+          enterprise/test_linux_acceptance.py
+          enterprise/test_production_capacity.py
 
   web:
     name: web
