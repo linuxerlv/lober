@@ -11,7 +11,7 @@
 
 `dev` 在 lobervm 上使用 `lober-ci-dev-app.service`。它只监听 `127.0.0.1:17831`，由独立账号 `lober-ci-dev-app` 运行。开发实例的 PostgreSQL 和数据目录与两个测试阶段分开。管理员在 `/etc/lober-ci-dev-app.json` 设置专用数据库、本地监听地址、独立制品目录和随机初始密码。该文件由 root 持有，权限为 `0640`，只授权开发服务组读取。部署入口复制固定提交的程序，切换后复核实际运行程序的校验值、前端入口和数据库登录。启动或冒烟失败时恢复上一个可执行文件。数据库迁移恢复须单独验证。
 
-`dev` 的故障启动器为每轮创建只含回环接口的网络和独立挂载空间。测试库通过当前阶段的 Unix 套接字转接。故障操作仅接受本轮测试目录的 8 MiB 临时挂载和本轮镜像来源端口的丢包规则，测试账号不直接获得系统挂载或防火墙权限。安装时将 `dev-deploy`、`dev-smoke`、`dev-app-control`、`recovery-launch`、`recovery_session.py` 和 `recovery-bin/sudo` 放入 `/opt/lober-ci/ops/ci/`，校验并安装 `systemd/lober-ci-dev-app.sudoers`。将 `systemd/dev-environment.conf` 安装到 `/etc/systemd/system/lober-ci-worker@dev.service.d/`，再重新加载 systemd 配置。
+故障启动器为每轮创建只含回环接口的网络和独立挂载空间。测试库通过当前阶段的 Unix 套接字转接。故障操作仅接受本轮测试目录的 8 MiB 临时挂载和本轮镜像来源端口的丢包规则，测试账号不直接获得系统挂载或防火墙权限。安装时将 `dev-deploy`、`dev-smoke`、`dev-app-control`、`recovery-launch`、`recovery_session.py` 和 `recovery-bin/sudo` 放入 `/opt/lober-ci/ops/ci/`，校验并安装 `systemd/lober-ci-dev-app.sudoers`。将 `systemd/dev-environment.conf` 和 `systemd/test-recovery.conf` 分别安装到对应阶段的 `lober-ci-worker@<阶段>.service.d/`，再重新加载 systemd 配置。
 
 ## 安装执行器
 
@@ -43,7 +43,7 @@ sudo systemctl daemon-reload
 | `PATH` | 两者 | 管理员维护的工具目录，包括锁定的 Go、Node、pnpm 和漏洞扫描工具 |
 | `LOBER_TEST_PG_DSN` | 两者 | 对应阶段独立测试数据库的连接串 |
 | `LOBER_CI_RECOVERY_NETNS` | 两者 | 本阶段专用网络命名空间路径，例如 `/run/netns/lober-ci-dev` |
-| `LOBER_CI_RECOVERY_LAUNCHER` | dev | 管理员持有的隔离故障启动器。启动器只接收候选提交，创建一次性的网络和挂载空间 |
+| `LOBER_CI_RECOVERY_LAUNCHER` | 两者 | 管理员持有的隔离故障启动器。启动器只接收候选提交，创建一次性的网络和挂载空间 |
 | `LOBER_ENTERPRISE_VM_IP` | 两者 | 对应隔离测试环境的地址，用于故障测试的临时来源服务 |
 | `LOBER_CI_DEV_DEPLOY`、`LOBER_CI_DEV_SMOKE` | dev | 管理员维护的开发环境部署和冒烟程序绝对路径 |
 | `LOBER_CI_MEDIA_CHECKSUMS`、`LOBER_TEST_ESXI7_ISO`、`LOBER_TEST_ESXI8_ISO`、`LOBER_TEST_ESXI9_ISO`、`LOBER_TEST_REAL_ISO` | test | 可信来源校验值清单及四张镜像的绝对路径 |

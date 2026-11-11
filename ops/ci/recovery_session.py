@@ -14,7 +14,6 @@ import threading
 
 
 SOURCE_IP = '192.0.2.1'
-DEV = 'lober-ci-dev'
 
 
 def fault(args, work, work_fd, uid, gid):
@@ -73,8 +72,8 @@ def serve(listener, work, work_fd, uid, gid):
                 pass
 
 
-def main(sha, mode='run'):
-    if os.geteuid() != 0 or not re.fullmatch('[0-9a-f]{40}', sha):
+def main(sha, mode='run', stage='dev'):
+    if os.geteuid() != 0 or stage not in ('dev', 'test') or not re.fullmatch('[0-9a-f]{40}', sha):
         return 2
     if any(os.path.samestat(os.stat(f'/proc/self/ns/{ns}'), os.stat(f'/proc/1/ns/{ns}'))
            for ns in ('net', 'mnt')):
@@ -84,8 +83,9 @@ def main(sha, mode='run'):
         return 2
     subprocess.run(['/usr/sbin/ip', 'link', 'set', 'lo', 'up'], check=True)
     subprocess.run(['/usr/sbin/ip', 'address', 'add', SOURCE_IP + '/32', 'dev', 'lo'], check=True)
-    user = pwd.getpwnam(DEV)
-    root = Path('/var/lib/lober-ci-dev')
+    account = f'lober-ci-{stage}'
+    user = pwd.getpwnam(account)
+    root = Path('/var/lib') / account
     candidate = root / sha
     results = candidate / ('logs' if mode == 'run' else 'diagnostic-recovery')
     as_dev = {'user': user.pw_uid, 'group': user.pw_gid, 'extra_groups': [], 'umask': 0o077}
@@ -103,12 +103,12 @@ def main(sha, mode='run'):
         env = {'PATH': '/opt/lober-ci/ops/ci/recovery-bin:/usr/local/bin:/usr/bin:/bin',
                'HOME': str(root), 'TMPDIR': str(work), 'PYTHONUTF8': '1',
                'LOBER_CI_FAULT_SOCKET': address, 'LOBER_ENTERPRISE_VM_IP': SOURCE_IP,
-               'LOBER_TEST_PG_DSN': 'host=127.0.0.1 port=5432 user=lober-ci-dev dbname=lober_ci sslmode=disable',
+               'LOBER_TEST_PG_DSN': f'host=127.0.0.1 port=5432 user={account} dbname=lober_ci sslmode=disable',
                'LOBER_ENTERPRISE_BINARY': str(candidate / 'lober'),
                'LOBER_ENTERPRISE_FIXTURE': str(candidate / 'synthetic-rocky.iso')}
         # 使用本阶段测试库的 Unix 套接字。临时 TCP 端口只在本轮独立网络内可见。
         with subprocess.Popen(['/usr/bin/systemd-socket-activate', '--listen=127.0.0.1:5432',
-                               '/usr/lib/systemd/systemd-socket-proxyd', '/run/lober-ci-db-dev/.s.PGSQL.5432'],
+                               '/usr/lib/systemd/systemd-socket-proxyd', f'/run/lober-ci-db-{stage}/.s.PGSQL.5432'],
                               env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **as_dev) as proxy:
             try:
                 for attempt in range(20):
