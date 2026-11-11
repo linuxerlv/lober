@@ -1,0 +1,10 @@
+<UserAccounts><LocalAccounts>
+  <LocalAccount wcm:action="add">
+    <Name>{{param:username}}</Name><DisplayName>{{param:username}}</DisplayName><Group>Administrators</Group>
+    <Password><Value>{{param:password}}</Value><PlainText>true</PlainText></Password>
+  </LocalAccount>
+</LocalAccounts></UserAccounts>
+<AutoLogon>
+  <Username>{{param:username}}</Username><Enabled>true</Enabled><LogonCount>1</LogonCount>
+  <Password><Value>{{param:password}}</Value><PlainText>true</PlainText></Password>
+</AutoLogon>

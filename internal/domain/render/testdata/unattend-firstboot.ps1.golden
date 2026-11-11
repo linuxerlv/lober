@@ -1,0 +1,6 @@
+﻿$ErrorActionPreference='Stop'
+$dir=Join-Path $env:SystemDrive 'ProgramData/lober'
+$token=(Get-Content -Raw (Join-Path $dir 'finalize.token')).Trim()
+try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 -Method Post -Uri ('http://gw.internal/v1/signal/task-42/'+$token+'/booted') -Body '' | Out-Null } catch {}
+try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 -Method Post -Uri ('http://gw.internal/v1/signal/task-42/'+$token+'/init-start') -Body '' | Out-Null } catch {}
+exit 0

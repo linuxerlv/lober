@@ -1,0 +1,59 @@
+[checksums]
+images/eltorito.img = sha256:559f48ffe13f08aa51f66aa5e0e53bb9aece7ae8dcfd992667c2fe834e18850b
+images/install.img = sha256:2f2cd49e631d27c00fe58dd6055207b687dad574f41168f0b5da00381a0df60f
+images/pxeboot/initrd.img = sha256:21736a8a0296302d2a250498bab9e7deef7903e4feab64943cb55178bb30d1f5
+images/pxeboot/vmlinuz = sha256:90ee8394588e78eed5136fa484a2b49c6a9e70960356b046c1b90a5a6f449f7d
+
+[general]
+; WARNING.0 = This section provides compatibility with pre-productmd treeinfos.
+; WARNING.1 = Read productmd documentation for details about new format.
+arch = x86_64
+family = AlmaLinux
+name = AlmaLinux 10
+packagedir = Minimal/Packages
+platforms = x86_64,xen
+repository = Minimal
+timestamp = 1779571756
+variant = Minimal
+variants = Minimal
+version = 10
+
+[header]
+type = productmd.treeinfo
+version = 1.2
+
+[images-x86_64]
+eltorito.img = images/eltorito.img
+initrd = images/pxeboot/initrd.img
+kernel = images/pxeboot/vmlinuz
+
+[images-xen]
+initrd = images/pxeboot/initrd.img
+kernel = images/pxeboot/vmlinuz
+
+[media]
+discnum = 1
+totaldiscs = 1
+
+[release]
+name = AlmaLinux
+short = AlmaLinux
+version = 10
+
+[stage2]
+mainimage = images/install.img
+
+[tree]
+arch = x86_64
+build_timestamp = 1779571756
+platforms = x86_64,xen
+variants = Minimal
+
+[variant-Minimal]
+id = Minimal
+name = Minimal
+packages = Minimal/Packages
+repository = Minimal
+type = variant
+uid = Minimal
+

@@ -1,0 +1,59 @@
+[checksums]
+images/eltorito.img = sha256:275e9078e04f89c70ec6d48600cf3aec3d4bf56ccffbde710e3fd5df5a7d1234
+images/install.img = sha256:900c143ce64395ef30de2723e31f007645044002c60b0f98d1740a22c27e68f9
+images/pxeboot/initrd.img = sha256:73361f12c007cfd3c23fce590c7484cc2709c188fe08e0ddfbb4e05791015aac
+images/pxeboot/vmlinuz = sha256:bdbe11aa10d1dce86d89e65e2f8476f78f47968b8045b20fa0f0aace82b77d77
+
+[general]
+; WARNING.0 = This section provides compatibility with pre-productmd treeinfos.
+; WARNING.1 = Read productmd documentation for details about new format.
+arch = x86_64
+family = Rocky Linux Minimal
+name = Rocky Linux Minimal 10.2
+packagedir = Minimal/Packages
+platforms = x86_64,xen
+repository = Minimal
+timestamp = 1779840701
+variant = Minimal
+variants = Minimal
+version = 10.2
+
+[header]
+type = productmd.treeinfo
+version = 1.2
+
+[images-x86_64]
+eltorito.img = images/eltorito.img
+initrd = images/pxeboot/initrd.img
+kernel = images/pxeboot/vmlinuz
+
+[images-xen]
+initrd = images/pxeboot/initrd.img
+kernel = images/pxeboot/vmlinuz
+
+[media]
+discnum = 1
+totaldiscs = 1
+
+[release]
+name = Rocky Linux Minimal
+short = Rocky-minimal
+version = 10.2
+
+[stage2]
+mainimage = images/install.img
+
+[tree]
+arch = x86_64
+build_timestamp = 1779840701
+platforms = x86_64,xen
+variants = Minimal
+
+[variant-Minimal]
+id = Minimal
+name = Minimal
+packages = Minimal/Packages
+repository = Minimal
+type = variant
+uid = Minimal
+

@@ -1,0 +1,10 @@
+#!ipxe
+kernel http://ng.internal/artifacts/windows/wimboot
+initrd http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/startnet.cmd startnet.cmd
+initrd http://ng.internal/artifacts/windows/winpeshl winpeshl.ini
+initrd http://ng.internal/artifacts/windows/winpe-busybox busybox.exe
+initrd http://ng.internal/artifacts/windows/winpe-curl curl.exe
+initrd http://ng.internal/artifacts/windows/bcd BCD
+initrd http://ng.internal/artifacts/windows/boot-sdi boot.sdi
+initrd http://ng.internal/artifacts/windows/boot-wim boot.wim
+boot

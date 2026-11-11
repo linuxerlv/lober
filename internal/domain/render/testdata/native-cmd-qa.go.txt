@@ -1,0 +1,107 @@
+package render
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+
+	"github.com/lober/lober/internal/core/catalog"
+	"github.com/lober/lober/internal/core/model"
+)
+
+// Native CMD grammar is target-platform behavior. Linux can cross-compile
+// these Windows-only tests and run the executable through WSL interop.
+// CmdLine bypasses Go's argument quoting to test XML-decoded bytes exactly.
+func rawCMD(line, dir string, env []string) *exec.Cmd {
+	cmd := exec.Command("cmd.exe")
+	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: line}
+	cmd.Dir = dir
+	cmd.Env = env
+	return cmd
+}
+
+func TestAnswerWindowsNativeCMDFirstboot(t *testing.T) {
+	for _, exit := range []string{"71", "0"} {
+		t.Run("wrapper-exit-"+exit, func(t *testing.T) {
+			r := answerFixture(t, "unattend", true, "uefi")
+			// Real native PS runs actual generated telemetry/cleanup bodies.
+			// Loopback connection refusal is intentional and nonfatal. Both
+			// SystemDrive and WINDIR refer only to the private temporary tree, so
+			// credential/cache deletion cannot reach the user's actual Windows.
+			r.Values["gateway"] = "http://127.0.0.1:1"
+			got, p, err := Render(r)
+			if err != nil || len(p) != 0 {
+				t.Fatalf("%v %v", p, err)
+			}
+			line := firstLogonCommandLines(t, got)[0]
+			dir := t.TempDir()
+			stage := filepath.Join(dir, "ProgramData", "lober")
+			if err := os.MkdirAll(stage, 0700); err != nil {
+				t.Fatal(err)
+			}
+			for _, part := range []catalog.SystemPart{"firstboot", "cleanup"} {
+				data, p := windowsPartScript(expansion{request: r}, part, model.Subject{})
+				if len(p) != 0 {
+					t.Fatal(p)
+				}
+				if err := os.WriteFile(filepath.Join(stage, string(part)+".ps1"), data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(stage, "finalize.token"), []byte("finalize-tok-test"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(stage, "script-3.cmd"), []byte("@echo executed>%~dp0wrapper.marker\r\n@exit /b "+exit+"\r\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// The expanded executable spelling contains only forward slashes;
+			// a backslash-bearing environment value must not mask the finding.
+			env := append(os.Environ(), "SystemDrive="+filepath.ToSlash(dir), "WINDIR="+filepath.Join(dir, "Windows"))
+			cmd := rawCMD(line, dir, env)
+			out, err := cmd.CombinedOutput()
+			want := 0
+			if exit == "71" {
+				want = 71
+			}
+			if cmd.ProcessState.ExitCode() != want {
+				t.Fatalf("actual decoded chain exit=%d want=%d err=%v output=%s", cmd.ProcessState.ExitCode(), want, err, out)
+			}
+			if _, err := os.Stat(filepath.Join(stage, "wrapper.marker")); err != nil {
+				t.Fatal("native wrapper did not execute")
+			}
+			_, tokenErr := os.Stat(filepath.Join(stage, "finalize.token"))
+			if (tokenErr == nil) != (want != 0) {
+				t.Fatalf("cleanup must follow success only, token err=%v", tokenErr)
+			}
+			t.Logf("raw decoded chain executed wrapper exit=%d; token retained=%v; staging root forward slashes=%s", want, tokenErr == nil, filepath.ToSlash(dir))
+		})
+	}
+}
+
+func TestAnswerWindowsNativeCMDPre(t *testing.T) {
+	r := answerFixture(t, "unattend", true, "uefi")
+	got, p, err := Render(r)
+	if err != nil || len(p) != 0 {
+		t.Fatalf("%v %v", p, err)
+	}
+	// X: is unavailable on the workstation. Substitute only its staging root;
+	// retain the decoded Path and raw grammar without automatic CMD quotes.
+	text := string(got)
+	start := strings.Index(text, "<Path>") + len("<Path>")
+	end := strings.Index(text[start:], "</Path>")
+	line := strings.ReplaceAll(text[start:start+end], "&amp;", "&")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "script-2.cmd"), []byte("@exit /b 71\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	line = strings.ReplaceAll(line, "X:/lober", filepath.ToSlash(dir))
+	cmd := rawCMD(line, filepath.Dir(dir), os.Environ())
+	out, err := cmd.CombinedOutput()
+	if err == nil || cmd.ProcessState.ExitCode() != 71 {
+		t.Fatalf("native pre exit=%d want=71 err=%v output=%s", cmd.ProcessState.ExitCode(), err, out)
+	}
+	t.Log("raw decoded WinPE Path with mapped forward-slash staging root executed wrapper exit=71")
+}

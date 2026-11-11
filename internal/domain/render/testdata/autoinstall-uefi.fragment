@@ -1,0 +1,7 @@
+- {id: disk0, type: disk, path: /dev/sda, ptable: gpt, wipe: superblock-recursive}
+- {id: esp, type: partition, device: disk0, size: 600M, flag: boot, grub_device: true}
+- {id: esp-fs, type: format, volume: esp, fstype: fat32}
+- {id: esp-mount, type: mount, device: esp-fs, path: /boot/efi}
+- {id: root, type: partition, device: disk0, size: -1}
+- {id: root-fs, type: format, volume: root, fstype: ext4}
+- {id: root-mount, type: mount, device: root-fs, path: /}

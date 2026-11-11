@@ -1,0 +1,3 @@
+#!ipxe
+kernel http://ng.internal/artifacts/esxi8/efi/boot/bootx64.efi -c http://gw.internal/v1/answer/42/install-tok-fixed-0000000000000000/boot.cfg
+boot

@@ -1,0 +1,160 @@
+package console
+
+import (
+	"fmt"
+	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/audit"
+	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/hosts"
+	"github.com/lober/lober/internal/application/identity"
+	"github.com/lober/lober/internal/application/inventory"
+	"github.com/lober/lober/internal/application/media"
+	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/application/tasks"
+	"github.com/lober/lober/internal/domain/model"
+	"log/slog"
+	"net/url"
+	"runtime/debug"
+	"strings"
+)
+
+type Deps struct {
+	HostRegistry      hosts.Registry
+	Inventory         inventory.Requester
+	HookAuthoring     authoring.Hooks
+	TemplateAuthoring authoring.Templates
+	AuthoringEditor   authoring.Editor
+	MediaRegistry     media.Registry
+	Wizard            tasks.Wizard
+	TaskReader        tasks.Reader
+	TaskController    tasks.Controller
+	TaskEvents        tasks.EventReader
+	AuditReader       audit.Reader
+	Identity          identity.Registry
+	Clock             ports.Clock
+	Logger            *slog.Logger
+	LoginBodyLimit    int64
+}
+type Server struct {
+	Engine *gin.Engine
+	server *server
+	routes []RouteInfo
+}
+type server struct {
+	loginLimits *loginLimits
+	deps        Deps
+	logger      *slog.Logger
+	index       map[string]route
+	routes      []route
+	owner       *Server
+}
+
+func New(d Deps) *Server {
+	if d.Clock == nil {
+		panic("console requires an injected clock")
+	}
+	if d.TaskReader == nil || d.TaskController == nil || d.TaskEvents == nil {
+		panic("console requires task application entries")
+	}
+	if d.Logger == nil {
+		d.Logger = slog.Default()
+	}
+	s := &server{deps: d, logger: d.Logger, index: make(map[string]route), loginLimits: newLoginLimits(d.Clock)}
+	out := &Server{Engine: gin.New(), server: s}
+	// 主机序列号允许斜杠，路由先按编码后的路径分段，再解开参数。
+	out.Engine.UseRawPath = true
+	out.Engine.UnescapePathValues = false
+	s.owner = out
+	out.Engine.Use(s.recoverPanic(), s.requestLog(), decodePathParams)
+	out.Engine.NoRoute(func(c *gin.Context) { Fail(c, 404, nil, model.ConsoleNotFound) })
+	s.installRoutes(out, s.allRoutes())
+	return out
+}
+
+func decodePathParams(c *gin.Context) {
+	if c.Request.URL.RawPath != "" {
+		for i := range c.Params {
+			value, err := url.PathUnescape(c.Params[i].Value)
+			if err != nil {
+				Fail(c, 400, nil, model.ConsoleBadRequest)
+				return
+			}
+			c.Params[i].Value = value
+		}
+	}
+	c.Next()
+}
+func (s *server) clock() int64 { return s.deps.Clock() }
+
+const ctxPrincipal = "console.principal"
+const ctxActor = "console.actor"
+
+func principalOf(c *gin.Context) identity.Principal {
+	v, _ := c.Get(ctxPrincipal)
+	p, _ := v.(identity.Principal)
+	return p
+}
+func actorOf(c *gin.Context) ports.Actor {
+	if v, ok := c.Get(ctxPrincipal); ok {
+		p, _ := v.(identity.Principal)
+		return p.Actor()
+	}
+	v, _ := c.Get(ctxActor)
+	a, _ := v.(ports.Actor)
+	return a
+}
+
+func (s *server) recoverPanic() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		defer func() {
+			if p := recover(); p != nil {
+				s.logger.ErrorContext(c.Request.Context(), "handler panic", "path", c.FullPath(), "type", fmt.Sprintf("%T", p), "stack", string(debug.Stack()))
+				if !c.Writer.Written() {
+					Fail(c, 500, nil, model.ConsoleInternal)
+				} else {
+					c.Abort()
+				}
+			}
+		}()
+		c.Next()
+	}
+}
+func (s *server) requestLog() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := s.clock()
+		c.Next()
+		s.logger.InfoContext(c.Request.Context(), "request", "method", c.Request.Method, "path", c.FullPath(), "status", c.Writer.Status(), "seconds", max(int64(0), s.clock()-start))
+	}
+}
+func bearerToken(c *gin.Context) string {
+	parts := strings.Fields(c.GetHeader("Authorization"))
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return parts[1]
+}
+func (s *server) authenticate() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.deps.Identity == nil {
+			Fail(c, 500, nil, model.ConsoleInternal)
+			return
+		}
+		p, err := s.deps.Identity.Authenticate(c.Request.Context(), bearerToken(c))
+		if err != nil {
+			RespondError(c, err)
+			return
+		}
+		c.Set(ctxPrincipal, p)
+		c.Next()
+	}
+}
+func (s *server) authorize(rt route) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		err := s.deps.Identity.Authorize(principalOf(c), identity.AccessRequest{Permission: rt.perm, Operation: rt.identityOperation, TargetUsername: c.Param("username")})
+		if err != nil {
+			RespondError(c, err)
+			return
+		}
+		c.Next()
+	}
+}

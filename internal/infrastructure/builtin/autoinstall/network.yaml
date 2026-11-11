@@ -1,0 +1,7 @@
+network:
+  version: 2
+  ethernets:
+    lober:
+      match:
+        name: '{{param:interface}}'
+      dhcp4: true

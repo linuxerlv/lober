@@ -1,0 +1,109 @@
+{
+  "Templates": [
+    {
+      "ID": "builtin-kickstart",
+      "Version": 1,
+      "Name": "lober:kickstart",
+      "State": "approved",
+      "Author": "",
+      "Approver": "",
+      "Builtin": true,
+      "DerivedFrom": null,
+      "Family": "linux",
+      "Series": [
+        "rhel",
+        "rocky",
+        "almalinux",
+        "openeuler",
+        "opencloudos"
+      ],
+      "Body": "cmdline\nlang en_US.UTF-8\nkeyboard us\ntimezone UTC\nurl --url={{sys:repo}}\n{{lober:syslog}}\nnetwork --bootproto=dhcp --hostname={{param:hostname}}\nrootpw --lock\nzerombr\nclearpart --all --initlabel\nautopart\n%packages\n@^minimal-environment\n{{slot:packages}}\n%end\n%post --interpreter=/bin/sh\n{{lober:firstboot}}\n{{lober:cleanup}}\n%end\nreboot\n",
+      "Params": [
+        {
+          "Name": "hostname",
+          "Label": "",
+          "Type": "hostname",
+          "List": false,
+          "Required": false,
+          "Default": "lober-node",
+          "Options": null,
+          "Min": null,
+          "Max": null,
+          "Offer": ""
+        }
+      ],
+      "Bindings": {
+        "hostname": {
+          "Source": "default",
+          "Value": "",
+          "Attr": "",
+          "Editable": true
+        }
+      },
+      "Assembly": {
+        "packages": [
+          {
+            "HookID": "builtin-packages",
+            "HookVersion": 1,
+            "TimeoutSec": null,
+            "Required": null,
+            "Bindings": {
+              "packages": {
+                "Source": "default",
+                "Value": "",
+                "Attr": "",
+                "Editable": true
+              }
+            }
+          }
+        ]
+      },
+      "Rev": 0
+    }
+  ],
+  "Hooks": [
+    {
+      "ID": "builtin-packages",
+      "Version": 1,
+      "Name": "lober:packages",
+      "Description": "Additional packages for kickstart installations.",
+      "State": "approved",
+      "Author": "",
+      "Approver": "",
+      "Builtin": true,
+      "Params": [
+        {
+          "Name": "packages",
+          "Label": "",
+          "Type": "word",
+          "List": true,
+          "Required": false,
+          "Default": "curl",
+          "Options": null,
+          "Min": null,
+          "Max": null,
+          "Offer": ""
+        }
+      ],
+      "TimeoutSec": 0,
+      "Required": false,
+      "Impls": [
+        {
+          "Family": "linux",
+          "Series": [
+            "rhel",
+            "rocky",
+            "almalinux",
+            "openeuler",
+            "opencloudos"
+          ],
+          "Kind": "fragment",
+          "Body": "{{param:packages}}\n",
+          "Interpreter": "",
+          "Timings": null
+        }
+      ],
+      "Rev": 0
+    }
+  ]
+}
