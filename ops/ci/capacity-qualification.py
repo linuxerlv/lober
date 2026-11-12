@@ -82,11 +82,15 @@ def bootstrap(initial_password, seed_iso, download_iso):
     api('/auth/password', initial, {'currentPassword': initial_password, 'newPassword': admin['password']})
     token = login(admin)
     credentials = []
-    for index, role in enumerate(['hook-author', 'hook-approver'] + ['operator'] * 40):
+    for index, role in enumerate(['hook-author', 'hook-approver', 'admin'] + ['operator'] * 39):
         user = {'username': f'capacity_{index:02d}', 'password': secrets.token_urlsafe(32)}
         api('/users', token, {**user, 'displayName': user['username'], 'role': role})
         credentials.append(user)
     author, approver = (login(user) for user in credentials[:2])
+    uploader = login(credentials[2])
+    if 'iso:write' not in api('/user/info', uploader)['permissions']:
+        raise RuntimeError('容量首个会话没有镜像导入权限')
+    api('/auth/logout', uploader, {})
     template = api('/templates', author, {'name': 'capacity-seed', 'family': 'linux', 'series': ['rocky'],
         'body': '# {{param:hostname}}\n{{lober:syslog}}\n{{lober:firstboot}}\n{{lober:cleanup}}\n',
         'params': [{'name': 'hostname', 'label': 'hostname', 'type': 'hostname', 'default': 'node'}]})
