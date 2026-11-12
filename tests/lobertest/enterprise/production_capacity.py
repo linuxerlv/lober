@@ -1419,9 +1419,10 @@ class Driver:
     def count(self, key, amount):
         with self.lock: self.active[key] += amount
 
-    def worker_failed(self, category):
+    def worker_failed(self, category, error=None):
         with self.lock: self.worker_errors += 1
-        self.log.add(kind='worker_error', category=category)
+        self.log.add(kind='worker_error', category=category, error_type=type(error).__name__ if error else None,
+                     detail=str(error) if type(error) is RuntimeError else None)
         self.stop_event.set()
 
     def open_download(self, worker, kind):
@@ -1605,7 +1606,7 @@ class Driver:
                     result = self.request('GET', f'/hosts?page={page}&page_size=20', token, category='host_list', session=worker)
                     if not isinstance(result.get('items'), list) or not result['items']: raise RuntimeError('host list result invalid')
                 elif selected == 1:
-                    sn = self.c['dataset']['host_prefix']+f'{rng.randrange(10000):05d}'
+                    sn = (self.c['dataset']['host_prefix']+f'{rng.randrange(10000):05d}').upper()
                     result = self.request('GET', '/hosts/'+sn, token, category='host_detail', session=worker)
                     if result.get('sn') != sn: raise RuntimeError('host detail identity invalid')
                 elif selected == 2:
@@ -1620,7 +1621,7 @@ class Driver:
                 create_period = int((before-self.window['start'])//60)
                 idle_period = int((before-self.window['start'])//600)
                 if worker == 0 and create_period > last_create:
-                    serial = self.c['dataset']['host_prefix']+'live-'+self.args.phase+'-'+str(turn)
+                    serial = (self.c['dataset']['host_prefix']+'live-'+self.args.phase+'-'+str(turn)).upper()
                     self.new_host_task(token, serial, category='create_read')
                     self.request('GET', '/hosts/'+serial, token, category='create_read', session=worker)
                     last_create = create_period
@@ -1636,8 +1637,8 @@ class Driver:
                 quit_event.wait(max(0, self.profile['request_period_seconds']-(time.monotonic()-before)))
         except LoadWindowClosed:
             pass
-        except Exception:
-            if not quit_event.is_set() and not self.stop_event.is_set(): self.worker_failed('console')
+        except Exception as error:
+            if not quit_event.is_set() and not self.stop_event.is_set(): self.worker_failed('console', error)
         finally: self.count('sessions', -1)
 
     def import_loop(self, quit_event):
@@ -1685,8 +1686,8 @@ class Driver:
                              uploaded_bytes=offset, state=current['state'], input_sha256=item['sha256'], synthetic=item['synthetic'])
         except LoadWindowClosed:
             pass
-        except Exception:
-            if not quit_event.is_set() and not self.stop_event.is_set(): self.worker_failed('upload_import')
+        except Exception as error:
+            if not quit_event.is_set() and not self.stop_event.is_set(): self.worker_failed('upload_import', error)
 
     def load(self):
         self.acquire()
