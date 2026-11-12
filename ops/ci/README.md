@@ -50,6 +50,8 @@ sudo systemctl daemon-reload
 | `LOBER_CI_CAPACITY_MANIFEST` | test | 准备完成后的容量配置文件，内容是候选清单中的 `capacity` 对象 |
 | `PLAYWRIGHT_BROWSERS_PATH` | 可选 | 本阶段的浏览器缓存路径 |
 
+真实 ISO 由内网测试机提供，在 `test` 服务中只读挂载。使用发行方校验值，或使用维护者明确指定的私有原件计算 SHA-256 后核对 VM 副本。仓库、公开制品和发布包不分发 ISO。四份镜像齐全且实际读取、识别和导入通过后，才生成 `real_media` 通过证据。
+
 启动对应服务可以先单轮执行。确认日志和独立资源后再启动定时器。
 
 ```sh
