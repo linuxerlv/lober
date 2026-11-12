@@ -176,11 +176,14 @@ def run(root, pg_socket):
         put_json(db_owner, {'run_id': identity['run_id'], 'schema': schema})
         auth_file, config_file = runtime/'auth.json', runtime/'config.json'
         seed_password = secrets.token_urlsafe(32)
+        write_paths = {key: runtime/key for key in ('staging', 'artifacts', 'smb', 'tools')}
+        for path in write_paths.values():
+            path.mkdir(mode=0o700)
         config = {'listen': '127.0.0.1:18093', 'pg': {'dsn': f'host={pg_socket} port={PG_PORT} user={db_user} dbname={DB_NAME} search_path={schema}',
                   'maxConns': 20}, 'seedAdmin': seed_password, 'log': {'level': 'error'},
                   'machine': {'enabled': True, 'keyFile': str(runtime/'machine.key')},
                   'preview': {'gateway': URL, 'artifacts': FILES_URL},
-                  'iso': {**{key: str(runtime/key) for key in ('staging', 'artifacts', 'smb', 'tools')},
+                  'iso': {**{key: str(path) for key, path in write_paths.items()},
                           'localRoots': [str(media)], 'workers': 1}}
         put_json(config_file, config)
         binary, archive = Path(candidate['binary']), Path(candidate['source_archive'])
@@ -216,11 +219,11 @@ def run(root, pg_socket):
                     'artifact': {**download, 'url': dl_url, 'qualification_file': str(receipt), 'qualification_sha256': sha(receipt)},
                     'auth_file': str(auth_file), 'auth_sha256': sha(auth_file), 'config_file': str(config_file),
                     'config_sha256': sha(config_file),
-                    'resource_paths': [str(path) for path in (pg_data, pg_data/'pg_wal', root/'logs', media,
-                                        *(runtime/key for key in ('staging', 'artifacts', 'smb', 'tools')))],
+                    'resource_paths': [str(path) for path in (pg_data, pg_data/'pg_wal', root/'logs', media, *write_paths.values())],
                     'resource_evidence': {'path': str(host), 'sha256': sha(host)}, 'imports': imports,
                     'source_bindings': [{**seed, 'purpose': 'seed'}, {**download, 'purpose': 'download', 'url': dl_url}],
-                    'dataset': {'host_prefix': 'CAPACITY-', 'arch': 'x86_64', 'firmware': 'bios', 'selection': selection,
+                    'dataset': {'host_prefix': capacity.host_prefix(identity['run_id']), 'arch': 'x86_64',
+                                'firmware': 'bios', 'selection': selection,
                                 'entered': {'tpl/hostname': 'capacity-node'}},
                     'processes': {role: capacity.process_identity(pid) for role, pid in
                                   (('product', product.pid), ('database', db_pid))}}

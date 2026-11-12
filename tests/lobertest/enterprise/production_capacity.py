@@ -95,6 +95,10 @@ def schema_for(run_id):
     return 'capacity_' + hashlib.sha256(run_id.encode()).hexdigest()[:16]
 
 
+def host_prefix(run_id):
+    return 'CAP-' + hashlib.sha256(run_id.encode()).hexdigest()[:8] + '-'
+
+
 def valid_schema(schema, run_id):
     return bool(run_id) and schema == schema_for(run_id)
 
@@ -1013,8 +1017,10 @@ class Driver:
         # 全库检查限定本轮schema；快照摘要只覆盖冻结历史行，运行中新任务另检查约束。
         prefix = self.c['dataset']['host_prefix']
         if not re.fullmatch(r'CAP-[a-z0-9]{8}-', prefix): raise ValueError('owned host prefix invalid')
-        expected_prefix = 'CAP-'+hashlib.sha256(self.run_id.encode()).hexdigest()[:8]+'-'
+        expected_prefix = host_prefix(self.run_id)
         if prefix != expected_prefix: raise ValueError('host prefix not bound to run')
+        # 主机入口把序列号转成大写，SQL 必须统计保存后的序列号。
+        prefix = prefix.upper()
         q = """SELECT json_build_object(
           'schema', current_schema(),
           'hosts',(SELECT count(*) FROM hosts WHERE sn LIKE '%s%%'),
@@ -1804,8 +1810,12 @@ class Driver:
         except Exception as error:
             # 不输出异常原文，避免HTTP/连接库异常携带私有认证信息。
             reason = 'interrupted' if self.interrupted else type(error).__name__
-            self.log.add(kind='failure', reason=reason,
-                         detail=str(error) if type(error) in (RuntimeError, ValueError, KeyError) else 'private transport failure')
+            detail = str(error) if type(error) in (RuntimeError, ValueError, KeyError) else 'private transport failure'
+            if isinstance(error, FileNotFoundError) and error.filename:
+                missing = Path(error.filename)
+                if missing.is_absolute() and missing.is_relative_to(self.root):
+                    detail = 'missing owned path: ' + str(missing.relative_to(self.root))
+            self.log.add(kind='failure', reason=reason, detail=detail)
             return 1
         finally:
             if not self.cleanup_complete: self.cleanup(self.threads)

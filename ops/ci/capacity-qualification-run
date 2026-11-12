@@ -13,7 +13,9 @@ test "$(readlink /proc/self/ns/net)" != "$(readlink /proc/1/ns/net)"
 test -z "$(ip route show default)"
 ip link set lo up
 while systemctl is-active --quiet lober-ci-kvm-qualification.service; do sleep 15; done
-systemctl stop lober-ci-debian-mirror-qualification.service
+if systemctl is-active --quiet lober-ci-debian-mirror-qualification.service; then
+    systemctl stop lober-ci-debian-mirror-qualification.service
+fi
 journalctl --no-pager -o short-iso -u lober-ci-kvm-qualification.service >"$install_run/unit.log"
 journalctl --no-pager -o short-iso -u lober-ci-debian-mirror-qualification.service >"$install_run/mirror-archive.log"
 grep -q 'four installations and repeat boots completed$' "$install_run/schedule.log"
