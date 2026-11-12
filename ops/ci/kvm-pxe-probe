@@ -1,0 +1,152 @@
+#!/bin/bash
+# 针对固定候选验证虚拟机的真实无任务网络启动。
+set -euo pipefail
+umask 077
+cd /
+test "$EUID" -eq 0
+test "$#" -ge 2 && test "$#" -le 3
+sha=$1
+evidence=$2
+mode=${3:-boot}
+[[ "$mode" == boot || "$mode" == install ]]
+[[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+candidate=/var/lib/lober-ci-test/$sha
+[[ "$evidence" == "$candidate"/diagnostic-pxe.* ]]
+test "$(realpath -e -- "$evidence")" = "$evidence"
+test "$(stat -c '%u:%a' "$evidence")" = 0:700
+test "$(readlink /proc/self/ns/net)" != "$(readlink /proc/1/ns/net)"
+test "$(ip -o link show | wc -l)" -eq 1
+test -z "$(ip route show)"
+test "$(sha256sum "$candidate/lober" | cut -d ' ' -f 1)" = "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["binary_sha256"])' "$candidate/candidate.json")"
+
+scratch=$(mktemp -d /tmp/lober-pxe.XXXXXXXX)
+schema=pxe_probe_${scratch##*.}
+schema=${schema,,}
+[[ "$schema" =~ ^pxe_probe_[a-z0-9]{8}$ ]]
+db() { runuser -u lober-ci-test -- psql -XAt -v ON_ERROR_STOP=1 -h /run/lober-ci-db-test -d lober_ci -c "$1"; }
+children=()
+cleanup() {
+    for pid in "${children[@]}"; do kill "$pid" 2>/dev/null || true; done
+    for pid in "${children[@]}"; do wait "$pid" 2>/dev/null || true; done
+    db "DROP SCHEMA IF EXISTS $schema CASCADE" >"$evidence/database-cleanup.log" 2>&1
+    test "$(realpath -e -- "$scratch")" = "$scratch"
+    rm -r --one-file-system -- "$scratch"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+chmod 0711 "$scratch"
+install -d -m 0700 -o lober-ci-test -g lober-ci-test "$scratch/app"
+install -d -m 0755 "$scratch/tftp"
+db "CREATE SCHEMA $schema" >"$evidence/database.log"
+runuser -u lober-ci-test -- python3 - "$scratch/app" "$schema" <<'PY'
+import json, secrets, sys
+from pathlib import Path
+p=Path(sys.argv[1])
+base='http://192.0.2.10:18090'
+config={'listen':'192.0.2.10:18090','pg':{'dsn':f'host=/run/lober-ci-db-test user=lober-ci-test dbname=lober_ci search_path={sys.argv[2]}','maxConns':4},
+        'seedAdmin':secrets.token_urlsafe(32),'log':{'level':'error'},'machine':{'enabled':True,'keyFile':str(p/'machine.key')},
+        'preview':{'gateway':base,'artifacts':'http://192.0.2.10:18091','syslogAddr':'192.0.2.10:1514'},
+        'iso':{**{k:str(p/k) for k in ('staging','artifacts','smb','tools')},'localRoots':[str(p),'/run/lober-ci-verified-media'],'workers':1}}
+(p/'config.json').write_text(json.dumps(config))
+PY
+ip link set lo up
+ip tuntap add dev loberpxe0 mode tap user lober-ci-test
+ip addr add 192.0.2.10/24 dev loberpxe0
+ip link set loberpxe0 up
+test -z "$(ip route show default)"
+ip -brief addr >"$evidence/network.log"
+ip route show >>"$evidence/network.log"
+cat >"$scratch/tftp/probe.ipxe" <<'IPXE'
+#!ipxe
+isset ${smbios/serial} || exit
+chain http://192.0.2.10:18090/v1/boot?sn=${smbios/serial}&arch=x86_64&firmware=bios || exit
+IPXE
+chmod 0644 "$scratch/tftp/probe.ipxe"
+sha256sum "$scratch/tftp/probe.ipxe" >"$evidence/boot-script.sha256"
+runuser -u lober-ci-test -- env GIN_MODE=release "$candidate/lober" -config "$scratch/app/config.json" >"$evidence/product.log" 2>&1 &
+children+=("$!")
+for _ in $(seq 1 50); do
+    if curl -fs --noproxy '*' --max-time 1 -o /dev/null http://192.0.2.10:18090/; then break; fi
+    sleep .2
+done
+curl -fsS --noproxy '*' --max-time 2 -o /dev/null http://192.0.2.10:18090/
+db "SELECT count(*) FROM $schema.tasks" >>"$evidence/database.log"
+
+memory=256
+seconds=55
+disk=()
+if [[ "$mode" == install ]]; then
+    available=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+    test "$available" -ge 2750000
+    memory=2048
+    seconds=1200
+    runuser -u lober-ci-test -- /usr/bin/python3 -I /opt/lober-ci/ops/ci/kvm_install_probe.py prepare "$scratch/app" >"$evidence/install.log" 2>&1
+    runuser -u lober-ci-test -- /usr/bin/python3 -m http.server 18091 --bind 192.0.2.10 \
+        --directory "$scratch/app/artifacts" >"$evidence/artifacts.log" 2>&1 &
+    children+=("$!")
+    runuser -u lober-ci-test -- /usr/bin/qemu-img create -q -f qcow2 "$scratch/app/guest.qcow2" 16G
+    disk=(-drive "file=$scratch/app/guest.qcow2,if=none,id=guestdisk,format=qcow2"
+          -device virtio-blk-pci,drive=guestdisk,serial=LOBER-KVM-PROBE-DISK)
+fi
+
+/usr/sbin/dnsmasq --conf-file=/dev/null --keep-in-foreground --no-resolv --port=0 --interface=loberpxe0 --bind-interfaces \
+    --dhcp-range=192.0.2.20,192.0.2.22,255.255.255.0,5m --dhcp-option=3 --dhcp-option=6 \
+    --dhcp-host=52:54:00:42:12:20,192.0.2.21 \
+    --dhcp-boot=probe.ipxe --enable-tftp --tftp-root="$scratch/tftp" \
+    --pid-file="$scratch/dnsmasq.pid" --dhcp-leasefile=/dev/null --log-facility=- --log-dhcp >"$evidence/dhcp.log" 2>&1 &
+dhcp=$!
+children+=("$dhcp")
+sleep .2
+kill -0 "$dhcp"
+/usr/bin/tcpdump -i loberpxe0 -U -s 0 -Z root -w "$evidence/boot.pcap" \
+    'udp or tcp port 18090' >"$evidence/tcpdump.log" 2>&1 &
+capture=$!
+children+=("$capture")
+for _ in $(seq 1 30); do
+    if grep -q 'listening on' "$evidence/tcpdump.log"; then break; fi
+    sleep .1
+done
+grep -q 'listening on' "$evidence/tcpdump.log"
+uid=$(id -u lober-ci-test)
+gid=$(id -g lober-ci-test)
+/usr/bin/timeout "${seconds}s" /usr/bin/setpriv --reuid "$uid" --regid "$gid" --groups kvm -- \
+    /usr/bin/qemu-system-x86_64 -machine pc,smbios-entry-point-type=32 -accel kvm -cpu host \
+    -m "$memory" -smp 1 -boot order=nc -display none -monitor none \
+    -serial stdio -smbios type=1,serial=LOBER-KVM-PXE-PROBE "${disk[@]}" \
+    -netdev tap,id=nic,ifname=loberpxe0,script=no,downscript=no \
+    -device e1000,netdev=nic,mac=52:54:00:42:12:20 >"$evidence/qemu.log" 2>&1 &
+guest=$!
+children+=("$guest")
+if [[ "$mode" == install ]]; then
+    sleep 2
+    kill -0 "$guest"
+    runuser -u lober-ci-test -- /usr/bin/python3 -I /opt/lober-ci/ops/ci/kvm_install_probe.py wait "$scratch/app" >>"$evidence/install.log" 2>&1
+    guest_ip=$(awk '/DHCPACK/ {print $3}' "$evidence/dhcp.log" | tail -1)
+    # 仅连接本轮隔离网段中的虚拟客户机。
+    if [[ ! "$guest_ip" =~ ^192\.0\.2\.2[012]$ ]]; then guest_ip=192.0.2.21; fi
+    runuser -u lober-ci-test -- /usr/bin/ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=8 \
+        -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$scratch/app/known_hosts" \
+        -i "$scratch/app/guest-key" "lober@$guest_ip" 'cat /etc/os-release; findmnt -no SOURCE /; cat /proc/sys/kernel/random/boot_id' \
+        >"$evidence/guest.log" 2>&1
+    grep -q '^ID="rocky"$' "$evidence/guest.log"
+    grep -q '^VERSION_ID="10.2"$' "$evidence/guest.log"
+    printf 'PASS isolated KVM Rocky install diagnostic, candidate %s\n' "$sha"
+    exit 0
+fi
+for _ in $(seq 1 45); do
+    tcpdump -nn -A -r "$evidence/boot.pcap" 'tcp port 18090' >"$evidence/http-packets.log" 2>/dev/null || true
+    if grep -Fq 'GET /v1/boot?sn=LOBER-KVM-PXE-PROBE&arch=x86_64&firmware=bios' "$evidence/http-packets.log" \
+        && grep -Fq 'exit || sanboot --no-describe --drive 0x80' "$evidence/http-packets.log"; then
+        break
+    fi
+    kill -0 "$guest" 2>/dev/null || break
+    sleep 1
+done
+kill -INT "$capture"
+wait "$capture"
+tcpdump -nn -A -r "$evidence/boot.pcap" 'tcp port 18090' >"$evidence/http-packets.log" 2>/dev/null
+grep -Fq 'GET /v1/boot?sn=LOBER-KVM-PXE-PROBE&arch=x86_64&firmware=bios' "$evidence/http-packets.log"
+grep -Fq 'exit || sanboot --no-describe --drive 0x80' "$evidence/http-packets.log"
+test "$(db "SELECT count(*) FROM $schema.tasks" | tee -a "$evidence/database.log")" -eq 0
+printf 'PASS isolated KVM BIOS no-task boot, candidate %s\n' "$sha"
