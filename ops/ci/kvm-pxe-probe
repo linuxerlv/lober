@@ -1,5 +1,5 @@
 #!/bin/bash
-# 针对固定候选验证虚拟机的真实无任务网络启动。
+# 在隔离网络中验证固定候选的虚拟机网络启动和装机。
 set -euo pipefail
 umask 077
 cd /
@@ -8,7 +8,7 @@ test "$#" -ge 2 && test "$#" -le 3
 sha=$1
 evidence=$2
 mode=${3:-boot}
-[[ "$mode" == boot || "$mode" == install ]]
+[[ "$mode" == boot || "$mode" == install || "$mode" == debian || "$mode" == debian-netinst ]]
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
 candidate=/var/lib/lober-ci-test/$sha
 [[ "$evidence" == "$candidate"/diagnostic-pxe.* ]]
@@ -76,12 +76,32 @@ db "SELECT count(*) FROM $schema.tasks" >>"$evidence/database.log"
 memory=256
 seconds=55
 disk=()
-if [[ "$mode" == install ]]; then
+install_wait=900
+network_options=(--port=0 --dhcp-option=3 --dhcp-option=6 --dhcp-host=52:54:00:42:12:20,192.0.2.21)
+if [[ "$mode" != boot ]]; then
     available=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
-    test "$available" -ge 2750000
-    memory=2048
-    seconds=1200
-    runuser -u lober-ci-test -- /usr/bin/python3 -I /opt/lober-ci/ops/ci/kvm_install_probe.py prepare "$scratch/app" >"$evidence/install.log" 2>&1
+    operation=prepare
+    if [[ "$mode" == debian* ]]; then
+        test "$available" -ge 2100000
+        memory=1024
+        seconds=2400
+        install_wait=2100
+        operation=prepare-$mode
+        # 安装器需要网关租约。该地址只通向本轮网络，宿主命名空间没有上游路由。
+        network_options=(--port=53 --no-hosts --local=/#/
+            --dhcp-option=3,192.0.2.10 --dhcp-option=6,192.0.2.10 --dhcp-option=15,lober-ci.invalid
+            --dhcp-host=52:54:00:42:12:20,192.0.2.21,lober-kvm-debian)
+        mirror=/run/lober-ci-debian-mirror/archive.sock
+        test -S "$mirror"
+        /usr/bin/systemd-socket-activate --listen=192.0.2.10:80 \
+            /usr/lib/systemd/systemd-socket-proxyd "$mirror" >"$evidence/mirror.log" 2>&1 &
+        children+=("$!")
+    else
+        test "$available" -ge 2750000
+        memory=2048
+        seconds=1200
+    fi
+    runuser -u lober-ci-test -- /usr/bin/python3 -I /opt/lober-ci/ops/ci/kvm_install_probe.py "$operation" "$scratch/app" >"$evidence/install.log" 2>&1
     runuser -u lober-ci-test -- /usr/bin/python3 -m http.server 18091 --bind 192.0.2.10 \
         --directory "$scratch/app/artifacts" >"$evidence/artifacts.log" 2>&1 &
     children+=("$!")
@@ -90,11 +110,10 @@ if [[ "$mode" == install ]]; then
           -device virtio-blk-pci,drive=guestdisk,serial=LOBER-KVM-PROBE-DISK)
 fi
 
-/usr/sbin/dnsmasq --conf-file=/dev/null --keep-in-foreground --no-resolv --port=0 --interface=loberpxe0 --bind-interfaces \
-    --dhcp-range=192.0.2.20,192.0.2.22,255.255.255.0,5m --dhcp-option=3 --dhcp-option=6 \
-    --dhcp-host=52:54:00:42:12:20,192.0.2.21 \
+/usr/sbin/dnsmasq --conf-file=/dev/null --keep-in-foreground --no-resolv --interface=loberpxe0 --bind-interfaces \
+    --dhcp-range=192.0.2.20,192.0.2.22,255.255.255.0,5m "${network_options[@]}" \
     --dhcp-boot=probe.ipxe --enable-tftp --tftp-root="$scratch/tftp" \
-    --pid-file="$scratch/dnsmasq.pid" --dhcp-leasefile=/dev/null --log-facility=- --log-dhcp >"$evidence/dhcp.log" 2>&1 &
+    --pid-file="$scratch/dnsmasq.pid" --leasefile-ro --log-facility=- --log-dhcp >"$evidence/dhcp.log" 2>&1 &
 dhcp=$!
 children+=("$dhcp")
 sleep .2
@@ -118,20 +137,32 @@ gid=$(id -g lober-ci-test)
     -device e1000,netdev=nic,mac=52:54:00:42:12:20 >"$evidence/qemu.log" 2>&1 &
 guest=$!
 children+=("$guest")
-if [[ "$mode" == install ]]; then
+if [[ "$mode" != boot ]]; then
     sleep 2
     kill -0 "$guest"
-    runuser -u lober-ci-test -- /usr/bin/python3 -I /opt/lober-ci/ops/ci/kvm_install_probe.py wait "$scratch/app" >>"$evidence/install.log" 2>&1
-    guest_ip=$(awk '/DHCPACK/ {print $3}' "$evidence/dhcp.log" | tail -1)
-    # 仅连接本轮隔离网段中的虚拟客户机。
-    if [[ ! "$guest_ip" =~ ^192\.0\.2\.2[012]$ ]]; then guest_ip=192.0.2.21; fi
-    runuser -u lober-ci-test -- /usr/bin/ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=8 \
+    runuser -u lober-ci-test -- env LOBER_INSTALL_GUEST_PID="$guest" LOBER_INSTALL_WAIT_SECONDS="$install_wait" \
+        /usr/bin/python3 -I /opt/lober-ci/ops/ci/kvm_install_probe.py wait "$scratch/app" >>"$evidence/install.log" 2>&1
+    # 使用本轮唯一的固定租约地址，等待安装器重启后 SSH 就绪。
+    deadline=$((SECONDS + 120))
+    until runuser -u lober-ci-test -- /usr/bin/ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=5 \
         -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$scratch/app/known_hosts" \
-        -i "$scratch/app/guest-key" "lober@$guest_ip" 'cat /etc/os-release; findmnt -no SOURCE /; cat /proc/sys/kernel/random/boot_id' \
-        >"$evidence/guest.log" 2>&1
-    grep -q '^ID="rocky"$' "$evidence/guest.log"
-    grep -q '^VERSION_ID="10.2"$' "$evidence/guest.log"
-    printf 'PASS isolated KVM Rocky install diagnostic, candidate %s\n' "$sha"
+        -i "$scratch/app/guest-key" lober@192.0.2.21 \
+        'set -e; cat /etc/os-release; findmnt -no SOURCE /; cat /proc/sys/kernel/random/boot_id' \
+        >"$evidence/guest.log" 2>>"$evidence/guest-ssh.log"; do
+        kill -0 "$guest"
+        test "$SECONDS" -lt "$deadline"
+        sleep 3
+    done
+    if [[ "$mode" == debian* ]]; then
+        grep -Eq '^ID=("debian"|debian)$' "$evidence/guest.log"
+        grep -Eq '^VERSION_ID=("13"|13)$' "$evidence/guest.log"
+        grep -Eq '^/dev/vda[0-9]+$' "$evidence/guest.log"
+    else
+        grep -q '^ID="rocky"$' "$evidence/guest.log"
+        grep -q '^VERSION_ID="10.2"$' "$evidence/guest.log"
+    fi
+    grep -Eq '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$' "$evidence/guest.log"
+    printf 'PASS isolated KVM %s install diagnostic, candidate %s\n' "$mode" "$sha"
     exit 0
 fi
 for _ in $(seq 1 45); do

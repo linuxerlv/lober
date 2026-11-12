@@ -67,6 +67,30 @@ journalctl -u lober-ci-worker@dev.service -u lober-ci-worker@test.service
 
 执行器只处理已合入受保护分支的代码。阶段账号负责生成该阶段的测试证据，管理员负责审查候选执行入口和保护该账号。GitHub 回报账号使用管理员安装的检查器复核结果。
 
+### 4 GiB 虚拟机的 Debian 装机诊断
+
+`kvm-pxe-probe` 的 `debian` 模式在独立网络启动一台 1 GiB 来宾。使用只读挂载的 Debian 13.7 DVD-1 和同版本 mini ISO。宿主的测试网络没有默认路由，来宾的 DNS 不向外转发。需要下载的软件包通过 Unix 套接字转接，安装器仍校验 Debian 软件源签名。
+
+管理员将 `kvm-pxe-probe` 以 `0755` 安装到 `/opt/lober-ci/ops/ci/`，将 `kvm_install_probe.py` 和 `debian_mirror.py` 以 `0644` 安装到同一目录。以下命令由管理员执行。`sha` 是已冻结候选的完整提交号，`dvd` 和 `mini` 是内网测试机上验签及校验通过的两个镜像文件的绝对路径。
+
+```sh
+sudo systemd-run --unit=lober-ci-debian-mirror-diagnostic \
+  -p User=lober-ci-test -p Group=lober-ci-test \
+  -p RuntimeDirectory=lober-ci-debian-mirror -p RuntimeDirectoryMode=0750 \
+  -p RuntimeMaxSec=70m -p MemoryMax=192M -p NoNewPrivileges=yes -p ProtectSystem=strict \
+  /usr/bin/python3 -I /opt/lober-ci/ops/ci/debian_mirror.py /run/lober-ci-debian-mirror/archive.sock
+
+sudo test -S /run/lober-ci-debian-mirror/archive.sock
+evidence=$(sudo mktemp -d "/var/lib/lober-ci-test/$sha/diagnostic-pxe.XXXXXXXX")
+sudo systemd-run --unit=lober-ci-kvm-debian-diagnostic \
+  -p PrivateNetwork=yes -p MemoryMax=2350M -p MemorySwapMax=0 -p RuntimeMaxSec=65m \
+  -p "BindReadOnlyPaths=$dvd:/run/lober-ci-verified-media/debian-dvd.iso $mini:/run/lober-ci-verified-media/debian-mini.iso" \
+  /usr/bin/flock -w 90 /run/lock/lober-ci-build.lock \
+  /opt/lober-ci/ops/ci/kvm-pxe-probe "$sha" "$evidence" debian
+```
+
+装机结束后停止 `lober-ci-debian-mirror-diagnostic.service`。诊断保留安装状态、抓包、串口和来宾验证日志。抓包和串口可能含临时装机凭据，只能保存在本轮私有目录。单台诊断不提供发布所需的两次并行、两次串行和重复启动证据。
+
 ## 接上 GitHub 合并拦截
 
 1. 把 GitHub 应用安装到该仓库。应用需有读取代码和合并请求、写入提交状态的权限。将应用私钥保存在仅状态回报账号可读的文件，权限设为 `0400`。在 `/etc/lober-ci/report.env` 配置 `LOBER_CI_GITHUB_REPOSITORY=linuxerlv/lober`、`LOBER_CI_APP_ID`、`LOBER_CI_INSTALLATION_ID`、`LOBER_CI_APP_KEY` 和 `LOBER_CI_STATUS_CREATOR_ID`。最后一项是应用机器人账号的数字 ID，可用 `gh api 'users/应用名%5Bbot%5D' --jq .id` 查询。
