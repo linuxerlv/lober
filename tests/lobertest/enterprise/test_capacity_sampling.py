@@ -33,3 +33,19 @@ class CapacitySamplingTests(unittest.TestCase):
         self.assertEqual(driver.proc_sample.call_count, 4)
         live.return_value = False
         self.assertIsNone(driver.sample_registered_child(original))
+
+    def test_login_pacing_is_shared_across_capacity_phases(self):
+        import threading
+        with tempfile.TemporaryDirectory() as directory, patch('production_capacity.private_file', side_effect=lambda p, _: p):
+            root = Path(directory)
+            for now, timestamp, expected_delay in [(10, 10, 0), (11, 12.2, 1.2)]:
+                driver = Driver.__new__(Driver)
+                driver.root, driver.login_lock = root, threading.Lock()
+                driver.stop_event, driver.request = Mock(), Mock(return_value={'token': 'fixture'})
+                driver.stop_event.wait.return_value = False
+                with patch('production_capacity.time.monotonic', side_effect=[now, timestamp]):
+                    driver.request_login({'username': 'operator'}, 0)
+                if expected_delay:
+                    self.assertAlmostEqual(driver.stop_event.wait.call_args.args[0], expected_delay)
+                else:
+                    driver.stop_event.wait.assert_not_called()

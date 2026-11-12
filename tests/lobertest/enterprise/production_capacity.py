@@ -889,6 +889,7 @@ class Driver:
         self.started_utc = time.time()
         self.sockets, self.child_procs, self.auth_books, self.threads = set(), {}, {}, []
         self.io_lock = threading.RLock()
+        self.login_lock = threading.Lock()
         self.cleanup_complete, self.residuals, self.shutdown_deadline = False, [], None
         self.stop_event = threading.Event()
         self.interrupted = False
@@ -1127,8 +1128,23 @@ class Driver:
                         self.business_inflight -= 1
                         self.request_condition.notify_all()
 
+    def request_login(self, credential, session):
+        # 所有客户端从同一隔离地址登录。产品每分钟只允许该地址尝试 30 次。
+        # 阶段进程顺序接替，保留上一次实际登录时间，避免在阶段边界形成突发。
+        pace = self.root/'last-login-monotonic'
+        with self.login_lock:
+            now = time.monotonic()
+            if pace.exists():
+                last = float(private_file(pace, self.root).read_text())
+                delay = last + 2.2 - now
+                if delay > 0 and self.stop_event.wait(delay):
+                    raise LoadWindowClosed()
+            with os.fdopen(os.open(pace, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600), 'w') as stream:
+                stream.write(str(time.monotonic()))
+            return self.request('POST', '/auth/login', body=credential, session=session)
+
     def login(self, credential, session):
-        def establish(): return self.request('POST', '/auth/login', body=credential, session=session)
+        def establish(): return self.request_login(credential, session)
         book = AuthSession(establish, lambda token: self.request('POST', '/auth/logout', token, session=session),
                            lambda **r: self.sessions_log.add(session=session, **r),
                            margin=self.profile['session_expiry_margin_seconds'])
