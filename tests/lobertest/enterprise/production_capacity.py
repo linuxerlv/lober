@@ -171,6 +171,14 @@ def same_process(registered):
     except (OSError, KeyError, ValueError): return False
 
 
+def live_registered_child(registered, proc_root=Path('/proc')):
+    try:
+        fields = (proc_root/str(registered['pid'])/'stat').read_text().rsplit(')', 1)[1].split()
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    return fields[19] == registered['start_ticks'] and fields[0] not in ('Z', 'X', 'x')
+
+
 def private_file(path, root):
     p = Path(path)
     if p.is_symlink() or not p.resolve(strict=True).is_relative_to(root):
@@ -1358,14 +1366,23 @@ class Driver:
         for role, registered in children:
             try:
                 child = self.proc_sample(registered)
+                if not child['alive'] or not child['identity_ok']:
+                    raise ValueError('child exited or changed identity during sampling')
                 # 子进程资源也算进所属服务；原始分项另留。RSS包含共享页，不冒充独占内存。
                 parent = row['processes'][role]
                 for key in ('rss_bytes', 'swap_bytes', 'fds', 'connections', 'cpu_ticks', 'threads'):
                     parent[key] += child[key]
                 parent.setdefault('children', []).append({'identity': registered, 'resource': child})
             except (OSError, ValueError, KeyError):
-                # 已退出的短子进程由spawn/exit登记证明；不能吞掉仍存在的身份异常。
-                if Path('/proc', str(registered['pid'])).exists(): row['sample_errors'].append('child:'+role)
+                # 短命数据库连接可能先退出，PID 目录仍暂时存在。仍活着的原子进程必须可采样。
+                try:
+                    alive = live_registered_child(registered)
+                except (OSError, ValueError, IndexError, KeyError):
+                    alive = True
+                if alive:
+                    row['sample_errors'].append('child:'+role)
+                else:
+                    self.children.add(kind='child_exited_during_sample', role=role, process=registered)
         try:
             mem = dict(line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines())
             for key, name in (('mem_available_bytes', 'MemAvailable'), ('swap_free_bytes', 'SwapFree')):
