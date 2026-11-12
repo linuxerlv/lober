@@ -1356,6 +1356,21 @@ class Driver:
                     result.append((role, registered))
         return result
 
+    def sample_registered_child(self, registered):
+        for attempt in range(4):
+            try:
+                child = self.proc_sample(registered)
+                if not child['alive'] or not child['identity_ok']:
+                    raise ValueError('child exited or changed identity during sampling')
+                return child
+            except (OSError, ValueError, IndexError, KeyError):
+                if not live_registered_child(registered):
+                    return None
+                if attempt == 3:
+                    raise
+                # /proc 的各文件并非同一快照，退出和关闭文件描述符可以交错。
+                time.sleep(.05 * (attempt + 1))
+
     def sample(self, measurement='preflight'):
         row = {'elapsed': time.monotonic()-(self.window['start'] if measurement == 'qualification' else self.start), 'measurement': measurement,
                'sample_errors': [], 'processes': {}}
@@ -1365,24 +1380,21 @@ class Driver:
         children = self.descendants()
         for role, registered in children:
             try:
-                child = self.proc_sample(registered)
-                if not child['alive'] or not child['identity_ok']:
-                    raise ValueError('child exited or changed identity during sampling')
+                child = self.sample_registered_child(registered)
+                if child is None:
+                    self.children.add(kind='child_exited_during_sample', role=role, process=registered)
+                    continue
                 # 子进程资源也算进所属服务；原始分项另留。RSS包含共享页，不冒充独占内存。
                 parent = row['processes'][role]
                 for key in ('rss_bytes', 'swap_bytes', 'fds', 'connections', 'cpu_ticks', 'threads'):
                     parent[key] += child[key]
                 parent.setdefault('children', []).append({'identity': registered, 'resource': child})
-            except (OSError, ValueError, KeyError):
-                # 短命数据库连接可能先退出，PID 目录仍暂时存在。仍活着的原子进程必须可采样。
-                try:
-                    alive = live_registered_child(registered)
-                except (OSError, ValueError, IndexError, KeyError):
-                    alive = True
-                if alive:
-                    row['sample_errors'].append('child:'+role)
-                else:
-                    self.children.add(kind='child_exited_during_sample', role=role, process=registered)
+            except (OSError, ValueError, IndexError, KeyError) as error:
+                row['sample_errors'].append('child:'+role)
+                detail = {'role': role, 'pid': registered['pid'], 'type': type(error).__name__}
+                if isinstance(error, OSError):
+                    detail.update(errno=error.errno, path=Path(error.filename).name if error.filename else None)
+                row.setdefault('sample_error_details', []).append(detail)
         try:
             mem = dict(line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines())
             for key, name in (('mem_available_bytes', 'MemAvailable'), ('swap_free_bytes', 'SwapFree')):
