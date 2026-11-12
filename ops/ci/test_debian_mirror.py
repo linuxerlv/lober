@@ -31,3 +31,8 @@ class DebianMirrorTests(unittest.TestCase):
             with self.subTest(encoded=encoded):
                 self.assertEqual(upstream_url(path + encoded + 'b9_amd64.deb'),
                                  'https://deb.debian.org' + path + '+b9_amd64.deb')
+
+    def test_apt_escaped_tilde_is_accepted_in_debian_package_versions(self):
+        path = '/debian/pool/main/e/expat/libexpat1_2.8.3-1'
+        self.assertEqual(upstream_url(path + '%7edeb13u1_amd64.deb'),
+                         'https://deb.debian.org' + path + '~deb13u1_amd64.deb')

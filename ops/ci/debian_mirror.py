@@ -9,6 +9,7 @@ import socketserver
 import sys
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -18,12 +19,15 @@ UPSTREAMS = {'debian': 'https://deb.debian.org', 'ustc': 'https://mirrors.ustc.e
 def upstream_url(path, upstream='debian'):
     if upstream not in UPSTREAMS:
         raise ValueError('没有批准的 Debian 仓库地址')
-    # APT 会转义软件包版本中的加号，其他转义字符仍由路径检查拒绝。
-    path = re.sub(r'%2[bB]', '+', path)
-    if not re.fullmatch(r'/debian/(?:dists/trixie(?:-updates)?|pool)/[A-Za-z0-9._+~/\-]+', path):
+    # 逐段解码 APT 的文件名，拒绝编码斜杠、二次编码和穿越路径。
+    if not path.startswith('/'):
         raise ValueError('不在 Debian 验收仓库范围内')
-    if any(part in ('', '.', '..') for part in path[1:].split('/')):
+    parts = [urllib.parse.unquote(part, errors='strict') for part in path[1:].split('/')]
+    if any(part in ('.', '..') or not re.fullmatch(r'[A-Za-z0-9._+~\-]+', part) for part in parts):
         raise ValueError('仓库路径不合法')
+    path = '/' + '/'.join(parts)
+    if not re.fullmatch(r'/debian/(?:dists/trixie(?:-updates)?|pool)/.+', path):
+        raise ValueError('不在 Debian 验收仓库范围内')
     return UPSTREAMS[upstream] + path
 
 
