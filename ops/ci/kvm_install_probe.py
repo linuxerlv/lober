@@ -5,17 +5,63 @@ import os
 from pathlib import Path
 import re
 import secrets
+import socket
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 
-BASE = 'http://192.0.2.10:18090/console/v1'
+BASE = os.environ.get('LOBER_KVM_BACKEND', 'http://192.0.2.10:18090') + '/console/v1'
 ROCKY = Path('/run/lober-ci-verified-media/rocky.iso')
 ROCKY_SHA = 'aac6ac3ce781b91a91ce78463405f66c611a5dca4b3840c79e5e01d97302f6c8'
-SERIAL = 'LOBER-KVM-PXE-PROBE'
+CASES = ('parallel-1', 'parallel-2', 'serial-1', 'serial-2')
+
+
+def case_identity(name):
+    if name not in CASES:
+        raise ValueError('未知装机用例')
+    index = CASES.index(name) + 1
+    return {'name': name, 'serial': 'LOBER-KVM-' + name.upper(), 'mac': f'52:54:00:42:12:{32 + index:02x}',
+            'uuid': str(uuid.uuid5(uuid.NAMESPACE_URL, f'https://github.com/linuxerlv/lober/test/{name}'))}
+
+
+def stable_guest(first, repeat):
+    return (first['id'] == repeat['id'] == 'debian' and first['version'] == repeat['version'] == '13'
+            and re.fullmatch(r'/dev/vda[0-9]+', first['root']) is not None and first['root'] == repeat['root']
+            and re.fullmatch(r'[0-9a-f]{32}', first['machine']) is not None and first['machine'] == repeat['machine']
+            and str(uuid.UUID(first['boot'])) == first['boot'] and str(uuid.UUID(repeat['boot'])) == repeat['boot']
+            and first['boot'] != repeat['boot'])
+
+
+def reset_guest(path):
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.settimeout(10)
+        sock.connect(str(path))
+        with sock.makefile('rwb') as stream:
+            if 'QMP' not in json.loads(stream.readline()):
+                raise RuntimeError('来宾控制台握手失败')
+            for command in ('qmp_capabilities', 'system_reset'):
+                stream.write(json.dumps({'execute': command, 'id': command}).encode() + b'\n')
+                stream.flush()
+                for line in stream:
+                    reply = json.loads(line)
+                    if reply.get('id') == command:
+                        if 'return' not in reply:
+                            raise RuntimeError(f'来宾控制台命令失败 {command}')
+                        print(json.dumps(reply), flush=True)
+                        break
+                else:
+                    raise RuntimeError('来宾控制台未确认重启')
+
+
+def guest_log(path):
+    lines = path.read_text().splitlines()
+    os_release = dict(line.split('=', 1) for line in lines[:-3] if '=' in line)
+    return {'id': os_release['ID'].strip('"'), 'version': os_release['VERSION_ID'].strip('"'),
+            'root': lines[-3], 'machine': lines[-2], 'boot': lines[-1]}
 
 
 def api(path, token=None, body=None, method=None):
@@ -47,6 +93,22 @@ def admin_login(work):
     return api('/auth/login', body={'username': 'admin', 'password': password})['token']
 
 
+def configure(work):
+    schema = os.environ['LOBER_KVM_SCHEMA']
+    if not re.fullmatch(r'pxe_probe_[a-z0-9]{8}', schema):
+        raise ValueError('隔离数据库名称无效')
+    listen = '127.0.0.1:18090' if os.environ.get('LOBER_KVM_BACKEND') else '192.0.2.10:18090'
+    config = {'listen': listen, 'pg': {'dsn': f'host=/run/lober-ci-db-test user=lober-ci-test dbname=lober_ci search_path={schema}',
+                                     'maxConns': 8},
+              'seedAdmin': secrets.token_urlsafe(32), 'log': {'level': 'error'},
+              'machine': {'enabled': True, 'keyFile': str(work/'machine.key')},
+              'preview': {'gateway': 'http://192.0.2.10:18090', 'artifacts': 'http://192.0.2.10:18091',
+                          'syslogAddr': '192.0.2.10:1514'},
+              'iso': {**{key: str(work/key) for key in ('staging', 'artifacts', 'smb', 'tools')},
+                      'localRoots': [str(work), '/run/lober-ci-verified-media'], 'workers': 1}}
+    (work/'config.json').write_text(json.dumps(config))
+
+
 def import_media(token, series, name, sources, expected):
     item = api('/isos', token, {'name': name, 'family': 'linux', 'series': series, 'sources': sources})
     deadline = time.monotonic() + 900
@@ -75,14 +137,15 @@ def guest_parameters(work):
 
 
 def create_install_task(work, token, selection, entered):
-    api('/hosts', token, {'sn': SERIAL, 'arch': 'x86_64', 'firmware': 'bios', 'attrs': {}})
-    params = api('/wizard/params', token, {**selection, 'hostSNs': [SERIAL], 'entered': {SERIAL: entered}})
+    serial = os.environ.get('LOBER_INSTALL_SERIAL', 'LOBER-KVM-PXE-PROBE')
+    api('/hosts', token, {'sn': serial, 'arch': 'x86_64', 'firmware': 'bios', 'attrs': {}})
+    params = api('/wizard/params', token, {**selection, 'hostSNs': [serial], 'entered': {serial: entered}})
     if params['common'] or params['hosts'][0]['problems']:
         for part in [*params['common'], *params['hosts'][0]['problems']]:
             print('参数检查', {k: v for k, v in part.items() if k in ('key', 'code', 'message')}, flush=True)
         raise RuntimeError('装机参数校验失败')
-    task = api('/wizard/tasks', token, {**selection, 'hosts': [{'sn': SERIAL, 'entered': entered}]})['tasks'][0]
-    (work / 'install-session.json').write_text(json.dumps({'token': token, 'task': task['id']}))
+    task = api('/wizard/tasks', token, {**selection, 'hosts': [{'sn': serial, 'entered': entered}]})['tasks'][0]
+    (work / 'install-session.json').write_text(json.dumps({'token': token, 'task': task['id'], 'serial': serial}))
     print(f"装机任务 {task['id']} 已进入 {task['state']}", flush=True)
 
 
@@ -95,7 +158,7 @@ def prepare(work):
     create_install_task(work, token, selection, entered)
 
 
-def prepare_debian(work, netinst=False):
+def register_debian(work, netinst=False):
     media = Path('/run/lober-ci-verified-media')
     image = media / ('debian-netinst.iso' if netinst else 'debian-dvd.iso')
     mini = media / 'debian-mini.iso'
@@ -135,10 +198,31 @@ def prepare_debian(work, netinst=False):
     if approved['state'] != 'approved':
         raise RuntimeError('Debian 验收模板未获独立账号审批')
     selection = {'isoID': item['id'], 'templateID': approved['id'], 'templateVersion': approved['version']}
+    return token, selection
+
+
+def prepare_debian(work, netinst=False):
+    shared = os.environ.get('LOBER_KVM_SHARED')
+    if shared:
+        registered = json.loads((Path(shared) / 'shared-selection.json').read_text())
+        token, selection = registered['token'], registered['selection']
+    else:
+        token, selection = register_debian(work, netinst)
     entered = {**guest_parameters(work), 'network/1/hostname': 'lober-kvm-debian',
                'packages/1/packages': 'curl\nopenssh-server\nqemu-guest-agent',
                'tpl/mirror_host': '192.0.2.10', 'tpl/mirror_path': '/debian'}
     create_install_task(work, token, selection, entered)
+
+
+def register_shared(work):
+    token, selection = register_debian(work)
+    (work / 'shared-selection.json').write_text(json.dumps({'token': token, 'selection': selection}))
+
+
+def shared_tasks(work):
+    token = json.loads((work / 'shared-selection.json').read_text())['token']
+    tasks = api('/tasks?limit=10', token)['items']
+    print(json.dumps([{key: task[key] for key in ('id', 'hostSN', 'state')} for task in tasks]), flush=True)
 
 
 def wait(work):
@@ -158,13 +242,16 @@ def wait(work):
             events = api(task_path + '/events?limit=100', state['token'])['items']
             sequences = [event['seq'] for event in events]
             required = {'machine.installing', 'machine.init_start', 'machine.ready'}
-            if (task['hostSN'] != SERIAL or sequences != sorted(set(sequences))
+            if (task['hostSN'] != state['serial'] or sequences != sorted(set(sequences))
                     or any(event['taskID'] != state['task'] for event in events)
                     or not required.issubset(event['kind'] for event in events)):
                 raise RuntimeError('装机任务缺少同一来宾的安装、首启或就绪记录')
             for event in events:
                 if event['kind'] in required:
                     print('装机事件', json.dumps({key: event[key] for key in ('taskID', 'seq', 'at', 'kind')}), flush=True)
+            (work / 'terminal.json').write_text(json.dumps({'task': task['id'], 'serial': task['hostSN'],
+                'state': task['state'], 'events': [{key: event[key] for key in ('taskID', 'seq', 'at', 'kind')}
+                                                   for event in events]}))
             return
         if previous in ('failed', 'cancelled'):
             raise RuntimeError('候选报告装机失败或取消')
@@ -172,7 +259,31 @@ def wait(work):
     raise RuntimeError('来宾装机等待超时')
 
 
+def verify_terminal(work):
+    state = json.loads((work / 'install-session.json').read_text())
+    before = json.loads((work / 'terminal.json').read_text())
+    path = '/tasks/' + state['task']
+    task = api(path, state['token'])
+    events = api(path + '/events?limit=100', state['token'])['items']
+    after = {'task': task['id'], 'serial': task['hostSN'], 'state': task['state'],
+             'events': [{key: event[key] for key in ('taskID', 'seq', 'at', 'kind')} for event in events]}
+    tasks = api(f"/tasks?host_sn={state['serial']}&limit=2", state['token'])['items']
+    if after != before or [task['id'] for task in tasks] != [state['task']]:
+        raise RuntimeError('重复启动改变了装机任务或创建了新任务')
+    print(json.dumps(after), flush=True)
+
+
 if __name__ == '__main__':
     operation, path = sys.argv[1:]
-    {'prepare': prepare, 'prepare-debian': prepare_debian,
-     'prepare-debian-netinst': lambda work: prepare_debian(work, netinst=True), 'wait': wait}[operation](Path(path))
+    if operation == 'identity':
+        identity = case_identity(path)
+        print(identity['serial'], identity['mac'], identity['uuid'])
+    elif operation == 'compare':
+        first, repeat = (guest_log(Path(path) / name) for name in ('guest.log', 'repeat-guest.log'))
+        if not stable_guest(first, repeat):
+            raise RuntimeError('重复启动未从同一块已安装系统盘进入新的启动实例')
+        print(json.dumps({'first': first, 'repeat': repeat}), flush=True)
+    else:
+        {'prepare': prepare, 'prepare-debian': prepare_debian, 'reset': reset_guest, 'terminal': verify_terminal,
+         'configure': configure, 'register-shared': register_shared, 'shared-tasks': shared_tasks,
+         'prepare-debian-netinst': lambda work: prepare_debian(work, netinst=True), 'wait': wait}[operation](Path(path))

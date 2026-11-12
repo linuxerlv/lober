@@ -171,7 +171,7 @@ def main():
         if not isinstance(row, dict) or not isinstance(row.get("evidence"), str):
             continue
         problems += [f"{name}: {problem}" for problem in validate_evidence(row, root)]
-    if not problems and any(passed(name) for name in ("pxe_state", "real_install", "capacity_soak")):
+    if not candidate_problems and any(passed(name) for name in ("pxe_state", "real_install", "capacity_soak")):
         try:
             sys.modules["gate"] = sys.modules[__name__]
             trusted = Path(__file__).resolve().parent
@@ -180,6 +180,9 @@ def main():
                 "cloud_packet_capture.py", "cloud_capture_session.py",
                 "cloud_guest_identity.py", "cloud_no_task_probe.py",
             )
+            if manifest.get("capacity", {}).get("installation_schema") == "lober-isolated-kvm-install-v1":
+                module_names = ("production_capacity.py", "installation_evidence.py", "kvm_install_evidence.py",
+                                "cloud_packet_capture.py")
             files = manifest["files"]
             expected = {name: files["tests/lobertest/enterprise/" + name] for name in module_names}
             if any(digest(trusted / name) != expected[name] for name in module_names):

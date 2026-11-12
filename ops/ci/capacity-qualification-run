@@ -1,0 +1,74 @@
+#!/bin/bash
+# 等装机批次真正结束后，复核原件并在独立数据库运行长稳。
+set -euo pipefail
+umask 077
+test "$EUID" -eq 0 && test "$#" -eq 2
+sha=$1
+install_run=$2
+candidate=/var/lib/lober-ci-test/$sha
+[[ "$sha" =~ ^[0-9a-f]{40}$ && "$install_run" == "$candidate"/kvm-qualification.* ]]
+test "$(realpath -e -- "$install_run")" = "$install_run"
+test "$(stat -c '%u:%a' "$install_run")" = 0:700
+test "$(readlink /proc/self/ns/net)" != "$(readlink /proc/1/ns/net)"
+test -z "$(ip route show default)"
+ip link set lo up
+while systemctl is-active --quiet lober-ci-kvm-qualification.service; do sleep 15; done
+systemctl stop lober-ci-debian-mirror-qualification.service
+journalctl --no-pager -o short-iso -u lober-ci-kvm-qualification.service >"$install_run/unit.log"
+journalctl --no-pager -o short-iso -u lober-ci-debian-mirror-qualification.service >"$install_run/mirror-archive.log"
+grep -q 'four installations and repeat boots completed$' "$install_run/schedule.log"
+
+account=lober-ci-test
+base="$candidate/qualification"
+test ! -L "$base"
+install -d -m 0700 -o "$account" -g "$account" "$base" "$base/leases"
+test "$(realpath -e -- "$base/leases")" = "$base/leases"
+for file in "$base/.qualification-owner" "$base/leases/heavy.lock"; do test ! -L "$file"; done
+if [[ ! -e "$base/.qualification-owner" ]]; then
+    runuser -u "$account" -- bash -ec 'set -o noclobber; printf "lobervm test qualification %s\n" "$1" >"$2"' _ "$sha" "$base/.qualification-owner"
+fi
+runuser -u "$account" -- touch "$base/leases/heavy.lock"
+root=$(runuser -u "$account" -- mktemp -d "$base/kvm-capacity.XXXXXXXX")
+test "$(realpath -e -- "$root")" = "$root"
+pg_socket=$(mktemp -d /run/lober-ci-capacity.XXXXXXXX)
+chown "$account:$account" "$pg_socket"
+printf 'Capacity evidence directory %s\n' "$root"
+cleanup() {
+    test "$(realpath -e -- "$root")" = "$root"
+    for temporary in runtime source; do
+        if [[ -d "$root/$temporary" && ! -L "$root/$temporary" ]]; then
+            rm -r --one-file-system -- "$root/$temporary"
+        fi
+    done
+    if [[ "$(realpath -e -- "$pg_socket")" == "$pg_socket" ]]; then
+        rm -r --one-file-system -- "$pg_socket"
+    fi
+}
+trap cleanup EXIT
+install -d -m 0700 -o "$account" -g "$account" "$root"/{installation,tools,runtime,runtime/media,runtime/inputs}
+install -m 0600 -o "$account" -g "$account" "$candidate/candidate.json" "$root/original-candidate.json"
+install -m 0600 -o "$account" -g "$account" "$candidate/logs/real_media.json" "$root/real-media.json"
+runuser -u "$account" -- mkdir -m 0700 "$root/source"
+runuser -u "$account" -- tar --no-same-owner --no-same-permissions -xf "$candidate/source.tar" -C "$root/source"
+install -m 0600 -o "$account" -g "$account" "$candidate/synthetic-rocky.iso" "$root/runtime/media/seed-rocky.iso"
+install -m 0600 -o "$account" -g "$account" /srv/lober/media/esxi7.iso "$root/runtime/media/esxi7.iso"
+mapfile -t input_dirs < <(find "$candidate" -maxdepth 1 -type d -name 'diagnostic-capacity-inputs.*')
+test "${#input_dirs[@]}" -eq 1
+install -m 0600 -o "$account" -g "$account" "${input_dirs[0]}"/imports.json "$root/runtime/imports.json"
+install -m 0600 -o "$account" -g "$account" "${input_dirs[0]}"/sample-*.iso "$root/runtime/inputs/"
+for name in parallel-1 parallel-2 serial-1 serial-2; do
+    install -d -m 0700 -o "$account" -g "$account" "$root/installation/$name"
+    for file in identity.json terminal.json repeat-terminal.json guest.log repeat-guest.log boot.pcap repeat.pcap repeat-qmp.log; do
+        install -m 0600 -o "$account" -g "$account" "$install_run/$name/$file" "$root/installation/$name/$file"
+    done
+done
+for file in shared-service-start.json shared-service-end.json shared-tasks.json; do
+    install -m 0600 -o "$account" -g "$account" "$install_run/$file" "$root/installation/$file"
+done
+for file in production_capacity.py kvm_install_evidence.py cloud_packet_capture.py db_env.py; do
+    install -m 0600 -o "$account" -g "$account" "/opt/lober-ci/qualification/$file" "$root/tools/$file"
+done
+for file in kvm_install_evidence.py cloud_packet_capture.py; do
+    install -m 0600 -o "$account" -g "$account" "$root/tools/$file" "$root/installation/$file"
+done
+runuser -u "$account" -- /usr/bin/python3 -I -B /opt/lober-ci/qualification/capacity-qualification.py "$root" "$pg_socket"

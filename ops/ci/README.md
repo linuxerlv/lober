@@ -28,7 +28,7 @@ sudo install -d -m 0755 /opt/lober-ci/ops/ci /opt/lober-ci/tests/lobertest/enter
 sudo install -d -m 0750 -o root -g lober-ci-report /etc/lober-ci
 sudo install -m 0644 ops/ci/{worker,verify,report}.py /opt/lober-ci/ops/ci/
 sudo install -m 0755 ops/ci/{app-token,verify-as-stage} /opt/lober-ci/ops/ci/
-sudo install -m 0644 tests/lobertest/enterprise/{gate.py,profiles.json,production_capacity.py,installation_evidence.py,cloud_install.py,cloud_packet_capture.py,cloud_capture_session.py,cloud_guest_identity.py,cloud_no_task_probe.py} /opt/lober-ci/tests/lobertest/enterprise/
+sudo install -m 0644 tests/lobertest/enterprise/{gate.py,profiles.json,production_capacity.py,installation_evidence.py,kvm_install_evidence.py,cloud_install.py,cloud_packet_capture.py,cloud_capture_session.py,cloud_guest_identity.py,cloud_no_task_probe.py} /opt/lober-ci/tests/lobertest/enterprise/
 sudo install -m 0644 ops/ci/systemd/*.service ops/ci/systemd/*.timer /etc/systemd/system/
 sudo visudo -cf ops/ci/systemd/lober-ci-report.sudoers
 sudo install -m 0440 ops/ci/systemd/lober-ci-report.sudoers /etc/sudoers.d/lober-ci-report
@@ -90,6 +90,12 @@ sudo systemd-run --unit=lober-ci-kvm-debian-diagnostic \
 ```
 
 装机结束后停止 `lober-ci-debian-mirror-diagnostic.service`。诊断保留安装状态、抓包、串口和来宾验证日志。抓包和串口可能含临时装机凭据，只能保存在本轮私有目录。单台诊断不提供发布所需的两次并行、两次串行和重复启动证据。
+
+正式 4 GiB 路径使用 `kvm-qualification-run`。它为四次装机分别创建空磁盘和隔离网络，先并行两次，再串行两次。四台来宾通过本机套接字连接同一个候选服务和数据库。每次安装结束后复位来宾并重新抓包，核对原系统盘、系统身份、变化后的启动编号和原装机任务。`kvm_install_evidence.py` 读取原始抓包和日志，复核每次启动与任务信号，并根据候选事件时间核对并行与串行顺序。
+
+将 `kvm-qualification-run` 安装到 `/opt/lober-ci/ops/ci/`。使用和单台装机相同的只读镜像挂载、软件源转接、`PrivateNetwork=yes` 和共享执行锁。批次根目录由管理员在固定候选下以 `mktemp -d "$candidate/kvm-qualification.XXXXXXXX"` 创建。批次服务名为 `lober-ci-kvm-qualification`，转接服务名为 `lober-ci-debian-mirror-qualification`。批次运行在一个内存预算内，由脚本为各台来宾分配网络。
+
+将 `capacity-qualification-run` 以 `0755` 安装到 `/opt/lober-ci/qualification/`，并将 `capacity-qualification.py`、`production_capacity.py`、`kvm_install_evidence.py`、`cloud_packet_capture.py`、`db_env.py` 以 `0644` 安装到该目录。通过 `systemd-run` 的 `PrivateNetwork=yes` 运行 `capacity-qualification-run <完整提交号> <装机批次根目录>`。它在四次装机及抓包复核通过后才启动正式容量负载。容量阶段使用独立 PostgreSQL 实例，日志保存在同一候选的 `qualification/kvm-capacity.*`。容量服务必须允许完整数据准备、常态、突发、24 小时长稳和最终复核的运行时间。
 
 ## 接上 GitHub 合并拦截
 

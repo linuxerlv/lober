@@ -28,6 +28,7 @@ import urllib.request
 import uuid
 
 BASE = Path('/home/dev/lober-production-qualification-20261025')
+KVM_INSTALL_SCHEMA = 'lober-isolated-kvm-install-v1'
 
 
 def load_verified_module(path, expected, name):
@@ -468,6 +469,18 @@ def installation_problems(report, identity, root, contract=None):
     """消费Task5原件与冻结检查器；单机工具没有第二目标合同时继续阻塞。"""
     errors = []
     try:
+        if report.get('schema') == KVM_INSTALL_SCHEMA:
+            root = Path(root).resolve(strict=True)
+            checker = root / 'kvm_install_evidence.py'
+            parser = root / 'cloud_packet_capture.py'
+            if contract.get('installation_schema') != KVM_INSTALL_SCHEMA:
+                raise ValueError('low-memory installation contract not frozen')
+            verifier = load_verified_module(private_file(checker, root), contract['installation_checkers'][str(checker)],
+                                            'frozen_kvm_install_evidence')
+            packet = load_verified_module(private_file(parser, root), contract['installation_helpers'][str(parser)],
+                                          'frozen_kvm_packet_capture')
+            verifier.verify_report(report, identity, root, packet)
+            return []
         if report.get('status') != 'PASS' or report.get('synthetic') is not False:
             raise ValueError('actual non-synthetic installation result required')
         if not contract or not contract.get('installation_checkers') or not contract.get('installation_targets'):
@@ -550,7 +563,7 @@ def installation_problems(report, identity, root, contract=None):
         if task_sets[0] & task_sets[1]: raise ValueError('serial comparison reuses parallel task')
         if min(e for _, e in groups[0])-max(s for s, _ in groups[0]) <= 0: raise ValueError('installations were not concurrent')
         if min(e for _, e in groups[1])-max(s for s, _ in groups[1]) > 0: raise ValueError('serial baseline was concurrent')
-    except (KeyError, ValueError, OSError, TypeError, AttributeError, ImportError) as error:
+    except (KeyError, ValueError, OSError, TypeError, AttributeError, ImportError, StopIteration) as error:
         errors.append('real concurrent install evidence refused: '+type(error).__name__)
     return errors
 
@@ -746,7 +759,7 @@ def assess_capacity(self):
     # 本工具不创建装机结果；两台真实并发装机必须有单独冻结的检查器结论。
     if not concurrent: problems.append('real concurrent installation evidence absent')
     else:
-        p = private_file(concurrent['path'], BASE)
+        p = private_file(concurrent['path'], getattr(self, 'qualification_root', BASE))
         report = json.loads(p.read_text())
         if sha(p) != concurrent['sha256']: problems.append('concurrent original changed')
         problems += installation_problems(report, self.identity, p.parent, self.common_identity)
@@ -757,18 +770,22 @@ class Driver:
     def __init__(self, args):
         if sys.platform != 'linux': raise ValueError('all tests and execution must run on lober VM')
         self.args, self.root = args, args.work_root.resolve(strict=True)
-        if self.root == BASE or not self.root.is_relative_to(BASE): raise ValueError('work root outside owned subtree')
+        self.qualification_root = Path(getattr(args, 'qualification_root', BASE)).resolve(strict=True)
+        base = self.qualification_root
+        if self.root == base or not self.root.is_relative_to(base): raise ValueError('work root outside owned subtree')
+        if base.stat().st_uid != os.getuid() or base.stat().st_mode & 0o077:
+            raise ValueError('qualification root must be owned and mode 0700')
         if self.root.stat().st_uid != os.getuid() or self.root.stat().st_mode & 0o077:
             raise ValueError('work root must be owned and mode 0700')
-        self.manifest = json.loads(private_file(args.manifest, BASE).read_text())
-        self.profile = json.loads(private_file(args.profile, BASE).read_text())
+        self.manifest = json.loads(private_file(args.manifest, base).read_text())
+        self.profile = json.loads(private_file(args.profile, base).read_text())
         if profile_problems(self.profile): raise ValueError('profile differs from fixed contract')
         self.c = self.manifest['capacity']
         self.run_id = self.manifest['run_id']
         if self.c['run_id'] != self.run_id or not valid_schema(self.c['database']['schema'], self.run_id):
             raise ValueError('run/schema ownership mismatch')
         self.schema = self.c['database']['schema']
-        owner = private_file(BASE/'.qualification-owner', BASE)
+        owner = private_file(base/'.qualification-owner', base)
         if sha(owner) != self.c['owner_sha256']: raise ValueError('base owner identity mismatch')
         schema_owner = json.loads(private_file(self.c['database']['owner_file'], self.root).read_text())
         if schema_owner != {'run_id': self.run_id, 'schema': self.schema}:
@@ -776,7 +793,7 @@ class Driver:
         self.identity = {'manifest_sha256': sha(args.manifest), 'profile_sha256': sha(args.profile),
                          'executor_sha256': sha(__file__), 'run_id': self.run_id,
                          'product_sha': self.manifest['product_sha'], 'test_sha': self.manifest['test_sha']}
-        shared = private_file(self.c['run_identity_file'], BASE)
+        shared = private_file(self.c['run_identity_file'], base)
         common = json.loads(shared.read_text())
         self.common_identity = common
         if sha(shared) != self.c['run_identity_sha256'] or any(common.get(k) != self.manifest[k] for k in ('run_id', 'product_sha', 'test_sha', 'binary_sha256')):
@@ -789,7 +806,7 @@ class Driver:
         for name, digest_key in (('binary', 'binary_sha256'), ('source_archive', 'source_archive_sha256')):
             if sha(self.manifest[name]) != self.manifest[digest_key]: raise ValueError('candidate binary/archive mismatch')
         source = Path(self.c['source_root']).resolve(strict=True)
-        if not source.is_relative_to(BASE) or not self.manifest.get('files'): raise ValueError('frozen source file map absent')
+        if not source.is_relative_to(base) or not self.manifest.get('files'): raise ValueError('frozen source file map absent')
         for name, expected in self.manifest['files'].items():
             p = (source/name).resolve(strict=True)
             if not p.is_relative_to(source) or sha(p) != expected: raise ValueError('source file mismatch')
@@ -799,7 +816,7 @@ class Driver:
         validate_url(self.media['url'], self.c['allowed_private_ips'])
         if (self.media['size'] < self.profile['artifact_size_bytes_min']
                 or not re.fullmatch('[0-9a-f]{64}', self.media['sha256'])): raise ValueError('full real image identity absent')
-        receipt = private_file(self.media['qualification_file'], BASE)
+        receipt = private_file(self.media['qualification_file'], base)
         if sha(receipt) != self.media['qualification_sha256']: raise ValueError('media qualification receipt changed')
         evidence = json.loads(receipt.read_text())
         if (evidence.get('status') != 'PASS' or evidence.get('synthetic') is not False
@@ -880,7 +897,7 @@ class Driver:
         self.import_used = 0
         self.lock_file = None
         self.resources = self.c['resource_paths']
-        if len(self.resources) < 1 or any(not Path(p).resolve().is_relative_to(BASE) for p in self.resources):
+        if len(self.resources) < 1 or any(not Path(p).resolve().is_relative_to(base) for p in self.resources):
             raise ValueError('owned resource mount paths required')
         all_imports = []
         for phase, needed in (('normal', 1), ('burst', 1), ('soak', 48)):
@@ -961,7 +978,7 @@ class Driver:
 
     def acquire(self):
         import fcntl
-        self.lock_file = (BASE/'leases/heavy.lock').open('r+')
+        self.lock_file = (self.qualification_root/'leases/heavy.lock').open('r+')
         fcntl.flock(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
         self.log.add(kind='heavy_lock_acquired', inode=os.fstat(self.lock_file.fileno()).st_ino)
 
@@ -1140,7 +1157,7 @@ class Driver:
     def history_task(self, token, sn, category='seed'):
         body = {**self.c['dataset']['selection'], 'hosts': [{'sn': sn, 'entered': self.c['dataset']['entered']}]}
         item = self.request('POST', '/wizard/tasks', token, body, category=category)['tasks'][0]
-        cancelled = self.request('POST', '/tasks/'+item['id']+'/cancel', token, category=category)
+        cancelled = self.request('POST', '/tasks/'+item['id']+'/cancel', token, {'rev': item['rev']}, category=category)
         if cancelled['state'] != 'cancelled' or cancelled['snapshot'] != item['snapshot']:
             raise RuntimeError('API cancellation/snapshot contract failed')
         return item['id']
@@ -1217,7 +1234,7 @@ class Driver:
         for device, amount in budgets.items():
             volume = self.volumes[device]; st = os.statvfs(volume['path'])
             if st.f_bavail*st.f_frsize-amount < volume['floor']: raise RuntimeError('original-scale filesystem budget blocked: '+device)
-        ref = self.c['resource_evidence']; path = private_file(ref['path'], BASE)
+        ref = self.c['resource_evidence']; path = private_file(ref['path'], self.qualification_root)
         if sha(path) != ref['sha256']: raise ValueError('host resource receipt changed')
         observed = json.loads(path.read_text())
         if observed.get('run_identity_sha256') != self.identity['run_identity_sha256'] or not 0 <= time.time()-observed['observed_utc_unix'] <= 300:
@@ -1820,10 +1837,11 @@ def stop_entry(args):
     """独立停止不读介质/源码包，不要求产品或PG活着，每次尝试保留新目录。"""
     if sys.platform != 'linux': raise ValueError('stop must execute on lober VM')
     root = args.work_root.resolve(strict=True)
-    if root == BASE or not root.is_relative_to(BASE) or root.stat().st_uid != os.getuid() or root.stat().st_mode & 0o077:
+    base = Path(getattr(args, 'qualification_root', BASE)).resolve(strict=True)
+    if root == base or not root.is_relative_to(base) or root.stat().st_uid != os.getuid() or root.stat().st_mode & 0o077:
         raise ValueError('wrong stop work root')
-    manifest = json.loads(private_file(args.manifest, BASE).read_text()); c = manifest['capacity']
-    if sha(private_file(BASE/'.qualification-owner', BASE)) != c['owner_sha256'] or c['run_id'] != manifest['run_id']:
+    manifest = json.loads(private_file(args.manifest, base).read_text()); c = manifest['capacity']
+    if sha(private_file(base/'.qualification-owner', base)) != c['owner_sha256'] or c['run_id'] != manifest['run_id']:
         raise ValueError('stop owner/run mismatch')
     if sha(__file__) != c['executor_sha256']: raise ValueError('stop requires same frozen executor')
     output = args.output.resolve(strict=True)
@@ -1851,6 +1869,7 @@ def main():
     parser.add_argument('--phase', choices=('seed', 'normal', 'burst', 'soak', 'evaluate', 'stop'), required=True)
     for name in ('manifest', 'profile', 'output', 'work-root'):
         parser.add_argument('--'+name, required=True, type=Path)
+    parser.add_argument('--qualification-root', type=Path, default=BASE)
     args = parser.parse_args()
     try: return stop_entry(args) if args.phase == 'stop' else Driver(args).run()
     except Exception as error:
