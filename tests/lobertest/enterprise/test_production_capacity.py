@@ -221,6 +221,15 @@ class CapacityCheckerTests(unittest.TestCase):
 
 class ReviewBoundaryTests(unittest.TestCase):
     """审查反例。这里只构造检查器输入，不生成任何资格结果。"""
+    def test_history_task_cancellation_uses_created_revision(self):
+        driver = object.__new__(cap.Driver)
+        driver.c = {'dataset': {'selection': {'isoID': 'fixture-iso'}, 'entered': {}}}
+        created = {'id': 'fixture-task', 'rev': 3, 'snapshot': {'schema': 1}}
+        driver.request = Mock(side_effect=[{'tasks': [created]}, {**created, 'rev': 4, 'state': 'cancelled'}])
+        self.assertEqual(driver.history_task('fixture-token', 'SN-FIXTURE'), 'fixture-task')
+        driver.request.assert_called_with(
+            'POST', '/tasks/fixture-task/cancel', 'fixture-token', {'rev': 3}, category='seed')
+
     def test_http_error_records_only_safe_category_and_codes(self):
         summary = cap.error_summary({'code': 422, 'message': '第 7 层（状态机）尚未实现，暂不能取消或重试任务',
                                      'data': {'problems': [{'code': 'task_control_state'}]}}, 422)
@@ -562,7 +571,8 @@ class LoadThreadBoundaryTests(unittest.TestCase):
             d.download_ready.update({i: 1 for i in range(4)})
             if phase == 'burst': d.download_ready.update({i: 1 for i in range(4, 8)})
             now = [100.0]
-            sampled, end_sample, send, reading, release, cleanup_entered, aborted = [threading.Event() for _ in range(7)]
+            sampled, end_sample, send, reading, release, cleanup_entered, aborted, recovery_sample = [
+                threading.Event() for _ in range(8)]
             class Response:
                 status = 500 if outcome == '500' else 200
                 fp = None
@@ -586,7 +596,9 @@ class LoadThreadBoundaryTests(unittest.TestCase):
                 return original_cleanup(*args, **kwargs)
             d.cleanup = cleanup
             def sample(**kwargs):
-                if kwargs and not sampled.is_set(): sampled.set(); end_sample.wait(3)
+                if kwargs:
+                    if not sampled.is_set(): sampled.set(); end_sample.wait(3)
+                    elif phase == 'burst' and now[0] >= cutoff: recovery_sample.set()
                 return {'processes': {}, 'oom_kill': 0}
             d.sample = sample
             def console(worker, quit_event):
@@ -608,6 +620,8 @@ class LoadThreadBoundaryTests(unittest.TestCase):
                     if interruption == 'TERM': d.on_signal(cap.signal.SIGTERM, None)
                     now[0] = cutoff+.1; end_sample.set()
                     self.assertTrue(cleanup_entered.wait(3))
+                    if phase == 'burst':
+                        self.assertTrue(recovery_sample.wait(1), 'settlement must not delay the first recovery sample')
                     if interruption == 'TERM_during':
                         self.assertFalse(aborted.wait(.03))
                         deadline = d.shutdown_deadline

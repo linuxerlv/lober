@@ -1770,20 +1770,35 @@ class Driver:
             startup_elapsed = time.monotonic()-startup
             next_sample = 0
             oom_first = None
+            burst_cleanup = None
+            burst_result = []
+
+            def settle_burst():
+                try:
+                    burst_result.append(self.cleanup(threads, settle=True))
+                except (RuntimeError, OSError, ValueError):
+                    burst_result.append(False)
+                self.log.add(kind='burst_load_stopped', elapsed=time.monotonic()-measurement_start)
+
             while True:
                 elapsed = time.monotonic()-measurement_start
                 if phase == 'burst' and elapsed >= 300 and not quit_event.is_set():
                     quit_event.set()
-                    if not self.cleanup(threads, settle=True): raise RuntimeError('burst cleanup incomplete')
-                    self.log.add(kind='burst_load_stopped', elapsed=time.monotonic()-measurement_start)
+                    burst_cleanup = threading.Thread(target=settle_burst, name='burst-settlement')
+                    burst_cleanup.start()
                 sample = self.sample(measurement='qualification')
                 self.guard_resources(sample)
                 if oom_first is None: oom_first = sample['oom_kill']
                 if sample['oom_kill'] != oom_first: raise RuntimeError('OOM observed')
                 if self.stop_event.is_set(): raise InterruptedError('phase interrupted or client failed')
+                if burst_cleanup is not None and not burst_cleanup.is_alive() and burst_result != [True]:
+                    raise RuntimeError('burst cleanup incomplete')
                 if elapsed >= duration: break
                 next_sample += 60
-                self.stop_event.wait(max(0, min(duration, next_sample)-(time.monotonic()-measurement_start)))
+                target = measurement_start + min(duration, next_sample)
+                if burst_cleanup is not None and burst_cleanup.is_alive():
+                    burst_cleanup.join(timeout=max(0, target-time.monotonic()))
+                self.stop_event.wait(max(0, target-time.monotonic()))
             self.log.add(kind='measurement_end', window_id=self.window['id'])
             quit_event.set()
             if not self.cleanup(threads, settle=True): raise RuntimeError('load cleanup incomplete')
@@ -1799,6 +1814,8 @@ class Driver:
                     'idle_baseline': idle_baseline}
         finally:
             quit_event.set()
+            if burst_cleanup is not None:
+                burst_cleanup.join()
             if not self.cleanup(threads): self.worker_errors += 1
 
     def stop(self):
