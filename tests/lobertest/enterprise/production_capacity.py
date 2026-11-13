@@ -1754,6 +1754,7 @@ class Driver:
         for w in range(4*multiplier): spawn(self.download_loop, w, quit_event)
         spawn(self.import_loop, quit_event)
         startup = time.monotonic()
+        burst_cleanup = None
         try:
             while True:
                 with self.lock:
@@ -1770,7 +1771,6 @@ class Driver:
             startup_elapsed = time.monotonic()-startup
             next_sample = 0
             oom_first = None
-            burst_cleanup = None
             burst_result = []
 
             def settle_burst():
