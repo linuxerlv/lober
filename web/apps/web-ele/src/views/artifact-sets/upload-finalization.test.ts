@@ -230,14 +230,14 @@ describe('normal page upload finalization recovery', () => {
     });
     await selectAndWait(node, wrong);
     expect(node.textContent).toContain('完整文件校验失败');
-    expect(node.textContent).toContain('已确认 1 段');
+    expect(node.textContent).toContain('已获取 9 字节 / 9 字节');
     io.upload.mockClear();
 
     io.operate.mockImplementationOnce(async () => {
       source = { ...source, fetched: 0, ranges: [], state: 'pending' };
     });
     click(node, '重试获取');
-    await vi.waitFor(() => expect(node.textContent).toContain('已确认 0 段'));
+    await vi.waitFor(() => expect(node.textContent).toContain('已获取 0 字节 / 9 字节'));
     expect(io.operate).toHaveBeenCalledWith('iso-1', 'retry');
     expect(node.textContent).toContain('选择文件上传');
 
