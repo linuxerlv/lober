@@ -30,13 +30,17 @@ vi.mock('element-plus', async () => {
     inheritAttrs: false,
     setup: (_, ctx) => () => h(tag, ctx.attrs, ctx.slots.default?.()),
   });
+  const overlay = defineComponent({
+      props: { modelValue: Boolean },
+      setup: (props, ctx) => () => props.modelValue ? h('section', [ctx.slots.default?.(), ctx.slots.footer?.()]) : null,
+  });
   return {
     ElAlert: defineComponent({ props: { title: { type: String, default: '' } }, setup: (props) => () => h('aside', props.title) }),
     ElButton: slot('button'),
-    ElDialog: defineComponent({
-      props: { modelValue: Boolean },
-      setup: (props, ctx) => () => props.modelValue ? h('section', [ctx.slots.default?.(), ctx.slots.footer?.()]) : null,
-    }),
+    ElCheckbox: slot('span'),
+    ElDialog: overlay,
+    ElDrawer: overlay,
+    ElEmpty: slot('div'),
     ElInput: slot('input'),
     ElMessage: { success: vi.fn() },
     ElMessageBox: { confirm: vi.fn() },
@@ -114,8 +118,8 @@ async function mountPage() {
   app.mount(node);
   unmount = () => app.unmount();
   await nextTick();
-  click(node, '详情 / 进度');
-  await vi.waitFor(() => expect(node.textContent).toContain('已确认'));
+  click(node, '查看详情');
+  await vi.waitFor(() => expect(node.textContent).toContain('已获取'));
   return node;
 }
 function select(node: HTMLElement, file: File) {
@@ -156,7 +160,7 @@ describe('Linux 支持范围', () => {
     app.mount(node);
     unmount = () => app.unmount();
     await nextTick();
-    click(node, '新建 ISO');
+    click(node, '登记镜像');
     await nextTick();
     const options = [...node.querySelectorAll<HTMLOptionElement>('select[aria-label="ISO 系"] option')]
       .map((item) => item.value);
@@ -226,14 +230,14 @@ describe('normal page upload finalization recovery', () => {
     });
     await selectAndWait(node, wrong);
     expect(node.textContent).toContain('完整文件校验失败');
-    expect(node.textContent).toContain('已确认 1 段');
+    expect(node.textContent).toContain('已获取 9 字节 / 9 字节');
     io.upload.mockClear();
 
     io.operate.mockImplementationOnce(async () => {
       source = { ...source, fetched: 0, ranges: [], state: 'pending' };
     });
     click(node, '重试获取');
-    await vi.waitFor(() => expect(node.textContent).toContain('已确认 0 段'));
+    await vi.waitFor(() => expect(node.textContent).toContain('已获取 0 字节 / 9 字节'));
     expect(io.operate).toHaveBeenCalledWith('iso-1', 'retry');
     expect(node.textContent).toContain('选择文件上传');
 

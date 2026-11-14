@@ -50,10 +50,14 @@ func (s *Store) createTasks(ctx context.Context, ts []model.Task, a repository.A
 	if err := repository.CheckNewTasks(ts); err != nil {
 		return nil, err
 	}
+	var batchID string
+	if current {
+		batchID = identity.NewID()
+	}
 	rows := make([]taskRow, len(ts))
 	ids := make([]string, len(ts))
 	for i, t := range ts {
-		t.ID, t.State, t.Rev = identity.NewID(), model.TaskPending, 1
+		t.ID, t.BatchID, t.State, t.Rev = identity.NewID(), batchID, model.TaskPending, 1
 		row, err := toTaskRow(t)
 		if err != nil {
 			return nil, err
@@ -310,7 +314,7 @@ func (s *Store) ListTasks(ctx context.Context, q repository.TaskQuery) (reposito
 			states = append(states, string(st))
 		}
 	}
-	if !storable(q.HostSN) || len(q.States) > 0 && len(states) == 0 {
+	if !storable(q.HostSN, q.BatchID) || len(q.States) > 0 && len(states) == 0 {
 		return emptyPage[model.Task](q.Page), nil
 	}
 	db := s.read(ctx)
@@ -319,6 +323,9 @@ func (s *Store) ListTasks(ctx context.Context, q repository.TaskQuery) (reposito
 	}
 	if q.HostSN != "" {
 		db = db.Where("host_sn = ?", q.HostSN)
+	}
+	if q.BatchID != "" {
+		db = db.Where("batch_id = ?", q.BatchID)
 	}
 	if len(states) > 0 {
 		db = db.Where("state IN ?", states)
@@ -338,6 +345,40 @@ func (s *Store) ListTasks(ctx context.Context, q repository.TaskQuery) (reposito
 		return repository.Page[model.Task]{}, err
 	}
 	return page(rows, limit, taskRow.task, func(r taskRow) string { return repository.EncodeCursor("tasks", r.CreatedAt, r.ID) }, total)
+}
+
+// GetTaskBatchSummary 在一次查询里读取整批统计，只从首条快照取名称。
+func (s *Store) GetTaskBatchSummary(ctx context.Context, id string) (model.TaskBatchSummary, error) {
+	if err := repository.CheckID(id); err != nil {
+		return model.TaskBatchSummary{}, err
+	}
+	var summary model.TaskBatchSummary
+	result := s.read(ctx).Raw(`
+		WITH counts AS (
+			SELECT count(*) AS total,
+				count(*) FILTER (WHERE state = ?) AS pending,
+				count(*) FILTER (WHERE state = ?) AS done,
+				count(*) FILTER (WHERE state = ?) AS failed,
+				count(*) FILTER (WHERE state = ?) AS cancelled
+			FROM tasks WHERE batch_id = ?
+		), first_task AS (
+			SELECT created_by, created_at, template_version,
+				snapshot #>> '{ISO,Name}' AS iso_name,
+				snapshot #>> '{Template,Name}' AS template_name
+			FROM tasks WHERE batch_id = ?
+			ORDER BY created_at, id LIMIT 1
+		)
+		SELECT first_task.*, counts.*,
+			total - pending - done - failed - cancelled AS active
+		FROM first_task CROSS JOIN counts
+	`, model.TaskPending, model.TaskDone, model.TaskFailed, model.TaskCancelled, id, id).Scan(&summary)
+	if result.Error != nil {
+		return model.TaskBatchSummary{}, translate(result.Error, false, nil)
+	}
+	if result.RowsAffected == 0 {
+		return model.TaskBatchSummary{}, repository.ErrNotFound
+	}
+	return summary, nil
 }
 
 // TransitionTask 见 repository.Tasks。

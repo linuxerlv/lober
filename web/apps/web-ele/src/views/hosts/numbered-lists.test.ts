@@ -9,6 +9,10 @@ import { createPinia } from 'pinia';
 import { afterEach, expect, it, vi } from 'vitest';
 
 const io = vi.hoisted(() => ({ commit: vi.fn(), hosts: vi.fn(), isos: vi.fn(), preview: vi.fn(), requestInventory: vi.fn(), update: vi.fn() }));
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ path: '/hosts', query: {} }),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+}));
 vi.mock('#/api/console/host', () => ({
   commitHostCSVApi: io.commit,
   getHostListApi: io.hosts,

@@ -30,7 +30,7 @@ await run(async () => {
 
   const isoName = 'B2-ISO-' + input.suffix;
   await go(page, '/artifact-sets');
-  await page.getByRole('button', { name: '新建 ISO', exact: true }).click();
+  await page.getByRole('button', { name: '登记镜像', exact: true }).click();
   const isoForm = page.getByRole('dialog', { name: '新建 ISO', exact: true });
   await isoForm.getByLabel('ISO 名字', { exact: true }).fill(isoName);
   await choose(page, isoForm.getByLabel('主 ISO来源方式', { exact: true }), '浏览器上传（支持续传）');
@@ -38,11 +38,12 @@ await run(async () => {
   await isoForm.getByRole('button', { name: '登记并获取', exact: true }).click();
   await isoForm.waitFor({ state: 'hidden' });
   // Successful creation opens its progress dialog automatically.
-  const isoDetails = page.getByRole('dialog', { name: 'ISO 详情与来源进度', exact: true });
+  const isoDetails = page.getByRole('dialog', { name: isoName, exact: true });
   await isoDetails.getByText('状态：可用', { exact: true }).waitFor({ timeout: 30000 });
   const iso = (await api(admin, 'GET', '/isos?limit=100')).items.find(item => item.name === isoName);
   assert.ok(iso && iso.state === 'ready' && iso.sha256, 'UI upload did not produce a ready ISO');
-  await closeDialog(isoDetails);
+  await isoDetails.getByRole('button', { name: '关闭此对话框' }).click();
+  await isoDetails.waitFor({ state: 'hidden' });
   completed.push('browser-file-upload-and-server-import-progress');
 
   const author = await signIn('enterprise_hook_author');
@@ -55,7 +56,8 @@ await run(async () => {
   const editor = author.page.getByRole('dialog').filter({ has: author.page.getByPlaceholder('派生模板名称（独立副本）') }).first();
   await editor.getByPlaceholder('派生模板名称（独立副本）').fill(derivedName);
   await editor.getByRole('button', { name: '派生模板', exact: true }).click();
-  await editor.getByLabel('模板正文', { exact: true }).fill('# {{param:hostname}}\n{{slot:enterprise}}\n{{lober:syslog}}\n{{lober:firstboot}}\n{{lober:cleanup}}\n');
+  await editor.getByRole('textbox', { name: '模板正文', exact: true }).fill('# {{param:hostname}}\n{{slot:enterprise}}\n{{lober:syslog}}\n{{lober:firstboot}}\n{{lober:cleanup}}\n');
+  await editor.getByRole('tab', { name: '脚本装配', exact: true }).click();
   await editor.getByRole('button', { name: '保存并刷新插槽', exact: true }).click();
   const slot = editor.locator('section').filter({ hasText: 'enterprise' }).first();
   await slot.getByRole('button', { name: '添加 hook', exact: true }).click();
@@ -91,7 +93,7 @@ await run(async () => {
   for (const sn of [first, second]) {
     await page.locator('.vxe-body--row').filter({ hasText: sn }).first().locator('.vxe-cell--checkbox').click();
   }
-  await page.getByText('已选 2 台', { exact: true }).waitFor();
+  await page.getByRole('definition').filter({ hasText: /^已选 2 台$/ }).waitFor();
   await page.getByRole('button', { name: '下一步', exact: true }).click();
   await page.locator('label.el-radio').filter({ hasText: isoName }).click();
   assert.equal(await page.getByRole('radio', { name: new RegExp(isoName) }).isChecked(), true);
@@ -99,12 +101,14 @@ await run(async () => {
   await page.locator('label.el-radio').filter({ hasText: derivedName }).click();
   assert.equal(await page.getByRole('radio', { name: new RegExp(derivedName) }).isChecked(), true);
   await page.getByRole('button', { name: '下一步', exact: true }).click();
-  const hostnames = page.locator('input[id$=":tpl/hostname"]');
-  await hostnames.nth(0).fill('b2-one');
-  await hostnames.nth(1).fill('b2-two');
+  const hosts = page.getByRole('navigation', { name: '参数主机', exact: true });
+  for (const [sn, value] of [[first, 'b2-one'], [second, 'b2-two']]) {
+    await hosts.getByRole('button', { name: sn, exact: true }).click();
+    await page.locator('input[id$=":tpl/hostname"]:visible').fill(value);
+  }
   await page.getByRole('button', { name: '校验并确认', exact: true }).click();
   for (const sn of [first, second]) {
-    const confirmation = page.locator('strong').filter({ hasText: sn }).locator('..');
+    const confirmation = page.getByText(sn, { exact: true }).and(page.locator('strong')).locator('..');
     await confirmation.getByRole('button', { name: '预览该主机全部文件', exact: true }).click();
     const preview = page.getByRole('dialog', { name: '机器下发文件预览', exact: true });
     await preview.getByRole('tab', { name: 'ks.cfg', exact: true }).click();
@@ -117,7 +121,7 @@ await run(async () => {
   const batchResponse = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/console/v1/wizard/tasks');
   await page.getByRole('button', { name: '创建整批任务', exact: true }).click();
   assert.equal((await batchResponse).status(), 200, 'UI batch creation failed');
-  await page.getByText(/已原子创建\s*2\s*个任务/).waitFor();
+  await page.getByText(/已创建\s*2\s*个任务/).waitFor();
   for (const sn of [first, second]) {
     const tasks = (await api(admin, 'GET', '/tasks?host_sn=' + sn)).items;
     assert.equal(tasks.length, 1);

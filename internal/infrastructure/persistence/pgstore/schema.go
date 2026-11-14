@@ -160,6 +160,7 @@ var tables = []table{
 		name:    "tasks",
 		primary: []string{"id"},
 		indexes: []index{
+			{name: "idx_tasks_batch_id", columns: []string{"batch_id"}, where: "batch_id <> ''::text"},
 			{name: "idx_tasks_created_at", columns: []string{"created_at"}},
 			{name: "idx_tasks_host_sn", columns: []string{"host_sn"}},
 			{name: "idx_tasks_iso_id", columns: []string{"iso_id"}},

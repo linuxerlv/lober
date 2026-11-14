@@ -25,7 +25,10 @@ const fixtures = vi.hoisted(() => ({
   candidateQueries: [] as Record<string, unknown>[],
   slots: [] as Schemas['SlotInfo'][],
 }));
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ query: {} }),
+  useRouter: () => ({ push: vi.fn() }),
+}));
 vi.mock('#/api/console/task', () => ({
   taskAPI: {
     list: async (query: Record<string, unknown>) => {
@@ -164,7 +167,10 @@ vi.mock('element-plus', async () => {
     ElAlert: Container,
     ElButton: Button,
     ElCheckbox: Container,
+    ElDatePicker: Input,
     ElDialog: Dialog,
+    ElDrawer: Dialog,
+    ElEmpty: Container,
     ElForm: Container,
     ElFormItem: Container,
     ElInput: Input,
@@ -206,6 +212,8 @@ vi.mock('element-plus', async () => {
           ),
     }),
     ElTag: Container,
+    ElTabs: Container,
+    ElTabPane: Container,
     ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
     ElMessageBox: { confirm: vi.fn() },
   };
