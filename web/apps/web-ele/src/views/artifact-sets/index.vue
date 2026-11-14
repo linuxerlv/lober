@@ -46,10 +46,10 @@ import { seriesByFamily } from '#/api/console/catalog';
 import { errorMessage, problemsOf, referencesOf } from '#/api/console/problem';
 import ChangeRecords from '#/components/console/ChangeRecords.vue';
 import ListPagination from '#/components/console/ListPagination.vue';
-import { downloadSelection } from '#/components/console/selection-export';
-import { useRowSelection } from '#/composables/use-row-selection';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { downloadSelection } from '#/components/console/selection-export';
 import { NumberedPage } from '#/composables/numbered-page';
+import { useRowSelection } from '#/composables/use-row-selection';
 
 import SourceForm from './SourceForm.vue';
 import { missingChunks, verifyReselectedFile } from './upload';
@@ -524,8 +524,7 @@ function formatSize(bytes: number) {
         class="flex flex-wrap items-end gap-3 px-5 py-4"
         @submit.prevent="search"
       >
-        <label class="grid gap-1 text-xs"
-          >系统类型
+        <label class="grid gap-1 text-xs">系统类型
           <ElSelect
             v-model="filters.family"
             aria-label="筛选族"
@@ -541,8 +540,7 @@ function formatSize(bytes: number) {
             />
           </ElSelect>
         </label>
-        <label class="grid gap-1 text-xs"
-          >镜像状态
+        <label class="grid gap-1 text-xs">镜像状态
           <ElSelect
             v-model="filters.state"
             aria-label="筛选状态"
@@ -559,15 +557,16 @@ function formatSize(bytes: number) {
           </ElSelect>
         </label>
         <div class="ml-auto flex flex-wrap items-center justify-end gap-3">
-          <ElButton native-type="submit" type="primary" :loading="page.loading"
-            >查询</ElButton
-          >
+          <ElButton native-type="submit" type="primary" :loading="page.loading">
+查询
+</ElButton>
           <ElButton class="!ml-0" @click="resetFilters">重置</ElButton>
           <ElButton
             :disabled="page.loading || !selectedRows.length"
             @click="exportSelected"
-            >导出所选</ElButton
-          >
+            >
+导出所选
+</ElButton>
         </div>
       </form>
       <Grid>
@@ -582,7 +581,7 @@ function formatSize(bytes: number) {
         </template>
         <template #select-row="{ row }">
           <ElCheckbox
-            :aria-label="'选择 ' + row.name"
+            :aria-label="`选择 ${ row.name}`"
             :model-value="selection.has(row)"
             :disabled="page.loading"
             @change="selection.toggle(row, $event)"
@@ -616,9 +615,9 @@ function formatSize(bytes: number) {
           </ElTag>
         </template>
         <template #action="{ row }">
-          <ElButton link type="primary" @click="openDetails(row)"
-            >查看详情</ElButton
-          >
+          <ElButton link type="primary" @click="openDetails(row)">
+查看详情
+</ElButton>
           <ElButton
             v-if="canWrite && row.state === 'ready'"
             link
@@ -775,10 +774,8 @@ function formatSize(bytes: number) {
           class="mb-4 rounded border p-4"
         >
           <div class="mb-2 flex justify-between">
-            <strong
-              >{{ source.role || '主镜像' }} ·
-              {{ sourceNames[source.kind] }}</strong
-            >
+            <strong>{{ source.role || '主镜像' }} ·
+              {{ sourceNames[source.kind] }}</strong>
             <span>{{ sourceStates[source.state] || source.state }}</span>
           </div>
           <ElProgress
@@ -788,8 +785,8 @@ function formatSize(bytes: number) {
           <p class="my-2 text-sm text-muted-foreground">
             已获取 {{ formatSize(source.fetched)
             }}<template v-if="source.totalSize > 0">
-              / {{ formatSize(source.totalSize) }}</template
-            >
+              / {{ formatSize(source.totalSize) }}
+</template>
           </p>
           <ElAlert
             v-if="source.error"

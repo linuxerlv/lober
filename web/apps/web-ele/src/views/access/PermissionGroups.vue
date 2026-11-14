@@ -26,9 +26,11 @@ defineProps<{
           class="flex items-center justify-between gap-3 py-2.5"
         >
           <span class="break-all">{{ action.label }}</span>
-          <ElTag size="small" :type="action.allowed ? 'success' : 'info'">{{
+          <ElTag size="small" :type="action.allowed ? 'success' : 'info'">
+{{
             action.allowed ? '允许' : '不允许'
-          }}</ElTag>
+          }}
+</ElTag>
         </li>
       </ul>
     </section>

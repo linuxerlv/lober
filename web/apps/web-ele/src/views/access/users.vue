@@ -24,14 +24,15 @@ import {
   ElTag,
 } from 'element-plus';
 
+import { consoleMenus } from '#/access/policy';
 import { accountsApi, roleLabels } from '#/api/console/accounts';
 import { getRoleMenusApi } from '#/api/console/role-menus';
-import { consoleMenus } from '#/access/policy';
 import ChangeRecords from '#/components/console/ChangeRecords.vue';
 import ListPagination from '#/components/console/ListPagination.vue';
 import { NumberedPage } from '#/composables/numbered-page';
 import { useConsoleAccess } from '#/composables/use-console-access';
 import { useAuthStore } from '#/store';
+
 import { readAccountDirectory } from './account-directory';
 import PermissionGroups from './PermissionGroups.vue';
 import { accountPermissionGroups, roleDescriptions } from './role-permissions';
@@ -284,13 +285,14 @@ onMounted(() => load());
         :empty-text="loading ? '正在加载…' : '暂无账号'"
       >
         <ElTableColumn label="用户名" min-width="160">
-          <template #default="{ row }"
-            ><RouterLink
+          <template #default="{ row }">
+<RouterLink
               class="text-primary"
               :to="{ path: '/access/users', query: { username: row.username } }"
-              >{{ row.username }}</RouterLink
-            ></template
-          >
+              >
+{{ row.username }}
+</RouterLink>
+</template>
         </ElTableColumn>
         <ElTableColumn prop="displayName" label="显示名称" min-width="160">
           <template #default="{ row }">{{ row.displayName || '—' }}</template>
@@ -304,9 +306,11 @@ onMounted(() => load());
             >
               {{ roleLabels[row.role as Schemas['StoreRole']] }}
             </RouterLink>
-            <ElTag v-else>{{
+            <ElTag v-else>
+{{
               roleLabels[row.role as Schemas['StoreRole']]
-            }}</ElTag>
+            }}
+</ElTag>
           </template>
         </ElTableColumn>
         <ElTableColumn label="状态" width="110">
@@ -372,8 +376,9 @@ onMounted(() => load());
                   v-if="canOpenRoles"
                   class="text-primary"
                   :to="roleLink(detail.role)"
-                  >{{ roleLabels[detail.role] }}</RouterLink
-                >
+                  >
+{{ roleLabels[detail.role] }}
+</RouterLink>
                 <template v-else>{{ roleLabels[detail.role] }}</template>
               </dd>
             </div>
@@ -418,10 +423,10 @@ onMounted(() => load());
             />
             <ul v-else-if="visibleMenus.length" class="flex flex-wrap gap-2">
               <li v-for="menu in visibleMenus" :key="menu.id">
-                <ElTag type="info"
-                  >{{ menu.group ? menu.group + ' / ' : ''
-                  }}{{ menu.title }}</ElTag
-                >
+                <ElTag type="info">
+{{ menu.group ? `${menu.group } / ` : ''
+                  }}{{ menu.title }}
+</ElTag>
               </li>
             </ul>
             <p v-else class="text-sm text-muted-foreground">
@@ -443,8 +448,9 @@ onMounted(() => load());
               detailOpen = false;
               edit(detail);
             "
-            >编辑账号</ElButton
-          >
+            >
+编辑账号
+</ElButton>
         </template>
       </ElDialog>
       <ElDialog

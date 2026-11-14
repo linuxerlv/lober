@@ -27,9 +27,9 @@ import {
   ElMessageBox,
   ElOption,
   ElSelect,
-  ElTag,
-  ElTabs,
   ElTabPane,
+  ElTabs,
+  ElTag,
 } from 'element-plus';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
@@ -38,11 +38,11 @@ import { getHookApi } from '#/api/console/hook';
 import { errorMessage, problemsOf } from '#/api/console/problem';
 import * as api from '#/api/console/template';
 import ListPagination from '#/components/console/ListPagination.vue';
-import { downloadSelection } from '#/components/console/selection-export';
-import { useRowSelection } from '#/composables/use-row-selection';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { downloadSelection } from '#/components/console/selection-export';
 import { NumberedPage } from '#/composables/numbered-page';
 import { useAuthoringEditor } from '#/composables/use-authoring-editor';
+import { useRowSelection } from '#/composables/use-row-selection';
 
 import { authoringRights, replaceInSlot, templatePayload } from './authoring';
 import BindingEditor from './BindingEditor.vue';
@@ -668,15 +668,16 @@ onBeforeUnmount(() => {
           />
         </ElSelect>
         <div class="ml-auto flex flex-wrap items-center justify-end gap-3">
-          <ElButton :loading="pagination.loading" @click="load(true)"
-            >查询</ElButton
-          >
+          <ElButton :loading="pagination.loading" @click="load(true)">
+查询
+</ElButton>
           <ElButton class="!ml-0" @click="resetFilters">重置</ElButton>
           <ElButton
             :disabled="pagination.loading || !selectedRows.length"
             @click="exportSelected"
-            >导出所选</ElButton
-          >
+            >
+导出所选
+</ElButton>
         </div>
       </div>
       <ProblemList v-if="!visible" :problems="errors" />
@@ -692,15 +693,15 @@ onBeforeUnmount(() => {
         </template>
         <template #select-row="{ row }">
           <ElCheckbox
-            :aria-label="'选择 ' + row.name"
+            :aria-label="`选择 ${ row.name}`"
             :model-value="selection.has(row)"
             :disabled="pagination.loading"
             @change="selection.toggle(row, $event)"
           />
         </template>
         <template #builtin="{ row }">
-          <ElTag>{{ row.builtin ? '内置' : '自定义' }}</ElTag> </template
-        ><template #action="{ row }">
+          <ElTag>{{ row.builtin ? '内置' : '自定义' }}</ElTag>
+</template><template #action="{ row }">
           <ElButton type="primary" link @click="open(row)">
             查看 / 编辑
           </ElButton>
@@ -732,13 +733,10 @@ onBeforeUnmount(() => {
     >
       <template v-if="selected">
         <div class="mb-4 flex flex-wrap items-center gap-3">
-          <ElTag v-if="selected.builtin">内置只读</ElTag
-          ><span
-            >作者：{{ selected.author }} 审批人：{{
+          <ElTag v-if="selected.builtin">内置只读</ElTag><span>作者：{{ selected.author }} 审批人：{{
               selected.approver || '—'
             }}
-            rev {{ selected.rev }}</span
-          ><ElSelect
+            rev {{ selected.rev }}</span><ElSelect
             v-if="versions.length"
             :model-value="selected.version"
             :disabled="busy"
@@ -750,8 +748,8 @@ onBeforeUnmount(() => {
               :key="v.version"
               :label="`v${v.version} · ${v.state}`"
               :value="v.version"
-            /> </ElSelect
-          ><ElButton
+            />
+</ElSelect><ElButton
             v-if="rights?.newVersion"
             :disabled="busy"
             @click="run(newVersion)"
@@ -879,24 +877,22 @@ onBeforeUnmount(() => {
                 class="mb-3 rounded border p-3"
               >
                 <div class="mb-3 flex flex-wrap items-center gap-2">
-                  <strong
-                    >#{{ index + 1 }}
+                  <strong>#{{ index + 1 }}
                     {{ hookOf(instance)?.name || instance.hookID }} v{{
                       instance.hookVersion
-                    }}</strong
-                  ><ElButton
+                    }}</strong><ElButton
                     v-if="editable"
                     :disabled="busy || staleSlots"
                     @click="run(() => pickHook(slot.name, index))"
                   >
-                    替换 hook（保留同名绑定） </ElButton
-                  ><ElButton
+                    替换 hook（保留同名绑定）
+</ElButton><ElButton
                     v-if="editable"
                     :disabled="busy || index === 0"
                     @click="move(slot.name, index, -1)"
                   >
-                    上移 </ElButton
-                  ><ElButton
+                    上移
+</ElButton><ElButton
                     v-if="editable"
                     :disabled="
                       busy ||
@@ -904,8 +900,8 @@ onBeforeUnmount(() => {
                     "
                     @click="move(slot.name, index, 1)"
                   >
-                    下移 </ElButton
-                  ><ElButton
+                    下移
+</ElButton><ElButton
                     v-if="editable"
                     :disabled="busy"
                     type="danger"
@@ -919,8 +915,7 @@ onBeforeUnmount(() => {
                   v-if="slot.exec"
                   class="mb-3 flex flex-wrap items-center gap-3"
                 >
-                  <span>超时秒（空为默认）</span
-                  ><ElInputNumber
+                  <span>超时秒（空为默认）</span><ElInputNumber
                     :model-value="instance.timeoutSec ?? undefined"
                     :disabled="!editable || busy"
                     :min="1"
@@ -1024,50 +1019,49 @@ onBeforeUnmount(() => {
       </template>
       <template #footer>
         <div class="flex flex-wrap justify-end gap-2">
-          <ElButton @click="visible = false">关闭</ElButton
-          ><ElButton
+          <ElButton @click="visible = false">关闭</ElButton><ElButton
             v-if="editable"
             :loading="busy"
             type="primary"
             @click="run(save)"
           >
-            保存草稿 </ElButton
-          ><ElButton
+            保存草稿
+</ElButton><ElButton
             v-if="selected?.id && canWrite"
             :disabled="busy"
             @click="run(validate)"
           >
-            校验 </ElButton
-          ><ElButton v-if="selected?.id" :disabled="busy" @click="run(preview)">
-            预览全部文件 </ElButton
-          ><ElButton
+            校验
+</ElButton><ElButton v-if="selected?.id" :disabled="busy" @click="run(preview)">
+            预览全部文件
+</ElButton><ElButton
             v-if="rights?.submit"
             :disabled="busy"
             @click="run(() => lifecycle('submit'))"
           >
-            提交审批 </ElButton
-          ><ElButton
+            提交审批
+</ElButton><ElButton
             v-if="rights?.review"
             :disabled="busy"
             type="success"
             @click="run(() => lifecycle('approve'))"
           >
-            批准 </ElButton
-          ><ElButton
+            批准
+</ElButton><ElButton
             v-if="rights?.review"
             :disabled="busy || !reason.trim()"
             type="danger"
             @click="run(() => lifecycle('reject'))"
           >
-            驳回 </ElButton
-          ><ElButton
+            驳回
+</ElButton><ElButton
             v-if="rights?.deprecate"
             :disabled="busy"
             type="danger"
             @click="run(() => lifecycle('deprecate'))"
           >
-            废弃 </ElButton
-          ><ElButton
+            废弃
+</ElButton><ElButton
             v-if="rights?.edit && selected?.id"
             :disabled="busy"
             type="danger"
@@ -1103,10 +1097,8 @@ onBeforeUnmount(() => {
         :class="{ 'opacity-60': !candidate.usable }"
       >
         <div class="flex items-center justify-between">
-          <span
-            >{{ candidate.hook.name }} v{{ candidate.hook.version }} ·
-            {{ candidate.hook.state }}</span
-          ><ElButton
+          <span>{{ candidate.hook.name }} v{{ candidate.hook.version }} ·
+            {{ candidate.hook.state }}</span><ElButton
             :disabled="!candidate.usable || candidateBusy"
             type="primary"
             @click="choose(candidate)"
@@ -1141,13 +1133,13 @@ onBeforeUnmount(() => {
           <ElInput
             v-model="previewForm.hostSN"
             placeholder="留空使用示例主机"
-          /> </ElFormItem
-        ><ElFormItem label="ISO ID（可选）">
+          />
+</ElFormItem><ElFormItem label="ISO ID（可选）">
           <ElInput
             v-model="previewForm.isoID"
             placeholder="留空使用示例 ISO，ESXi 需真实 ISO"
-          /> </ElFormItem
-        ><ElFormItem label="固件">
+          />
+</ElFormItem><ElFormItem label="固件">
           <ElSelect v-model="previewForm.firmware" clearable>
             <ElOption label="UEFI" value="uefi" /><ElOption
               label="BIOS"
@@ -1189,8 +1181,8 @@ onBeforeUnmount(() => {
         type="primary"
         @click="run(renderPreview)"
       >
-        生成预览 </ElButton
-      ><ProblemList :problems="previewResult?.problems ?? errors" />
+        生成预览
+</ElButton><ProblemList :problems="previewResult?.problems ?? errors" />
       <ElAlert
         v-if="previewResult?.sample?.length"
         class="my-3"

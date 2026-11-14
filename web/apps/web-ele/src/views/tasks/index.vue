@@ -2,11 +2,11 @@
 import type { Task } from '#/api/console/task';
 
 import {
+  computed,
   onActivated,
   onBeforeUnmount,
   onDeactivated,
   onMounted,
-  computed,
   reactive,
   ref,
 } from 'vue';
@@ -309,8 +309,7 @@ onBeforeUnmount(() => {
         class="flex flex-wrap items-end gap-3 px-5 py-4"
         @submit.prevent="load(true)"
       >
-        <label class="grid gap-1 text-xs"
-          >主机序列号
+        <label class="grid gap-1 text-xs">主机序列号
           <ElInput
             v-model="sn"
             aria-label="主机序列号"
@@ -319,8 +318,7 @@ onBeforeUnmount(() => {
             class="!w-52"
           />
         </label>
-        <label class="grid gap-1 text-xs"
-          >任务状态
+        <label class="grid gap-1 text-xs">任务状态
           <ElSelect
             v-model="state"
             aria-label="任务状态"
@@ -336,8 +334,7 @@ onBeforeUnmount(() => {
             />
           </ElSelect>
         </label>
-        <label class="grid gap-1 text-xs"
-          >创建日期
+        <label class="grid gap-1 text-xs">创建日期
           <ElDatePicker
             v-model="dates"
             type="daterange"
@@ -351,14 +348,16 @@ onBeforeUnmount(() => {
             type="primary"
             native-type="submit"
             :loading="pagination.loading"
-            >查询</ElButton
-          >
+            >
+查询
+</ElButton>
           <ElButton class="!ml-0" @click="reset">重置</ElButton>
           <ElButton
             :disabled="batchBusy || pagination.loading || !selected.length"
             @click="exportSelected"
-            >导出所选</ElButton
-          >
+            >
+导出所选
+</ElButton>
           <ElButton
             v-if="access.accessCodes.includes('task:cancel')"
             type="danger"
@@ -423,8 +422,9 @@ onBeforeUnmount(() => {
             type="primary"
             class="font-mono"
             @click="openSummary(row)"
-            >{{ row.hostSN }}</ElButton
-          >
+            >
+{{ row.hostSN }}
+</ElButton>
         </template>
         <template #plan="{ row }">
           <div class="py-1">
@@ -511,8 +511,9 @@ onBeforeUnmount(() => {
               drawer = false;
               openDetail(summary.id);
             "
-            >查看完整详情</ElButton
-          >
+            >
+查看完整详情
+</ElButton>
         </div>
       </div>
     </ElDrawer>

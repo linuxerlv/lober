@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { TreeInstance } from 'element-plus';
 
+import type { User } from '#/api/console/accounts';
 import type { RoleMenuList } from '#/api/console/role-menus';
 import type { ConsoleRole } from '#/api/console/session';
-import type { User } from '#/api/console/accounts';
 
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
@@ -26,8 +26,9 @@ import { roleLabels } from '#/api/console/accounts';
 import { getRoleMenusApi, saveRoleMenusApi } from '#/api/console/role-menus';
 import { useConsoleAccess } from '#/composables/use-console-access';
 import { useAuthStore } from '#/store';
-import PermissionGroups from './PermissionGroups.vue';
+
 import { readAccountDirectory } from './account-directory';
+import PermissionGroups from './PermissionGroups.vue';
 import { roleDescriptions, rolePermissionGroups } from './role-permissions';
 const { can, refresh } = useConsoleAccess();
 const auth = useAuthStore();
@@ -192,9 +193,9 @@ watch(
     "
   >
     <template #extra>
-      <RouterLink v-if="role" :to="roleLink()"
-        ><ElButton>返回角色列表</ElButton></RouterLink
-      >
+      <RouterLink v-if="role" :to="roleLink()">
+<ElButton>返回角色列表</ElButton>
+</RouterLink>
       <ElButton
         v-else
         :loading="loading || accountsLoading"
@@ -202,8 +203,9 @@ watch(
           load();
           loadAccounts();
         "
-        >刷新列表</ElButton
-      >
+        >
+刷新列表
+</ElButton>
     </template>
     <ElAlert
       v-if="!can('user:manage')"
@@ -243,8 +245,9 @@ watch(
             v-if="auth.sessionUser?.menuIds.includes('users')"
             class="text-sm text-primary"
             to="/access/users"
-            >账号管理</RouterLink
-          >
+            >
+账号管理
+</RouterLink>
         </div>
         <ElTable
           style="--el-table-header-bg-color: hsl(var(--accent))"
@@ -253,17 +256,19 @@ watch(
           :empty-text="loading ? '正在读取角色…' : '暂无角色'"
         >
           <ElTableColumn label="角色" min-width="190">
-            <template #default="{ row }"
-              ><strong>{{ roleLabels[row.role as ConsoleRole] }}</strong>
+            <template #default="{ row }">
+<strong>{{ roleLabels[row.role as ConsoleRole] }}</strong>
               <div class="text-xs text-muted-foreground">
                 {{ row.role }}
-              </div></template
-            >
+              </div>
+</template>
           </ElTableColumn>
           <ElTableColumn label="用途" min-width="260">
-            <template #default="{ row }">{{
+            <template #default="{ row }">
+{{
               roleDescriptions[row.role as ConsoleRole]
-            }}</template>
+            }}
+</template>
           </ElTableColumn>
           <ElTableColumn label="关联账号" width="115">
             <template #default="{ row }">{{ accountCount(row.role) }}</template>
@@ -272,11 +277,11 @@ watch(
             <template #default="{ row }">{{ row.menuIds.length }}</template>
           </ElTableColumn>
           <ElTableColumn label="操作" width="120">
-            <template #default="{ row }"
-              ><RouterLink class="text-primary" :to="roleLink(row.role)"
-                >查看详情</RouterLink
-              ></template
-            >
+            <template #default="{ row }">
+<RouterLink class="text-primary" :to="roleLink(row.role)">
+查看详情
+</RouterLink>
+</template>
           </ElTableColumn>
         </ElTable>
         <div class="px-5 py-3 text-sm text-muted-foreground">
@@ -318,27 +323,30 @@ watch(
                 min-width="160"
               />
               <ElTableColumn label="状态" width="110">
-                <template #default="{ row }"
-                  ><ElTag :type="row.disabled ? 'danger' : 'success'">{{
+                <template #default="{ row }">
+<ElTag :type="row.disabled ? 'danger' : 'success'">
+{{
                     row.disabled ? '已禁用' : '正常'
-                  }}</ElTag></template
-                >
+                  }}
+</ElTag>
+</template>
               </ElTableColumn>
               <ElTableColumn
                 v-if="auth.sessionUser?.menuIds.includes('users')"
                 label="操作"
                 width="120"
               >
-                <template #default="{ row }"
-                  ><RouterLink
+                <template #default="{ row }">
+<RouterLink
                     class="text-primary"
                     :to="{
                       path: '/access/users',
                       query: { username: row.username },
                     }"
-                    >查看账号</RouterLink
-                  ></template
-                >
+                    >
+查看账号
+</RouterLink>
+</template>
               </ElTableColumn>
             </ElTable>
           </ElTabPane>
@@ -367,32 +375,28 @@ watch(
               @check="updateDraft"
             >
               <template #default="{ data }">
-                <span class="flex items-center gap-2"
-                  >{{ data.title }}
-                  <ElTag v-if="data.required" size="small" type="info"
-                    >必留入口</ElTag
-                  >
+                <span class="flex items-center gap-2">{{ data.title }}
+                  <ElTag v-if="data.required" size="small" type="info">必留入口</ElTag>
                 </span>
               </template>
             </ElTree>
             <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
-              <span class="text-sm text-muted-foreground"
-                >已选
+              <span class="text-sm text-muted-foreground">已选
                 {{ selectedIds.length }}
-                个入口，保存后对该角色的所有账号生效。</span
-              >
+                个入口，保存后对该角色的所有账号生效。</span>
               <div class="flex gap-2">
-                <ElButton :disabled="saving || loading" @click="load"
-                  >重新读取</ElButton
-                >
+                <ElButton :disabled="saving || loading" @click="load">
+重新读取
+</ElButton>
                 <ElButton
                   data-action="save"
                   type="primary"
                   :loading="saving"
                   :disabled="loading || saving"
                   @click="save"
-                  >保存配置</ElButton
-                >
+                  >
+保存配置
+</ElButton>
               </div>
             </div>
           </ElTabPane>

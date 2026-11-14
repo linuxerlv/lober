@@ -4,7 +4,6 @@ import type { AttributeRow } from './inventory-state';
 import type { HostListItem } from '#/api/console/host';
 
 import { computed, reactive, ref, watch } from 'vue';
-
 import { useRoute, useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
@@ -30,28 +29,27 @@ import {
   commitHostCSVApi,
   createHostApi,
   deleteHostApi,
-  getHostListApi,
   getHostApi,
+  getHostListApi,
   previewHostCSVApi,
   requestHostInventoryApi,
   updateHostApi,
 } from '#/api/console/host';
 import { errorMessage, problemsOf, referencesOf } from '#/api/console/problem';
 import ListPagination from '#/components/console/ListPagination.vue';
-import { downloadSelection } from '#/components/console/selection-export';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { downloadSelection } from '#/components/console/selection-export';
 import { NumberedPage } from '#/composables/numbered-page';
 import { useConsoleAccess } from '#/composables/use-console-access';
 import { useRowSelection } from '#/composables/use-row-selection';
 
+import { diskRows, networkRows } from './hardware-details';
+import HostTaskHistory from './HostTaskHistory.vue';
 import {
   attributesOf,
   CsvImportSession,
   isInventoryControlAttribute,
 } from './inventory-state';
-
-import { diskRows, networkRows } from './hardware-details';
-import HostTaskHistory from './HostTaskHistory.vue';
 
 defineOptions({ name: 'HostsIndex' });
 const access = useAccessStore();
@@ -433,8 +431,9 @@ async function commitCSV() {
           <ElButton
             :disabled="page.loading || !selectedHosts.length"
             @click="exportHosts"
-            >导出所选</ElButton
-          >
+            >
+导出所选
+</ElButton>
         </div>
       </form>
       <Grid>
@@ -465,9 +464,9 @@ async function commitCSV() {
           </span>
         </template>
         <template #action="{ row }">
-          <ElButton link type="primary" @click="viewHost(row)"
-            >查看详情</ElButton
-          >
+          <ElButton link type="primary" @click="viewHost(row)">
+查看详情
+</ElButton>
           <ElButton v-if="canWrite" link @click="openHost(row)">编辑</ElButton>
           <ElButton
             v-if="canWrite"
@@ -579,7 +578,7 @@ async function commitCSV() {
                   <td class="break-words p-2">{{ disk.model || '未采集' }}</td>
                   <td
                     class="whitespace-nowrap p-2 text-right tabular-nums"
-                    :title="disk.bytes + ' 字节'"
+                    :title="`${disk.bytes } 字节`"
                   >
                     {{ disk.capacity }}
                   </td>
@@ -639,8 +638,9 @@ async function commitCSV() {
               detailOpen = false;
               router.push({ name: 'TasksNew', query: { host: detail.sn } });
             "
-            >为这台主机创建任务</ElButton
-          >
+            >
+为这台主机创建任务
+</ElButton>
         </div>
       </div>
     </ElDrawer>

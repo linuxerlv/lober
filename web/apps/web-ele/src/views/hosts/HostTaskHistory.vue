@@ -2,9 +2,11 @@
 import type { Task } from '#/api/console/task';
 
 import { ref, watch } from 'vue';
+
 import { ElButton, ElTag } from 'element-plus';
 
 import { taskAPI } from '#/api/console/task';
+
 import { taskStateLabels } from '../tasks/task-state';
 
 const props = defineProps<{ sn: string }>();
@@ -52,16 +54,17 @@ watch(
       <RouterLink
         class="text-sm text-primary"
         :to="{ path: '/tasks', query: { host_sn: sn } }"
-        >查看全部</RouterLink
-      >
+        >
+查看全部
+</RouterLink>
     </div>
     <p v-if="loading" role="status" class="text-sm text-muted-foreground">
       正在读取装机历史…
     </p>
     <div v-else-if="error" role="alert" class="flex items-center gap-2 text-sm">
-      读取装机历史失败。<ElButton link type="primary" @click="load"
-        >重新读取</ElButton
-      >
+      读取装机历史失败。<ElButton link type="primary" @click="load">
+重新读取
+</ElButton>
     </div>
     <p v-else-if="!rows.length" class="text-sm text-muted-foreground">
       暂无装机记录。
@@ -80,8 +83,9 @@ watch(
               params: { id: task.id },
               query: { fromHost: sn },
             }"
-            >{{ task.id }}</RouterLink
-          >
+            >
+{{ task.id }}
+</RouterLink>
           <p class="mt-1 break-words text-sm">
             {{ task.snapshot.iso.name }} · {{ task.snapshot.template.name }} v{{
               task.templateVersion
@@ -100,8 +104,9 @@ watch(
                 ? 'success'
                 : 'info'
           "
-          >{{ taskStateLabels[task.state] ?? task.state }}</ElTag
-        >
+          >
+{{ taskStateLabels[task.state] ?? task.state }}
+</ElTag>
       </li>
     </ul>
   </section>

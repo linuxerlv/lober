@@ -29,8 +29,7 @@ const emit = defineEmits<{
       本页 {{ pageCount }} 条 · 共 {{ total }} 条<span
         v-if="selectedCount !== undefined"
       >
-        · 已选 {{ selectedCount }} 条</span
-      >
+        · 已选 {{ selectedCount }} 条</span>
     </p>
     <ElPagination
       :current-page="currentPage"

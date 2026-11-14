@@ -26,9 +26,9 @@ import {
   ElMessageBox,
   ElOption,
   ElSelect,
-  ElTag,
-  ElTabs,
   ElTabPane,
+  ElTabs,
+  ElTag,
 } from 'element-plus';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
@@ -36,11 +36,11 @@ import { allSeries as series } from '#/api/console/catalog';
 import * as api from '#/api/console/hook';
 import { errorMessage, problemsOf } from '#/api/console/problem';
 import ListPagination from '#/components/console/ListPagination.vue';
-import { downloadSelection } from '#/components/console/selection-export';
-import { useRowSelection } from '#/composables/use-row-selection';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { downloadSelection } from '#/components/console/selection-export';
 import { NumberedPage } from '#/composables/numbered-page';
 import { useAuthoringEditor } from '#/composables/use-authoring-editor';
+import { useRowSelection } from '#/composables/use-row-selection';
 
 import { authoringRights, hookPayload } from '../templates/authoring';
 import ParamEditor from '../templates/ParamEditor.vue';
@@ -334,15 +334,16 @@ onBeforeUnmount(() => {
           />
         </ElSelect>
         <div class="ml-auto flex flex-wrap items-center justify-end gap-3">
-          <ElButton :loading="pagination.loading" @click="load(true)"
-            >查询</ElButton
-          >
+          <ElButton :loading="pagination.loading" @click="load(true)">
+查询
+</ElButton>
           <ElButton class="!ml-0" @click="resetFilters">重置</ElButton>
           <ElButton
             :disabled="pagination.loading || !selectedRows.length"
             @click="exportSelected"
-            >导出所选</ElButton
-          >
+            >
+导出所选
+</ElButton>
         </div>
       </div>
       <ProblemList v-if="!visible" :problems="errors" />
@@ -358,15 +359,15 @@ onBeforeUnmount(() => {
         </template>
         <template #select-row="{ row }">
           <ElCheckbox
-            :aria-label="'选择 ' + row.name"
+            :aria-label="`选择 ${ row.name}`"
             :model-value="selection.has(row)"
             :disabled="pagination.loading"
             @change="selection.toggle(row, $event)"
           />
         </template>
         <template #builtin="{ row }">
-          <ElTag>{{ row.builtin ? '内置' : '自定义' }}</ElTag> </template
-        ><template #action="{ row }">
+          <ElTag>{{ row.builtin ? '内置' : '自定义' }}</ElTag>
+</template><template #action="{ row }">
           <ElButton link type="primary" @click="open(row)">
             查看 / 编辑
           </ElButton>
@@ -398,13 +399,10 @@ onBeforeUnmount(() => {
     >
       <template v-if="selected">
         <div class="mb-4 flex flex-wrap items-center gap-3">
-          <ElTag v-if="selected.builtin">内置只读</ElTag
-          ><span
-            >作者：{{ selected.author }} 审批人：{{
+          <ElTag v-if="selected.builtin">内置只读</ElTag><span>作者：{{ selected.author }} 审批人：{{
               selected.approver || '—'
             }}
-            rev {{ selected.rev }}</span
-          ><ElSelect
+            rev {{ selected.rev }}</span><ElSelect
             v-if="versions.length"
             :model-value="selected.version"
             :disabled="busy"
@@ -416,8 +414,8 @@ onBeforeUnmount(() => {
               :key="v.version"
               :value="v.version"
               :label="`v${v.version} · ${v.state}`"
-            /> </ElSelect
-          ><ElButton
+            />
+</ElSelect><ElButton
             v-if="rights?.newVersion"
             :disabled="busy"
             @click="run(newVersion)"
@@ -484,8 +482,8 @@ onBeforeUnmount(() => {
                       :label="f"
                       :value="f"
                     />
-                  </ElSelect> </ElFormItem
-                ><ElFormItem label="系">
+                  </ElSelect>
+</ElFormItem><ElFormItem label="系">
                   <ElSelect v-model="impl.series" multiple>
                     <ElOption
                       v-for="s in series"
@@ -493,8 +491,8 @@ onBeforeUnmount(() => {
                       :label="s"
                       :value="s"
                     />
-                  </ElSelect> </ElFormItem
-                ><ElFormItem label="种类">
+                  </ElSelect>
+</ElFormItem><ElFormItem label="种类">
                   <ElSelect v-model="impl.kind">
                     <ElOption label="片段" value="fragment" /><ElOption
                       label="脚本"
@@ -512,8 +510,8 @@ onBeforeUnmount(() => {
                       :value="i"
                       :label="i"
                     />
-                  </ElSelect> </ElFormItem
-                ><ElFormItem label="执行时机">
+                  </ElSelect>
+</ElFormItem><ElFormItem label="执行时机">
                   <ElSelect v-model="impl.timings" multiple>
                     <ElOption
                       v-for="t in [
@@ -540,8 +538,8 @@ onBeforeUnmount(() => {
                   type="textarea"
                   :rows="12"
                   class="font-mono"
-                /> </ElFormItem
-              ><ElButton
+                />
+</ElFormItem><ElButton
                 v-if="editable"
                 type="danger"
                 plain
@@ -563,48 +561,47 @@ onBeforeUnmount(() => {
       </template>
       <template #footer>
         <div class="flex flex-wrap justify-end gap-2">
-          <ElButton @click="visible = false">关闭</ElButton
-          ><ElButton
+          <ElButton @click="visible = false">关闭</ElButton><ElButton
             v-if="editable"
             :loading="busy"
             type="primary"
             @click="run(save)"
           >
-            保存草稿 </ElButton
-          ><ElButton
+            保存草稿
+</ElButton><ElButton
             v-if="selected?.id && canWrite"
             :disabled="busy"
             @click="run(validate)"
           >
-            校验 </ElButton
-          ><ElButton
+            校验
+</ElButton><ElButton
             v-if="rights?.submit"
             :disabled="busy"
             @click="run(() => lifecycle('submit'))"
           >
-            提交审批 </ElButton
-          ><ElButton
+            提交审批
+</ElButton><ElButton
             v-if="rights?.review"
             :disabled="busy"
             type="success"
             @click="run(() => lifecycle('approve'))"
           >
-            批准 </ElButton
-          ><ElButton
+            批准
+</ElButton><ElButton
             v-if="rights?.review"
             :disabled="busy || !reason.trim()"
             type="danger"
             @click="run(() => lifecycle('reject'))"
           >
-            驳回 </ElButton
-          ><ElButton
+            驳回
+</ElButton><ElButton
             v-if="rights?.deprecate"
             :disabled="busy"
             type="danger"
             @click="run(() => lifecycle('deprecate'))"
           >
-            废弃 </ElButton
-          ><ElButton
+            废弃
+</ElButton><ElButton
             v-if="rights?.edit && selected?.id"
             :disabled="busy"
             type="danger"

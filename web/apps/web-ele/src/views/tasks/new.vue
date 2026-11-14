@@ -632,9 +632,7 @@ onBeforeUnmount(() => {
                 @click="activeHost = host.sn"
               >
                 {{ host.sn
-                }}<span v-if="host.problems?.length" class="ml-2 text-xs"
-                  >有错误</span
-                >
+                }}<span v-if="host.problems?.length" class="ml-2 text-xs">有错误</span>
               </ElButton>
             </nav>
             <div
@@ -824,9 +822,9 @@ onBeforeUnmount(() => {
         </li>
       </ul>
       <p v-else class="mt-3">这台主机当前无法创建任务。</p>
-      <template #footer
-        ><ElButton @click="restrictionOpen = false">关闭</ElButton></template
-      >
+      <template #footer>
+<ElButton @click="restrictionOpen = false">关闭</ElButton>
+</template>
     </ElDialog>
     <ElDialog v-model="previewOpen" title="机器下发文件预览" width="85%">
       <ElAlert

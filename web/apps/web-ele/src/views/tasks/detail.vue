@@ -340,19 +340,23 @@ watch(
         v-if="fromBatch"
         class="text-primary"
         :to="{ name: 'TasksBatch', params: { id: fromBatch } }"
-      >返回批次</RouterLink>
+      >
+返回批次
+</RouterLink>
       <RouterLink
         v-else-if="fromHost"
         class="text-primary"
         :to="{ path: '/hosts', query: { host: fromHost } }"
-        >返回主机详情</RouterLink
-      >
+        >
+返回主机详情
+</RouterLink>
       <RouterLink
         v-else
         class="text-primary"
         :to="{ path: '/tasks', query: route.query }"
-        >返回任务列表</RouterLink
-      >
+        >
+返回任务列表
+</RouterLink>
     </template>
     <ElAlert
       v-if="streamError || error"
@@ -377,8 +381,9 @@ watch(
                       ? 'warning'
                       : 'info'
               "
-              >{{ taskStateLabels[task.state] }}</ElTag
-            >
+              >
+{{ taskStateLabels[task.state] }}
+</ElTag>
             <ElTag :type="connected ? 'success' : 'info'">
               {{
                 streamError
@@ -457,8 +462,9 @@ watch(
               plain
               :aria-pressed="section === key"
               @click="section = key!"
-              >{{ label }}</ElButton
-            >
+              >
+{{ label }}
+</ElButton>
           </div>
           <ChangeRecords
             v-if="task && section === 'audit' && canReadAudit"
@@ -478,9 +484,11 @@ watch(
                 }}
               </p>
               <div class="mt-3 flex flex-wrap items-center gap-3">
-                <ElButton type="primary" plain @click="locateFailure">{{
+                <ElButton type="primary" plain @click="locateFailure">
+{{
                   failure ? '定位日志' : '查看日志'
-                }}</ElButton>
+                }}
+</ElButton>
                 <ElButton
                   v-if="
                     access.accessCodes.includes('task:retry') &&
@@ -488,16 +496,16 @@ watch(
                   "
                   :loading="busy"
                   @click="control(true)"
-                  >重试</ElButton
-                >
+                  >
+重试
+</ElButton>
                 <span
                   v-else-if="
                     access.accessCodes.includes('task:retry') &&
                     task.canRetry?.length
                   "
                   class="text-sm text-muted-foreground"
-                  >{{ task.canRetry[0]?.message }}</span
-                >
+                  >{{ task.canRetry[0]?.message }}</span>
               </div>
             </section>
             <h2 class="mb-2 font-semibold">最近活动</h2>
@@ -549,15 +557,15 @@ watch(
               @page-change="eventPage = $event"
               @size-change="changeEventSize"
             />
-            <ElButton :disabled="!!streamError" @click="loadEvents"
-              >补读后续事件</ElButton
-            >
+            <ElButton :disabled="!!streamError" @click="loadEvents">
+补读后续事件
+</ElButton>
           </div>
         </ElCard>
         <ElCard v-if="task && section === 'config'" header="创建时保存的配置">
-          <ElButton :loading="busy" class="mb-3" @click="renderPreview"
-            >查看下发文件</ElButton
-          >
+          <ElButton :loading="busy" class="mb-3" @click="renderPreview">
+查看下发文件
+</ElButton>
           <p class="mb-3 text-sm">
             登记属性：{{
               Object.entries(task.snapshot.host.attrs ?? {})
