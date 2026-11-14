@@ -7,6 +7,8 @@ defineProps<{
   pageSize: number;
   total: number;
   disabled?: boolean;
+  pageCount?: number;
+  selectedCount?: number;
 }>();
 const emit = defineEmits<{
   'page-change': [page: number];
@@ -15,14 +17,31 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="list-pagination">
+  <div
+    class="list-pagination"
+    :class="{ 'with-summary': pageCount !== undefined }"
+  >
+    <p
+      v-if="pageCount !== undefined"
+      class="text-sm text-muted-foreground"
+      aria-live="polite"
+    >
+      本页 {{ pageCount }} 条 · 共 {{ total }} 条<span
+        v-if="selectedCount !== undefined"
+      >
+        · 已选 {{ selectedCount }} 条</span>
+    </p>
     <ElPagination
       :current-page="currentPage"
       :page-size="pageSize"
       :total="total"
       :disabled="disabled"
       :page-sizes="[10, 20, 50, 100]"
-      layout="total, sizes, prev, pager, next, jumper"
+      :layout="
+        pageCount === undefined
+          ? 'total, sizes, prev, pager, next, jumper'
+          : 'sizes, prev, pager, next, jumper'
+      "
       @update:current-page="emit('page-change', $event)"
       @update:page-size="emit('size-change', $event)"
     />
@@ -32,8 +51,17 @@ const emit = defineEmits<{
 <style scoped>
 .list-pagination {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
   justify-content: flex-end;
   margin-top: 12px;
+}
+.list-pagination.with-summary {
+  justify-content: space-between;
+}
+.with-summary :deep(.el-pagination) {
+  margin-inline-start: auto;
 }
 .list-pagination :deep(.el-pagination) {
   flex-wrap: wrap;

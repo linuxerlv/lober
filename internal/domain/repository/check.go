@@ -263,8 +263,8 @@ func CheckNewTasks(ts []model.Task) error {
 func newTaskProblem(t, first model.Task) string {
 	s := t.Snapshot
 	switch {
-	case t.ID != "" || t.State != "" || t.Rev != 0:
-		return "的 ID、State、Rev 要留空，由仓储填"
+	case t.ID != "" || t.BatchID != "" || t.State != "" || t.Rev != 0:
+		return "的 ID、BatchID、State、Rev 要留空，由仓储填"
 	case t.CreatedAt <= 0:
 		return "的 CreatedAt 要大于 0：Unix 秒，由调用方给"
 	case t.CreatedBy == "" || !model.StorableText(t.CreatedBy):

@@ -19,6 +19,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/tasks/index.vue'),
         meta: {
           title: '任务列表',
+          fullPathKey: false,
           menuId: 'tasks',
         },
       },
@@ -34,8 +35,21 @@ const routes: RouteRecordRaw[] = [
           // 内的提交按钮上再校验一层，作为 operator/admin 之间更细的区分
           // （如需要）。
           hideInMenu: true,
-          title: '建任务',
+          keepAlive: false,
+          fullPathKey: false,
+          title: '创建任务',
           permission: 'task:create',
+          menuId: 'tasks',
+        },
+      },
+      {
+        name: 'TasksBatch',
+        path: 'batches/:id',
+        component: () => import('#/views/tasks/batch.vue'),
+        meta: {
+          hideInMenu: true,
+          keepAlive: false,
+          title: '批次跟踪',
           menuId: 'tasks',
         },
       },

@@ -58,6 +58,7 @@ type Task struct {
 	// （IsSafeWord），由第 2 层生成时保证（L-13b）：含空格、引号的 ID 会改变应答文件的结构。快照里不带它，
 	// 快照构建查不到。
 	ID              string
+	BatchID         string // 装机向导同一次提交的编号；旧任务可为空。
 	HostSN          string
 	ISOID           string
 	TemplateID      string
@@ -71,6 +72,21 @@ type Task struct {
 	// 快照里也不放它。
 	Rev       int64
 	Execution *Execution
+}
+
+// TaskBatchSummary 是同一次装机提交的概要及当前状态统计。
+type TaskBatchSummary struct {
+	CreatedBy       string
+	CreatedAt       int64
+	ISOName         string
+	TemplateName    string
+	TemplateVersion int
+	Total           int64
+	Pending         int64
+	Active          int64
+	Done            int64
+	Failed          int64
+	Cancelled       int64
 }
 
 // SnapshotSchema 是本层产出的快照格式版本。任务要保存很久，格式将来变了，渲染靠它认出旧快照，

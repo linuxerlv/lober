@@ -4,6 +4,7 @@ import type { AttributeRow } from './inventory-state';
 import type { HostListItem } from '#/api/console/host';
 
 import { computed, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
 import { useAccessStore } from '@vben/stores';
@@ -13,6 +14,7 @@ import {
   ElButton,
   ElCheckbox,
   ElDialog,
+  ElDrawer,
   ElInput,
   ElMessage,
   ElMessageBox,
@@ -27,6 +29,7 @@ import {
   commitHostCSVApi,
   createHostApi,
   deleteHostApi,
+  getHostApi,
   getHostListApi,
   previewHostCSVApi,
   requestHostInventoryApi,
@@ -35,12 +38,22 @@ import {
 import { errorMessage, problemsOf, referencesOf } from '#/api/console/problem';
 import ListPagination from '#/components/console/ListPagination.vue';
 import ProblemList from '#/components/console/ProblemList.vue';
+import { downloadSelection } from '#/components/console/selection-export';
 import { NumberedPage } from '#/composables/numbered-page';
+import { useConsoleAccess } from '#/composables/use-console-access';
+import { useRowSelection } from '#/composables/use-row-selection';
 
-import { attributesOf, CsvImportSession, isInventoryControlAttribute } from './inventory-state';
+import { diskRows, networkRows } from './hardware-details';
+import HostTaskHistory from './HostTaskHistory.vue';
+import {
+  attributesOf,
+  CsvImportSession,
+  isInventoryControlAttribute,
+} from './inventory-state';
 
 defineOptions({ name: 'HostsIndex' });
 const access = useAccessStore();
+const { hasMenu } = useConsoleAccess();
 const canWrite = computed(() => access.accessCodes.includes('host:write'));
 const failure = ref<unknown>();
 const problems = computed(() => problemsOf(failure.value));
@@ -48,10 +61,100 @@ const references = computed(() => referencesOf(failure.value));
 const filters = reactive({ prefix: '', attr_key: '', attr_value: '' });
 const appliedFilters = reactive({ ...filters });
 const page = reactive(new NumberedPage<HostListItem>());
+const router = useRouter();
+const route = useRoute();
+const selection = useRowSelection(
+  (host: HostListItem) => host.sn,
+  () => page.items,
+);
+const { rows: selectedHosts, all, partial } = selection;
+const detailOpen = ref(false);
+const detail = ref<HostListItem>();
+const detailLoading = ref(false);
+const detailError = ref('');
+let detailRun = 0;
+const hardwareNames: Record<string, string> = {
+  inv_cpu_model: '处理器',
+  inv_cpu_cores: '处理器核心数',
+  inv_mem_mib: '内存（MiB）',
+  inv_system_model: '设备型号',
+  inv_system_disk: '系统磁盘',
+};
+const disks = computed(() => diskRows(detail.value?.attrs?.inv_disks));
+const network = computed(() => networkRows(detail.value?.attrs?.inv_nics));
+const hardware = computed(() =>
+  Object.entries(detail.value?.attrs ?? {}).filter(
+    ([key, value]) => Object.hasOwn(hardwareNames, key) && value.trim(),
+  ),
+);
+const registered = computed(() =>
+  Object.entries(detail.value?.attrs ?? {}).filter(
+    ([key]) =>
+      !isInventoryControlAttribute(key) &&
+      !Object.hasOwn(hardwareNames, key) &&
+      key !== 'inv_disks' &&
+      key !== 'inv_nics',
+  ),
+);
+const inventoryStatus = computed(() => {
+  const attrs = detail.value?.attrs;
+  if (attrs?.inv_in_flight_at) return '正在采集';
+  if (attrs?.inv_requested_at || attrs?.inv_request_id)
+    return '已请求，等待主机执行';
+  const collected = Number(attrs?.inv_collected_at);
+  return collected > 0
+    ? '最近采集于 ' + new Date(collected * 1000).toLocaleString()
+    : '暂无采集记录';
+});
+async function viewHost(row: HostListItem | string) {
+  const run = ++detailRun;
+  const sn = typeof row === 'string' ? row : row.sn;
+  detail.value = typeof row === 'string' ? undefined : row;
+  detailOpen.value = true;
+  detailLoading.value = true;
+  detailError.value = '';
+  try {
+    const item = await getHostApi(sn);
+    if (run === detailRun) detail.value = item;
+  } catch (reason) {
+    if (run === detailRun) detailError.value = errorMessage(reason);
+  } finally {
+    if (run === detailRun) detailLoading.value = false;
+  }
+}
+watch(
+  () => (route.path === '/hosts' ? route.query.host : undefined),
+  (sn) => {
+    if (typeof sn === 'string' && sn) void viewHost(sn);
+  },
+  { immediate: true },
+);
+function closeHostDetails() {
+  if (route.path === '/hosts' && route.query.host)
+    void router.replace('/hosts');
+}
+function exportHosts() {
+  downloadSelection('主机清单.csv', [
+    ['主机序列号', '架构', '固件', '登记属性'],
+    ...selectedHosts.value.map((host) => [
+      host.sn,
+      host.arch,
+      host.firmware,
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(host.attrs ?? {}).filter(
+            ([key]) => !isInventoryControlAttribute(key),
+          ),
+        ),
+      ),
+    ]),
+  ]);
+}
 const [Grid, gridApi] = useVbenVxeGrid<HostListItem>({
   class: 'h-auto',
   gridOptions: {
     columns: [
+      { width: 48, slots: { header: 'select-all', default: 'select-row' } },
       { field: 'sn', title: 'SN', minWidth: 180 },
       { field: 'arch', title: '架构', width: 100 },
       { field: 'firmware', title: '固件', width: 100 },
@@ -62,7 +165,7 @@ const [Grid, gridApi] = useVbenVxeGrid<HostListItem>({
         slots: { default: 'attrs' },
       },
       { field: 'rev', title: '修订', width: 80 },
-      { title: '操作', width: 230, slots: { default: 'action' } },
+      { title: '操作', width: 310, slots: { default: 'action' } },
     ],
     maxHeight: 520,
     pagerConfig: { enabled: false },
@@ -72,9 +175,11 @@ const [Grid, gridApi] = useVbenVxeGrid<HostListItem>({
         query: async () => {
           try {
             const query = { ...appliedFilters };
-            return await page.load((pagination) =>
+            const result = await page.load((pagination) =>
               getHostListApi({ ...query, ...pagination }),
             );
+            selection.refresh(result.items);
+            return result;
           } catch (error) {
             failure.value = error;
             return { items: page.items };
@@ -86,10 +191,15 @@ const [Grid, gridApi] = useVbenVxeGrid<HostListItem>({
   },
 });
 function search() {
+  selection.clear();
   failure.value = undefined;
   Object.assign(appliedFilters, filters);
   page.reset();
   void gridApi.reload();
+}
+function resetFilters() {
+  Object.assign(filters, { prefix: '', attr_key: '', attr_value: '' });
+  search();
 }
 function changePage(value: number) {
   page.setPage(value);
@@ -186,15 +296,23 @@ const csvBusy = ref(false);
 const confirmed = ref(false);
 const csv = reactive(new CsvImportSession());
 const canCommitCSV = computed(
-  () => csvOpen.value && canWrite.value && !csvBusy.value &&
-    confirmed.value && csv.canConfirm,
+  () =>
+    csvOpen.value &&
+    canWrite.value &&
+    !csvBusy.value &&
+    confirmed.value &&
+    csv.canConfirm,
 );
-watch(csvOpen, (open) => {
-  if (open) return;
-  csv.select();
-  confirmed.value = false;
-  csvBusy.value = false;
-}, { flush: 'sync' });
+watch(
+  csvOpen,
+  (open) => {
+    if (open) return;
+    csv.select();
+    confirmed.value = false;
+    csvBusy.value = false;
+  },
+  { flush: 'sync' },
+);
 function openCSV() {
   csvText.value = '';
   csvName.value = '';
@@ -281,66 +399,251 @@ async function commitCSV() {
       :problems="problems"
       :references="references"
     />
-    <form
-      class="mb-4 flex flex-wrap items-center gap-3"
-      @submit.prevent="search"
+    <section class="overflow-hidden rounded-lg border border-border bg-card">
+      <form
+        class="flex flex-wrap items-end gap-3 px-5 py-4"
+        @submit.prevent="search"
+      >
+        <ElInput
+          v-model="filters.prefix"
+          aria-label="SN 前缀"
+          placeholder="SN 前缀"
+          class="!w-52"
+          clearable
+        />
+        <ElInput
+          v-model="filters.attr_key"
+          aria-label="属性名"
+          placeholder="属性名，例如 rack"
+          class="!w-44"
+          clearable
+        />
+        <ElInput
+          v-model="filters.attr_value"
+          aria-label="属性值"
+          placeholder="属性值"
+          class="!w-52"
+          clearable
+        />
+        <div class="ml-auto flex flex-wrap items-center justify-end gap-3">
+          <ElButton native-type="submit" type="primary">查询</ElButton>
+          <ElButton class="!ml-0" @click="resetFilters">重置</ElButton>
+          <ElButton
+            :disabled="page.loading || !selectedHosts.length"
+            @click="exportHosts"
+            >
+导出所选
+</ElButton>
+        </div>
+      </form>
+      <Grid>
+        <template #select-all>
+          <ElCheckbox
+            aria-label="选择本页主机"
+            :model-value="all"
+            :indeterminate="partial"
+            :disabled="page.loading || !page.items.length"
+            @change="selection.togglePage"
+          />
+        </template>
+        <template #select-row="{ row }">
+          <ElCheckbox
+            :aria-label="`选择主机 ${row.sn}`"
+            :model-value="selection.has(row)"
+            :disabled="page.loading"
+            @change="selection.toggle(row, $event)"
+          />
+        </template>
+        <template #attrs="{ row }">
+          <span
+            v-for="(value, key) in row.attrs"
+            :key="key"
+            class="mr-4 inline-block"
+          >
+            {{ key }}：{{ value }}
+          </span>
+        </template>
+        <template #action="{ row }">
+          <ElButton link type="primary" @click="viewHost(row)">
+查看详情
+</ElButton>
+          <ElButton v-if="canWrite" link @click="openHost(row)">编辑</ElButton>
+          <ElButton
+            v-if="canWrite"
+            link
+            :loading="inventoryRequests.has(row.sn)"
+            @click="requestInventory(row.sn)"
+          >
+            请求硬件采集
+          </ElButton>
+          <ElButton v-if="canWrite" link type="danger" @click="removeHost(row)">
+            删除
+          </ElButton>
+        </template>
+      </Grid>
+      <div class="px-4 pb-3">
+        <ListPagination
+          :current-page="page.page"
+          :page-size="page.pageSize"
+          :total="page.total"
+          :page-count="page.items.length"
+          :selected-count="selectedHosts.length"
+          :disabled="page.loading"
+          @page-change="changePage"
+          @size-change="changePageSize"
+        />
+      </div>
+    </section>
+    <ElDrawer
+      v-model="detailOpen"
+      :title="detail?.sn || '主机详情'"
+      size="min(580px, 100vw)"
+      @close="closeHostDetails"
     >
-      <ElInput
-        v-model="filters.prefix"
-        aria-label="SN 前缀"
-        placeholder="SN 前缀"
-        class="!w-52"
-        clearable
+      <p v-if="!detail && detailLoading" role="status">正在读取主机…</p>
+      <ElAlert
+        v-if="!detail && detailError"
+        :title="detailError"
+        type="error"
+        :closable="false"
       />
-      <ElInput
-        v-model="filters.attr_key"
-        aria-label="属性名"
-        placeholder="属性名，例如 rack"
-        class="!w-44"
-        clearable
-      />
-      <ElInput
-        v-model="filters.attr_value"
-        aria-label="属性值"
-        placeholder="属性值"
-        class="!w-52"
-        clearable
-      />
-      <ElButton native-type="submit" type="primary">查询</ElButton>
-    </form>
-    <Grid>
-      <template #attrs="{ row }">
-        <span
-          v-for="(value, key) in row.attrs"
-          :key="key"
-          class="mr-4 inline-block"
+      <div v-if="detail" class="grid gap-5">
+        <p v-if="detailLoading" class="text-sm text-muted-foreground">
+          正在读取最新信息…
+        </p>
+        <ElAlert
+          v-if="detailError"
+          type="error"
+          :title="detailError"
+          :closable="false"
         >
-          {{ key }}：{{ value }}
-        </span>
-      </template>
-      <template #action="{ row }">
-        <ElButton v-if="canWrite" link @click="openHost(row)">编辑</ElButton>
-        <ElButton
-          v-if="canWrite"
-          link
-          :loading="inventoryRequests.has(row.sn)"
-          @click="requestInventory(row.sn)"
+          <ElButton link @click="viewHost(detail)">重试</ElButton>
+        </ElAlert>
+        <section class="rounded-lg border border-border p-4">
+          <h3 class="mb-3 font-semibold">基本信息</h3>
+          <dl class="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <dt class="text-muted-foreground">架构</dt>
+              <dd>{{ detail.arch || '未登记' }}</dd>
+            </div>
+            <div>
+              <dt class="text-muted-foreground">固件</dt>
+              <dd>{{ detail.firmware?.toUpperCase() || '未登记' }}</dd>
+            </div>
+            <div>
+              <dt class="text-muted-foreground">序列号</dt>
+              <dd>{{ detail.sn }}</dd>
+            </div>
+            <div>
+              <dt class="text-muted-foreground">修订</dt>
+              <dd>{{ detail.rev }}</dd>
+            </div>
+          </dl>
+        </section>
+        <HostTaskHistory
+          v-if="detailOpen && hasMenu('tasks')"
+          :sn="detail.sn"
+        />
+        <section class="rounded-lg border border-border p-4">
+          <h3 class="mb-2 font-semibold">硬件采集</h3>
+          <p class="mb-3 text-sm text-muted-foreground">
+            {{ inventoryStatus }}
+          </p>
+          <dl v-if="hardware.length" class="grid gap-3 text-sm">
+            <div v-for="[key, value] in hardware" :key="key">
+              <dt class="text-muted-foreground">{{ hardwareNames[key] }}</dt>
+              <dd class="break-all">{{ value }}</dd>
+            </div>
+          </dl>
+          <p v-else class="text-sm text-muted-foreground">未采集</p>
+        </section>
+        <section class="min-w-0 rounded-lg border border-border p-4">
+          <h3 class="mb-3 font-semibold">磁盘</h3>
+          <div v-if="disks.length" class="overflow-x-auto">
+            <table aria-label="磁盘清单" class="w-full text-left text-sm">
+              <thead class="bg-muted text-muted-foreground">
+                <tr>
+                  <th scope="col" class="p-2">设备名</th>
+                  <th scope="col" class="p-2">型号</th>
+                  <th scope="col" class="p-2 text-right">容量</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(disk, index) in disks"
+                  :key="index"
+                  class="border-b border-border"
+                >
+                  <td class="p-2 font-mono">{{ disk.device }}</td>
+                  <td class="break-words p-2">{{ disk.model || '未采集' }}</td>
+                  <td
+                    class="whitespace-nowrap p-2 text-right tabular-nums"
+                    :title="`${disk.bytes } 字节`"
+                  >
+                    {{ disk.capacity }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="text-sm text-muted-foreground">未采集</p>
+        </section>
+        <section class="min-w-0 rounded-lg border border-border p-4">
+          <h3 class="mb-3 font-semibold">网卡</h3>
+          <div v-if="network.length" class="overflow-x-auto">
+            <table aria-label="网卡清单" class="w-full text-left text-sm">
+              <thead class="bg-muted text-muted-foreground">
+                <tr>
+                  <th scope="col" class="p-2">接口名</th>
+                  <th scope="col" class="p-2">型号</th>
+                  <th scope="col" class="p-2">网卡地址</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(nic, index) in network"
+                  :key="index"
+                  class="border-b border-border"
+                >
+                  <td class="p-2 font-mono">{{ nic.device }}</td>
+                  <td class="break-words p-2">{{ nic.model || '未采集' }}</td>
+                  <td class="whitespace-nowrap p-2 font-mono">
+                    {{ nic.mac || '未采集' }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="text-sm text-muted-foreground">未采集</p>
+        </section>
+        <section class="rounded-lg border border-border p-4">
+          <h3 class="mb-3 font-semibold">登记属性</h3>
+          <dl v-if="registered.length" class="grid gap-2 text-sm">
+            <div
+              v-for="[key, value] in registered"
+              :key="key"
+              class="grid grid-cols-[1fr_2fr] gap-3"
+            >
+              <dt class="break-all text-muted-foreground">{{ key }}</dt>
+              <dd class="break-all">{{ value }}</dd>
+            </div>
+          </dl>
+          <p v-else class="text-sm text-muted-foreground">暂无登记属性。</p>
+        </section>
+        <div
+          v-if="access.accessCodes.includes('task:create') && hasMenu('tasks')"
         >
-          请求硬件采集
-        </ElButton>
-        <ElButton v-if="canWrite" link type="danger" @click="removeHost(row)">
-          删除
-        </ElButton>
-      </template>
-    </Grid>
-    <ListPagination
-      :current-page="page.page"
-      :page-size="page.pageSize"
-      :total="page.total"
-      :disabled="page.loading"
-      @page-change="changePage"
-      @size-change="changePageSize"
-    />
+          <ElButton
+            @click="
+              detailOpen = false;
+              router.push({ name: 'TasksNew', query: { host: detail.sn } });
+            "
+            >
+为这台主机创建任务
+</ElButton>
+        </div>
+      </div>
+    </ElDrawer>
     <ElDialog
       v-model="editorOpen"
       :title="editingSN ? '编辑主机' : '登记主机'"
@@ -468,7 +771,12 @@ async function commitCSV() {
         placeholder="sn,arch,firmware,rack&#10;SN001,,,R1"
         @input="changeCSVText"
       />
-      <ElButton class="my-3" :disabled="!csv.ready" :loading="csvBusy" @click="previewCSV">
+      <ElButton
+        class="my-3"
+        :disabled="!csv.ready"
+        :loading="csvBusy"
+        @click="previewCSV"
+      >
         预览 CSV（不写入）
       </ElButton>
       <ElTable v-if="csv.plan" :data="csv.plan.rows ?? []" max-height="320">

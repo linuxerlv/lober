@@ -10,7 +10,7 @@ import {
   ref,
   watch,
 } from 'vue';
-import { useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
 import { useAccessStore } from '@vben/stores';
@@ -22,6 +22,7 @@ import {
   ElDialog,
   ElInput,
   ElMessage,
+  ElMessageBox,
   ElOption,
   ElRadio,
   ElRadioGroup,
@@ -50,6 +51,7 @@ import {
 defineOptions({ name: 'TasksNew' });
 type Host = Schemas['WizardHostItem'];
 const router = useRouter();
+const route = useRoute();
 const access = useAccessStore();
 const step = ref(0);
 const busy = ref(false);
@@ -84,7 +86,14 @@ const state = ref({
   entered: {} as Record<string, Record<string, string>>,
 });
 const forms = ref<Schemas['WizardParamsHost'][]>([]);
+const activeHost = ref('');
+const restrictedHost = ref<Host>();
+const restrictionOpen = ref(false);
 const paramsProblems = ref<Schemas['ProblemJSON'][]>([]);
+const commonProblems = ref<Schemas['ProblemJSON'][]>([]);
+const invalidHosts = computed(
+  () => forms.value.filter((host) => host.problems?.length).length,
+);
 const preview = ref<Schemas['PreviewResponse']>();
 const previewOpen = ref(false);
 const created = ref<Schemas['TaskItem'][]>([]);
@@ -115,7 +124,7 @@ const [HostGrid, hostGrid] = useVbenVxeGrid<Host>({
             .map(([key, value]) => `${key}=${value}`)
             .join('；'),
       },
-      { title: '选择限制', minWidth: 200, slots: { default: 'problems' } },
+      { title: '选择限制', minWidth: 225, slots: { default: 'problems' } },
     ],
     rowConfig: { keyField: 'sn' },
     checkboxConfig: {
@@ -219,7 +228,7 @@ async function loadISOs() {
   await gate.run(
     isoPage.load((pagination) => wizardAPI.isos({ hostSNs, ...pagination })),
     () => {
-      step.value = 1;
+      step.value = selectedTemplate.value ? 2 : step.value === 2 ? 2 : 1;
     },
     fail,
   );
@@ -227,6 +236,7 @@ async function loadISOs() {
 function changeISO(value: unknown) {
   resetDownstream('iso', String(value));
   selectedISO.value = isos.value.find((iso) => iso.id === String(value));
+  void loadTemplates();
 }
 function changeISOPage(value: number) {
   isoPage.setPage(value);
@@ -285,6 +295,12 @@ async function evaluate(confirm = false) {
     }),
     (result) => {
       forms.value = result.hosts ?? [];
+      commonProblems.value = result.common ?? [];
+      activeHost.value =
+        forms.value.find((host) => host.problems?.length)?.sn ??
+        forms.value.find((host) => host.sn === activeHost.value)?.sn ??
+        forms.value[0]?.sn ??
+        '';
       paramsProblems.value = [
         ...(result.common ?? []),
         ...(result.hosts ?? []).flatMap((host) => host.problems ?? []),
@@ -309,6 +325,7 @@ async function evaluate(confirm = false) {
 }
 function fillColumn() {
   if (busy.value) return;
+  let count = 0;
   for (const host of forms.value)
     if (
       (host.fields ?? []).some(
@@ -316,7 +333,9 @@ function fillColumn() {
       )
     ) {
       (state.value.entered[host.sn] ??= {})[batchKey.value] = batchValue.value;
+      count++;
     }
+  if (count) ElMessage.success(`已更新 ${count} 台主机的参数`);
 }
 async function showPreview(host: Host) {
   error.value = '';
@@ -378,9 +397,37 @@ async function next() {
 }
 function back() {
   invalidate();
-  step.value = Math.max(0, step.value - 1);
+  step.value = step.value === 2 ? 0 : Math.max(0, step.value - 1);
 }
-onMounted(() => loadHosts());
+onMounted(async () => {
+  const requested =
+    typeof route.query.host === 'string' ? route.query.host : '';
+  if (requested) {
+    hostQuery.value = requested;
+    hostFilters.q = requested;
+  }
+  await loadHosts();
+  const host = requested
+    ? hosts.value.find((row) => row.sn === requested && row.selectable)
+    : undefined;
+  if (host) {
+    selectedHosts.value = [host];
+    void restoreHostChecks();
+  }
+});
+onBeforeRouteLeave(async () => {
+  if (!selectedHosts.value.length || step.value === 5) return true;
+  try {
+    await ElMessageBox.confirm('当前选择与填写内容会丢失。', '离开创建任务？', {
+      confirmButtonText: '离开',
+      cancelButtonText: '继续编辑',
+      type: 'warning',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+});
 watch(step, (value) => {
   if (value === 0) void restoreHostChecks();
 });
@@ -395,16 +442,21 @@ onBeforeUnmount(() => {
 
 <template>
   <Page
-    title="批量建任务"
-    description="选择已登记主机、ISO 和已审批模板，服务端逐台校验后一次创建整批任务。"
+    title="创建装机任务"
+    description="选择主机和安装方案，核对配置后提交。"
+    auto-content-height
+    footer-fixed
   >
-    <ElSteps :active="step" finish-status="success" class="mb-6">
+    <ElSteps
+      v-if="step < 5"
+      :active="step === 0 ? 0 : step <= 2 ? 1 : step - 1"
+      finish-status="success"
+      class="mb-4 rounded-lg border border-border bg-card p-5"
+    >
       <ElStep title="选主机" />
-      <ElStep title="选 ISO" />
-      <ElStep title="选模板" />
+      <ElStep title="选安装方案" />
       <ElStep title="填参数" />
       <ElStep title="确认" />
-      <ElStep title="已创建" />
     </ElSteps>
     <ElAlert
       v-if="error"
@@ -414,231 +466,366 @@ onBeforeUnmount(() => {
       class="mb-3"
     />
     <ProblemList :problems="problems" />
-    <ElCard v-if="step === 0">
-      <div class="mb-3 flex flex-wrap gap-2">
-        <ElInput
-          v-model="hostQuery"
-          placeholder="按 SN 前缀搜索"
-          class="!w-56"
-          @keyup.enter="searchHosts"
-        />
-        <ElInput v-model="attrKey" placeholder="属性名" class="!w-36" />
-        <ElInput v-model="attrValue" placeholder="属性值" class="!w-44" />
-        <ElButton :loading="working" @click="searchHosts">搜索</ElButton>
-        <ElTag>已选 {{ selectedHosts.length }} 台</ElTag>
-      </div>
-      <HostGrid>
-        <template #problems="{ row }">
-          <ProblemList :problems="row.problems" />
-        </template>
-      </HostGrid>
-      <ListPagination
-        :current-page="hostPage.page"
-        :page-size="hostPage.pageSize"
-        :total="hostPage.total"
-        :disabled="working"
-        @page-change="changeHostPage"
-        @size-change="changeHostPageSize"
-      />
-    </ElCard>
-    <ElCard v-if="step === 1" header="选择 ISO">
-      <ElRadioGroup v-model="state.isoID" class="!block" @change="changeISO">
-        <div v-for="iso in isos" :key="iso.id" class="mb-3 rounded border p-3">
-          <ElRadio :value="iso.id" :disabled="!iso.usable || working">
-            {{ iso.name }} · {{ iso.series }} {{ iso.version }} · {{ iso.arch }}
-          </ElRadio>
-          <ProblemList :problems="iso.problems" />
-        </div>
-      </ElRadioGroup>
-      <p v-if="selectedISO" class="mt-3">已选 ISO：{{ selectedISO.name }}</p>
-      <ElAlert
-        v-if="!isos.length"
-        title="没有可用 ISO，请先在 ISO 页面完成导入。"
-        type="info"
-        :closable="false"
-      />
-      <ListPagination
-        :current-page="isoPage.page"
-        :page-size="isoPage.pageSize"
-        :total="isoPage.total"
-        :disabled="working"
-        @page-change="changeISOPage"
-        @size-change="changeISOPageSize"
-      />
-    </ElCard>
-    <ElCard v-if="step === 2" header="选择模板">
-      <ElRadioGroup
-        v-model="state.templateID"
-        class="!block"
-        @change="chooseTemplate(String($event))"
-      >
-        <div
-          v-for="tpl in templates"
-          :key="`${tpl.id}/${tpl.version}`"
-          class="mb-3 rounded border p-3"
-        >
-          <ElRadio :value="tpl.id" :disabled="!tpl.usable || working">
-            {{ tpl.name }} · v{{ tpl.version }}
-            <ElTag v-if="tpl.builtin" size="small" class="ml-2">内置</ElTag>
-          </ElRadio>
-          <ProblemList :problems="tpl.problems" />
-        </div>
-      </ElRadioGroup>
-      <p v-if="selectedTemplate" class="mt-3">
-        已选模板：{{ selectedTemplate.name }} v{{ selectedTemplate.version }}
-      </p>
-      <ElAlert
-        v-if="!templates.length"
-        title="没有匹配该 ISO 的已审批模板。"
-        type="info"
-        :closable="false"
-      />
-      <ListPagination
-        :current-page="templatePage.page"
-        :page-size="templatePage.pageSize"
-        :total="templatePage.total"
-        :disabled="working"
-        @page-change="changeTemplatePage"
-        @size-change="changeTemplatePageSize"
-      />
-    </ElCard>
-    <ElCard v-if="step === 3" header="逐台参数">
-      <div class="mb-4 flex flex-wrap gap-2">
-        <ElSelect
-          v-model="batchKey"
-          :disabled="working"
-          placeholder="选择批量填写的字段"
-          class="!w-64"
-        >
-          <ElOption
-            v-for="field in batchFields"
-            :key="field.key"
-            :value="field.key"
-            :label="`${field.label} (${field.key})`"
-          />
-        </ElSelect>
-        <ElInput
-          v-model="batchValue"
-          :disabled="working"
-          placeholder="整列值；列表每行一项"
-          type="textarea"
-          class="!w-72"
-        />
-        <ElButton :disabled="working || !batchKey" @click="fillColumn">
-          填写整列
-        </ElButton>
-      </div>
-      <ProblemList :problems="paramsProblems" />
-      <div v-for="host in forms" :key="host.sn" class="mb-4 rounded border p-4">
-        <h3 class="mb-3 font-semibold">{{ host.sn }}</h3>
-        <div
-          v-for="field in host.fields"
-          :key="field.key"
-          class="mb-3 grid gap-2 md:grid-cols-[240px_1fr]"
-        >
-          <label :for="`${host.sn}:${field.key}`">
-            {{ field.label }}
-            <span v-if="field.required" class="text-red-500">*</span>
-            <small class="block text-gray-500">
-              {{ field.key }} · {{ field.type }}
-              <span v-if="field.locked">· 已锁定</span>
-            </small>
-          </label>
-          <div>
+    <div class="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+      <div class="grid min-w-0 gap-4">
+        <ElCard v-if="step === 0" header="选择目标主机">
+          <div class="mb-3 flex flex-wrap gap-2">
             <ElInput
-              v-if="field.locked"
-              :id="`${host.sn}:${field.key}`"
-              :model-value="field.prefill"
-              disabled
+              v-model="hostQuery"
+              placeholder="按 SN 前缀搜索"
+              class="!w-56"
+              @keyup.enter="searchHosts"
             />
+            <ElInput v-model="attrKey" placeholder="属性名" class="!w-36" />
+            <ElInput v-model="attrValue" placeholder="属性值" class="!w-44" />
+            <ElButton :loading="working" @click="searchHosts">搜索</ElButton>
+            <ElTag>已选 {{ selectedHosts.length }} 台</ElTag>
+          </div>
+          <HostGrid>
+            <template #problems="{ row }">
+              <button
+                v-if="!row.selectable"
+                type="button"
+                class="inline-flex max-w-full items-center gap-2 text-left hover:underline focus-visible:outline"
+                :aria-label="`查看 ${row.sn} 的选择限制`"
+                @click="
+                  restrictedHost = row;
+                  restrictionOpen = true;
+                "
+              >
+                <ElTag type="warning" size="small">不可选</ElTag>
+                <span class="truncate text-xs">{{
+                  row.problems?.[0]?.message || '当前无法创建任务'
+                }}</span>
+              </button>
+              <span v-else class="text-xs text-muted-foreground">可选</span>
+            </template>
+          </HostGrid>
+          <ListPagination
+            :current-page="hostPage.page"
+            :page-size="hostPage.pageSize"
+            :total="hostPage.total"
+            :disabled="working"
+            @page-change="changeHostPage"
+            @size-change="changeHostPageSize"
+          />
+        </ElCard>
+        <ElCard v-if="step === 1 || step === 2" header="系统镜像">
+          <ElRadioGroup
+            v-model="state.isoID"
+            class="!block"
+            @change="changeISO"
+          >
+            <div
+              v-for="iso in isos"
+              :key="iso.id"
+              class="mb-3 rounded border p-3"
+            >
+              <ElRadio :value="iso.id" :disabled="!iso.usable || working">
+                {{ iso.name }} · {{ iso.series }} {{ iso.version }} ·
+                {{ iso.arch }}
+              </ElRadio>
+              <ProblemList :problems="iso.problems" />
+            </div>
+          </ElRadioGroup>
+          <p v-if="selectedISO" class="mt-3">
+            已选 ISO：{{ selectedISO.name }}
+          </p>
+          <ElAlert
+            v-if="!isos.length"
+            title="没有可用 ISO，请先在 ISO 页面完成导入。"
+            type="info"
+            :closable="false"
+          />
+          <ListPagination
+            :current-page="isoPage.page"
+            :page-size="isoPage.pageSize"
+            :total="isoPage.total"
+            :disabled="working"
+            @page-change="changeISOPage"
+            @size-change="changeISOPageSize"
+          />
+        </ElCard>
+        <ElCard v-if="step === 2" header="与镜像匹配的已审批模板">
+          <ElRadioGroup
+            v-model="state.templateID"
+            class="!block"
+            @change="chooseTemplate(String($event))"
+          >
+            <div
+              v-for="tpl in templates"
+              :key="`${tpl.id}/${tpl.version}`"
+              class="mb-3 rounded border p-3"
+            >
+              <ElRadio :value="tpl.id" :disabled="!tpl.usable || working">
+                {{ tpl.name }} · v{{ tpl.version }}
+                <ElTag v-if="tpl.builtin" size="small" class="ml-2">内置</ElTag>
+              </ElRadio>
+              <ProblemList :problems="tpl.problems" />
+            </div>
+          </ElRadioGroup>
+          <p v-if="selectedTemplate" class="mt-3">
+            已选模板：{{ selectedTemplate.name }} v{{
+              selectedTemplate.version
+            }}
+          </p>
+          <ElAlert
+            v-if="!templates.length"
+            title="没有匹配该 ISO 的已审批模板。"
+            type="info"
+            :closable="false"
+          />
+          <ListPagination
+            :current-page="templatePage.page"
+            :page-size="templatePage.pageSize"
+            :total="templatePage.total"
+            :disabled="working"
+            @page-change="changeTemplatePage"
+            @size-change="changeTemplatePageSize"
+          />
+        </ElCard>
+        <ElCard v-if="step === 3" header="逐台参数">
+          <div class="mb-4 flex flex-wrap gap-2">
             <ElSelect
-              v-else-if="field.options?.length && !field.list"
-              :id="`${host.sn}:${field.key}`"
-              v-model="state.entered[host.sn]![field.key]"
+              v-model="batchKey"
               :disabled="working"
-              clearable
+              placeholder="选择批量填写的字段"
+              class="!w-64"
             >
               <ElOption
-                v-for="option in field.options"
-                :key="option.value"
-                :label="option.label || option.value"
-                :value="option.value"
+                v-for="field in batchFields"
+                :key="field.key"
+                :value="field.key"
+                :label="`${field.label} (${field.key})`"
               />
             </ElSelect>
             <ElInput
-              v-else
-              :id="`${host.sn}:${field.key}`"
-              v-model="state.entered[host.sn]![field.key]"
+              v-model="batchValue"
               :disabled="working"
-              :type="field.list ? 'textarea' : 'text'"
-              :placeholder="field.list ? '每行一项' : '请输入'"
+              placeholder="整列值；列表每行一项"
+              type="textarea"
+              class="!w-72"
             />
-            <ProblemList
-              :problems="
-                (host.problems ?? []).filter(
-                  (problem) => problem.subject?.path === field.key,
-                )
-              "
-            />
+            <ElButton :disabled="working || !batchKey" @click="fillColumn">
+              填写整列
+            </ElButton>
           </div>
-        </div>
+          <ElAlert
+            v-if="invalidHosts"
+            :title="`${invalidHosts} 台主机有参数需要修改`"
+            type="warning"
+            :closable="false"
+            class="mb-4"
+          />
+          <ProblemList :problems="commonProblems" />
+          <div class="grid gap-3 md:grid-cols-[185px_minmax(0,1fr)]">
+            <nav
+              class="flex max-h-80 flex-wrap content-start gap-2 overflow-auto md:flex-col"
+              aria-label="参数主机"
+            >
+              <ElButton
+                v-for="host in forms"
+                :key="host.sn"
+                class="!ml-0 !justify-start"
+                :type="activeHost === host.sn ? 'primary' : undefined"
+                :plain="activeHost === host.sn"
+                @click="activeHost = host.sn"
+              >
+                {{ host.sn
+                }}<span v-if="host.problems?.length" class="ml-2 text-xs">有错误</span>
+              </ElButton>
+            </nav>
+            <div
+              v-for="host in forms"
+              v-show="host.sn === activeHost"
+              :key="host.sn"
+              class="min-w-0 rounded border border-border p-4"
+            >
+              <h3 class="mb-3 font-semibold">{{ host.sn }}</h3>
+              <ProblemList
+                :problems="
+                  (host.problems ?? []).filter(
+                    (problem) =>
+                      !host.fields?.some(
+                        (field) => field.key === problem.subject?.path,
+                      ),
+                  )
+                "
+              />
+              <div
+                v-for="field in host.fields"
+                :key="field.key"
+                class="mb-3 grid gap-2 md:grid-cols-[240px_1fr]"
+              >
+                <label :for="`${host.sn}:${field.key}`">
+                  {{ field.label }}
+                  <span v-if="field.required" class="text-red-500">*</span>
+                  <small class="block text-gray-500">
+                    {{ field.key }} · {{ field.type }}
+                    <span v-if="field.locked">· 已锁定</span>
+                  </small>
+                </label>
+                <div>
+                  <ElInput
+                    v-if="field.locked"
+                    :id="`${host.sn}:${field.key}`"
+                    :model-value="field.prefill"
+                    disabled
+                  />
+                  <ElSelect
+                    v-else-if="field.options?.length && !field.list"
+                    :id="`${host.sn}:${field.key}`"
+                    v-model="state.entered[host.sn]![field.key]"
+                    :disabled="working"
+                    clearable
+                  >
+                    <ElOption
+                      v-for="option in field.options"
+                      :key="option.value"
+                      :label="option.label || option.value"
+                      :value="option.value"
+                    />
+                  </ElSelect>
+                  <ElInput
+                    v-else
+                    :id="`${host.sn}:${field.key}`"
+                    v-model="state.entered[host.sn]![field.key]"
+                    :disabled="working"
+                    :type="field.list ? 'textarea' : 'text'"
+                    :placeholder="field.list ? '每行一项' : '请输入'"
+                  />
+                  <ProblemList
+                    :problems="
+                      (host.problems ?? []).filter(
+                        (problem) => problem.subject?.path === field.key,
+                      )
+                    "
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </ElCard>
+        <ElCard v-if="step === 4" header="确认批次">
+          <p class="mb-3">
+            ISO：{{ selectedISO?.name }} · 模板：{{
+              selectedTemplate?.name
+            }}
+            v{{ state.templateVersion }}
+          </p>
+          <ElAlert
+            title="创建后任务立即等待机器引导；目标机下次网络启动可能开始安装。"
+            type="warning"
+            :closable="false"
+            class="mb-3"
+          />
+          <div
+            v-for="host in selectedHosts"
+            :key="host.sn"
+            class="mb-2 flex flex-wrap items-center gap-3 rounded border p-3"
+          >
+            <strong>{{ host.sn }}</strong>
+            <span>
+              {{ host.arch || '未登记架构' }} /
+              {{ host.firmware || '未登记固件' }}
+            </span>
+            <span>
+              {{
+                Object.entries(host.attrs ?? {})
+                  .map(([key, value]) => `${key}=${value}`)
+                  .join('；')
+              }}
+            </span>
+            <ElButton :loading="working" @click="showPreview(host)">
+              预览该主机全部文件
+            </ElButton>
+          </div>
+        </ElCard>
+        <ElCard v-if="step === 5" header="任务创建成功">
+          <p class="mb-3">
+            已创建 {{ created.length }} 个任务，正在等待主机引导。
+          </p>
+          <div v-for="task in created" :key="task.id" class="mb-2">
+            <ElButton
+              link
+              type="primary"
+              @click="router.push(`/tasks/${encodeURIComponent(task.id)}`)"
+            >
+              {{ task.hostSN }} · {{ task.id }}
+            </ElButton>
+          </div>
+          <ElButton
+            v-if="created[0]?.batchID"
+            type="primary"
+            @click="router.push({ name: 'TasksBatch', params: { id: created[0].batchID } })"
+          >
+            查看批次
+          </ElButton>
+          <ElButton @click="router.push('/tasks')">返回任务列表</ElButton>
+        </ElCard>
       </div>
-    </ElCard>
-    <ElCard v-if="step === 4" header="确认批次">
-      <p class="mb-3">
-        ISO：{{ selectedISO?.name }} · 模板：{{ selectedTemplate?.name }} v{{
-          state.templateVersion
-        }}
-      </p>
-      <ElAlert
-        title="创建后任务立即等待机器引导；目标机下次网络启动可能开始安装。"
-        type="warning"
-        :closable="false"
-        class="mb-3"
-      />
-      <div
-        v-for="host in selectedHosts"
-        :key="host.sn"
-        class="mb-2 flex flex-wrap items-center gap-3 rounded border p-3"
-      >
-        <strong>{{ host.sn }}</strong>
-        <span>
-          {{ host.arch || '未登记架构' }} /
-          {{ host.firmware || '未登记固件' }}
-        </span>
-        <span>
-          {{
-            Object.entries(host.attrs ?? {})
-              .map(([key, value]) => `${key}=${value}`)
-              .join('；')
-          }}
-        </span>
-        <ElButton :loading="working" @click="showPreview(host)">
-          预览该主机全部文件
-        </ElButton>
-      </div>
-    </ElCard>
-    <ElCard v-if="step === 5" header="任务创建成功">
-      <p class="mb-3">已原子创建 {{ created.length }} 个任务。</p>
-      <div v-for="task in created" :key="task.id" class="mb-2">
-        <ElButton
-          link
-          type="primary"
-          @click="router.push(`/tasks/${encodeURIComponent(task.id)}`)"
-        >
-          {{ task.hostSN }} · {{ task.id }}
-        </ElButton>
-      </div>
-      <ElButton @click="router.push('/tasks')">返回任务列表</ElButton>
-    </ElCard>
-    <div v-if="step < 5" class="mt-5 flex justify-end gap-3">
-      <ElButton :disabled="step === 0 || working" @click="back">
-        上一步
-      </ElButton>
-      <ElButton type="primary" :loading="working" @click="next">
-        {{ step === 4 ? '创建整批任务' : step === 3 ? '校验并确认' : '下一步' }}
-      </ElButton>
+      <ElCard v-if="step < 5" header="安装摘要" class="lg:sticky lg:top-4">
+        <dl class="grid gap-3 text-sm">
+          <div>
+            <dt class="text-muted-foreground">目标主机</dt>
+            <dd>已选 {{ selectedHosts.length }} 台</dd>
+          </div>
+          <div>
+            <dt class="text-muted-foreground">系统镜像</dt>
+            <dd>{{ selectedISO?.name || '未选择' }}</dd>
+          </div>
+          <div>
+            <dt class="text-muted-foreground">安装模板</dt>
+            <dd>
+              {{
+                selectedTemplate
+                  ? `${selectedTemplate.name} · v${selectedTemplate.version}`
+                  : '未选择'
+              }}
+            </dd>
+          </div>
+        </dl>
+        <details v-if="selectedHosts.length" class="mt-4">
+          <summary class="cursor-pointer text-sm text-primary">
+            查看已选主机
+          </summary>
+          <ul class="mt-2 max-h-40 space-y-1 overflow-auto font-mono text-xs">
+            <li v-for="host in selectedHosts" :key="host.sn">{{ host.sn }}</li>
+          </ul>
+        </details>
+      </ElCard>
     </div>
+    <template #footer>
+      <div v-if="step < 5" class="flex w-full justify-between gap-3">
+        <ElButton :disabled="step === 0 || working" @click="back">
+          上一步
+        </ElButton>
+        <ElButton type="primary" :loading="working" @click="next">
+          {{
+            step === 4 ? '创建整批任务' : step === 3 ? '校验并确认' : '下一步'
+          }}
+        </ElButton>
+      </div>
+    </template>
+    <ElDialog
+      v-model="restrictionOpen"
+      title="主机选择限制"
+      width="min(480px, 95vw)"
+    >
+      <strong>{{ restrictedHost?.sn }}</strong>
+      <ul v-if="restrictedHost?.problems?.length" class="mt-3 grid gap-2">
+        <li v-for="(problem, index) in restrictedHost.problems" :key="index">
+          <p>{{ problem.message }}</p>
+          <p v-if="problem.next" class="text-muted-foreground">
+            {{ problem.next }}
+          </p>
+        </li>
+      </ul>
+      <p v-else class="mt-3">这台主机当前无法创建任务。</p>
+      <template #footer>
+<ElButton @click="restrictionOpen = false">关闭</ElButton>
+</template>
+    </ElDialog>
     <ElDialog v-model="previewOpen" title="机器下发文件预览" width="85%">
       <ElAlert
         v-if="preview?.sample?.length"

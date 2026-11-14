@@ -13,6 +13,18 @@ function deferred<T>() {
 }
 
 describe('NumberedPage', () => {
+  it('keeps only the rows that fit the requested page', async () => {
+    const page = new NumberedPage<number>();
+    page.setPageSize(10);
+    const items = Array.from({ length: 15 }, (_, index) => index + 1);
+    const fetch = async () => ({ items, total: 15 });
+    expect((await page.load(fetch)).items).toHaveLength(10);
+    page.setPage(2);
+    expect(
+      (await page.load(async () => ({ items: items.slice(10), total: 15 })))
+        .items,
+    ).toEqual([11, 12, 13, 14, 15]);
+  });
   it('requests numbered pages, replaces rows and preserves real zero totals', async () => {
     const page = new NumberedPage<string>();
     const fetch = vi

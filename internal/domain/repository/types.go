@@ -136,6 +136,7 @@ type TemplateSelection struct {
 type TaskQuery struct {
 	Page                   int // Zero preserves cursor pagination; positive values select a numbered page.
 	HostSN                 string
+	BatchID                string
 	States                 []model.TaskState
 	CreatedFrom, CreatedTo int64 // CreatedAt 的范围，含两端
 	Cursor                 string

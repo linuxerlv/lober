@@ -37,6 +37,7 @@ vi.mock('element-plus', async () => {
     ElCard: slot('section'),
     ElDialog: slot('dialog'),
     ElMessageBox: { confirm: io.confirm },
+    ElMessage: { success: vi.fn() },
     ElTabPane: slot('div'),
     ElTabs: slot('div'),
     ElTag: slot('span'),
@@ -490,7 +491,7 @@ it.each([
   source.send(event(201));
   await vi.advanceTimersByTimeAsync(120);
   await flushPage();
-  expect(node.textContent).toContain('等待机器引导');
+  expect(node.textContent).toContain('等待引导');
 
   finishConfirmation();
   await flushPage();

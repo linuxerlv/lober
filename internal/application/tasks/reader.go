@@ -59,13 +59,16 @@ func (r *reader) List(ctx context.Context, actor ports.Actor, req ListRequest) (
 	if to != 0 && from > to {
 		return TaskPage{}, ErrBadRequest
 	}
-	q := repository.TaskQuery{HostSN: req.HostSN, CreatedFrom: from, CreatedTo: to, Cursor: req.Cursor, Limit: req.Limit, Page: req.Page}
+	q := repository.TaskQuery{HostSN: req.HostSN, BatchID: req.BatchID, CreatedFrom: from, CreatedTo: to, Cursor: req.Cursor, Limit: req.Limit, Page: req.Page}
 	if q.HostSN != "" {
 		sn, err := model.NormalizeSN(q.HostSN)
 		if err != nil {
 			return TaskPage{}, err
 		}
 		q.HostSN = sn
+	}
+	if q.BatchID != "" && !model.ValidID(q.BatchID) {
+		return TaskPage{}, ErrBadRequest
 	}
 	if req.State != "" {
 		state := model.TaskState(req.State)
@@ -84,6 +87,13 @@ func (r *reader) List(ctx context.Context, actor ports.Actor, req ListRequest) (
 	}
 	return TaskPage{Items: items, Next: page.Next, Total: page.Total}, nil
 }
+func (r *reader) BatchSummary(ctx context.Context, actor ports.Actor, id string) (model.TaskBatchSummary, error) {
+	if err := actor.Authorize(access.PermTaskRead); err != nil {
+		return model.TaskBatchSummary{}, err
+	}
+	return r.deps.Tasks.GetTaskBatchSummary(ctx, id)
+}
+
 func (r *reader) Get(ctx context.Context, actor ports.Actor, id string) (TaskChoice, error) {
 	if err := actor.Authorize(access.PermTaskRead); err != nil {
 		return TaskChoice{}, err

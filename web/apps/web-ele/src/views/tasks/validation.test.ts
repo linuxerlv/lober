@@ -10,7 +10,11 @@ const flow = vi.hoisted(() => ({
   pending: undefined as ((x: unknown) => void) | undefined,
   calls: 0,
 }));
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('vue-router', () => ({
+  onBeforeRouteLeave: vi.fn(),
+  useRoute: () => ({ query: {} }),
+  useRouter: () => ({ push: vi.fn() }),
+}));
 vi.mock('@vben/stores', () => ({
   useAccessStore: () => ({ accessCodes: ['task:create'] }),
 }));
@@ -18,7 +22,7 @@ vi.mock('@vben/common-ui', async () => {
   const { defineComponent, h } = await import('vue');
   return {
     Page: defineComponent({
-      setup: (_, ctx) => () => h('main', ctx.slots.default?.()),
+      setup: (_, ctx) => () => h('main', [ctx.slots.default?.(), ctx.slots.footer?.()]),
     }),
   };
 });
@@ -201,7 +205,6 @@ it('freezes parameter and column controls during server validation', async () =>
   await click('选择测试主机');
   await click('下一步');
   await click('选择测试 ISO');
-  await click('下一步');
   await click('选择测试模板');
   await click('下一步');
   const field = document.getElementById('H1:tpl/name') as HTMLInputElement;
@@ -247,7 +250,6 @@ it('clears a failed preview diagnostic when retry succeeds', async () => {
   await click('选择测试主机');
   await click('下一步');
   await click('选择测试 ISO');
-  await click('下一步');
   await click('选择测试模板');
   await click('下一步');
   await click('校验并确认');
