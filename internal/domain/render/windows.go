@@ -67,6 +67,7 @@ func renderWindowsAux(r Request) ([]byte, []model.Problem, error) {
 	name, _ := catalog.DeliveryFileName("unattend", catalog.FileAnswer)
 	body.WriteString(download("unattend", catalog.AnswerURL(values["gateway"], values["task"], values["token"], name), "X:/lober/"+name))
 	body.WriteString("printf '%s' " + shQuote(values["finalize-token"]) + " > \"$OEM/finalize.token\"\n")
+	body.WriteString("printf '%s' " + shQuote(base64.StdEncoding.EncodeToString(windowsReportScript(values["gateway"], values["task"]))) + " | base64 -d > \"$OEM/reports.ps1\"\n")
 	for _, part := range []catalog.SystemPart{"firstboot", "cleanup"} {
 		body.WriteString("printf '%s' " + shQuote(base64.StdEncoding.EncodeToString(parts[part])) + " | base64 -d > \"$OEM/" + windowsPartFile(part) + "\"\n")
 	}
@@ -121,31 +122,31 @@ func windowsPart(e expansion, part catalog.SystemPart, subject model.Subject) (s
 // on Windows PowerShell 5.1. The answer uses compact -File paths to keep its
 // single native command chain within Microsoft's 1024-character field limit.
 func windowsPartScript(e expansion, part catalog.SystemPart, subject model.Subject) ([]byte, []model.Problem) {
-	values, p := answerValues(e, subject, "gateway", "task")
+	_, p := answerValues(e, subject, "gateway", "task")
 	if len(p) != 0 {
 		return nil, p
 	}
 	if part != "firstboot" && part != "cleanup" {
 		return nil, []model.Problem{model.NewProblem("render_replacement_missing", subject, part)}
 	}
-	body := "$ErrorActionPreference='Stop'\n$dir=Join-Path $env:SystemDrive 'ProgramData/lober'\n$token=(Get-Content -Raw (Join-Path $dir 'finalize.token')).Trim()\n"
-	phases := []model.SignalPhase{model.PhaseBooted, model.PhaseInitStart}
+	body := "$ErrorActionPreference = 'Stop'\n. (Join-Path $PSScriptRoot 'reports.ps1')\n"
 	if part == "cleanup" {
-		phases = []model.SignalPhase{model.PhaseInitDone, model.PhaseReady}
+		body = "param([switch]$Replay)\n" + body + `if (-not $Replay) {
+    Write-Report '900-init-done' 'init-done'
+    Write-Report '901-ready' 'ready'
+}
+`
+	} else {
+		body += `Register-ReportReplay
+Write-Report '000-booted' 'booted'
+Write-Report '001-init-start' 'init-start'
+`
 	}
-	for _, phase := range phases {
-		// Token is read locally after reboot; the install token never enters this payload.
-		base := catalog.SignalURL(values[0], values[1], "TOKEN", string(phase))
-		before, after := tokenURLParts(base)
-		body += "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 -Method Post -Uri (" + psQuote(before) + "+$token+" + psQuote(after) + ") -Body '' | Out-Null } catch {}\n"
-	}
-	if part == "cleanup" {
-		body += "Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $dir 'finalize.token'),(Join-Path $dir 'script-*.cmd'),(Join-Path $dir 'hook-*'),(Join-Path $dir 'firstboot.ps1'),(Join-Path $dir 'cleanup.ps1')\n"
-		body += "Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:WINDIR 'Panther/Unattend.xml'),(Join-Path $env:WINDIR 'Panther/Unattend/Unattend.xml')\n"
-	}
-	return append([]byte{0xef, 0xbb, 0xbf}, []byte(body+"exit 0\n")...), nil
+	return windowsPowerShellBytes(body + "Send-Reports\nexit 0\n"), nil
 }
 
 func windowsPartFile(part catalog.SystemPart) string { return string(part) + ".ps1" }
+
+func windowsPowerShellBytes(text string) []byte { return []byte("\xef\xbb\xbf" + text) }
 
 func psQuote(text string) string { return "'" + strings.ReplaceAll(text, "'", "''") + "'" }

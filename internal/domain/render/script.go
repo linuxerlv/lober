@@ -46,7 +46,7 @@ func posixRuntime(r Request, slot model.SnapshotSlot, windows bool) (string, []m
 	}
 	if windows {
 		b.WriteString("DIR=$LOBER_DIR\n")
-		for _, applet := range []string{"mkdir", "cat", "mktemp", "rm", "sleep", "sha256sum", "tail", "base64", "head"} {
+		for _, applet := range []string{"mkdir", "cat", "mktemp", "rm", "sleep", "sha256sum", "tail", "base64", "head", "cp", "mv"} {
 			b.WriteString(applet + "() { \"$DIR/busybox.exe\" " + applet + " \"$@\"; }\n")
 		}
 		b.WriteString("curl() { \"$DIR/curl.exe\" \"$@\"; }\n[ -f \"$DIR/curl.exe\" ] || exit 127\n")
@@ -68,7 +68,11 @@ func posixRuntime(r Request, slot model.SnapshotSlot, windows bool) (string, []m
 	b.WriteString(runtimeSignalFunction(r, slot, values))
 	if windows {
 		b.WriteString(powerShellCopyScript())
-		b.WriteString("finish_slot() { printf '%s' \"$1\" > \"$DIR/runtime-" + strconv.Itoa(slot.Seq) + ".rc\" || exit 125; exit 0; }\n")
+		b.WriteString("finish_slot() {\n status=$1\n")
+		if slot.Timing != "firstboot" {
+			b.WriteString(windowsInstallerFlushReports)
+		}
+		b.WriteString(" printf '%s' \"$status\" > \"$DIR/runtime-" + strconv.Itoa(slot.Seq) + ".rc\" || exit 125\n exit 0\n}\n")
 	}
 	switch {
 	case windows:
@@ -218,52 +222,44 @@ func runtimeLauncher(instance model.SnapshotInstance, windows bool) string {
 }
 
 func runtimeSignalFunction(r Request, slot model.SnapshotSlot, values map[catalog.SystemValue]string) string {
-	if r.Snapshot.Format != "unattend" && r.Snapshot.Format != "esxi-ks" {
+	if r.Snapshot.Format != "esxi-ks" {
 		token := values["token"]
 		if slot.Timing == "firstboot" {
 			token = ""
 		}
 		wget := r.Snapshot.Format == "preseed" && (slot.Timing == "pre" || slot.Timing == "post-installer")
-		return signalQueue(values["gateway"], values["task"], token, wget) + fmt.Sprintf(`signal() {
+		queue := ""
+		if r.Snapshot.Format == "unattend" && slot.Timing == "firstboot" {
+			queue = windowsSlotReportQueue
+		} else {
+			queue = signalQueue(values["gateway"], values["task"], token, wget)
+		}
+		onQueueError := ""
+		if r.Snapshot.Format == "unattend" {
+			onQueueError = " || finish_slot 125"
+		}
+		return queue + fmt.Sprintf(`signal() {
  phase=$1; instance=$2; rc=$3; digest=$4; body=$5
  label_instance=$instance; label_step=0
  case "$phase" in hook-report) label_step=1;; slot-end) label_instance=999999999; label_step=9;; esac
  label=$(printf '1-%%09d-%%09d-%%d' %d "$label_instance" "$label_step")
  request="$phase?slot=%d&timing=%s&rc=$rc"
  if [ "$instance" -ne 0 ]; then request="$request&instance=$instance&digest=$digest"; fi
- queue_signal "$label" "$request" "$body"
+ queue_signal "$label" "$request" "$body"%s
 }
-`, slot.Seq, slot.Seq, slot.Timing)
+`, slot.Seq, slot.Seq, slot.Timing, onQueueError)
 	}
 	address := catalog.SignalURL(values["gateway"], values["task"], "TOKEN", "PHASE")
 	before, after := tokenURLParts(address)
 	after = strings.TrimSuffix(after, "PHASE")
-	transport := "curl -fsS -m 10 -X POST -H 'Content-Type: text/plain' \"$address\" --data-binary \"$body\""
-	wgetSignal := r.Snapshot.Format == "preseed" && (slot.Timing == "pre" || slot.Timing == "post-installer")
-	if wgetSignal {
-		transport = "wget -q -T 10 -O /dev/null --header='Content-Type: text/plain' --post-file=\"$body\" \"$address\""
-	}
-	// Debian's packaged GNU wget must bypass standalone ash's wget applet;
-	// that applet truncates --post-file bodies containing NUL bytes.
-	if r.Snapshot.Format == "preseed" && wgetSignal {
-		transport = "/usr/bin/" + transport
-	}
-	body := "if [ -n \"$body\" ]; then body=\"@$body\"; fi"
-	if wgetSignal {
-		body = "if [ -z \"$body\" ]; then body=\"$WORK/empty\"; : > \"$body\"; fi"
-	}
-	if r.Snapshot.Format == "esxi-ks" {
-		body = ":"
-		transport = esxiHTTPPost()
-	}
 	return fmt.Sprintf(`signal() {
  phase=$1; instance=$2; rc=$3; digest=$4; body=$5
  address=%s"$TOKEN"%s"$phase"'?slot=%d&timing=%s&rc='"$rc"
  if [ "$instance" -ne 0 ]; then address="$address&instance=$instance&digest=$digest"; fi
- %s
+ :
  %s >/dev/null 2>&1 || :
 }
-`, shQuote(before), shQuote(after), slot.Seq, slot.Timing, body, transport)
+`, shQuote(before), shQuote(after), slot.Seq, slot.Timing, esxiHTTPPost())
 }
 
 func renderWindowsScript(r Request, slot model.SnapshotSlot) ([]byte, []model.Problem, error) {

@@ -8,6 +8,7 @@ import (
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -212,5 +213,61 @@ func Test任务读取缺少必要能力立即拒绝(t *testing.T) {
 			}()
 			NewReader(d)
 		}()
+	}
+}
+
+func Test任务预览传给渲染器的快照隐藏凭据(t *testing.T) {
+	newSnapshot := func() model.Snapshot {
+		return model.Snapshot{
+			Template: model.SnapshotTemplate{
+				Params: map[string]model.SnapshotValue{
+					"password": {Type: "word", Items: []string{"template-password-fixture"}},
+					"ordinary": {Type: "word", Items: []string{"keep-template-value"}},
+				},
+			},
+			Slots: []model.SnapshotSlot{{Instances: []model.SnapshotInstance{{
+				Params: map[string]model.SnapshotValue{
+					"admin":    {Type: "password", Items: []string{"typed-password-fixture"}},
+					"accounts": {Type: "pwhash", List: true, Items: []string{"hash-fixture-1", "hash-fixture-2"}},
+					"pwhash":   {Type: "word", Items: []string{"named-hash-fixture"}},
+					"ordinary": {Type: "word", Items: []string{"keep-instance-value"}},
+				},
+			}}}},
+		}
+	}
+	s, r, d := readFixture()
+	s.task = model.Task{ID: "frozen", Snapshot: newSnapshot()}
+	viewer := ports.Actor{Username: "viewer", Role: model.RoleViewer}
+	if _, err := NewReader(d).Preview(t.Context(), viewer, s.task.ID, PreviewRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(s.task.Snapshot, newSnapshot()) {
+		t.Fatal("预览改写了原快照")
+	}
+	original, got := newSnapshot(), r.snapshot
+	for _, pair := range [][2]map[string]model.SnapshotValue{
+		{original.Template.Params, got.Template.Params},
+		{original.Slots[0].Instances[0].Params, got.Slots[0].Instances[0].Params},
+	} {
+		for name, raw := range pair[0] {
+			value, ok := pair[1][name]
+			if !ok || value.Type != raw.Type || value.List != raw.List || len(value.Items) != len(raw.Items) {
+				t.Errorf("参数 %s 的形状改变", name)
+				continue
+			}
+			if name == "ordinary" {
+				if !reflect.DeepEqual(value, raw) {
+					t.Error("普通参数被改写")
+				}
+				continue
+			}
+			for _, item := range value.Items {
+				for _, secret := range raw.Items {
+					if strings.Contains(item, secret) {
+						t.Errorf("参数 %s 的原凭据进入预览", name)
+					}
+				}
+			}
+		}
 	}
 }

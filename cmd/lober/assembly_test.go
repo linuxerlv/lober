@@ -681,18 +681,18 @@ func Test任务控制显式共用后端时钟和通知(t *testing.T) {
 			op = c.Retry
 			action = "task.retry"
 		}
-		got, err := op(t.Context(), ports.Actor{Username: "operator", Role: model.RoleOperator}, "raw")
+		got, err := op(t.Context(), ports.Actor{Username: "operator", Role: model.RoleOperator}, "raw", 9)
 		if err != nil || got.Task.ID != "stored" || len(got.CanCancel) != 1 || !reflect.DeepEqual(b.got, st.task) || b.audit != (ports.AuditIntent{Actor: "operator", Action: action, At: 43}) || !reflect.DeepEqual(st.calls, []string{"get:raw", "get:stored"}) || !reflect.DeepEqual(b.calls, []string{"cancel:stored", "retry:stored"}) || !reflect.DeepEqual(n.publishes, []string{"stored", "stored"}) {
 			t.Fatal(got, err, b.audit, st.calls, b.calls, n.publishes)
 		}
 	}
 }
 func Test任务控制未启用明确不可用(t *testing.T) {
-	st := &taskReadAssemblyStore{task: model.Task{ID: "stored"}}
+	st := &taskReadAssemblyStore{task: model.Task{ID: "stored", Rev: 1}}
 	n := &taskControlAssemblyNotifier{}
 	c := taskControllerOf(st, taskBackendOf(&machineBundle{}), func() int64 { return 44 }, n)
-	for _, op := range []func(context.Context, ports.Actor, string) (tasks.TaskChoice, error){c.Cancel, c.Retry} {
-		if _, err := op(t.Context(), ports.Actor{Username: "admin", Role: model.RoleAdmin}, "raw"); !errors.Is(err, tasks.ErrControlUnavailable) {
+	for _, op := range []func(context.Context, ports.Actor, string, int64) (tasks.TaskChoice, error){c.Cancel, c.Retry} {
+		if _, err := op(t.Context(), ports.Actor{Username: "admin", Role: model.RoleAdmin}, "raw", 1); !errors.Is(err, tasks.ErrControlUnavailable) {
 			t.Fatal(err)
 		}
 	}

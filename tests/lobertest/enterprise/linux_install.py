@@ -264,7 +264,7 @@ uname -r
                     require_hook_failure(task, events)
                     codes = [p['code'] for p in task['canRetry']]
                     assert 'task_retry_after_reboot' in codes
-                    rejected = self.api('POST', '/tasks/' + task['id'] + '/retry', expected=422)
+                    rejected = self.api('POST', '/tasks/' + task['id'] + '/retry', {'rev': task['rev']}, expected=422)
                     assert any(p['code'] == 'task_retry_after_reboot' for p in rejected['problems'])
                     self.save('EXPECTED_FAILURE', task=task['id'], hook_rc=41, retry_http=422,
                         retry_code='task_retry_after_reboot')

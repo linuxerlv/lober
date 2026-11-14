@@ -396,7 +396,7 @@ class CloudChecks(unittest.TestCase):
                     if path=='/hosts':return body
                     if path=='/wizard/params':return {'common':[],'hosts':[{'problems':[]}]}
                     if path=='/wizard/tasks':
-                        task={'id':'actual-created-response','hostSN':'PQ25L01','state':'pending','isoID':'iso-own',
+                        task={'id':'actual-created-response','hostSN':'PQ25L01','state':'pending','isoID':'iso-own','rev':1,
                             'templateID':'template','templateVersion':1,'snapshot':{'family':'OTHER-PLATFORM'}}
                         created.append(task);return {'tasks':[task]}
                     raise AssertionError((method,path))
@@ -552,13 +552,13 @@ class CloudChecks(unittest.TestCase):
         checker=module(self)
         for invalid_packet in (False,True):
             with self.subTest(invalid_packet=invalid_packet),tempfile.TemporaryDirectory() as directory:
-                root=Path(directory);task=self.good_evidence()['task'];task['hostSN']='PQ25L01'
+                root=Path(directory);task=self.good_evidence()['task'];task.update(hostSN='PQ25L01', rev=11)
                 events=self.good_evidence()['events'];events[0]['at']=100
                 manifest={'cloud':{'owner':OWNER,'target':TARGET_SPEC,'prepare_chain_sha256':'a'*64,
                     'start_chain_sha256':'b'*64,'instance_record_sha256':'c'*64,'media':{'version':'13'}},
                     'binary_sha256':'d'*64}
                 started={'owner':OWNER,'prepare_chain_sha256':'a'*64,'instance_record_sha256':'c'*64,
-                    'executor_sha256':checker.sha256(checker.__file__),'task':task,'template':{},'hook':{}}
+                    'executor_sha256':checker.sha256(checker.__file__),'task':{**task,'rev':1},'template':{},'hook':{}}
                 prepared={'iso':{'id':'iso'}}
                 install={'owner':OWNER,'target_uuid':OWNER['target_uuid'],'sha256':'e'*64,
                     'path':checker.VM_BASE+'/machines/fixture-install.pcap','packet_contract':{'task_id':'task-real'}}
@@ -569,7 +569,9 @@ class CloudChecks(unittest.TestCase):
                     def __exit__(self,*args):return False
                 def open_request(request,**kwargs):requests.append(request);return Response()
                 def request(method,path,*args,**kwargs):
-                    if path.endswith('/retry'):return {'problems':[{'code':'task_retry_after_reboot'}]}
+                    if path.endswith('/retry'):
+                        self.assertEqual((method, path, args, kwargs), ('POST', '/tasks/task-real/retry', ({'rev': 11},), {'expected': 422}))
+                        return {'problems':[{'code':'task_retry_after_reboot'}]}
                     if path.startswith('/isos/'):return prepared['iso']
                     return task
                 api=types.SimpleNamespace(authenticate=lambda:None,api=request,events=lambda task_id:events,

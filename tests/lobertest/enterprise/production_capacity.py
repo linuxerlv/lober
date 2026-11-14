@@ -1140,7 +1140,7 @@ class Driver:
     def history_task(self, token, sn, category='seed'):
         body = {**self.c['dataset']['selection'], 'hosts': [{'sn': sn, 'entered': self.c['dataset']['entered']}]}
         item = self.request('POST', '/wizard/tasks', token, body, category=category)['tasks'][0]
-        cancelled = self.request('POST', '/tasks/'+item['id']+'/cancel', token, category=category)
+        cancelled = self.request('POST', '/tasks/'+item['id']+'/cancel', token, {'rev': item['rev']}, category=category)
         if cancelled['state'] != 'cancelled' or cancelled['snapshot'] != item['snapshot']:
             raise RuntimeError('API cancellation/snapshot contract failed')
         return item['id']

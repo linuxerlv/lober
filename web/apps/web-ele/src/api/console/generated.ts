@@ -79,6 +79,7 @@ export interface Schemas {
   "StoreSourceState": string;
   "SubjectJSON": { "col": number; "id": string; "kind": string; "line": number; "path": string; };
   "TaskBatchSummary": { "active": number; "cancelled": number; "createdAt": number; "createdBy": string; "done": number; "failed": number; "isoName": string; "pending": number; "templateName": string; "templateVersion": number; "total": number; };
+  "TaskControlRequest": { "rev": number; };
   "TaskItem": { "batchID"?: string; "canCancel": (Array<Schemas["ProblemJSON"]>) | null; "canRetry": (Array<Schemas["ProblemJSON"]>) | null; "createdAt": number; "createdBy": string; "hostSN": string; "id": string; "isoID": string; "rev": number; "snapshot": Schemas["SnapshotDTO"]; "state": Schemas["ModelTaskState"]; "templateID": string; "templateVersion": number; };
   "TaskPage": { "items": (Array<Schemas["TaskItem"]>) | null; "next": string; "total"?: number | null; };
   "TaskPreviewRequest": { "firmware"?: Schemas["CatalogFirmware"]; };
@@ -360,7 +361,8 @@ export interface Paths {
   "/console/v1/tasks/{id}/cancel": {
     "post": {
       path: { "id": string; };
-      responses: { "200": { "application/json": { "code": 0; "data": Schemas["TaskItem"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+      requestBody: { "application/json": Schemas["TaskControlRequest"]; };
+      responses: { "200": { "application/json": { "code": 0; "data": Schemas["TaskItem"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "413": { "application/json": { "code": 413; "data": null; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };
   "/console/v1/tasks/{id}/events": {
@@ -380,7 +382,8 @@ export interface Paths {
   "/console/v1/tasks/{id}/retry": {
     "post": {
       path: { "id": string; };
-      responses: { "200": { "application/json": { "code": 0; "data": Schemas["TaskItem"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+      requestBody: { "application/json": Schemas["TaskControlRequest"]; };
+      responses: { "200": { "application/json": { "code": 0; "data": Schemas["TaskItem"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "413": { "application/json": { "code": 413; "data": null; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };
   "/console/v1/tasks/{id}/stream": {

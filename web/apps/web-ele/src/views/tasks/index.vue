@@ -97,7 +97,7 @@ async function cancelSelected() {
       try {
         if (!access.accessCodes.includes('task:cancel'))
           throw new Error('没有取消权限');
-        await taskAPI.cancel(task.id);
+        await taskAPI.cancel(task.id, task.rev);
         selection.toggle(task, false);
         done++;
       } catch (reason) {

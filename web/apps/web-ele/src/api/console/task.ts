@@ -14,8 +14,10 @@ export const taskAPI = {
     requestClient.get<Schemas['EventPage']>(`/tasks/${encodeURIComponent(id)}/events`, {
       params: { after_seq: after, limit: 200 },
     }),
-  cancel: (id: string) => requestClient.post<Task>(`/tasks/${encodeURIComponent(id)}/cancel`),
-  retry: (id: string) => requestClient.post<Task>(`/tasks/${encodeURIComponent(id)}/retry`),
+  cancel: (id: string, rev: number) =>
+    requestClient.post<Task>(`/tasks/${encodeURIComponent(id)}/cancel`, { rev }),
+  retry: (id: string, rev: number) =>
+    requestClient.post<Task>(`/tasks/${encodeURIComponent(id)}/retry`, { rev }),
   preview: (id: string, firmware?: string) =>
     requestClient.post<Schemas['PreviewResponse']>(`/tasks/${encodeURIComponent(id)}/preview`, {
       firmware,

@@ -214,6 +214,7 @@ async function control(retry: boolean) {
   )
     return;
   if ((retry ? task.value.canRetry : task.value.canCancel)?.length) return;
+  const rev = task.value.rev;
   try {
     await ElMessageBox.confirm(
       retry
@@ -242,8 +243,8 @@ async function control(retry: boolean) {
   problems.value = [];
   try {
     const result = await (retry
-      ? taskAPI.retry(current.id)
-      : taskAPI.cancel(current.id));
+      ? taskAPI.retry(current.id, rev)
+      : taskAPI.cancel(current.id, rev));
     if (current !== session) return;
     task.value = result;
     if (retry) {

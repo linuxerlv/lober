@@ -798,9 +798,14 @@ export default defineEventHandler(async (event) => {
     }
     if (method === 'POST' && (match[2] === 'cancel' || match[2] === 'retry')) {
       const retry = match[2] === 'retry';
+      const { rev } = (await readBody<{ rev?: number }>(event)) ?? {};
+      if (typeof rev !== 'number' || !Number.isSafeInteger(rev) || rev < 1)
+        return fail(400, '任务版本无效');
+      if (rev !== task.rev) return fail(409, '任务状态已变更，请刷新后重试');
       if (task.state !== (retry ? 'failed' : 'pending'))
         return fail(409, '当前状态不能执行此操作');
       task.state = retry ? 'pending' : 'cancelled';
+      task.rev++;
       task.canCancel = retry ? [] : [problem('任务已取消')];
       task.canRetry = [problem('仅失败的任务可以重试')];
       events.push({

@@ -285,6 +285,14 @@ onBeforeUnmount(() => {
   page.reset();
 });
 
+function canChooseNewUploadFile(source: SourceProgress) {
+  return (
+    source.state === 'pending' &&
+    source.fetched === 0 &&
+    (source.ranges?.length ?? 0) === 0
+  );
+}
+
 async function uploadFile(id: string, role: string, file: File) {
   if (!canWrite.value) return;
   const key = uploadKey(id, role);
@@ -297,8 +305,13 @@ async function uploadFile(id: string, role: string, file: File) {
     const source = (state.sources ?? []).find((item) => item.role === role);
     if (!source || source.kind !== 'upload')
       throw new Error('服务器未登记该上传来源');
-    const expected = localStorage.getItem(identityKey(id, role)) ?? undefined;
-    if (!expected && (source.fetched > 0 || (source.ranges ?? []).length > 0))
+    const ranges = source.ranges ?? [];
+    const storageKey = identityKey(id, role);
+    // 服务端重试会清空进度。只有还没开始的上传才能换用新文件。
+    const expected = canChooseNewUploadFile(source)
+      ? undefined
+      : (localStorage.getItem(storageKey) ?? undefined);
+    if (!expected && (source.fetched > 0 || ranges.length > 0))
       throw new Error(
         '此浏览器没有原上传文件的校验记录，不能安全续传；请使用原浏览器或重新登记 ISO',
       );
@@ -308,10 +321,10 @@ async function uploadFile(id: string, role: string, file: File) {
       source.totalSize,
       expected,
     );
-    localStorage.setItem(identityKey(id, role), identity);
+    localStorage.setItem(storageKey, identity);
     for (const chunk of missingChunks(
       source.totalSize,
-      source.ranges ?? [],
+      ranges,
       undefined,
       source.state === 'fetching',
     )) {
@@ -787,10 +800,14 @@ function formatSize(bytes: number) {
           />
           <template v-if="canWrite && source.kind === 'upload'">
             <label>
-              选择原文件以补传缺失分片
+              {{
+                canChooseNewUploadFile(source)
+                  ? '选择文件上传'
+                  : '选择原文件以补传缺失分片'
+              }}
               <input
                 type="file"
-                :aria-label="`${source.role || '主 ISO'}续传文件`"
+                :aria-label="`${source.role || '主 ISO'}${canChooseNewUploadFile(source) ? '上传文件' : '续传文件'}`"
                 :disabled="
                   uploadActive.has(uploadKey(selected.id, source.role))
                 "

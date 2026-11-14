@@ -6,6 +6,7 @@ import (
 	"github.com/lober/lober/internal/application/media/port"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
+	"time"
 )
 
 const (
@@ -206,12 +207,39 @@ func (s *Sources) finishFetch(ctx context.Context, src model.Source, session por
 		src.TotalSize = content.Size
 	}
 	if _, err = s.sources.SaveSource(ctx, src, repository.Audit{}); err != nil {
+		// 回执丢失不代表保存失败；先核对数据库，结果不明时保留正式文件。
+		current, readErr := s.readFetchOutcome(ctx, src.ISOID, src.Role)
+		if readErr != nil {
+			return &unknownFetchOutcome{cause: err}
+		}
+		if current.State == model.SourceFetched {
+			expected := src
+			expected.Rev = current.Rev
+			if current.Rev > src.Rev && current == expected {
+				return nil
+			}
+			return err
+		}
 		return errors.Join(err, session.Restore(context.WithoutCancel(ctx)))
 	}
 	return nil
 }
+
+func (s *Sources) readFetchOutcome(ctx context.Context, id, role string) (model.Source, error) {
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return s.getSource(readCtx, id, role)
+}
+
+type unknownFetchOutcome struct{ cause error }
+
+func (e *unknownFetchOutcome) Error() string { return e.cause.Error() }
+func (e *unknownFetchOutcome) Unwrap() error { return e.cause }
+
 func (s *Sources) failFetch(ctx context.Context, src model.Source, cause error) {
-	if ctx.Err() != nil {
+	var unknown *unknownFetchOutcome
+	// 完成结果不明时，不能再把来源改成失败；保留进度供下次核对和续传。
+	if ctx.Err() != nil || errors.As(cause, &unknown) {
 		return
 	}
 	cleanup := context.WithoutCancel(ctx)

@@ -6,6 +6,7 @@ import (
 	"github.com/lober/lober/internal/application/tasks/port"
 	"github.com/lober/lober/internal/domain/access"
 	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
 )
 
 type controller struct{ deps ControllerDeps }
@@ -17,7 +18,7 @@ func NewController(d ControllerDeps) Controller {
 	}
 	return &controller{deps: d}
 }
-func (c *controller) control(ctx context.Context, actor ports.Actor, id string, retry bool) (TaskChoice, error) {
+func (c *controller) control(ctx context.Context, actor ports.Actor, id string, rev int64, retry bool) (TaskChoice, error) {
 	permission, action := access.PermTaskCancel, "task.cancel"
 	if retry {
 		permission, action = access.PermTaskRetry, "task.retry"
@@ -28,6 +29,9 @@ func (c *controller) control(ctx context.Context, actor ports.Actor, id string, 
 	t, err := c.deps.Tasks.GetTask(ctx, id)
 	if err != nil {
 		return TaskChoice{}, err
+	}
+	if t.Rev != rev {
+		return TaskChoice{}, repository.ErrConflict
 	}
 	audit := ports.AuditIntent{Actor: actor.Username, Action: action, At: c.deps.Clock()}
 	if retry {
@@ -45,11 +49,11 @@ func (c *controller) control(ctx context.Context, actor ports.Actor, id string, 
 	c.deps.Notifier.Publish(back.ID)
 	return taskChoice(back, c.deps.Backend), nil
 }
-func (c *controller) Cancel(ctx context.Context, a ports.Actor, id string) (TaskChoice, error) {
-	return c.control(ctx, a, id, false)
+func (c *controller) Cancel(ctx context.Context, a ports.Actor, id string, rev int64) (TaskChoice, error) {
+	return c.control(ctx, a, id, rev, false)
 }
-func (c *controller) Retry(ctx context.Context, a ports.Actor, id string) (TaskChoice, error) {
-	return c.control(ctx, a, id, true)
+func (c *controller) Retry(ctx context.Context, a ports.Actor, id string, rev int64) (TaskChoice, error) {
+	return c.control(ctx, a, id, rev, true)
 }
 
 type unavailableControl struct{}

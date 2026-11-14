@@ -553,8 +553,8 @@ def test_cancel_active_tasks_returns_cancelled_ids(console, m):
         f"{CONSOLE_BASE}/tasks",
         json=envelope_ok(
             [
-                {"id": "task-1", "hostSn": "SN1", "state": "pending"},
-                {"id": "task-2", "hostSn": "SN1", "state": "booting"},
+                {"id": "task-1", "hostSn": "SN1", "state": "pending", "rev": 2},
+                {"id": "task-2", "hostSn": "SN1", "state": "booting", "rev": 4},
                 {"id": "task-3", "hostSn": "SN1", "state": "done"},
             ]
         ),
@@ -565,6 +565,12 @@ def test_cancel_active_tasks_returns_cancelled_ids(console, m):
     cancelled = console.cancel_active_tasks("SN1")
 
     assert sorted(cancelled) == ["task-1", "task-2"]
+    bodies = [
+        request.json()
+        for request in m.request_history
+        if request.method == "POST" and request.path.endswith("/cancel")
+    ]
+    assert bodies == [{"rev": 2}, {"rev": 4}]
 
 
 def test_cancel_active_tasks_none_active_returns_empty(console, m):

@@ -141,6 +141,58 @@ func (f *taskControlFixture) Retry(ctx context.Context, task model.Task, a ports
 func (f *taskControlFixture) CanCancel(model.Task) []model.Problem { return f.block }
 func (f *taskControlFixture) CanRetry(model.Task) []model.Problem  { return f.block }
 
+func Test任务控制拒绝旧版本(t *testing.T) {
+	for _, action := range []string{"cancel", "retry"} {
+		t.Run(action, func(t *testing.T) {
+			s, st, token, task, _ := taskFixture(t)
+			ctl := &taskControlFixture{st: st}
+			setTaskControl(s, ctl)
+			path := "/console/v1/tasks/" + task.ID
+			cancelled := responseData[taskItem](t, httpCall(s, "POST", path+"/cancel", fmt.Sprintf(`{"rev":%d}`, task.Rev), token))
+			if cancelled.State != model.TaskCancelled || cancelled.Rev <= task.Rev {
+				t.Fatalf("有效版本取消后的状态为 %s，版本为 %d", cancelled.State, cancelled.Rev)
+			}
+			current := cancelled
+			if action == "cancel" {
+				current = responseData[taskItem](t, httpCall(s, "POST", path+"/retry", fmt.Sprintf(`{"rev":%d}`, cancelled.Rev), token))
+				if current.State != model.TaskPending || current.Rev <= cancelled.Rev {
+					t.Fatalf("有效版本重试后的状态为 %s，版本为 %d", current.State, current.Rev)
+				}
+			}
+
+			calls := len(ctl.calls)
+			w := httpCall(s, "POST", path+"/"+action, fmt.Sprintf(`{"rev":%d}`, task.Rev), token)
+			if w.Code != http.StatusConflict {
+				t.Errorf("旧版本请求得到 %d，期望 409", w.Code)
+			}
+			got, err := st.GetTask(t.Context(), task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.State != current.State || got.Rev != current.Rev || len(ctl.calls) != calls {
+				t.Errorf("旧版本请求触发了任务操作，状态为 %s，版本为 %d", got.State, got.Rev)
+			}
+		})
+	}
+}
+
+func Test任务控制要求正整数版本(t *testing.T) {
+	s, st, token, task, _ := taskFixture(t)
+	ctl := &taskControlFixture{st: st, reject: repository.ErrConflict}
+	setTaskControl(s, ctl)
+	for _, action := range []string{"cancel", "retry"} {
+		for _, body := range []string{"", `{}`, `{"rev":0}`, `{"rev":-1}`, `{"rev":1.5}`, `{"rev":"1"}`, `{"rev":9223372036854775808}`} {
+			w := httpCall(s, "POST", "/console/v1/tasks/"+task.ID+"/"+action, body, token)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("%s 收到请求体 %q 后返回 %d，期望 400", action, body, w.Code)
+			}
+		}
+	}
+	if len(ctl.calls) != 0 {
+		t.Error("非法版本请求触发了任务操作")
+	}
+}
+
 func Test任务控制委托审计及错误隔离(t *testing.T) {
 	s, st, token, task, _ := taskFixture(t)
 	ctl := &taskControlFixture{st: st}
@@ -151,14 +203,16 @@ func Test任务控制委托审计及错误隔离(t *testing.T) {
 	}
 	ch, unsub := testCaps(s).Notifier.Subscribe(task.ID)
 	defer unsub()
+	rev := task.Rev
 	for _, step := range []struct {
 		action string
 		state  model.TaskState
 	}{{"cancel", model.TaskCancelled}, {"retry", model.TaskPending}} {
-		back := responseData[taskItem](t, httpCall(s, "POST", "/console/v1/tasks/"+task.ID+"/"+step.action, "", token))
+		back := responseData[taskItem](t, httpCall(s, "POST", "/console/v1/tasks/"+task.ID+"/"+step.action, fmt.Sprintf(`{"rev":%d}`, rev), token))
 		if back.State != step.state {
 			t.Fatal(back)
 		}
+		rev = back.Rev
 		select {
 		case <-ch:
 		case <-time.After(time.Second):
@@ -177,7 +231,7 @@ func Test任务控制委托审计及错误隔离(t *testing.T) {
 		status int
 	}{{repository.ErrConflict, 409}, {&repository.ProblemsError{Kind: repository.ErrRejected, Problems: []model.Problem{model.NewProblem("host_has_open_task", model.Subject{Kind: model.KindHost, ID: "SN-1"})}}, 422}, {errors.New("private backend credential"), 500}, {tasks.ErrControlUnavailable, 422}} {
 		ctl.reject = test.err
-		w := httpCall(s, "POST", "/console/v1/tasks/"+task.ID+"/cancel", "", token)
+		w := httpCall(s, "POST", "/console/v1/tasks/"+task.ID+"/cancel", fmt.Sprintf(`{"rev":%d}`, rev), token)
 		if w.Code != test.status || strings.Contains(w.Body.String(), "private backend credential") {
 			t.Fatal(w.Code, w.Body.String())
 		}
@@ -258,6 +312,59 @@ func Test任务预览只使用固化快照及引用删除保护(t *testing.T) {
 	frozen := responseData[previewResponse](t, httpCall(s, "POST", path, `{"firmware":"uefi"}`, token))
 	if !reflect.DeepEqual(first, frozen) {
 		t.Fatal("preview depended on live records", frozen)
+	}
+}
+
+func Test只读用户的任务预览隐藏模板和插槽凭据(t *testing.T) {
+	s, st, _, task, _ := taskFixture(t)
+	viewer, _ := seedHTTPUser(t, s, st, "preview_viewer", model.RoleViewer)
+	// 模板和插槽都有自己的参数。
+	const hash = "$6$loberfixture$s48HMcReZuTl/hNjsbSzMJwS02PdRGxg.c4S/fcvnK13iqHyU.awFlFtXuNgMr03IcKPWRhuoIqMge0LZ.KGX0"
+	frozen := task.Snapshot
+	frozen.Host.SN = "SN-3"
+	frozen.Template.Body += "# {{param:password}} {{param:root_hash}}\n{{slot:account}}\n"
+	frozen.Template.Params["password"] = model.SnapshotValue{Type: "word", Items: []string{"template-password-fixture"}}
+	frozen.Template.Params["root_hash"] = model.SnapshotValue{Type: "pwhash", Items: []string{hash}}
+	frozen.Slots = append(frozen.Slots, model.SnapshotSlot{Seq: len(frozen.Slots) + 1, Name: "account", Instances: []model.SnapshotInstance{{
+		Kind: model.ImplFragment,
+		Body: "# user {{param:name}} {{param:password}}\n",
+		Params: map[string]model.SnapshotValue{
+			"name":     {Type: "word", Items: []string{"visible-account"}},
+			"password": {Type: "word", Items: []string{"fragment-password-fixture"}},
+		},
+	}}})
+	created, err := st.CreateTasks(t.Context(), []model.Task{{
+		HostSN: "SN-3", ISOID: task.ISOID, TemplateID: task.TemplateID, TemplateVersion: task.TemplateVersion,
+		Snapshot: frozen, CreatedBy: "admin", CreatedAt: fixedAt,
+	}}, repository.Audit{Actor: "admin", Action: "task.create", At: fixedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := created[0]
+	w := httpCall(s, "POST", "/console/v1/tasks/"+stored.ID+"/preview", `{}`, viewer)
+	got := responseData[previewResponse](t, w)
+	if len(got.Problems) != 0 || len(got.Files) < 2 {
+		t.Fatal("未生成预览文件")
+	}
+	for name, fixture := range map[string]string{"模板密码": "template-password-fixture", "模板口令散列": hash, "插槽密码": "fragment-password-fixture"} {
+		if strings.Contains(w.Body.String(), fixture) {
+			t.Errorf("任务预览泄露了%s", name)
+		}
+	}
+	if !strings.Contains(w.Body.String(), "visible-account") || !strings.Contains(w.Body.String(), "node fixed") {
+		t.Error("任务预览丢失了普通参数")
+	}
+	for _, file := range got.Files {
+		if !file.Sample {
+			t.Errorf("文件 %s 缺少样例标记", file.Name)
+		}
+	}
+	after, err := st.GetTask(t.Context(), stored.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Rev != stored.Rev || !reflect.DeepEqual(after.Snapshot, stored.Snapshot) {
+		t.Error("预览修改了数据库里的任务快照")
 	}
 }
 
@@ -657,17 +764,18 @@ func Test任务网页只转换读取应用结果与原始查询(t *testing.T) {
 type taskControllerResultFixture struct {
 	calls  []string
 	actor  ports.Actor
+	rev    int64
 	choice tasks.TaskChoice
 	err    error
 }
 
-func (f *taskControllerResultFixture) Cancel(_ context.Context, a ports.Actor, id string) (tasks.TaskChoice, error) {
-	f.actor = a
+func (f *taskControllerResultFixture) Cancel(_ context.Context, a ports.Actor, id string, rev int64) (tasks.TaskChoice, error) {
+	f.actor, f.rev = a, rev
 	f.calls = append(f.calls, "cancel:"+id)
 	return f.choice, f.err
 }
-func (f *taskControllerResultFixture) Retry(_ context.Context, a ports.Actor, id string) (tasks.TaskChoice, error) {
-	f.actor = a
+func (f *taskControllerResultFixture) Retry(_ context.Context, a ports.Actor, id string, rev int64) (tasks.TaskChoice, error) {
+	f.actor, f.rev = a, rev
 	f.calls = append(f.calls, "retry:"+id)
 	return f.choice, f.err
 }
@@ -678,16 +786,16 @@ func Test任务控制网页只转换应用结果(t *testing.T) {
 	f := &taskControllerResultFixture{choice: tasks.TaskChoice{Task: model.Task{ID: "app-result", Rev: 17, State: model.TaskCancelled}, CanCancel: ps, CanRetry: ps}}
 	s.server.deps.TaskController = f
 	for _, action := range []string{"cancel", "retry"} {
-		got := responseData[taskItem](t, httpCall(s, "POST", "/console/v1/tasks/raw-id/"+action, `{"actor":"forged","action":"forged","detail":"forged","at":1}`, token))
-		if got.ID != "app-result" || got.Rev != 17 || got.State != model.TaskCancelled || len(got.CanCancel) != 1 || len(got.CanRetry) != 1 || got.CanCancel[0].Code != ps[0].Code || f.actor.Username != "alice" || f.actor.Role != model.RoleAdmin {
-			t.Fatal(got, f.actor)
+		got := responseData[taskItem](t, httpCall(s, "POST", "/console/v1/tasks/raw-id/"+action, `{"rev":16,"actor":"forged","action":"forged","detail":"forged","at":1}`, token))
+		if got.ID != "app-result" || got.Rev != 17 || got.State != model.TaskCancelled || len(got.CanCancel) != 1 || len(got.CanRetry) != 1 || got.CanCancel[0].Code != ps[0].Code || f.actor.Username != "alice" || f.actor.Role != model.RoleAdmin || f.rev != 16 {
+			t.Fatal(got, f.actor, f.rev)
 		}
 	}
 	if !reflect.DeepEqual(f.calls, []string{"cancel:raw-id", "retry:raw-id"}) {
 		t.Fatal(f.calls)
 	}
 	f.err = tasks.ErrControlUnavailable
-	w := httpCall(s, "POST", "/console/v1/tasks/raw-id/cancel", "", token)
+	w := httpCall(s, "POST", "/console/v1/tasks/raw-id/cancel", `{"rev":16}`, token)
 	if w.Code != 422 || !strings.Contains(w.Body.String(), model.ConsoleTaskControlUnavailable) {
 		t.Fatal(w.Code, w.Body.String())
 	}

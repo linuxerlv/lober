@@ -2,6 +2,8 @@ package tasks
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strconv"
 
 	"github.com/lober/lober/internal/application/ports"
@@ -122,7 +124,7 @@ func (r *reader) Preview(ctx context.Context, actor ports.Actor, id string, req 
 			labels = append(labels, "firmware")
 		}
 	}
-	files, sample, ps, err := r.deps.Renderer.RenderFrozen(ctx, t.Snapshot, firmware, t.ID)
+	files, sample, ps, err := r.deps.Renderer.RenderFrozen(ctx, previewSnapshot(t.Snapshot), firmware, t.ID)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -134,4 +136,40 @@ func (r *reader) Preview(ctx context.Context, actor ports.Actor, id string, req 
 		}
 	}
 	return PreviewResult{Files: files, Sample: sample, Problems: ps}, nil
+}
+
+// isCredentialParam 识别口令类型，以及内置模板和钩子使用的口令参数名。
+func isCredentialParam(name string, typ model.ParamType) bool {
+	return name == "password" || name == "pwhash" || typ == "password" || typ == "pwhash"
+}
+
+const redactedCredential = "[redacted]"
+
+// 复制脱敏需要改写的字段。机器渲染继续使用原快照。
+func previewSnapshot(s model.Snapshot) model.Snapshot {
+	s.Template.Params = previewParams(s.Template.Params)
+	s.Slots = slices.Clone(s.Slots)
+	for i := range s.Slots {
+		slot := &s.Slots[i]
+		slot.Instances = slices.Clone(slot.Instances)
+		for j := range slot.Instances {
+			instance := &slot.Instances[j]
+			instance.Params = previewParams(instance.Params)
+		}
+	}
+	return s
+}
+
+func previewParams(params map[string]model.SnapshotValue) map[string]model.SnapshotValue {
+	sample := maps.Clone(params)
+	for name, value := range sample {
+		if isCredentialParam(name, value.Type) {
+			value.Items = slices.Clone(value.Items)
+			for i := range value.Items {
+				value.Items[i] = redactedCredential
+			}
+			sample[name] = value
+		}
+	}
+	return sample
 }
