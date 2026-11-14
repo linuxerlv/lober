@@ -7,6 +7,8 @@ export type TaskEvent = Schemas['EventItem'];
 export const taskAPI = {
   list: (params: Record<string, number | string> = {}) =>
     requestClient.get<Schemas['TaskPage']>('/tasks', { params }),
+  batch: (id: string) =>
+    requestClient.get<Schemas['TaskBatchSummary']>(`/task-batches/${encodeURIComponent(id)}`),
   get: (id: string) => requestClient.get<Task>(`/tasks/${encodeURIComponent(id)}`),
   events: (id: string, after = 0) =>
     requestClient.get<Schemas['EventPage']>(`/tasks/${encodeURIComponent(id)}/events`, {

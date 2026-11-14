@@ -3,18 +3,21 @@ import type { TreeInstance } from 'element-plus';
 
 import type { RoleMenuList } from '#/api/console/role-menus';
 import type { ConsoleRole } from '#/api/console/session';
+import type { User } from '#/api/console/accounts';
 
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
+
+import { Page } from '@vben/common-ui';
 
 import {
   ElAlert,
   ElButton,
-  ElCard,
   ElEmpty,
-  ElForm,
-  ElFormItem,
-  ElOption,
-  ElSelect,
+  ElTable,
+  ElTableColumn,
+  ElTabPane,
+  ElTabs,
   ElTag,
   ElTree,
 } from 'element-plus';
@@ -23,11 +26,24 @@ import { roleLabels } from '#/api/console/accounts';
 import { getRoleMenusApi, saveRoleMenusApi } from '#/api/console/role-menus';
 import { useConsoleAccess } from '#/composables/use-console-access';
 import { useAuthStore } from '#/store';
+import PermissionGroups from './PermissionGroups.vue';
+import { readAccountDirectory } from './account-directory';
+import { roleDescriptions, rolePermissionGroups } from './role-permissions';
 const { can, refresh } = useConsoleAccess();
 const auth = useAuthStore();
-const role = ref<ConsoleRole>('viewer');
+const route = useRoute();
+const role = computed(() =>
+  typeof route.query.role === 'string' &&
+  Object.hasOwn(roleLabels, route.query.role)
+    ? (route.query.role as ConsoleRole)
+    : undefined,
+);
+const section = ref('permissions');
+const accounts = ref<User[]>();
+const accountsError = ref('');
+const accountsLoading = ref(false);
 const state = ref<null | RoleMenuList>(null);
-const drafts = reactive<Record<string, string[]>>({});
+const drafts = reactive<Partial<Record<ConsoleRole, string[]>>>({});
 const error = ref('');
 const loading = ref(false);
 const notice = ref('');
@@ -36,6 +52,20 @@ const tree = ref<TreeInstance>();
 const current = computed(() =>
   state.value?.roles.find((item) => item.role === role.value),
 );
+const permissions = computed(() =>
+  role.value ? rolePermissionGroups(role.value) : [],
+);
+const members = computed(
+  () => accounts.value?.filter((account) => account.role === role.value) ?? [],
+);
+function accountCount(target: ConsoleRole) {
+  return (
+    accounts.value?.filter((account) => account.role === target).length ?? '—'
+  );
+}
+function roleLink(target?: ConsoleRole) {
+  return { path: '/access/role-menus', query: target ? { role: target } : {} };
+}
 const menus = computed(
   () =>
     state.value?.menus.filter((menu) =>
@@ -59,7 +89,10 @@ const treeData = computed(() =>
 );
 const selectedIds = computed(() =>
   menus.value
-    .filter((menu) => menu.required || drafts[role.value]?.includes(menu.id))
+    .filter(
+      (menu) =>
+        menu.required || (role.value && drafts[role.value]?.includes(menu.id)),
+    )
     .map((menu) => menu.id),
 );
 watch(
@@ -69,7 +102,22 @@ watch(
 );
 watch(role, () => {
   notice.value = '';
+  error.value = '';
+  section.value = 'permissions';
 });
+async function loadAccounts() {
+  if (!can('user:manage') || accountsLoading.value) return;
+  accountsLoading.value = true;
+  accountsError.value = '';
+  try {
+    accounts.value = await readAccountDirectory();
+  } catch {
+    accounts.value = undefined;
+    accountsError.value = '读取关联账号失败，请重试。';
+  } finally {
+    accountsLoading.value = false;
+  }
+}
 async function load() {
   if (!can('user:manage')) return;
   loading.value = true;
@@ -87,6 +135,7 @@ async function load() {
   }
 }
 function updateDraft() {
+  if (!role.value) return;
   const checked = new Set(tree.value?.getCheckedKeys(true) || []);
   drafts[role.value] = menus.value
     .filter((menu) => menu.required || checked.has(menu.id))
@@ -94,7 +143,8 @@ function updateDraft() {
   notice.value = '';
 }
 async function save() {
-  if (saving.value || !current.value || !can('user:manage')) return;
+  if (saving.value || !current.value || !role.value || !can('user:manage'))
+    return;
   saving.value = true;
   error.value = '';
   notice.value = '';
@@ -110,8 +160,7 @@ async function save() {
     const index = state.value!.roles.findIndex((item) => item.role === target);
     state.value!.roles[index] = result;
     drafts[target] = [...result.menuIds];
-    notice.value =
-      '配置已保存，同角色用户将在下次导航、窗口聚焦或 30 秒内刷新。';
+    notice.value = `已保存「${roleLabels[target]}」的菜单配置。该角色的账号刷新权限后生效。`;
     if (target === auth.sessionUser?.role) await refresh();
   } catch (e: any) {
     error.value =
@@ -122,56 +171,192 @@ async function save() {
     saving.value = false;
   }
 }
-onMounted(load);
+onMounted(() => {
+  void load();
+  void loadAccounts();
+});
+watch(
+  () => route.path,
+  (path, previous) => {
+    if (path === '/access/role-menus' && previous !== path) void loadAccounts();
+  },
+);
 </script>
 <template>
-  <main class="p-6">
-    <h1 class="mb-2 text-2xl font-semibold">角色与菜单</h1>
-    <p class="mb-6 text-sm text-gray-500">
-      选择角色并配置可见菜单。菜单分配受角色已有权限约束，操作按钮仍按权限控制。
-    </p>
+  <Page
+    :title="role ? roleLabels[role] : '角色管理'"
+    :description="
+      role
+        ? roleDescriptions[role]
+        : '查看内置角色的操作权限、关联账号和可见菜单。'
+    "
+  >
+    <template #extra>
+      <RouterLink v-if="role" :to="roleLink()"
+        ><ElButton>返回角色列表</ElButton></RouterLink
+      >
+      <ElButton
+        v-else
+        :loading="loading || accountsLoading"
+        @click="
+          load();
+          loadAccounts();
+        "
+        >刷新列表</ElButton
+      >
+    </template>
     <ElAlert
       v-if="!can('user:manage')"
-      title="当前账号没有角色菜单管理权限"
+      title="当前账号没有角色管理权限"
       type="error"
       :closable="false"
     />
-    <ElCard v-else class="max-w-3xl">
-      <ElAlert
-        v-if="error"
-        class="mb-4"
-        :title="error"
-        type="error"
-        :closable="false"
-        role="alert"
-      />
-      <ElAlert
-        v-if="notice"
-        class="mb-4"
-        :title="notice"
-        type="success"
-        :closable="false"
-      />
-      <template v-if="state">
-        <ElForm label-position="top" :disabled="saving || loading">
-          <ElFormItem label="配置角色">
-            <ElSelect
-              v-model="role"
-              aria-label="配置角色"
-              class="w-full max-w-sm"
+    <section
+      v-else
+      class="overflow-hidden rounded-lg border border-border bg-card"
+    >
+      <div v-if="error || accountsError" class="grid gap-2 px-5 py-3">
+        <ElAlert
+          v-if="error"
+          :title="error"
+          type="error"
+          :closable="false"
+          role="alert"
+        >
+          <ElButton link @click="load">重新读取配置</ElButton>
+        </ElAlert>
+        <ElAlert
+          v-if="accountsError"
+          :title="accountsError"
+          type="warning"
+          :closable="false"
+        >
+          <ElButton link @click="loadAccounts">重新读取账号</ElButton>
+        </ElAlert>
+      </div>
+      <template v-if="!role">
+        <div
+          class="flex items-center justify-between border-b border-border px-5 py-4"
+        >
+          <h2 class="font-semibold">内置角色</h2>
+          <RouterLink
+            v-if="auth.sessionUser?.menuIds.includes('users')"
+            class="text-sm text-primary"
+            to="/access/users"
+            >账号管理</RouterLink
+          >
+        </div>
+        <ElTable
+          style="--el-table-header-bg-color: hsl(var(--accent))"
+          :data="state?.roles ?? []"
+          row-key="role"
+          :empty-text="loading ? '正在读取角色…' : '暂无角色'"
+        >
+          <ElTableColumn label="角色" min-width="190">
+            <template #default="{ row }"
+              ><strong>{{ roleLabels[row.role as ConsoleRole] }}</strong>
+              <div class="text-xs text-muted-foreground">
+                {{ row.role }}
+              </div></template
             >
-              <ElOption
-                v-for="item in state.roles"
-                :key="item.role"
-                :value="item.role"
-                :label="`${roleLabels[item.role]}（${item.role}）`"
+          </ElTableColumn>
+          <ElTableColumn label="用途" min-width="260">
+            <template #default="{ row }">{{
+              roleDescriptions[row.role as ConsoleRole]
+            }}</template>
+          </ElTableColumn>
+          <ElTableColumn label="关联账号" width="115">
+            <template #default="{ row }">{{ accountCount(row.role) }}</template>
+          </ElTableColumn>
+          <ElTableColumn label="可见菜单" width="115">
+            <template #default="{ row }">{{ row.menuIds.length }}</template>
+          </ElTableColumn>
+          <ElTableColumn label="操作" width="120">
+            <template #default="{ row }"
+              ><RouterLink class="text-primary" :to="roleLink(row.role)"
+                >查看详情</RouterLink
+              ></template
+            >
+          </ElTableColumn>
+        </ElTable>
+        <div class="px-5 py-3 text-sm text-muted-foreground">
+          共 {{ state?.roles.length ?? 0 }} 个角色
+        </div>
+      </template>
+      <ElEmpty
+        v-else-if="!current"
+        :description="loading ? '正在读取角色…' : '未找到该角色'"
+      />
+      <div v-else class="px-5 pb-5">
+        <ElTabs v-model="section" aria-label="角色详情">
+          <ElTabPane label="操作权限" name="permissions">
+            <p class="mb-4 text-sm text-muted-foreground">
+              这是内置角色的操作权限。实际执行还需满足业务条件，例如只有符合条件的任务才能取消。
+            </p>
+            <PermissionGroups :groups="permissions" />
+          </ElTabPane>
+          <ElTabPane label="关联账号" name="accounts" lazy>
+            <p class="mb-3 text-sm text-muted-foreground">
+              关联账号 {{ accountCount(role) }} 个
+            </p>
+            <ElTable
+              style="--el-table-header-bg-color: hsl(var(--accent))"
+              :data="members"
+              row-key="username"
+              :empty-text="
+                accountsLoading
+                  ? '正在读取账号…'
+                  : accountsError
+                    ? '账号读取失败'
+                    : '暂无关联账号'
+              "
+            >
+              <ElTableColumn prop="username" label="用户名" min-width="140" />
+              <ElTableColumn
+                prop="displayName"
+                label="显示名称"
+                min-width="160"
               />
-            </ElSelect>
-          </ElFormItem>
-          <ElFormItem label="可见菜单（二级）">
+              <ElTableColumn label="状态" width="110">
+                <template #default="{ row }"
+                  ><ElTag :type="row.disabled ? 'danger' : 'success'">{{
+                    row.disabled ? '已禁用' : '正常'
+                  }}</ElTag></template
+                >
+              </ElTableColumn>
+              <ElTableColumn
+                v-if="auth.sessionUser?.menuIds.includes('users')"
+                label="操作"
+                width="120"
+              >
+                <template #default="{ row }"
+                  ><RouterLink
+                    class="text-primary"
+                    :to="{
+                      path: '/access/users',
+                      query: { username: row.username },
+                    }"
+                    >查看账号</RouterLink
+                  ></template
+                >
+              </ElTableColumn>
+            </ElTable>
+          </ElTabPane>
+          <ElTabPane label="菜单可见性" name="menus" lazy>
+            <p class="mb-4 text-sm text-muted-foreground">
+              这些选项控制侧栏显示哪些入口。操作权限由内置角色规则决定。
+            </p>
+            <ElAlert
+              v-if="notice"
+              class="mb-4"
+              :title="notice"
+              type="success"
+              :closable="false"
+              role="status"
+            />
             <ElTree
               ref="tree"
-              class="w-full rounded border p-3"
+              class="rounded-lg border border-border p-3"
               :data="treeData"
               node-key="id"
               :props="{ label: 'title', disabled: 'disabled' }"
@@ -182,31 +367,37 @@ onMounted(load);
               @check="updateDraft"
             >
               <template #default="{ data }">
-                <span class="flex items-center gap-2">
-                  {{ data.title }}
-                  <ElTag v-if="data.required" size="small" type="info">必留入口</ElTag>
+                <span class="flex items-center gap-2"
+                  >{{ data.title }}
+                  <ElTag v-if="data.required" size="small" type="info"
+                    >必留入口</ElTag
+                  >
                 </span>
               </template>
             </ElTree>
-          </ElFormItem>
-        </ElForm>
-        <p class="mb-5 text-sm text-gray-500">
-          勾选一级目录可批量选择二级菜单，部分选中时目录显示半选。仅保存勾选的二级菜单，空目录自动隐藏。可保存空菜单列表，管理员的“角色与菜单”入口必须保留。
-        </p>
-      </template>
-      <ElEmpty v-else-if="!loading && !error" description="暂无配置" />
-      <ElButton
-        data-action="save"
-        type="primary"
-        :loading="saving"
-        :disabled="!state || loading || saving"
-        @click="save"
-      >
-        保存配置
-      </ElButton>
-      <ElButton :disabled="saving || loading" :loading="loading" @click="load">
-        重新读取
-      </ElButton>
-    </ElCard>
-  </main>
+            <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <span class="text-sm text-muted-foreground"
+                >已选
+                {{ selectedIds.length }}
+                个入口，保存后对该角色的所有账号生效。</span
+              >
+              <div class="flex gap-2">
+                <ElButton :disabled="saving || loading" @click="load"
+                  >重新读取</ElButton
+                >
+                <ElButton
+                  data-action="save"
+                  type="primary"
+                  :loading="saving"
+                  :disabled="loading || saving"
+                  @click="save"
+                  >保存配置</ElButton
+                >
+              </div>
+            </div>
+          </ElTabPane>
+        </ElTabs>
+      </div>
+    </section>
+  </Page>
 </template>

@@ -47,6 +47,9 @@ func taskFixture(t *testing.T) (*Server, *pgstore.Store, string, model.Task, *at
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(result.Tasks) != 2 || !model.ValidID(task.BatchID) || result.Tasks[0].BatchID != task.BatchID || result.Tasks[1].BatchID != task.BatchID {
+		t.Fatal("提交结果缺少共同的批次编号", result)
+	}
 	return s, st, token, task, clock
 }
 
@@ -63,6 +66,14 @@ func Test任务列表详情事件及查询边界(t *testing.T) {
 	page = responseData[taskPage](t, httpCall(s, "GET", "/console/v1/tasks?host_sn=sn-1&state=pending", "", token))
 	if len(page.Items) != 1 || page.Items[0].ID != task.ID {
 		t.Fatal(page)
+	}
+	batch := responseData[taskPage](t, httpCall(s, "GET", "/console/v1/tasks?batch_id="+task.BatchID+"&page=1&page_size=1", "", token))
+	if batch.Total == nil || *batch.Total != 2 || len(batch.Items) != 1 || batch.Items[0].BatchID != task.BatchID {
+		t.Fatal(batch)
+	}
+	missingBatch := responseData[taskPage](t, httpCall(s, "GET", "/console/v1/tasks?batch_id=missing-batch&page=1", "", token))
+	if missingBatch.Total == nil || *missingBatch.Total != 0 || len(missingBatch.Items) != 0 {
+		t.Fatal(missingBatch)
 	}
 	detail := responseData[taskItem](t, httpCall(s, "GET", "/console/v1/tasks/"+task.ID, "", token))
 	if detail.Snapshot.Template.Params["hostname"].Items[0] != "node" || detail.CanCancel == nil || detail.CanRetry == nil {
@@ -395,7 +406,7 @@ func Test任务接口五角色权限(t *testing.T) {
 				t.Fatal(role, r, w.Code)
 			}
 		}
-		if count != 7 {
+		if count != 8 {
 			t.Fatal(count)
 		}
 	}

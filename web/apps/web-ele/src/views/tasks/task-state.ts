@@ -1,7 +1,7 @@
 import type { Schemas } from '#/api/console/generated';
 
 export const taskStateLabels: Record<Schemas['ModelTaskState'], string> = {
-  pending: '等待机器引导，随时可能开始装机',
+  pending: '等待引导',
   booting: '引导中',
   installing: '安装中',
   rebooting: '重启中',

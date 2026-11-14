@@ -36,6 +36,7 @@ vi.mock('element-plus', async () => {
     ElCard: slot('section'),
     ElDialog: slot('dialog'),
     ElMessageBox: { confirm: async () => {} },
+    ElMessage: { success: vi.fn() },
     ElTabPane: slot('div'),
     ElTabs: slot('div'),
     ElTag: slot('span'),

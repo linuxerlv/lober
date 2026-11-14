@@ -78,7 +78,8 @@ export interface Schemas {
   "StoreRole": "viewer" | "operator" | "hook-author" | "hook-approver" | "admin";
   "StoreSourceState": string;
   "SubjectJSON": { "col": number; "id": string; "kind": string; "line": number; "path": string; };
-  "TaskItem": { "canCancel": (Array<Schemas["ProblemJSON"]>) | null; "canRetry": (Array<Schemas["ProblemJSON"]>) | null; "createdAt": number; "createdBy": string; "hostSN": string; "id": string; "isoID": string; "rev": number; "snapshot": Schemas["SnapshotDTO"]; "state": Schemas["ModelTaskState"]; "templateID": string; "templateVersion": number; };
+  "TaskBatchSummary": { "active": number; "cancelled": number; "createdAt": number; "createdBy": string; "done": number; "failed": number; "isoName": string; "pending": number; "templateName": string; "templateVersion": number; "total": number; };
+  "TaskItem": { "batchID"?: string; "canCancel": (Array<Schemas["ProblemJSON"]>) | null; "canRetry": (Array<Schemas["ProblemJSON"]>) | null; "createdAt": number; "createdBy": string; "hostSN": string; "id": string; "isoID": string; "rev": number; "snapshot": Schemas["SnapshotDTO"]; "state": Schemas["ModelTaskState"]; "templateID": string; "templateVersion": number; };
   "TaskPage": { "items": (Array<Schemas["TaskItem"]>) | null; "next": string; "total"?: number | null; };
   "TaskPreviewRequest": { "firmware"?: Schemas["CatalogFirmware"]; };
   "TemplateDraftRequest": { "assembly"?: ({ [key: string]: (Array<Schemas["InstanceDTO"]>) | null; }) | null; "bindings"?: ({ [key: string]: Schemas["BindingDTO"]; }) | null; "body"?: string; "family"?: Schemas["CatalogFamily"]; "name"?: string; "params"?: (Array<Schemas["ParamDeclDTO"]>) | null; "rev": number; "series"?: (Array<Schemas["CatalogSeries"]>) | null; };
@@ -338,9 +339,15 @@ export interface Paths {
       responses: { "200": { "application/json": { "code": 0; "data": Schemas["RoleMenuListResponse"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };
+  "/console/v1/task-batches/{id}": {
+    "get": {
+      path: { "id": string; };
+      responses: { "200": { "application/json": { "code": 0; "data": Schemas["TaskBatchSummary"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+    };
+  };
   "/console/v1/tasks": {
     "get": {
-      query: { "page"?: number; "page_size"?: number; "host_sn"?: string; "state"?: Schemas["ModelTaskState"]; "created_from"?: number; "created_to"?: number; "cursor"?: string; "limit"?: number; };
+      query: { "page"?: number; "page_size"?: number; "host_sn"?: string; "batch_id"?: string; "state"?: Schemas["ModelTaskState"]; "created_from"?: number; "created_to"?: number; "cursor"?: string; "limit"?: number; };
       responses: { "200": { "application/json": { "code": 0; "data": Schemas["TaskPage"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };

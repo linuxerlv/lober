@@ -44,12 +44,13 @@ async function mount(
   role: ConsoleRole,
   permissions: string[],
   props = {},
+  location = '/',
 ) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/', component: { template: '<div />' } }],
   });
-  await router.push('/');
+  await router.push(location);
   const el = document.createElement('div');
   document.body.append(el);
   const app = createApp(
@@ -140,4 +141,23 @@ it('renders current paged read responses for a viewer without any write entry po
   await vi.waitFor(() => expect(iso.textContent).toContain('Rocky ISO'));
   expect(iso.textContent).not.toContain('登记制品集');
   expect(iso.textContent).not.toContain('废弃');
+});
+
+it('clears filters from the return URL and returns to the first page', async () => {
+  io.tasks.mockResolvedValue({ items: [], total: 0, next: '' });
+  const view = await mount(Tasks, 'operator', ['task:read'], {}, '/?state=failed&page=2');
+  const click = (label: string) => {
+    const button = [...view.querySelectorAll('button')].find(
+      (entry) => entry.textContent?.trim() === label,
+    );
+    expect(button).toBeDefined();
+    button!.click();
+  };
+  await vi.waitFor(() => expect(io.tasks).toHaveBeenCalledWith(
+    expect.objectContaining({ state: 'failed', page: 2 }),
+  ));
+  click('重置');
+  await vi.waitFor(() => expect(io.tasks).toHaveBeenLastCalledWith(
+    expect.objectContaining({ state: '', page: 1 }),
+  ));
 });

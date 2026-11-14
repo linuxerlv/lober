@@ -17,6 +17,20 @@ type taskPage struct {
 	Next  string     `json:"next"`
 	Total *int64     `json:"total,omitempty"`
 }
+type taskBatchSummary struct {
+	CreatedBy       string `json:"createdBy"`
+	CreatedAt       int64  `json:"createdAt"`
+	ISOName         string `json:"isoName"`
+	TemplateName    string `json:"templateName"`
+	TemplateVersion int    `json:"templateVersion"`
+	Total           int64  `json:"total"`
+	Pending         int64  `json:"pending"`
+	Active          int64  `json:"active"`
+	Done            int64  `json:"done"`
+	Failed          int64  `json:"failed"`
+	Cancelled       int64  `json:"cancelled"`
+}
+
 type eventItem struct {
 	TaskID string            `json:"taskID"`
 	Seq    int64             `json:"seq"`
@@ -32,6 +46,7 @@ type taskQuery struct {
 	Page        int             `form:"page"`
 	PageSize    int             `form:"page_size"`
 	HostSN      string          `form:"host_sn"`
+	BatchID     string          `form:"batch_id"`
 	State       model.TaskState `form:"state"`
 	CreatedFrom int64           `form:"created_from"`
 	CreatedTo   int64           `form:"created_to"`
@@ -55,6 +70,7 @@ type taskPreviewRequest struct {
 func (s *server) taskRoutes() []route {
 	return []route{
 		{method: "GET", path: "/console/v1/tasks", perm: PermTaskRead, tag: "tasks", summary: "List tasks and frozen snapshots", query: taskQuery{}, resp: taskPage{}, handle: s.listTasks},
+		{method: "GET", path: "/console/v1/task-batches/:id", perm: PermTaskRead, tag: "tasks", summary: "Read submission details and current counts for the entire batch", resp: taskBatchSummary{}, handle: s.getTaskBatch},
 		{method: "GET", path: "/console/v1/tasks/:id", perm: PermTaskRead, tag: "tasks", summary: "Read frozen task and control diagnostics", resp: taskItem{}, handle: s.getTask},
 		{method: "GET", path: "/console/v1/tasks/:id/events", perm: PermTaskRead, tag: "tasks", summary: "Read committed events after a sequence", query: eventQuery{}, resp: eventPage{}, handle: s.listEvents},
 		{method: "GET", path: "/console/v1/tasks/:id/stream", perm: PermTaskRead, tag: "tasks", summary: "Stream committed events with resume and polling recovery", query: streamQuery{}, headers: streamHeaders{}, stream: true, handle: s.taskStream},
@@ -81,7 +97,7 @@ func (s *server) listTasks(c *gin.Context) {
 		return
 	}
 	page, ok := Get(c, func() (tasks.TaskPage, error) {
-		return s.deps.TaskReader.List(c.Request.Context(), actorOf(c), tasks.ListRequest{PageRequest: tasks.PageRequest{Page: number, Limit: limit, Cursor: c.Query("cursor")}, HostSN: c.Query("host_sn"), State: c.Query("state"), CreatedFrom: c.Query("created_from"), CreatedTo: c.Query("created_to")})
+		return s.deps.TaskReader.List(c.Request.Context(), actorOf(c), tasks.ListRequest{PageRequest: tasks.PageRequest{Page: number, Limit: limit, Cursor: c.Query("cursor")}, HostSN: c.Query("host_sn"), BatchID: c.Query("batch_id"), State: c.Query("state"), CreatedFrom: c.Query("created_from"), CreatedTo: c.Query("created_to")})
 	})
 	if !ok {
 		return
@@ -92,6 +108,15 @@ func (s *server) listTasks(c *gin.Context) {
 	}
 	Ok(c, taskPage{items, page.Next, page.Total})
 }
+func (s *server) getTaskBatch(c *gin.Context) {
+	summary, ok := Get(c, func() (model.TaskBatchSummary, error) {
+		return s.deps.TaskReader.BatchSummary(c.Request.Context(), actorOf(c), c.Param("id"))
+	})
+	if ok {
+		Ok(c, taskBatchSummary(summary))
+	}
+}
+
 func (s *server) getTask(c *gin.Context) {
 	t, ok := Get(c, func() (tasks.TaskChoice, error) {
 		return s.deps.TaskReader.Get(c.Request.Context(), actorOf(c), c.Param("id"))

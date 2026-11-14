@@ -81,7 +81,7 @@ func migratedApplicationMethod(fn *types.Func) bool {
 	}
 	if target == pkgTasks {
 		switch symbol {
-		case "EventReader.List", "EventReader.Open", "EventSubscription.Initial", "EventSubscription.Hints", "EventSubscription.Read", "EventSubscription.Close", "Controller.Cancel", "Controller.Retry", "Reader.List", "Reader.Get", "Reader.Preview", "Wizard.Hosts", "Wizard.ISOs", "Wizard.Templates", "Wizard.Params", "Wizard.Submit":
+		case "EventReader.List", "EventReader.Open", "EventSubscription.Initial", "EventSubscription.Hints", "EventSubscription.Read", "EventSubscription.Close", "Controller.Cancel", "Controller.Retry", "Reader.List", "Reader.Get", "Reader.BatchSummary", "Reader.Preview", "Wizard.Hosts", "Wizard.ISOs", "Wizard.Templates", "Wizard.Params", "Wizard.Submit":
 			return true
 		}
 	}

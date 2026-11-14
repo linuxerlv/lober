@@ -29,6 +29,11 @@ func (s *readStore) GetTask(_ context.Context, id string) (model.Task, error) {
 	return s.task, s.err
 }
 
+func (s *readStore) GetTaskBatchSummary(_ context.Context, id string) (model.TaskBatchSummary, error) {
+	s.calls = append(s.calls, "batch:"+id)
+	return model.TaskBatchSummary{}, s.err
+}
+
 type readRenderer struct {
 	calls    int
 	snapshot model.Snapshot
@@ -62,6 +67,7 @@ func Test任务查询保留错误先后(t *testing.T) {
 		{"范围先于编号", ListRequest{CreatedFrom: "3", CreatedTo: "2", HostSN: "非法"}, ErrBadRequest, ""},
 		{"编号先于状态", ListRequest{HostSN: "非法", State: "bad"}, nil, "sn_invalid"},
 		{"状态", ListRequest{State: "bad"}, ErrBadRequest, ""},
+		{"批次编号非法", ListRequest{BatchID: "a/b"}, ErrBadRequest, ""},
 		{"时间拒绝空白", ListRequest{CreatedFrom: " 1"}, ErrBadRequest, ""},
 		{"时间拒绝负数", ListRequest{CreatedTo: "-1"}, ErrBadRequest, ""},
 	} {
@@ -126,11 +132,11 @@ func Test任务列表保留分页顺序与诊断(t *testing.T) {
 	s.page = repository.Page[model.Task]{Items: []model.Task{{ID: "b"}, {ID: "a"}}, Next: "next", Total: &total}
 	diag := &diagnostics{}
 	d.Diagnostics = diag
-	got, e := NewReader(d).List(t.Context(), operator, ListRequest{PageRequest: PageRequest{Page: 2, Limit: 2}, HostSN: " sn-1 ", State: "pending", CreatedFrom: "+1", CreatedTo: "20"})
+	got, e := NewReader(d).List(t.Context(), operator, ListRequest{PageRequest: PageRequest{Page: 2, Limit: 2}, HostSN: " sn-1 ", BatchID: "batch-one", State: "pending", CreatedFrom: "+1", CreatedTo: "20"})
 	if e != nil || got.Next != "next" || got.Total != &total || len(got.Items) != 2 || got.Items[0].Task.ID != "b" || got.Items[1].Task.ID != "a" || len(got.Items[0].CanCancel) != 1 {
 		t.Fatal(got, e)
 	}
-	if !reflect.DeepEqual(s.query, repository.TaskQuery{Page: 2, Limit: 2, HostSN: "SN-1", States: []model.TaskState{model.TaskPending}, CreatedFrom: 1, CreatedTo: 20}) || !reflect.DeepEqual(diag.calls, []string{"cancel:b", "retry:b", "cancel:a", "retry:a"}) {
+	if !reflect.DeepEqual(s.query, repository.TaskQuery{Page: 2, Limit: 2, HostSN: "SN-1", BatchID: "batch-one", States: []model.TaskState{model.TaskPending}, CreatedFrom: 1, CreatedTo: 20}) || !reflect.DeepEqual(diag.calls, []string{"cancel:b", "retry:b", "cancel:a", "retry:a"}) {
 		t.Fatal(s.query, diag.calls)
 	}
 	s.page = repository.Page[model.Task]{}

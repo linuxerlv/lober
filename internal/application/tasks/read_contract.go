@@ -15,7 +15,7 @@ var ErrBadRequest = errors.New("任务查询参数无效")
 // 应用负责主机编号规范化和状态检查；分页沿用仓储默认值及最大500条。
 type ListRequest struct {
 	PageRequest
-	HostSN, State, CreatedFrom, CreatedTo string
+	HostSN, BatchID, State, CreatedFrom, CreatedTo string
 }
 type TaskPage struct {
 	Items []TaskChoice
@@ -40,6 +40,8 @@ type Reader interface {
 	// List 按分页、起始时间、结束时间、范围、主机编号、状态的顺序检查。
 	// 保留仓储顺序、游标及总数，空任务是非空数组；每项先取消诊断再重试诊断。
 	List(context.Context, ports.Actor, ListRequest) (TaskPage, error)
+	// BatchSummary 查询已保存的批次及其当前状态统计。
+	BatchSummary(context.Context, ports.Actor, string) (model.TaskBatchSummary, error)
 	// Get 的编号原样交仓储校验，不增加应用格式和必填检查；成功后取得两项诊断。
 	// 快照只取已保存任务，不读取当前主机、镜像、模板或组件。
 	Get(context.Context, ports.Actor, string) (TaskChoice, error)

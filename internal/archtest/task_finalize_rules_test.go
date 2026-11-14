@@ -467,7 +467,7 @@ func taskBoundaryObject(obj types.Object, console, assembly bool) bool {
 		return true
 	}
 	switch name {
-	case "GetTask", "ListTasks", "ListEvents", "FindOpenTask", "CanCancel", "CanRetry", "Publish", "Subscribe", "RenderFrozen", "CreateTasks", "CreateCurrentTasks", "TransitionTask", "TransitionTaskByUser", "UpdateTaskExecution":
+	case "GetTask", "GetTaskBatchSummary", "ListTasks", "ListEvents", "FindOpenTask", "CanCancel", "CanRetry", "Publish", "Subscribe", "RenderFrozen", "CreateTasks", "CreateCurrentTasks", "TransitionTask", "TransitionTaskByUser", "UpdateTaskExecution":
 		return true
 	case "NewHub":
 		return console
@@ -742,7 +742,7 @@ func Test任务终态边界拒绝仓储和后端旁路(t *testing.T) {
 		{"日志类型隐藏查询", pkgAssembly, `import("context";r "` + pkgStore + `");type loggingStore struct{r.Store};func(l *loggingStore)hidden(ctx context.Context){read:=l.Store.GetTask;_,_=read(ctx,"id")}`, false},
 		{"日志辅助隐藏状态判断", pkgAssembly, `import m "` + pkgModel + `";type loggingStore struct{};func(*loggingStore)log(t m.Task)bool{return t.State==m.TaskDone}`, false},
 		{"组装原生命周期", pkgAssembly, `import e "` + pkgExecution + `";func f(s *e.Service){_=s.Sweep}`, true},
-		{"真实网页读入口", pkgConsole, `import a "` + pkgTasks + `";func f(r a.Reader){_=r.List;_=r.Get;_=r.Preview}`, true},
+		{"真实网页读入口", pkgConsole, `import a "` + pkgTasks + `";func f(r a.Reader){_=r.List;_=r.Get;_=r.BatchSummary;_=r.Preview}`, true},
 		{"真实网页控制入口", pkgConsole, `import a "` + pkgTasks + `";func f(c a.Controller){_=c.Cancel;_=c.Retry}`, true},
 		{"真实网页事件入口", pkgConsole, `import a "` + pkgTasks + `";func f(r a.EventReader,s a.EventSubscription){_=r.List;_=r.Open;_=s.Initial;_=s.Hints;_=s.Read;_=s.Close}`, true},
 		{"纯字段转换", pkgConsole, `import(m "` + pkgModel + `";c "` + pkgCatalog + `");type dto struct{State m.TaskState;Firmware c.Firmware};func f(t m.Task)dto{return dto{State:t.State,Firmware:t.Snapshot.Host.Firmware}}`, true},

@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import type { Schemas } from '#/api/console/generated';
 
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+} from 'vue';
 
 import { Page } from '@vben/common-ui';
 import { useAccessStore, useUserStore } from '@vben/stores';
@@ -9,6 +17,7 @@ import { useAccessStore, useUserStore } from '@vben/stores';
 import {
   ElAlert,
   ElButton,
+  ElCheckbox,
   ElDialog,
   ElForm,
   ElFormItem,
@@ -19,6 +28,8 @@ import {
   ElOption,
   ElSelect,
   ElTag,
+  ElTabs,
+  ElTabPane,
 } from 'element-plus';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
@@ -27,6 +38,8 @@ import { getHookApi } from '#/api/console/hook';
 import { errorMessage, problemsOf } from '#/api/console/problem';
 import * as api from '#/api/console/template';
 import ListPagination from '#/components/console/ListPagination.vue';
+import { downloadSelection } from '#/components/console/selection-export';
+import { useRowSelection } from '#/composables/use-row-selection';
 import ProblemList from '#/components/console/ProblemList.vue';
 import { NumberedPage } from '#/composables/numbered-page';
 import { useAuthoringEditor } from '#/composables/use-authoring-editor';
@@ -56,10 +69,27 @@ const user = useUserStore();
 const canWrite = computed(() => access.accessCodes.includes('template:write'));
 const selected = ref<TemplateForm>();
 const visible = ref(false);
+const editorSection = ref('content');
 const prefix = ref('');
 const state = ref('');
 const appliedFilters = { prefix: '', state: undefined as string | undefined };
 const pagination = reactive(new NumberedPage<Template>());
+const selection = useRowSelection(
+  (row: Template) => `${row.id}/${row.version}`,
+  () => pagination.items,
+);
+const { rows: selectedRows, all, partial } = selection;
+function exportSelected() {
+  downloadSelection('模板.csv', [
+    ['名称', '编号', '版本', '状态'],
+    ...selectedRows.value.map((row) => [
+      row.name,
+      row.id,
+      row.version,
+      row.state,
+    ]),
+  ]);
+}
 const errors = ref<Schemas['ProblemJSON'][]>([]);
 const versions = ref<Template[]>([]);
 const slots = ref<Schemas['SlotInfo'][]>([]);
@@ -71,7 +101,9 @@ const candidateSlot = ref('');
 const candidateIndex = ref(0);
 const candidatePrefix = ref('');
 const candidateFilters = { prefix: '' };
-const candidatePagination = reactive(new NumberedPage<Schemas['HookCandidateResponse']>());
+const candidatePagination = reactive(
+  new NumberedPage<Schemas['HookCandidateResponse']>(),
+);
 const candidateBusy = computed(() => candidatePagination.loading);
 const candidateProblems = ref<Schemas['ProblemJSON'][]>([]);
 const previewDialog = ref(false);
@@ -96,8 +128,10 @@ const rights = computed(() =>
       )
     : null,
 );
-const editable = computed(() =>
-  !!selected.value && (selected.value.id ? !!rights.value?.edit : canWrite.value),
+const editable = computed(
+  () =>
+    !!selected.value &&
+    (selected.value.id ? !!rights.value?.edit : canWrite.value),
 );
 const staleSlots = computed(() => selected.value?.body !== savedBody.value);
 const savedBody = ref('');
@@ -112,6 +146,7 @@ const [Grid, grid] = useVbenVxeGrid<Template>({
   class: 'h-auto',
   gridOptions: {
     columns: [
+      { width: 48, slots: { header: 'select-all', default: 'select-row' } },
       { field: 'name', title: '名称', minWidth: 200 },
       { field: 'version', title: '版本', width: 80 },
       { field: 'family', title: '族', width: 110 },
@@ -156,18 +191,30 @@ const { busy, currentEditor, lifecycle, reason, run } = editor;
 async function load(reset = false) {
   const owner = editor.token;
   if (reset) {
-    Object.assign(appliedFilters, { prefix: prefix.value, state: state.value || undefined });
+    selection.clear();
+    Object.assign(appliedFilters, {
+      prefix: prefix.value,
+      state: state.value || undefined,
+    });
     pagination.reset();
   }
   const token = ++listToken;
   const filters = { ...appliedFilters };
   try {
-    const page = await pagination.load((params) => api.getTemplateListApi({ ...filters, ...params }));
+    const page = await pagination.load((params) =>
+      api.getTemplateListApi({ ...filters, ...params }),
+    );
     if (token !== listToken) return;
+    selection.refresh(page.items);
     grid.setGridOptions({ data: page.items });
   } catch (error) {
     if (token === listToken && owner === editor.token) report(error);
   }
+}
+function resetFilters() {
+  prefix.value = '';
+  state.value = '';
+  void load(true);
 }
 function changePage(page: number) {
   pagination.setPage(page);
@@ -236,6 +283,7 @@ async function refreshDetails(token = editor.token) {
   );
 }
 async function open(row: Template) {
+  editorSection.value = 'content';
   const token = editor.invalidate();
   candidateDialog.value = false;
   previewDialog.value = false;
@@ -251,6 +299,7 @@ async function open(row: Template) {
   });
 }
 function create() {
+  editorSection.value = 'content';
   editor.invalidate();
   candidateDialog.value = false;
   previewDialog.value = false;
@@ -284,8 +333,8 @@ async function save() {
   const data = templatePayload(row);
   const { rev: _rev, ...content } = data;
   const saved = row.id
-      ? await api.updateTemplateApi(row.id, row.version, data)
-      : await api.createTemplateApi(content);
+    ? await api.updateTemplateApi(row.id, row.version, data)
+    : await api.createTemplateApi(content);
   if (!currentEditor(token, row)) return false;
   assign(saved);
   await refreshDetails(token);
@@ -318,9 +367,9 @@ async function derive() {
   const row = selected.value;
   if (!row || !deriveName.value.trim()) return;
   const changed = await api.deriveTemplateApi(row.id, {
-      from: row.version,
-      name: deriveName.value.trim(),
-    });
+    from: row.version,
+    name: deriveName.value.trim(),
+  });
   if (!currentEditor(token, row)) return;
   assign(changed);
   deriveName.value = '';
@@ -390,10 +439,12 @@ async function candidates(reset = false) {
   };
   candidateProblems.value = [];
   try {
-    await candidatePagination.load((params) => api.getHookCandidatesApi(row.id, row.version, {
-      ...filters,
-      ...params,
-    }));
+    await candidatePagination.load((params) =>
+      api.getHookCandidatesApi(row.id, row.version, {
+        ...filters,
+        ...params,
+      }),
+    );
   } catch (error) {
     if (token === candidateToken && owner === editor.token) {
       candidateProblems.value = problemsOf(error);
@@ -411,12 +462,18 @@ function changeCandidatePageSize(size: number) {
 }
 function choose(candidate: Schemas['HookCandidateResponse']) {
   const row = selected.value;
-  if (!row || !visible.value || !candidateDialog.value || !candidate.usable) return;
+  if (!row || !visible.value || !candidateDialog.value || !candidate.usable)
+    return;
   const items = (row.assembly[candidateSlot.value] ??= []);
   const hook = candidate.hook;
-  row.assembly[candidateSlot.value] = replaceInSlot(items, candidateIndex.value, {
-    ...hook, params: hook.params ?? [],
-  }).map((instance) => ({ ...instance, bindings: instance.bindings ?? {} }));
+  row.assembly[candidateSlot.value] = replaceInSlot(
+    items,
+    candidateIndex.value,
+    {
+      ...hook,
+      params: hook.params ?? [],
+    },
+  ).map((instance) => ({ ...instance, bindings: instance.bindings ?? {} }));
   hookMap.value[`${hook.id}@${hook.version}`] = hook;
   candidateDialog.value = false;
   ElMessage.success('已更新装配，保存草稿后生效');
@@ -436,30 +493,62 @@ async function renderPreview() {
   if (!row || !previewReady.value) return;
   previewResult.value = undefined;
   errors.value = [];
-  const entered = Object.fromEntries(previewFields.value.filter((field) => !field.locked && previewForm.value.entered?.[field.key] !== undefined).map((field) => [field.key, previewForm.value.entered![field.key]!]));
+  const entered = Object.fromEntries(
+    previewFields.value
+      .filter(
+        (field) =>
+          !field.locked && previewForm.value.entered?.[field.key] !== undefined,
+      )
+      .map((field) => [field.key, previewForm.value.entered![field.key]!]),
+  );
   try {
-    const result = await api.previewTemplateApi(row.id, row.version, { ...previewForm.value, entered });
-    if (token !== editor.token || context !== previewToken || !previewDialog.value) return;
+    const result = await api.previewTemplateApi(row.id, row.version, {
+      ...previewForm.value,
+      entered,
+    });
+    if (
+      token !== editor.token ||
+      context !== previewToken ||
+      !previewDialog.value
+    )
+      return;
     previewResult.value = result;
   } catch (error) {
-    if (token === editor.token && context === previewToken && previewDialog.value) report(error);
+    if (
+      token === editor.token &&
+      context === previewToken &&
+      previewDialog.value
+    )
+      report(error);
   }
 }
 async function loadPreviewParams(token: number, owner: number) {
   const row = selected.value;
   if (!row?.id) return;
-  const context = { hostSN: previewForm.value.hostSN, isoID: previewForm.value.isoID, series: previewForm.value.series, firmware: previewForm.value.firmware };
+  const context = {
+    hostSN: previewForm.value.hostSN,
+    isoID: previewForm.value.isoID,
+    series: previewForm.value.series,
+    firmware: previewForm.value.firmware,
+  };
   try {
     const result = await api.getPreviewParamsApi(row.id, row.version, context);
-    if (token !== previewToken || owner !== editor.token || !previewDialog.value) return;
+    if (
+      token !== previewToken ||
+      owner !== editor.token ||
+      !previewDialog.value
+    )
+      return;
     previewFields.value = result.fields ?? [];
     previewSamples.value = result.sample ?? [];
     errors.value = result.problems ?? [];
     previewReady.value = true;
   } catch (error) {
-    if (token === previewToken && owner === editor.token && previewDialog.value) report(error);
+    if (token === previewToken && owner === editor.token && previewDialog.value)
+      report(error);
   } finally {
-    if (token === previewToken && owner === editor.token) previewLoading.value = false;
+    if (token === previewToken && owner === editor.token)
+      previewLoading.value = false;
   }
 }
 function comparison(row: null | Template) {
@@ -480,20 +569,72 @@ function comparison(row: null | Template) {
 }
 const families: Schemas['CatalogFamily'][] = ['linux', 'windows', 'esxi'];
 onMounted(() => load());
-watch(visible, (open) => { if (!open) { editor.invalidate(); candidateDialog.value = false; previewDialog.value = false; errors.value = []; } }, { flush: 'sync' });
-watch(candidateDialog, (open) => { if (!open) { ++candidateToken; candidatePagination.reset(); } }, { flush: 'sync' });
-watch(() => previewForm.value.isoID, () => { previewForm.value.series = undefined; }, { flush: 'sync' });
-watch(() => [previewDialog.value, previewForm.value.hostSN, previewForm.value.isoID, previewForm.value.series, previewForm.value.firmware, selected.value?.id, selected.value?.version], (_context, _old, cleanup) => {
-  const token = ++previewToken;
-  const owner = editor.token;
-  previewFields.value = []; previewSamples.value = []; previewForm.value.entered = {};
-  previewResult.value = undefined; previewReady.value = false; previewLoading.value = false;
-  if (!previewDialog.value || !visible.value) return;
-  errors.value = []; previewLoading.value = true;
-  const timer = setTimeout(() => { void loadPreviewParams(token, owner); }, 200);
-  cleanup(() => clearTimeout(timer));
-}, { flush: 'sync' });
-onBeforeUnmount(() => { editor.invalidate(); ++listToken; ++candidateToken; ++previewToken; pagination.reset(); candidatePagination.reset(); });
+watch(
+  visible,
+  (open) => {
+    if (!open) {
+      editor.invalidate();
+      candidateDialog.value = false;
+      previewDialog.value = false;
+      errors.value = [];
+    }
+  },
+  { flush: 'sync' },
+);
+watch(
+  candidateDialog,
+  (open) => {
+    if (!open) {
+      ++candidateToken;
+      candidatePagination.reset();
+    }
+  },
+  { flush: 'sync' },
+);
+watch(
+  () => previewForm.value.isoID,
+  () => {
+    previewForm.value.series = undefined;
+  },
+  { flush: 'sync' },
+);
+watch(
+  () => [
+    previewDialog.value,
+    previewForm.value.hostSN,
+    previewForm.value.isoID,
+    previewForm.value.series,
+    previewForm.value.firmware,
+    selected.value?.id,
+    selected.value?.version,
+  ],
+  (_context, _old, cleanup) => {
+    const token = ++previewToken;
+    const owner = editor.token;
+    previewFields.value = [];
+    previewSamples.value = [];
+    previewForm.value.entered = {};
+    previewResult.value = undefined;
+    previewReady.value = false;
+    previewLoading.value = false;
+    if (!previewDialog.value || !visible.value) return;
+    errors.value = [];
+    previewLoading.value = true;
+    const timer = setTimeout(() => {
+      void loadPreviewParams(token, owner);
+    }, 200);
+    cleanup(() => clearTimeout(timer));
+  },
+  { flush: 'sync' },
+);
+onBeforeUnmount(() => {
+  editor.invalidate();
+  ++listToken;
+  ++candidateToken;
+  ++previewToken;
+  pagination.reset();
+  candidatePagination.reset();
+});
 </script>
 <template>
   <Page
@@ -501,43 +642,83 @@ onBeforeUnmount(() => { editor.invalidate(); ++listToken; ++candidateToken; ++pr
     description="编辑正文，使用服务端插槽装配 hook，预览完整文件后提交审批。内置模板可派生。"
   >
     <template #extra>
-<ElButton v-if="canWrite" type="primary" @click="create">
-新建模板
-</ElButton>
-</template>
-    <div class="mb-4 flex gap-3">
-      <ElInput
-        v-model="prefix"
-        clearable
-        placeholder="名称前缀"
-        @keyup.enter="load(true)"
-      /><ElSelect v-model="state" clearable placeholder="所有状态">
-<ElOption
-          v-for="s in ['draft', 'review', 'approved', 'deprecated']"
-          :key="s"
-          :label="s"
-          :value="s"
-/>
-</ElSelect><ElButton :loading="pagination.loading" @click="load(true)">查询</ElButton>
-    </div>
-    <ProblemList v-if="!visible" :problems="errors" />
-    <Grid>
-<template #builtin="{ row }">
-<ElTag>{{ row.builtin ? '内置' : '自定义' }}</ElTag>
-</template><template #action="{ row }">
-<ElButton type="primary" link @click="open(row)">
-查看 / 编辑
-</ElButton>
-</template>
-</Grid>
-    <ListPagination
-      :current-page="pagination.page"
-      :page-size="pagination.pageSize"
-      :total="pagination.total"
-      :disabled="pagination.loading"
-      @page-change="changePage"
-      @size-change="changePageSize"
-    />
+      <ElButton v-if="canWrite" type="primary" @click="create">
+        新建模板
+      </ElButton>
+    </template>
+    <section class="overflow-hidden rounded-lg border border-border bg-card">
+      <div class="flex flex-wrap items-end gap-3 px-5 py-4">
+        <ElInput
+          v-model="prefix"
+          class="!w-52"
+          clearable
+          placeholder="名称前缀"
+          @keyup.enter="load(true)"
+        /><ElSelect
+          v-model="state"
+          class="!w-36"
+          clearable
+          placeholder="所有状态"
+        >
+          <ElOption
+            v-for="s in ['draft', 'review', 'approved', 'deprecated']"
+            :key="s"
+            :label="s"
+            :value="s"
+          />
+        </ElSelect>
+        <div class="ml-auto flex flex-wrap items-center justify-end gap-3">
+          <ElButton :loading="pagination.loading" @click="load(true)"
+            >查询</ElButton
+          >
+          <ElButton class="!ml-0" @click="resetFilters">重置</ElButton>
+          <ElButton
+            :disabled="pagination.loading || !selectedRows.length"
+            @click="exportSelected"
+            >导出所选</ElButton
+          >
+        </div>
+      </div>
+      <ProblemList v-if="!visible" :problems="errors" />
+      <Grid>
+        <template #select-all>
+          <ElCheckbox
+            aria-label="选择本页模板"
+            :model-value="all"
+            :indeterminate="partial"
+            :disabled="pagination.loading || !pagination.items.length"
+            @change="selection.togglePage"
+          />
+        </template>
+        <template #select-row="{ row }">
+          <ElCheckbox
+            :aria-label="'选择 ' + row.name"
+            :model-value="selection.has(row)"
+            :disabled="pagination.loading"
+            @change="selection.toggle(row, $event)"
+          />
+        </template>
+        <template #builtin="{ row }">
+          <ElTag>{{ row.builtin ? '内置' : '自定义' }}</ElTag> </template
+        ><template #action="{ row }">
+          <ElButton type="primary" link @click="open(row)">
+            查看 / 编辑
+          </ElButton>
+        </template>
+      </Grid>
+      <div class="px-4 pb-3">
+        <ListPagination
+          :current-page="pagination.page"
+          :page-size="pagination.pageSize"
+          :total="pagination.total"
+          :page-count="pagination.items.length"
+          :selected-count="selectedRows.length"
+          :disabled="pagination.loading"
+          @page-change="changePage"
+          @size-change="changePageSize"
+        />
+      </div>
+    </section>
     <ElDialog
       v-model="visible"
       :title="
@@ -545,34 +726,38 @@ onBeforeUnmount(() => { editor.invalidate(); ++listToken; ++candidateToken; ++pr
           ? `${selected.name} · v${selected.version} · ${selected.state}`
           : '新建模板'
       "
-      width="92%"
+      width="min(980px, 94vw)"
       top="3vh"
       :close-on-click-modal="false"
     >
       <template v-if="selected">
         <div class="mb-4 flex flex-wrap items-center gap-3">
-          <ElTag v-if="selected.builtin">内置只读</ElTag><span>作者：{{ selected.author }} 审批人：{{
+          <ElTag v-if="selected.builtin">内置只读</ElTag
+          ><span
+            >作者：{{ selected.author }} 审批人：{{
               selected.approver || '—'
-            }} rev {{ selected.rev }}</span><ElSelect
+            }}
+            rev {{ selected.rev }}</span
+          ><ElSelect
             v-if="versions.length"
             :model-value="selected.version"
             :disabled="busy"
             class="!w-64"
             @update:model-value="changeVersion"
-            >
-<ElOption
+          >
+            <ElOption
               v-for="v in versions"
               :key="v.version"
               :label="`v${v.version} · ${v.state}`"
               :value="v.version"
-/>
-</ElSelect><ElButton
+            /> </ElSelect
+          ><ElButton
             v-if="rights?.newVersion"
             :disabled="busy"
             @click="run(newVersion)"
-            >
-基于此版本新建草稿
-</ElButton>
+          >
+            基于此版本新建草稿
+          </ElButton>
         </div>
         <div
           v-if="rights?.derive && selected.id"
@@ -584,9 +769,9 @@ onBeforeUnmount(() => { editor.invalidate(); ++listToken; ++candidateToken; ++pr
           /><ElButton
             :disabled="busy || !deriveName.trim()"
             @click="run(derive)"
-            >
-派生模板
-</ElButton>
+          >
+            派生模板
+          </ElButton>
         </div>
         <ElAlert
           v-if="
@@ -599,177 +784,211 @@ onBeforeUnmount(() => { editor.invalidate(); ++listToken; ++candidateToken; ++pr
           :closable="false"
         />
         <ProblemList :problems="errors" />
-        <ElForm :disabled="!editable || busy" label-width="100px">
-          <ElFormItem label="名称">
-<ElInput v-model="selected.name" :disabled="!!selected.id" />
-</ElFormItem>
-          <ElFormItem label="族">
-<ElSelect v-model="selected.family">
-<ElOption
-                v-for="f in families"
-                :key="f"
-                :value="f"
-                :label="f"
-/>
-</ElSelect>
-</ElFormItem>
-          <ElFormItem label="系">
-<ElSelect v-model="selected.series" multiple>
-<ElOption
-                v-for="s in allSeries"
-                :key="s"
-                :value="s"
-                :label="s"
-/>
-</ElSelect>
-</ElFormItem>
-          <ElFormItem label="模板正文">
-<ElInput
-              v-model="selected.body"
-              type="textarea"
-              :rows="18"
-              class="font-mono"
-          />
-</ElFormItem>
-        </ElForm>
-        <ParamEditor v-model="selected.params" :disabled="!editable || busy" />
-        <h3 class="my-4 text-lg font-semibold">模板参数取值</h3>
-        <BindingEditor
-          v-model="selected.bindings"
-          :params="selected.params"
-          :disabled="!editable || busy"
-        />
-        <h3 class="my-4 text-lg font-semibold">插槽与 hook 装配</h3>
-        <ElAlert
-          v-if="!selected.id || staleSlots"
-          title="保存草稿以刷新服务端插槽。装配和预览使用已保存的版本。"
-          type="info"
-          :closable="false"
-          class="mb-3"
-        />
-        <ElButton
-          v-if="editable"
-          :disabled="busy"
-          class="mb-3"
-          @click="run(save)"
-          >
-保存并刷新插槽
-</ElButton>
-        <section
-          v-for="slot in slots"
-          :key="slot.name"
-          class="mb-4 rounded border p-4"
-        >
-          <h4 class="mb-3 font-semibold">
-            {{ slot.name }} ·
-            {{ slot.exec ? `执行 / ${slot.timing}` : '片段' }} ·
-            {{ slot.line }}:{{ slot.col }}
-          </h4>
-          <div
-            v-for="(instance, index) in selected.assembly[slot.name]"
-            :key="`${index}-${hookKey(instance)}`"
-            class="mb-3 rounded border p-3"
-          >
-            <div class="mb-3 flex flex-wrap items-center gap-2">
-              <strong>#{{ index + 1 }}
-                {{ hookOf(instance)?.name || instance.hookID }} v{{
-                  instance.hookVersion
-                }}</strong><ElButton
-                v-if="editable"
-                :disabled="busy || staleSlots"
-                @click="run(() => pickHook(slot.name, index))"
-                >
-替换 hook（保留同名绑定）
-</ElButton><ElButton
-                v-if="editable"
-                :disabled="busy || index === 0"
-                @click="move(slot.name, index, -1)"
-                >
-上移
-</ElButton><ElButton
-                v-if="editable"
-                :disabled="
-                  busy ||
-                  index === (selected.assembly[slot.name]?.length ?? 0) - 1
-                "
-                @click="move(slot.name, index, 1)"
-                >
-下移
-</ElButton><ElButton
-                v-if="editable"
-                :disabled="busy"
-                type="danger"
-                plain
-                @click="selected.assembly[slot.name]?.splice(index, 1)"
-                >
-移除
-</ElButton>
-            </div>
-            <div
-              v-if="slot.exec"
-              class="mb-3 flex flex-wrap items-center gap-3"
-            >
-              <span>超时秒（空为默认）</span><ElInputNumber
-                :model-value="instance.timeoutSec ?? undefined"
-                :disabled="!editable || busy"
-                :min="1"
-                @update:model-value="instance.timeoutSec = $event ?? null"
-              /><ElSelect
-                :model-value="
-                  instance.required === null
-                    ? 'inherit'
-                    : String(instance.required)
-                "
-                :disabled="!editable || busy"
-                class="!w-52"
-                @update:model-value="
-                  instance.required =
-                    $event === 'inherit' ? null : $event === 'true'
-                "
-                >
-<ElOption label="失败处理沿用默认" value="inherit" /><ElOption
-                  label="失败终止任务"
-                  value="true"
-/><ElOption label="失败继续" value="false" />
-</ElSelect>
-            </div>
-            <BindingEditor
-              v-model="instance.bindings"
-              :params="hookOf(instance)?.params ?? []"
+        <ElTabs v-model="editorSection">
+          <ElTabPane label="模板正文" name="content" />
+          <ElTabPane label="基本信息" name="basic" />
+          <ElTabPane label="参数配置" name="params" />
+          <ElTabPane label="脚本装配" name="assembly" />
+        </ElTabs>
+        <div class="max-h-[55dvh] overflow-auto px-1">
+          <section v-show="editorSection === 'basic'">
+            <ElForm :disabled="!editable || busy" label-width="100px">
+              <ElFormItem label="名称">
+                <ElInput v-model="selected.name" :disabled="!!selected.id" />
+              </ElFormItem>
+              <ElFormItem label="族">
+                <ElSelect v-model="selected.family">
+                  <ElOption
+                    v-for="f in families"
+                    :key="f"
+                    :value="f"
+                    :label="f"
+                  />
+                </ElSelect>
+              </ElFormItem>
+              <ElFormItem label="系">
+                <ElSelect v-model="selected.series" multiple>
+                  <ElOption
+                    v-for="s in allSeries"
+                    :key="s"
+                    :value="s"
+                    :label="s"
+                  />
+                </ElSelect>
+              </ElFormItem>
+            </ElForm>
+          </section>
+          <section v-show="editorSection === 'params'">
+            <ParamEditor
+              v-model="selected.params"
               :disabled="!editable || busy"
             />
-          </div>
-          <ElButton
-            v-if="editable"
-            :disabled="busy || staleSlots"
-            @click="
-              run(() =>
-                pickHook(slot.name, selected!.assembly[slot.name]?.length ?? 0),
-              )
-            "
+            <h3 class="my-4 text-lg font-semibold">模板参数取值</h3>
+            <BindingEditor
+              v-model="selected.bindings"
+              :params="selected.params"
+              :disabled="!editable || busy"
+            />
+          </section>
+          <section v-show="editorSection === 'content'">
+            <h3 class="mb-2 font-semibold">模板正文</h3>
+            <ElInput
+              v-if="editable"
+              v-model="selected.body"
+              type="textarea"
+              :rows="14"
+              :disabled="busy"
+              aria-label="模板正文"
+              class="font-mono"
+            />
+            <pre
+              v-else
+              class="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-muted p-4 text-sm"
+              >{{ selected.body || '暂无模板正文' }}</pre>
+          </section>
+          <section v-show="editorSection === 'assembly'">
+            <h3 class="my-4 text-lg font-semibold">插槽与 hook 装配</h3>
+            <ElAlert
+              v-if="!selected.id || staleSlots"
+              title="保存草稿以刷新服务端插槽。装配和预览使用已保存的版本。"
+              type="info"
+              :closable="false"
+              class="mb-3"
+            />
+            <ElButton
+              v-if="editable"
+              :disabled="busy"
+              class="mb-3"
+              @click="run(save)"
             >
-添加 hook
-</ElButton>
-          <p
-            v-if="!selected.assembly[slot.name]?.length"
-            class="text-sm text-gray-500"
-          >
-            插槽为空
-          </p>
-        </section>
-        <div
-          v-for="name in unknownSlots"
-          :key="name"
-          class="my-3 rounded border border-orange-300 p-3"
-        >
-          装配中的 {{ name }} 不在服务端插槽列表中。<ElButton
-            v-if="editable"
-            type="danger"
-            link
-            @click="delete selected.assembly[name]"
+              保存并刷新插槽
+            </ElButton>
+            <section
+              v-for="slot in slots"
+              :key="slot.name"
+              class="mb-4 rounded border p-4"
             >
-移除该插槽的装配
-</ElButton>
+              <h4 class="mb-3 font-semibold">
+                {{ slot.name }} ·
+                {{ slot.exec ? `执行 / ${slot.timing}` : '片段' }} ·
+                {{ slot.line }}:{{ slot.col }}
+              </h4>
+              <div
+                v-for="(instance, index) in selected.assembly[slot.name]"
+                :key="`${index}-${hookKey(instance)}`"
+                class="mb-3 rounded border p-3"
+              >
+                <div class="mb-3 flex flex-wrap items-center gap-2">
+                  <strong
+                    >#{{ index + 1 }}
+                    {{ hookOf(instance)?.name || instance.hookID }} v{{
+                      instance.hookVersion
+                    }}</strong
+                  ><ElButton
+                    v-if="editable"
+                    :disabled="busy || staleSlots"
+                    @click="run(() => pickHook(slot.name, index))"
+                  >
+                    替换 hook（保留同名绑定） </ElButton
+                  ><ElButton
+                    v-if="editable"
+                    :disabled="busy || index === 0"
+                    @click="move(slot.name, index, -1)"
+                  >
+                    上移 </ElButton
+                  ><ElButton
+                    v-if="editable"
+                    :disabled="
+                      busy ||
+                      index === (selected.assembly[slot.name]?.length ?? 0) - 1
+                    "
+                    @click="move(slot.name, index, 1)"
+                  >
+                    下移 </ElButton
+                  ><ElButton
+                    v-if="editable"
+                    :disabled="busy"
+                    type="danger"
+                    plain
+                    @click="selected.assembly[slot.name]?.splice(index, 1)"
+                  >
+                    移除
+                  </ElButton>
+                </div>
+                <div
+                  v-if="slot.exec"
+                  class="mb-3 flex flex-wrap items-center gap-3"
+                >
+                  <span>超时秒（空为默认）</span
+                  ><ElInputNumber
+                    :model-value="instance.timeoutSec ?? undefined"
+                    :disabled="!editable || busy"
+                    :min="1"
+                    @update:model-value="instance.timeoutSec = $event ?? null"
+                  /><ElSelect
+                    :model-value="
+                      instance.required === null
+                        ? 'inherit'
+                        : String(instance.required)
+                    "
+                    :disabled="!editable || busy"
+                    class="!w-52"
+                    @update:model-value="
+                      instance.required =
+                        $event === 'inherit' ? null : $event === 'true'
+                    "
+                  >
+                    <ElOption
+                      label="失败处理沿用默认"
+                      value="inherit"
+                    /><ElOption label="失败终止任务" value="true" /><ElOption
+                      label="失败继续"
+                      value="false"
+                    />
+                  </ElSelect>
+                </div>
+                <BindingEditor
+                  v-model="instance.bindings"
+                  :params="hookOf(instance)?.params ?? []"
+                  :disabled="!editable || busy"
+                />
+              </div>
+              <ElButton
+                v-if="editable"
+                :disabled="busy || staleSlots"
+                @click="
+                  run(() =>
+                    pickHook(
+                      slot.name,
+                      selected!.assembly[slot.name]?.length ?? 0,
+                    ),
+                  )
+                "
+              >
+                添加 hook
+              </ElButton>
+              <p
+                v-if="!selected.assembly[slot.name]?.length"
+                class="text-sm text-gray-500"
+              >
+                插槽为空
+              </p>
+            </section>
+            <div
+              v-for="name in unknownSlots"
+              :key="name"
+              class="my-3 rounded border border-orange-300 p-3"
+            >
+              装配中的 {{ name }} 不在服务端插槽列表中。<ElButton
+                v-if="editable"
+                type="danger"
+                link
+                @click="delete selected.assembly[name]"
+              >
+                移除该插槽的装配
+              </ElButton>
+            </div>
+          </section>
         </div>
         <details v-if="sourceDiff?.original" class="my-4 rounded border p-3">
           <summary class="cursor-pointer font-semibold">
@@ -804,60 +1023,61 @@ onBeforeUnmount(() => { editor.invalidate(); ++listToken; ++candidateToken; ++pr
         />
       </template>
       <template #footer>
-<div class="flex flex-wrap justify-end gap-2">
-          <ElButton @click="visible = false">关闭</ElButton><ElButton
+        <div class="flex flex-wrap justify-end gap-2">
+          <ElButton @click="visible = false">关闭</ElButton
+          ><ElButton
             v-if="editable"
             :loading="busy"
             type="primary"
             @click="run(save)"
-            >
-保存草稿
-</ElButton><ElButton
+          >
+            保存草稿 </ElButton
+          ><ElButton
             v-if="selected?.id && canWrite"
             :disabled="busy"
             @click="run(validate)"
-            >
-校验
-</ElButton><ElButton v-if="selected?.id" :disabled="busy" @click="run(preview)">
-预览全部文件
-</ElButton><ElButton
+          >
+            校验 </ElButton
+          ><ElButton v-if="selected?.id" :disabled="busy" @click="run(preview)">
+            预览全部文件 </ElButton
+          ><ElButton
             v-if="rights?.submit"
             :disabled="busy"
             @click="run(() => lifecycle('submit'))"
-            >
-提交审批
-</ElButton><ElButton
+          >
+            提交审批 </ElButton
+          ><ElButton
             v-if="rights?.review"
             :disabled="busy"
             type="success"
             @click="run(() => lifecycle('approve'))"
-            >
-批准
-</ElButton><ElButton
+          >
+            批准 </ElButton
+          ><ElButton
             v-if="rights?.review"
             :disabled="busy || !reason.trim()"
             type="danger"
             @click="run(() => lifecycle('reject'))"
-            >
-驳回
-</ElButton><ElButton
+          >
+            驳回 </ElButton
+          ><ElButton
             v-if="rights?.deprecate"
             :disabled="busy"
             type="danger"
             @click="run(() => lifecycle('deprecate'))"
-            >
-废弃
-</ElButton><ElButton
+          >
+            废弃 </ElButton
+          ><ElButton
             v-if="rights?.edit && selected?.id"
             :disabled="busy"
             type="danger"
             plain
             @click="run(remove)"
-            >
-删除草稿
-</ElButton>
+          >
+            删除草稿
+          </ElButton>
         </div>
-</template>
+      </template>
     </ElDialog>
     <ElDialog
       v-model="candidateDialog"
@@ -872,8 +1092,8 @@ onBeforeUnmount(() => { editor.invalidate(); ++listToken; ++candidateToken; ++pr
           placeholder="hook 名称前缀"
           @keyup.enter="candidates(true)"
         /><ElButton :loading="candidateBusy" @click="candidates(true)">
-查询
-</ElButton>
+          查询
+        </ElButton>
       </div>
       <ProblemList :problems="candidateProblems" />
       <article
@@ -883,14 +1103,16 @@ onBeforeUnmount(() => { editor.invalidate(); ++listToken; ++candidateToken; ++pr
         :class="{ 'opacity-60': !candidate.usable }"
       >
         <div class="flex items-center justify-between">
-          <span>{{ candidate.hook.name }} v{{ candidate.hook.version }} ·
-            {{ candidate.hook.state }}</span><ElButton
+          <span
+            >{{ candidate.hook.name }} v{{ candidate.hook.version }} ·
+            {{ candidate.hook.state }}</span
+          ><ElButton
             :disabled="!candidate.usable || candidateBusy"
             type="primary"
             @click="choose(candidate)"
-            >
-选用
-</ElButton>
+          >
+            选用
+          </ElButton>
         </div>
         <p>{{ candidate.hook.description }}</p>
         <ProblemList :problems="candidate.problems ?? []" />
@@ -915,36 +1137,60 @@ onBeforeUnmount(() => { editor.invalidate(); ++listToken; ++candidateToken; ++pr
       append-to-body
     >
       <ElForm label-width="150px">
-<ElFormItem label="主机 SN（可选）">
-<ElInput
+        <ElFormItem label="主机 SN（可选）">
+          <ElInput
             v-model="previewForm.hostSN"
             placeholder="留空使用示例主机"
-/>
-</ElFormItem><ElFormItem label="ISO ID（可选）">
-<ElInput
+          /> </ElFormItem
+        ><ElFormItem label="ISO ID（可选）">
+          <ElInput
             v-model="previewForm.isoID"
             placeholder="留空使用示例 ISO，ESXi 需真实 ISO"
-/>
-</ElFormItem><ElFormItem label="固件">
-<ElSelect v-model="previewForm.firmware" clearable>
-<ElOption label="UEFI" value="uefi" /><ElOption
+          /> </ElFormItem
+        ><ElFormItem label="固件">
+          <ElSelect v-model="previewForm.firmware" clearable>
+            <ElOption label="UEFI" value="uefi" /><ElOption
               label="BIOS"
               value="bios"
-/>
-</ElSelect>
-</ElFormItem>
-        <ElFormItem v-if="!previewForm.isoID" label="示例 ISO 系">
-          <ElSelect v-model="previewForm.series" clearable placeholder="默认使用模板首个系">
-            <ElOption v-for="series in selected?.series" :key="series" :label="series" :value="series" />
+            />
           </ElSelect>
         </ElFormItem>
-</ElForm>
-      <PreviewFields v-model="previewForm.entered!" :fields="previewFields" :disabled="busy || previewLoading" />
-      <ElAlert v-if="previewSamples.length" :title="`参数上下文含示例值：${ previewSamples.join('、')}`" type="info" :closable="false" class="my-3" />
+        <ElFormItem v-if="!previewForm.isoID" label="示例 ISO 系">
+          <ElSelect
+            v-model="previewForm.series"
+            clearable
+            placeholder="默认使用模板首个系"
+          >
+            <ElOption
+              v-for="series in selected?.series"
+              :key="series"
+              :label="series"
+              :value="series"
+            />
+          </ElSelect>
+        </ElFormItem>
+      </ElForm>
+      <PreviewFields
+        v-model="previewForm.entered!"
+        :fields="previewFields"
+        :disabled="busy || previewLoading"
+      />
+      <ElAlert
+        v-if="previewSamples.length"
+        :title="`参数上下文含示例值：${previewSamples.join('、')}`"
+        type="info"
+        :closable="false"
+        class="my-3"
+      />
 
-      <ElButton :loading="busy || previewLoading" :disabled="!previewReady" type="primary" @click="run(renderPreview)">
-生成预览
-</ElButton><ProblemList :problems="previewResult?.problems ?? errors" />
+      <ElButton
+        :loading="busy || previewLoading"
+        :disabled="!previewReady"
+        type="primary"
+        @click="run(renderPreview)"
+      >
+        生成预览 </ElButton
+      ><ProblemList :problems="previewResult?.problems ?? errors" />
       <ElAlert
         v-if="previewResult?.sample?.length"
         class="my-3"

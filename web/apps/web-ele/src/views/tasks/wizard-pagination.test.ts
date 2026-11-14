@@ -9,13 +9,17 @@ const io = vi.hoisted(() => ({
   templates: vi.fn(),
   params: vi.fn(),
 }));
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('vue-router', () => ({
+  onBeforeRouteLeave: vi.fn(),
+  useRoute: () => ({ query: {} }),
+  useRouter: () => ({ push: vi.fn() }),
+}));
 vi.mock('@vben/stores', () => ({
   useAccessStore: () => ({ accessCodes: ['task:create'] }),
 }));
 vi.mock('@vben/common-ui', () => ({
   Page: defineComponent({
-    setup: (_, ctx) => () => h('main', ctx.slots.default?.()),
+    setup: (_, ctx) => () => h('main', [ctx.slots.default?.(), ctx.slots.footer?.()]),
   }),
 }));
 vi.mock('#/api/console/wizard', () => ({ wizardAPI: io }));
@@ -173,18 +177,18 @@ it('keeps chosen ISO and template labels while navigating their pages', async ()
   await vi.waitFor(() => expect(el.textContent).toContain('ISO page 1'));
   el.querySelector<HTMLInputElement>('input[type="radio"]')!.click();
   await nextTick();
+  await vi.waitFor(() => expect(el.textContent).toContain('Template page 1'));
   el.querySelector<HTMLButtonElement>('.el-pagination .btn-next')!.click();
   await vi.waitFor(() => expect(el.textContent).toContain('ISO page 2'));
-  click('下一步');
   await vi.waitFor(() => expect(el.textContent).toContain('Template page 1'));
   expect(io.templates).toHaveBeenLastCalledWith({
     isoID: 'iso1',
     page: 1,
     page_size: 20,
   });
-  el.querySelector<HTMLInputElement>('input[type="radio"]')!.click();
+  [...el.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find((input) => input.value === 'tpl1')!.click();
   await nextTick();
-  el.querySelector<HTMLButtonElement>('.el-pagination .btn-next')!.click();
+  [...el.querySelectorAll<HTMLButtonElement>('.el-pagination .btn-next')].at(-1)!.click();
   await vi.waitFor(() => expect(el.textContent).toContain('Template page 2'));
   click('下一步');
   await vi.waitFor(() =>

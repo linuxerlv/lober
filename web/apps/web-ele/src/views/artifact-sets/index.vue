@@ -16,7 +16,10 @@ import { useAccessStore } from '@vben/stores';
 import {
   ElAlert,
   ElButton,
+  ElCheckbox,
   ElDialog,
+  ElDrawer,
+  ElEmpty,
   ElInput,
   ElMessage,
   ElMessageBox,
@@ -41,7 +44,10 @@ import {
 } from '#/api/console/artifact';
 import { seriesByFamily } from '#/api/console/catalog';
 import { errorMessage, problemsOf, referencesOf } from '#/api/console/problem';
+import ChangeRecords from '#/components/console/ChangeRecords.vue';
 import ListPagination from '#/components/console/ListPagination.vue';
+import { downloadSelection } from '#/components/console/selection-export';
+import { useRowSelection } from '#/composables/use-row-selection';
 import ProblemList from '#/components/console/ProblemList.vue';
 import { NumberedPage } from '#/composables/numbered-page';
 
@@ -49,6 +55,7 @@ import SourceForm from './SourceForm.vue';
 import { missingChunks, verifyReselectedFile } from './upload';
 
 defineOptions({ name: 'ArtifactSetsIndex' });
+
 const access = useAccessStore();
 const canWrite = computed(() => access.accessCodes.includes('iso:write'));
 const failure = ref<unknown>();
@@ -70,14 +77,30 @@ const filters = reactive<{
 }>({ family: '', state: '' });
 const appliedFilters = reactive({ ...filters });
 const page = reactive(new NumberedPage<ISOItem>());
+const selection = useRowSelection(
+  (row: ISOItem) => row.id,
+  () => page.items,
+);
+const { rows: selectedRows, all, partial } = selection;
+function exportSelected() {
+  downloadSelection('系统镜像.csv', [
+    ['名称', '编号', '版本', '状态'],
+    ...selectedRows.value.map((row) => [
+      row.name,
+      row.id,
+      row.version,
+      row.state,
+    ]),
+  ]);
+}
 const [Grid, gridApi] = useVbenVxeGrid<ISOItem>({
   class: 'h-auto',
   gridOptions: {
     columns: [
-      { field: 'name', title: '名字', minWidth: 180 },
-      { field: 'id', title: 'ID', minWidth: 180 },
-      { field: 'family', title: '族', width: 100 },
-      { field: 'series', title: '系', width: 140 },
+      { width: 48, slots: { header: 'select-all', default: 'select-row' } },
+      { field: 'name', title: '镜像名称', minWidth: 235 },
+      { field: 'family', title: '系统类型', width: 100 },
+      { field: 'series', title: '发行系列', width: 140 },
       { field: 'version', title: '版本', width: 110 },
       { field: 'arch', title: '架构', width: 100 },
       {
@@ -86,9 +109,11 @@ const [Grid, gridApi] = useVbenVxeGrid<ISOItem>({
         width: 100,
         slots: { default: 'state' },
       },
-      { title: '操作', width: 300, slots: { default: 'action' } },
+      { title: '操作', width: 225, slots: { default: 'action' } },
     ],
     maxHeight: 520,
+    align: 'left',
+    cellConfig: { height: 48 },
     pagerConfig: { enabled: false },
     rowConfig: { keyField: 'id' },
     proxyConfig: {
@@ -101,12 +126,14 @@ const [Grid, gridApi] = useVbenVxeGrid<ISOItem>({
                 : {}),
               state: appliedFilters.state,
             };
-            return await page.load((pagination) =>
+            const result = await page.load((pagination) =>
               getArtifactSetListApi({
                 ...query,
                 ...pagination,
               }),
             );
+            selection.refresh(result.items);
+            return result;
           } catch (error) {
             failure.value = error;
             return { items: page.items };
@@ -118,10 +145,16 @@ const [Grid, gridApi] = useVbenVxeGrid<ISOItem>({
   },
 });
 function search() {
+  selection.clear();
   failure.value = undefined;
   Object.assign(appliedFilters, filters);
   page.reset();
   void gridApi.reload();
+}
+function resetFilters() {
+  filters.family = '';
+  filters.state = '';
+  search();
 }
 function changePage(value: number) {
   page.setPage(value);
@@ -424,16 +457,41 @@ function percent(source: SourceProgress) {
     ? Math.min(100, Math.round((source.fetched / source.totalSize) * 100))
     : 0;
 }
+const sourceNames: Record<SourceProgress['kind'], string> = {
+  url: '远程下载',
+  upload: '浏览器上传',
+  path: '服务器本地文件',
+};
+const sourceStates: Record<string, string> = {
+  ...labels,
+  fetching: '获取中',
+  pending: '等待获取',
+  verifying: '校验中',
+  fetched: '已获取',
+  complete: '已获取',
+  cancelled: '已取消',
+};
+function formatSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} 字节`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${Number(value.toFixed(2))} ${units[unit]}`;
+}
 </script>
 
 <template>
   <Page
-    title="ISO 管理"
-    description="登记远程下载、浏览器上传或服务器本地来源，查看服务端获取和导入结果。"
+    title="系统镜像"
+    description="查看镜像是否可用于装机，以及获取和导入进度。"
   >
     <template #extra>
       <ElButton v-if="canWrite" type="primary" @click="openCreate">
-        新建 ISO
+        登记镜像
       </ElButton>
     </template>
     <ElAlert
@@ -448,78 +506,136 @@ function percent(source: SourceProgress) {
       :problems="problems"
       :references="references"
     />
-    <form class="mb-4 flex gap-3" @submit.prevent="search">
-      <ElSelect
-        v-model="filters.family"
-        aria-label="筛选族"
-        placeholder="全部族"
-        clearable
-        class="!w-44"
+    <section class="overflow-hidden rounded-lg border border-border bg-card">
+      <form
+        class="flex flex-wrap items-end gap-3 px-5 py-4"
+        @submit.prevent="search"
       >
-        <ElOption
-          v-for="family in families"
-          :key="family"
-          :value="family"
-          :label="family"
+        <label class="grid gap-1 text-xs"
+          >系统类型
+          <ElSelect
+            v-model="filters.family"
+            aria-label="筛选族"
+            placeholder="全部系统"
+            clearable
+            class="!w-44"
+          >
+            <ElOption
+              v-for="family in families"
+              :key="family"
+              :value="family"
+              :label="family"
+            />
+          </ElSelect>
+        </label>
+        <label class="grid gap-1 text-xs"
+          >镜像状态
+          <ElSelect
+            v-model="filters.state"
+            aria-label="筛选状态"
+            placeholder="全部状态"
+            clearable
+            class="!w-44"
+          >
+            <ElOption
+              v-for="(label, state) in labels"
+              :key="state"
+              :value="state"
+              :label="label"
+            />
+          </ElSelect>
+        </label>
+        <div class="ml-auto flex flex-wrap items-center justify-end gap-3">
+          <ElButton native-type="submit" type="primary" :loading="page.loading"
+            >查询</ElButton
+          >
+          <ElButton class="!ml-0" @click="resetFilters">重置</ElButton>
+          <ElButton
+            :disabled="page.loading || !selectedRows.length"
+            @click="exportSelected"
+            >导出所选</ElButton
+          >
+        </div>
+      </form>
+      <Grid>
+        <template #select-all>
+          <ElCheckbox
+            aria-label="选择本页系统镜像"
+            :model-value="all"
+            :indeterminate="partial"
+            :disabled="page.loading || !page.items.length"
+            @change="selection.togglePage"
+          />
+        </template>
+        <template #select-row="{ row }">
+          <ElCheckbox
+            :aria-label="'选择 ' + row.name"
+            :model-value="selection.has(row)"
+            :disabled="page.loading"
+            @change="selection.toggle(row, $event)"
+          />
+        </template>
+        <template #empty>
+          <ElEmpty
+            :image-size="72"
+            :description="
+              page.loading
+                ? '正在读取镜像…'
+                : failure
+                  ? '镜像读取失败'
+                  : '没有匹配的镜像'
+            "
+          />
+        </template>
+        <template #state="{ row }">
+          <ElTag
+            :type="
+              row.state === 'ready'
+                ? 'success'
+                : row.state === 'failed'
+                  ? 'danger'
+                  : row.state === 'deprecated'
+                    ? 'info'
+                    : 'warning'
+            "
+          >
+            {{ labels[row.state] || row.state }}
+          </ElTag>
+        </template>
+        <template #action="{ row }">
+          <ElButton link type="primary" @click="openDetails(row)"
+            >查看详情</ElButton
+          >
+          <ElButton
+            v-if="canWrite && row.state === 'ready'"
+            link
+            @click="operation(row, 'deprecate')"
+          >
+            废弃
+          </ElButton>
+          <ElButton
+            v-if="canWrite"
+            link
+            type="danger"
+            @click="operation(row, 'delete')"
+          >
+            删除
+          </ElButton>
+        </template>
+      </Grid>
+      <div class="px-4 pb-3">
+        <ListPagination
+          :current-page="page.page"
+          :page-size="page.pageSize"
+          :total="page.total"
+          :page-count="page.items.length"
+          :selected-count="selectedRows.length"
+          :disabled="page.loading"
+          @page-change="changePage"
+          @size-change="changePageSize"
         />
-      </ElSelect>
-      <ElSelect
-        v-model="filters.state"
-        aria-label="筛选状态"
-        placeholder="全部状态"
-        clearable
-        class="!w-44"
-      >
-        <ElOption
-          v-for="(label, state) in labels"
-          :key="state"
-          :value="state"
-          :label="label"
-        />
-      </ElSelect>
-      <ElButton native-type="submit" type="primary">查询</ElButton>
-    </form>
-    <Grid>
-      <template #state="{ row }">
-        <ElTag
-          :type="
-            row.state === 'ready'
-              ? 'success'
-              : row.state === 'failed'
-                ? 'danger'
-                : 'info'
-          "
-        >
-          {{ labels[row.state] || row.state }}
-        </ElTag>
-      </template>
-      <template #action="{ row }">
-        <ElButton link @click="openDetails(row)">详情 / 进度</ElButton>
-        <ElButton
-          v-if="canWrite && row.state === 'ready'"
-          link
-          @click="operation(row, 'deprecate')"
-        >
-          废弃
-        </ElButton>
-        <ElButton
-          v-if="canWrite"
-          link
-          type="danger"
-          @click="operation(row, 'delete')"
-        >
-          删除
-        </ElButton>
-      </template>
-    </Grid>
-    <ListPagination
-      :current-page="page.page"
-      :page-size="page.pageSize"
-      :total="page.total"
-      :disabled="page.loading"
-      @page-change="changePage"
-      @size-change="changePageSize"
-    />
+      </div>
+    </section>
     <ElDialog
       v-model="createOpen"
       title="新建 ISO"
@@ -592,10 +708,10 @@ function percent(source: SourceProgress) {
         </ElButton>
       </template>
     </ElDialog>
-    <ElDialog
+    <ElDrawer
       v-model="detailOpen"
-      title="ISO 详情与来源进度"
-      width="860px"
+      :title="selected?.name || '镜像详情'"
+      size="min(620px, 100vw)"
       :close-on-click-modal="false"
     >
       <template v-if="selected">
@@ -646,13 +762,21 @@ function percent(source: SourceProgress) {
           class="mb-4 rounded border p-4"
         >
           <div class="mb-2 flex justify-between">
-            <strong>{{ source.role || '主 ISO' }} · {{ source.kind }}</strong>
-            <span>{{ source.state }}</span>
+            <strong
+              >{{ source.role || '主镜像' }} ·
+              {{ sourceNames[source.kind] }}</strong
+            >
+            <span>{{ sourceStates[source.state] || source.state }}</span>
           </div>
-          <ElProgress :percentage="percent(source)" />
-          <p class="my-2">
-            {{ source.fetched }} / {{ source.totalSize || '未知' }} 字节 ·
-            已确认 {{ (source.ranges ?? []).length }} 段
+          <ElProgress
+            v-if="source.totalSize > 0"
+            :percentage="percent(source)"
+          />
+          <p class="my-2 text-sm text-muted-foreground">
+            已获取 {{ formatSize(source.fetched)
+            }}<template v-if="source.totalSize > 0">
+              / {{ formatSize(source.totalSize) }}</template
+            >
           </p>
           <ElAlert
             v-if="source.error"
@@ -698,8 +822,14 @@ function percent(source: SourceProgress) {
             {{ role }}：{{ path }}
           </div>
         </section>
+        <ChangeRecords
+          v-if="detailOpen && access.accessCodes.includes('audit:read')"
+          class="mt-5 border-t border-border pt-4"
+          target-kind="iso"
+          :target-id="selected.id"
+        />
       </template>
-    </ElDialog>
+    </ElDrawer>
     <ElDialog
       v-model="sourceOpen"
       title="补充缺失来源"
