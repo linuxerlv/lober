@@ -32,6 +32,7 @@ await run(async () => {
   await append(1, 1);
   await go(page, '/tasks/' + input.taskID);
   await page.getByText('实时连接已建立', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '完整日志', exact: true }).click();
   const rows = page.locator('.vxe-table--body .vxe-body--row').filter({ hasText: 'test.transport' });
   await rows.nth(0).waitFor();
   assert.equal(await rows.count(), 1);

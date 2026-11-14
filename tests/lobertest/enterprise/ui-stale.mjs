@@ -28,6 +28,7 @@ await run(async () => {
   await closeDialog(page.getByRole('dialog'));
   await open(input.secondName);
   const editor = page.getByRole('dialog');
+  await editor.getByRole('tab', { name: '基本信息', exact: true }).click();
   await editor.getByLabel('名称', { exact: true }).waitFor();
   assert.equal(await editor.getByLabel('名称', { exact: true }).inputValue(), input.secondName);
   const delivered = page.waitForResponse(response => new URL(response.url()).pathname === '/console/v1/templates/' + input.firstID + '/versions/1');
@@ -37,6 +38,7 @@ await run(async () => {
   await page.getByRole('button', { name: '查询', exact: true }).count();
   await page.waitForTimeout(200);
   assert.equal(await editor.getByLabel('名称', { exact: true }).inputValue(), input.secondName);
-  assert.match(await editor.getByLabel('模板正文', { exact: true }).inputValue(), /SECOND-RESOURCE/);
+  await editor.getByRole('tab', { name: '模板正文', exact: true }).click();
+  assert.match(await editor.getByRole('textbox', { name: '模板正文', exact: true }).inputValue(), /SECOND-RESOURCE/);
   completed.push('late-real-template-response-cannot-overwrite-new-editor');
 });
