@@ -40,7 +40,8 @@ export class NumberedPage<T> {
         this.validateTotal(result.total);
       }
       this.page = page;
-      this.items = result.items ?? [];
+      const remaining = Math.max(0, result.total! - (page - 1) * pageSize);
+      this.items = (result.items ?? []).slice(0, Math.min(pageSize, remaining));
       this.total = result.total!;
       this.successfulPage = page;
       this.successfulPageSize = pageSize;

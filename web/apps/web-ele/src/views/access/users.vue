@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import type { User } from '#/api/console/accounts';
 import type { Schemas } from '#/api/console/generated';
+import type { RoleMenuList } from '#/api/console/role-menus';
 
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+
+import { Page } from '@vben/common-ui';
 
 import {
   ElAlert,
@@ -20,11 +24,20 @@ import {
   ElTag,
 } from 'element-plus';
 
+import { consoleMenus } from '#/access/policy';
 import { accountsApi, roleLabels } from '#/api/console/accounts';
+import { getRoleMenusApi } from '#/api/console/role-menus';
+import ChangeRecords from '#/components/console/ChangeRecords.vue';
 import ListPagination from '#/components/console/ListPagination.vue';
 import { NumberedPage } from '#/composables/numbered-page';
 import { useConsoleAccess } from '#/composables/use-console-access';
 import { useAuthStore } from '#/store';
+
+import { readAccountDirectory } from './account-directory';
+import PermissionGroups from './PermissionGroups.vue';
+import { accountPermissionGroups, roleDescriptions } from './role-permissions';
+const route = useRoute();
+const router = useRouter();
 const auth = useAuthStore();
 const { can, refresh } = useConsoleAccess();
 const allowed = computed(
@@ -45,13 +58,102 @@ const form = reactive({
   disabled: false,
   rev: 0,
 });
-const descriptions: Record<Schemas['StoreRole'], string> = {
-  viewer: '读取业务数据，不能执行写入操作',
-  operator: '主机维护、任务创建与控制',
-  'hook-author': '编写并提交脚本和模板',
-  'hook-approver': '审核脚本和模板，不能编写',
-  admin: '管理账号、角色分配、菜单及全部业务操作',
-};
+const detailOpen = ref(false);
+const detail = ref<User>();
+const detailError = ref('');
+const detailLoading = ref(false);
+const detailMenus = ref<RoleMenuList>();
+const menusError = ref('');
+const restricted = computed(
+  () => detail.value?.disabled || detail.value?.passwordChangeRequired,
+);
+const operations = computed(() =>
+  accountPermissionGroups(detail.value?.permissions ?? []),
+);
+const visibleMenus = computed(() => {
+  const user = detail.value;
+  const config = detailMenus.value;
+  if (!user || !config || restricted.value) return [];
+  const ids = new Set(
+    config.roles.find((role) => role.role === user.role)?.menuIds,
+  );
+  const permissions = new Set(user.permissions ?? []);
+  return config.menus
+    .filter(
+      (menu) =>
+        menu.parentId &&
+        Object.hasOwn(consoleMenus, menu.id) &&
+        ids.has(menu.id) &&
+        permissions.has(menu.permission),
+    )
+    .map((menu) => ({
+      ...menu,
+      title:
+        menu.id === 'role-menus'
+          ? '角色管理'
+          : menu.id === 'isos'
+            ? '系统镜像'
+            : menu.title,
+      group:
+        menu.id === 'isos'
+          ? '制品管理'
+          : config.menus.find((group) => group.id === menu.parentId)?.title,
+    }));
+});
+const canOpenRoles = computed(() =>
+  auth.sessionUser?.menuIds.includes('role-menus'),
+);
+function roleLink(role: Schemas['StoreRole']) {
+  return { path: '/access/role-menus', query: { role } };
+}
+watch(
+  () => (route.path === '/access/users' ? route.query.username : undefined),
+  async (username, _, onCleanup) => {
+    if (!allowed.value || typeof username !== 'string' || !username) {
+      detailOpen.value = false;
+      return;
+    }
+    let stale = false;
+    onCleanup(() => {
+      stale = true;
+    });
+    detailOpen.value = true;
+    detail.value = undefined;
+    detailMenus.value = undefined;
+    menusError.value = '';
+    detailError.value = '';
+    detailLoading.value = true;
+    try {
+      const [account, menus] = await Promise.allSettled([
+        readAccountDirectory(username),
+        getRoleMenusApi(),
+      ]);
+      if (stale) return;
+      if (account.status === 'rejected') throw account.reason;
+      detail.value = account.value.find((row) => row.username === username);
+      if (
+        menus.status === 'fulfilled' &&
+        menus.value.roles.some((role) => role.role === detail.value?.role)
+      ) {
+        detailMenus.value = menus.value;
+      } else {
+        menusError.value = '无法读取该账号的菜单配置。';
+      }
+      if (!detail.value) detailError.value = '未找到该账号';
+    } catch {
+      if (!stale) detailError.value = '读取账号失败';
+    } finally {
+      if (!stale) detailLoading.value = false;
+    }
+  },
+  { immediate: true },
+);
+function closeDetails() {
+  if (route.path === '/access/users' && route.query.username) {
+    const { username: _username, ...query } = route.query;
+    void router.replace({ path: route.path, query });
+  }
+}
 async function load() {
   if (!allowed.value) return;
   error.value = '';
@@ -146,11 +248,12 @@ async function save() {
 onMounted(() => load());
 </script>
 <template>
-  <div class="accounts-page">
+  <Page title="账号管理" description="查看账号、分配角色和管理账号状态。">
     <ElCard v-if="!allowed"><p>仅管理员可以管理账号及分配角色。</p></ElCard>
-    <ElCard v-else>
-      <h1>账号管理</h1>
-      <p class="muted">为每个账号分配角色；角色菜单在“角色与菜单”中设置。</p>
+    <section
+      v-else
+      class="overflow-hidden rounded-lg border border-border bg-card"
+    >
       <ElAlert
         v-if="error && !editing"
         :title="error"
@@ -164,26 +267,50 @@ onMounted(() => load());
         :closable="false"
         role="status"
       />
-      <div class="actions">
-        <ElButton type="primary" @click="edit()" :disabled="saving">
-          创建账号
-        </ElButton>
-        <ElButton @click="load()" :disabled="loading || saving">
-          刷新列表
-        </ElButton>
+      <div class="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+        <h2 class="font-semibold">账号列表</h2>
+        <div class="ml-auto flex flex-wrap items-center justify-end gap-2">
+          <ElButton type="primary" @click="edit()" :disabled="saving">
+            创建账号
+          </ElButton>
+          <ElButton @click="load()" :disabled="loading || saving">
+            刷新列表
+          </ElButton>
+        </div>
       </div>
       <ElTable
+        style="--el-table-header-bg-color: hsl(var(--accent))"
         :data="items"
         row-key="username"
         :empty-text="loading ? '正在加载…' : '暂无账号'"
       >
-        <ElTableColumn prop="username" label="用户名" min-width="160" />
+        <ElTableColumn label="用户名" min-width="160">
+          <template #default="{ row }">
+<RouterLink
+              class="text-primary"
+              :to="{ path: '/access/users', query: { username: row.username } }"
+              >
+{{ row.username }}
+</RouterLink>
+</template>
+        </ElTableColumn>
         <ElTableColumn prop="displayName" label="显示名称" min-width="160">
           <template #default="{ row }">{{ row.displayName || '—' }}</template>
         </ElTableColumn>
         <ElTableColumn label="角色" min-width="180">
           <template #default="{ row }">
-            <ElTag>{{ roleLabels[row.role as Schemas['StoreRole']] }}</ElTag>
+            <RouterLink
+              v-if="canOpenRoles"
+              class="text-primary"
+              :to="roleLink(row.role)"
+            >
+              {{ roleLabels[row.role as Schemas['StoreRole']] }}
+            </RouterLink>
+            <ElTag v-else>
+{{
+              roleLabels[row.role as Schemas['StoreRole']]
+            }}
+</ElTag>
           </template>
         </ElTableColumn>
         <ElTableColumn label="状态" width="110">
@@ -195,23 +322,137 @@ onMounted(() => load());
         </ElTableColumn>
         <ElTableColumn label="操作" width="100">
           <template #default="{ row }">
-            <ElButton
-              @click="edit(row as User)"
-              :disabled="saving"
-            >
+            <ElButton @click="edit(row as User)" :disabled="saving">
               编辑
             </ElButton>
           </template>
         </ElTableColumn>
       </ElTable>
-      <ListPagination
-        :current-page="page.page"
-        :page-size="page.pageSize"
-        :total="page.total"
-        :disabled="loading || saving"
-        @page-change="changePage"
-        @size-change="changePageSize"
-      />
+      <div class="px-4 pb-3">
+        <ListPagination
+          :current-page="page.page"
+          :page-size="page.pageSize"
+          :total="page.total"
+          :page-count="items.length"
+          :disabled="loading || saving"
+          @page-change="changePage"
+          @size-change="changePageSize"
+        />
+      </div>
+      <ElDialog
+        v-if="detailOpen"
+        v-model="detailOpen"
+        title="账号详情"
+        width="min(1080px, 94vw)"
+        append-to-body
+        @close="closeDetails"
+      >
+        <ElAlert
+          v-if="detailError"
+          type="error"
+          :title="detailError"
+          :closable="false"
+        />
+        <p v-else-if="detailLoading">正在读取账号…</p>
+        <div
+          v-else-if="detail"
+          class="grid max-h-[68dvh] gap-5 overflow-auto p-1"
+        >
+          <dl
+            class="grid grid-cols-2 gap-4 rounded-lg border border-border bg-card p-4 md:grid-cols-4"
+          >
+            <div>
+              <dt class="text-muted-foreground">用户名</dt>
+              <dd>{{ detail.username }}</dd>
+            </div>
+            <div>
+              <dt class="text-muted-foreground">显示名称</dt>
+              <dd>{{ detail.displayName || '—' }}</dd>
+            </div>
+            <div>
+              <dt class="text-muted-foreground">角色</dt>
+              <dd>
+                <RouterLink
+                  v-if="canOpenRoles"
+                  class="text-primary"
+                  :to="roleLink(detail.role)"
+                  >
+{{ roleLabels[detail.role] }}
+</RouterLink>
+                <template v-else>{{ roleLabels[detail.role] }}</template>
+              </dd>
+            </div>
+            <div>
+              <dt class="text-muted-foreground">状态</dt>
+              <dd>{{ detail.disabled ? '已禁用' : '正常' }}</dd>
+            </div>
+          </dl>
+          <ElAlert
+            v-if="restricted"
+            type="warning"
+            :closable="false"
+            :title="
+              detail.disabled
+                ? '账号已禁用，无法使用控制台。'
+                : '该账号需要先修改密码，才能使用业务功能。'
+            "
+          />
+          <section aria-label="实际操作权限">
+            <h2 class="mb-2 font-semibold">实际操作权限</h2>
+            <p v-if="restricted" class="text-sm text-muted-foreground">
+              当前没有可用的业务操作。
+            </p>
+            <p
+              v-else-if="!detail.permissions?.length"
+              class="text-sm text-muted-foreground"
+            >
+              当前没有可用的业务操作。
+            </p>
+            <PermissionGroups v-else :groups="operations" />
+          </section>
+          <section
+            aria-label="可见菜单"
+            class="rounded-lg border border-border p-4"
+          >
+            <h2 class="mb-2 font-semibold">可见菜单</h2>
+            <ElAlert
+              v-if="menusError && !restricted"
+              type="warning"
+              :title="menusError"
+              :closable="false"
+            />
+            <ul v-else-if="visibleMenus.length" class="flex flex-wrap gap-2">
+              <li v-for="menu in visibleMenus" :key="menu.id">
+                <ElTag type="info">
+{{ menu.group ? `${menu.group } / ` : ''
+                  }}{{ menu.title }}
+</ElTag>
+              </li>
+            </ul>
+            <p v-else class="text-sm text-muted-foreground">
+              当前没有可见菜单。
+            </p>
+          </section>
+          <ChangeRecords
+            v-if="can('audit:read')"
+            class="rounded-lg border border-border p-4"
+            target-kind="user"
+            :target-id="detail.username"
+          />
+        </div>
+        <template #footer>
+          <ElButton
+            v-if="detail"
+            type="primary"
+            @click="
+              detailOpen = false;
+              edit(detail);
+            "
+            >
+编辑账号
+</ElButton>
+        </template>
+      </ElDialog>
       <ElDialog
         v-model="editing"
         :title="form.rev ? '编辑账号' : '创建账号'"
@@ -269,7 +510,7 @@ onMounted(() => load());
               />
             </ElSelect>
           </ElFormItem>
-          <p class="muted">{{ descriptions[form.role] }}</p>
+          <p class="muted">{{ roleDescriptions[form.role] }}</p>
           <ElFormItem
             :label="form.rev ? '重置密码（留空保留原密码）' : '初始密码'"
           >
@@ -307,25 +548,13 @@ onMounted(() => load());
           </ElButton>
         </template>
       </ElDialog>
-    </ElCard>
-  </div>
+    </section>
+  </Page>
 </template>
 <style scoped>
-.accounts-page {
-  padding: 24px;
-}
-h1 {
-  font-size: 24px;
-  font-weight: 600;
-}
 .muted {
   color: var(--el-text-color-secondary);
   margin: 10px 0;
-}
-.actions {
-  display: flex;
-  gap: 8px;
-  margin: 16px 0;
 }
 .account-form {
   width: 100%;

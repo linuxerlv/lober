@@ -48,11 +48,32 @@ func Test契约任务(t *testing.T) {
 		{"查询：FindOpenTask 在有、没有、任务刚结束时都对", taskFindOpen},
 		{"查询：ListTasks 按 CreatedAt 倒序、再按 ID，翻页与一次全取相同", taskListPaging},
 		{"查询：ListTasks 按主机、状态、时间范围过滤", taskListFilters},
+		{"查询：按批次分页且排除未分批的任务", taskListBatch},
 		{"查询：ListTasks 的查询不合规则报 ErrInvalid", taskListInvalid},
 		{"查询：ListTasks 的 Limit 为 0 时每页 100 条", taskListDefaultLimit},
 		{"返回值与入参都是拷贝：快照是深拷贝", taskCopies},
 	})
 	runAudited(t, taskAuditedOps())
+}
+
+func taskListBatch(t *testing.T, s *pgstore.Store) {
+	f := newFixture(t, s)
+	batch := f.newTasks(t, mustTaskHosts(t, s, "SN-1", "SN-2")...)
+	created, err := s.CreateCurrentTasks(t.Context(), batch, anAudit("task.create"))
+	must(t, err, "建批次")
+	batchID := created[0].BatchID
+	if !model.ValidID(batchID) || created[1].BatchID != batchID {
+		t.Fatal("同一次提交应使用同一个批次编号", created)
+	}
+	f.mustCreate(t, s, mustTaskHosts(t, s, "SN-3")...)
+	want := sortedTasks(created)
+	for i, task := range want {
+		p, err := s.ListTasks(t.Context(), repository.TaskQuery{BatchID: batchID, Page: i + 1, Limit: 1})
+		must(t, err, "按批次查任务")
+		if p.Total == nil || *p.Total != 2 || len(p.Items) != 1 || p.Items[0].ID != task.ID || p.Items[0].BatchID != batchID {
+			t.Fatal(p)
+		}
+	}
 }
 
 func taskCurrentStale(t *testing.T, s *pgstore.Store) {
@@ -89,8 +110,8 @@ func taskCurrentCreate(t *testing.T, s *pgstore.Store) {
 	wantEqual(t, len(got), 2, "任务数")
 	for i, task := range got {
 		want := in[i]
-		want.ID, want.State, want.Rev = task.ID, model.TaskPending, 1
-		if !model.ValidID(task.ID) {
+		want.ID, want.BatchID, want.State, want.Rev = task.ID, got[0].BatchID, model.TaskPending, 1
+		if !model.ValidID(task.ID) || !model.ValidID(task.BatchID) {
 			t.Fatal("任务编号不合法")
 		}
 		wantEqual(t, task, want, "返回顺序与默认字段")

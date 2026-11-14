@@ -1,6 +1,30 @@
 import { describe, expect, it } from 'vitest';
 
-import { eventDetails } from './event-details';
+import { eventDetails, findFailureEvent } from './event-details';
+
+it('finds the current failure event even when later log records arrive', () => {
+  const timeout = {
+    seq: 22,
+    kind: 'machine.timeout',
+    fields: { stage: 'install' },
+  };
+  expect(
+    findFailureEvent([
+      timeout,
+      { seq: 23, kind: 'installer.syslog', fields: {} },
+    ])?.event,
+  ).toBe(timeout);
+});
+
+it('does not report an older failure after retry or an optional script error as the cause', () => {
+  expect(
+    findFailureEvent([
+      { seq: 1, kind: 'machine.failed', fields: { reason: '旧故障' } },
+      { seq: 2, kind: 'machine.retry', fields: {} },
+      { seq: 3, kind: 'machine.hook-report', fields: { rc: '1' } },
+    ]),
+  ).toBeUndefined();
+});
 
 describe('task event details', () => {
   it('shows decoded UTF-8 logs alongside phase diagnostics', () => {

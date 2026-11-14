@@ -21,11 +21,13 @@ async function signIn(username) {
 try {
   const admin = await signIn('admin');
   await admin.page.goto(input.url + '/#/access/role-menus');
-  await admin.page.getByRole('combobox', { name: '配置角色', exact: true }).locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")][1]').click();
-  await admin.page.getByRole('option', { name: '管理员（admin）', exact: true }).click();
-  const roleMenu = admin.page.locator('[data-key="role-menus"]');
-  await roleMenu.locator('.el-checkbox').waitFor();
-  await roleMenu.locator('input[type="checkbox"]').waitFor({ state: 'attached' });
+  const adminRole = admin.page.getByRole('row').filter({
+    has: admin.page.getByText('管理员', { exact: true }),
+  });
+  await adminRole.getByRole('link', { name: '查看详情', exact: true }).click();
+  await admin.page.getByRole('tab', { name: '菜单可见性', exact: true }).click();
+  const roleMenu = admin.page.getByRole('tree', { name: '可见菜单', exact: true });
+  await roleMenu.locator('input[type="checkbox"]').first().waitFor({ state: 'attached' });
   results.push('administrator-role-menu-page');
   await admin.page.goto(input.url + '/#/hosts');
   await admin.page.locator('.vxe-grid').first().waitFor();

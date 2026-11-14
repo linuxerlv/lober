@@ -13,6 +13,7 @@ import (
 // 靠它们，不必解开快照。部分唯一索引 idx_tasks_open 守着 C31：每台主机最多一个未结束的任务，结束了的不占位。
 type taskRow struct {
 	ID              string `gorm:"primaryKey"`
+	BatchID         string `gorm:"not null;default:'';index:idx_tasks_batch_id,where:batch_id <> ''"`
 	HostSN          string `gorm:"not null;index:idx_tasks_host_sn;uniqueIndex:idx_tasks_open,where:state NOT IN ('done'\\, 'failed'\\, 'cancelled')"`
 	ISOID           string `gorm:"not null;index:idx_tasks_iso_id"`
 	TemplateID      string `gorm:"not null;index:idx_tasks_template_version,priority:1"`
@@ -59,7 +60,7 @@ func toTaskRow(t model.Task) (taskRow, error) {
 		return taskRow{}, err
 	}
 	return taskRow{
-		ID: t.ID, HostSN: t.HostSN, ISOID: t.ISOID, TemplateID: t.TemplateID, TemplateVersion: t.TemplateVersion,
+		ID: t.ID, BatchID: t.BatchID, HostSN: t.HostSN, ISOID: t.ISOID, TemplateID: t.TemplateID, TemplateVersion: t.TemplateVersion,
 		State: string(t.State), Snapshot: snap, CreatedBy: t.CreatedBy, CreatedAt: t.CreatedAt, Rev: t.Rev,
 	}, nil
 }
@@ -67,7 +68,7 @@ func toTaskRow(t model.Task) (taskRow, error) {
 // task 把一行转回 model.Task。快照每次都从 JSON 解出新的值，所以返回值就是深拷贝，nil 与空的 map、切片也照写进去的分开。
 func (r taskRow) task() (model.Task, error) {
 	t := model.Task{
-		ID: r.ID, HostSN: r.HostSN, ISOID: r.ISOID, TemplateID: r.TemplateID, TemplateVersion: r.TemplateVersion,
+		ID: r.ID, BatchID: r.BatchID, HostSN: r.HostSN, ISOID: r.ISOID, TemplateID: r.TemplateID, TemplateVersion: r.TemplateVersion,
 		State: model.TaskState(r.State), CreatedBy: r.CreatedBy, CreatedAt: r.CreatedAt, Rev: r.Rev,
 	}
 	if err := decodeJSON(r.Snapshot, &t.Snapshot); err != nil {
