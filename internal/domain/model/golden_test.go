@@ -231,7 +231,7 @@ func goldenSnapshot() Snapshot {
 
 func goldenTask() Task {
 	return Task{
-		ID: "t-20261002-0001", HostSN: "SN-0001", ISOID: "iso-rocky96", TemplateID: "rocky-base", TemplateVersion: 4,
+		ID: "t-20261002-0001", BatchID: "batch-20261002-0001", HostSN: "SN-0001", ISOID: "iso-rocky96", TemplateID: "rocky-base", TemplateVersion: 4,
 		State: TaskInstalling, Snapshot: goldenSnapshot(), CreatedBy: "alice", CreatedAt: 1790000000,
 	}
 }

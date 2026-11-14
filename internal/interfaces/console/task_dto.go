@@ -64,6 +64,7 @@ type snapshotDTO struct {
 type taskItem struct {
 	ID              string          `json:"id"`
 	HostSN          string          `json:"hostSN"`
+	BatchID         string          `json:"batchID,omitempty"`
 	ISOID           string          `json:"isoID"`
 	TemplateID      string          `json:"templateID"`
 	TemplateVersion int             `json:"templateVersion"`
@@ -114,7 +115,7 @@ func snapshotToDTO(s model.Snapshot) snapshotDTO {
 	return snapshotDTO{Schema: s.Schema, Family: s.Family, Series: string(s.Series), Format: string(s.Format), Host: snapshotHostDTO{s.Host.SN, s.Host.Arch, s.Host.Firmware, stringMap(s.Host.Attrs)}, ISO: snapshotISODTO{s.ISO.ID, s.ISO.Name, s.ISO.Version, s.ISO.Arch, stringMap(s.ISO.Artifacts)}, Template: snapshotTemplateDTO{s.Template.ID, s.Template.Version, s.Template.Name, s.Template.Body, snapshotValues(s.Template.Params)}, Slots: slots}
 }
 func toTaskItem(t model.Task) taskItem {
-	return taskItem{t.ID, t.HostSN, t.ISOID, t.TemplateID, t.TemplateVersion, t.State, snapshotToDTO(t.Snapshot), t.CreatedBy, t.CreatedAt, t.Rev, []problemJSON{}, []problemJSON{}}
+	return taskItem{t.ID, t.HostSN, t.BatchID, t.ISOID, t.TemplateID, t.TemplateVersion, t.State, snapshotToDTO(t.Snapshot), t.CreatedBy, t.CreatedAt, t.Rev, []problemJSON{}, []problemJSON{}}
 }
 
 func toTaskChoiceItem(choice tasks.TaskChoice) taskItem {

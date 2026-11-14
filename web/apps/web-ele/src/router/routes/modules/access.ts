@@ -18,6 +18,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/access/users.vue'),
         meta: {
           title: '账号管理',
+          fullPathKey: false,
           menuId: 'users',
           permission: 'user:manage',
         },
@@ -27,7 +28,8 @@ const routes: RouteRecordRaw[] = [
         path: 'role-menus',
         component: () => import('#/views/access/role-menus.vue'),
         meta: {
-          title: '角色与菜单',
+          title: '角色管理',
+          fullPathKey: false,
           menuId: 'role-menus',
           permission: 'user:manage',
         },

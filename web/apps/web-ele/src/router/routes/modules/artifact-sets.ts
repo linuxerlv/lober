@@ -8,7 +8,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       icon: Inbox,
       order: 50,
-      title: '制品集',
+      title: '制品管理',
     },
     name: 'ArtifactSets',
     path: '/artifact-sets',
@@ -18,7 +18,7 @@ const routes: RouteRecordRaw[] = [
         path: '',
         component: () => import('#/views/artifact-sets/index.vue'),
         meta: {
-          title: '制品集导入',
+          title: '系统镜像',
           menuId: 'isos',
         },
       },

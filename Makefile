@@ -26,8 +26,11 @@ archcheck:
 test: archcheck
 	go test ./...
 
+# 并发检查会拖慢真实口令校验；较慢的测试机可单独延长超时。
+RACE_TIMEOUT ?= 20m
+
 race: archcheck
-	go test -race -timeout=20m ./...
+	go test -race -timeout=$(RACE_TIMEOUT) ./...
 
 # 旧系统出过在 Windows 上能编译、却编不出 Linux 版的问题（spec §7.1）。
 cross:
