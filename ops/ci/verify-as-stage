@@ -11,6 +11,6 @@ esac
 [ "${#2}" -eq 40 ]
 if [ "$stage" = test ]; then
     exec /usr/bin/sudo -n -u lober-ci-test /usr/bin/python3 -I /opt/lober-ci/ops/ci/verify.py \
-        test "$2" --image-root /var/lib/lober-container-ci
+        test "$2" --image-root /var/lib/lober-ci-container-evidence
 fi
 exec /usr/bin/sudo -n -u "lober-ci-$stage" /usr/bin/python3 -I /opt/lober-ci/ops/ci/verify.py "$stage" "$2"

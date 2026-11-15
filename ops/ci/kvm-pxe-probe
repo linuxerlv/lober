@@ -20,14 +20,18 @@ guest_identity=()
 helper=/opt/lober-ci/ops/ci/kvm_install_probe.py
 guest_user=lober-ci-test
 if [[ -n "$image_run" ]]; then
-    [[ "$mode" == debian-netinst && -z "$shared" && -z "$case_name" ]]
-    [[ "$image_run" == /* && "$evidence" == "$image_run/kvm" ]]
+    [[ "$image_run" == /* && -z "$shared" ]]
+    if [[ -n "$case_name" ]]; then
+        [[ "$mode" == debian && "$case_name" =~ ^(parallel|serial)-[12]$ && "$evidence" == "$image_run/kvm/$case_name" ]]
+    else
+        [[ "$mode" == debian-netinst && "$evidence" == "$image_run/kvm" ]]
+    fi
     test "$(stat -c '%u:%a' "$image_run")" = 0:700
     helper="$(dirname -- "$(realpath -- "$0")")/kvm_install_probe.py"
     guest_user=nobody
     shared="$image_run/relay"
     test -S "$shared/gateway.sock" && test -S "$shared/artifacts.sock"
-    read -r serial mac guest_uuid <<<"$(/usr/bin/python3 -I "$helper" identity serial-1)"
+    read -r serial mac guest_uuid <<<"$(/usr/bin/python3 -I "$helper" identity "${case_name:-serial-1}")"
     guest_identity=(-uuid "$guest_uuid")
 elif [[ -n "$case_name" ]]; then
     [[ "$mode" == debian && "$case_name" =~ ^(parallel|serial)-[12]$ ]]
@@ -50,12 +54,13 @@ if [[ -z "$image_run" ]]; then
 fi
 
 scratch=$(mktemp -d /tmp/lober-pxe.XXXXXXXX)
-if [[ -n "$image_run" ]]; then
+if [[ -n "$image_run" || -n "$case_name" ]]; then
     guest_identity+=(-qmp "unix:$scratch/app/qmp.sock,server=on,wait=off")
 fi
 if [[ -n "$case_name" ]]; then
-    guest_identity+=(-qmp "unix:$scratch/app/qmp.sock,server=on,wait=off")
-    /usr/bin/python3 -I - "$candidate/candidate.json" "$case_name" "$serial" "$mac" "$guest_uuid" >"$evidence/identity.json" <<'PY'
+    manifest="$candidate/candidate.json"
+    if [[ -n "$image_run" ]]; then manifest="$image_run/kvm/candidate.json"; fi
+    /usr/bin/python3 -I - "$manifest" "$case_name" "$serial" "$mac" "$guest_uuid" >"$evidence/identity.json" <<'PY'
 import json, sys
 from pathlib import Path
 manifest = json.loads(Path(sys.argv[1]).read_text())
@@ -92,6 +97,10 @@ from pathlib import Path
 print(json.dumps({"seedAdmin": json.loads(Path(sys.argv[1]).read_text())["seedAdmin"]}))
 PY
     chown "$guest_user:$(id -gn "$guest_user")" "$scratch/app/config.json"
+    if [[ -n "$case_name" ]]; then
+        install -m 0600 -o "$guest_user" -g "$(id -gn "$guest_user")" \
+            "$image_run/app/shared-selection.json" "$scratch/app/shared-selection.json"
+    fi
 fi
 install -d -m 0755 "$scratch/tftp"
 ip link set lo up
@@ -157,7 +166,10 @@ if [[ "$mode" != boot ]]; then
         seconds=1200
     fi
     selection="$shared"
-    if [[ -n "$image_run" ]]; then selection=""; fi
+    if [[ -n "$image_run" ]]; then
+        selection=""
+        if [[ -n "$case_name" ]]; then selection="$scratch/app"; fi
+    fi
     runuser -u "$guest_user" -- env LOBER_INSTALL_SERIAL="$serial" LOBER_KVM_SHARED="$selection" \
         /usr/bin/python3 -I "$helper" "$operation" "$scratch/app" >"$evidence/install.log" 2>&1
     if [[ -z "$shared" ]]; then

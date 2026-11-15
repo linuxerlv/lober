@@ -14,14 +14,17 @@ nonce=${run##*/}
 db="lober-ci-db-$nonce"
 app="lober-ci-app-$nonce"
 children=()
+kvm_units=()
 db_started=
 app_created=
 cleanup() {
+    for unit in "${kvm_units[@]}"; do systemctl stop "$unit" 2>/dev/null || true; done
     for pid in "${children[@]}"; do kill "$pid" 2>/dev/null || true; done
     for pid in "${children[@]}"; do wait "$pid" 2>/dev/null || true; done
     if [[ -n "$app_created" ]]; then docker rm -fv "$app" >/dev/null; fi
     if [[ -n "$db_started" ]]; then docker rm -fv "$db" >/dev/null; fi
     if [[ -f "$run/app/config.json" ]]; then rm -- "$run/app/config.json"; fi
+    if [[ -f "$run/app/shared-selection.json" ]]; then rm -- "$run/app/shared-selection.json"; fi
 }
 trap cleanup EXIT
 trap 'exit 143' TERM
@@ -39,10 +42,20 @@ case "$suite" in
         export LOBER_ENTERPRISE_UI_SCRIPT="$enterprise/ui.mjs"
         test -r "$fixture" && test -x "$LOBER_ENTERPRISE_NODE"
         ;;
-    debian)
-        netinst=${LOBER_IMAGE_DEBIAN_NETINST:?设置 Debian netinst 路径}
+    debian|debian-batch)
+        installer=debian-netinst
+        if [[ "$suite" == debian-batch ]]; then
+            installer=debian-dvd
+            media=${LOBER_IMAGE_DEBIAN_DVD:?设置 Debian DVD-1 路径}
+            manifest=${LOBER_IMAGE_RELEASE_MANIFEST:?设置冻结候选清单}
+            test -r "$manifest"
+            test "$(df -PB1 /tmp | awk 'NR==2 {print $4}')" -ge 19000000000
+            test "$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)" -ge 2600000
+        else
+            media=${LOBER_IMAGE_DEBIAN_NETINST:?设置 Debian netinst 路径}
+        fi
         mini=${LOBER_IMAGE_DEBIAN_MINI:?设置 Debian 网络引导镜像路径}
-        test -r "$netinst" && test -r "$mini" && test -c /dev/kvm
+        test -r "$media" && test -r "$mini" && test -c /dev/kvm
         ;;
     *) exit 2 ;;
 esac
@@ -65,7 +78,7 @@ docker exec "$db" pg_isready -h 127.0.0.1 -U postgres
 dsn="postgres://postgres:$POSTGRES_PASSWORD@127.0.0.1:$port/postgres?sslmode=disable"
 unset POSTGRES_PASSWORD
 
-if [[ "$suite" != debian ]]; then
+if [[ "$suite" != debian && "$suite" != debian-batch ]]; then
     mkdir "$run/bin"
     cat >"$run/bin/db-tool" <<'SH'
 #!/usr/bin/env bash
@@ -110,11 +123,16 @@ free_port() {
     python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
 }
 gateway_port="$(free_port)"
+if [[ "$suite" == debian-batch ]]; then
+    schema="pxe_probe_${nonce:0:8}"
+    docker exec "$db" psql -U postgres -X -v ON_ERROR_STOP=1 -c "CREATE SCHEMA $schema" >"$run/kvm/database.log"
+    dsn="$dsn&search_path=$schema"
+fi
 LOBER_KVM_LISTEN="127.0.0.1:$gateway_port" LOBER_KVM_PG_DSN="$dsn" \
     python3 -I "$here/kvm_install_probe.py" configure "$run/app"
 docker create --name "$app" --network host --env GIN_MODE=release \
     --mount "type=bind,src=$run/app,dst=$run/app" \
-    --mount "type=bind,src=$netinst,dst=/run/lober-ci-verified-media/debian-netinst.iso,readonly" \
+    --mount "type=bind,src=$media,dst=/run/lober-ci-verified-media/$installer.iso,readonly" \
     --mount "type=bind,src=$mini,dst=/run/lober-ci-verified-media/debian-mini.iso,readonly" \
     "$image" -config "$run/app/config.json" >/dev/null
 app_created=1
@@ -146,11 +164,71 @@ for _ in $(seq 1 50); do
     if [[ -S "$run/relay/gateway.sock" && -S "$run/relay/artifacts.sock" && -S "$run/relay/mirror.sock" ]]; then break; fi
     sleep .1
 done
+commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$run/result.json")"
+guest() {
+    local unit=$1 case_name=$2 output=$3 mode=$4
+    systemd-run --quiet --wait --pipe --collect --unit="$unit" \
+        -p PrivateNetwork=yes -p RuntimeMaxSec=55min -p KillMode=control-group \
+        -p "BindReadOnlyPaths=$media:/run/lober-ci-verified-media/$installer.iso $mini:/run/lober-ci-verified-media/debian-mini.iso" \
+        --setenv="LOBER_KVM_IMAGE_RUN=$run" --setenv="LOBER_KVM_CASE=$case_name" /bin/bash "$here/kvm-pxe-probe" \
+        "$commit" "$output" "$mode"
+}
 rc=0
-systemd-run --quiet --wait --pipe --collect --unit="lober-image-kvm-$nonce" \
-    -p PrivateNetwork=yes -p RuntimeMaxSec=55min -p KillMode=control-group \
-    -p "BindReadOnlyPaths=$netinst:/run/lober-ci-verified-media/debian-netinst.iso $mini:/run/lober-ci-verified-media/debian-mini.iso" \
-    --setenv="LOBER_KVM_IMAGE_RUN=$run" /bin/bash "$here/kvm-pxe-probe" \
-    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$run/result.json")" "$run/kvm" debian-netinst || rc=$?
+if [[ "$suite" == debian ]]; then
+    unit="lober-image-kvm-$nonce"
+    kvm_units+=("$unit")
+    guest "$unit" "" "$run/kvm" debian-netinst || rc=$?
+else
+    install -m 0600 -- "$manifest" "$run/kvm/candidate.json"
+    snapshot() {
+        local identity binary
+        identity="$(docker inspect --format '{{.Id}} {{.Image}} {{.State.Pid}}' "$app")"
+        binary="$(docker exec "$app" sha256sum /usr/local/bin/lober)"
+        python3 -I - "$run/kvm/candidate.json" "$commit" "$image" "$identity" "${binary%% *}" "$schema" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, commit, expected_image, observed, binary, schema = sys.argv[1:]
+candidate = json.loads(Path(path).read_text())
+container, image, pid = observed.split()
+if (candidate["product_sha"] != commit or candidate["test_sha"] != commit
+        or candidate["image_id"] != expected_image or image != expected_image
+        or candidate["binary_sha256"] != binary or int(pid) <= 1):
+    raise SystemExit("装机容器、冻结提交或程序校验值不一致")
+ticks = int(Path("/proc", pid, "stat").read_text().rsplit(")", 1)[1].split()[19])
+print(json.dumps({**{key: candidate[key] for key in ("run_id", "product_sha", "test_sha", "binary_sha256")},
+    "image_id": image, "container_id": container, "pid": int(pid), "start_ticks": ticks, "schema": schema}))
+PY
+    }
+    snapshot >"$run/kvm/shared-service-start.json"
+    LOBER_KVM_BACKEND="http://127.0.0.1:$gateway_port" \
+        python3 -I "$here/kvm_install_probe.py" register-shared "$run/app" >"$run/kvm/media-and-template.log" 2>&1
+    one_case() {
+        local name=$1 status=0
+        printf '%s start %s\n' "$(date -u +%FT%TZ)" "$name" >>"$run/kvm/schedule.log"
+        guest "lober-image-$nonce-$name" "$name" "$run/kvm/$name" debian >"$run/kvm/$name/runner.log" 2>&1 || status=$?
+        printf '%s end %s %s\n' "$(date -u +%FT%TZ)" "$name" "$status" >>"$run/kvm/schedule.log"
+        return "$status"
+    }
+    for name in parallel-1 parallel-2 serial-1 serial-2; do
+        mkdir -m 0700 -- "$run/kvm/$name"
+        kvm_units+=("lober-image-$nonce-$name")
+    done
+    one_case parallel-1 & first=$!
+    one_case parallel-2 & second=$!
+    wait "$first" || rc=1
+    wait "$second" || rc=1
+    if [[ "$rc" == 0 ]]; then
+        one_case serial-1 && one_case serial-2 || rc=1
+    fi
+    if [[ "$rc" == 0 ]]; then
+        LOBER_KVM_BACKEND="http://127.0.0.1:$gateway_port" \
+            python3 -I "$here/kvm_install_probe.py" shared-tasks "$run/app" >"$run/kvm/shared-tasks.json"
+        snapshot >"$run/kvm/shared-service-end.json"
+        cmp -s "$run/kvm/shared-service-start.json" "$run/kvm/shared-service-end.json"
+        printf 'PASS four Debian installs and repeat boots on %s\n' "$image"
+    fi
+fi
 docker logs "$app" >"$run/kvm/product.log" 2>&1
 exit "$rc"

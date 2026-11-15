@@ -67,6 +67,8 @@ def verify_installation(manifest, source, root):
     try:
         source, root = Path(source).resolve(strict=True), Path(root).resolve(strict=True)
         identity = {name: manifest[name] for name in ("run_id", "product_sha", "test_sha", "binary_sha256")}
+        if "image_id" in manifest:
+            identity["image_id"] = manifest["image_id"]
         config = manifest["capacity"]
         low_memory = config.get("installation_schema") == capacity.KVM_INSTALL_SCHEMA
         checker, helpers = (KVM_CHECKER, HELPERS[:1]) if low_memory else (CHECKER, HELPERS)
@@ -130,6 +132,8 @@ def verify_capacity(manifest, source, root, manifest_path):
         identity.update(manifest_sha256=digest(manifest_path), profile_sha256=config["profile_sha256"],
                         executor_sha256=manifest["files"]["tests/lobertest/enterprise/production_capacity.py"],
                         run_identity_sha256=config["run_identity_sha256"])
+        if "image_id" in manifest:
+            identity["image_id"] = manifest["image_id"]
         context = SimpleNamespace(output_root=resolved, identity=identity, profile=profile,
                                   c=config, common_identity=common, qualification_root=root)
         return capacity.assess_capacity(context)[0]
@@ -176,6 +180,8 @@ def main():
                    "evidence": log.name, "evidence_sha256": digest(log),
                    "scope": ("已冻结的两台并行及两台串行安装原件" if args.kind == "installation"
                              else "完整规模、24 小时长稳及真实并发安装原件")}
+            if "image_id" in manifest and not problems:
+                row["image_id"] = manifest["image_id"]
             atomic_json(args.output / (name + ".json"), row)
         return 1 if problems else 0
     except (KeyError, ValueError, OSError, TypeError, json.JSONDecodeError):

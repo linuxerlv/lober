@@ -117,6 +117,24 @@ def wait_service(service):
     raise RuntimeError('容量候选服务启动超时')
 
 
+class ContainerProduct:
+    def __init__(self, bridge, image):
+        self.image = image
+        self.receipt = bridge / 'started.json'
+        for _ in range(600):
+            if self.receipt.is_file():
+                observed = read_json(self.receipt)
+                self.pid = observed['pid']
+                if observed['image_id'] != image or type(self.pid) is not int or self.pid <= 1:
+                    raise ValueError('容量容器的进程或镜像不匹配')
+                return
+            time.sleep(.2)
+        raise RuntimeError('容量容器没有启动记录')
+
+    def poll(self):
+        return None if self.pid > 1 and Path('/proc', str(self.pid)).exists() else 1
+
+
 def run(root, pg_socket):
     base = root.parent
     if (root.resolve(strict=True) != root or base.name != 'qualification' or base.parent.parent != TEST_BASE
@@ -139,6 +157,14 @@ def run(root, pg_socket):
 
     candidate = read_json(root/'original-candidate.json')
     identity = {key: candidate[key] for key in ('run_id', 'product_sha', 'test_sha', 'binary_sha256')}
+    bridge = None
+    if 'image_id' in candidate:
+        identity['image_id'] = candidate['image_id']
+        bridge = Path(os.environ['LOBER_CAPACITY_BRIDGE'])
+        if (bridge.parent != Path('/run') or not bridge.name.startswith('lober-ci-container.')
+                or bridge.resolve(strict=True) != bridge or bridge.stat().st_uid != 0
+                or bridge.stat().st_mode & 0o022):
+            raise ValueError('容器启动记录目录不是管理员只读目录')
     case_root = root/'installation'
     checker, parser = (case_root / name for name in ('kvm_install_evidence.py', 'cloud_packet_capture.py'))
     common = root/'run-identity.json'
@@ -148,13 +174,14 @@ def run(root, pg_socket):
     report_path = case_root/'report.json'
     report = collect_report({**identity, 'run_identity_sha256': sha(common)}, case_root, packet)
     put_json(report_path, report)
-    print('四次装机和抓包已复核，通过后开始准备容量负载', flush=True)
+    print('四次装机和抓包已复核', flush=True)
 
     runtime = root/'runtime'
     media = runtime/'media'
     esxi = media/'esxi7.iso'
     media_evidence = read_json(root/'real-media.json')
-    if (media_evidence['status'] != 'PASS' or any(media_evidence[key] != identity[key] for key in identity)
+    media_keys = ('run_id', 'product_sha', 'test_sha', 'binary_sha256')
+    if (media_evidence['status'] != 'PASS' or any(media_evidence[key] != identity[key] for key in media_keys)
             or media_evidence['media_sha256']['LOBER_TEST_ESXI7_ISO'] != ESXI7_SHA or sha(esxi) != ESXI7_SHA):
         raise ValueError('真实下载镜像和候选证据不符')
     receipt = root/'download-media.json'
@@ -163,7 +190,7 @@ def run(root, pg_socket):
     profile = root/'profile.json'
     put_json(profile, capacity.FORMAL_PROFILE)
     schema = capacity.schema_for(identity['run_id'])
-    pg_data = runtime/'pgdata'
+    pg_data = (root if bridge else runtime)/'pgdata'
     db_user = pwd.getpwuid(os.getuid()).pw_name
     env = {k: v for k, v in os.environ.items() if not k.startswith('PG') and k != 'LOBER_PG_DSN'}
     subprocess.run([PG_BIN/'initdb', '-D', pg_data, '--auth-local=trust', '--auth-host=reject',
@@ -175,7 +202,30 @@ def run(root, pg_socket):
     try:
         psql = [PG_BIN/'psql', '-h', pg_socket, '-p', str(PG_PORT), '-X', '-v', 'ON_ERROR_STOP=1']
         subprocess.run([*psql, '-d', 'postgres', '-c', f'CREATE DATABASE {DB_NAME}'], env=env, check=True)
-        subprocess.run([*psql, '-d', DB_NAME, '-c', f'CREATE SCHEMA {schema}'], env=env, check=True)
+        db_dsn = f'host={pg_socket} port={PG_PORT} user={db_user} dbname={DB_NAME} search_path={schema}'
+        if bridge:
+            role = 'lober_capacity_app'
+            password = secrets.token_hex(32)
+            subprocess.run([*psql, '-d', DB_NAME], env=env, text=True, check=True, input=(
+                f"CREATE ROLE {role} LOGIN NOSUPERUSER NOREPLICATION NOBYPASSRLS PASSWORD '{password}';\n"
+                f"CREATE SCHEMA {schema} AUTHORIZATION {role};\n"
+                f"GRANT pg_read_all_settings TO {role};\n"))
+            # 容器启动前撤销 trust。宿主测试账号同 UID 的容器也不能用管理员身份连接。
+            (pg_data/'pg_hba.conf').write_text(f'local {DB_NAME} {role} scram-sha-256\nlocal all all reject\n')
+            subprocess.run([*pg_command, 'reload'], env=env, check=True)
+            for _ in range(100):
+                ready = subprocess.run([*psql, '-w', '-d', DB_NAME, '-U', role, '-Atc', 'SELECT current_user'],
+                    env={**env, 'PGPASSWORD': password}, capture_output=True, text=True, timeout=5)
+                refused = subprocess.run([*psql, '-w', '-d', DB_NAME, '-Atc', 'SELECT current_user'],
+                    env=env, capture_output=True, timeout=5)
+                if ready.returncode == 0 and ready.stdout.strip() == role and refused.returncode:
+                    break
+                time.sleep(.1)
+            else:
+                raise RuntimeError('容量数据库未启用受限账号')
+            db_dsn = f'host={pg_socket} port={PG_PORT} user={role} dbname={DB_NAME} search_path={schema} password={password}'
+        else:
+            subprocess.run([*psql, '-d', DB_NAME, '-c', f'CREATE SCHEMA {schema}'], env=env, check=True)
         db_owner = root/'database-owner.json'
         put_json(db_owner, {'run_id': identity['run_id'], 'schema': schema})
         auth_file, config_file = runtime/'auth.json', runtime/'config.json'
@@ -183,7 +233,7 @@ def run(root, pg_socket):
         write_paths = {key: runtime/key for key in ('staging', 'artifacts', 'smb', 'tools')}
         for path in write_paths.values():
             path.mkdir(mode=0o700)
-        config = {'listen': '127.0.0.1:18093', 'pg': {'dsn': f'host={pg_socket} port={PG_PORT} user={db_user} dbname={DB_NAME} search_path={schema}',
+        config = {'listen': '127.0.0.1:18093', 'pg': {'dsn': db_dsn,
                   'maxConns': 20}, 'seedAdmin': seed_password, 'log': {'level': 'error'},
                   'machine': {'enabled': True, 'keyFile': str(runtime/'machine.key')},
                   'preview': {'gateway': URL, 'artifacts': FILES_URL},
@@ -194,10 +244,14 @@ def run(root, pg_socket):
         if (binary.resolve(strict=True) != base.parent/'lober' or archive.resolve(strict=True) != base.parent/'source.tar'
                 or sha(binary) != candidate['binary_sha256'] or sha(archive) != candidate['source_archive_sha256']):
             raise ValueError('容量候选程序或源码包校验不符')
-        with (root/'product.log').open('xb') as log:
-            product = subprocess.Popen([binary, '-config', config_file], env={**env, 'GIN_MODE': 'release'},
-                                       stdout=log, stderr=subprocess.STDOUT)
-        processes.append(product)
+        if bridge:
+            (runtime/'container-request').touch(exist_ok=False)
+            product = ContainerProduct(bridge, identity['image_id'])
+        else:
+            with (root/'product.log').open('xb') as log:
+                product = subprocess.Popen([binary, '-config', config_file], env={**env, 'GIN_MODE': 'release'},
+                                           stdout=log, stderr=subprocess.STDOUT)
+            processes.append(product)
         with (root/'downloads.log').open('xb') as log:
             processes.append(subprocess.Popen([sys.executable, '-I', '-m', 'http.server', '18094', '--bind', '127.0.0.1',
                                                 '--directory', media], env=env, stdout=log, stderr=subprocess.STDOUT))
@@ -233,7 +287,8 @@ def run(root, pg_socket):
                                   (('product', product.pid), ('database', db_pid))}}
         manifest = root/'capacity-candidate.json'
         put_json(root/'capacity-config.json', settings)
-        put_json(manifest, {**candidate, 'capacity': settings})
+        extra = {'container_capacity_run': root.name} if bridge else {}
+        put_json(manifest, {**candidate, **extra, 'capacity': settings})
         for phase in ('seed', 'normal', 'burst', 'soak', 'evaluate'):
             print(f'容量阶段 {phase} 开始', flush=True)
             subprocess.run([sys.executable, '-B', str(root/'tools/production_capacity.py'), '--phase', phase,
@@ -248,6 +303,8 @@ def run(root, pg_socket):
         for process in processes:
             process.wait(timeout=30)
         subprocess.run([*pg_command, '-m', 'fast', 'stop'], env=env, check=True)
+        if bridge:
+            shutil.rmtree(pg_data)
         shutil.rmtree(runtime)
 
 

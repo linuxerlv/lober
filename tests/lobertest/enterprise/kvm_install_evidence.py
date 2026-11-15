@@ -69,6 +69,17 @@ def check_shared_tasks(tasks, expected):
             '同一个候选服务必须返回四台来宾各自完成的任务')
 
 
+def check_shared_image(before, after, identity):
+    image = identity.get("image_id")
+    if image is None and "image_id" not in before and "image_id" not in after:
+        return
+    require(isinstance(image, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", image)
+            and before.get("image_id") == after.get("image_id") == image
+            and before.get("container_id") == after.get("container_id")
+            and re.fullmatch(r"[0-9a-f]{64}", before.get("container_id", "")),
+            "装机期间共用容器或候选镜像不一致")
+
+
 def guest(data):
     lines = data.decode().splitlines()
     properties = dict(line.split('=', 1) for line in lines[:-3] if '=' in line)
@@ -113,12 +124,14 @@ def check_capture(parser, data, identity, task, repeat):
 def verify_report(report, identity, root, parser):
     root = Path(root).resolve(strict=True)
     require(report['schema'] == SCHEMA and report['synthetic'] is False and report['status'] == 'PASS'
-            and all(report[key] == identity[key] for key in (*IDENTITY, 'run_identity_sha256')),
+            and all(report[key] == identity[key] for key in (*IDENTITY, 'run_identity_sha256'))
+            and report.get('image_id') == identity.get('image_id'),
             '原件与冻结候选不一致')
     require(set(report['cases']) == set(CASES), '四次装机原件不齐全')
     shared = {file: private_bytes(root, file, 1 << 20) for file in SHARED_FILES}
     require(report['shared'] == {file: digest(value) for file, value in shared.items()}, '共享候选原件校验值不符')
     before, after, tasks = (json.loads(shared[file]) for file in SHARED_FILES)
+    check_shared_image(before, after, identity)
     require(before == after and all(before[key] == identity[key] for key in IDENTITY)
             and type(before['pid']) is int and before['pid'] > 1 and type(before['start_ticks']) is int
             and before['start_ticks'] > 0 and re.fullmatch(r'pxe_probe_[a-z0-9]{8}', before['schema']),
