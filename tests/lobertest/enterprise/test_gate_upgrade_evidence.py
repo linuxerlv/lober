@@ -12,9 +12,10 @@ class UpgradeEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             image = "sha256:" + "9" * 64
-            manifest = {"image_id": image, "product_sha": "a" * 40, "test_sha": "b" * 40}
+            manifest = {"image_id": image, "product_sha": "a" * 40, "test_sha": "b" * 40,
+                        "files": {"ops/ci/upgrade_probe.py": "7" * 64}}
             run_id = "c" * 32
-            proof = {"baseline_sha": BASELINE_SHA, "new_task_sha256": "4" * 64,
+            proof = {"baseline_sha": BASELINE_SHA, "probe_sha256": "7" * 64, "new_task_sha256": "4" * 64,
                      "rolled_back_status": 404, "stages": [
                          {"phase": phase, "image_id": running, "container_id": key * 64,
                           "snapshot_sha256": "5" * 64, "artifacts_sha256": "6" * 64, "artifact_count": 2}
@@ -36,6 +37,7 @@ class UpgradeEvidenceTests(unittest.TestCase):
             self.assertEqual(verify_upgrade(root, manifest, row_for(proof)), [])
             for modified in (
                     {**proof, "baseline_sha": "f" * 40},
+                    {**proof, "probe_sha256": "f" * 64},
                     {**proof, "rolled_back_status": 200},
                     {**proof, "stages": [proof["stages"][0], {**proof["stages"][1], "image_id": BASELINE_IMAGE}, proof["stages"][2]]},
                     {**proof, "stages": [*proof["stages"][:2], {**proof["stages"][2], "snapshot_sha256": "0" * 64}]}):

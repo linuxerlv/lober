@@ -120,6 +120,7 @@ class UpgradeProbe(EnterpriseServiceFixture, unittest.TestCase):
         self.assert_status(gone, 404)
         if self.image:
             print(PROOF_PREFIX + json.dumps({"baseline_sha": BASELINE_SHA,
+                  "probe_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                   "new_task_sha256": fingerprint(new_task), "rolled_back_status": gone[0],
                   "stages": [before, upgraded_proof, self.observe("restored", restored, files)]}), flush=True)
         print('已恢复升级前数据库及制品，旧程序重新运行', flush=True)

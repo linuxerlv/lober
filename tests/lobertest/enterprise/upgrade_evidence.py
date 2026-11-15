@@ -42,7 +42,9 @@ def validate(manifest, log, worker):
     if len(proofs) != 1:
         raise ValueError("必须有且只有一份升级原始记录")
     proof = proofs[0]
-    if (proof["baseline_sha"] != BASELINE_SHA or proof["rolled_back_status"] != 404
+    probe_sha = proof["probe_sha256"]
+    if (not re.fullmatch(r"[0-9a-f]{64}", probe_sha) or probe_sha != manifest["files"]["ops/ci/upgrade_probe.py"]
+            or proof["baseline_sha"] != BASELINE_SHA or proof["rolled_back_status"] != 404
             or not re.fullmatch(r"[0-9a-f]{64}", proof["new_task_sha256"])):
         raise ValueError("升级起点、升级后新任务或恢复记录不符")
     stages = proof["stages"]
