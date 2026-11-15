@@ -587,8 +587,13 @@ def image_run(root, repo, commit, promote_from=None, check=None, verified_runs=N
                 ["docker", "run", "--rm", "--network", "none", image, "-h"])
         result["check_command"] = argv
         with (run / "check.log").open("wb") as log:
-            outcome = subprocess.run(argv, stdout=log, stderr=subprocess.STDOUT,
-                                     timeout=check_timeout, check=False)
+            if check and check.name == "image-recovery":
+                # 先通知入口清理容器和挂载，再强制结束超时进程。
+                command = ["timeout", "--kill-after=30s", str(check_timeout), *argv]
+                outcome = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=False)
+            else:
+                outcome = subprocess.run(argv, stdout=log, stderr=subprocess.STDOUT,
+                                         timeout=check_timeout, check=False)
         result["check_exit_code"] = outcome.returncode
         result["check_log_sha256"] = digest(run / "check.log")
         result["status"] = "PASS" if outcome.returncode == 0 else "FAIL"
@@ -629,9 +634,67 @@ def image_main():
     return image_run(root, args.repo, args.commit, args.promote_from, check, args.verified_runs, args.check_timeout)
 
 
+def container_source_main():
+    parser = argparse.ArgumentParser(description="在测试账号下生成冻结镜像对应的源码检查证据")
+    parser.add_argument("commit")
+    parser.add_argument("--root", type=Path, default=Path("/var/lib/lober-ci-test"))
+    parser.add_argument("--media-only", action="store_true")
+    args = parser.parse_args(sys.argv[2:])
+    if not sys.flags.isolated or not sys.platform.startswith("linux") or os.geteuid() == 0:
+        parser.error("请在 Linux 测试账号下使用 python3 -I 运行")
+    if not re.fullmatch(SHA, args.commit) or args.root.resolve(strict=True) != args.root:
+        parser.error("需要绝对候选目录和完整提交号")
+    os.umask(0o077)
+    candidate = Candidate("test", args.root, args.commit, "https://github.com/linuxerlv/lober.git", os.environ)
+    try:
+        manifest = read_json(candidate.manifest)
+        if (candidate.manifest.is_symlink() or candidate.manifest.stat().st_uid != 0
+                or manifest["product_sha"] != args.commit or manifest["test_sha"] != args.commit
+                or manifest["binary"] != str(candidate.binary)
+                or manifest["binary_sha256"] != digest(candidate.binary)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", manifest["image_id"])):
+            raise ValueError("冻结候选身份不符")
+        if not args.media_only and "capacity" not in manifest:
+            raise ValueError("需要最终容量清单才能记录完整源码检查")
+        with tempfile.TemporaryDirectory(prefix="lober-container-source-") as temporary:
+            workspace = Path(temporary)
+            candidate.build = workspace / "build"
+            candidate.env["TMPDIR"] = candidate.test_env["TMPDIR"] = str(workspace)
+            if args.media_only:
+                return 0 if candidate.real_media() else 1
+            for name in ("backend", "frontend", "gate", "fuzz_iso", "fuzz_wim",
+                         "security_scan", "frontend_audit", "real_media"):
+                (candidate.logs / (name + ".json")).unlink(missing_ok=True)
+            # 源码检查使用可写工作目录。供企业测试运行的程序只从镜像提取。
+            candidate.require("git-init", ["git", "init", "--template=", candidate.build], cwd=workspace)
+            candidate.require("git-fetch", ["git", "-c", "http.followRedirects=false", "fetch", "--no-tags",
+                                            "--depth=1", candidate.repository, candidate.sha], timeout=180)
+            candidate.require("git-checkout", ["git", "-c", "core.hooksPath=/dev/null",
+                                               "checkout", "--detach", candidate.sha])
+            candidate.require("frontend-install", ["pnpm", "install", "--frozen-lockfile"],
+                              cwd=candidate.build / "web")
+            frontend = candidate.command("frontend", ["make", "webcheck"],
+                                         env={**candidate.env, "NODE_OPTIONS": "--test-reporter=tap"})
+            candidate.restore_missing_ui_files()
+            gate = candidate.command("gate", ["python3", "-E", "-s", "-B",
+                                     candidate.source / "tests/lobertest/enterprise/run.py", "gate",
+                                     *candidate.common_args(), "--test-sha", candidate.sha],
+                                     cwd=candidate.source, env=candidate.test_env)
+            checks = (frontend == 0 and candidate.frontend(), gate == 0, candidate.backend(),
+                      candidate.fuzz("fuzz_iso", "./internal/infrastructure/media/iso9660", "FuzzISO"),
+                      candidate.fuzz("fuzz_wim", "./internal/infrastructure/media", "FuzzWIMImages"),
+                      candidate.scan(), candidate.audit(), candidate.real_media())
+            return 0 if all(checks) else 1
+    except (OSError, KeyError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+        print(f"源码检查失败：{error}", file=sys.stderr)
+        return 1
+
+
 def main():
     if sys.argv[1:2] == ["image"]:
         return image_main()
+    if sys.argv[1:2] == ["container-source"]:
+        return container_source_main()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("branch", choices=("dev", "test"))
     parser.add_argument("--root", type=Path, required=True)

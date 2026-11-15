@@ -95,7 +95,9 @@ install -m 0600 -o "$account" -g "$account" "$candidate/logs/real_media.json" "$
 runuser -u "$account" -- mkdir -m 0700 "$root/source"
 runuser -u "$account" -- tar --no-same-owner --no-same-permissions -xf "$candidate/source.tar" -C "$root/source"
 install -m 0600 -o "$account" -g "$account" "$candidate/synthetic-rocky.iso" "$root/runtime/media/seed-rocky.iso"
-install -m 0600 -o "$account" -g "$account" /srv/lober/media/esxi7.iso "$root/runtime/media/esxi7.iso"
+esxi7=${LOBER_CAPACITY_ESXI7:-/srv/lober/media/esxi7.iso}
+[[ "$esxi7" == /* && -f "$esxi7" ]]
+install -m 0600 -o "$account" -g "$account" "$esxi7" "$root/runtime/media/esxi7.iso"
 mapfile -t input_dirs < <(find "$candidate" -maxdepth 1 -type d -name 'diagnostic-capacity-inputs.*')
 test "${#input_dirs[@]}" -eq 1
 install -m 0600 -o "$account" -g "$account" "${input_dirs[0]}"/imports.json "$root/runtime/imports.json"
@@ -116,8 +118,17 @@ for file in kvm_install_evidence.py cloud_packet_capture.py; do
     install -m 0600 -o "$account" -g "$account" "$root/tools/$file" "$root/installation/$file"
 done
 runner_script=/opt/lober-ci/qualification/capacity-qualification.py
+pg_bin=${LOBER_CAPACITY_PG_BIN:-/usr/lib/postgresql/16/bin}
+[[ "$pg_bin" == /* && "$(realpath -e -- "$pg_bin")" == "$pg_bin" ]]
+for program in initdb pg_ctl postgres psql; do test -x "$pg_bin/$program"; done
+pg_env=("LOBER_CAPACITY_PG_BIN=$pg_bin")
+if [[ -n "${LOBER_CAPACITY_PG_LIB:-}" ]]; then
+    [[ "$LOBER_CAPACITY_PG_LIB" == /* && "$(realpath -e -- "$LOBER_CAPACITY_PG_LIB")" == "$LOBER_CAPACITY_PG_LIB" ]]
+    pg_env+=("LOBER_CAPACITY_PG_LIB=$LOBER_CAPACITY_PG_LIB")
+fi
 if [[ -z "$image" ]]; then
-    runuser -u "$account" -- /usr/bin/python3 -I -B "$runner_script" "$root" "$pg_socket"
+    runuser -u "$account" -- env "${pg_env[@]}" \
+        /usr/bin/python3 -I -B "$runner_script" "$root" "$pg_socket"
     exit
 fi
 
@@ -131,7 +142,7 @@ docker run -d --name "$network" --network none --user 65534:65534 --read-only \
 ns_pid=$(docker inspect --format '{{.State.Pid}}' "$network")
 [[ "$ns_pid" =~ ^[0-9]+$ && "$ns_pid" -gt 1 ]]
 test "$(readlink "/proc/$ns_pid/ns/net")" != "$(readlink /proc/1/ns/net)"
-nsenter -t "$ns_pid" -n -- runuser -u "$account" -- env LOBER_CAPACITY_BRIDGE="$bridge" \
+nsenter -t "$ns_pid" -n -- runuser -u "$account" -- env LOBER_CAPACITY_BRIDGE="$bridge" "${pg_env[@]}" \
     /usr/bin/python3 -I -B "$runner_script" "$root" "$pg_socket" &
 runner=$!
 ready="$root/runtime/container-request"
