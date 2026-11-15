@@ -20,7 +20,21 @@ python3 -I ops/ci/worker.py image --root /srv/lober-ci/images +  --repo /srv/lob
 `LOBER_IMAGE_RELEASE_MANIFEST`，并给执行器传入 `--check-timeout 10800`。
 批次启动一份候选容器，记录容器、实际镜像和程序身份。四台来宾各用独立空盘和网络，
 按两次并行、两次串行执行，原件保存在本轮的 `kvm/` 目录。
-旧容量入口只运行二进制，不能给容器候选生成长稳通过记录。
+容器长稳启动时设置 `LOBER_CAPACITY_IMAGE` 为同一镜像校验值。
+`capacity-qualification-run <候选提交> /var/lib/lober-container-ci/runs/<四次装机运行编号>/kvm`
+会复核装机原件，再启动无外网的候选容器和独立数据库。使用完整容量配置，给服务预留
+不少于 24 小时加准备和回收的时间。宿主机记录实际容器在长稳开始和结束时的身份，
+只有完整长稳通过才把原件写入 `/var/lib/lober-container-ci/capacity/`。
+容量程序输出 `capacity-candidate.json`，它包含 `container_capacity_run`。
+正式发布使用这份清单，其他结果需绑定它的校验值。候选清单中 `binary` 必须是从已冻结镜像
+提取的 `/usr/local/bin/lober`，对该文件计算 `binary_sha256`。旧二进制容量入口不能生成容器原件。
+
+```sh
+sudo systemd-run --unit="lober-capacity-${candidate_sha:0:12}" \
+  -p PrivateNetwork=yes -p RuntimeMaxSec=36h -p KillMode=control-group \
+  --setenv="LOBER_CAPACITY_IMAGE=$image_id" \
+  /opt/lober-ci/ops/ci/capacity-qualification-run "$candidate_sha" "$batch_run/kvm"
+```
 
 管理员可创建 `image-control`、`image-debian` 两个启动器，分别执行
 `bash check-candidate-image control "$@"` 和 `bash check-candidate-image debian "$@"`，
@@ -36,9 +50,15 @@ Debian 使用专用空盘和隔离网络。
 这个检查补充原有发布门槛。分支审查、完整企业验证和发布审批仍由现有流程执行。
 
 GitHub 的 `enterprise-release` 继续由宿主机回报到试合并提交。用于回报的
-`verify-as-stage test` 要求发布清单包含 `image_id`、`container_control_run`
-和 `container_debian_run`，并要求所有运行服务的发布测试结果写入相同的 `image_id`。
-启用前向发布校验账号提供只读证据访问，并保留 `preview` 的必过检查和人工审批。
+`verify-as-stage test` 要求发布清单包含 `image_id`、`container_control_run`、
+`container_flows_run`、`container_events_run`、`container_recovery_run`、
+`container_kvm_batch_run`、`container_upgrade_run` 和 `container_capacity_run`，
+并要求所有运行服务的发布测试结果写入相同的 `image_id`。
+真实介质读取是源码级测试，仍由完整发布门槛核对介质与冻结提交。
+管理员执行 `python3 -I ops/ci/export-image-evidence.py <最终候选清单>`，向发布校验账号导出
+只读原件。原始镜像库仍保持 `0700`。缺少容器故障恢复或任何其他必需原件都会拦截。
+在安装 GitHub 回报应用和配置安装凭据后，先用相同的回报命令加 `--dry-run`，核对
+试合并提交和判断结果。预览不发 GitHub 状态。实际启用后保留 `preview` 的必过检查和人工审批。
 缺证据、镜像不一致或原有发布门槛不通过时，回报失败。
 
 在具备 Docker 的 Linux 测试宿主机执行以下命令。使用一个尚不存在的证据目录：

@@ -68,16 +68,58 @@ class VerifyTests(unittest.TestCase):
             "manifest_sha256": verify.digest(self.manifest),
         }), encoding="utf-8")
 
-    @patch("verify.verify_image")
-    def test_container_release_rejects_missing_and_mismatched_suite_before_reporting(self, paired):
+    def test_capacity_report_requires_original_container_and_full_window(self):
+        image = "sha256:" + "a" * 64
+        run = "kvm-capacity.ABCDEFGH"
+        record = self.root / "capacity" / (run + ".json")
+        record.parent.mkdir()
+        instance = {"image_id": image, "container_id": "b" * 64, "pid": 42, "start_ticks": 100}
+        expected = {"run_id": "frozen-run", "image_id": image, "container_capacity_run": run}
+        proof = {"status": "PASS", "commit": SHA, "run_id": expected["run_id"],
+                 "before": instance, "after": instance, "soak_seconds": 86400, "observed_seconds": 90000}
+        record.write_text(json.dumps(proof))
+        verify.require_capacity_image(self.root, SHA, expected)
+        phase_records = {}
+        for phase in ("seed", "normal", "burst", "soak", "evaluate"):
+            path = self.root / "results" / phase / "result.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(phase)
+            phase_records[phase] = verify.digest(path)
+        expected["capacity"] = {"evidence_root": str(self.root / "results")}
+        record.write_text(json.dumps({**proof, "manifest_sha256": "manifest", "phase_records": phase_records}))
+        verify.require_capacity_image(self.root, SHA, expected, "manifest")
+        (self.root / "results" / "soak" / "result.json").write_text("replaced")
+        with self.assertRaises(ValueError):
+            verify.require_capacity_image(self.root, SHA, expected, "manifest")
+        for invalid in ({**proof, "soak_seconds": 3600}, {**proof, "soak_seconds": float("nan")},
+                        {**proof, "observed_seconds": 86399},
+                        {**proof, "after": {**instance, "image_id": "sha256:" + "c" * 64}},
+                        {**proof, "commit": "2" * 40}):
+            record.write_text(json.dumps(invalid))
+            with self.assertRaises(ValueError):
+                verify.require_capacity_image(self.root, SHA, expected)
+        record.unlink()
+        with self.assertRaises(OSError):
+            verify.require_capacity_image(self.root, SHA, expected)
+
+    @patch("verify.require_batch_image")
+    @patch("verify.require_capacity_image")
+    @patch("verify.verify_suite_image")
+    @patch("verify.verify_control_image")
+    def test_container_release_rejects_missing_and_mismatched_suite_before_reporting(self, paired, suite_image, capacity, batch):
         image = "sha256:" + "a" * 64
         paired.return_value = image
+        suite_image.return_value = image
         manifest = {"image_id": image, "container_control_run": "1" * 32, "container_debian_run": "2" * 32}
-        suites = ("control", "flows", "events", "recovery", "real_media",
+        manifest.update(container_flows_run="3" * 32, container_events_run="4" * 32, container_recovery_run="5" * 32)
+        suites = ("control", "flows", "events", "recovery",
                   "pxe_state", "real_install", "capacity_soak", "supported_upgrade")
         for suite in suites:
             (self.run / "logs" / (suite + ".json")).write_text(json.dumps({"image_id": image}))
         verify.require_release_image(self.root, SHA, manifest, self.run / "logs")
+        batch.assert_called_once()
+        capacity.assert_called_once()
+        self.assertEqual(suite_image.call_count, 3)
         (self.run / "logs" / "flows.json").write_text(json.dumps({"image_id": "sha256:" + "b" * 64}))
         with self.assertRaisesRegex(ValueError, "flows"):
             verify.require_release_image(self.root, SHA, manifest, self.run / "logs")

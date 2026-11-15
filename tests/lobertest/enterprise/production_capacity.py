@@ -160,7 +160,8 @@ def process_identity(pid):
     p = Path('/proc') / str(pid)
     fields = (p / 'stat').read_text().rsplit(')', 1)[1].split()
     return {'pid': pid, 'start_ticks': fields[19], 'cwd': str((p/'cwd').resolve(strict=True)),
-            'exe': str((p/'exe').resolve(strict=True)), 'exe_sha256': sha(p/'exe'),
+            # 容器中的程序路径不一定存在于宿主机。校验实际运行的文件。
+            'exe': os.readlink(p/'exe'), 'exe_sha256': sha(p/'exe'),
             'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip()}
 
 
@@ -811,6 +812,10 @@ class Driver:
         if sha(shared) != self.c['run_identity_sha256'] or any(common.get(k) != self.manifest[k] for k in ('run_id', 'product_sha', 'test_sha', 'binary_sha256')):
             raise ValueError('common installation/capacity run identity mismatch')
         self.identity.update(run_identity_sha256=sha(shared), binary_sha256=self.manifest['binary_sha256'])
+        if 'image_id' in self.manifest:
+            if common.get('image_id') != self.manifest['image_id']:
+                raise ValueError('容量和装机没有绑定同一候选镜像')
+            self.identity['image_id'] = self.manifest['image_id']
         if (self.identity['profile_sha256'] != self.c['profile_sha256']
                 or self.identity['executor_sha256'] != self.c['executor_sha256']): raise ValueError('executor/profile not frozen')
         for name in ('product_sha', 'test_sha'):

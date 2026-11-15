@@ -136,7 +136,7 @@ def unchanged_status(github, prefix, merge_sha, context, creator_id, state, now)
     return False
 
 
-def report_pull(github, repository, prefix, number, base, source, context, verify, creator_id, now):
+def report_pull(github, repository, prefix, number, base, source, context, verify, creator_id, now, *, dry_run=False):
     trial = current_trial(github, repository, prefix, number, base, source)
     if trial is None or not matching_tree(github, prefix, trial):
         return
@@ -146,10 +146,13 @@ def report_pull(github, repository, prefix, number, base, source, context, verif
         result = None
     passed = type(result) is int and result == 0
     state = "success" if passed else "failure"
-    if unchanged_status(github, prefix, trial.merge_sha, context, creator_id, state, now):
+    if not dry_run and unchanged_status(github, prefix, trial.merge_sha, context, creator_id, state, now):
         return
     # 检查可能耗时。发状态前，再确认申请和两个分支仍指向同一批提交。
     if current_trial(github, repository, prefix, number, base, source) != trial:
+        return
+    if dry_run:
+        print(f"PR #{number}: {context} {state} on {trial.merge_sha} (dry-run)")
         return
     github.call(
         f"{prefix}/statuses/{trial.merge_sha}",
@@ -162,7 +165,7 @@ def report_pull(github, repository, prefix, number, base, source, context, verif
     print(f"PR #{number}: {context} {state}")
 
 
-def poll_branch(github, repository, base, verify, creator_id, now):
+def poll_branch(github, repository, base, verify, creator_id, now, *, dry_run=False):
     prefix = f"/repos/{repository}"
     source, context = ROUTES[base]
     owner, _ = repository.split("/")
@@ -172,7 +175,8 @@ def poll_branch(github, repository, base, verify, creator_id, now):
             continue
         number = summary["number"]
         try:
-            report_pull(github, repository, prefix, number, base, source, context, verify, creator_id, now)
+            report_pull(github, repository, prefix, number, base, source, context, verify, creator_id, now,
+                        dry_run=dry_run)
         except GitHubError as exc:
             print(f"PR #{number}: {exc}", file=sys.stderr)
             healthy = False
@@ -221,6 +225,7 @@ def main():
     parser.add_argument("--token-command", required=True, type=absolute_path)
     parser.add_argument("--verify-command", required=True, type=absolute_path)
     parser.add_argument("--status-creator-id", required=True, type=int)
+    parser.add_argument("--dry-run", action="store_true", help="核对试合并并显示结论，不发 GitHub 状态")
     args = parser.parse_args()
     if (
         re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+", args.repository) is None
@@ -244,6 +249,7 @@ def main():
                 lambda stage, sha: run_verifier(args.verify_command, stage, sha),
                 args.status_creator_id,
                 datetime.now(timezone.utc),
+                dry_run=args.dry_run,
             ):
                 healthy = False
         except GitHubError as exc:

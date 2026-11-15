@@ -147,6 +147,16 @@ class ReportTests(unittest.TestCase):
                 github.run()
                 self.assertEqual(github.writes, [(f"{PREFIX}/statuses/{MERGE}", "enterprise-release", "failure")])
 
+    def test_dry_run_checks_the_trial_without_posting_a_status(self):
+        for verdict in (0, 1):
+            with self.subTest(verdict=verdict):
+                github = GitHub()
+                github.verdict = verdict
+                self.assertTrue(report.poll_branch(github, REPO, github.base, github.verify, BOT_ID, NOW,
+                                                   dry_run=True))
+                self.assertEqual(github.verified, [("test", HEAD)])
+                self.assertEqual(github.writes, [])
+
     def test_ineligible_or_unavailable_pull_is_not_reported(self):
         for reason, mutate in {
             "fork": lambda g: g.pull["head"]["repo"].update(full_name="other/lober"),
