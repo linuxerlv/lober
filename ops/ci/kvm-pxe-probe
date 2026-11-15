@@ -82,6 +82,17 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 chmod 0711 "$scratch"
 install -d -m 0700 -o "$guest_user" -g "$(id -gn "$guest_user")" "$scratch/app"
+if [[ -n "$image_run" ]]; then
+    # 来宾准备程序只需要初始登录口令，数据库配置留在容器一侧。
+    /usr/bin/python3 -I - "$image_run/app/config.json" >"$scratch/app/config.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+print(json.dumps({"seedAdmin": json.loads(Path(sys.argv[1]).read_text())["seedAdmin"]}))
+PY
+    chown "$guest_user:$(id -gn "$guest_user")" "$scratch/app/config.json"
+fi
 install -d -m 0755 "$scratch/tftp"
 ip link set lo up
 ip tuntap add dev loberpxe0 mode tap user "$guest_user"

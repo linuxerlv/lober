@@ -28,7 +28,13 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 
 case "$suite" in
-    control) fixture=${LOBER_IMAGE_SYNTHETIC_ISO:?设置合成测试镜像路径}; test -r "$fixture" ;;
+    control)
+        fixture=${LOBER_IMAGE_SYNTHETIC_ISO:?设置合成测试镜像路径}
+        : "${LOBER_ENTERPRISE_NODE:?设置 Node 或浏览器测试启动器路径}"
+        : "${LOBER_ENTERPRISE_PLAYWRIGHT:?设置 Playwright 入口路径}"
+        export LOBER_ENTERPRISE_UI_SCRIPT="$enterprise/ui.mjs"
+        test -r "$fixture" && test -x "$LOBER_ENTERPRISE_NODE"
+        ;;
     debian)
         netinst=${LOBER_IMAGE_DEBIAN_NETINST:?设置 Debian netinst 路径}
         mini=${LOBER_IMAGE_DEBIAN_MINI:?设置 Debian 网络引导镜像路径}
