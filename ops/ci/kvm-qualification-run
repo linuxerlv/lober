@@ -1,0 +1,105 @@
+#!/bin/bash
+# 在同一内存预算下运行两台并行和两台串行装机，每台使用独立网络和磁盘。
+set -euo pipefail
+umask 077
+test "$EUID" -eq 0 && test "$#" -eq 2
+sha=$1
+root=$2
+[[ "$sha" =~ ^[0-9a-f]{40}$ && "$root" == /var/lib/lober-ci-test/"$sha"/kvm-qualification.* ]]
+test "$(realpath -e -- "$root")" = "$root"
+test "$(stat -c '%u:%a' "$root")" = 0:700
+test "$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)" -ge 2600000
+test "$(df -PB1 /tmp | awk 'NR==2 {print $4}')" -ge 19000000000
+test -S /run/lober-ci-debian-mirror/archive.sock
+test -c /dev/kvm
+test "$(readlink /proc/self/ns/net)" != "$(readlink /proc/1/ns/net)"
+test "$(ip -o link show | wc -l)" -eq 1
+test -z "$(ip route show default)"
+ip link set lo up
+candidate=/var/lib/lober-ci-test/$sha
+helper=/opt/lober-ci/ops/ci/kvm_install_probe.py
+shared=$(mktemp -d /tmp/lober-kvm-shared.XXXXXXXX)
+schema=pxe_probe_${shared##*.}
+schema=${schema,,}
+[[ "$schema" =~ ^pxe_probe_[a-z0-9]{8}$ ]]
+service_pids=()
+schema_created=0
+sql() { runuser -u lober-ci-test -- psql -XAt -v ON_ERROR_STOP=1 -h /run/lober-ci-db-test -d lober_ci -c "$1"; }
+cleanup() {
+    for pid in "${service_pids[@]}"; do kill "$pid" 2>/dev/null || true; done
+    for pid in "${service_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+    if [[ "$schema_created" -eq 1 ]]; then
+        sql "DROP SCHEMA $schema CASCADE" >"$root/database-cleanup.log" 2>&1
+    fi
+    test "$(realpath -e -- "$shared")" = "$shared"
+    rm -r --one-file-system -- "$shared"
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+chown lober-ci-test:lober-ci-test "$shared"
+sql "CREATE SCHEMA $schema" >"$root/database.log"
+schema_created=1
+product() { runuser -u lober-ci-test -- env LOBER_KVM_BACKEND=http://127.0.0.1:18090 "$@"; }
+product env LOBER_KVM_SCHEMA="$schema" /usr/bin/python3 -I "$helper" configure "$shared"
+runuser -u lober-ci-test -- env GIN_MODE=release "$candidate/lober" -config "$shared/config.json" >"$root/product.log" 2>&1 &
+service=$!
+service_pids+=("$service")
+for _ in $(seq 1 75); do
+    curl -fs --noproxy '*' --max-time 1 -o /dev/null http://127.0.0.1:18090/ && break
+    sleep .2
+done
+curl -fsS --noproxy '*' --max-time 2 -o /dev/null http://127.0.0.1:18090/
+service_identity() {
+    local pid
+    pid=$(pgrep -P "$service" -x lober)
+    /usr/bin/python3 -I - "$pid" "$schema" "$candidate/candidate.json" <<'PY'
+import json, sys
+from pathlib import Path
+pid, schema, manifest = sys.argv[1:]
+process = Path('/proc') / pid
+fields = (process/'stat').read_text().rsplit(')', 1)[1].split()
+candidate = json.loads(Path(manifest).read_text())
+print(json.dumps({**{key: candidate[key] for key in ('run_id', 'product_sha', 'test_sha', 'binary_sha256')},
+                  'pid': int(pid), 'start_ticks': int(fields[19]), 'schema': schema}))
+PY
+}
+service_identity >"$root/shared-service-start.json"
+product /usr/bin/python3 -I "$helper" register-shared "$shared" >"$root/media-and-template.log" 2>&1
+runuser -u lober-ci-test -- /usr/bin/python3 -m http.server 18091 --bind 127.0.0.1 \
+    --directory "$shared/artifacts" >"$root/artifacts.log" 2>&1 &
+service_pids+=("$!")
+for endpoint in gateway:18090 artifacts:18091; do
+    /usr/bin/systemd-socket-activate --listen="$shared/${endpoint%:*}.sock" \
+        /usr/lib/systemd/systemd-socket-proxyd "127.0.0.1:${endpoint#*:}" >"$root/${endpoint%:*}-socket.log" 2>&1 &
+    service_pids+=("$!")
+done
+for _ in $(seq 1 50); do
+    [[ -S "$shared/gateway.sock" && -S "$shared/artifacts.sock" ]] && break
+    sleep .1
+done
+curl -fsS --max-time 3 --unix-socket "$shared/gateway.sock" -o /dev/null http://localhost/
+
+run_case() {
+    local name=$1
+    mkdir -m 0700 -- "$root/$name"
+    printf '%s start %s\n' "$(date -u +%FT%TZ)" "$name" >>"$root/schedule.log"
+    local status=0
+    LOBER_KVM_CASE="$name" LOBER_KVM_SHARED="$shared" /usr/bin/unshare --net /opt/lober-ci/ops/ci/kvm-pxe-probe \
+        "$sha" "$root/$name" debian >"$root/$name/runner.log" 2>&1 || status=$?
+    printf '%s end %s %s\n' "$(date -u +%FT%TZ)" "$name" "$status" >>"$root/schedule.log"
+    return "$status"
+}
+
+run_case parallel-1 & first=$!
+run_case parallel-2 & second=$!
+failed=0
+wait "$first" || failed=1
+wait "$second" || failed=1
+test "$failed" -eq 0
+run_case serial-1
+run_case serial-2
+product /usr/bin/python3 -I "$helper" shared-tasks "$shared" >"$root/shared-tasks.json"
+service_identity >"$root/shared-service-end.json"
+cmp -s "$root/shared-service-start.json" "$root/shared-service-end.json"
+printf '%s four installations and repeat boots completed\n' "$(date -u +%FT%TZ)" >>"$root/schedule.log"

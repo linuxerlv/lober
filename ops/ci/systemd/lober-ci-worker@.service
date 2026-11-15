@@ -1,0 +1,20 @@
+[Unit]
+Description=Lober %i candidate checks
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lober-ci-%i
+Group=lober-ci-%i
+StateDirectory=lober-ci-%i
+StateDirectoryMode=0700
+EnvironmentFile=/etc/lober-ci/%i.env
+Environment=PYTHONUTF8=1
+ExecStart=/usr/bin/python3 -I /opt/lober-ci/ops/ci/worker.py %i --root /var/lib/lober-ci-%i --repository ${LOBER_CI_REPOSITORY}
+UMask=0077
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+InaccessiblePaths=-/var/lib/lober
+TimeoutStartSec=2h

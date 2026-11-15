@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+case "${SUDO_USER:-}" in
+    lober-ci-dev) stage=dev ;;
+    lober-ci-test) stage=test ;;
+    *) exit 2 ;;
+esac
+test "$#" -eq 1
+printf '%s\n' "$1" | /usr/bin/grep -Exq '[0-9a-f]{40}'
+exec /usr/bin/unshare --net --mount --propagation private -- \
+    /usr/bin/python3 -I /opt/lober-ci/ops/ci/recovery_session.py "$1" run "$stage"

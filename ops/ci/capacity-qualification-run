@@ -1,0 +1,241 @@
+#!/bin/bash
+# 等装机批次真正结束后，复核原件并在独立数据库运行长稳。
+set -euo pipefail
+umask 077
+test "$EUID" -eq 0 && test "$#" -eq 2
+sha=$1
+install_run=$2
+candidate=/var/lib/lober-ci-test/$sha
+image_root=/var/lib/lober-container-ci
+image=${LOBER_CAPACITY_IMAGE:-}
+[[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+if [[ -z "$image" ]]; then
+    [[ "$install_run" == "$candidate"/kvm-qualification.* ]]
+else
+    [[ "$image" =~ ^sha256:[0-9a-f]{64}$ && "$install_run" =~ ^/var/lib/lober-container-ci/runs/[0-9a-f]{32}/kvm$ ]]
+    test "$(stat -c '%u:%a' "$image_root")" = 0:700
+    exec 9>"$image_root/.capacity-container.lock"
+    flock -n 9
+    python3 -I - "$candidate/candidate.json" "$install_run" "$sha" "$image" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+file, installation, commit, image = sys.argv[1:]
+manifest = json.loads(Path(file).read_text())
+root = Path(installation).parent
+result = json.loads((root / "result.json").read_text())
+if (manifest["product_sha"] != commit or manifest["test_sha"] != commit or manifest["image_id"] != image
+        or manifest["container_kvm_batch_run"] != root.name or result["run_id"] != root.name
+        or result["commit"] != commit or result["image_id"] != image or result["status"] != "PASS"
+        or result["check_exit_code"] != 0 or Path(result["check_command"][0]).name != "image-debian-batch"
+        or result["check_log_sha256"] != hashlib.sha256((root / "check.log").read_bytes()).hexdigest()):
+    raise SystemExit("装机原件与容量候选不符")
+PY
+fi
+test "$(realpath -e -- "$install_run")" = "$install_run"
+test "$(stat -c '%u:%a' "$install_run")" = 0:700
+test "$(readlink /proc/self/ns/net)" != "$(readlink /proc/1/ns/net)"
+test -z "$(ip route show default)"
+ip link set lo up
+if [[ -z "$image" ]]; then
+    while systemctl is-active --quiet lober-ci-kvm-qualification.service; do sleep 15; done
+    if systemctl is-active --quiet lober-ci-debian-mirror-qualification.service; then
+        systemctl stop lober-ci-debian-mirror-qualification.service
+    fi
+    journalctl --no-pager -o short-iso -u lober-ci-kvm-qualification.service >"$install_run/unit.log"
+    journalctl --no-pager -o short-iso -u lober-ci-debian-mirror-qualification.service >"$install_run/mirror-archive.log"
+    grep -q 'four installations and repeat boots completed$' "$install_run/schedule.log"
+fi
+
+account=lober-ci-test
+base="$candidate/qualification"
+test ! -L "$base"
+install -d -m 0700 -o "$account" -g "$account" "$base" "$base/leases"
+test "$(realpath -e -- "$base/leases")" = "$base/leases"
+for file in "$base/.qualification-owner" "$base/leases/heavy.lock"; do test ! -L "$file"; done
+if [[ ! -e "$base/.qualification-owner" ]]; then
+    runuser -u "$account" -- bash -ec 'set -o noclobber; printf "lobervm test qualification %s\n" "$1" >"$2"' _ "$sha" "$base/.qualification-owner"
+fi
+runuser -u "$account" -- touch "$base/leases/heavy.lock"
+root=$(runuser -u "$account" -- mktemp -d "$base/kvm-capacity.XXXXXXXX")
+test "$(realpath -e -- "$root")" = "$root"
+pg_socket=$(mktemp -d /run/lober-ci-capacity.XXXXXXXX)
+chown "$account:$account" "$pg_socket"
+printf 'Capacity evidence directory %s\n' "$root"
+bridge=
+network=
+product=
+runner=
+cleanup() {
+    if [[ -n "$runner" ]]; then
+        kill "$runner" 2>/dev/null || true
+        wait "$runner" 2>/dev/null || true
+    fi
+    if [[ -n "$product" ]]; then docker rm -fv "$product" >/dev/null || true; fi
+    if [[ -n "$network" ]]; then docker rm -fv "$network" >/dev/null || true; fi
+    if [[ -n "$bridge" ]]; then rm -r --one-file-system -- "$bridge"; fi
+    test "$(realpath -e -- "$root")" = "$root"
+    for temporary in runtime source pgdata; do
+        if [[ -d "$root/$temporary" && ! -L "$root/$temporary" ]]; then
+            rm -r --one-file-system -- "$root/$temporary"
+        fi
+    done
+    if [[ "$(realpath -e -- "$pg_socket")" == "$pg_socket" ]]; then
+        rm -r --one-file-system -- "$pg_socket"
+    fi
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+install -d -m 0700 -o "$account" -g "$account" "$root"/{installation,tools,runtime,runtime/media,runtime/inputs}
+install -m 0600 -o "$account" -g "$account" "$candidate/candidate.json" "$root/original-candidate.json"
+install -m 0600 -o "$account" -g "$account" "$candidate/logs/real_media.json" "$root/real-media.json"
+runuser -u "$account" -- mkdir -m 0700 "$root/source"
+runuser -u "$account" -- tar --no-same-owner --no-same-permissions -xf "$candidate/source.tar" -C "$root/source"
+install -m 0600 -o "$account" -g "$account" "$candidate/synthetic-rocky.iso" "$root/runtime/media/seed-rocky.iso"
+esxi7=${LOBER_CAPACITY_ESXI7:-/srv/lober/media/esxi7.iso}
+[[ "$esxi7" == /* && -f "$esxi7" ]]
+install -m 0600 -o "$account" -g "$account" "$esxi7" "$root/runtime/media/esxi7.iso"
+mapfile -t input_dirs < <(find "$candidate" -maxdepth 1 -type d -name 'diagnostic-capacity-inputs.*')
+test "${#input_dirs[@]}" -eq 1
+install -m 0600 -o "$account" -g "$account" "${input_dirs[0]}"/imports.json "$root/runtime/imports.json"
+install -m 0600 -o "$account" -g "$account" "${input_dirs[0]}"/sample-*.iso "$root/runtime/inputs/"
+for name in parallel-1 parallel-2 serial-1 serial-2; do
+    install -d -m 0700 -o "$account" -g "$account" "$root/installation/$name"
+    for file in identity.json terminal.json repeat-terminal.json guest.log repeat-guest.log boot.pcap repeat.pcap repeat-qmp.log; do
+        install -m 0600 -o "$account" -g "$account" "$install_run/$name/$file" "$root/installation/$name/$file"
+    done
+done
+for file in shared-service-start.json shared-service-end.json shared-tasks.json; do
+    install -m 0600 -o "$account" -g "$account" "$install_run/$file" "$root/installation/$file"
+done
+for file in production_capacity.py kvm_install_evidence.py cloud_packet_capture.py db_env.py; do
+    install -m 0600 -o "$account" -g "$account" "/opt/lober-ci/qualification/$file" "$root/tools/$file"
+done
+for file in kvm_install_evidence.py cloud_packet_capture.py; do
+    install -m 0600 -o "$account" -g "$account" "$root/tools/$file" "$root/installation/$file"
+done
+runner_script=/opt/lober-ci/qualification/capacity-qualification.py
+pg_bin=${LOBER_CAPACITY_PG_BIN:-/usr/lib/postgresql/16/bin}
+[[ "$pg_bin" == /* && "$(realpath -e -- "$pg_bin")" == "$pg_bin" ]]
+for program in initdb pg_ctl postgres psql; do test -x "$pg_bin/$program"; done
+pg_env=("LOBER_CAPACITY_PG_BIN=$pg_bin")
+if [[ -n "${LOBER_CAPACITY_PG_LIB:-}" ]]; then
+    [[ "$LOBER_CAPACITY_PG_LIB" == /* && "$(realpath -e -- "$LOBER_CAPACITY_PG_LIB")" == "$LOBER_CAPACITY_PG_LIB" ]]
+    pg_env+=("LOBER_CAPACITY_PG_LIB=$LOBER_CAPACITY_PG_LIB")
+fi
+if [[ -z "$image" ]]; then
+    runuser -u "$account" -- env "${pg_env[@]}" \
+        /usr/bin/python3 -I -B "$runner_script" "$root" "$pg_socket"
+    exit
+fi
+
+# 用 Docker 创建只含回环接口的网络。测试驱动和数据库加入该网络，但无 Docker 权限。
+bridge=$(mktemp -d /run/lober-ci-container.XXXXXXXX)
+chmod 0755 "$bridge"
+network="lober-capacity-net-${root##*.}"
+product="lober-capacity-app-${root##*.}"
+docker run -d --name "$network" --network none --user 65534:65534 --read-only \
+    --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/sleep "$image" infinity >/dev/null
+ns_pid=$(docker inspect --format '{{.State.Pid}}' "$network")
+[[ "$ns_pid" =~ ^[0-9]+$ && "$ns_pid" -gt 1 ]]
+test "$(readlink "/proc/$ns_pid/ns/net")" != "$(readlink /proc/1/ns/net)"
+nsenter -t "$ns_pid" -n -- runuser -u "$account" -- env LOBER_CAPACITY_BRIDGE="$bridge" "${pg_env[@]}" \
+    /usr/bin/python3 -I -B "$runner_script" "$root" "$pg_socket" &
+runner=$!
+ready="$root/runtime/container-request"
+for _ in $(seq 1 600); do
+    if [[ -f "$ready" && ! -L "$ready" ]]; then break; fi
+    kill -0 "$runner"
+    sleep .2
+done
+test -f "$ready"
+test "$(realpath -e "$root/runtime/config.json")" = "$root/runtime/config.json"
+test "$(realpath -e "$pg_socket")" = "$pg_socket"
+docker run -d --name "$product" --network "container:$network" \
+    --user "$(id -u "$account"):$(id -g "$account")" --env GIN_MODE=release \
+    --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp \
+    --mount "type=bind,src=$root/runtime,dst=$root/runtime" \
+    --mount "type=bind,src=$pg_socket,dst=$pg_socket" --workdir "$root/runtime" \
+    "$image" -config "$root/runtime/config.json" >/dev/null
+observe() {
+    local pid found container
+    read -r container found pid <<<"$(docker inspect --format '{{.Id}} {{.Image}} {{.State.Pid}}' "$product")"
+    [[ "$found" == "$image" && "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$container" =~ ^[0-9a-f]{64}$ ]]
+    test "$(readlink "/proc/$pid/ns/net")" = "$(readlink "/proc/$ns_pid/ns/net")"
+    python3 -I - "$container" "$found" "$pid" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+container, image, pid = sys.argv[1:]
+ticks = int(Path("/proc", pid, "stat").read_text().rsplit(")", 1)[1].split()[19])
+print(json.dumps(dict(container_id=container, image_id=image, pid=int(pid), start_ticks=ticks)))
+PY
+}
+observe >"$bridge/started.tmp"
+chmod 0444 "$bridge/started.tmp"
+cut -d ' ' -f 1 /proc/uptime >"$bridge/started.uptime"
+mv -- "$bridge/started.tmp" "$bridge/started.json"
+rc=0
+wait "$runner" || rc=$?
+runner=
+docker logs "$product" 2>&1 |
+    runuser -u "$account" -- bash -ec 'set -o noclobber; cat >"$1"' _ "$root/product.log"
+test "$rc" -eq 0
+observe >"$bridge/finished.json"
+cut -d ' ' -f 1 /proc/uptime >"$bridge/finished.uptime"
+cmp -s "$bridge/started.json" "$bridge/finished.json"
+install -d -m 0700 "$image_root/capacity"
+python3 -I - "$root" "$bridge" "$image_root" "$sha" <<'PY'
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import stat
+import sys
+
+root, bridge, store = map(Path, sys.argv[1:4])
+commit = sys.argv[4]
+def load_owned(name):
+    path = root / name
+    if path.resolve(strict=True) != path:
+        raise SystemExit("容量原件路径无效")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != root.stat().st_uid or info.st_mode & 0o077:
+            raise SystemExit("容量原件不是测试账号拥有的私有文件")
+        data = stream.read((32 << 20) + 1)
+    if len(data) > 32 << 20:
+        raise SystemExit("容量原件超出大小限制")
+    return data
+
+manifest = load_owned("capacity-candidate.json")
+doc = json.loads(manifest)
+result = json.loads(load_owned("logs/evaluate/capacity_soak.json"))
+phase_records = {phase: load_owned(f"logs/{phase}/result.json")
+    for phase in ("seed", "normal", "burst", "soak", "evaluate")}
+window = json.loads(phase_records["soak"])
+before = json.loads((bridge / "started.json").read_text())
+after = json.loads((bridge / "finished.json").read_text())
+sha = hashlib.sha256(manifest).hexdigest()
+elapsed = window["elapsed_seconds"]
+observed_seconds = float((bridge / "finished.uptime").read_text()) - float((bridge / "started.uptime").read_text())
+if (doc["product_sha"] != commit or doc["image_id"] != before["image_id"] or before != after
+        or result["status"] != "PASS" or result["manifest_sha256"] != sha
+        or result["image_id"] != doc["image_id"] or window["status"] != "COMPLETED"
+        or type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < 86400
+        or not math.isfinite(observed_seconds) or observed_seconds < 86400
+        or window["manifest_sha256"] != sha):
+    raise SystemExit("容量原件未满足候选身份和 24 小时要求")
+receipt = store / "capacity" / (root.name + ".json")
+with receipt.open("x") as stream:
+    json.dump(dict(status="PASS", commit=commit, run_id=doc["run_id"],
+        manifest_sha256=sha, before=before, after=after, soak_seconds=elapsed,
+        observed_seconds=observed_seconds,
+        phase_records={phase: hashlib.sha256(data).hexdigest() for phase, data in phase_records.items()}), stream)
+PY
