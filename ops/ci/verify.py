@@ -104,12 +104,12 @@ def verify(stage, sha, root, image_root=None):
             marker = run / "dev-ready.json"
             if marker.is_symlink():
                 return False
-        if stage == "test" and image_root is not None:
-            require_release_image(image_root, sha, candidate, logs)
             ready = json.loads(marker.read_text(encoding="utf-8"))
             if (ready["sha"] != sha or ready["binary_sha256"] != candidate["binary_sha256"]
                     or ready["manifest_sha256"] != manifest_sha):
                 return False
+        if stage == "test" and image_root is not None:
+            require_release_image(image_root, sha, candidate, logs)
 
         result = subprocess.run([
             sys.executable, "-I", str(GATE), "--profile", PROFILES[stage],
@@ -122,7 +122,7 @@ def verify(stage, sha, root, image_root=None):
         report = json.loads(result.stdout)
         return report == {"profile": PROFILES[stage], "product_sha": sha,
                           "status": "PASS", "problems": []}
-    except (OSError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, TypeError, KeyError, IndexError, subprocess.TimeoutExpired):
         return False
 
 
