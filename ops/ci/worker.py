@@ -526,7 +526,7 @@ def source_tree(repo, sha):
                                     sha + "^{commit}^{tree}"], text=True, timeout=30).strip()
 
 
-def image_run(root, repo, commit, promote_from=None, check=None, verified_runs=None):
+def image_run(root, repo, commit, promote_from=None, check=None, verified_runs=None, check_timeout=3600):
     import fcntl
 
     run_id = uuid.uuid4().hex
@@ -588,7 +588,7 @@ def image_run(root, repo, commit, promote_from=None, check=None, verified_runs=N
         result["check_command"] = argv
         with (run / "check.log").open("wb") as log:
             outcome = subprocess.run(argv, stdout=log, stderr=subprocess.STDOUT,
-                                     timeout=3600, check=False)
+                                     timeout=check_timeout, check=False)
         result["check_exit_code"] = outcome.returncode
         result["check_log_sha256"] = digest(run / "check.log")
         result["status"] = "PASS" if outcome.returncode == 0 else "FAIL"
@@ -607,6 +607,7 @@ def image_main():
     parser.add_argument("--commit", required=True)
     parser.add_argument("--promote-from")
     parser.add_argument("--check", type=Path)
+    parser.add_argument("--check-timeout", type=int, default=3600, metavar="SECONDS")
     parser.add_argument("--verified-runs", nargs=2, metavar=("CONTROL_RUN", "DEBIAN_RUN"))
     args = parser.parse_args(sys.argv[2:])
     if not sys.platform.startswith("linux") or not sys.flags.isolated:
@@ -616,6 +617,8 @@ def image_main():
         parser.error("--root 和 --repo 必须是绝对路径")
     if args.verified_runs and not args.promote_from:
         parser.error("--verified-runs 需要同时指定 --promote-from")
+    if not 1 <= args.check_timeout <= 172800 or (not args.check and args.check_timeout != 3600):
+        parser.error("--check-timeout 仅用于管理员测试入口，范围为 1 到 172800 秒")
     root = args.root.resolve(strict=True)
     info = root.stat()
     if not root.is_dir() or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
@@ -623,7 +626,7 @@ def image_main():
     check = args.check
     if check is not None:
         check = admin_executable(check, root)
-    return image_run(root, args.repo, args.commit, args.promote_from, check, args.verified_runs)
+    return image_run(root, args.repo, args.commit, args.promote_from, check, args.verified_runs, args.check_timeout)
 
 
 def main():

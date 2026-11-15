@@ -15,6 +15,13 @@ python3 -I ops/ci/worker.py image --root /srv/lober-ci/images +  --repo /srv/lob
 
 默认检查只运行容器中的 `lober -h`。配置 `--check` 可指定管理员维护的检查程序，依次传入实际镜像校验值和本轮记录目录。已有企业测试和合并检查由各自的入口执行。
 
+容器批量装机使用管理员入口 `bash ops/ci/check-candidate-image debian-batch "$@"`。
+设置 `LOBER_IMAGE_DEBIAN_DVD`、`LOBER_IMAGE_DEBIAN_MINI`、
+`LOBER_IMAGE_RELEASE_MANIFEST`，并给执行器传入 `--check-timeout 10800`。
+批次启动一份候选容器，记录容器、实际镜像和程序身份。四台来宾各用独立空盘和网络，
+按两次并行、两次串行执行，原件保存在本轮的 `kvm/` 目录。
+旧容量入口只运行二进制，不能给容器候选生成长稳通过记录。
+
 管理员可创建 `image-control`、`image-debian` 两个启动器，分别执行
 `bash check-candidate-image control "$@"` 和 `bash check-candidate-image debian "$@"`，
 在两次执行器调用里分别作为 `--check`，使用相同的原提交与制品目录。

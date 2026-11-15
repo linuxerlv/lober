@@ -139,6 +139,8 @@ def run(root, pg_socket):
 
     candidate = read_json(root/'original-candidate.json')
     identity = {key: candidate[key] for key in ('run_id', 'product_sha', 'test_sha', 'binary_sha256')}
+    if 'image_id' in candidate:
+        identity['image_id'] = candidate['image_id']
     case_root = root/'installation'
     checker, parser = (case_root / name for name in ('kvm_install_evidence.py', 'cloud_packet_capture.py'))
     common = root/'run-identity.json'
@@ -148,7 +150,11 @@ def run(root, pg_socket):
     report_path = case_root/'report.json'
     report = collect_report({**identity, 'run_identity_sha256': sha(common)}, case_root, packet)
     put_json(report_path, report)
-    print('四次装机和抓包已复核，通过后开始准备容量负载', flush=True)
+    print('四次装机和抓包已复核', flush=True)
+
+    # 旧容量入口只启动二进制，不能签发容器长稳证据。
+    if 'image_id' in candidate:
+        raise ValueError('容器候选需要容器长稳入口')
 
     runtime = root/'runtime'
     media = runtime/'media'
