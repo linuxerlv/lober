@@ -97,14 +97,17 @@ def validate_evidence(row, root):
     return []
 
 
-def evaluate(required, results, product_sha, manifest=None):
+def evaluate(required, results, product_sha, manifest=None, upgrade_problems=None):
     problems = []
     if not required or len(set(required)) != len(required) or not product_sha:
         return ["Invalid or empty required-suite profile"]
     for name in required:
         row = results.get(name)
         if name == "supported_upgrade":
-            problems.append("supported_upgrade: supported-version verification is not implemented")
+            if upgrade_problems is None:
+                problems.append("supported_upgrade: verified upgrade evidence is required")
+            else:
+                problems.extend("supported_upgrade: " + problem for problem in upgrade_problems)
         if not isinstance(row, dict):
             problems.append(f"{name}: required result missing")
             continue
@@ -157,7 +160,7 @@ def main():
                 results[name] = json.loads(path.read_text())
             except (ValueError, OSError):
                 pass
-    problems = evaluate(required, results, args.product_sha, manifest)
+    problems = []
     if manifest.get("product_sha") != args.product_sha or not manifest.get("run_id"):
         problems.append("Frozen product/run identity mismatch")
     source = (args.source_root or Path(__file__).resolve().parents[3]).resolve()
@@ -165,6 +168,16 @@ def main():
     if args.profile == "release":
         candidate_problems += evaluate_release_profile(required, manifest, source)
     problems += candidate_problems
+    upgrade_problems = None
+    if not candidate_problems and isinstance(results.get("supported_upgrade"), dict):
+        try:
+            file = "tests/lobertest/enterprise/upgrade_evidence.py"
+            verifier = load_verified_module(Path(__file__).with_name("upgrade_evidence.py"),
+                                            manifest["files"][file], "upgrade_evidence")
+            upgrade_problems = verifier.verify_upgrade(root, manifest, results["supported_upgrade"])
+        except (ImportError, KeyError, OSError, TypeError, ValueError):
+            upgrade_problems = ["升级证据检查器缺失或与冻结源码不符"]
+    problems.extend(evaluate(required, results, args.product_sha, manifest, upgrade_problems))
     def passed(name):
         return isinstance(results.get(name), dict) and results[name].get("status") == "PASS"
     for name, row in results.items():

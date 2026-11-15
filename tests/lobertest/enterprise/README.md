@@ -82,7 +82,20 @@ python3 -I tests/lobertest/enterprise/installation_evidence.py --kind installati
 
 长稳接入需在候选冻结前额外写入 `capacity.profile_file` 和 `capacity.evidence_root`，前者必须与 `capacity.profile_sha256` 匹配，后者指向专用目录下包含 seed、normal、burst、soak 的原始记录目录。执行同一命令并将 `--kind installation` 改为 `--kind capacity`。程序重新读取阶段原件并复用正式容量检查，包括完整规模、24 小时采样、状态不变量和真实并发安装；仅凭报告标签不够。门禁再次检查原件。负载执行和实际安装分别需要授权，本命令不会替代或自动启动这些步骤。
 
-`supported_upgrade` 目前没有已确认的受支持旧版本清单和验收器，门禁明确拒绝此项通过标签。确认版本范围并完成可重复升级验收器及其验证后才能移除该限制；不得使用模拟记录冒充升级验收。
+`supported_upgrade` 的本轮起点固定为 `a7655ac` 对应的已冻结镜像。管理员用
+`image-upgrade` 启动器执行 `bash ops/ci/check-candidate-image upgrade "$@"`，再将启动器作为
+`worker.py image --check` 传入。检查会在独立 PostgreSQL 中创建旧数据和导入制品，切到候选镜像，验证旧数据仍可读且能创建新任务，再恢复备份并启动旧镜像。执行器日志记录三个实际运行的容器和数据校验值。
+
+将通过的独立执行记录导入正式发布候选的结果目录：
+
+```bash
+python3 -I tests/lobertest/enterprise/upgrade_evidence.py \
+  --manifest /private/run/candidate.json \
+  --run /var/lib/lober-container-ci/runs/RUN_ID \
+  --results /private/run/logs
+```
+
+发布清单必须包含实际候选 `image_id`。校验器只接受同一提交、同一镜像的记录，并在发布门槛再次核对原始日志和执行器结果。
 
 flows 使用当前构建的真实表单、独立登录会话和后端；旧请求隔离只延迟实际服务响应，不伪造业务响应。
 events 的 eventgen.sh 仅在 enterprise 随机 schema 中向 pending 的 ENTERPRISE 主机任务追加 test.transport
