@@ -144,6 +144,7 @@ def main():
     parser.add_argument("--product-sha", required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--source-root", type=Path, help="Candidate source when using an installed verifier")
+    parser.add_argument("--image-root", type=Path, help="Read-only original image worker records")
     parser.add_argument("--qualification-root", type=Path, help="Private installation and capacity evidence directory")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.product_sha):
@@ -174,7 +175,7 @@ def main():
             file = "tests/lobertest/enterprise/upgrade_evidence.py"
             verifier = load_verified_module(Path(__file__).with_name("upgrade_evidence.py"),
                                             manifest["files"][file], "upgrade_evidence")
-            upgrade_problems = verifier.verify_upgrade(root, manifest, results["supported_upgrade"])
+            upgrade_problems = verifier.verify_upgrade(root, manifest, results["supported_upgrade"], args.image_root)
         except (ImportError, KeyError, OSError, TypeError, ValueError):
             upgrade_problems = ["升级证据检查器缺失或与冻结源码不符"]
     problems.extend(evaluate(required, results, args.product_sha, manifest, upgrade_problems))

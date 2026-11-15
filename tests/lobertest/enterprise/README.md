@@ -95,7 +95,7 @@ python3 -I tests/lobertest/enterprise/upgrade_evidence.py \
   --results /private/run/logs
 ```
 
-发布清单必须包含实际候选 `image_id`。校验器只接受同一提交、同一镜像的记录，并在发布门槛再次核对原始日志和执行器结果。
+在生成绑定发布清单的各项结果前，先固定实际候选 `image_id` 和升级执行编号 `container_upgrade_run`。发布门槛使用 `--image-root /var/lib/lober-container-ci` 对照执行器保存的原始日志与结果。发布校验账号只能读取原件，不能修改。
 
 flows 使用当前构建的真实表单、独立登录会话和后端；旧请求隔离只延迟实际服务响应，不伪造业务响应。
 events 的 eventgen.sh 仅在 enterprise 随机 schema 中向 pending 的 ENTERPRISE 主机任务追加 test.transport

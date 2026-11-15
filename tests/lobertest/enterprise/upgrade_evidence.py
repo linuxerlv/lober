@@ -63,13 +63,23 @@ def validate(manifest, log, worker):
         raise ValueError("原制品缺失或数量不符")
 
 
-def verify_upgrade(root, manifest, row):
+def verify_upgrade(root, manifest, row, image_root):
     try:
         log, worker = read_file(root / LOG), read_file(root / WORKER)
         if (row["evidence"] != LOG or row["evidence_sha256"] != digest(log)
                 or row["worker_sha256"] != digest(worker) or row["image_id"] != manifest["image_id"]):
             raise ValueError("原始记录的校验值或镜像不符")
-        validate(manifest, log, json.loads(worker))
+        original = json.loads(worker)
+        run_id = manifest["container_upgrade_run"]
+        if image_root is None or run_id != original["run_id"] or not re.fullmatch(r"[0-9a-f]{32}", run_id):
+            raise ValueError("发布清单没有指定原始升级执行")
+        original_run = image_root / "runs" / run_id
+        if (original_run.is_symlink()
+                or original_run.resolve() != image_root.resolve() / "runs" / run_id
+                or read_file(original_run / "check.log") != log
+                or read_file(original_run / "result.json") != worker):
+            raise ValueError("汇总证据与执行器原件不符")
+        validate(manifest, log, original)
         return []
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return ["升级原始记录缺失、不完整或与固定候选不符"]
@@ -91,7 +101,7 @@ def main():
         manifest = json.loads(manifest_data)
         log, worker = read_file(args.run / "check.log"), read_file(args.run / "result.json")
         record = json.loads(worker)
-        if record["run_id"] != args.run.resolve().name:
+        if record["run_id"] != args.run.resolve().name or record["run_id"] != manifest["container_upgrade_run"]:
             raise ValueError("执行编号与原件目录不符")
         validate(manifest, log, record)
         row = {key: manifest[key] for key in ("run_id", "product_sha", "test_sha", "binary_sha256", "image_id")}
