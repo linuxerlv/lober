@@ -1,4 +1,4 @@
-"""在 lobervm 的私有进程和数据库中运行正式容量负载。"""
+"""在专用进程和数据库中运行正式容量负载。"""
 import hashlib
 import json
 import os
@@ -15,7 +15,7 @@ import urllib.request
 
 
 TEST_BASE = Path('/var/lib/lober-ci-test')
-PG_BIN = Path('/usr/lib/postgresql/16/bin')
+PG_BIN = Path(os.environ.get('LOBER_CAPACITY_PG_BIN', '/usr/lib/postgresql/16/bin'))
 PG_PORT = 55433
 DB_NAME = 'lober_capacity'
 URL = 'http://127.0.0.1:18093'
@@ -193,6 +193,8 @@ def run(root, pg_socket):
     pg_data = (root if bridge else runtime)/'pgdata'
     db_user = pwd.getpwuid(os.getuid()).pw_name
     env = {k: v for k, v in os.environ.items() if not k.startswith('PG') and k != 'LOBER_PG_DSN'}
+    if os.environ.get('LOBER_CAPACITY_PG_LIB'):
+        env['LD_LIBRARY_PATH'] = os.environ['LOBER_CAPACITY_PG_LIB']
     subprocess.run([PG_BIN/'initdb', '-D', pg_data, '--auth-local=trust', '--auth-host=reject',
                     '--no-locale', '--encoding=UTF8'], env=env, check=True)
     pg_options = f"-c listen_addresses='' -k {pg_socket} -p {PG_PORT} -c shared_buffers=96MB -c max_connections=48"

@@ -45,6 +45,48 @@ sudo systemd-run --unit="lober-capacity-${candidate_sha:0:12}" \
 可设 `LOBER_IMAGE_DEBIAN_MIRROR=ustc` 选择中科大镜像。每轮启动独立数据库，
 Debian 使用专用空盘和隔离网络。
 
+故障恢复入口执行 `bash check-candidate-image recovery "$@"`，入口文件命名为
+`image-recovery`。它只需要合成镜像 `LOBER_IMAGE_SYNTHETIC_ISO`。
+程序、测试和专用数据库共用本轮的封闭网络。测试只在该网络模拟超时，
+并只写满本轮的 8 MiB 临时挂载。结束时清理该网络的容器和临时挂载。
+
+管理员先从 GitHub 获取最新 `test` 提交，然后用已保存的镜像冻结发布清单。
+执行账号组 `lober-ci-test` 需能读候选目录和写入日志目录。
+冻结命令从镜像提取可执行文件，并从固定提交生成源码归档。
+容器发布使用管理员维护的目录。切换前停止旧的 `lober-ci-worker@test`，
+保留以往测试记录，避免它和容器入口同时写入候选目录。
+四次装机使用这份清单。控制面、业务流程、事件、故障恢复、装机和升级各自完成后，
+按本轮运行编号组装清单，再启动容量测试。
+
+```sh
+sudo install -d -m 0750 -o root -g lober-ci-test /var/lib/lober-ci-test
+sudo python3 -I ops/ci/container_candidate.py "$candidate_sha" freeze /srv/lober-ci/repo.git
+sudo python3 -I ops/ci/container_candidate.py "$candidate_sha" bind \
+  --control "$control_run" --flows "$flows_run" --events "$events_run" \
+  --recovery "$recovery_run" --kvm-batch "$batch_id" --upgrade "$upgrade_run"
+```
+
+容量测试开始前，由测试账号运行 `worker.py container-source "$candidate_sha" --media-only`，
+使用下面的真实介质及校验值配置生成初始读取记录。将 `fixturegen.sh` 生成的
+`synthetic-rocky.iso` 放到候选目录，再用该提交的 `ops/ci/capacity_input_gen.go`
+生成 50 个样本，放到候选目录下一个独立的 `diagnostic-capacity-inputs.XXXXXXXX` 目录。
+将此目录设为 `LOBER_CAPACITY_INPUTS`，通过同一镜像执行
+`bash check-candidate-image capacity-inputs "$@"`，生成实际导入记录 `imports.json`。
+如 ESXi 7 介质保存在其他受控目录，给容量服务设置 `LOBER_CAPACITY_ESXI7`。
+如果 PostgreSQL 16 工具独立安装，给容量服务设置 `LOBER_CAPACITY_PG_BIN`，
+必要时同时设置其私有库目录 `LOBER_CAPACITY_PG_LIB`。
+
+容量测试通过后，使用本轮 `kvm-capacity.XXXXXXXX` 目录名冻结最终清单。
+让专用测试账号在已配置的工具链和测试数据库环境中生成其余源码检查记录。
+最后由管理员汇总。汇总会核验完整发布验收，通过后才生成供回报服务复核的结果。
+
+```sh
+sudo python3 -I ops/ci/container_candidate.py "$candidate_sha" finish "$capacity_id"
+# 下行由 lober-ci-test 在已经配置的测试环境中运行。
+python3 -I /opt/lober-ci/ops/ci/worker.py container-source "$candidate_sha"
+sudo python3 -I ops/ci/container_candidate.py "$candidate_sha" collect
+```
+
 晋级流程使用 `--promote-from "$candidate_sha" --verified-runs "$control_run" "$debian_run"`。
 执行器检查两个运行编号是否对应原提交和同一镜像，是否通过控制面检查、完成装机且通过重复引导。
 这个检查补充原有发布门槛。分支审查、完整企业验证和发布审批仍由现有流程执行。
@@ -55,11 +97,20 @@ GitHub 的 `enterprise-release` 继续由宿主机回报到试合并提交。用
 `container_kvm_batch_run`、`container_upgrade_run` 和 `container_capacity_run`，
 并要求所有运行服务的发布测试结果写入相同的 `image_id`。
 真实介质读取是源码级测试，仍由完整发布门槛核对介质与冻结提交。
-管理员执行 `python3 -I ops/ci/export-image-evidence.py <最终候选清单>`，向发布校验账号导出
-只读原件。原始镜像库仍保持 `0700`。缺少容器故障恢复或任何其他必需原件都会拦截。
+`collect` 向发布校验账号导出只读原件。原始镜像库仍保持 `0700`。
+缺少容器故障恢复或任何其他必需原件都会拦截。
 在安装 GitHub 回报应用和配置安装凭据后，先用相同的回报命令加 `--dry-run`，核对
 试合并提交和判断结果。预览不发 GitHub 状态。实际启用后保留 `preview` 的必过检查和人工审批。
 缺证据、镜像不一致或原有发布门槛不通过时，回报失败。
+
+管理员把应用私钥放到宿主机仅 root 可读的绝对路径，然后运行配置入口。
+用 `--check-only` 可先验证是否能获取限定到本仓库的安装令牌。
+成功后去掉该参数写入服务配置。该入口不会打印令牌或启动服务。
+
+```sh
+sudo python3 -I ops/ci/configure-report.py --check-only --key "$private_key_path" \
+  --installation-id "$app_installation_id" --creator-id "$app_bot_id"
+```
 
 在具备 Docker 的 Linux 测试宿主机执行以下命令。使用一个尚不存在的证据目录：
 
@@ -97,7 +148,7 @@ sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin lo
 
 sudo install -d -m 0755 /opt/lober-ci/ops/ci /opt/lober-ci/tests/lobertest/enterprise
 sudo install -d -m 0750 -o root -g lober-ci-report /etc/lober-ci
-sudo install -m 0644 ops/ci/{worker,verify,report}.py /opt/lober-ci/ops/ci/
+sudo install -m 0644 ops/ci/{worker,verify,report,configure-report,container_candidate,export-image-evidence}.py /opt/lober-ci/ops/ci/
 sudo install -m 0755 ops/ci/{app-token,verify-as-stage} /opt/lober-ci/ops/ci/
 sudo install -m 0644 tests/lobertest/enterprise/{gate.py,profiles.json,production_capacity.py,installation_evidence.py,kvm_install_evidence.py,cloud_install.py,cloud_packet_capture.py,cloud_capture_session.py,cloud_guest_identity.py,cloud_no_task_probe.py,upgrade_evidence.py} /opt/lober-ci/tests/lobertest/enterprise/
 sudo install -m 0644 ops/ci/systemd/*.service ops/ci/systemd/*.timer /etc/systemd/system/

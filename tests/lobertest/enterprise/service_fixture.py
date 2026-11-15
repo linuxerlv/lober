@@ -41,11 +41,13 @@ class ContainerProcess:
                        capture_output=True, check=True, timeout=20)
 
     def kill(self):
-        subprocess.run(["docker", "kill", self.cid],
+        subprocess.run(["docker", "kill", "--signal", "KILL", self.cid],
                        capture_output=True, check=True, timeout=20)
 
 
 class EnterpriseServiceFixture:
+    recovery_uid = 65534
+
     @classmethod
     def setUpClass(cls):
         cls.base_dsn = os.environ["LOBER_TEST_PG_DSN"]
@@ -125,10 +127,28 @@ class EnterpriseServiceFixture:
         if cls.image and not cls.container:
             cls.container_generation += 1
             name = f"lober-control-{cls.schema}-{cls.container_generation}"
-            cid = subprocess.check_output(["docker", "create", "--network", "host",
+            network = ["--network", "host"]
+            user = f"{os.getuid()}:{os.getgid()}"
+            mounts = ["--mount", f"type=bind,src={cls.work},dst={cls.work}"]
+            recovery_run = os.environ.get("LOBER_ENTERPRISE_RECOVERY_RUN")
+            if recovery_run:
+                db = os.environ["LOBER_ENTERPRISE_NETWORK_CONTAINER"]
+                if not re.fullmatch(r"[0-9a-f]{32}", recovery_run) or db != "lober-ci-db-" + recovery_run:
+                    raise ValueError("Recovery requires the dedicated database network")
+                network = ["--network", "container:" + db,
+                           "--label", "org.lober.ci.recovery=" + recovery_run]
+                user = f"{cls.recovery_uid}:{cls.recovery_uid}"
+                mounts = ["--cap-drop", "ALL", "--security-opt", "no-new-privileges"]
+                os.chown(cls.config, cls.recovery_uid, cls.recovery_uid)
+                mounts += ["--mount", f"type=bind,src={cls.config},dst={cls.config},readonly"]
+                for name in ("staging", "artifacts", "smb", "tools"):
+                    data = cls.work / name
+                    data.mkdir(exist_ok=True, mode=0o700)
+                    os.chown(data, cls.recovery_uid, cls.recovery_uid)
+                    mounts += ["--mount", f"type=bind,src={data},dst={data}"]
+            cid = subprocess.check_output(["docker", "create", *network,
                 "--name", name, "--env", "GIN_MODE=release",
-                "--user", f"{os.getuid()}:{os.getgid()}",
-                "--mount", f"type=bind,src={cls.work},dst={cls.work}",
+                "--user", user, *mounts,
                 cls.image, "-config", str(cls.config)], text=True, timeout=30).strip()
             cls.addClassCleanup(subprocess.run, ["docker", "rm", "-f", cid],
                                 capture_output=True, timeout=30, check=True)
