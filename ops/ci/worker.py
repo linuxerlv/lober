@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import uuid
 
@@ -507,7 +508,114 @@ def admin_executable(value, root):
     return path
 
 
+def image_id(reference):
+    result = subprocess.run(["docker", "image", "inspect", "--format", "{{.Id}}", reference],
+                            capture_output=True, text=True, timeout=30, check=False)
+    if result.returncode:
+        return ""
+    value = result.stdout.strip()
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+        raise ValueError("Docker 返回了无效的镜像校验值")
+    return value
+
+
+def source_tree(repo, sha):
+    if not re.fullmatch(SHA, sha):
+        raise ValueError("必须使用完整的 Git 提交号")
+    return subprocess.check_output(["git", "-C", str(repo), "rev-parse", "--verify",
+                                    sha + "^{commit}^{tree}"], text=True, timeout=30).strip()
+
+
+def image_run(root, repo, commit, promote_from=None, check=None):
+    import fcntl
+
+    run_id = uuid.uuid4().hex
+    run = root / "runs" / run_id
+    run.mkdir(mode=0o700, parents=True)
+    result = {"run_id": run_id, "commit": commit, "promote_from": promote_from,
+              "status": "RUNNING", "started": utc_now(), "machine": socket.gethostname()}
+    write_json(run / "result.json", result)
+    try:
+        tree = source_tree(repo, commit)
+        result["tree"] = tree
+        if promote_from:
+            if source_tree(repo, promote_from) != tree:
+                raise ValueError("晋级提交的文件内容和原候选不一致")
+            subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor",
+                            promote_from, commit], timeout=30, check=True)
+        store = root / "images"
+        store.mkdir(mode=0o700, exist_ok=True)
+        tag = "lober-candidate:" + tree
+        record = store / (tree + ".json")
+        with (store / (tree + ".lock")).open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if record.is_file():
+                image = read_json(record)["image_id"]
+                if image_id(image) != image:
+                    raise ValueError("共享制品记录对应的镜像已丢失")
+                result["image_action"] = "reused"
+            elif promote_from:
+                raise ValueError("晋级所需的原候选镜像记录不存在")
+            else:
+                with tempfile.TemporaryFile() as archive, (run / "build.log").open("wb") as log:
+                    subprocess.run(["git", "-C", str(repo), "archive", "--format=tar", tree],
+                                   stdout=archive, timeout=180, check=True)
+                    archive.seek(0)
+                    subprocess.run(["docker", "buildx", "build", "--builder", "default",
+                                    "--load", "--progress=plain", "--build-arg", "GOPROXY",
+                                    "--platform", "linux/amd64", "--tag", tag,
+                                    "--file", "ops/ci/Dockerfile", "-"],
+                                   stdin=archive, stdout=log, stderr=subprocess.STDOUT,
+                                   timeout=3600, check=True)
+                image = image_id(tag)
+                if not image:
+                    raise ValueError("构建完成后找不到本地镜像")
+                write_json(record, {"tree": tree, "built_from": commit, "image_id": image})
+                result["image_action"] = "built"
+        result["image_id"] = image
+        argv = ([str(check), image, str(run)] if check else
+                ["docker", "run", "--rm", "--network", "none", image, "-h"])
+        result["check_command"] = argv
+        with (run / "check.log").open("wb") as log:
+            outcome = subprocess.run(argv, stdout=log, stderr=subprocess.STDOUT,
+                                     timeout=3600, check=False)
+        result["check_exit_code"] = outcome.returncode
+        result["check_log_sha256"] = digest(run / "check.log")
+        result["status"] = "PASS" if outcome.returncode == 0 else "FAIL"
+    except (OSError, KeyError, ValueError, subprocess.SubprocessError) as error:
+        result.update(status="FAIL", problem=str(error))
+    result["finished"] = utc_now()
+    write_json(run / "result.json", result)
+    print(f"{result['status']} {run / 'result.json'}", flush=True)
+    return 0 if result["status"] == "PASS" else 1
+
+
+def image_main():
+    parser = argparse.ArgumentParser(description="构建或复用一个候选镜像，并独立记录本轮检查")
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--commit", required=True)
+    parser.add_argument("--promote-from")
+    parser.add_argument("--check", type=Path)
+    args = parser.parse_args(sys.argv[2:])
+    if not sys.platform.startswith("linux") or not sys.flags.isolated:
+        parser.error("请在 Linux 上使用 python3 -I 运行")
+    os.umask(0o077)
+    if not args.root.is_absolute() or not args.repo.is_absolute():
+        parser.error("--root 和 --repo 必须是绝对路径")
+    root = args.root.resolve(strict=True)
+    info = root.stat()
+    if not root.is_dir() or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        parser.error("镜像库目录须由当前执行账号拥有，权限为 0700")
+    check = args.check
+    if check is not None:
+        check = admin_executable(check, root)
+    return image_run(root, args.repo, args.commit, args.promote_from, check)
+
+
 def main():
+    if sys.argv[1:2] == ["image"]:
+        return image_main()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("branch", choices=("dev", "test"))
     parser.add_argument("--root", type=Path, required=True)

@@ -1,4 +1,29 @@
-# 在 lobervm 上运行 Lober 流水线
+# Lober 内部流水线
+
+## 云服务器宿主机上的候选镜像
+
+在 Docker Engine 所在的云服务器宿主机运行。执行账号需能使用 Docker，并拥有一个权限为 `0700` 的共享制品目录。各阶段使用同一个目录和同一个 Docker 构建器。Docker 权限等同于宿主机管理权限，只交给受信的执行账号。
+
+```sh
+python3 -I ops/ci/worker.py image --root /srv/lober-ci/images +  --repo /srv/lober-ci/repo.git --commit "$candidate_sha"
+python3 -I ops/ci/worker.py image --root /srv/lober-ci/images +  --repo /srv/lober-ci/repo.git --commit "$merged_sha" --promote-from "$candidate_sha"
+```
+
+执行前先在共享 Git 仓库拉取对应提交。镜像按完整 Git 文件树查找，晋级要求源提交是目标的祖先，且两者文件内容完全一致。原镜像缺失时，晋级会失败。镜像存在于 Docker 本地存储，`images/*.json` 只保存索引。每次运行在 `runs/<运行编号>/` 写结果和日志。发布、回滚仍会使用的镜像须保留。
+
+如宿主机无法直连 Go 官方代理，可由管理员为执行器设置 `GOPROXY`。构建仍执行 Go 的模块校验。
+
+默认检查只运行容器中的 `lober -h`。配置 `--check` 可指定管理员维护的检查程序，依次传入实际镜像校验值和本轮记录目录。已有企业测试和合并检查由各自的入口执行。
+
+在具备 Docker 的 Linux 测试宿主机执行以下命令。使用一个尚不存在的证据目录：
+
+```sh
+bash ops/ci/verify-image-reuse /srv/lober-ci/repo.git "$candidate_sha" /srv/lober-ci/reuse-verification
+```
+
+验证会检查同提交重跑是否复用镜像、仅改 Go 时前端构建是否命中缓存，以及同文件树晋级是否沿用原镜像。四轮分别保存实际运行记录。
+
+## 原有二进制测试入口
 
 `dev` 和 `test` 在同一台 Linux 虚拟机运行。执行器定期查询 GitHub，从对应分支下载确切提交。每个阶段有自己的系统账号、状态目录、工具缓存、测试数据库账号和数据目录。状态回报使用第三个账号。
 
