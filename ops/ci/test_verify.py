@@ -27,6 +27,40 @@ class VerifyTests(unittest.TestCase):
             "binary_sha256": verify.digest(self.binary), "run_id": "round-1",
         }), encoding="utf-8")
 
+    def test_image_promotion_rejects_changed_log_and_mismatched_commit(self):
+        image = "sha256:" + "a" * 64
+        control, debian = "1" * 32, "2" * 32
+
+        def write(path, data):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+        for run_id, suite in ((control, "control"), (debian, "debian")):
+            run = self.root / "runs" / run_id
+            run.mkdir(parents=True)
+            (run / "check.log").write_text("checked")
+            write(run / "result.json", {"status": "PASS", "run_id": run_id, "commit": SHA,
+                "check_exit_code": 0, "check_command": [f"/opt/image-{suite}"],
+                "check_log_sha256": verify.digest(run / "check.log"), "image_id": image})
+        write(self.root / "runs" / control / "control.json",
+              {"status": "PASS", "count": 88, "failures": 0, "skipped": 0, "runtime_images": [image]})
+        kvm = self.root / "runs" / debian / "kvm"
+        terminal = {"state": "done", "events": [{"kind": kind} for kind in
+                    ("machine.installing", "machine.init_start", "machine.ready")]}
+        write(kvm / "terminal.json", terminal)
+        write(kvm / "repeat-terminal.json", terminal)
+        guest = {"id": "debian", "version": "13", "machine": "same", "root": "/dev/vda1"}
+        write(kvm / "guest-identity.json", {"first": {**guest, "boot": "first"},
+                                         "repeat": {**guest, "boot": "repeat"}})
+        (kvm / "runtime-image.txt").write_text(image)
+        (kvm / "repeat.pcap").write_bytes(bytes(40))
+        self.assertEqual(verify.verify_image(self.root, SHA, control, debian), image)
+        with self.assertRaises(ValueError):
+            verify.verify_image(self.root, "2" * 40, control, debian)
+        (self.root / "runs" / control / "check.log").write_text("changed")
+        with self.assertRaises(ValueError):
+            verify.verify_image(self.root, SHA, control, debian)
+
     def complete(self, stage, status="PASS"):
         (self.run / "execution.json").write_text(json.dumps({
             "sha": SHA, "branch": stage, "status": status, "run_id": "round-1",

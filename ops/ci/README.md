@@ -15,6 +15,19 @@ python3 -I ops/ci/worker.py image --root /srv/lober-ci/images +  --repo /srv/lob
 
 默认检查只运行容器中的 `lober -h`。配置 `--check` 可指定管理员维护的检查程序，依次传入实际镜像校验值和本轮记录目录。已有企业测试和合并检查由各自的入口执行。
 
+管理员可创建 `image-control`、`image-debian` 两个启动器，分别执行
+`bash check-candidate-image control "$@"` 和 `bash check-candidate-image debian "$@"`，
+在两次执行器调用里分别作为 `--check`，使用相同的原提交与制品目录。
+控制面需要 `LOBER_IMAGE_SYNTHETIC_ISO`、`LOBER_ENTERPRISE_NODE` 和
+`LOBER_ENTERPRISE_PLAYWRIGHT`。Debian 需要 `LOBER_IMAGE_DEBIAN_NETINST`、
+`LOBER_IMAGE_DEBIAN_MINI`，以及宿主机的 KVM、QEMU、dnsmasq 和 tcpdump。
+可设 `LOBER_IMAGE_DEBIAN_MIRROR=ustc` 选择中科大镜像。每轮启动独立数据库，
+Debian 使用专用空盘和隔离网络。
+
+晋级流程使用 `--promote-from "$candidate_sha" --verified-runs "$control_run" "$debian_run"`。
+执行器检查两个运行编号是否对应原提交和同一镜像，是否通过控制面检查、完成装机且通过重复引导。
+这个检查补充原有发布门槛。分支审查、完整企业验证和发布审批仍由现有流程执行。
+
 在具备 Docker 的 Linux 测试宿主机执行以下命令。使用一个尚不存在的证据目录：
 
 ```sh

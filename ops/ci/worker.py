@@ -526,7 +526,7 @@ def source_tree(repo, sha):
                                     sha + "^{commit}^{tree}"], text=True, timeout=30).strip()
 
 
-def image_run(root, repo, commit, promote_from=None, check=None):
+def image_run(root, repo, commit, promote_from=None, check=None, verified_runs=None):
     import fcntl
 
     run_id = uuid.uuid4().hex
@@ -573,6 +573,16 @@ def image_run(root, repo, commit, promote_from=None, check=None):
                 write_json(record, {"tree": tree, "built_from": commit, "image_id": image})
                 result["image_action"] = "built"
         result["image_id"] = image
+        if verified_runs:
+            control_run, debian_run = verified_runs
+            observed = subprocess.check_output([
+                sys.executable, "-I", str(Path(__file__).with_name("verify.py")), "image",
+                promote_from, "--root", str(root),
+                "--control-run", control_run, "--debian-run", debian_run,
+            ], text=True, timeout=30).strip()
+            if observed != image:
+                raise ValueError("晋级镜像与通过测试的镜像不符")
+            result["verified_runs"] = {"control": control_run, "debian": debian_run}
         argv = ([str(check), image, str(run)] if check else
                 ["docker", "run", "--rm", "--network", "none", image, "-h"])
         result["check_command"] = argv
@@ -597,12 +607,15 @@ def image_main():
     parser.add_argument("--commit", required=True)
     parser.add_argument("--promote-from")
     parser.add_argument("--check", type=Path)
+    parser.add_argument("--verified-runs", nargs=2, metavar=("CONTROL_RUN", "DEBIAN_RUN"))
     args = parser.parse_args(sys.argv[2:])
     if not sys.platform.startswith("linux") or not sys.flags.isolated:
         parser.error("请在 Linux 上使用 python3 -I 运行")
     os.umask(0o077)
     if not args.root.is_absolute() or not args.repo.is_absolute():
         parser.error("--root 和 --repo 必须是绝对路径")
+    if args.verified_runs and not args.promote_from:
+        parser.error("--verified-runs 需要同时指定 --promote-from")
     root = args.root.resolve(strict=True)
     info = root.stat()
     if not root.is_dir() or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
@@ -610,7 +623,7 @@ def image_main():
     check = args.check
     if check is not None:
         check = admin_executable(check, root)
-    return image_run(root, args.repo, args.commit, args.promote_from, check)
+    return image_run(root, args.repo, args.commit, args.promote_from, check, args.verified_runs)
 
 
 def main():

@@ -18,6 +18,45 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def verify_image(root, sha, control_id, debian_id):
+    """返回两项检查实际使用的镜像。缺少证据时拒绝晋级。"""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha) or control_id == debian_id:
+        raise ValueError("候选提交或运行编号无效")
+    records = []
+    for suite, run_id in (("control", control_id), ("debian", debian_id)):
+        if not re.fullmatch(r"[0-9a-f]{32}", run_id):
+            raise ValueError("运行编号无效")
+        run = root / "runs" / run_id
+        report = json.loads((run / "result.json").read_text())
+        if (report["status"] != "PASS" or report["run_id"] != run_id or report["commit"] != sha
+                or report["check_exit_code"] != 0
+                or Path(report["check_command"][0]).name != f"image-{suite}"
+                or report["check_log_sha256"] != digest(run / "check.log")):
+            raise ValueError(f"{suite} 检查结果与指定候选不匹配")
+        records.append((run, report))
+    (control, cr), (debian, dr) = records
+    image = cr["image_id"]
+    if image != dr["image_id"] or not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+        raise ValueError("两项检查使用的镜像不同")
+    result = json.loads((control / "control.json").read_text())
+    if (result["status"] != "PASS" or result["count"] <= 0 or result["failures"] or result["skipped"]
+            or result["runtime_images"] != [image]):
+        raise ValueError("control 未完整通过")
+    kvm = debian / "kvm"
+    first = json.loads((kvm / "terminal.json").read_text())
+    repeat = json.loads((kvm / "repeat-terminal.json").read_text())
+    guest = json.loads((kvm / "guest-identity.json").read_text())
+    if ((kvm / "runtime-image.txt").read_text().strip() != image or first["state"] != "done"
+            or first != repeat or (kvm / "repeat.pcap").stat().st_size <= 24
+            or not {"machine.installing", "machine.init_start", "machine.ready"}
+                <= {event["kind"] for event in first["events"]}
+            or guest["first"]["boot"] == guest["repeat"]["boot"]
+            or any(guest["first"][key] != guest["repeat"][key] for key in ("machine", "root", "id", "version"))
+            or guest["repeat"]["id"] != "debian" or guest["repeat"]["version"] != "13"):
+        raise ValueError("Debian 装机或重复引导证据不完整")
+    return image
+
+
 def verify(stage, sha, root):
     if stage not in PROFILES or not re.fullmatch(r"[0-9a-f]{40}", sha):
         return False
@@ -72,6 +111,19 @@ def verify(stage, sha, root):
 
 
 def main():
+    if sys.argv[1:2] == ["image"]:
+        parser = argparse.ArgumentParser(description="核对候选镜像的控制面和装机证据")
+        parser.add_argument("sha")
+        parser.add_argument("--root", type=Path, required=True)
+        parser.add_argument("--control-run", required=True)
+        parser.add_argument("--debian-run", required=True)
+        args = parser.parse_args(sys.argv[2:])
+        try:
+            print(verify_image(args.root, args.sha, args.control_run, args.debian_run))
+            return 0
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+            print(f"镜像晋级检查失败：{error}", file=sys.stderr)
+            return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stage", choices=PROFILES)
     parser.add_argument("sha")
