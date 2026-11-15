@@ -28,6 +28,7 @@ import urllib.request
 import uuid
 
 BASE = Path('/home/dev/lober-production-qualification-20261025')
+KVM_INSTALL_SCHEMA = 'lober-isolated-kvm-install-v1'
 
 
 def load_verified_module(path, expected, name):
@@ -94,6 +95,10 @@ def schema_for(run_id):
     return 'capacity_' + hashlib.sha256(run_id.encode()).hexdigest()[:16]
 
 
+def host_prefix(run_id):
+    return 'CAP-' + hashlib.sha256(run_id.encode()).hexdigest()[:8] + '-'
+
+
 def valid_schema(schema, run_id):
     return bool(run_id) and schema == schema_for(run_id)
 
@@ -155,7 +160,8 @@ def process_identity(pid):
     p = Path('/proc') / str(pid)
     fields = (p / 'stat').read_text().rsplit(')', 1)[1].split()
     return {'pid': pid, 'start_ticks': fields[19], 'cwd': str((p/'cwd').resolve(strict=True)),
-            'exe': str((p/'exe').resolve(strict=True)), 'exe_sha256': sha(p/'exe'),
+            # 容器中的程序路径不一定存在于宿主机。校验实际运行的文件。
+            'exe': os.readlink(p/'exe'), 'exe_sha256': sha(p/'exe'),
             'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip()}
 
 
@@ -164,6 +170,14 @@ def same_process(registered):
         actual = process_identity(registered['pid'])
         return all(actual[k] == registered.get(k) for k in actual)
     except (OSError, KeyError, ValueError): return False
+
+
+def live_registered_child(registered, proc_root=Path('/proc')):
+    try:
+        fields = (proc_root/str(registered['pid'])/'stat').read_text().rsplit(')', 1)[1].split()
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    return fields[19] == registered['start_ticks'] and fields[0] not in ('Z', 'X', 'x')
 
 
 def private_file(path, root):
@@ -468,6 +482,18 @@ def installation_problems(report, identity, root, contract=None):
     """消费Task5原件与冻结检查器；单机工具没有第二目标合同时继续阻塞。"""
     errors = []
     try:
+        if report.get('schema') == KVM_INSTALL_SCHEMA:
+            root = Path(root).resolve(strict=True)
+            checker = root / 'kvm_install_evidence.py'
+            parser = root / 'cloud_packet_capture.py'
+            if contract.get('installation_schema') != KVM_INSTALL_SCHEMA:
+                raise ValueError('low-memory installation contract not frozen')
+            verifier = load_verified_module(private_file(checker, root), contract['installation_checkers'][str(checker)],
+                                            'frozen_kvm_install_evidence')
+            packet = load_verified_module(private_file(parser, root), contract['installation_helpers'][str(parser)],
+                                          'frozen_kvm_packet_capture')
+            verifier.verify_report(report, identity, root, packet)
+            return []
         if report.get('status') != 'PASS' or report.get('synthetic') is not False:
             raise ValueError('actual non-synthetic installation result required')
         if not contract or not contract.get('installation_checkers') or not contract.get('installation_targets'):
@@ -550,7 +576,7 @@ def installation_problems(report, identity, root, contract=None):
         if task_sets[0] & task_sets[1]: raise ValueError('serial comparison reuses parallel task')
         if min(e for _, e in groups[0])-max(s for s, _ in groups[0]) <= 0: raise ValueError('installations were not concurrent')
         if min(e for _, e in groups[1])-max(s for s, _ in groups[1]) > 0: raise ValueError('serial baseline was concurrent')
-    except (KeyError, ValueError, OSError, TypeError, AttributeError, ImportError) as error:
+    except (KeyError, ValueError, OSError, TypeError, AttributeError, ImportError, StopIteration) as error:
         errors.append('real concurrent install evidence refused: '+type(error).__name__)
     return errors
 
@@ -746,7 +772,7 @@ def assess_capacity(self):
     # 本工具不创建装机结果；两台真实并发装机必须有单独冻结的检查器结论。
     if not concurrent: problems.append('real concurrent installation evidence absent')
     else:
-        p = private_file(concurrent['path'], BASE)
+        p = private_file(concurrent['path'], getattr(self, 'qualification_root', BASE))
         report = json.loads(p.read_text())
         if sha(p) != concurrent['sha256']: problems.append('concurrent original changed')
         problems += installation_problems(report, self.identity, p.parent, self.common_identity)
@@ -757,18 +783,22 @@ class Driver:
     def __init__(self, args):
         if sys.platform != 'linux': raise ValueError('all tests and execution must run on lober VM')
         self.args, self.root = args, args.work_root.resolve(strict=True)
-        if self.root == BASE or not self.root.is_relative_to(BASE): raise ValueError('work root outside owned subtree')
+        self.qualification_root = Path(getattr(args, 'qualification_root', BASE)).resolve(strict=True)
+        base = self.qualification_root
+        if self.root == base or not self.root.is_relative_to(base): raise ValueError('work root outside owned subtree')
+        if base.stat().st_uid != os.getuid() or base.stat().st_mode & 0o077:
+            raise ValueError('qualification root must be owned and mode 0700')
         if self.root.stat().st_uid != os.getuid() or self.root.stat().st_mode & 0o077:
             raise ValueError('work root must be owned and mode 0700')
-        self.manifest = json.loads(private_file(args.manifest, BASE).read_text())
-        self.profile = json.loads(private_file(args.profile, BASE).read_text())
+        self.manifest = json.loads(private_file(args.manifest, base).read_text())
+        self.profile = json.loads(private_file(args.profile, base).read_text())
         if profile_problems(self.profile): raise ValueError('profile differs from fixed contract')
         self.c = self.manifest['capacity']
         self.run_id = self.manifest['run_id']
         if self.c['run_id'] != self.run_id or not valid_schema(self.c['database']['schema'], self.run_id):
             raise ValueError('run/schema ownership mismatch')
         self.schema = self.c['database']['schema']
-        owner = private_file(BASE/'.qualification-owner', BASE)
+        owner = private_file(base/'.qualification-owner', base)
         if sha(owner) != self.c['owner_sha256']: raise ValueError('base owner identity mismatch')
         schema_owner = json.loads(private_file(self.c['database']['owner_file'], self.root).read_text())
         if schema_owner != {'run_id': self.run_id, 'schema': self.schema}:
@@ -776,12 +806,16 @@ class Driver:
         self.identity = {'manifest_sha256': sha(args.manifest), 'profile_sha256': sha(args.profile),
                          'executor_sha256': sha(__file__), 'run_id': self.run_id,
                          'product_sha': self.manifest['product_sha'], 'test_sha': self.manifest['test_sha']}
-        shared = private_file(self.c['run_identity_file'], BASE)
+        shared = private_file(self.c['run_identity_file'], base)
         common = json.loads(shared.read_text())
         self.common_identity = common
         if sha(shared) != self.c['run_identity_sha256'] or any(common.get(k) != self.manifest[k] for k in ('run_id', 'product_sha', 'test_sha', 'binary_sha256')):
             raise ValueError('common installation/capacity run identity mismatch')
         self.identity.update(run_identity_sha256=sha(shared), binary_sha256=self.manifest['binary_sha256'])
+        if 'image_id' in self.manifest:
+            if common.get('image_id') != self.manifest['image_id']:
+                raise ValueError('容量和装机没有绑定同一候选镜像')
+            self.identity['image_id'] = self.manifest['image_id']
         if (self.identity['profile_sha256'] != self.c['profile_sha256']
                 or self.identity['executor_sha256'] != self.c['executor_sha256']): raise ValueError('executor/profile not frozen')
         for name in ('product_sha', 'test_sha'):
@@ -789,7 +823,7 @@ class Driver:
         for name, digest_key in (('binary', 'binary_sha256'), ('source_archive', 'source_archive_sha256')):
             if sha(self.manifest[name]) != self.manifest[digest_key]: raise ValueError('candidate binary/archive mismatch')
         source = Path(self.c['source_root']).resolve(strict=True)
-        if not source.is_relative_to(BASE) or not self.manifest.get('files'): raise ValueError('frozen source file map absent')
+        if not source.is_relative_to(base) or not self.manifest.get('files'): raise ValueError('frozen source file map absent')
         for name, expected in self.manifest['files'].items():
             p = (source/name).resolve(strict=True)
             if not p.is_relative_to(source) or sha(p) != expected: raise ValueError('source file mismatch')
@@ -799,7 +833,7 @@ class Driver:
         validate_url(self.media['url'], self.c['allowed_private_ips'])
         if (self.media['size'] < self.profile['artifact_size_bytes_min']
                 or not re.fullmatch('[0-9a-f]{64}', self.media['sha256'])): raise ValueError('full real image identity absent')
-        receipt = private_file(self.media['qualification_file'], BASE)
+        receipt = private_file(self.media['qualification_file'], base)
         if sha(receipt) != self.media['qualification_sha256']: raise ValueError('media qualification receipt changed')
         evidence = json.loads(receipt.read_text())
         if (evidence.get('status') != 'PASS' or evidence.get('synthetic') is not False
@@ -860,6 +894,7 @@ class Driver:
         self.started_utc = time.time()
         self.sockets, self.child_procs, self.auth_books, self.threads = set(), {}, {}, []
         self.io_lock = threading.RLock()
+        self.login_lock = threading.Lock()
         self.cleanup_complete, self.residuals, self.shutdown_deadline = False, [], None
         self.stop_event = threading.Event()
         self.interrupted = False
@@ -880,7 +915,7 @@ class Driver:
         self.import_used = 0
         self.lock_file = None
         self.resources = self.c['resource_paths']
-        if len(self.resources) < 1 or any(not Path(p).resolve().is_relative_to(BASE) for p in self.resources):
+        if len(self.resources) < 1 or any(not Path(p).resolve().is_relative_to(base) for p in self.resources):
             raise ValueError('owned resource mount paths required')
         all_imports = []
         for phase, needed in (('normal', 1), ('burst', 1), ('soak', 48)):
@@ -961,7 +996,7 @@ class Driver:
 
     def acquire(self):
         import fcntl
-        self.lock_file = (BASE/'leases/heavy.lock').open('r+')
+        self.lock_file = (self.qualification_root/'leases/heavy.lock').open('r+')
         fcntl.flock(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
         self.log.add(kind='heavy_lock_acquired', inode=os.fstat(self.lock_file.fileno()).st_ino)
 
@@ -996,8 +1031,10 @@ class Driver:
         # 全库检查限定本轮schema；快照摘要只覆盖冻结历史行，运行中新任务另检查约束。
         prefix = self.c['dataset']['host_prefix']
         if not re.fullmatch(r'CAP-[a-z0-9]{8}-', prefix): raise ValueError('owned host prefix invalid')
-        expected_prefix = 'CAP-'+hashlib.sha256(self.run_id.encode()).hexdigest()[:8]+'-'
+        expected_prefix = host_prefix(self.run_id)
         if prefix != expected_prefix: raise ValueError('host prefix not bound to run')
+        # 主机入口把序列号转成大写，SQL 必须统计保存后的序列号。
+        prefix = prefix.upper()
         q = """SELECT json_build_object(
           'schema', current_schema(),
           'hosts',(SELECT count(*) FROM hosts WHERE sn LIKE '%s%%'),
@@ -1096,8 +1133,23 @@ class Driver:
                         self.business_inflight -= 1
                         self.request_condition.notify_all()
 
+    def request_login(self, credential, session):
+        # 所有客户端从同一隔离地址登录。产品每分钟只允许该地址尝试 30 次。
+        # 阶段进程顺序接替，保留上一次实际登录时间，避免在阶段边界形成突发。
+        pace = self.root/'last-login-monotonic'
+        with self.login_lock:
+            now = time.monotonic()
+            if pace.exists():
+                last = float(private_file(pace, self.root).read_text())
+                delay = last + 2.2 - now
+                if delay > 0 and self.stop_event.wait(delay):
+                    raise LoadWindowClosed()
+            with os.fdopen(os.open(pace, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600), 'w') as stream:
+                stream.write(str(time.monotonic()))
+            return self.request('POST', '/auth/login', body=credential, session=session)
+
     def login(self, credential, session):
-        def establish(): return self.request('POST', '/auth/login', body=credential, session=session)
+        def establish(): return self.request_login(credential, session)
         book = AuthSession(establish, lambda token: self.request('POST', '/auth/logout', token, session=session),
                            lambda **r: self.sessions_log.add(session=session, **r),
                            margin=self.profile['session_expiry_margin_seconds'])
@@ -1217,7 +1269,7 @@ class Driver:
         for device, amount in budgets.items():
             volume = self.volumes[device]; st = os.statvfs(volume['path'])
             if st.f_bavail*st.f_frsize-amount < volume['floor']: raise RuntimeError('original-scale filesystem budget blocked: '+device)
-        ref = self.c['resource_evidence']; path = private_file(ref['path'], BASE)
+        ref = self.c['resource_evidence']; path = private_file(ref['path'], self.qualification_root)
         if sha(path) != ref['sha256']: raise ValueError('host resource receipt changed')
         observed = json.loads(path.read_text())
         if observed.get('run_identity_sha256') != self.identity['run_identity_sha256'] or not 0 <= time.time()-observed['observed_utc_unix'] <= 300:
@@ -1325,6 +1377,21 @@ class Driver:
                     result.append((role, registered))
         return result
 
+    def sample_registered_child(self, registered):
+        for attempt in range(4):
+            try:
+                child = self.proc_sample(registered)
+                if not child['alive'] or not child['identity_ok']:
+                    raise ValueError('child exited or changed identity during sampling')
+                return child
+            except (OSError, ValueError, IndexError, KeyError):
+                if not live_registered_child(registered):
+                    return None
+                if attempt == 3:
+                    raise
+                # /proc 的各文件并非同一快照，退出和关闭文件描述符可以交错。
+                time.sleep(.05 * (attempt + 1))
+
     def sample(self, measurement='preflight'):
         row = {'elapsed': time.monotonic()-(self.window['start'] if measurement == 'qualification' else self.start), 'measurement': measurement,
                'sample_errors': [], 'processes': {}}
@@ -1334,15 +1401,21 @@ class Driver:
         children = self.descendants()
         for role, registered in children:
             try:
-                child = self.proc_sample(registered)
+                child = self.sample_registered_child(registered)
+                if child is None:
+                    self.children.add(kind='child_exited_during_sample', role=role, process=registered)
+                    continue
                 # 子进程资源也算进所属服务；原始分项另留。RSS包含共享页，不冒充独占内存。
                 parent = row['processes'][role]
                 for key in ('rss_bytes', 'swap_bytes', 'fds', 'connections', 'cpu_ticks', 'threads'):
                     parent[key] += child[key]
                 parent.setdefault('children', []).append({'identity': registered, 'resource': child})
-            except (OSError, ValueError, KeyError):
-                # 已退出的短子进程由spawn/exit登记证明；不能吞掉仍存在的身份异常。
-                if Path('/proc', str(registered['pid'])).exists(): row['sample_errors'].append('child:'+role)
+            except (OSError, ValueError, IndexError, KeyError) as error:
+                row['sample_errors'].append('child:'+role)
+                detail = {'role': role, 'pid': registered['pid'], 'type': type(error).__name__}
+                if isinstance(error, OSError):
+                    detail.update(errno=error.errno, path=Path(error.filename).name if error.filename else None)
+                row.setdefault('sample_error_details', []).append(detail)
         try:
             mem = dict(line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines())
             for key, name in (('mem_available_bytes', 'MemAvailable'), ('swap_free_bytes', 'SwapFree')):
@@ -1379,9 +1452,10 @@ class Driver:
     def count(self, key, amount):
         with self.lock: self.active[key] += amount
 
-    def worker_failed(self, category):
+    def worker_failed(self, category, error=None):
         with self.lock: self.worker_errors += 1
-        self.log.add(kind='worker_error', category=category)
+        self.log.add(kind='worker_error', category=category, error_type=type(error).__name__ if error else None,
+                     detail=str(error) if type(error) is RuntimeError else None)
         self.stop_event.set()
 
     def open_download(self, worker, kind):
@@ -1565,7 +1639,7 @@ class Driver:
                     result = self.request('GET', f'/hosts?page={page}&page_size=20', token, category='host_list', session=worker)
                     if not isinstance(result.get('items'), list) or not result['items']: raise RuntimeError('host list result invalid')
                 elif selected == 1:
-                    sn = self.c['dataset']['host_prefix']+f'{rng.randrange(10000):05d}'
+                    sn = (self.c['dataset']['host_prefix']+f'{rng.randrange(10000):05d}').upper()
                     result = self.request('GET', '/hosts/'+sn, token, category='host_detail', session=worker)
                     if result.get('sn') != sn: raise RuntimeError('host detail identity invalid')
                 elif selected == 2:
@@ -1580,7 +1654,7 @@ class Driver:
                 create_period = int((before-self.window['start'])//60)
                 idle_period = int((before-self.window['start'])//600)
                 if worker == 0 and create_period > last_create:
-                    serial = self.c['dataset']['host_prefix']+'live-'+self.args.phase+'-'+str(turn)
+                    serial = (self.c['dataset']['host_prefix']+'live-'+self.args.phase+'-'+str(turn)).upper()
                     self.new_host_task(token, serial, category='create_read')
                     self.request('GET', '/hosts/'+serial, token, category='create_read', session=worker)
                     last_create = create_period
@@ -1596,8 +1670,8 @@ class Driver:
                 quit_event.wait(max(0, self.profile['request_period_seconds']-(time.monotonic()-before)))
         except LoadWindowClosed:
             pass
-        except Exception:
-            if not quit_event.is_set() and not self.stop_event.is_set(): self.worker_failed('console')
+        except Exception as error:
+            if not quit_event.is_set() and not self.stop_event.is_set(): self.worker_failed('console', error)
         finally: self.count('sessions', -1)
 
     def import_loop(self, quit_event):
@@ -1645,8 +1719,8 @@ class Driver:
                              uploaded_bytes=offset, state=current['state'], input_sha256=item['sha256'], synthetic=item['synthetic'])
         except LoadWindowClosed:
             pass
-        except Exception:
-            if not quit_event.is_set() and not self.stop_event.is_set(): self.worker_failed('upload_import')
+        except Exception as error:
+            if not quit_event.is_set() and not self.stop_event.is_set(): self.worker_failed('upload_import', error)
 
     def load(self):
         self.acquire()
@@ -1685,6 +1759,7 @@ class Driver:
         for w in range(4*multiplier): spawn(self.download_loop, w, quit_event)
         spawn(self.import_loop, quit_event)
         startup = time.monotonic()
+        burst_cleanup = None
         try:
             while True:
                 with self.lock:
@@ -1701,20 +1776,34 @@ class Driver:
             startup_elapsed = time.monotonic()-startup
             next_sample = 0
             oom_first = None
+            burst_result = []
+
+            def settle_burst():
+                try:
+                    burst_result.append(self.cleanup(threads, settle=True))
+                except (RuntimeError, OSError, ValueError):
+                    burst_result.append(False)
+                self.log.add(kind='burst_load_stopped', elapsed=time.monotonic()-measurement_start)
+
             while True:
                 elapsed = time.monotonic()-measurement_start
                 if phase == 'burst' and elapsed >= 300 and not quit_event.is_set():
                     quit_event.set()
-                    if not self.cleanup(threads, settle=True): raise RuntimeError('burst cleanup incomplete')
-                    self.log.add(kind='burst_load_stopped', elapsed=time.monotonic()-measurement_start)
+                    burst_cleanup = threading.Thread(target=settle_burst, name='burst-settlement')
+                    burst_cleanup.start()
                 sample = self.sample(measurement='qualification')
                 self.guard_resources(sample)
                 if oom_first is None: oom_first = sample['oom_kill']
                 if sample['oom_kill'] != oom_first: raise RuntimeError('OOM observed')
                 if self.stop_event.is_set(): raise InterruptedError('phase interrupted or client failed')
+                if burst_cleanup is not None and not burst_cleanup.is_alive() and burst_result != [True]:
+                    raise RuntimeError('burst cleanup incomplete')
                 if elapsed >= duration: break
                 next_sample += 60
-                self.stop_event.wait(max(0, min(duration, next_sample)-(time.monotonic()-measurement_start)))
+                target = measurement_start + min(duration, next_sample)
+                if burst_cleanup is not None and burst_cleanup.is_alive():
+                    burst_cleanup.join(timeout=max(0, target-time.monotonic()))
+                self.stop_event.wait(max(0, target-time.monotonic()))
             self.log.add(kind='measurement_end', window_id=self.window['id'])
             quit_event.set()
             if not self.cleanup(threads, settle=True): raise RuntimeError('load cleanup incomplete')
@@ -1730,6 +1819,8 @@ class Driver:
                     'idle_baseline': idle_baseline}
         finally:
             quit_event.set()
+            if burst_cleanup is not None:
+                burst_cleanup.join()
             if not self.cleanup(threads): self.worker_errors += 1
 
     def stop(self):
@@ -1787,8 +1878,12 @@ class Driver:
         except Exception as error:
             # 不输出异常原文，避免HTTP/连接库异常携带私有认证信息。
             reason = 'interrupted' if self.interrupted else type(error).__name__
-            self.log.add(kind='failure', reason=reason,
-                         detail=str(error) if type(error) in (RuntimeError, ValueError, KeyError) else 'private transport failure')
+            detail = str(error) if type(error) in (RuntimeError, ValueError, KeyError) else 'private transport failure'
+            if isinstance(error, FileNotFoundError) and error.filename:
+                missing = Path(error.filename)
+                if missing.is_absolute() and missing.is_relative_to(self.root):
+                    detail = 'missing owned path: ' + str(missing.relative_to(self.root))
+            self.log.add(kind='failure', reason=reason, detail=detail)
             return 1
         finally:
             if not self.cleanup_complete: self.cleanup(self.threads)
@@ -1820,10 +1915,11 @@ def stop_entry(args):
     """独立停止不读介质/源码包，不要求产品或PG活着，每次尝试保留新目录。"""
     if sys.platform != 'linux': raise ValueError('stop must execute on lober VM')
     root = args.work_root.resolve(strict=True)
-    if root == BASE or not root.is_relative_to(BASE) or root.stat().st_uid != os.getuid() or root.stat().st_mode & 0o077:
+    base = Path(getattr(args, 'qualification_root', BASE)).resolve(strict=True)
+    if root == base or not root.is_relative_to(base) or root.stat().st_uid != os.getuid() or root.stat().st_mode & 0o077:
         raise ValueError('wrong stop work root')
-    manifest = json.loads(private_file(args.manifest, BASE).read_text()); c = manifest['capacity']
-    if sha(private_file(BASE/'.qualification-owner', BASE)) != c['owner_sha256'] or c['run_id'] != manifest['run_id']:
+    manifest = json.loads(private_file(args.manifest, base).read_text()); c = manifest['capacity']
+    if sha(private_file(base/'.qualification-owner', base)) != c['owner_sha256'] or c['run_id'] != manifest['run_id']:
         raise ValueError('stop owner/run mismatch')
     if sha(__file__) != c['executor_sha256']: raise ValueError('stop requires same frozen executor')
     output = args.output.resolve(strict=True)
@@ -1851,6 +1947,7 @@ def main():
     parser.add_argument('--phase', choices=('seed', 'normal', 'burst', 'soak', 'evaluate', 'stop'), required=True)
     for name in ('manifest', 'profile', 'output', 'work-root'):
         parser.add_argument('--'+name, required=True, type=Path)
+    parser.add_argument('--qualification-root', type=Path, default=BASE)
     args = parser.parse_args()
     try: return stop_entry(args) if args.phase == 'stop' else Driver(args).run()
     except Exception as error:

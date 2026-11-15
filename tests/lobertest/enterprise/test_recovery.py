@@ -159,7 +159,7 @@ class RecoveryTests(EnterpriseServiceFixture, unittest.TestCase):
         item = self.register(payload)
         blocker = self.disk / 'bounded-enospc-blocker'
         try:
-            with blocker.open('wb', buffering=0) as output:
+            with blocker.open('xb', buffering=0) as output:
                 with self.assertRaises(OSError) as raised:
                     while True:
                         output.write(b'x' * 65536)
@@ -211,7 +211,13 @@ class RecoveryTests(EnterpriseServiceFixture, unittest.TestCase):
         host = self.host()
         self.proc.kill()
         self.proc.wait(timeout=10)
-        self.assertLess(self.proc.returncode, 0)
+        if self.container:
+            state = subprocess.check_output(["docker", "inspect", "--format",
+                                             "{{.State.Running}} {{.State.ExitCode}}", self.container],
+                                            text=True, timeout=10).strip()
+            self.assertEqual(state, "false 137")
+        else:
+            self.assertLess(self.proc.returncode, 0)
         server.mode = 'ok'
         server.release.set()
         self.start()

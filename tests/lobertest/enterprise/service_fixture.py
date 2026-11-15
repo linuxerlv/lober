@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import socket
@@ -25,12 +26,39 @@ from db_env import postgres_env
 ROLES = ("admin", "operator", "hook-author", "hook-approver", "viewer")
 
 
+class ContainerProcess:
+    def __init__(self, cid, process):
+        self.cid, self.process = cid, process
+
+    def poll(self):
+        return self.process.poll()
+
+    def wait(self, timeout):
+        return self.process.wait(timeout=timeout)
+
+    def terminate(self):
+        subprocess.run(["docker", "stop", "--timeout", "10", self.cid],
+                       capture_output=True, check=True, timeout=20)
+
+    def kill(self):
+        subprocess.run(["docker", "kill", "--signal", "KILL", self.cid],
+                       capture_output=True, check=True, timeout=20)
+
+
 class EnterpriseServiceFixture:
+    recovery_uid = 65534
+
     @classmethod
     def setUpClass(cls):
         cls.base_dsn = os.environ["LOBER_TEST_PG_DSN"]
-        cls.binary = Path(os.environ["LOBER_ENTERPRISE_BINARY"]).resolve(strict=True)
-        cls.work = Path(tempfile.mkdtemp(prefix="lober-enterprise-http-"))
+        cls.image = os.environ.get("LOBER_ENTERPRISE_IMAGE")
+        if cls.image and not re.fullmatch(r"sha256:[0-9a-f]{64}", cls.image):
+            raise ValueError("Expected a frozen Docker image ID")
+        cls.binary = None if cls.image else Path(os.environ["LOBER_ENTERPRISE_BINARY"]).resolve(strict=True)
+        cls.container = None
+        cls.container_generation = 0
+        cls.work = Path(tempfile.mkdtemp(prefix="lober-enterprise-http-",
+                                        dir=os.environ.get("LOBER_ENTERPRISE_WORKDIR")))
         cls.schema = "enterprise_" + secrets.token_hex(8)
         cls.proc = None
         cls.log = None
@@ -95,8 +123,48 @@ class EnterpriseServiceFixture:
         env = os.environ.copy()
         env.pop("LOBER_PG_DSN", None)
         env["GIN_MODE"] = "release"
-        cls.proc = subprocess.Popen([str(cls.binary), "-config", str(cls.config)],
+        command = [str(cls.binary), "-config", str(cls.config)]
+        if cls.image and not cls.container:
+            cls.container_generation += 1
+            name = f"lober-control-{cls.schema}-{cls.container_generation}"
+            network = ["--network", "host"]
+            user = f"{os.getuid()}:{os.getgid()}"
+            mounts = ["--mount", f"type=bind,src={cls.work},dst={cls.work}"]
+            recovery_run = os.environ.get("LOBER_ENTERPRISE_RECOVERY_RUN")
+            if recovery_run:
+                db = os.environ["LOBER_ENTERPRISE_NETWORK_CONTAINER"]
+                if not re.fullmatch(r"[0-9a-f]{32}", recovery_run) or db != "lober-ci-db-" + recovery_run:
+                    raise ValueError("Recovery requires the dedicated database network")
+                network = ["--network", "container:" + db,
+                           "--label", "org.lober.ci.recovery=" + recovery_run]
+                user = f"{cls.recovery_uid}:{cls.recovery_uid}"
+                mounts = ["--cap-drop", "ALL", "--security-opt", "no-new-privileges"]
+                os.chown(cls.config, cls.recovery_uid, cls.recovery_uid)
+                mounts += ["--mount", f"type=bind,src={cls.config},dst={cls.config},readonly"]
+                for name in ("staging", "artifacts", "smb", "tools"):
+                    data = cls.work / name
+                    data.mkdir(exist_ok=True, mode=0o700)
+                    os.chown(data, cls.recovery_uid, cls.recovery_uid)
+                    mounts += ["--mount", f"type=bind,src={data},dst={data}"]
+            cid = subprocess.check_output(["docker", "create", *network,
+                "--name", name, "--env", "GIN_MODE=release",
+                "--user", user, *mounts,
+                cls.image, "-config", str(cls.config)], text=True, timeout=30).strip()
+            cls.addClassCleanup(subprocess.run, ["docker", "rm", "-f", cid],
+                                capture_output=True, timeout=30, check=True)
+            cls.container = cid
+        if cls.container:
+            cid = cls.container
+            actual = subprocess.check_output(["docker", "inspect", "--format", "{{.Image}}", cid],
+                                             text=True, timeout=30).strip()
+            if actual != cls.image:
+                raise RuntimeError("Control container image differs from candidate")
+            (cls.work / "runtime-image.txt").write_text(actual + "\n")
+            command = ["docker", "start", "--attach", cid]
+        cls.proc = subprocess.Popen(command,
             cwd=cls.work, env=env, stdout=cls.log, stderr=cls.log)
+        if cls.container:
+            cls.proc = ContainerProcess(cls.container, cls.proc)
         for _ in range(150):
             if cls.proc.poll() is not None:
                 raise RuntimeError("Candidate service exited during startup; inspect restricted service.log")
