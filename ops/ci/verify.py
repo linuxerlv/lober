@@ -111,12 +111,15 @@ def verify(stage, sha, root, image_root=None):
         if stage == "test" and image_root is not None:
             require_release_image(image_root, sha, candidate, logs)
 
-        result = subprocess.run([
+        command = [
             sys.executable, "-I", str(GATE), "--profile", PROFILES[stage],
             "--source-root", str(source), "--results", str(logs),
             "--product-sha", sha, "--manifest", str(manifest),
             "--qualification-root", str(qualification),
-        ], capture_output=True, check=False, timeout=100)
+        ]
+        if stage == "test" and image_root is not None:
+            command += ["--image-root", str(image_root)]
+        result = subprocess.run(command, capture_output=True, check=False, timeout=100)
         if result.returncode:
             return False
         report = json.loads(result.stdout)

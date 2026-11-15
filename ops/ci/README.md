@@ -72,7 +72,7 @@ sudo install -d -m 0755 /opt/lober-ci/ops/ci /opt/lober-ci/tests/lobertest/enter
 sudo install -d -m 0750 -o root -g lober-ci-report /etc/lober-ci
 sudo install -m 0644 ops/ci/{worker,verify,report}.py /opt/lober-ci/ops/ci/
 sudo install -m 0755 ops/ci/{app-token,verify-as-stage} /opt/lober-ci/ops/ci/
-sudo install -m 0644 tests/lobertest/enterprise/{gate.py,profiles.json,production_capacity.py,installation_evidence.py,kvm_install_evidence.py,cloud_install.py,cloud_packet_capture.py,cloud_capture_session.py,cloud_guest_identity.py,cloud_no_task_probe.py} /opt/lober-ci/tests/lobertest/enterprise/
+sudo install -m 0644 tests/lobertest/enterprise/{gate.py,profiles.json,production_capacity.py,installation_evidence.py,kvm_install_evidence.py,cloud_install.py,cloud_packet_capture.py,cloud_capture_session.py,cloud_guest_identity.py,cloud_no_task_probe.py,upgrade_evidence.py} /opt/lober-ci/tests/lobertest/enterprise/
 sudo install -m 0644 ops/ci/systemd/*.service ops/ci/systemd/*.timer /etc/systemd/system/
 sudo visudo -cf ops/ci/systemd/lober-ci-report.sudoers
 sudo install -m 0440 ops/ci/systemd/lober-ci-report.sudoers /etc/sudoers.d/lober-ci-report
@@ -107,7 +107,7 @@ journalctl -u lober-ci-worker@dev.service -u lober-ci-worker@test.service
 
 每轮产物放在 `/var/lib/lober-ci-<阶段>/<完整提交号>/`。查看 `execution.json` 和 `logs/`。需要重跑时，给对应服务的 `ExecStart` 加 `--retry` 后执行单轮，再移除临时覆盖配置。
 
-真实镜像、装机和长稳测试按 [企业测试说明](../../tests/lobertest/enterprise/README.md) 准备。先让执行器冻结程序和本轮编号。然后依据 `candidate.json` 准备原件身份文件和安装原件，将原件放入同一候选下的私有 `qualification/` 目录，由 `lober-ci-test` 持有。配置 `LOBER_CI_CAPACITY_MANIFEST` 后重跑一次，绑定容量配置并更新同一轮的自动检查。容量负载和最终证据引用冻结后的清单。使用 `installation_evidence.py --qualification-root <本轮 qualification 目录>` 检查装机和长稳原件，输出写入同一轮 `logs/`。真实装机和长稳执行器仍需现场准备，旧版升级验收器仍待实现。缺少任一结果时完整发布检查失败。
+真实镜像、装机和长稳测试按 [企业测试说明](../../tests/lobertest/enterprise/README.md) 准备。先让执行器冻结程序和本轮编号。然后依据 `candidate.json` 准备原件身份文件和安装原件，将原件放入同一候选下的私有 `qualification/` 目录，由 `lober-ci-test` 持有。配置 `LOBER_CI_CAPACITY_MANIFEST` 后重跑一次，绑定容量配置并更新同一轮的自动检查。容量负载和最终证据引用冻结后的清单。使用 `installation_evidence.py --qualification-root <本轮 qualification 目录>` 检查装机和长稳原件，输出写入同一轮 `logs/`。升级使用企业测试说明中的容器入口。给发布校验账号只读访问原始证据目录的权限。缺少任一结果时完整发布检查失败。
 
 执行器只处理已合入受保护分支的代码。阶段账号负责生成该阶段的测试证据，管理员负责审查候选执行入口和保护该账号。GitHub 回报账号使用管理员安装的检查器复核结果。
 

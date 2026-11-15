@@ -9,6 +9,11 @@ import unittest
 
 from db_env import postgres_env
 from service_fixture import EnterpriseServiceFixture, ROLES
+from upgrade_evidence import BASELINE_IMAGE, BASELINE_SHA, PROOF_PREFIX
+
+
+def fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def frozen_binary(sha):
@@ -26,6 +31,24 @@ def frozen_binary(sha):
 
 
 class UpgradeProbe(EnterpriseServiceFixture, unittest.TestCase):
+    def start_version(self, version):
+        if self.image:
+            self.__class__.image = version
+            self.__class__.container = None
+        else:
+            self.__class__.binary = version
+        self.start()
+        self.sign_in()
+
+    def observe(self, phase, snapshot, files):
+        artifacts = {str(path): hashlib.sha256((self.work / path).read_bytes()).hexdigest()
+                     for path in files}
+        self.assertTrue(artifacts, "No real imported artifacts observed")
+        return {"phase": phase, "container_id": self.container,
+                "image_id": (self.work / "runtime-image.txt").read_text().strip(),
+                "snapshot_sha256": fingerprint(snapshot),
+                "artifacts_sha256": fingerprint(artifacts), "artifact_count": len(artifacts)}
+
     def stop_service(self):
         self.proc.terminate()
         self.proc.wait(timeout=25)
@@ -55,7 +78,7 @@ class UpgradeProbe(EnterpriseServiceFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0, f'{argv[0]} failed')
 
     def test_upgrade_and_restore_previous_candidate(self):
-        previous = self.binary
+        previous = self.image or self.binary
         selection = self.selection()
         host = self.host()
         task = self.create_task(host, selection)
@@ -69,15 +92,18 @@ class UpgradeProbe(EnterpriseServiceFixture, unittest.TestCase):
             shutil.copytree(self.work / name, backup / name, symlinks=True)
         files = {path.relative_to(backup): hashlib.sha256(path.read_bytes()).hexdigest()
                  for path in backup.rglob('*') if path.is_file()}
+        before = self.observe("before", expected, files) if self.image else None
 
-        self.__class__.binary = frozen_binary(os.environ['LOBER_UPGRADE_NEXT_SHA'])
-        self.start()
-        self.sign_in()
-        self.assertEqual(self.snapshot(host, selection, task), expected)
+        candidate = os.environ["LOBER_UPGRADE_NEXT_IMAGE"] if self.image else frozen_binary(os.environ["LOBER_UPGRADE_NEXT_SHA"])
+        self.start_version(candidate)
+        upgraded = self.snapshot(host, selection, task)
+        self.assertEqual(upgraded, expected)
         for path, digest in files.items():
             self.assertEqual(hashlib.sha256((self.work / path).read_bytes()).hexdigest(), digest)
         new_host = self.host()
-        self.create_task(new_host, selection)
+        new_task = self.create_task(new_host, selection)
+        self.assertNotEqual(new_task, task)
+        upgraded_proof = self.observe("upgraded", upgraded, files) if self.image else None
         print('升级后旧数据、权限和制品完整，新任务创建成功', flush=True)
 
         self.stop_service()
@@ -86,14 +112,28 @@ class UpgradeProbe(EnterpriseServiceFixture, unittest.TestCase):
         for name in directories:
             shutil.rmtree(self.work / name)
             shutil.copytree(backup / name, self.work / name, symlinks=True)
-        self.__class__.binary = previous
-        self.start()
-        self.sign_in()
-        self.assertEqual(self.snapshot(host, selection, task), expected)
+        self.start_version(previous)
+        restored = self.snapshot(host, selection, task)
+        self.assertEqual(restored, expected)
         self.assert_status(self.admin('GET', '/hosts/' + new_host['sn']), 404)
+        gone = self.admin('GET', '/tasks/' + new_task)
+        self.assert_status(gone, 404)
+        if self.image:
+            print(PROOF_PREFIX + json.dumps({"baseline_sha": BASELINE_SHA,
+                  "probe_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                  "new_task_sha256": fingerprint(new_task), "rolled_back_status": gone[0],
+                  "stages": [before, upgraded_proof, self.observe("restored", restored, files)]}), flush=True)
         print('已恢复升级前数据库及制品，旧程序重新运行', flush=True)
 
 
 if __name__ == '__main__':
-    os.environ['LOBER_ENTERPRISE_BINARY'] = str(frozen_binary(os.environ['LOBER_UPGRADE_PREVIOUS_SHA']))
+    if os.environ.get("LOBER_UPGRADE_NEXT_IMAGE"):
+        os.environ["LOBER_ENTERPRISE_IMAGE"] = BASELINE_IMAGE
+        revision = subprocess.check_output(["docker", "image", "inspect", "--format",
+            '{{index .Config.Labels "org.opencontainers.image.revision"}}', BASELINE_IMAGE],
+            text=True, timeout=30).strip()
+        if revision != BASELINE_SHA or os.environ["LOBER_UPGRADE_NEXT_IMAGE"] == BASELINE_IMAGE:
+            raise SystemExit("升级起点或目标镜像身份不符")
+    else:
+        os.environ['LOBER_ENTERPRISE_BINARY'] = str(frozen_binary(os.environ['LOBER_UPGRADE_PREVIOUS_SHA']))
     unittest.main(verbosity=2)

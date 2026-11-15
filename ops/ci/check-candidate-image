@@ -28,6 +28,10 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 
 case "$suite" in
+    upgrade)
+        fixture=${LOBER_IMAGE_SYNTHETIC_ISO:?设置合成测试镜像路径}
+        test -r "$fixture"
+        ;;
     control|flows|events)
         fixture=${LOBER_IMAGE_SYNTHETIC_ISO:?设置合成测试镜像路径}
         : "${LOBER_ENTERPRISE_NODE:?设置 Node 或浏览器测试启动器路径}"
@@ -74,6 +78,11 @@ SH
     export LOBER_IMAGE_DB="$db" LOBER_TEST_PG_DSN="$dsn" LOBER_ENTERPRISE_FIXTURE="$fixture"
     export LOBER_ENTERPRISE_IMAGE="$image" LOBER_ENTERPRISE_WORKDIR="$run"
     export PATH="$run/bin:$PATH"
+    if [[ "$suite" == upgrade ]]; then
+        export LOBER_UPGRADE_NEXT_IMAGE="$image" PYTHONPATH="$enterprise"
+        python3 -B "$here/upgrade_probe.py"
+        exit
+    fi
     cd -- "$enterprise"
     python3 -B - "$run/$suite.json" "$suite" <<'PY'
 import json

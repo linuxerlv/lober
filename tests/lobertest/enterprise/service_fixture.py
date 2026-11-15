@@ -54,6 +54,7 @@ class EnterpriseServiceFixture:
             raise ValueError("Expected a frozen Docker image ID")
         cls.binary = None if cls.image else Path(os.environ["LOBER_ENTERPRISE_BINARY"]).resolve(strict=True)
         cls.container = None
+        cls.container_generation = 0
         cls.work = Path(tempfile.mkdtemp(prefix="lober-enterprise-http-",
                                         dir=os.environ.get("LOBER_ENTERPRISE_WORKDIR")))
         cls.schema = "enterprise_" + secrets.token_hex(8)
@@ -122,7 +123,8 @@ class EnterpriseServiceFixture:
         env["GIN_MODE"] = "release"
         command = [str(cls.binary), "-config", str(cls.config)]
         if cls.image and not cls.container:
-            name = "lober-control-" + cls.schema
+            cls.container_generation += 1
+            name = f"lober-control-{cls.schema}-{cls.container_generation}"
             cid = subprocess.check_output(["docker", "create", "--network", "host",
                 "--name", name, "--env", "GIN_MODE=release",
                 "--user", f"{os.getuid()}:{os.getgid()}",
