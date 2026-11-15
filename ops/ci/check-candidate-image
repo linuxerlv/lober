@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# 由管理员维护的 --check 入口调用。每次只操作本轮资源。
+set -euo pipefail
+umask 077
+[[ $# == 3 && "$2" =~ ^sha256:[0-9a-f]{64}$ && "$3" == /* && "$EUID" == 0 ]]
+suite=$1
+image=$2
+run=$3
+here="$(cd -- "$(dirname -- "$0")" && pwd)"
+enterprise="$here/../../tests/lobertest/enterprise"
+test "$(stat -c '%u:%a' "$run")" = 0:700
+nonce=${run##*/}
+[[ "$nonce" =~ ^[0-9a-f]{32}$ ]]
+db="lober-ci-db-$nonce"
+app="lober-ci-app-$nonce"
+children=()
+db_started=
+app_created=
+cleanup() {
+    for pid in "${children[@]}"; do kill "$pid" 2>/dev/null || true; done
+    for pid in "${children[@]}"; do wait "$pid" 2>/dev/null || true; done
+    if [[ -n "$app_created" ]]; then docker rm -fv "$app" >/dev/null; fi
+    if [[ -n "$db_started" ]]; then docker rm -fv "$db" >/dev/null; fi
+    if [[ -f "$run/app/config.json" ]]; then rm -- "$run/app/config.json"; fi
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+
+case "$suite" in
+    control|flows|events)
+        fixture=${LOBER_IMAGE_SYNTHETIC_ISO:?设置合成测试镜像路径}
+        : "${LOBER_ENTERPRISE_NODE:?设置 Node 或浏览器测试启动器路径}"
+        : "${LOBER_ENTERPRISE_PLAYWRIGHT:?设置 Playwright 入口路径}"
+        export LOBER_ENTERPRISE_UI_SCRIPT="$enterprise/ui.mjs"
+        test -r "$fixture" && test -x "$LOBER_ENTERPRISE_NODE"
+        ;;
+    debian)
+        netinst=${LOBER_IMAGE_DEBIAN_NETINST:?设置 Debian netinst 路径}
+        mini=${LOBER_IMAGE_DEBIAN_MINI:?设置 Debian 网络引导镜像路径}
+        test -r "$netinst" && test -r "$mini" && test -c /dev/kvm
+        ;;
+    *) exit 2 ;;
+esac
+
+# 使用独立实例，数据库只发布到回环地址。
+export POSTGRES_PASSWORD
+POSTGRES_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
+pg=postgres:16@sha256:63e83b5a3dc36a917dccb76fe1bd2ac51f1ec9c1deb47ff20d4f04233bf6eae9
+docker run -d --name "$db" --publish 127.0.0.1::5432 \
+    --env POSTGRES_PASSWORD --mount "type=bind,src=$run,dst=$run" "$pg" >/dev/null
+db_started=1
+host_port="$(docker port "$db" 5432/tcp)"
+[[ "$host_port" =~ ^127\.0\.0\.1:([0-9]+)$ ]]
+port=${BASH_REMATCH[1]}
+for _ in $(seq 1 120); do
+    if docker exec "$db" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
+    sleep .25
+done
+docker exec "$db" pg_isready -h 127.0.0.1 -U postgres
+dsn="postgres://postgres:$POSTGRES_PASSWORD@127.0.0.1:$port/postgres?sslmode=disable"
+unset POSTGRES_PASSWORD
+
+if [[ "$suite" != debian ]]; then
+    mkdir "$run/bin"
+    cat >"$run/bin/db-tool" <<'SH'
+#!/usr/bin/env bash
+exec docker exec -e PGHOST=127.0.0.1 -e PGPORT=5432 -e PGUSER -e PGPASSWORD \
+    -e PGDATABASE -e PGOPTIONS -e PGSSLMODE "$LOBER_IMAGE_DB" "${0##*/}" "$@"
+SH
+    chmod 700 "$run/bin/db-tool"
+    ln -s db-tool "$run/bin/psql"
+    ln -s db-tool "$run/bin/pg_dump"
+    export LOBER_IMAGE_DB="$db" LOBER_TEST_PG_DSN="$dsn" LOBER_ENTERPRISE_FIXTURE="$fixture"
+    export LOBER_ENTERPRISE_IMAGE="$image" LOBER_ENTERPRISE_WORKDIR="$run"
+    export PATH="$run/bin:$PATH"
+    cd -- "$enterprise"
+    python3 -B - "$run/$suite.json" "$suite" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+import unittest
+
+path = Path(sys.argv[1])
+suite = unittest.defaultTestLoader.discover(".", pattern=f"test_{sys.argv[2]}.py")
+result = unittest.TextTestRunner(verbosity=2).run(suite)
+images = sorted({file.read_text().strip() for file in path.parent.glob("lober-enterprise-http-*/runtime-image.txt")})
+passed = result.wasSuccessful() and result.testsRun > 0 and not result.skipped and images == [os.environ["LOBER_ENTERPRISE_IMAGE"]]
+path.write_text(json.dumps({"status": "PASS" if passed else "FAIL", "count": result.testsRun,
+    "failures": len(result.failures) + len(result.errors), "skipped": len(result.skipped),
+    "runtime_images": images}, indent=2) + "\n")
+raise SystemExit(0 if passed else 1)
+PY
+    exit
+fi
+
+mkdir "$run/app" "$run/relay" "$run/kvm"
+install -d "$run/app/artifacts"
+free_port() {
+    python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+gateway_port="$(free_port)"
+LOBER_KVM_LISTEN="127.0.0.1:$gateway_port" LOBER_KVM_PG_DSN="$dsn" \
+    python3 -I "$here/kvm_install_probe.py" configure "$run/app"
+docker create --name "$app" --network host --env GIN_MODE=release \
+    --mount "type=bind,src=$run/app,dst=$run/app" \
+    --mount "type=bind,src=$netinst,dst=/run/lober-ci-verified-media/debian-netinst.iso,readonly" \
+    --mount "type=bind,src=$mini,dst=/run/lober-ci-verified-media/debian-mini.iso,readonly" \
+    "$image" -config "$run/app/config.json" >/dev/null
+app_created=1
+docker start "$app" >/dev/null
+actual="$(docker inspect --format '{{.Image}}' "$app")"
+[[ "$actual" == "$image" ]]
+printf '%s\n' "$actual" >"$run/kvm/runtime-image.txt"
+for _ in $(seq 1 90); do
+    if curl -fsS --noproxy '*' "http://127.0.0.1:$gateway_port/" -o /dev/null 2>/dev/null; then break; fi
+    sleep .25
+done
+curl -fsS --noproxy '*' "http://127.0.0.1:$gateway_port/" -o /dev/null
+
+# 文件服务只监听本地端口，隔离来宾通过本轮 Unix 套接字访问。
+artifacts_port="$(free_port)"
+python3 -m http.server "$artifacts_port" --bind 127.0.0.1 --directory "$run/app/artifacts" \
+    >"$run/kvm/artifacts.log" 2>&1 &
+children+=("$!")
+for endpoint in "gateway:$gateway_port" "artifacts:$artifacts_port"; do
+    systemd-socket-activate --listen="$run/relay/${endpoint%:*}.sock" \
+        /usr/lib/systemd/systemd-socket-proxyd "127.0.0.1:${endpoint#*:}" \
+        >"$run/kvm/${endpoint%:*}-host-relay.log" 2>&1 &
+    children+=("$!")
+done
+python3 -I "$here/debian_mirror.py" "$run/relay/mirror.sock" "${LOBER_IMAGE_DEBIAN_MIRROR:-debian}" \
+    >"$run/kvm/mirror-upstream.log" 2>&1 &
+children+=("$!")
+for _ in $(seq 1 50); do
+    if [[ -S "$run/relay/gateway.sock" && -S "$run/relay/artifacts.sock" && -S "$run/relay/mirror.sock" ]]; then break; fi
+    sleep .1
+done
+rc=0
+systemd-run --quiet --wait --pipe --collect --unit="lober-image-kvm-$nonce" \
+    -p PrivateNetwork=yes -p RuntimeMaxSec=55min -p KillMode=control-group \
+    -p "BindReadOnlyPaths=$netinst:/run/lober-ci-verified-media/debian-netinst.iso $mini:/run/lober-ci-verified-media/debian-mini.iso" \
+    --setenv="LOBER_KVM_IMAGE_RUN=$run" /bin/bash "$here/kvm-pxe-probe" \
+    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$run/result.json")" "$run/kvm" debian-netinst || rc=$?
+docker logs "$app" >"$run/kvm/product.log" 2>&1
+exit "$rc"

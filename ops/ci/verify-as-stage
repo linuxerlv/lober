@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+case "${1:-}" in
+    dev|test) stage=$1 ;;
+    *) exit 2 ;;
+esac
+[ "$#" -eq 2 ]
+case "$2" in
+    *[!0123456789abcdef]*) exit 2 ;;
+esac
+[ "${#2}" -eq 40 ]
+if [ "$stage" = test ]; then
+    exec /usr/bin/sudo -n -u lober-ci-test /usr/bin/python3 -I /opt/lober-ci/ops/ci/verify.py \
+        test "$2" --image-root /var/lib/lober-container-ci
+fi
+exec /usr/bin/sudo -n -u "lober-ci-$stage" /usr/bin/python3 -I /opt/lober-ci/ops/ci/verify.py "$stage" "$2"

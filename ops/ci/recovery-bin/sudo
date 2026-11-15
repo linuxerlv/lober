@@ -1,0 +1,15 @@
+#!/usr/bin/python3 -I
+"""把验收脚本的故障操作交给本轮隔离进程。"""
+import json
+import os
+import socket
+import sys
+
+if len(sys.argv) < 3 or sys.argv[1] != '-n':
+    sys.exit(2)
+with socket.socket(socket.AF_UNIX) as client:
+    client.settimeout(8)
+    client.connect('\0' + os.environ['LOBER_CI_FAULT_SOCKET'])
+    client.sendall(json.dumps(sys.argv[2:]).encode())
+    client.shutdown(socket.SHUT_WR)
+    sys.exit(int(client.recv(16)))
