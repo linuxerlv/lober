@@ -92,6 +92,48 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(command.call_args.kwargs["env"]["TMPDIR"], "/tmp")
             self.assertEqual(candidate.test_env["TMPDIR"], str(candidate.path / "scratch"))
 
+    def test_backend_prepares_browser_before_tests_with_race_budget(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = worker.Candidate("test", Path(temporary), "1" * 40, "", {
+                "LOBER_TEST_PG_DSN": "fixture",
+            })
+            candidate.logs.mkdir(parents=True)
+
+            def execute(name, argv, **kwargs):
+                (candidate.logs / (name + ".log")).write_text(
+                    '{"Action":"pass","Test":"TestExample"}\n')
+                return 0
+
+            with (patch.object(candidate, "command", side_effect=execute) as command,
+                  patch.object(candidate, "evidence", return_value=True)):
+                self.assertTrue(candidate.backend())
+            calls = {call.args[0]: call for call in command.call_args_list}
+            self.assertEqual(list(calls), ["backend-static", "browser", "backend-unit", "backend-race"])
+            self.assertEqual(calls["browser"].args[1],
+                             ["pnpm", "exec", "playwright", "install", "chromium", "--only-shell"])
+            web = candidate.build / "web"
+            self.assertEqual(calls["browser"].kwargs["cwd"], web)
+            for name in ("backend-unit", "backend-race"):
+                self.assertEqual(calls[name].kwargs["env"]["LOBER_TEST_BATCH_WEB"], str(web))
+            self.assertEqual(calls["backend-race"].args[1],
+                             ["go", "test", "-json", "-count=1", "-race", "-timeout=40m", "./..."])
+
+    def test_restore_ui_files_keeps_built_index(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = worker.Candidate("test", Path(temporary), "1" * 40, "", {})
+            dist = candidate.build / "internal/interfaces/console/ui/dist"
+            dist.mkdir(parents=True)
+            (dist / "index.html").write_text("built index")
+            tracked = (b"internal/interfaces/console/ui/dist/index.html\0"
+                       b"internal/interfaces/console/ui/dist/_placeholder.js\0")
+            with (patch.object(worker.subprocess, "check_output", return_value=tracked),
+                  patch.object(candidate, "require") as require):
+                candidate.restore_missing_ui_files()
+            require.assert_called_once_with(
+                "restore-ui-placeholders", ["git", "restore", "--source", candidate.sha, "--",
+                                            "internal/interfaces/console/ui/dist/_placeholder.js"])
+            self.assertEqual((dist / "index.html").read_text(), "built index")
+
     def test_test_retry_preserves_handoff_and_stays_blocked_on_release_gate(self):
         with tempfile.TemporaryDirectory() as temporary:
             candidate = worker.Candidate("test", Path(temporary), "1" * 40, "", {})

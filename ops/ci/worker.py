@@ -208,6 +208,16 @@ class Candidate:
         if self.command(name, argv, **kwargs):
             raise RuntimeError(f"{name} 执行失败，详情见 {name}.log")
 
+    def restore_missing_ui_files(self):
+        # 架构测试要能读取 Git 列出的文件。保留 Vite 已生成的同名文件。
+        dist = "internal/interfaces/console/ui/dist"
+        tracked = subprocess.check_output(["git", "ls-files", "-z", "--", dist],
+                                          cwd=self.build, env=self.env)
+        paths = [os.fsdecode(path) for path in tracked.split(b"\0") if path]
+        missing = [path for path in paths if not (self.build / path).exists()]
+        if missing:
+            self.require("restore-ui-placeholders", ["git", "restore", "--source", self.sha, "--", *missing])
+
     def prepare(self):
         self.path.mkdir(mode=0o700)
         self.logs.mkdir()
@@ -227,9 +237,7 @@ class Candidate:
         self.require("frontend", ["make", "webcheck"],
                      env={**self.env, "NODE_OPTIONS": "--test-reporter=tap"})
         self.require("build", ["go", "build", "-trimpath", "-o", self.binary, "./cmd/lober"])
-        # Vite 删除了 Git 中的占位文件。架构测试要能读取 Git 列出的每个文件。
-        self.require("restore-ui-placeholders", ["git", "restore", "--source", self.sha,
-                     "--", "internal/interfaces/console/ui/dist"])
+        self.restore_missing_ui_files()
         data = {"product_sha": self.sha, "test_sha": self.sha, "run_id": uuid.uuid4().hex,
                 "binary": str(self.binary), "binary_sha256": digest(self.binary),
                 "source_archive": str(self.archive), "source_archive_sha256": digest(self.archive),
@@ -286,23 +294,29 @@ class Candidate:
         if not self.test_env.get("LOBER_TEST_PG_DSN"):
             raise ValueError("必须为本阶段配置专用测试数据库 LOBER_TEST_PG_DSN")
         # 安装脚本测试会替换 /var/lib/lober，临时路径必须避开这个前缀。
-        backend_env = {**self.test_env, "TMPDIR": "/tmp"}
+        web = self.build / "web"
+        backend_env = {**self.test_env, "TMPDIR": "/tmp", "LOBER_TEST_BATCH_WEB": str(web)}
+        # 控制台用例会多次运行完整口令校验。并发检测下 20 分钟不够。
         checks = [
-            ("backend-static", ["make", "fmt", "vet", "cross", "gen", "archcheck"]),
             ("backend-unit", ["go", "test", "-json", "-count=1", "./..."]),
-            ("backend-race", ["go", "test", "-json", "-count=1", "-race", "-timeout=20m", "./..."]),
+            ("backend-race", ["go", "test", "-json", "-count=1", "-race", "-timeout=40m", "./..."]),
         ]
-        codes = {}
+        static = self.command("backend-static", ["make", "fmt", "vet", "cross", "gen", "archcheck"],
+                              env=backend_env)
+        browser = self.command("browser", ["pnpm", "exec", "playwright", "install", "chromium", "--only-shell"],
+                               cwd=web)
+        codes = {"backend-static": static, "browser": browser}
         counts = {**empty_counts(), "package_failures": 0, "optional_skips": []}
-        problems = []
+        problems = ["浏览器准备失败，见 browser.log"] if browser else []
         with (self.logs / "backend.log").open("wb") as combined:
+            for name, code in codes.items():
+                combined.write((self.logs / (name + ".log")).read_bytes())
+                combined.write(f"\n{name} exit_code={code}\n".encode())
             for name, argv in checks:
                 codes[name] = self.command(name, argv, env=backend_env)
                 raw = (self.logs / (name + ".log")).read_bytes()
                 combined.write(raw)
                 combined.write(f"\n{name} exit_code={codes[name]}\n".encode())
-                if name == "backend-static":
-                    continue
                 summary = go_summary(raw.decode("utf-8", errors="replace"), optional_media=True)
                 for key, value in summary.items():
                     counts[key] += value
@@ -322,13 +336,11 @@ class Candidate:
         fixture.unlink(missing_ok=True)
         fixture_code = self.command("fixture", ["bash", scripts / "fixturegen.sh", fixture], cwd=self.source)
         node = shutil.which("node", path=self.env.get("PATH"))
-        browser_code = self.command("browser", ["pnpm", "exec", "playwright", "install", "chromium", "--only-shell"],
-                                    cwd=self.build / "web")
         enterprise_env = dict(self.test_env, LOBER_ENTERPRISE_BINARY=str(self.binary),
                               LOBER_ENTERPRISE_FIXTURE=str(fixture), LOBER_ENTERPRISE_NODE=node or "",
                               LOBER_ENTERPRISE_UI_SCRIPT=str(scripts / "ui.mjs"),
                               LOBER_ENTERPRISE_PLAYWRIGHT=str(self.build / "web/node_modules/playwright/index.mjs"))
-        passed = not (fixture_code or browser_code)
+        passed = fixture_code == 0
         recovery_launcher = self.environ.get("LOBER_CI_RECOVERY_LAUNCHER")
         for suite in SUITES:
             if suite == "recovery" and recovery_launcher:
