@@ -94,11 +94,12 @@ def admin_login(work):
 
 
 def configure(work):
-    schema = os.environ['LOBER_KVM_SCHEMA']
-    if not re.fullmatch(r'pxe_probe_[a-z0-9]{8}', schema):
+    schema = os.environ.get('LOBER_KVM_SCHEMA', '')
+    dsn = os.environ.get('LOBER_KVM_PG_DSN')
+    if not dsn and not re.fullmatch(r'pxe_probe_[a-z0-9]{8}', schema):
         raise ValueError('隔离数据库名称无效')
     listen = '127.0.0.1:18090' if os.environ.get('LOBER_KVM_BACKEND') else '192.0.2.10:18090'
-    config = {'listen': listen, 'pg': {'dsn': f'host=/run/lober-ci-db-test user=lober-ci-test dbname=lober_ci search_path={schema}',
+    config = {'listen': os.environ.get('LOBER_KVM_LISTEN', listen), 'pg': {'dsn': dsn or f'host=/run/lober-ci-db-test user=lober-ci-test dbname=lober_ci search_path={schema}',
                                      'maxConns': 8},
               'seedAdmin': secrets.token_urlsafe(32), 'log': {'level': 'error'},
               'machine': {'enabled': True, 'keyFile': str(work/'machine.key')},
