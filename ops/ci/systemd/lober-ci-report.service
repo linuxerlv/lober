@@ -1,0 +1,16 @@
+[Unit]
+Description=Report Lober promotion checks to GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lober-ci-report
+Group=lober-ci-report
+EnvironmentFile=/etc/lober-ci/report.env
+ExecStart=/usr/bin/python3 -I /opt/lober-ci/ops/ci/report.py --repository ${LOBER_CI_GITHUB_REPOSITORY} --token-command /opt/lober-ci/ops/ci/app-token --verify-command /opt/lober-ci/ops/ci/verify-as-stage --status-creator-id ${LOBER_CI_STATUS_CREATOR_ID}
+UMask=0077
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+TimeoutStartSec=15min

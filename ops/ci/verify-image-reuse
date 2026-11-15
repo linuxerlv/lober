@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# 用三个临时提交验证复用，保留独立的检查结果和实际构建日志。
+set -euo pipefail
+umask 077
+if [[ $# != 3 || ! "$2" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "用法: bash ops/ci/verify-image-reuse <Git 仓库> <完整提交号> <证据目录>" >&2
+    exit 2
+fi
+worker="$(cd -- "$(dirname -- "$0")" && pwd)/worker.py"
+repo="$(realpath -- "$1")"
+commit="$2"
+mkdir -- "$3"
+root="$(realpath -- "$3")"
+temp="$(mktemp -d -- "$root/git.XXXXXXXX")"
+git clone --quiet --shared --no-checkout "$repo" "$temp"
+cd -- "$temp"
+git config user.email ci@example.invalid
+git config user.name "Lober CI"
+tree="$(git rev-parse "$commit^{tree}")"
+promoted="$(git commit-tree "$tree" -p "$commit" -m '验证：原候选晋级')"
+git read-tree "$commit"
+src=cmd/lober/main.go
+git show "$commit:$src" | sed 's/YAML configuration path/YAML config path (cache verification)/' > cache-test.go
+grep -Fq 'YAML config path (cache verification)' cache-test.go
+git update-index --cacheinfo "100644,$(git hash-object -w cache-test.go),$src"
+changed="$(git commit-tree "$(git write-tree)" -p "$commit" -m '验证：只改 Go')"
+test "$(git diff-tree --no-commit-id --name-only -r "$commit" "$changed")" = "$src"
+
+run() {
+    python3 -I "$worker" image --root "$root" --repo "$temp" --commit "$@" 2>&1
+}
+first="$(run "$commit")"
+retry="$(run "$commit")"
+go_change="$(run "$changed")"
+promotion="$(run "$promoted" --promote-from "$commit")"
+printf '%s\n' "$first" "$retry" "$go_change" "$promotion"
+
+python3 - "${first#PASS }" "${retry#PASS }" "${go_change#PASS }" "${promotion#PASS }" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+paths = [Path(value) for value in sys.argv[1:]]
+first, retry, changed, promoted = (json.loads(path.read_text()) for path in paths)
+assert [row["image_action"] for row in (first, retry, changed, promoted)] == [
+    "built", "reused", "built", "reused",
+]
+assert first["image_id"] == retry["image_id"] == promoted["image_id"] != changed["image_id"]
+assert len({row["run_id"] for row in (first, retry, changed, promoted)}) == 4
+assert "YAML config path (cache verification)" in paths[2].with_name("check.log").read_text()
+log = paths[2].with_name("build.log").read_text()
+step = re.search(r"(?m)^(#\d+) \[frontend \d+/\d+\] RUN pnpm build:ele\s*$", log)
+assert step and re.search(rf"(?m)^{step[1]} CACHED\s*$", log), "前端构建没有命中缓存"
+print("同提交重跑、只改 Go 命中前端缓存、晋级沿用镜像：全部通过")
+PY

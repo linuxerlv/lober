@@ -53,6 +53,7 @@ else:
     import production_capacity as capacity
 
 CHECKER = "tests/lobertest/enterprise/cloud_install.py"
+KVM_CHECKER = "tests/lobertest/enterprise/kvm_install_evidence.py"
 HELPERS = tuple("tests/lobertest/enterprise/" + x + ".py" for x in
                 ("cloud_packet_capture", "cloud_capture_session", "cloud_guest_identity", "cloud_no_task_probe"))
 TRUSTED_FILES = (CHECKER,) + HELPERS + (
@@ -66,20 +67,23 @@ def verify_installation(manifest, source, root):
     try:
         source, root = Path(source).resolve(strict=True), Path(root).resolve(strict=True)
         identity = {name: manifest[name] for name in ("run_id", "product_sha", "test_sha", "binary_sha256")}
-        for name in TRUSTED_FILES:
+        config = manifest["capacity"]
+        low_memory = config.get("installation_schema") == capacity.KVM_INSTALL_SCHEMA
+        checker, helpers = (KVM_CHECKER, HELPERS[:1]) if low_memory else (CHECKER, HELPERS)
+        trusted_files = (checker, *helpers, *TRUSTED_FILES[-3:])
+        for name in trusted_files:
             path = (source / name).resolve(strict=True)
             if not path.is_relative_to(source) or digest(path) != manifest["files"][name]:
                 raise ValueError("frozen checker source mismatch")
-        config = manifest["capacity"]
         common_file = capacity.private_file(config["run_identity_file"], root)
         if digest(common_file) != config["run_identity_sha256"]:
             raise ValueError("common identity changed")
         common = json.loads(common_file.read_text())
         if any(common.get(name) != value for name, value in identity.items()):
             raise ValueError("common identity mismatch")
-        expected = {Path(name).name: manifest["files"][name] for name in TRUSTED_FILES}
-        for mapping, required in ((common["installation_checkers"], {Path(CHECKER).name}),
-                                  (common["installation_helpers"], {Path(name).name for name in HELPERS})):
+        expected = {Path(name).name: manifest["files"][name] for name in trusted_files}
+        for mapping, required in ((common["installation_checkers"], {Path(checker).name}),
+                                  (common["installation_helpers"], {Path(name).name for name in helpers})):
             if not isinstance(mapping, dict) or {Path(name).name for name in mapping} != required:
                 raise ValueError("checker contract incomplete")
             for name, value in mapping.items():
@@ -93,6 +97,8 @@ def verify_installation(manifest, source, root):
         if digest(report_file) != ref["sha256"]:
             raise ValueError("installation report changed")
         report = json.loads(report_file.read_text())
+        if low_memory != (report.get("schema") == capacity.KVM_INSTALL_SCHEMA):
+            raise ValueError("installation report schema changed")
         identity["run_identity_sha256"] = config["run_identity_sha256"]
         return capacity.installation_problems(report, identity, report_file.parent, common)
     except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
@@ -125,7 +131,7 @@ def verify_capacity(manifest, source, root, manifest_path):
                         executor_sha256=manifest["files"]["tests/lobertest/enterprise/production_capacity.py"],
                         run_identity_sha256=config["run_identity_sha256"])
         context = SimpleNamespace(output_root=resolved, identity=identity, profile=profile,
-                                  c=config, common_identity=common)
+                                  c=config, common_identity=common, qualification_root=root)
         return capacity.assess_capacity(context)[0]
     except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
         return ["capacity evidence missing, changed, or untrusted"]
@@ -137,6 +143,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--product-sha", required=True)
     parser.add_argument("--kind", choices=("installation", "capacity"), default="installation")
+    parser.add_argument("--qualification-root", type=Path, default=capacity.BASE)
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.product_sha):
         parser.error("product-sha must be a full Git SHA")
@@ -154,9 +161,9 @@ def main():
             problems.append("candidate identity mismatch")
         if not problems:
             if args.kind == "installation":
-                problems += verify_installation(manifest, source, capacity.BASE)
+                problems += verify_installation(manifest, source, args.qualification_root)
             else:
-                problems += verify_capacity(manifest, source, capacity.BASE, args.manifest)
+                problems += verify_capacity(manifest, source, args.qualification_root, args.manifest)
         log = args.output / (args.kind + "-verification.log")
         log.write_text(json.dumps({"product_sha": args.product_sha, "run_id": manifest["run_id"],
                                    "manifest_sha256": digest(args.manifest), "problems": problems},

@@ -1,0 +1,278 @@
+#!/bin/bash
+# 在隔离网络中验证固定候选的虚拟机网络启动和装机。
+set -euo pipefail
+umask 077
+cd /
+test "$EUID" -eq 0
+test "$#" -ge 2 && test "$#" -le 3
+sha=$1
+evidence=$2
+mode=${3:-boot}
+[[ "$mode" == boot || "$mode" == install || "$mode" == debian || "$mode" == debian-netinst ]]
+[[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+candidate=/var/lib/lober-ci-test/$sha
+case_name=${LOBER_KVM_CASE:-}
+shared=${LOBER_KVM_SHARED:-}
+image_run=${LOBER_KVM_IMAGE_RUN:-}
+serial=LOBER-KVM-PXE-PROBE
+mac=52:54:00:42:12:20
+guest_identity=()
+helper=/opt/lober-ci/ops/ci/kvm_install_probe.py
+guest_user=lober-ci-test
+if [[ -n "$image_run" ]]; then
+    [[ "$mode" == debian-netinst && -z "$shared" && -z "$case_name" ]]
+    [[ "$image_run" == /* && "$evidence" == "$image_run/kvm" ]]
+    test "$(stat -c '%u:%a' "$image_run")" = 0:700
+    helper="$(dirname -- "$(realpath -- "$0")")/kvm_install_probe.py"
+    guest_user=nobody
+    shared="$image_run/relay"
+    test -S "$shared/gateway.sock" && test -S "$shared/artifacts.sock"
+    read -r serial mac guest_uuid <<<"$(/usr/bin/python3 -I "$helper" identity serial-1)"
+    guest_identity=(-uuid "$guest_uuid")
+elif [[ -n "$case_name" ]]; then
+    [[ "$mode" == debian && "$case_name" =~ ^(parallel|serial)-[12]$ ]]
+    [[ "$evidence" == "$candidate"/kvm-qualification.*/"$case_name" ]]
+    identity=$(/usr/bin/python3 -I "$helper" identity "$case_name")
+    read -r serial mac guest_uuid <<<"$identity"
+    guest_identity=(-uuid "$guest_uuid")
+    [[ "$shared" =~ ^/tmp/lober-kvm-shared\.[A-Za-z0-9]{8}$ ]]
+    test -S "$shared/gateway.sock" && test -S "$shared/artifacts.sock"
+else
+    [[ "$evidence" == "$candidate"/diagnostic-pxe.* ]]
+fi
+test "$(realpath -e -- "$evidence")" = "$evidence"
+test "$(stat -c '%u:%a' "$evidence")" = 0:700
+test "$(readlink /proc/self/ns/net)" != "$(readlink /proc/1/ns/net)"
+test "$(ip -o link show | wc -l)" -eq 1
+test -z "$(ip route show)"
+if [[ -z "$image_run" ]]; then
+    test "$(sha256sum "$candidate/lober" | cut -d ' ' -f 1)" = "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["binary_sha256"])' "$candidate/candidate.json")"
+fi
+
+scratch=$(mktemp -d /tmp/lober-pxe.XXXXXXXX)
+if [[ -n "$image_run" ]]; then
+    guest_identity+=(-qmp "unix:$scratch/app/qmp.sock,server=on,wait=off")
+fi
+if [[ -n "$case_name" ]]; then
+    guest_identity+=(-qmp "unix:$scratch/app/qmp.sock,server=on,wait=off")
+    /usr/bin/python3 -I - "$candidate/candidate.json" "$case_name" "$serial" "$mac" "$guest_uuid" >"$evidence/identity.json" <<'PY'
+import json, sys
+from pathlib import Path
+manifest = json.loads(Path(sys.argv[1]).read_text())
+print(json.dumps({**{key: manifest[key] for key in ('run_id', 'product_sha', 'test_sha', 'binary_sha256')},
+                  'case': sys.argv[2], 'serial': sys.argv[3], 'mac': sys.argv[4], 'uuid': sys.argv[5], 'memory_mib': 1024}))
+PY
+fi
+schema=pxe_probe_${scratch##*.}
+schema=${schema,,}
+[[ "$schema" =~ ^pxe_probe_[a-z0-9]{8}$ ]]
+db() { runuser -u lober-ci-test -- psql -XAt -v ON_ERROR_STOP=1 -h /run/lober-ci-db-test -d lober_ci -c "$1"; }
+children=()
+cleanup() {
+    for pid in "${children[@]}"; do kill "$pid" 2>/dev/null || true; done
+    for pid in "${children[@]}"; do wait "$pid" 2>/dev/null || true; done
+    if [[ -z "$shared" ]]; then
+        db "DROP SCHEMA IF EXISTS $schema CASCADE" >"$evidence/database-cleanup.log" 2>&1
+    fi
+    test "$(realpath -e -- "$scratch")" = "$scratch"
+    rm -r --one-file-system -- "$scratch"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+chmod 0711 "$scratch"
+install -d -m 0700 -o "$guest_user" -g "$(id -gn "$guest_user")" "$scratch/app"
+if [[ -n "$image_run" ]]; then
+    # 来宾准备程序只需要初始登录口令，数据库配置留在容器一侧。
+    /usr/bin/python3 -I - "$image_run/app/config.json" >"$scratch/app/config.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+print(json.dumps({"seedAdmin": json.loads(Path(sys.argv[1]).read_text())["seedAdmin"]}))
+PY
+    chown "$guest_user:$(id -gn "$guest_user")" "$scratch/app/config.json"
+fi
+install -d -m 0755 "$scratch/tftp"
+ip link set lo up
+ip tuntap add dev loberpxe0 mode tap user "$guest_user"
+ip addr add 192.0.2.10/24 dev loberpxe0
+ip link set loberpxe0 up
+test -z "$(ip route show default)"
+ip -brief addr >"$evidence/network.log"
+ip route show >>"$evidence/network.log"
+cat >"$scratch/tftp/probe.ipxe" <<'IPXE'
+#!ipxe
+isset ${smbios/serial} || exit
+chain http://192.0.2.10:18090/v1/boot?sn=${smbios/serial}&arch=x86_64&firmware=bios || exit
+IPXE
+chmod 0644 "$scratch/tftp/probe.ipxe"
+sha256sum "$scratch/tftp/probe.ipxe" >"$evidence/boot-script.sha256"
+if [[ -n "$shared" ]]; then
+    for endpoint in gateway:18090 artifacts:18091; do
+        /usr/bin/systemd-socket-activate --listen="192.0.2.10:${endpoint#*:}" \
+            /usr/lib/systemd/systemd-socket-proxyd "$shared/${endpoint%:*}.sock" >"$evidence/${endpoint%:*}-relay.log" 2>&1 &
+        children+=("$!")
+    done
+else
+    db "CREATE SCHEMA $schema" >"$evidence/database.log"
+    runuser -u lober-ci-test -- env LOBER_KVM_SCHEMA="$schema" /usr/bin/python3 -I "$helper" configure "$scratch/app"
+    runuser -u lober-ci-test -- env GIN_MODE=release "$candidate/lober" -config "$scratch/app/config.json" >"$evidence/product.log" 2>&1 &
+    children+=("$!")
+fi
+for _ in $(seq 1 50); do
+    if curl -fs --noproxy '*' --max-time 1 -o /dev/null http://192.0.2.10:18090/; then break; fi
+    sleep .2
+done
+curl -fsS --noproxy '*' --max-time 2 -o /dev/null http://192.0.2.10:18090/
+if [[ -z "$shared" ]]; then db "SELECT count(*) FROM $schema.tasks" >>"$evidence/database.log"; fi
+
+memory=256
+seconds=55
+disk=()
+install_wait=900
+network_options=(--port=0 --dhcp-option=3 --dhcp-option=6 "--dhcp-host=$mac,192.0.2.21")
+if [[ "$mode" != boot ]]; then
+    available=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+    operation=prepare
+    if [[ "$mode" == debian* ]]; then
+        test "$available" -ge 2100000 || { test -n "$case_name" && test "$available" -ge 1600000; }
+        memory=1024
+        seconds=2400
+        install_wait=2100
+        operation=prepare-$mode
+        # 安装器需要网关租约。该地址只通向本轮网络，宿主命名空间没有上游路由。
+        network_options=(--port=53 --no-hosts --local=/#/
+            --dhcp-option=3,192.0.2.10 --dhcp-option=6,192.0.2.10 --dhcp-option=15,lober-ci.invalid
+            "--dhcp-host=$mac,192.0.2.21,lober-kvm-debian")
+        mirror=/run/lober-ci-debian-mirror/archive.sock
+        if [[ -n "$image_run" ]]; then mirror="$shared/mirror.sock"; fi
+        test -S "$mirror"
+        /usr/bin/systemd-socket-activate --listen=192.0.2.10:80 \
+            /usr/lib/systemd/systemd-socket-proxyd "$mirror" >"$evidence/mirror.log" 2>&1 &
+        children+=("$!")
+    else
+        test "$available" -ge 2750000
+        memory=2048
+        seconds=1200
+    fi
+    selection="$shared"
+    if [[ -n "$image_run" ]]; then selection=""; fi
+    runuser -u "$guest_user" -- env LOBER_INSTALL_SERIAL="$serial" LOBER_KVM_SHARED="$selection" \
+        /usr/bin/python3 -I "$helper" "$operation" "$scratch/app" >"$evidence/install.log" 2>&1
+    if [[ -z "$shared" ]]; then
+        runuser -u lober-ci-test -- /usr/bin/python3 -m http.server 18091 --bind 192.0.2.10 \
+            --directory "$scratch/app/artifacts" >"$evidence/artifacts.log" 2>&1 &
+        children+=("$!")
+    fi
+    runuser -u "$guest_user" -- /usr/bin/qemu-img create -q -f qcow2 "$scratch/app/guest.qcow2" 16G
+    disk=(-drive "file=$scratch/app/guest.qcow2,if=none,id=guestdisk,format=qcow2"
+          -device virtio-blk-pci,drive=guestdisk,serial=LOBER-KVM-PROBE-DISK)
+fi
+
+/usr/sbin/dnsmasq --conf-file=/dev/null --keep-in-foreground --no-resolv --interface=loberpxe0 --bind-interfaces \
+    --dhcp-range=192.0.2.20,192.0.2.22,255.255.255.0,5m "${network_options[@]}" \
+    --dhcp-boot=probe.ipxe --enable-tftp --tftp-root="$scratch/tftp" \
+    --pid-file="$scratch/dnsmasq.pid" --leasefile-ro --log-facility=- --log-dhcp >"$evidence/dhcp.log" 2>&1 &
+dhcp=$!
+children+=("$dhcp")
+sleep .2
+kill -0 "$dhcp"
+/usr/bin/tcpdump -i loberpxe0 -U -s 0 -Z root -w "$evidence/boot.pcap" \
+    'udp or tcp port 18090' >"$evidence/tcpdump.log" 2>&1 &
+capture=$!
+children+=("$capture")
+for _ in $(seq 1 30); do
+    if grep -q 'listening on' "$evidence/tcpdump.log"; then break; fi
+    sleep .1
+done
+grep -q 'listening on' "$evidence/tcpdump.log"
+uid=$(id -u "$guest_user")
+gid=$(id -g "$guest_user")
+/usr/bin/timeout "${seconds}s" /usr/bin/setpriv --reuid "$uid" --regid "$gid" --groups kvm -- \
+    /usr/bin/qemu-system-x86_64 -machine pc,smbios-entry-point-type=32 -accel kvm -cpu host \
+    -m "$memory" -smp 1 -boot order=nc -display none -monitor none \
+    -serial stdio -smbios "type=1,serial=$serial" "${guest_identity[@]}" "${disk[@]}" \
+    -netdev tap,id=nic,ifname=loberpxe0,script=no,downscript=no \
+    -device "e1000,netdev=nic,mac=$mac" >"$evidence/qemu.log" 2>&1 &
+guest=$!
+children+=("$guest")
+if [[ "$mode" != boot ]]; then
+    sleep 2
+    kill -0 "$guest"
+    runuser -u "$guest_user" -- env LOBER_INSTALL_GUEST_PID="$guest" LOBER_INSTALL_WAIT_SECONDS="$install_wait" \
+        /usr/bin/python3 -I "$helper" wait "$scratch/app" >>"$evidence/install.log" 2>&1
+    # 使用本轮唯一的固定租约地址，等待安装器重启后 SSH 就绪。
+    deadline=$((SECONDS + 120))
+    ssh_guest() { runuser -u "$guest_user" -- /usr/bin/ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=5 \
+        -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$scratch/app/known_hosts" \
+        -i "$scratch/app/guest-key" lober@192.0.2.21 "$1"; }
+    collect='set -e; cat /etc/os-release; findmnt -no SOURCE /; cat /etc/machine-id /proc/sys/kernel/random/boot_id'
+    until ssh_guest "$collect" \
+        >"$evidence/guest.log" 2>>"$evidence/guest-ssh.log"; do
+        kill -0 "$guest"
+        test "$SECONDS" -lt "$deadline"
+        sleep 3
+    done
+    if [[ "$mode" == debian* ]]; then
+        grep -Eq '^ID=("debian"|debian)$' "$evidence/guest.log"
+        grep -Eq '^VERSION_ID=("13"|13)$' "$evidence/guest.log"
+        grep -Eq '^/dev/vda[0-9]+$' "$evidence/guest.log"
+    else
+        grep -q '^ID="rocky"$' "$evidence/guest.log"
+        grep -q '^VERSION_ID="10.2"$' "$evidence/guest.log"
+    fi
+    grep -Eq '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$' "$evidence/guest.log"
+    if [[ -n "$case_name" || -n "$image_run" ]]; then
+        cp "$scratch/app/terminal.json" "$evidence/terminal.json"
+        kill -INT "$capture"
+        wait "$capture"
+        /usr/bin/tcpdump -i loberpxe0 -U -s 0 -Z root -w "$evidence/repeat.pcap" \
+            'udp or tcp port 18090' >"$evidence/repeat-tcpdump.log" 2>&1 &
+        repeat_capture=$!
+        children+=("$repeat_capture")
+        for _ in $(seq 1 30); do
+            grep -q 'listening on' "$evidence/repeat-tcpdump.log" && break
+            sleep .1
+        done
+        grep -q 'listening on' "$evidence/repeat-tcpdump.log"
+        ssh_guest sync
+        /usr/bin/python3 -I "$helper" reset "$scratch/app/qmp.sock" >"$evidence/repeat-qmp.log"
+        first_boot=$(tail -n 1 "$evidence/guest.log")
+        deadline=$((SECONDS + 180))
+        until ssh_guest "$collect" >"$evidence/repeat-guest.log" 2>>"$evidence/guest-ssh.log" \
+                && [[ "$(tail -n 1 "$evidence/repeat-guest.log")" != "$first_boot" ]]; do
+            kill -0 "$guest"
+            test "$SECONDS" -lt "$deadline"
+            sleep 3
+        done
+        kill -INT "$repeat_capture"
+        wait "$repeat_capture"
+        /usr/bin/python3 -I "$helper" compare "$evidence" >"$evidence/guest-identity.json"
+        runuser -u "$guest_user" -- /usr/bin/python3 -I "$helper" terminal "$scratch/app" >"$evidence/repeat-terminal.json"
+        tcpdump -nn -A -r "$evidence/repeat.pcap" 'tcp port 18090' >"$evidence/repeat-http.log" 2>/dev/null
+        grep -Fq "GET /v1/boot?sn=$serial&arch=x86_64&firmware=bios" "$evidence/repeat-http.log"
+        grep -Fq 'exit || sanboot --no-describe --drive 0x80' "$evidence/repeat-http.log"
+        ! grep -Eq '(GET|POST) /v1/(answer|signal)/' "$evidence/repeat-http.log"
+        printf 'PASS isolated KVM Debian installation and repeat boot, case %s, candidate %s\n' "$case_name" "$sha"
+        exit 0
+    fi
+    printf 'PASS isolated KVM %s install diagnostic, candidate %s\n' "$mode" "$sha"
+    exit 0
+fi
+for _ in $(seq 1 45); do
+    tcpdump -nn -A -r "$evidence/boot.pcap" 'tcp port 18090' >"$evidence/http-packets.log" 2>/dev/null || true
+    if grep -Fq 'GET /v1/boot?sn=LOBER-KVM-PXE-PROBE&arch=x86_64&firmware=bios' "$evidence/http-packets.log" \
+        && grep -Fq 'exit || sanboot --no-describe --drive 0x80' "$evidence/http-packets.log"; then
+        break
+    fi
+    kill -0 "$guest" 2>/dev/null || break
+    sleep 1
+done
+kill -INT "$capture"
+wait "$capture"
+tcpdump -nn -A -r "$evidence/boot.pcap" 'tcp port 18090' >"$evidence/http-packets.log" 2>/dev/null
+grep -Fq 'GET /v1/boot?sn=LOBER-KVM-PXE-PROBE&arch=x86_64&firmware=bios' "$evidence/http-packets.log"
+grep -Fq 'exit || sanboot --no-describe --drive 0x80' "$evidence/http-packets.log"
+test "$(db "SELECT count(*) FROM $schema.tasks" | tee -a "$evidence/database.log")" -eq 0
+printf 'PASS isolated KVM BIOS no-task boot, candidate %s\n' "$sha"
