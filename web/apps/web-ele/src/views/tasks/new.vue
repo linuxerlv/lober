@@ -58,6 +58,7 @@ const busy = ref(false);
 const error = ref('');
 const problems = ref<Schemas['ProblemJSON'][]>([]);
 const gate = latestOnly();
+let validationTimer: ReturnType<typeof setTimeout> | undefined;
 const hostPage = reactive(new NumberedPage<Host>());
 const hosts = computed(() => hostPage.items);
 const selectedHosts = ref<Host[]>([]);
@@ -144,6 +145,7 @@ function fail(reason: unknown) {
   problems.value = problemsOf(reason);
 }
 function invalidate() {
+  clearTimeout(validationTimer);
   gate.invalidate();
   busy.value = false;
   error.value = '';
@@ -285,7 +287,8 @@ function selection() {
     templateVersion: state.value.templateVersion,
   };
 }
-async function evaluate(confirm = false) {
+async function evaluate(mode: 'confirm' | 'edit' | 'initial' = 'initial') {
+  clearTimeout(validationTimer);
   const entered = collectEditable(forms.value, state.value.entered);
   await gate.run(
     wizardAPI.params({
@@ -296,9 +299,11 @@ async function evaluate(confirm = false) {
     (result) => {
       forms.value = result.hosts ?? [];
       commonProblems.value = result.common ?? [];
+      const firstInvalid = forms.value.find((host) => host.problems?.length)?.sn;
       activeHost.value =
-        forms.value.find((host) => host.problems?.length)?.sn ??
+        (mode === 'edit' ? undefined : firstInvalid) ??
         forms.value.find((host) => host.sn === activeHost.value)?.sn ??
+        firstInvalid ??
         forms.value[0]?.sn ??
         '';
       paramsProblems.value = [
@@ -318,10 +323,18 @@ async function evaluate(confirm = false) {
           ),
         ]),
       );
-      step.value = confirm && paramsProblems.value.length === 0 ? 4 : 3;
+      if (mode !== 'edit') {
+        step.value = mode === 'confirm' && paramsProblems.value.length === 0 ? 4 : 3;
+      }
     },
     fail,
   );
+}
+function scheduleParameterValidation() {
+  if (step.value !== 3 || busy.value) return;
+  // 输入一变化就废弃旧结果，停顿后再校验，避免每敲一个字就发请求。
+  invalidate();
+  validationTimer = setTimeout(() => void evaluate('edit'), 300);
 }
 function fillColumn() {
   if (busy.value) return;
@@ -335,7 +348,10 @@ function fillColumn() {
       (state.value.entered[host.sn] ??= {})[batchKey.value] = batchValue.value;
       count++;
     }
-  if (count) ElMessage.success(`已更新 ${count} 台主机的参数`);
+  if (count) {
+    scheduleParameterValidation();
+    ElMessage.success(`已更新 ${count} 台主机的参数`);
+  }
 }
 async function showPreview(host: Host) {
   error.value = '';
@@ -375,7 +391,7 @@ async function next() {
     } else if (step.value === 2) {
       if (!state.value.templateID) return void ElMessage.warning('请选择模板');
       await evaluate();
-    } else if (step.value === 3) await evaluate(true);
+    } else if (step.value === 3) await evaluate('confirm');
     else if (step.value === 4) {
       if (!access.accessCodes.includes('task:create')) return;
       const entered = collectEditable(forms.value, state.value.entered);
@@ -432,6 +448,7 @@ watch(step, (value) => {
   if (value === 0) void restoreHostChecks();
 });
 onBeforeUnmount(() => {
+  clearTimeout(validationTimer);
   gate.invalidate();
   hostRender++;
   hostPage.reset();
@@ -678,6 +695,7 @@ onBeforeUnmount(() => {
                     v-model="state.entered[host.sn]![field.key]"
                     :disabled="working"
                     clearable
+                    @update:model-value="scheduleParameterValidation"
                   >
                     <ElOption
                       v-for="option in field.options"
@@ -693,6 +711,7 @@ onBeforeUnmount(() => {
                     :disabled="working"
                     :type="field.list ? 'textarea' : 'text'"
                     :placeholder="field.list ? '每行一项' : '请输入'"
+                    @update:model-value="scheduleParameterValidation"
                   />
                   <ProblemList
                     :problems="
