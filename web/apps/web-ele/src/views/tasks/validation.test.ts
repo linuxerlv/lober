@@ -175,6 +175,7 @@ vi.mock('#/api/console/wizard', () => ({
 let stop: (() => void) | undefined;
 afterEach(() => {
   stop?.();
+  vi.restoreAllMocks();
   document.body.innerHTML = '';
   flow.calls = 0;
   flow.pending = undefined;
@@ -270,4 +271,92 @@ it('clears a failed preview diagnostic when retry succeeds', async () => {
   });
   await click('预览该主机全部文件');
   expect(document.body.textContent).not.toContain('fixture unavailable');
+});
+
+it('updates parameter errors after editing and ignores an older response', async () => {
+  const result = (
+    message?: string,
+  ): Awaited<ReturnType<typeof wizardAPI.params>> => ({
+    common: [],
+    hosts: [
+      {
+        sn: 'H1',
+        fields: [
+          {
+            key: 'tpl/name',
+            label: '主机名',
+            list: false,
+            locked: false,
+            options: [],
+            prefill: '',
+            required: true,
+            type: 'hostname',
+          },
+        ],
+        problems: message
+          ? [
+              {
+                code: 'invalid',
+                message,
+                next: '',
+                subject: { col: 0, id: 'H1', kind: 'param', line: 0, path: 'tpl/name' },
+              },
+            ]
+          : [],
+      },
+    ],
+  });
+  const replies: Array<(value: ReturnType<typeof result>) => void> = [];
+  vi.spyOn(wizardAPI, 'params')
+    .mockResolvedValueOnce(result('请填写主机名'))
+    .mockImplementation(() => new Promise((resolve) => replies.push(resolve)));
+
+  const mount = document.createElement('div');
+  document.body.append(mount);
+  const app = createApp(Wizard);
+  app.mount(mount);
+  stop = () => app.unmount();
+  await settle();
+  await click('选择测试主机');
+  await click('下一步');
+  await click('选择测试 ISO');
+  await click('选择测试模板');
+  await click('下一步');
+  expect(mount.textContent).toContain('请填写主机名');
+  expect(mount.textContent).toContain('1 台主机有参数需要修改');
+
+  function edit(value: string) {
+    const input = document.getElementById('H1:tpl/name') as HTMLInputElement;
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  edit('host-01');
+  await vi.waitFor(() => expect(replies).toHaveLength(1));
+  replies[0]!(result());
+  await settle();
+  expect(mount.textContent).not.toContain('请填写主机名');
+  expect(mount.textContent).not.toContain('台主机有参数需要修改');
+  expect(mount.textContent).toContain('校验并确认');
+
+  edit('invalid name');
+  await vi.waitFor(() => expect(replies).toHaveLength(2));
+  replies[1]!(result('主机名不能包含空格'));
+  await settle();
+  expect(mount.textContent).toContain('主机名不能包含空格');
+  expect(mount.textContent).toContain('1 台主机有参数需要修改');
+
+  edit('older edit');
+  await vi.waitFor(() => expect(replies).toHaveLength(3));
+  edit('host-02');
+  await settle();
+  replies[2]!(result('旧输入的校验结果'));
+  await settle();
+  expect(mount.textContent).not.toContain('旧输入的校验结果');
+  await vi.waitFor(() => expect(replies).toHaveLength(4));
+  replies[3]!(result());
+  await settle();
+  expect(mount.textContent).not.toContain('台主机有参数需要修改');
+  expect(
+    (document.getElementById('H1:tpl/name') as HTMLInputElement).value,
+  ).toBe('host-02');
 });
