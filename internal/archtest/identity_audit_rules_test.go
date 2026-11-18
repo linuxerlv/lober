@@ -127,6 +127,7 @@ func identityAuditFindings(caller string, fset *token.FileSet, files []*ast.File
 						if target == pkgCredentials {
 							// 会话令牌与采集令牌都要一个随机源；两个装配口各建一个，别处不许。
 							allowed := assemblyAt("identityServiceOf") || assemblyAt("inventoryServiceOf")
+							allowed = allowed || assemblyAt("discoveryServiceOf") && symbol == "NewTokens"
 							bad = bad || !allowed || (symbol != "NewPasswords" && symbol != "NewTokens")
 						}
 						if target == pkgAuditApp {

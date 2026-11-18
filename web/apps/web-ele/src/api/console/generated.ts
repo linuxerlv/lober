@@ -15,6 +15,12 @@ export interface Schemas {
   "CsvPlan": { "rows": (Array<Schemas["CsvRow"]>) | null; "total": number; };
   "CsvRow": { "action": string; "problems": (Array<Schemas["ProblemJSON"]>) | null; "row": number; "sn": string; };
   "DeriveRequest": { "from": number; "name": string; };
+  "DiscoveryItem": { "fields": ({ [key: string]: string; }) | null; "name": string; };
+  "DiscoveryPage": { "items": (Array<Schemas["DiscoveryRecord"]>) | null; "next_cursor"?: string; };
+  "DiscoveryRecord": { "arch": Schemas["CatalogArch"]; "firmware": Schemas["CatalogFirmware"]; "first_seen_at": number; "last_seen_at": number; "mac": string; "reason"?: string; "registered_sn"?: string; "report"?: Schemas["DiscoveryReport"] | null; "report_at"?: number; "sn"?: string; "status": string; "system_model"?: string; };
+  "DiscoveryRegistration": { "sn": string; };
+  "DiscoveryReport": { "sections": (Array<Schemas["DiscoverySection"]>) | null; };
+  "DiscoverySection": { "items": (Array<Schemas["DiscoveryItem"]>) | null; "key": string; "reason"?: string; "status": string; "title": string; };
   "EventItem": { "at": number; "fields": ({ [key: string]: string; }) | null; "key": string; "kind": string; "seq": number; "taskID": string; };
   "EventPage": { "items": (Array<Schemas["EventItem"]>) | null; };
   "HookCandidatePage": { "items": (Array<Schemas["HookCandidateResponse"]>) | null; "next": string; "total"?: number | null; };
@@ -140,6 +146,25 @@ export interface Paths {
     "post": {
       requestBody: { "application/json": Schemas["PasswordRequest"]; };
       responses: { "200": { "application/json": { "code": 0; "data": (Record<string, unknown>) | null; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "413": { "application/json": { "code": 413; "data": null; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+    };
+  };
+  "/console/v1/discoveries": {
+    "get": {
+      query: { "limit"?: number; "cursor"?: string; };
+      responses: { "200": { "application/json": { "code": 0; "data": Schemas["DiscoveryPage"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+    };
+  };
+  "/console/v1/discoveries/{mac}": {
+    "get": {
+      path: { "mac": string; };
+      responses: { "200": { "application/json": { "code": 0; "data": Schemas["DiscoveryRecord"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+    };
+  };
+  "/console/v1/discoveries/{mac}/register": {
+    "post": {
+      path: { "mac": string; };
+      requestBody: { "application/json": Schemas["DiscoveryRegistration"]; };
+      responses: { "200": { "application/json": { "code": 0; "data": Schemas["HostResponse"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "413": { "application/json": { "code": 413; "data": null; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };
   "/console/v1/hooks": {

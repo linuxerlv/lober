@@ -15,7 +15,7 @@ func (h *handler) boot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil || !only(q, "sn", "arch", "firmware") {
+	if err != nil || !only(q, "sn", "arch", "firmware", "mac") {
 		fail(w, http.StatusBadRequest)
 		return
 	}
@@ -31,17 +31,39 @@ func (h *handler) boot(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest)
 		return
 	}
+	sn, mac := q.Get("sn"), q.Get("mac")
+	discover := mac != "" && h.allowDiscovery(r)
+	if discover {
+		registered, err := h.discovery.RegisteredSerial(r.Context(), mac)
+		if err != nil {
+			fail(w, http.StatusServiceUnavailable)
+			return
+		}
+		if registered != "" {
+			sn = registered
+		}
+	}
 	// DHCP 把这一个地址同时交给网卡的引导客户端与安装器：iPXE 执行返回的菜单，
 	// 而 Debian 安装器在 auto 模式下会把同一个地址当 preseed 下载，并覆盖内核
 	// 命令行上的 preseed/url（D1）。装好了识别就交给安装器，其余一律按 iPXE 走。
 	if installerAgent(r.UserAgent()) {
-		h.installerBoot(w, r, q.Get("sn"))
+		h.installerBoot(w, r, sn)
 		return
 	}
-	result, err := h.gateway.BootMenu(r.Context(), execution.BootInput{SN: q.Get("sn"), Arch: arch, Firmware: fw})
+	result, err := h.gateway.BootMenu(r.Context(), execution.BootInput{SN: sn, Arch: arch, Firmware: fw})
 	if err != nil {
 		fail(w, gatewayStatus(err, 503))
 		return
+	}
+	if !result.Found && discover {
+		body, err := h.discovery.Boot(r.Context(), sn, mac, arch, fw)
+		if err != nil {
+			fail(w, http.StatusServiceUnavailable)
+			return
+		}
+		if len(body) > 0 {
+			result = execution.BootResult{Body: body, Found: true}
+		}
 	}
 	bootResult(w, result)
 }
