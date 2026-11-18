@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/discovery"
 	"github.com/lober/lober/internal/application/execution"
 	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/identity"
@@ -126,7 +127,11 @@ func mediaRegistryOf(st repository.Store, src port.SourceControl, j *appmedia.De
 	return appmedia.NewRegistry(appmedia.Deps{ISOs: st, Sources: st, Control: src, Deletion: j, Clock: clock})
 }
 func consoleDepsOf(mediaRegistry appmedia.Registry, clock ports.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, controller tasks.Controller, hostRegistry hosts.Registry, identityService *identity.Service, auditReader audit.Reader, taskReader tasks.Reader, taskEvents tasks.EventReader, machine *machineBundle, cfg config) console.Deps {
-	return console.Deps{TaskReader: taskReader, TaskEvents: taskEvents, HostRegistry: hostRegistry, Inventory: machine.Inventory, MediaRegistry: mediaRegistry, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, AuditReader: auditReader, Identity: identityService, TaskController: controller, Clock: clock, Logger: logger, LoginBodyLimit: cfg.LoginMaxBytes}
+	deps := console.Deps{TaskReader: taskReader, TaskEvents: taskEvents, HostRegistry: hostRegistry, Inventory: machine.Inventory, MediaRegistry: mediaRegistry, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, AuditReader: auditReader, Identity: identityService, TaskController: controller, Clock: clock, Logger: logger, LoginBodyLimit: cfg.LoginMaxBytes}
+	if machine.Discovery != nil {
+		deps.Discovery = machine.Discovery
+	}
+	return deps
 }
 func appOf(ctx context.Context, cfg config, clock ports.Clock, logger *slog.Logger, st repository.Store, consoleServer *console.Server, src *appmedia.Sources, ctl port.SourceControl, s *appmedia.Supervisor, j *appmedia.Deletion, m *machineBundle, identityService *identity.Service, builtinBootstrapper authoring.Bootstrapper) *app {
 	return &app{Builtin: builtinBootstrapper, Identity: identityService, Context: ctx, Config: cfg, Clock: clock, Logger: logger, Store: st, Console: consoleServer, Sources: src, Control: ctl, Supervisor: s, Deletion: j, Machine: m}
@@ -135,6 +140,15 @@ func appOf(ctx context.Context, cfg config, clock ports.Clock, logger *slog.Logg
 func identityServiceOf(st repository.Store, cfg config, clock ports.Clock) *identity.Service {
 	sessions := identity.NewSessionBook(cfg.SessionTTLHours*3600, clock, credentials.NewTokens())
 	return identity.NewService(identity.Deps{Users: st, RoleMenus: st, Passwords: credentials.NewPasswords(), Sessions: sessions, Clock: clock})
+}
+
+type discoveryAccess interface {
+	discovery.Console
+	discovery.Machine
+}
+
+func discoveryServiceOf(st repository.Store, cfg config, clock ports.Clock, key []byte) discoveryAccess {
+	return discovery.New(st, clock, key, cfg.Preview.Gateway, cfg.Preview.Artifacts, cfg.Machine.Discovery.Images, cfg.Machine.Discovery.Enabled, credentials.NewTokens())
 }
 
 func auditReaderOf(st repository.Store) audit.Reader { return audit.NewReader(st) }

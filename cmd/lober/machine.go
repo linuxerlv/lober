@@ -31,6 +31,7 @@ type machineBundle struct {
 	Handler   http.Handler
 	Logs      *events.Collector
 	Inventory inventory.Requester
+	Discovery discoveryAccess
 }
 type machineAdapter struct {
 	execution.Gateway
@@ -77,8 +78,19 @@ func machineOf(st repository.Store, hub ports.Notifier, cfg config, clock ports.
 	if err != nil {
 		return nil, err
 	}
-	handler := machine.New(machineAdapter{gateway, logger})
-	return &machineBundle{Service: engine, Handler: handler, Logs: collector, Inventory: inv}, nil
+	if err := cfg.Machine.Discovery.validate(cfg.Machine.Enabled); err != nil {
+		return nil, err
+	}
+	discovered := discoveryServiceOf(st, cfg, clock, key)
+	adapter := machineAdapter{gateway, logger}
+	if cfg.Machine.Discovery.Enabled {
+		for _, base := range []string{cfg.Preview.Gateway, cfg.Preview.Artifacts} {
+			if strings.ContainsAny(base, " &\"$\\|;<>") {
+				return nil, errors.New("自动发现的引导地址包含不支持的字符")
+			}
+		}
+	}
+	return &machineBundle{Service: engine, Handler: machine.NewWithDiscovery(adapter, discovered, cfg.Machine.Discovery.AllowedNetworks), Logs: collector, Inventory: inv, Discovery: discovered}, nil
 }
 
 // inventoryAdapter 把采集服务接到执行网关的接口上。两个应用模块互不依赖，翻译在这里做。

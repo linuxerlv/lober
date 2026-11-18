@@ -5,11 +5,14 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/lober/lober/internal/application/discovery"
+	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/interfaces/console"
 	"gopkg.in/yaml.v3"
 )
@@ -29,10 +32,17 @@ type config struct {
 	Machine   machineConfig `yaml:"machine"`
 }
 type machineConfig struct {
-	Enabled      bool   `yaml:"enabled"`
-	KeyFile      string `yaml:"keyFile"`
-	SyslogListen string `yaml:"syslogListen"`
+	Enabled      bool            `yaml:"enabled"`
+	KeyFile      string          `yaml:"keyFile"`
+	SyslogListen string          `yaml:"syslogListen"`
+	Discovery    discoveryConfig `yaml:"discovery"`
 }
+type discoveryConfig struct {
+	AllowedNetworks []netip.Prefix                   `yaml:"allowedNetworks"`
+	Enabled         bool                             `yaml:"enabled"`
+	Images          map[catalog.Arch]discovery.Image `yaml:"images"`
+}
+
 type pgConfig struct {
 	DSN      string `yaml:"dsn"`
 	MaxConns int    `yaml:"maxConns"`
@@ -149,5 +159,28 @@ func loadConfig(path string) (config, error) {
 	if (strings.TrimSpace(c.Preview.InventoryKernel) == "") != (strings.TrimSpace(c.Preview.InventoryInitrd) == "") {
 		return config{}, errors.New("preview.inventoryKernel 与 preview.inventoryInitrd 必须同时提供")
 	}
+	if err := c.Machine.Discovery.validate(c.Machine.Enabled); err != nil {
+		return config{}, err
+	}
 	return c, nil
+}
+
+func (d discoveryConfig) validate(machineEnabled bool) error {
+	if d.Enabled && !machineEnabled {
+		return errors.New("machine.discovery.enabled 需要同时启用 machine.enabled")
+	}
+	if d.Enabled && len(d.AllowedNetworks) == 0 {
+		return errors.New("启用自动发现时需要填写 machine.discovery.allowedNetworks")
+	}
+	for _, network := range d.AllowedNetworks {
+		if !network.IsValid() {
+			return errors.New("machine.discovery.allowedNetworks 需要有效的网段")
+		}
+	}
+	for arch, image := range d.Images {
+		if !arch.Valid() || !image.Valid() {
+			return errors.New("machine.discovery.images 需要有效架构和两个制品相对路径")
+		}
+	}
+	return nil
 }

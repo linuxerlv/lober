@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lober/lober/internal/application/discovery"
 	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/domain/model"
 	"net/http/httptest"
@@ -126,6 +127,7 @@ func Test主机HTTP校验列表过滤分页(t *testing.T) {
 }
 func Test主机HTTP全部路由权限矩阵(t *testing.T) {
 	s, st, _ := newHTTPServer(t)
+	s.server.deps.Discovery = discovery.New(st, s.server.deps.Clock, nil, "", "", nil, false, nil)
 	for i, role := range model.Roles() {
 		name := fmt.Sprintf("u%d", i)
 		seedAuthUser(t, st, name, role, "pw")
@@ -136,14 +138,17 @@ func Test主机HTTP全部路由权限矩阵(t *testing.T) {
 				continue
 			}
 			count++
-			path := strings.ReplaceAll(rt.Path, ":sn", "SN-1")
-			w := httpCall(s, rt.Method, path, `{}`, token)
+			path := strings.NewReplacer(":sn", "SN-1", ":mac", "52:54:00:12:34:56").Replace(rt.Path)
+			w := httpCall(s, rt.Method, path, `{"sn":"SN-1"}`, token)
 			allowed := rt.Perm == PermHostRead || role == model.RoleAdmin || role == model.RoleOperator
+			if rt.Path == "/console/v1/discoveries/:mac/register" {
+				allowed = role == model.RoleAdmin
+			}
 			if allowed && (w.Code == 401 || w.Code == 403) || !allowed && w.Code != 403 {
 				t.Fatal(role, rt, w.Code)
 			}
 		}
-		if count != 7 {
+		if count != 10 {
 			t.Fatal("host routes missing", count)
 		}
 	}
