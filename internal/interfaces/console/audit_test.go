@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/lober/lober/internal/application/audit"
+	"github.com/lober/lober/internal/application/discovery"
 	"github.com/lober/lober/internal/application/inventory"
 	"github.com/lober/lober/internal/domain/access"
+	discovered "github.com/lober/lober/internal/domain/discovery"
 	"io"
 	"net/url"
 	"reflect"
@@ -130,6 +132,11 @@ func Test每条正式审计路由都写入正确操作者和目标(t *testing.T)
 		Hosts: st, Tokens: credentials.NewTokens(), Clock: s.server.deps.Clock,
 		Menu: inventory.MenuEndpoints{Gateway: "http://gateway.invalid", Artifacts: "http://artifacts.invalid", Kernel: "kernel", Initrd: "initrd"},
 	})
+	const discoveryMAC = "52:54:00:12:34:56"
+	if _, err := st.ObserveDiscovery(t.Context(), discovered.Attempt{MAC: discoveryMAC, Arch: "x86_64", Firmware: "uefi", At: fixedAt}); err != nil {
+		t.Fatal(err)
+	}
+	s.server.deps.Discovery = discovery.New(st, s.server.deps.Clock, nil, "", "", nil, false, nil)
 	admin := adminHTTP(t, s, st)
 	reviewer := reviewerHTTP(t, s, st)
 	setMedia(s, st, st, auditedISOSource{st}, &mockISODeletion{st: st})
@@ -212,6 +219,7 @@ func Test每条正式审计路由都写入正确操作者和目标(t *testing.T)
 	run("user.update", "PUT", "/console/v1/users/carol", `{"role":"operator","rev":1}`, admin, "user", "carol")
 	run("user.disable", "DELETE", "/console/v1/users/carol", "", admin, "user", "carol")
 	run("host.create", "POST", "/console/v1/hosts", `{"sn":"SN-AUDIT","arch":"x86_64","firmware":"uefi"}`, admin, "host", "SN-AUDIT")
+	run("host.create", "POST", "/console/v1/discoveries/"+discoveryMAC+"/register", `{"sn":"SN-DISCOVERY"}`, admin, "host", "SN-DISCOVERY")
 	run("host.update", "PUT", "/console/v1/hosts/SN-AUDIT", `{"sn":"SN-AUDIT","arch":"x86_64","rev":1}`, admin, "host", "SN-AUDIT")
 	run("host.inventory_request", "POST", "/console/v1/hosts/SN-AUDIT/inventory/request", "", admin, "host", "SN-AUDIT")
 	run("host.delete", "DELETE", "/console/v1/hosts/SN-AUDIT?rev=3", "", admin, "host", "SN-AUDIT")

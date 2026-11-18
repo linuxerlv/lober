@@ -5,6 +5,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lober/lober/internal/application/audit"
 	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/discovery"
 	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/application/inventory"
@@ -21,6 +22,7 @@ import (
 type Deps struct {
 	HostRegistry      hosts.Registry
 	Inventory         inventory.Requester
+	Discovery         discovery.Console
 	HookAuthoring     authoring.Hooks
 	TemplateAuthoring authoring.Templates
 	AuthoringEditor   authoring.Editor
