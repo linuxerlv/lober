@@ -4,6 +4,7 @@ package repository
 type Store interface {
 	Hosts
 	HostInventory
+	Discoveries
 	ISOs
 	ISOSources
 	Hooks

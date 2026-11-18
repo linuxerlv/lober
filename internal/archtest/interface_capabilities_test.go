@@ -214,8 +214,15 @@ func interfaceCapabilityFindings(caller string, fset *token.FileSet, files []*as
 					}
 				}
 				if machine {
-					if target == pkgStore || strings.HasPrefix(target, modulePath+"/internal/application/") && target != pkgExecution {
+					if target == pkgStore || strings.HasPrefix(target, modulePath+"/internal/application/") && target != pkgExecution && target != pkgDiscoveryApp {
 						bad = true
+					}
+					if target == pkgDiscoveryApp {
+						switch symbol {
+						case "Machine", "Machine.Boot", "Machine.RegisteredSerial", "Machine.Submit":
+						default:
+							bad = true
+						}
 					}
 					if target == pkgExecution {
 						switch symbol {

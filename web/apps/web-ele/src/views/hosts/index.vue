@@ -42,8 +42,10 @@ import { downloadSelection } from '#/components/console/selection-export';
 import { NumberedPage } from '#/composables/numbered-page';
 import { useConsoleAccess } from '#/composables/use-console-access';
 import { useRowSelection } from '#/composables/use-row-selection';
+import { useAuthStore } from '#/store';
 
 import { diskRows, networkRows } from './hardware-details';
+import HostDiscovery from './HostDiscovery.vue';
 import HostTaskHistory from './HostTaskHistory.vue';
 import {
   attributesOf,
@@ -53,8 +55,14 @@ import {
 
 defineOptions({ name: 'HostsIndex' });
 const access = useAccessStore();
-const { hasMenu } = useConsoleAccess();
+const auth = useAuthStore();
+const { can, hasMenu } = useConsoleAccess();
 const canWrite = computed(() => access.accessCodes.includes('host:write'));
+const canReadDiscovery = computed(() => can('host:read'));
+const canRegisterDiscovery = computed(
+  () => auth.sessionUser?.role === 'admin' && can('host:write'),
+);
+const discoveryOpen = ref(false);
 const failure = ref<unknown>();
 const problems = computed(() => problemsOf(failure.value));
 const references = computed(() => referencesOf(failure.value));
@@ -207,6 +215,10 @@ function changePage(value: number) {
 }
 function changePageSize(value: number) {
   page.setPageSize(value);
+  void gridApi.reload();
+}
+function discoveryRegistered(sn: string) {
+  ElMessage.success(`已登记主机 ${sn}`);
   void gridApi.reload();
 }
 const editorOpen = ref(false);
@@ -382,6 +394,9 @@ async function commitCSV() {
     description="登记主机 SN、可选架构固件和任意属性；建任务时从这里选择主机。"
   >
     <template #extra>
+      <ElButton v-if="canReadDiscovery" @click="discoveryOpen = true">
+        自动发现
+      </ElButton>
       <ElButton v-if="canWrite" @click="openCSV">CSV 导入</ElButton>
       <ElButton v-if="canWrite" type="primary" @click="openHost()">
         登记主机
@@ -494,6 +509,12 @@ async function commitCSV() {
         />
       </div>
     </section>
+    <HostDiscovery
+      v-if="canReadDiscovery"
+      v-model="discoveryOpen"
+      :can-write="canRegisterDiscovery"
+      @registered="discoveryRegistered"
+    />
     <ElDrawer
       v-model="detailOpen"
       :title="detail?.sn || '主机详情'"
