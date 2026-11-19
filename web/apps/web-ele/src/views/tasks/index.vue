@@ -81,7 +81,7 @@ const stateStats = computed(() => {
       key: 'installing',
       label: '正在安装',
       value: items.filter((t) =>
-        ['booting', 'installing', 'rebooting', 'initializing'].includes(t.state),
+        ['booting', 'initializing', 'installing', 'rebooting'].includes(t.state),
       ).length,
       desc: '本页活跃装机流',
       tone: 'border-blue-500/30 bg-blue-500/5 text-blue-600 dark:text-blue-400',
@@ -568,7 +568,7 @@ onBeforeUnmount(() => {
                           : 'bg-blue-500'
                 "
                 :style="{ width: `${taskProgressPercent(row.state)}%` }"
-              />
+              ></div>
             </div>
           </div>
         </template>
