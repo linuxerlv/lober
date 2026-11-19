@@ -23,6 +23,13 @@ vi.mock('@vben/common-ui', () => ({
   }),
 }));
 vi.mock('#/api/console/wizard', () => ({ wizardAPI: io }));
+vi.mock('#/api/console/discovery', () => ({
+  getDiscoveryApi: vi.fn(),
+  getDiscoveryListApi: vi.fn().mockResolvedValue({ items: [] }),
+}));
+vi.mock('#/api/console/host', () => ({
+  getHostApi: vi.fn(),
+}));
 vi.mock('#/adapter/vxe-table', () => ({
   useVbenVxeGrid: (options: { gridEvents: { checkboxChange: () => void } }) => {
     const rows = ref<Array<{ sn: string; selectable: boolean }>>([]);

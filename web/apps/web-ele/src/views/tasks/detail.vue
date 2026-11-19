@@ -30,7 +30,13 @@ import ProblemList from '#/components/console/ProblemList.vue';
 import { useTaskStream } from '#/composables/use-task-stream';
 import { useAuthStore } from '#/store';
 
-import { eventDetails, findFailureEvent } from './event-details';
+import {
+  eventDetails,
+  eventLabels,
+  findFailureEvent,
+  latestEventReport,
+  taskProgressStage,
+} from './event-details';
 import { taskStateLabels } from './task-state';
 import { mergeEvents } from './wizard-state';
 
@@ -99,18 +105,12 @@ const phase = computed(() => {
   ];
   return states.indexOf(task.value?.state ?? '');
 });
-const eventLabels: Record<string, string> = {
-  'task.created': '任务已创建',
-  'machine.boot': '主机开始引导',
-  'machine.cancel': '任务已取消',
-  'machine.retry': '任务已请求重试',
-  'machine.installing': '开始安装',
-  'machine.reboot': '主机重启',
-  'machine.init': '开始初始化',
-  'machine.done': '安装已完成',
-  'machine.failed': '任务失败',
-  'installer.syslog': '安装程序日志',
-};
+const currentProgressStage = computed(() =>
+  taskProgressStage(task.value?.state, events.value),
+);
+const latestReport = computed(() =>
+  latestEventReport(events.value, task.value?.state),
+);
 const preview = ref<Schemas['PreviewResponse']>();
 const showPreview = ref(false);
 const busy = ref(false);
@@ -446,8 +446,26 @@ watch(
             v-if="task.state === 'pending'"
             class="mt-3 text-sm text-muted-foreground"
           >
-            目标主机下次网络启动时可能开始安装。
+            请让目标主机从网络启动；若已停在自动发现或硬件采集界面，须先重启再从网络启动以开始安装。
           </p>
+          <dl class="mt-3 grid gap-2 border-t border-border pt-3 text-sm sm:grid-cols-2">
+            <div>
+              <dt class="text-muted-foreground">当前阶段</dt>
+              <dd class="font-medium">{{ currentProgressStage }}</dd>
+            </div>
+            <div>
+              <dt class="text-muted-foreground">最近回报</dt>
+              <dd v-if="latestReport" class="break-words">
+                <span>{{ new Date(latestReport.at * 1000).toLocaleString() }}</span>
+                ·
+                <strong>{{ latestReport.title }}</strong>
+                <span v-if="latestReport.content && latestReport.content !== '无附加内容'">
+                  （{{ latestReport.content }}）
+                </span>
+              </dd>
+              <dd v-else class="text-muted-foreground">暂无回报记录</dd>
+            </div>
+          </dl>
         </ElCard>
         <ElCard>
           <div

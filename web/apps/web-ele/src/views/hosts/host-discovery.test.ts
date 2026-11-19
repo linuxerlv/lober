@@ -1,3 +1,4 @@
+/* eslint-disable vue/one-component-per-file -- Mount wrapper exercises HostDiscovery component. */
 import { createApp, h, nextTick } from 'vue';
 
 import { afterEach, expect, it, vi } from 'vitest';
@@ -115,6 +116,51 @@ it('requires an administrator to confirm a serial number and uses it to register
   );
   expect(registered).toHaveBeenCalledExactlyOnceWith('LAB-42');
   await vi.waitFor(() => expect(el.textContent).toContain('已登记为 LAB-42'));
+});
+
+it('shows create install task button after registration and navigates to wizard with preselected host when permitted', async () => {
+  api.getDiscoveryListApi.mockResolvedValue({ items: [summary] });
+  api.getDiscoveryApi.mockResolvedValue(discovery);
+  api.registerDiscoveryApi.mockResolvedValue({ sn: 'LAB-42' });
+  const createTask = vi.fn();
+  const el = document.createElement('div');
+  const app = createApp({
+    render: () =>
+      h(HostDiscovery, {
+        canCreateTask: true,
+        canWrite: true,
+        modelValue: true,
+        onCreateTask: createTask,
+        onRegistered: vi.fn(),
+      }),
+  });
+  document.body.append(el);
+  app.mount(el);
+  cleanup.push(() => {
+    app.unmount();
+    el.remove();
+  });
+
+  await vi.waitFor(() => expect(el.textContent).toContain(discovery.mac));
+  button(el, '查看详情').click();
+  await nextTick();
+  expect(
+    [...el.querySelectorAll('button')].some(
+      (b) => b.textContent?.trim() === '为这台主机创建装机任务',
+    ),
+  ).toBe(false);
+
+  const input = el.querySelector<HTMLInputElement>('input')!;
+  input.value = 'LAB-42';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  await nextTick();
+  button(el, '确认登记').click();
+
+  await vi.waitFor(() =>
+    expect(el.textContent).toContain('为这台主机创建装机任务'),
+  );
+  button(el, '为这台主机创建装机任务').click();
+  expect(createTask).toHaveBeenCalledExactlyOnceWith('LAB-42');
 });
 
 it('keeps the serial number available for correction if the host already exists', async () => {
