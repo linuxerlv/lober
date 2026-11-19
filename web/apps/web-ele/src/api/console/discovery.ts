@@ -41,6 +41,12 @@ export function getDiscoveryListApi(cursor?: string) {
   });
 }
 
+export function getRegisteredDiscoveryApi(sn: string) {
+  return requestClient.get<DiscoveryPage>('/discoveries', {
+    params: { registered_sn: sn },
+  });
+}
+
 export function getDiscoveryApi(mac: string) {
   return requestClient.get<DiscoveredHost>(
     `/discoveries/${encodeURIComponent(mac)}`,

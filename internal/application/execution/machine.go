@@ -162,6 +162,7 @@ func (m *Machine) Signal(ctx context.Context, id, token string, sig Signal) erro
 			event.Kind = "slot.start"
 		case model.PhaseSlotEnd:
 			event.Kind = "slot.end"
+			event.Fields["stage"] = string(next.Execution.Stage)
 		case model.PhaseHookStart:
 			event.Kind = "hook.start"
 		case model.PhaseHookReport:

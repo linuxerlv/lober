@@ -32,7 +32,7 @@ import { useAuthStore } from '#/store';
 
 import {
   eventDetails,
-  eventLabels,
+  eventLabel,
   findFailureEvent,
   latestEventReport,
   taskProgressStage,
@@ -539,7 +539,7 @@ watch(
                 new Date(event.at * 1000).toLocaleString()
               }}</time>
               <div>
-                <strong>{{ eventLabels[event.kind] || event.kind }}</strong>
+                <strong>{{ eventLabel(event) }}</strong>
                 <p v-if="event.fields?.reason" class="mt-1 text-sm">
                   {{ event.fields.reason }}
                 </p>
@@ -558,7 +558,7 @@ watch(
                 已定位到事件 #{{ locatedEvent.seq }}
               </h2>
               <p class="mt-1 text-sm text-muted-foreground">
-                {{ eventLabels[locatedEvent.kind] || locatedEvent.kind }} ·
+                {{ eventLabel(locatedEvent) }} ·
                 {{ new Date(locatedEvent.at * 1000).toLocaleString() }}
               </p>
               <pre

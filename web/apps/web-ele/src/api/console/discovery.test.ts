@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest';
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
 vi.mock('#/api/request', () => ({ requestClient: http }));
 
-import { getDiscoveryApi, getDiscoveryListApi, registerDiscoveryApi } from './discovery';
+import { getDiscoveryApi, getDiscoveryListApi, getRegisteredDiscoveryApi, registerDiscoveryApi } from './discovery';
 
 it('reads the next discoveries page and registers using the encoded network address', async () => {
   await getDiscoveryListApi('next');
@@ -19,4 +19,9 @@ it('reads the next discoveries page and registers using the encoded network addr
     '/discoveries/52%3A54%3A00%3A00%3A11%3A22/register',
     { sn: 'LAB-42' },
   );
+});
+
+it('requests discovery by the registered serial number', async () => {
+  await getRegisteredDiscoveryApi('LAB-42');
+  expect(http.get).toHaveBeenLastCalledWith('/discoveries', { params: { registered_sn: 'LAB-42' } });
 });

@@ -10,8 +10,9 @@ import (
 )
 
 type discoveryQuery struct {
-	Limit  int    `form:"limit"`
-	Cursor string `form:"cursor"`
+	RegisteredSN string `form:"registered_sn"`
+	Limit        int    `form:"limit"`
+	Cursor       string `form:"cursor"`
 }
 
 type discoveryRegistration struct {
@@ -41,7 +42,7 @@ func (s *server) listDiscoveries(c *gin.Context) {
 		Ok(c, map[string]any{"items": []any{}})
 		return
 	}
-	page, err := svc.List(c.Request.Context(), actorOf(c), c.Query("cursor"), limit)
+	page, err := svc.List(c.Request.Context(), actorOf(c), c.Query("cursor"), c.Query("registered_sn"), limit)
 	if err != nil {
 		RespondError(c, err)
 		return
