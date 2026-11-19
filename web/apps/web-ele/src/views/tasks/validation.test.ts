@@ -1,9 +1,9 @@
 /* eslint-disable vue/one-component-per-file -- Test adapters exercise the real page's async flow. */
+import type { Schemas } from '#/api/console/generated';
+
 import { createApp, nextTick } from 'vue';
 
 import { afterEach, expect, it, vi } from 'vitest';
-
-import type { Schemas } from '#/api/console/generated';
 
 import { wizardAPI } from '#/api/console/wizard';
 
