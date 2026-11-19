@@ -46,10 +46,16 @@ type paramFieldDTO struct {
 	Prefill  string           `json:"prefill"`
 	Options  []optionResponse `json:"options"`
 }
+type wizardTargetDisk struct {
+	Key   params.FieldKey `json:"key"`
+	Mode  string          `json:"mode"`
+	Value string          `json:"value"`
+}
 type wizardParamsHost struct {
-	SN       string          `json:"sn"`
-	Fields   []paramFieldDTO `json:"fields"`
-	Problems []problemJSON   `json:"problems"`
+	TargetDisk *wizardTargetDisk `json:"targetDisk,omitempty"`
+	SN         string            `json:"sn"`
+	Fields     []paramFieldDTO   `json:"fields"`
+	Problems   []problemJSON     `json:"problems"`
 }
 type wizardParamsResult struct {
 	Hosts  []wizardParamsHost `json:"hosts"`
@@ -225,7 +231,11 @@ func (s *server) wizardParams(c *gin.Context) {
 	}
 	hosts := make([]wizardParamsHost, len(result.Hosts))
 	for i, h := range result.Hosts {
-		hosts[i] = wizardParamsHost{h.SN, paramFields(h.Fields), jsonProblems(h.Problems)}
+		hosts[i] = wizardParamsHost{SN: h.SN, Fields: paramFields(h.Fields), Problems: jsonProblems(h.Problems)}
+		if h.TargetDisk != nil {
+			disk := wizardTargetDisk(*h.TargetDisk)
+			hosts[i].TargetDisk = &disk
+		}
 	}
 	Ok(c, wizardParamsResult{hosts, jsonProblems(result.Common)})
 }

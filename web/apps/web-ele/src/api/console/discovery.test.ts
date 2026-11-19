@@ -3,7 +3,13 @@ import { expect, it, vi } from 'vitest';
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
 vi.mock('#/api/request', () => ({ requestClient: http }));
 
-import { getDiscoveryApi, getDiscoveryListApi, getRegisteredDiscoveryApi, registerDiscoveryApi } from './discovery';
+import {
+  getDiscoveryApi,
+  getDiscoveryListApi,
+  getHostDisksApi,
+  getRegisteredDiscoveryApi,
+  registerDiscoveryApi,
+} from './discovery';
 
 it('reads the next discoveries page and registers using the encoded network address', async () => {
   await getDiscoveryListApi('next');
@@ -23,5 +29,12 @@ it('reads the next discoveries page and registers using the encoded network addr
 
 it('requests discovery by the registered serial number', async () => {
   await getRegisteredDiscoveryApi('LAB-42');
-  expect(http.get).toHaveBeenLastCalledWith('/discoveries', { params: { registered_sn: 'LAB-42' } });
+  expect(http.get).toHaveBeenLastCalledWith('/discoveries', {
+    params: { registered_sn: 'LAB-42' },
+  });
+});
+
+it('reads the selected host disk list from one endpoint', async () => {
+  await getHostDisksApi('RACK/01');
+  expect(http.get).toHaveBeenLastCalledWith('/hosts/RACK%2F01/disks');
 });
