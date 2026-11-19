@@ -51,7 +51,7 @@ func TestHistoricalUnsupportedTaskCannotExecute(t *testing.T) {
 				case "signal":
 					err = s.Signal(t.Context(), task.ID, s.Token(task, Install), Signal{Phase: "installed"})
 				case "retry":
-					err = s.Retry(t.Context(), task, repository.Audit{Actor: "operator", Action: "task.retry", At: 1100})
+					_, err = s.Retry(t.Context(), task, repository.Audit{Actor: "operator", Action: "task.retry", At: 1100})
 				case "sweep":
 					err = s.Sweep(t.Context())
 				}

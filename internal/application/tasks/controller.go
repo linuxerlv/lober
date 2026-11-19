@@ -13,7 +13,7 @@ type controller struct{ deps ControllerDeps }
 
 // NewController 要求显式提供所有能力，不在请求时寻找替代实现。
 func NewController(d ControllerDeps) Controller {
-	if d.Tasks == nil || d.Backend == nil || d.Clock == nil || d.Notifier == nil {
+	if d.Tasks == nil || d.Backend == nil || d.Clock == nil {
 		panic("任务控制缺少必要能力")
 	}
 	return &controller{deps: d}
@@ -34,20 +34,16 @@ func (c *controller) control(ctx context.Context, actor ports.Actor, id string, 
 		return TaskChoice{}, repository.ErrConflict
 	}
 	audit := ports.AuditIntent{Actor: actor.Username, Action: action, At: c.deps.Clock()}
+	var saved model.Task
 	if retry {
-		err = c.deps.Backend.Retry(ctx, t, audit)
+		saved, err = c.deps.Backend.Retry(ctx, t, audit)
 	} else {
-		err = c.deps.Backend.Cancel(ctx, t, audit)
+		saved, err = c.deps.Backend.Cancel(ctx, t, audit)
 	}
 	if err != nil {
 		return TaskChoice{}, err
 	}
-	back, err := c.deps.Tasks.GetTask(ctx, t.ID)
-	if err != nil {
-		return TaskChoice{}, err
-	}
-	c.deps.Notifier.Publish(back.ID)
-	return taskChoice(back, c.deps.Backend), nil
+	return taskChoice(saved, c.deps.Backend), nil
 }
 func (c *controller) Cancel(ctx context.Context, a ports.Actor, id string, rev int64) (TaskChoice, error) {
 	return c.control(ctx, a, id, rev, false)
@@ -60,11 +56,11 @@ type unavailableControl struct{}
 
 // NewUnavailableControl 用于没有启用机器服务的组装，不执行或伪造状态变化。
 func NewUnavailableControl() port.Control { return unavailableControl{} }
-func (unavailableControl) Cancel(context.Context, model.Task, ports.AuditIntent) error {
-	return ErrControlUnavailable
+func (unavailableControl) Cancel(context.Context, model.Task, ports.AuditIntent) (model.Task, error) {
+	return model.Task{}, ErrControlUnavailable
 }
-func (unavailableControl) Retry(context.Context, model.Task, ports.AuditIntent) error {
-	return ErrControlUnavailable
+func (unavailableControl) Retry(context.Context, model.Task, ports.AuditIntent) (model.Task, error) {
+	return model.Task{}, ErrControlUnavailable
 }
 func (unavailableControl) CanCancel(model.Task) []model.Problem { return nil }
 func (unavailableControl) CanRetry(model.Task) []model.Problem  { return nil }

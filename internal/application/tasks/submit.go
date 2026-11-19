@@ -49,11 +49,19 @@ func (w *wizard) Submit(ctx context.Context, actor ports.Actor, req SubmitReques
 			continue
 		}
 		seen[h.SN] = true
-		frozen, ps := snapshot.Build(params.Input{Template: t, Hooks: hooks, ISO: iso, Host: h, Entered: enteredOf(req.Hosts[i].Entered)})
+		frozen, evaluated, ps := snapshot.BuildWithParams(params.Input{Template: t, Hooks: hooks, ISO: iso, Host: h, Entered: enteredOf(req.Hosts[i].Entered)})
 		result.ByHost[h.SN] = append(result.ByHost[h.SN], ps...)
-		if len(ps) == 0 {
-			tasks = append(tasks, model.Task{HostSN: h.SN, ISOID: iso.ID, TemplateID: t.ID, TemplateVersion: t.Version, Snapshot: frozen, CreatedBy: actor.Username, CreatedAt: w.deps.Clock()})
+		if len(ps) > 0 {
+			continue
 		}
+		if expected := req.Hosts[i].ExpectedTargetDisk; expected != nil {
+			_, disk := wizardDiskFields(t, iso, hooks, evaluated)
+			if disk == nil || *disk != *expected {
+				p := model.NewProblem("target_disk_changed", model.Subject{Kind: model.KindHost, ID: h.SN}, h.SN)
+				return nil, &ProblemsError{Problems: []model.Problem{p}}
+			}
+		}
+		tasks = append(tasks, model.Task{HostSN: h.SN, ISOID: iso.ID, TemplateID: t.ID, TemplateVersion: t.Version, Snapshot: frozen, CreatedBy: actor.Username, CreatedAt: w.deps.Clock()})
 	}
 	if err := batchError(result); err != nil {
 		return nil, err

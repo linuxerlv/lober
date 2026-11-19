@@ -2,7 +2,10 @@ package tasks
 
 import (
 	"context"
+	"slices"
+
 	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/domain/catalog"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/params"
 	"github.com/lober/lober/internal/domain/repository"
@@ -67,13 +70,60 @@ func (w *wizard) Params(ctx context.Context, actor ports.Actor, req ParamsReques
 	out := make([]HostParams, len(hosts))
 	for i, h := range hosts {
 		fields := []params.Field{}
+		var disk *TargetDisk
 		ps := append([]model.Problem{}, result.ByHost[h.SN]...)
 		if !absent[h.SN] && len(result.Common) == 0 {
 			res := params.Evaluate(params.Input{Template: t, Hooks: hooks, ISO: iso, Host: h, Entered: enteredOf(entered[h.SN])})
-			fields = res.Fields
+			fields, disk = wizardDiskFields(t, iso, hooks, res)
 			ps = append(ps, res.Problems...)
 		}
-		out[i] = HostParams{SN: h.SN, Fields: fields, Problems: ps}
+		out[i] = HostParams{SN: h.SN, Fields: fields, TargetDisk: disk, Problems: ps}
 	}
 	return ParamsResult{Hosts: out, Common: result.Common}, nil
+}
+
+// 只有随程序发布的模板才能保证分区步骤与最终安装位置一致。
+// 自定义模板仍可使用任何参数，向导不能替它推断整盘的用途。
+func wizardDiskFields(t model.Template, iso model.ISO, hooks map[model.HookKey]model.Hook, res params.Result) ([]params.Field, *TargetDisk) {
+	const slot = "partition"
+	instances := t.Assembly[slot]
+	if !t.Builtin || len(instances) != 1 {
+		return res.Fields, nil
+	}
+	inst := instances[0]
+	hook := hooks[model.HookKey{ID: inst.HookID, Version: inst.HookVersion}]
+	if !hook.Builtin || hook.ID != "builtin-partition" {
+		return res.Fields, nil
+	}
+	name, mode := "disk", ""
+	switch iso.Series.Format() {
+	case catalog.FormatKickstart:
+		mode = "device-or-path"
+	case catalog.FormatPreseed, catalog.FormatAutoinstall:
+		mode = "device"
+	case catalog.FormatESXiKS:
+		mode = "first-disk-rule"
+	case catalog.FormatUnattend:
+		if t.ID != "builtin-unattend" {
+			return res.Fields, nil
+		}
+		name, mode = "disk_index", "windows-index"
+	default:
+		return res.Fields, nil
+	}
+	key := params.FieldKey(model.InstanceFieldKey(slot, 1, name))
+	pos := slices.IndexFunc(res.Fields, func(f params.Field) bool { return f.Key == key })
+	if pos < 0 {
+		return res.Fields, nil
+	}
+	fields := res.Fields
+	if mode == "windows-index" {
+		// 内置应答的 InstallTo 固定为磁盘 0；分区脚本必须锁定同一编号。
+		if f := fields[pos]; !f.Locked || f.Prefill != "0" {
+			return fields, nil
+		}
+		unused := params.FieldKey(model.InstanceFieldKey(slot, 1, "disk"))
+		fields = slices.DeleteFunc(fields, func(f params.Field) bool { return f.Key == unused })
+	}
+	return fields, &TargetDisk{Key: key, Mode: mode, Value: res.Values[key].Canonical()}
 }

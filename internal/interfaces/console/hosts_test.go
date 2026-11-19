@@ -148,7 +148,7 @@ func Test主机HTTP全部路由权限矩阵(t *testing.T) {
 				t.Fatal(role, rt, w.Code)
 			}
 		}
-		if count != 10 {
+		if count != 11 {
 			t.Fatal("host routes missing", count)
 		}
 	}

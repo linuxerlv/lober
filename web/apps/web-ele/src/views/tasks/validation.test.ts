@@ -18,9 +18,7 @@ const flow = vi.hoisted(() => ({
     sn: string;
   }>,
   warning: vi.fn(),
-  hostDetail: vi.fn(),
-  discoveryList: vi.fn(),
-  discoveryDetail: vi.fn(),
+  disks: vi.fn().mockResolvedValue({ status: 'none', disks: [] }),
 }));
 vi.mock('vue-router', () => ({
   onBeforeRouteLeave: vi.fn(),
@@ -128,13 +126,8 @@ vi.mock('element-plus', async () => {
     ElTag: Container,
   };
 });
-vi.mock('#/api/console/host', () => ({
-  getHostApi: flow.hostDetail,
-}));
 vi.mock('#/api/console/discovery', () => ({
-  getRegisteredDiscoveryApi: flow.discoveryList,
-  getDiscoveryListApi: vi.fn().mockResolvedValue({ items: [] }),
-  getDiscoveryApi: flow.discoveryDetail,
+  getHostDisksApi: flow.disks,
 }));
 vi.mock('#/api/console/wizard', () => ({
   wizardAPI: {
@@ -202,9 +195,7 @@ afterEach(() => {
   flow.routeQuery = {};
   flow.checkedHosts = [{ sn: 'H1', attrs: {}, selectable: true }];
   flow.warning.mockReset();
-  flow.hostDetail.mockReset().mockImplementation(async (sn: string) => ({ sn, attrs: {} }));
-  flow.discoveryList.mockReset().mockResolvedValue({ items: [] });
-  flow.discoveryDetail.mockReset();
+  flow.disks.mockReset().mockResolvedValue({ status: 'none', disks: [] });
 });
 async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -387,106 +378,6 @@ it('updates parameter errors after editing and ignores an older response', async
   ).toBe('host-02');
 });
 
-it('shows disk candidates from hardware report, warns on default disk mismatch without auto-selecting, updates target disk, and shows it on confirmation', async () => {
-  flow.hostDetail.mockResolvedValue({
-    sn: 'H1',
-    arch: 'x86_64',
-    firmware: 'uefi',
-    attrs: {
-      inv_disks: 'nvme0n1:480000000000:Intel NVMe\nnvme1n1:960000000000:Samsung NVMe',
-    },
-    rev: 1,
-  });
-  flow.discoveryList.mockResolvedValue({
-    items: [{ mac: '52:54:00:11:22:33', registered_sn: 'H1', status: 'received' }],
-  });
-  flow.discoveryDetail.mockResolvedValue({
-    mac: '52:54:00:11:22:33',
-    registered_sn: 'H1',
-    status: 'received',
-    report: {
-      sections: [
-        {
-          key: 'storage',
-          title: '磁盘和阵列',
-          status: 'read',
-          items: [
-            {
-              name: 'nvme0n1',
-              fields: {
-                类型: '磁盘',
-                '容量（字节）': '480000000000',
-                序列号: 'SN-NVME-01',
-              },
-            },
-            {
-              name: 'nvme1n1',
-              fields: {
-                类型: '磁盘',
-                '容量（字节）': '960000000000',
-                序列号: 'SN-NVME-02',
-              },
-            },
-          ],
-        },
-      ],
-    },
-  });
-  vi.spyOn(wizardAPI, 'params').mockResolvedValue({
-    common: [],
-    hosts: [
-      {
-        sn: 'H1',
-        fields: [
-          {
-            key: 'partition/1/disk',
-            label: '安装目标盘',
-            list: false,
-            locked: false,
-            options: [],
-            prefill: 'sda',
-            required: true,
-            type: 'word',
-          },
-        ],
-        problems: [],
-      },
-    ],
-  });
-
-  const mount = document.createElement('div');
-  document.body.append(mount);
-  const app = createApp(Wizard);
-  app.mount(mount);
-  stop = () => app.unmount();
-  await settle();
-  await click('选择测试主机');
-  await click('下一步');
-  await click('选择测试 ISO');
-  await click('选择测试模板');
-  await click('下一步');
-  await settle();
-
-  const diskInput = document.getElementById('H1:partition/1/disk') as HTMLInputElement;
-  // Must not silently replace 'sda' with nvme0n1
-  expect(diskInput.value).toBe('sda');
-  expect(mount.textContent).toContain('默认目标盘');
-  expect(mount.textContent).toContain('nvme0n1');
-  expect(mount.textContent).toContain('480 GB');
-  expect(mount.textContent).toContain('SN-NVME-01');
-
-  // Explicitly select nvme1n1 from candidate options
-  await click('nvme1n1 · 960 GB · 序列号 SN-NVME-02');
-  expect(diskInput.value).toBe('nvme1n1');
-
-  await click('校验并确认');
-  await settle();
-  expect(mount.textContent).toContain('创建整批任务');
-  expect(mount.textContent).toContain('目标盘：nvme1n1');
-  expect(mount.textContent).toContain('960 GB');
-  expect(mount.textContent).toContain('SN-NVME-02');
-});
-
 it('safely preselects a requested registered host and warns without selecting when requested host is unregistered or not selectable', async () => {
   // 1. Valid registered and selectable host is preselected
   flow.routeQuery = { host: 'H1' };
@@ -554,433 +445,309 @@ it('safely preselects a requested registered host and warns without selecting wh
   expect(mount3.textContent).toContain('已选 0 台');
 });
 
-it('does not overwrite manual edits or cross-contaminate hosts when hardware reports arrive asynchronously, and preserves manual input when no report exists', async () => {
-  let resolveH1Host!: (val: unknown) => void;
-  flow.hostDetail.mockImplementation((sn: string) => {
-    if (sn === 'H1') {
-      return new Promise((resolve) => {
-        resolveH1Host = resolve;
-      });
-    }
-    return Promise.resolve({
-      sn: 'H2',
-      arch: 'x86_64',
-      firmware: 'uefi',
-      attrs: {},
-      rev: 1,
-    });
-  });
-  flow.discoveryList.mockResolvedValue({ items: [] });
-
-  vi.spyOn(wizardAPI, 'params').mockResolvedValue({
-    common: [],
-    hosts: [
-      {
-        sn: 'H1',
-        fields: [
-          {
-            key: 'partition/1/disk',
-            label: '安装目标盘',
-            list: false,
-            locked: false,
-            options: [],
-            prefill: 'sda',
-            required: true,
-            type: 'word',
-          },
-        ],
-        problems: [],
-      },
-      {
-        sn: 'H2',
-        fields: [
-          {
-            key: 'partition/1/disk',
-            label: '安装目标盘',
-            list: false,
-            locked: false,
-            options: [],
-            prefill: 'vda',
-            required: true,
-            type: 'word',
-          },
-        ],
-        problems: [],
-      },
-    ],
-  });
-
-  const mount = document.createElement('div');
-  document.body.append(mount);
-  const app = createApp(Wizard);
-  app.mount(mount);
-  stop = () => app.unmount();
-  await settle();
-  await click('选择测试主机');
-  await click('下一步');
-  await click('选择测试 ISO');
-  await click('选择测试模板');
-  await click('下一步');
-  await settle();
-
-  // Operator manually edits H1's target disk before H1 hardware report finishes loading
-  const h1Input = document.getElementById('H1:partition/1/disk') as HTMLInputElement;
-  h1Input.value = 'manual-disk0';
-  h1Input.dispatchEvent(new Event('input', { bubbles: true }));
-  await settle();
-
-  // Now H1 hardware report arrives asynchronously
-  resolveH1Host({
-    sn: 'H1',
-    arch: 'x86_64',
-    firmware: 'uefi',
-    attrs: {
-      inv_disks: 'nvme0n1:480000000000:Intel NVMe',
-    },
-    rev: 1,
-  });
-  await settle();
-
-  // Manual edit on H1 must not be overwritten by async report
-  expect(h1Input.value).toBe('manual-disk0');
-
-  // H2 has no report, must keep manual path and not see H1's disks
-  const h2Input = document.getElementById('H2:partition/1/disk') as HTMLInputElement;
-  expect(h2Input.value).toBe('vda');
-});
-
-it('blocks confirmation and submission when disk report is loading or current disk value mismatches installable disks (including locked, batch-filled, or late async report), and focuses the offending host', async () => {
-  flow.checkedHosts = [
-    { sn: 'H1', attrs: {}, selectable: true },
-    { sn: 'H2', attrs: {}, selectable: true },
-  ];
-  let resolveDiscoveryList!: (val: unknown) => void;
-  flow.discoveryList.mockImplementation((sn: string) =>
-    sn === 'H1' ? Promise.resolve({ items: [] }) : new Promise((resolve) => {
-      resolveDiscoveryList = resolve;
-    }),
-  );
-  flow.discoveryDetail.mockImplementation(async (mac: string) => {
-    if (mac === '52:54:00:00:00:02') {
-      return {
-        mac,
-        registered_sn: 'H2',
-        report_at: 2000,
-        status: 'received',
-        report: {
-          sections: [
-            {
-              key: 'storage',
-              title: '磁盘和阵列',
-              status: 'read',
-              items: [
-                {
-                  name: 'nvme0n1',
-                  fields: {
-                    类型: '磁盘',
-                    '容量（字节）': '480000000000',
-                    序列号: 'H2-NVME-1',
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      };
-    }
-    return { mac, status: 'waiting' };
-  });
-
-  vi.spyOn(wizardAPI, 'params').mockResolvedValue({
-    common: [],
-    hosts: [
-      {
-        sn: 'H1',
-        fields: [
-          {
-            key: 'partition/1/disk',
-            label: '安装目标盘',
-            list: false,
-            locked: false,
-            options: [],
-            prefill: 'sda',
-            required: true,
-            type: 'word',
-          },
-        ],
-        problems: [],
-      },
-      {
-        sn: 'H2',
-        fields: [
-          {
-            key: 'partition/1/disk',
-            label: '安装目标盘',
-            list: false,
-            locked: false,
-            options: [],
-            prefill: 'sda',
-            required: true,
-            type: 'word',
-          },
-        ],
-        problems: [],
-      },
-    ],
-  });
-
-  const mount = document.createElement('div');
-  document.body.append(mount);
-  const app = createApp(Wizard);
-  app.mount(mount);
-  stop = () => app.unmount();
-  await settle();
-  await click('选择测试主机');
-  await click('下一步');
-  await click('选择测试 ISO');
-  await click('选择测试模板');
-  await click('下一步');
-  await settle();
-
-  // While hardware report is still loading, attempting to confirm must not advance to step 4
-  await click('校验并确认');
-  expect(mount.textContent).not.toContain('创建整批任务');
-
-  // Resolve discovery list: H1 has no report (manual allowed), H2 has nvme0n1 (mismatch with 'sda')
-  resolveDiscoveryList({
-    items: [{ mac: '52:54:00:00:00:02', registered_sn: 'H2', report_at: 2000, status: 'received' }],
-  });
-  await settle();
-  await settle();
-
-  // Now try to confirm: H2 mismatches ('sda' not in ['nvme0n1']), must block confirmation and focus H2
-  await click('校验并确认');
-  expect(mount.textContent).not.toContain('创建整批任务');
-  expect(mount.textContent).toContain('H2');
-
-  // Select H2's valid disk nvme0n1
-  await click('nvme0n1 · 480 GB · 序列号 H2-NVME-1');
-  await click('校验并确认');
-  await settle();
-  // Now both H1 (no report -> manual 'sda' allowed) and H2 ('nvme0n1' matched) can reach step 4
-  expect(mount.textContent).toContain('创建整批任务');
-
-  // Also verify locked target disk mismatch blocks confirmation
-  await click('上一步');
-  vi.spyOn(wizardAPI, 'params').mockResolvedValueOnce({
-    common: [],
-    hosts: [
-      {
-        sn: 'H1',
-        fields: [
-          {
-            key: 'partition/1/disk',
-            label: '安装目标盘',
-            list: false,
-            locked: true,
-            options: [],
-            prefill: 'sda',
-            required: true,
-            type: 'word',
-          },
-        ],
-        problems: [],
-      },
-      {
-        sn: 'H2',
-        fields: [
-          {
-            key: 'partition/1/disk',
-            label: '安装目标盘',
-            list: false,
-            locked: true,
-            options: [],
-            prefill: 'sda',
-            required: true,
-            type: 'word',
-          },
-        ],
-        problems: [],
-      },
-    ],
-  });
-  await click('校验并确认');
-  await settle();
-  expect(mount.textContent).not.toContain('创建整批任务');
-});
-
-it('looks up only the selected registered host and reuses its wizard attributes', async () => {
-  const h1Row = {
-    sn: 'H1',
-    attrs: { inv_collected_at: '1000', inv_disks: 'sda:240000000000:Old Disk' },
-    selectable: true,
-  };
-  flow.checkedHosts = [h1Row];
-  vi.spyOn(wizardAPI, 'hosts').mockResolvedValueOnce({
-    items: [h1Row as never],
-    next: '',
-    total: 1,
-  });
-
-  flow.discoveryList.mockResolvedValue({
-    items: [{ mac: '52:54:00:aa:bb:03', registered_sn: 'H1', report_at: 2500, status: 'received' }],
-  });
-
-  flow.discoveryDetail.mockImplementation(async (mac: string) => ({
-    mac,
-    registered_sn: 'H1',
-    sn: 'H1',
-    report_at: 2500,
-    status: 'received',
-    report: {
-      sections: [
-        {
-          key: 'storage',
-          title: '磁盘和阵列',
-          status: 'read',
-          items: [
-            {
-              name: 'nvme0n1',
-              fields: {
-                类型: '磁盘',
-                '容量（字节）': '960000000000',
-                序列号: 'REAL-NEWEST-SN',
-              },
-            },
-          ],
-        },
-      ],
-    },
-  }));
-
-  vi.spyOn(wizardAPI, 'params').mockResolvedValue({
-    common: [],
-    hosts: [
-      {
-        sn: 'H1',
-        fields: [
-          {
-            key: 'partition/1/disk',
-            label: '安装目标盘',
-            list: false,
-            locked: false,
-            options: [],
-            prefill: 'nvme0n1',
-            required: true,
-            type: 'word',
-          },
-        ],
-        problems: [],
-      },
-    ],
-  });
-
-  const mount = document.createElement('div');
-  document.body.append(mount);
-  const app = createApp(Wizard);
-  app.mount(mount);
-  stop = () => app.unmount();
-  await settle();
-  await click('选择测试主机');
-  await click('下一步');
-  await click('选择测试 ISO');
-  await click('选择测试模板');
-  await click('下一步');
-  await settle();
-  await settle();
-
-  expect(flow.hostDetail).not.toHaveBeenCalled();
-  expect(flow.discoveryList).toHaveBeenCalledExactlyOnceWith('H1');
-  expect(flow.discoveryDetail).toHaveBeenCalledExactlyOnceWith('52:54:00:aa:bb:03');
-  expect(mount.textContent).toContain('REAL-NEWEST-SN');
-  expect(mount.textContent).not.toContain('Old Disk');
-});
 
 const diskField: Schemas['ParamFieldDTO'] = {
-  key: 'partition/1/disk', label: '系统盘', type: 'word', prefill: 'sda',
-  locked: false, list: false, required: true, options: [],
+  key: 'partition/1/disk',
+  label: '已重命名',
+  type: 'word',
+  prefill: 'sda',
+  locked: false,
+  list: false,
+  required: true,
+  options: [],
 };
+const diskRow = (device: string, serial = '') => ({
+  device,
+  serial,
+  model: '',
+  bytes: '480000000000',
+});
+type Form = Schemas['WizardParamsHost'];
 
-async function openDiskForm(fields: Schemas['ParamFieldDTO'][], family: Schemas['CatalogFamily'] = 'linux') {
-  vi.spyOn(wizardAPI, 'isos').mockResolvedValue({
-    items: [{
-      id: 'iso1', family, name: '选择测试 ISO', usable: true, arch: 'x86_64',
-      artifacts: null, offers: null, problems: [], rev: 1, series: '', sha256: '',
-      state: 'ready', version: '1',
-    }],
-    total: 1, next: '',
-  });
-  vi.spyOn(wizardAPI, 'templates').mockResolvedValue({
-    items: [{
-      id: family === 'windows' ? 'builtin-unattend' : 'test-template',
-      name: '选择测试模板', usable: true, version: 1, family,
-      assembly: {
-        partition: [{
-          hookID: 'builtin-partition', hookVersion: 3, bindings: null, required: null, timeoutSec: null,
-        }],
-      },
-      approver: '', author: '', bindings: null, body: '', builtin: family === 'windows',
-      derivedFrom: null, params: null, problems: [], rev: 1, series: null, state: 'approved',
-    }],
-    total: 1, next: '',
-  });
-  vi.spyOn(wizardAPI, 'params').mockResolvedValue({ common: [], hosts: [{ sn: 'H1', fields, problems: [] }] });
+function mockForms(build: (sn: string) => Form) {
+  vi.spyOn(wizardAPI, 'params').mockImplementation(
+    async ({ hostSNs, entered }) => ({
+      common: [],
+      hosts: (hostSNs ?? []).map((sn) => {
+        const form = build(sn);
+        const target = form.targetDisk;
+        if (target) {
+          const field = form.fields?.find(
+            (candidate) => candidate.key === target.key,
+          );
+          target.value =
+            (field?.locked ? undefined : entered?.[sn]?.[target.key]) ||
+            field?.prefill ||
+            '';
+        }
+        return form;
+      }),
+    }),
+  );
+}
+
+function diskForm(sn: string, field = diskField, mode = 'device') {
+  return {
+    sn,
+    fields: [field],
+    problems: [],
+    targetDisk: { key: field.key, mode, value: '' },
+  };
+}
+
+async function openDiskForm() {
   const mount = document.createElement('div');
   document.body.append(mount);
   const app = createApp(Wizard);
   app.mount(mount);
   stop = () => app.unmount();
   await settle();
-  for (const label of ['选择测试主机', '下一步', '选择测试 ISO', '选择测试模板', '下一步']) {
+  for (const label of [
+    '选择测试主机',
+    '下一步',
+    '选择测试 ISO',
+    '选择测试模板',
+    '下一步',
+  ])
     await click(label);
-  }
   return mount;
 }
 
-it('shows the Windows installer disk number without offering Linux devices or submitting the unused parameter', async () => {
-  flow.checkedHosts[0]!.attrs = { inv_disks: 'sda:1000000000:A\nsdb:1000000000:B' };
-  const mount = await openDiskForm([diskField, {
-    ...diskField, key: 'partition/1/disk_index', label: '磁盘编号', type: 'int', prefill: '0', locked: true,
-  }], 'windows');
-  expect(document.getElementById('H1:partition/1/disk')).toBeNull();
-  expect(mount.textContent).not.toContain('可安装磁盘：');
-  expect(flow.discoveryList).not.toHaveBeenCalled();
+function editDisk(sn: string, value: string) {
+  const input = document.getElementById(
+    sn + ':' + diskField.key,
+  ) as HTMLInputElement;
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  return input;
+}
+
+it('uses the declared field despite its label and waits for the report before confirming', async () => {
+  let finish!: (v: unknown) => void;
+  flow.disks.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  mockForms((sn) => diskForm(sn));
+  const page = await openDiskForm();
+  const input = editDisk('H1', 'manual');
   await click('校验并确认');
-  expect(mount.textContent).toContain('目标盘：Windows 磁盘 0');
+  expect(page.textContent).not.toContain('创建整批任务');
+  finish({ status: 'ready', disks: [diskRow('nvme1n1', 'REAL-01')] });
+  await settle();
+  expect(input.value).toBe('manual');
+  expect(page.textContent).toContain('默认目标盘');
+  await click('校验并确认');
+  expect(page.textContent).not.toContain('创建整批任务');
+  await click('nvme1n1 · 480 GB · 序列号 REAL-01');
+  await click('校验并确认');
+  expect(page.textContent).toContain(
+    '目标盘：nvme1n1（480 GB · 序列号 REAL-01）',
+  );
+  expect(flow.disks).toHaveBeenCalledExactlyOnceWith('H1');
+});
+
+it('blocks a locked target that is missing from the disk report', async () => {
+  flow.disks.mockResolvedValue({ status: 'ready', disks: [diskRow('sdb')] });
+  mockForms((sn) => diskForm(sn, { ...diskField, locked: true }));
+  const page = await openDiskForm();
+  await click('校验并确认');
+  expect(page.textContent).toContain('默认目标盘');
+  expect(page.textContent).not.toContain('创建整批任务');
+});
+
+it.each([
+  ['windows-index', '0', '目标盘：Windows 磁盘 0', true],
+  ['first-disk-rule', 'local', '选盘规则：local', false],
+])(
+  'shows %s as evaluated without loading a Linux disk list',
+  async (mode, prefill, summary, locked) => {
+    mockForms((sn) =>
+      diskForm(
+        sn,
+        { ...diskField, prefill: String(prefill), locked: Boolean(locked) },
+        String(mode),
+      ),
+    );
+    const page = await openDiskForm();
+    await click('校验并确认');
+    expect(page.textContent).toContain(String(summary));
+    expect(flow.disks).not.toHaveBeenCalled();
+    vi.mocked(wizardAPI.submit).mockResolvedValueOnce({ tasks: [] });
+    await click('创建整批任务');
+    expect(vi.mocked(wizardAPI.submit).mock.lastCall?.[0].hosts).toEqual([
+      { sn: 'H1', entered: locked ? {} : { [diskField.key]: prefill }, expectedTargetDisk: {key:diskField.key, mode, value:prefill} },
+    ]);
+  },
+);
+
+it('keeps an old response without a descriptor editable even if a label says target disk', async () => {
+  mockForms((sn) => ({
+    sn,
+    fields: [{ ...diskField, label: '安装目标盘' }],
+    problems: [],
+  }));
+  const page = await openDiskForm();
+  const path = '/dev/disk/by-id/wwn-example';
+  editDisk('H1', path);
+  await click('校验并确认');
+  expect(page.textContent).toContain('目标盘由自定义模板决定');
+  expect(flow.disks).not.toHaveBeenCalled();
   vi.mocked(wizardAPI.submit).mockResolvedValueOnce({ tasks: [] });
   await click('创建整批任务');
-  expect(vi.mocked(wizardAPI.submit).mock.lastCall?.[0].hosts).toEqual([{ sn: 'H1', entered: {} }]);
+  expect(
+    vi.mocked(wizardAPI.submit).mock.lastCall?.[0].hosts?.[0]?.entered,
+  ).toEqual({ [diskField.key]: path });
 });
 
-it('preserves the ESXi firstdisk rule when Linux hardware inventory is available', async () => {
-  flow.checkedHosts[0]!.attrs = { inv_disks: 'sda:1000000000:A' };
-  const mount = await openDiskForm([{ ...diskField, prefill: 'local' }], 'esxi');
-  expect(mount.textContent).not.toContain('可安装磁盘：');
-  expect(flow.discoveryList).not.toHaveBeenCalled();
+it('preserves an absolute persistent path when the installer accepts it', async () => {
+  mockForms((sn) => diskForm(sn, diskField, 'device-or-path'));
+  flow.disks.mockResolvedValue({
+    status: 'partial',
+    disks: [diskRow('sda')],
+    notice: '未读取序列号',
+  });
+  const page = await openDiskForm();
+  expect(page.textContent).toContain('未读取序列号');
+  const path = '/dev/disk/by-id/wwn-1234';
+  editDisk('H1', path);
   await click('校验并确认');
-  expect(mount.textContent).toContain('创建整批任务');
-  expect(mount.textContent).toContain('选盘规则：local');
+  expect(page.textContent).toContain(
+    '目标盘：' + path + '（安装时解析此路径）',
+  );
 });
 
-it.each(['list', 'detail', 'host'])('blocks submission after a %s read failure and preserves manual input when retrying', async (source) => {
-  const summary = { mac: '52:54:00:11:22:33', registered_sn: 'H1', status: 'received', report_at: 100 };
-  if (source === 'list') flow.discoveryList.mockRejectedValueOnce(new Error('请求未完成'));
-  if (source === 'detail') {
-    flow.discoveryList.mockResolvedValue({ items: [summary] });
-    flow.discoveryDetail.mockRejectedValueOnce(new Error('请求未完成')).mockResolvedValue({
-      ...summary, report: { sections: [] },
-    });
-  }
-  if (source === 'host') flow.hostDetail.mockRejectedValueOnce(new Error('请求未完成'));
-  const mount = await openDiskForm([diskField]);
-  expect(mount.textContent).toContain('H1 的硬件报告读取失败');
-  const input = document.getElementById('H1:partition/1/disk') as HTMLInputElement;
-  input.value = 'vda';
-  input.dispatchEvent(new Event('input', { bubbles: true }));
+it('retries both failed hosts without rereading the successful one or changing manual input', async () => {
+  flow.checkedHosts = ['H1', 'H2', 'H3'].map((sn) => ({
+    sn,
+    selectable: true,
+    attrs: {},
+  }));
+  const retried = new Set<string>();
+  flow.disks.mockImplementation(async (sn: string) => {
+    if (sn !== 'H2' && !retried.has(sn)) {
+      retried.add(sn);
+      throw new Error('连接失败');
+    }
+    return { status: 'none', disks: [] };
+  });
+  mockForms((sn) => diskForm(sn));
+  const page = await openDiskForm();
+  expect(page.textContent).toContain('H1 的硬件报告读取失败');
+  expect(page.textContent).toContain('H3 的硬件报告读取失败');
+  const input = editDisk('H1', 'vda');
   await click('校验并确认');
-  expect(mount.textContent).not.toContain('创建整批任务');
+  expect(page.textContent).not.toContain('创建整批任务');
   await click('重新读取硬件报告');
+  expect(input.value).toBe('vda');
   await click('校验并确认');
-  expect(mount.textContent).toContain('目标盘：vda');
-  expect(mount.textContent).toContain('创建整批任务');
+  expect(page.textContent).toContain('目标盘：vda');
+  expect(flow.disks.mock.calls.map(([sn]) => sn).sort()).toEqual([
+    'H1',
+    'H1',
+    'H2',
+    'H3',
+    'H3',
+  ]);
+});
+
+it('discards late reports and old input after the selection changes', async () => {
+  const all = ['H1', 'H2'].map((sn) => ({ sn, selectable: true, attrs: {} }));
+  vi.spyOn(wizardAPI, 'hosts').mockResolvedValue({
+    items: all as never,
+    total: 2,
+    next: '',
+  });
+  let finish!: (v: unknown) => void;
+  flow.disks
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    )
+    .mockResolvedValue({ status: 'ready', disks: [diskRow('sda', 'DISK-B')] });
+  mockForms((sn) => diskForm(sn));
+  const page = await openDiskForm();
+  editDisk('H1', 'old');
+  await click('上一步');
+  await click('上一步');
+  flow.checkedHosts = [all[1]!];
+  for (const label of [
+    '选择测试主机',
+    '下一步',
+    '选择测试 ISO',
+    '选择测试模板',
+    '下一步',
+    '校验并确认',
+  ])
+    await click(label);
+  finish({ status: 'ready', disks: [diskRow('sda', 'DISK-A')] });
+  await settle();
+  expect(page.textContent).toContain('目标盘：sda（480 GB · 序列号 DISK-B）');
+  expect(page.textContent).not.toContain('DISK-A');
+  expect(vi.mocked(wizardAPI.params).mock.lastCall?.[0].entered).toEqual({
+    H2: { [diskField.key]: 'sda' },
+  });
+});
+
+it('clears an entered value even when the replacement template uses the same field key', async () => {
+  vi.spyOn(wizardAPI, 'templates').mockResolvedValue({
+    items: [
+      { id: 'one', version: 1, name: '选择测试模板', usable: true },
+      { id: 'two', version: 3, name: '第二个模板', usable: true },
+    ] as never,
+    total: 2,
+    next: '',
+  });
+  mockForms((sn) => diskForm(sn));
+  await openDiskForm();
+  editDisk('H1', 'old');
+  await click('上一步');
+  await click('第二个模板');
+  await click('下一步');
+  const last = vi.mocked(wizardAPI.params).mock.lastCall?.[0];
+  expect(last).toMatchObject({
+    templateID: 'two',
+    templateVersion: 3,
+    entered: {},
+  });
+  expect(
+    (document.getElementById('H1:' + diskField.key) as HTMLInputElement).value,
+  ).toBe('sda');
+});
+
+it('explains manual entry and an invalid template prefix without a report', async () => {
+  mockForms((sn) => diskForm(sn));
+  const page = await openDiskForm();
+  expect(page.textContent).toContain('默认目标盘未经硬件核对');
+  editDisk('H1', '/dev/vdb');
+  await click('校验并确认');
+  expect(page.textContent).toContain('此模板会补上 /dev/');
+  expect(page.textContent).not.toContain('创建整批任务');
+  editDisk('H1', 'vdb');
+  await click('校验并确认');
+  expect(page.textContent).toContain('目标盘：vdb');
+});
+
+it('submits the confirmed target and asks for confirmation again if it changed', async () => {
+  let disk = 'sda';
+  mockForms((sn) => diskForm(sn, { ...diskField, locked: true, prefill: disk }));
+  const page = await openDiskForm();
+  await click('校验并确认');
+  expect(page.textContent).toContain('目标盘：sda');
+  disk = 'sdb';
+  vi.mocked(wizardAPI.submit).mockRejectedValueOnce({ response: { data: {
+    code: 409, data: { problems: [{ code: 'target_disk_changed', message: '目标盘已变化，请重新确认。' }] },
+  } } });
+  await click('创建整批任务');
+  expect(vi.mocked(wizardAPI.submit).mock.lastCall?.[0].hosts).toEqual([
+    { sn: 'H1', entered: {}, expectedTargetDisk: { key: diskField.key, mode: 'device', value: 'sda' } },
+  ]);
+  expect(page.textContent).toContain('目标盘已变化');
+  expect(page.textContent).toContain('校验并确认');
+  await click('校验并确认');
+  expect(page.textContent).toContain('目标盘：sdb');
 });

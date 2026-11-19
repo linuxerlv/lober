@@ -11,21 +11,20 @@ var ErrControlUnavailable = errors.New("task control is not implemented")
 
 // Controller 允许具有task:cancel或task:retry权限的可信操作者控制任务。
 // 编号原样交仓储处理，不新增格式、长度或必填检查。身份错误先于查任务，查任务先于不可用。
-// 成功返回重读的任务，先取得取消诊断再取得重试诊断；网页将空诊断转换为数组。
+// 成功返回本次提交的任务，先取得取消诊断再取得重试诊断；网页将空诊断转换为数组。
 // 后端错误原样返回，包括不存在、版本冲突、业务问题和审计失败，不自动重试。
 // 应用先核对操作者看到的版本，再把匹配的任务交给后端。
 // 后端按该版本在锁内复查最新事实，将状态、执行记录、事件和审计一起保存。
-// 审计只用可信操作者、固定动作、空说明和一次注入时钟。后端成功后重读，再补发提示。
-// 已提交但重读失败时返回原错误，不补发，不声称回滚。context原样传递，不新增超时或提交后检查。
+// 审计只用可信操作者、固定动作、空说明和一次注入时钟。保存成功后由执行层通知订阅者一次。
+// 上下文原样传递。提交后用返回的任务计算诊断。
 type Controller interface {
-	// Cancel 先检查task:cancel，审计动作固定为task.cancel；成功后返回重读任务及诊断。
+	// Cancel 先检查task:cancel，审计动作固定为task.cancel；成功后返回本次提交的任务及诊断。
 	Cancel(ctx context.Context, actor ports.Actor, id string, rev int64) (TaskChoice, error)
 	// Retry 先检查task:retry，审计动作固定为task.retry；保留原版本交后端复查。
 	Retry(ctx context.Context, actor ports.Actor, id string, rev int64) (TaskChoice, error)
 }
 type ControllerDeps struct {
-	Tasks    port.TaskGetter
-	Backend  port.Control
-	Clock    ports.Clock
-	Notifier ports.Notifier
+	Tasks   port.TaskGetter
+	Backend port.Control
+	Clock   ports.Clock
 }

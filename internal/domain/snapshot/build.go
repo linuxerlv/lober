@@ -39,21 +39,28 @@ import (
 // map 由 encoding/json 按键排序。快照里的 map 与切片都是新建的，不与入参共用；没有内容的也给
 // 空值而不是 nil，JSON 里统一是 {} 与 []。
 func Build(in params.Input) (model.Snapshot, []model.Problem) {
+	snap, _, ps := BuildWithParams(in)
+	return snap, ps
+}
+
+// BuildWithParams 同时返回构建快照所用的参数，供提交时核对操作者确认的值。
+func BuildWithParams(in params.Input) (model.Snapshot, params.Result, []model.Problem) {
 	t, series := in.Template, in.ISO.Series
 	// 目录里的系都推得出族与格式，catalog 的测试守着这一点。不认识的系，模板也不可能合法地勾上，
 	// 所以与没勾同报。
 	if !slices.Contains(t.Series, series) || !series.Valid() {
 		subject := model.Subject{Kind: model.KindTemplate, ID: templateRef(t)}
-		return model.Snapshot{}, []model.Problem{model.NewProblem("series_not_ticked", subject, string(series))}
+		return model.Snapshot{}, params.Result{}, []model.Problem{model.NewProblem("series_not_ticked", subject, string(series))}
 	}
 	if ps := slotProblems(t, series.Format()); len(ps) > 0 {
-		return model.Snapshot{}, ps
+		return model.Snapshot{}, params.Result{}, ps
 	}
 	res := params.Evaluate(in)
 	if len(res.Problems) > 0 {
-		return model.Snapshot{}, res.Problems
+		return model.Snapshot{}, res, res.Problems
 	}
-	return buildFrom(in, res)
+	snap, ps := buildFrom(in, res)
+	return snap, res, ps
 }
 
 // slotProblems 按正文里的顺序查模板 t 的每个插槽：名字不重复，执行插槽的时机格式 format 支持。两条与

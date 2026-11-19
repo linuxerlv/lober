@@ -7,6 +7,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 )
 
 const ruleTaskFinal rule = "任务接口与组装只转换和委托，不能重建仓储、控制、通知、渲染或状态规则"
+const ruleMachineAssembly rule = "机器组装只构造、普通字段转换和委托，不渲染、推算观察策略或生成凭据"
 
 func taskFinalFindings(caller string, fset *token.FileSet, files []*ast.File, info *types.Info) []violation {
 	console, assembly := under(caller, pkgConsole), caller == pkgAssembly
@@ -877,18 +879,6 @@ func Test机器密钥精确包接入完整检查(t *testing.T) {
 		}
 	}
 }
-func Test机器组装仅构造转换与委托(t *testing.T) {
-	root := filepath.Dir(goModPath(t))
-	b, err := os.ReadFile(filepath.Join(root, "cmd/lober/machine.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, forbidden := range []string{"render.Render", "machineSigningKey", ".Token(", ".ObserveIP(", ".ReachedReboot", ".IssuedAt", ".Execution.Firmware"} {
-		if strings.Contains(string(b), forbidden) {
-			t.Error("组装仍拥有业务实现", forbidden)
-		}
-	}
-}
 func Test执行观察只开放精确能力包(t *testing.T) {
 	for _, pkg := range []string{pkgExecution, pkgExecution + "/port", pkgEvents, pkgMachine} {
 		for _, imp := range []string{pkgExecution + "/port", pkgExecution + "/port/hidden", pkgExecution + "/hidden", pkgStore, pkgModel, "os"} {
@@ -918,33 +908,54 @@ func machineAssemblyFindings(caller string, fset *token.FileSet, files []*ast.Fi
 			if !ok {
 				return true
 			}
-			obj := info.Uses[id]
-			if obj == nil {
-				obj = info.Defs[id]
-			}
-			if obj == nil || obj.Pkg() == nil {
-				return true
-			}
-			target, name := obj.Pkg().Path(), obj.Name()
-			bad := target == pkgRender
-			if fn, ok := obj.(*types.Func); ok {
-				bad = bad || target == pkgExecution && name == "Token" || fn.Name() == "ObserveIP" || fn.Name() == "ReadESXiBootConfig"
-			}
-			if field, ok := obj.(*types.Var); ok && field.IsField() && target == pkgModel {
-				switch name {
-				case "Attempt", "IssuedAt", "ReachedReboot", "Firmware":
-					bad = true
-				}
-			}
-			if bad {
-				found = append(found, violation{rule: rule("机器组装只构造、普通字段转换和委托，不渲染、推算观察策略或生成凭据"), pkg: caller, subject: target + "." + name, pos: position(fset, id.Pos())})
+			if obj := info.ObjectOf(id); machineAssemblyRestricted(obj) {
+				found = append(found, violation{rule: ruleMachineAssembly, pkg: caller, subject: obj.Pkg().Path() + "." + obj.Name(), pos: position(fset, id.Pos())})
 			}
 			return true
 		})
 	}
 	return found
 }
-func Test机器组装不能借别名或小接口重做业务(t *testing.T) {
+
+func machineAssemblyRestricted(obj types.Object) bool {
+	if obj == nil || obj.Pkg() == nil {
+		return false
+	}
+	target := obj.Pkg().Path()
+	if target == pkgRender {
+		return true
+	}
+	switch o := obj.(type) {
+	case *types.Func:
+		switch o.Name() {
+		case "machineSigningKey":
+			return target == pkgAssembly
+		case "ObserveIP", "ReadESXiBootConfig":
+			return true
+		case "Token":
+			// 本地接口也能接收执行服务。用任务和作用域的真实类型认出签发方法。
+			sig := o.Type().(*types.Signature)
+			return target == pkgExecution || sig.Recv() != nil && sig.Params().Len() == 2 && sig.Results().Len() == 1 &&
+				standardNamedType(sig.Params().At(0).Type(), pkgModel, "Task") &&
+				standardNamedType(sig.Params().At(1).Type(), pkgExecution, "Scope") &&
+				types.Identical(sig.Results().At(0).Type(), types.Typ[types.String])
+		}
+	case *types.Var:
+		if target == pkgAssembly && o.Name() == "machineSigningKey" && o.Parent() == o.Pkg().Scope() {
+			_, callable := interfaceCallableSignature(o)
+			return callable
+		}
+		if target == pkgModel && o.IsField() {
+			switch o.Name() {
+			case "Attempt", "IssuedAt", "ReachedReboot", "Firmware":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func Test机器组装仅构造转换与委托(t *testing.T) {
 	imports := identityFixtureImports(t, pkgRender, pkgEvents, pkgMachine, pkgExecutionPort, modulePath+"/internal/application/authoring/port", modulePath+"/internal/application/authoring", pkgMachineKeys)
 	for _, tc := range []struct {
 		name, body string
@@ -952,6 +963,9 @@ func Test机器组装不能借别名或小接口重做业务(t *testing.T) {
 	}{
 		{"渲染方法别名", `import r "` + pkgRender + `";var render=r.Render`, false},
 		{"令牌方法值", `import e "` + pkgExecution + `";func f(s *e.Service){_=s.Token}`, false},
+		{"本地接口转发令牌", `import(e "` + pkgExecution + `";m "` + pkgModel + `");type task=m.Task;type source interface{Token(task,e.Scope) string};func f(s source,t task)string{return s.Token(t,e.Install)}`, false},
+		{"组装自行读取签名密钥", `func machineSigningKey(string)([]byte,error){return nil,nil};var sign=machineSigningKey`, false},
+		{"组装用函数变量读取签名密钥", `var machineSigningKey=func(string)([]byte,error){return nil,nil}`, false},
 		{"观察方法表达式", `import e "` + pkgEvents + `";var observe=(*e.Collector).ObserveIP`, false},
 		{"自建观察接口", `type local interface{ObserveIP(string,int,string,int64)};func f(s local){_=s.ObserveIP}`, false},
 		{"原配置能力方法", `import p "` + modulePath + `/internal/application/authoring/port";func f(s p.BootConfig){_=s.ReadESXiBootConfig}`, false},
@@ -962,11 +976,17 @@ func Test机器组装不能借别名或小接口重做业务(t *testing.T) {
 		{"凭据委托", `import(e "` + pkgExecution + `";m "` + pkgModel + `");func f(s *e.Service,t m.Task)(string,string){return s.Credentials(t)}`, true},
 		{"普通请求转换", `import(a "` + modulePath + `/internal/application/authoring";m "` + pkgExecutionPort + `");func f(r m.RenderRequest)a.MachineRenderRequest{return a.MachineRenderRequest{Task:r.Task,Kind:r.Kind,Slot:r.Slot,Values:r.Values}}`, true},
 		{"密钥入口", `import k "` + pkgMachineKeys + `";func f(){_=k.LoadOrCreate}`, true},
+		{"注释和文字不执行业务", `/* machineSigningKey 与 render.Render */ const note=".Token( .ObserveIP( .ReachedReboot .IssuedAt .Execution.Firmware"`, true},
+		{"无关的同名字段和方法", `type row struct{IssuedAt int64};func(row)Token()string{return ""};func f(r row){machineSigningKey:=r.IssuedAt;_,_=machineSigningKey,r.Token()}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := identityTypedFixture(t, imports, pkgAssembly, "machine_extra.go", tc.body)
-			if (len(got) == 0) != tc.allowed {
-				t.Fatal(tc.allowed, got)
+			if tc.allowed {
+				if len(got) != 0 {
+					t.Fatal(got)
+				}
+			} else if !slices.ContainsFunc(got, func(v violation) bool { return v.rule == ruleMachineAssembly }) {
+				t.Fatal("未查出机器组装规则违规", got)
 			}
 		})
 	}

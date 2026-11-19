@@ -1,3 +1,4 @@
+import type { Schemas } from './generated';
 import type { HostListItem } from './host';
 
 import { requestClient } from '#/api/request';
@@ -57,5 +58,11 @@ export function registerDiscoveryApi(mac: string, sn: string) {
   return requestClient.post<HostListItem>(
     `/discoveries/${encodeURIComponent(mac)}/register`,
     { sn },
+  );
+}
+
+export function getHostDisksApi(sn: string) {
+  return requestClient.get<Schemas['DiscoveryHostDiskReport']>(
+    `/hosts/${encodeURIComponent(sn)}/disks`,
   );
 }

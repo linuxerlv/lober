@@ -110,6 +110,11 @@ func TestDiscoveryDelivery(t *testing.T) {
 			t.Errorf("按登记序列号查找 %s 返回 %s", tc.sn, w.Body)
 		}
 	}
+	w = call("GET", "/console/v1/hosts/PXE-NEW/disks", "", viewer)
+	var diskReply struct{ Data data.HostDiskReport }
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &diskReply) != nil || diskReply.Data.Status != "none" || diskReply.Data.Disks == nil || diskReply.Data.Notice != "缺驱动" {
+		t.Fatalf("确认后的磁盘报告缺项信息应原样保留 %d %s", w.Code, w.Body)
+	}
 	for _, agent := range []string{"iPXE", "debian-installer"} {
 		r := httptest.NewRequest("GET", strings.Replace(boot, "sn=&", "sn=OTHER-HOST&", 1), nil)
 		r.Header.Set("User-Agent", agent)

@@ -3,6 +3,7 @@ package console
 import (
 	"github.com/lober/lober/internal/application/audit"
 	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/discovery"
 	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/application/media"
@@ -34,7 +35,9 @@ func newHTTPServer(t *testing.T) (*Server, *pgstore.Store, *atomic.Int64) {
 	st := pgtest.OpenStore(t)
 	now := new(atomic.Int64)
 	now.Store(fixedAt)
-	s := New(wizardDeps(testDeps{Tasks: st, Events: st, AuditReader: audit.NewReader(st), Clock: now.Load, Notifier: notification.NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, st))
+	deps := wizardDeps(testDeps{Tasks: st, Events: st, AuditReader: audit.NewReader(st), Clock: now.Load, Notifier: notification.NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, st)
+	deps.HostDisks = discovery.NewDiskReader(st)
+	s := New(deps)
 	return s, st, now
 }
 
@@ -93,7 +96,7 @@ func wizardDepsGuardControl(input testDeps, store authoringTestStore, guard port
 	d.MediaRegistry = media.NewRegistry(media.Deps{ISOs: store, Sources: store, Control: &mockISOSource{calls: map[string][]sourceCall{}}, Deletion: &mockISODeletion{st: store}, Clock: d.Clock})
 	d.HostRegistry = hosts.NewRegistry(hosts.Deps{Hosts: store, Clock: d.Clock})
 	d.HookAuthoring = authoring.NewHooks(authoring.HookDeps{Hooks: store, Clock: d.Clock})
-	d.TaskController = tasks.NewController(tasks.ControllerDeps{Tasks: cap.Tasks, Backend: backend, Clock: d.Clock, Notifier: cap.Notifier})
+	d.TaskController = tasks.NewController(tasks.ControllerDeps{Tasks: cap.Tasks, Backend: backend, Clock: d.Clock})
 	d.TaskReader = tasks.NewReader(tasks.ReaderDeps{Tasks: cap.Tasks, Diagnostics: backend, Renderer: cap.FrozenPreview})
 	d.TaskEvents = tasks.NewEventReader(tasks.EventDeps{Tasks: cap.Tasks, Events: cap.Events, Notifier: cap.Notifier})
 	d.Identity.(*identityTestFixture).capabilities = cap
@@ -153,7 +156,7 @@ func rewireTaskReader(s *Server, backendOverride ...tasksport.Control) {
 func setTaskControl(s *Server, backend tasksport.Control) {
 	d := s.server.deps
 	cap := testCaps(s)
-	s.server.deps.TaskController = tasks.NewController(tasks.ControllerDeps{Tasks: cap.Tasks, Backend: backend, Clock: d.Clock, Notifier: cap.Notifier})
+	s.server.deps.TaskController = tasks.NewController(tasks.ControllerDeps{Tasks: cap.Tasks, Backend: backend, Clock: d.Clock})
 	rewireTaskReader(s, backend)
 }
 

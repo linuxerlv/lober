@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import type { HostDiskOption, HostDiskReport } from './wizard-state';
-
 import type { Schemas } from '#/api/console/generated';
 
 import {
@@ -37,8 +35,7 @@ import {
 } from 'element-plus';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
-import { getDiscoveryApi, getRegisteredDiscoveryApi } from '#/api/console/discovery';
-import { getHostApi } from '#/api/console/host';
+import { getHostDisksApi } from '#/api/console/discovery';
 import { errorMessage, problemsOf } from '#/api/console/problem';
 import { wizardAPI } from '#/api/console/wizard';
 import ListPagination from '#/components/console/ListPagination.vue';
@@ -46,16 +43,20 @@ import ProblemList from '#/components/console/ProblemList.vue';
 import { NumberedPage } from '#/composables/numbered-page';
 
 import {
-  collectEditable,
-  extractHostDiskReport,
-  findTargetDiskOption,
-  formatTargetDiskValue,
+  deviceField,
+  diskInputProblem,
+  diskLabel,
+  diskNotice,
   isPersistentDiskPath,
-  isTargetDiskField,
+  matchesTargetDisk,
+  targetDiskSummary,
+  useHostDiskReports,
+} from './wizard-disks';
+import {
+  collectEditable,
   latestOnly,
-  matchesTargetDiskOption,
   mergeHostSelection,
-  selectionChanged,
+  useWizardSelection,
 } from './wizard-state';
 
 defineOptions({ name: 'TasksNew' });
@@ -71,73 +72,72 @@ const gate = latestOnly();
 let validationTimer: ReturnType<typeof setTimeout> | undefined;
 const hostPage = reactive(new NumberedPage<Host>());
 const hosts = computed(() => hostPage.items);
-const selectedHosts = ref<Host[]>([]);
+
 const hostQuery = ref('');
 const attrKey = ref('');
 const attrValue = ref('');
 const hostFilters = reactive({ q: '', attr_key: '', attr_value: '' });
-const isoPage = reactive(new NumberedPage<Schemas['WizardISOItem']>());
+const {
+  reports: hostDiskReports,
+  errors: diskReportErrors,
+  loading: diskReportsLoading,
+  blocked: diskReportsBlocked,
+  reset: resetDiskReports,
+  load: loadDiskReports,
+  retry: retryDiskReports,
+} = useHostDiskReports(getHostDisksApi);
+const {
+  selectedHosts,
+  selectedISO,
+  selectedTemplate,
+  isoPage,
+  templatePage,
+  forms,
+  entered,
+  commonProblems,
+  paramsProblems,
+  activeHost,
+  batchKey,
+  batchValue,
+  preview,
+  previewOpen,
+  selectHosts,
+  selectISO,
+  selectTemplate,
+  selection,
+} = useWizardSelection(() => {
+  invalidate();
+  resetDiskReports();
+});
 const isos = computed(() => isoPage.items);
-const templatePage = reactive(
-  new NumberedPage<Schemas['WizardTemplateItem']>(),
-);
 const templates = computed(() => templatePage.items);
 const working = computed(
   () =>
     busy.value || hostPage.loading || isoPage.loading || templatePage.loading,
 );
-const selectedISO = ref<Schemas['WizardISOItem']>();
-const selectedTemplate = ref<Schemas['WizardTemplateItem']>();
 let restoringHosts = false;
 let hostRender = 0;
-const state = ref({
-  isoID: '',
-  templateID: '',
-  templateVersion: 0,
-  entered: {} as Record<string, Record<string, string>>,
-});
-const forms = ref<Schemas['WizardParamsHost'][]>([]);
-const activeHost = ref('');
 const restrictedHost = ref<Host>();
 const restrictionOpen = ref(false);
-const paramsProblems = ref<Schemas['ProblemJSON'][]>([]);
-const commonProblems = ref<Schemas['ProblemJSON'][]>([]);
-const preview = ref<Schemas['PreviewResponse']>();
-const previewOpen = ref(false);
 const created = ref<Schemas['TaskItem'][]>([]);
-const batchKey = ref('');
-const batchValue = ref('');
-const hostDiskReports = ref<Record<string, HostDiskReport>>({});
-const diskReportsLoading = ref(false);
-const diskReportErrors = ref<Record<string, string>>({});
-const diskReportsBlocked = computed(
-  () => diskReportsLoading.value || Object.keys(diskReportErrors.value).length > 0,
-);
-const targetFamily = computed(() => selectedISO.value?.family);
-let diskReportTicket = 0;
 
-function linuxDiskField(field: Schemas['ParamFieldDTO']): boolean {
-  return targetFamily.value === 'linux' && isTargetDiskField(field);
-}
-
-function builtinPartitionParameter(field: Schemas['ParamFieldDTO'], name: string): boolean {
-  const [slot, position, parameter] = field.key.split('/');
-  if (!slot || parameter !== name) return false;
-  const instance = selectedTemplate.value?.assembly?.[slot]?.[Number(position) - 1];
-  return instance?.hookID === 'builtin-partition';
-}
-
-function hostFieldValue(hostSN: string, field: Schemas['ParamFieldDTO']): string {
-  return field.locked
-    ? field.prefill
-    : state.value.entered[hostSN]?.[field.key] || field.prefill;
+function hostFieldValue(
+  hostSN: string,
+  field: Schemas['ParamFieldDTO'],
+): string {
+  // 空输入按服务端参数规则回落到预填值。
+  return (!field.locked && entered.value[hostSN]?.[field.key]) || field.prefill;
 }
 
 function hostHasDiskMismatch(host: Schemas['WizardParamsHost']): boolean {
-  const disks = hostDiskReports.value[host.sn]?.disks ?? [];
-  return (host.fields ?? []).some(
-    (field) => linuxDiskField(field) &&
-      !matchesTargetDiskOption(field, hostFieldValue(host.sn, field), disks),
+  const field = deviceField(host);
+  return (
+    !!field &&
+    !matchesTargetDisk(
+      host,
+      hostFieldValue(host.sn, field),
+      hostDiskReports.value[host.sn]?.disks,
+    )
   );
 }
 
@@ -153,95 +153,21 @@ const invalidHosts = computed(
   () => forms.value.filter((host) => hostNeedsAttention(host)).length,
 );
 
-async function readHostDiskReport(host: Host): Promise<HostDiskReport> {
-  const [hostRecord, page] = await Promise.all([
-    host.attrs && Object.keys(host.attrs).length ? host : getHostApi(host.sn),
-    getRegisteredDiscoveryApi(host.sn),
-  ]);
-  if (hostRecord?.sn !== host.sn || !Array.isArray(page?.items)) {
-    throw new Error('主机记录不完整，请重新读取。');
-  }
-  const matched = page.items[0];
-  if (!matched) return extractHostDiskReport(hostRecord);
-  if (!matched.mac || matched.registered_sn !== host.sn) {
-    throw new Error('硬件报告的登记主机已变更，请重新读取。');
-  }
-  if (Array.isArray(matched.report?.sections)) {
-    return extractHostDiskReport(hostRecord, matched);
-  }
-  if (!matched.report_at && matched.status !== 'received') {
-    return extractHostDiskReport(hostRecord);
-  }
-  const detail = await getDiscoveryApi(matched.mac);
-  if (detail?.registered_sn !== host.sn || !Array.isArray(detail.report?.sections)) {
-    throw new Error('已登记的硬件报告不完整，请重新读取。');
-  }
-  return extractHostDiskReport(hostRecord, detail);
-}
-
-async function loadHostDiskReports(retry = false) {
-  const ticket = ++diskReportTicket;
-  const needed = new Set(
-    forms.value.filter((host) => host.fields?.some(linuxDiskField)).map((host) => host.sn),
-  );
-  const hostsToLoad = selectedHosts.value.filter(
-    (host) => needed.has(host.sn) && (!retry || diskReportErrors.value[host.sn]),
-  );
-  if (!retry) hostDiskReports.value = {};
-  diskReportErrors.value = {};
-  diskReportsLoading.value = hostsToLoad.length > 0;
-  await Promise.all(hostsToLoad.map(async (host) => {
-    try {
-      const report = await readHostDiskReport(host);
-      if (ticket === diskReportTicket) hostDiskReports.value[host.sn] = report;
-    } catch (error) {
-      if (ticket === diskReportTicket) {
-        diskReportErrors.value[host.sn] = errorMessage(error);
-      }
-    }
-  }));
-  if (ticket === diskReportTicket) diskReportsLoading.value = false;
-}
-
 function chooseTargetDisk(
-  hostSN: string,
-  field: Schemas['ParamFieldDTO'],
-  disk: HostDiskOption,
+  host: Schemas['WizardParamsHost'],
+  disk: Schemas['DiscoveryHostDisk'],
 ) {
-  if (working.value || field.locked) return;
-  const nextVal = formatTargetDiskValue(field, disk.device);
-  (state.value.entered[hostSN] ??= {})[field.key] = nextVal;
+  const field = deviceField(host);
+  if (working.value || !field || field.locked) return;
+  (entered.value[host.sn] ??= {})[field.key] = disk.device;
   scheduleParameterValidation();
 }
 
-function hostConfirmedDiskSummary(hostSN: string): string {
-  const hostForm = forms.value.find((h) => h.sn === hostSN);
-  if (!hostForm) return '';
-  const fields = hostForm.fields ?? [];
-  if (targetFamily.value === 'windows') {
-    const index = fields.find((field) => builtinPartitionParameter(field, 'disk_index'));
-    if (!index) return '';
-    const value = hostFieldValue(hostSN, index);
-    return selectedTemplate.value?.id === 'builtin-unattend'
-      ? `目标盘：Windows 磁盘 ${value}`
-      : `分区脚本使用 Windows 磁盘 ${value}`;
-  }
-  if (targetFamily.value === 'esxi') {
-    const rule = fields.find((field) => builtinPartitionParameter(field, 'disk'));
-    return rule ? `选盘规则：${hostFieldValue(hostSN, rule)}` : '';
-  }
-  const diskField = fields.find(linuxDiskField);
-  if (!diskField) return '';
-  const value = hostFieldValue(hostSN, diskField);
-  if (isPersistentDiskPath(diskField, value)) return `目标盘：${value}（安装时解析此路径）`;
-  if (!value) return '';
-  const report = hostDiskReports.value[hostSN];
-  const matched = findTargetDiskOption(value, report?.disks ?? []);
-  if (!matched) return `目标盘：${value}`;
-  const details = [matched.capacity];
-  if (matched.serial) details.push(`序列号 ${matched.serial}`);
-  else if (matched.model) details.push(matched.model);
-  return `目标盘：${value}（${details.filter(Boolean).join(' · ')}）`;
+function hostConfirmedDiskSummary(sn: string) {
+  return targetDiskSummary(
+    forms.value.find((host) => host.sn === sn),
+    hostDiskReports.value[sn]?.disks,
+  );
 }
 const batchFields = computed(() => [
   ...new Map(
@@ -294,35 +220,15 @@ function invalidate() {
   error.value = '';
   problems.value = [];
 }
-function resetDownstream(kind: 'hosts' | 'iso', value = '') {
-  invalidate();
-  state.value = selectionChanged(state.value, kind, value);
-  forms.value = [];
-  paramsProblems.value = [];
-  templatePage.reset();
-  templatePage.items = [];
-  templatePage.total = 0;
-  selectedTemplate.value = undefined;
-  preview.value = undefined;
-  diskReportTicket++;
-  diskReportsLoading.value = false;
-  diskReportErrors.value = {};
-  hostDiskReports.value = {};
-  if (kind === 'hosts') {
-    isoPage.reset();
-    isoPage.items = [];
-    isoPage.total = 0;
-    selectedISO.value = undefined;
-  }
-}
 function updateHosts() {
   if (restoringHosts || working.value) return;
-  selectedHosts.value = mergeHostSelection(
-    selectedHosts.value,
-    hosts.value,
-    hostGrid.grid.getCheckboxRecords(),
+  selectHosts(
+    mergeHostSelection(
+      selectedHosts.value,
+      hosts.value,
+      hostGrid.grid.getCheckboxRecords(),
+    ),
   );
-  resetDownstream('hosts');
 }
 async function restoreHostChecks() {
   const render = ++hostRender;
@@ -383,8 +289,7 @@ async function loadISOs() {
   );
 }
 function changeISO(value: unknown) {
-  resetDownstream('iso', String(value));
-  selectedISO.value = isos.value.find((iso) => iso.id === String(value));
+  selectISO(isos.value.find((iso) => iso.id === String(value)));
   void loadTemplates();
 }
 function changeISOPage(value: number) {
@@ -398,7 +303,7 @@ function changeISOPageSize(value: number) {
 async function loadTemplates() {
   error.value = '';
   problems.value = [];
-  const isoID = state.value.isoID;
+  const isoID = selection().isoID;
   await gate.run(
     templatePage.load((pagination) =>
       wizardAPI.templates({ isoID, ...pagination }),
@@ -418,61 +323,23 @@ function changeTemplatePageSize(value: number) {
   void loadTemplates();
 }
 function chooseTemplate(id: string) {
-  invalidate();
-  const tpl = templates.value.find((item) => item.id === id);
-  selectedTemplate.value = tpl;
-  state.value.templateVersion = tpl?.version ?? 0;
-  state.value.entered = {};
-  forms.value = [];
-  paramsProblems.value = [];
-  preview.value = undefined;
-}
-function selection() {
-  return {
-    isoID: state.value.isoID,
-    templateID: state.value.templateID,
-    templateVersion: state.value.templateVersion,
-  };
+  selectTemplate(templates.value.find((item) => item.id === id));
 }
 async function evaluate(mode: 'confirm' | 'edit' | 'initial' = 'initial') {
   clearTimeout(validationTimer);
-  const entered = collectEditable(forms.value, state.value.entered);
+  const values = collectEditable(forms.value, entered.value);
   await gate.run(
     wizardAPI.params({
       ...selection(),
       hostSNs: selectedHosts.value.map((host) => host.sn),
-      entered,
+      entered: values,
     }),
     (result) => {
-      // Windows 内置分区脚本只读 disk_index；同一脚本声明的 Linux disk 对它无效。
-      forms.value = (result.hosts ?? []).map((host) =>
-        targetFamily.value === 'windows'
-          ? {
-              ...host,
-              fields: (host.fields ?? []).filter((field) => !builtinPartitionParameter(field, 'disk')),
-            }
-          : host,
-      );
+      forms.value = result.hosts ?? [];
       commonProblems.value = result.common ?? [];
-      paramsProblems.value = [
-        ...(result.common ?? []),
-        ...(result.hosts ?? []).flatMap((host) => host.problems ?? []),
-      ];
-      state.value.entered = Object.fromEntries(
-        forms.value.map((host) => [
-          host.sn,
-          Object.fromEntries(
-            (host.fields ?? [])
-              .filter((field) => !field.locked)
-              .map((field) => [
-                field.key,
-                entered[host.sn]?.[field.key] ?? field.prefill,
-              ]),
-          ),
-        ]),
-      );
+      entered.value = collectEditable(forms.value, values);
       if (mode === 'initial') {
-        void loadHostDiskReports();
+        void loadDiskReports(forms.value, selectedHosts.value);
       }
       const mismatch = forms.value.find(hostHasDiskMismatch);
       const firstInvalid = forms.value.find(hostNeedsAttention)?.sn;
@@ -512,7 +379,7 @@ function fillColumn() {
         (field) => field.key === batchKey.value && !field.locked,
       )
     ) {
-      (state.value.entered[host.sn] ??= {})[batchKey.value] = batchValue.value;
+      (entered.value[host.sn] ??= {})[batchKey.value] = batchValue.value;
       count++;
     }
   if (count) {
@@ -526,13 +393,13 @@ async function showPreview(host: Host) {
   busy.value = true;
   try {
     preview.value = await wizardAPI.preview(
-      state.value.templateID,
-      state.value.templateVersion,
+      selection().templateID,
+      selection().templateVersion,
       {
-        isoID: state.value.isoID,
+        isoID: selection().isoID,
         hostSN: host.sn,
         firmware: host.firmware || undefined,
-        entered: collectEditable(forms.value, state.value.entered)[host.sn],
+        entered: collectEditable(forms.value, entered.value)[host.sn],
       },
     );
     previewOpen.value = true;
@@ -553,10 +420,10 @@ async function next() {
         return void ElMessage.warning('请先选择主机');
       await loadISOs();
     } else if (step.value === 1) {
-      if (!state.value.isoID) return void ElMessage.warning('请选择 ISO');
+      if (!selection().isoID) return void ElMessage.warning('请选择 ISO');
       await loadTemplates();
     } else if (step.value === 2) {
-      if (!state.value.templateID) return void ElMessage.warning('请选择模板');
+      if (!selection().templateID) return void ElMessage.warning('请选择模板');
       await evaluate();
     } else if (step.value === 3) {
       if (diskReportsBlocked.value) {
@@ -577,18 +444,24 @@ async function next() {
           `主机 ${mismatch.sn} 的目标盘与可安装磁盘清单不匹配，请先选择可用目标盘`,
         );
       }
-      const entered = collectEditable(forms.value, state.value.entered);
+      const values = collectEditable(forms.value, entered.value);
+      const confirmed = new Map(forms.value.map(({ sn, targetDisk }) => [sn, targetDisk]));
       const result = await wizardAPI.submit({
         ...selection(),
         hosts: selectedHosts.value.map((host) => ({
           sn: host.sn,
-          entered: entered[host.sn] ?? {},
+          entered: values[host.sn] ?? {},
+          expectedTargetDisk: confirmed.get(host.sn),
         })),
       });
       created.value = result.tasks ?? [];
       step.value = 5;
     }
   } catch (reason) {
+    if (step.value === 4 && problemsOf(reason).some((p) => p.code === 'target_disk_changed')) {
+      step.value = 3;
+      await evaluate();
+    }
     fail(reason);
   } finally {
     busy.value = false;
@@ -610,7 +483,7 @@ onMounted(async () => {
   if (requested) {
     const matched = hosts.value.find((row) => row.sn === requested);
     if (matched && matched.selectable) {
-      selectedHosts.value = [matched];
+      selectHosts([matched]);
       void restoreHostChecks();
     } else if (matched && !matched.selectable) {
       selectedHosts.value = [];
@@ -645,7 +518,7 @@ watch(step, (value) => {
 onBeforeUnmount(() => {
   clearTimeout(validationTimer);
   gate.invalidate();
-  diskReportTicket++;
+  resetDiskReports();
   hostRender++;
   hostPage.reset();
   isoPage.reset();
@@ -725,7 +598,7 @@ onBeforeUnmount(() => {
         </ElCard>
         <ElCard v-if="step === 1 || step === 2" header="系统镜像">
           <ElRadioGroup
-            v-model="state.isoID"
+            :model-value="selectedISO?.id ?? ''"
             class="!block"
             @change="changeISO"
           >
@@ -761,7 +634,7 @@ onBeforeUnmount(() => {
         </ElCard>
         <ElCard v-if="step === 2" header="与镜像匹配的已审批模板">
           <ElRadioGroup
-            v-model="state.templateID"
+            :model-value="selectedTemplate?.id ?? ''"
             class="!block"
             @change="chooseTemplate(String($event))"
           >
@@ -838,7 +711,7 @@ onBeforeUnmount(() => {
               type="error"
               :closable="false"
             />
-            <ElButton :disabled="working || diskReportsLoading" @click="loadHostDiskReports(true)">
+            <ElButton :disabled="working || diskReportsLoading" @click="retryDiskReports">
               重新读取硬件报告
             </ElButton>
           </div>
@@ -900,7 +773,7 @@ onBeforeUnmount(() => {
                   <ElSelect
                     v-else-if="field.options?.length && !field.list"
                     :id="`${host.sn}:${field.key}`"
-                    v-model="state.entered[host.sn]![field.key]"
+                    v-model="entered[host.sn]![field.key]"
                     :disabled="working"
                     clearable
                     @update:model-value="scheduleParameterValidation"
@@ -915,30 +788,19 @@ onBeforeUnmount(() => {
                   <ElInput
                     v-else
                     :id="`${host.sn}:${field.key}`"
-                    v-model="state.entered[host.sn]![field.key]"
+                    v-model="entered[host.sn]![field.key]"
                     :disabled="working"
                     :type="field.list ? 'textarea' : 'text'"
                     :placeholder="field.list ? '每行一项' : '请输入'"
                     @update:model-value="scheduleParameterValidation"
                   />
                   <div
-                    v-if="linuxDiskField(field)"
+                    v-if="deviceField(host)?.key === field.key"
                     class="mt-2 grid gap-2 text-xs"
                   >
                     <ElAlert
-                      v-if="
-                        hostDiskReports[host.sn]?.disks?.length &&
-                        !matchesTargetDiskOption(
-                          field,
-                          hostFieldValue(host.sn, field),
-                          hostDiskReports[host.sn]!.disks,
-                        )
-                      "
-                      :title="`默认目标盘或当前值（${
-                        (field.locked
-                          ? field.prefill
-                          : state.entered[host.sn]?.[field.key]) || '未填写'
-                      }）与这台主机的可靠可安装磁盘清单不匹配；系统不会默认改选其他磁盘，请明确选择下方可安装磁盘或核对手工值。`"
+                      v-if="hostHasDiskMismatch(host)"
+                      :title="diskInputProblem(host, hostFieldValue(host.sn, field), hostDiskReports[host.sn]?.disks)"
                       type="warning"
                       :closable="false"
                     />
@@ -953,26 +815,23 @@ onBeforeUnmount(() => {
                         size="small"
                         :disabled="working"
                         :type="
-                          findTargetDiskOption(
-                            state.entered[host.sn]?.[field.key],
-                            [disk],
-                          )
+                          hostFieldValue(host.sn, field).trim().replace(/^\/dev\//, '') === disk.device
                             ? 'primary'
                             : undefined
                         "
-                        @click="chooseTargetDisk(host.sn, field, disk)"
+                        @click="chooseTargetDisk(host, disk)"
                       >
-                        {{ disk.label }}
+                        {{ diskLabel(disk) }}
                       </ElButton>
                     </div>
-                    <p v-if="isPersistentDiskPath(field, hostFieldValue(host.sn, field))" class="text-muted-foreground">
+                    <p v-if="isPersistentDiskPath(host.targetDisk?.mode, hostFieldValue(host.sn, field))" class="text-muted-foreground">
                       安装程序会在目标主机解析此路径。请核对它指向的磁盘。
                     </p>
                     <p
-                      v-if="hostDiskReports[host.sn]?.notice"
+                      v-if="diskNotice(hostDiskReports[host.sn])"
                       class="text-muted-foreground"
                     >
-                      {{ hostDiskReports[host.sn]!.notice }}
+                      {{ diskNotice(hostDiskReports[host.sn]) }}
                     </p>
                   </div>
                   <ProblemList
@@ -992,7 +851,7 @@ onBeforeUnmount(() => {
             ISO：{{ selectedISO?.name }} · 模板：{{
               selectedTemplate?.name
             }}
-            v{{ state.templateVersion }}
+            v{{ selectedTemplate?.version }}
           </p>
           <ElAlert
             title="创建后任务立即等待机器引导；请让目标主机从网络启动，若已停在自动发现或硬件采集界面，须先重启再从网络启动。"
@@ -1010,7 +869,7 @@ onBeforeUnmount(() => {
               {{ host.arch || '未登记架构' }} /
               {{ host.firmware || '未登记固件' }}
             </span>
-            <span v-if="hostConfirmedDiskSummary(host.sn)">
+            <span>
               {{ hostConfirmedDiskSummary(host.sn) }}
             </span>
             <span>

@@ -178,6 +178,7 @@ func TestOpenAPI公开枚举与路由数量保持兼容(t *testing.T) {
 		{"CatalogFirmware", []string{"bios", "uefi"}},
 		{"StoreRole", []string{"viewer", "operator", "hook-author", "hook-approver", "admin"}},
 		{"SourceKind", []string{"url", "upload", "path"}},
+		{"DiscoveryDiskStatus", []string{"none", "partial", "ready"}},
 	} {
 		want := map[string]any{"type": "string", "enum": tc.want}
 		if !reflect.DeepEqual(defs[tc.name], want) {
@@ -188,7 +189,7 @@ func TestOpenAPI公开枚举与路由数量保持兼容(t *testing.T) {
 	for _, item := range doc["paths"].(map[string]any) {
 		count += len(item.(map[string]any))
 	}
-	if count != 80 {
+	if count != 81 {
 		t.Fatalf("公开路由数量改变：%d", count)
 	}
 }

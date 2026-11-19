@@ -48,8 +48,9 @@ type ParamsRequest struct {
 	Entered map[string]map[string]string
 }
 type SubmitHost struct {
-	SN      string
-	Entered map[string]string
+	ExpectedTargetDisk *TargetDisk
+	SN                 string
+	Entered            map[string]string
 }
 type SubmitRequest struct {
 	Selection
@@ -84,10 +85,18 @@ type TemplatePage struct {
 	Next  string
 	Total *int64
 }
+
+// TargetDisk 指向实际交给安装器的参数。Value 与任务快照使用同一次求值规则。
+type TargetDisk struct {
+	Key   params.FieldKey
+	Mode  string
+	Value string
+}
 type HostParams struct {
-	SN       string
-	Fields   []params.Field
-	Problems []model.Problem
+	TargetDisk *TargetDisk
+	SN         string
+	Fields     []params.Field
+	Problems   []model.Problem
 }
 type ParamsResult struct {
 	Hosts  []HostParams

@@ -1,4 +1,4 @@
-function formatCapacity(bytes: bigint) {
+export function formatCapacity(bytes: bigint) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'];
   let unit = 0;
   let scale = 1n;

@@ -326,7 +326,8 @@ func Test机器应答渲染后取消不泄出正文(t *testing.T) {
 			f.task.Snapshot.Series = "debian"
 			observed := 0
 			h := f.handler(t, port.RenderFunc(func(ctx context.Context, _ port.RenderRequest) ([]byte, error) {
-				must(t, f.service.Cancel(ctx, f.task, repository.Audit{Actor: "tester", Action: "task.cancel", At: 1000}))
+				_, err := f.service.Cancel(ctx, f.task, repository.Audit{Actor: "tester", Action: "task.cancel", At: 1000})
+				must(t, err)
 				return []byte("private rendered answer"), nil
 			}), func(model.Task, string) { observed++ })
 			path := "/v1/answer/task-one/" + f.install + "/preseed.cfg"

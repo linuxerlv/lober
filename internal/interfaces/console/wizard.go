@@ -46,10 +46,16 @@ type paramFieldDTO struct {
 	Prefill  string           `json:"prefill"`
 	Options  []optionResponse `json:"options"`
 }
+type wizardTargetDisk struct {
+	Key   params.FieldKey `json:"key"`
+	Mode  string          `json:"mode"`
+	Value string          `json:"value"`
+}
 type wizardParamsHost struct {
-	SN       string          `json:"sn"`
-	Fields   []paramFieldDTO `json:"fields"`
-	Problems []problemJSON   `json:"problems"`
+	TargetDisk *wizardTargetDisk `json:"targetDisk,omitempty"`
+	SN         string            `json:"sn"`
+	Fields     []paramFieldDTO   `json:"fields"`
+	Problems   []problemJSON     `json:"problems"`
 }
 type wizardParamsResult struct {
 	Hosts  []wizardParamsHost `json:"hosts"`
@@ -61,8 +67,9 @@ type wizardSelection struct {
 	TemplateVersion int    `json:"templateVersion" binding:"required,gt=0"`
 }
 type wizardSubmitHost struct {
-	SN      string            `json:"sn"`
-	Entered map[string]string `json:"entered,omitempty"`
+	ExpectedTargetDisk *wizardTargetDisk `json:"expectedTargetDisk,omitempty"`
+	SN                 string            `json:"sn"`
+	Entered            map[string]string `json:"entered,omitempty"`
 }
 type wizardSubmitRequest struct {
 	wizardSelection
@@ -225,7 +232,11 @@ func (s *server) wizardParams(c *gin.Context) {
 	}
 	hosts := make([]wizardParamsHost, len(result.Hosts))
 	for i, h := range result.Hosts {
-		hosts[i] = wizardParamsHost{h.SN, paramFields(h.Fields), jsonProblems(h.Problems)}
+		hosts[i] = wizardParamsHost{SN: h.SN, Fields: paramFields(h.Fields), Problems: jsonProblems(h.Problems)}
+		if h.TargetDisk != nil {
+			disk := wizardTargetDisk(*h.TargetDisk)
+			hosts[i].TargetDisk = &disk
+		}
 	}
 	Ok(c, wizardParamsResult{hosts, jsonProblems(result.Common)})
 }
@@ -236,7 +247,7 @@ func (s *server) wizardSubmit(c *gin.Context) {
 	}
 	hosts := make([]tasks.SubmitHost, len(req.Hosts))
 	for i, h := range req.Hosts {
-		hosts[i] = tasks.SubmitHost{SN: h.SN, Entered: h.Entered}
+		hosts[i] = tasks.SubmitHost{SN: h.SN, Entered: h.Entered, ExpectedTargetDisk: (*tasks.TargetDisk)(h.ExpectedTargetDisk)}
 	}
 	created, ok := Get(c, func() ([]tasks.TaskChoice, error) {
 		return s.deps.Wizard.Submit(c.Request.Context(), actorOf(c), tasks.SubmitRequest{Selection: req.applicationSelection(), Hosts: hosts})

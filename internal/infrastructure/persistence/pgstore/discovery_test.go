@@ -61,9 +61,15 @@ func TestDiscoveryPersistence(t *testing.T) {
 	if observed, selected, err := st.RegisteredDiscoverySN(ctx, mac); err != nil || selected != "CONFIRMED" || observed != "SN-PXE" {
 		t.Fatalf("正式登记后的网口应可查到确认的序列号: %q %v", selected, err)
 	}
+	if report, at, err := st.LatestDiscoveryReport(ctx, host.SN); err != nil || at != 120 || report == nil || report.Sections[0].Reason != "缺驱动" {
+		t.Fatalf("最近登记报告 %v %d %v", report, at, err)
+	}
 	audit.Action = "host.delete"
 	if err := st.DeleteHost(ctx, host.SN, host.Rev, audit); err != nil {
 		t.Fatal(err)
+	}
+	if report, at, err := st.LatestDiscoveryReport(ctx, host.SN); err != nil || report != nil || at != 0 {
+		t.Fatalf("误返回已解绑报告 %v %d %v", report, at, err)
 	}
 	if _, selected, err := st.RegisteredDiscoverySN(ctx, mac); err != nil || selected != "" {
 		t.Fatalf("删除主机后不能再按网口关联: %q %v", selected, err)
