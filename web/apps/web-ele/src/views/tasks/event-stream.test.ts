@@ -535,3 +535,47 @@ it('ignores an old request returning 401 after credentials change', async () => 
   expect(io.clearSession).not.toHaveBeenCalled();
   expect(new Headers(Stream.instances[0]?.init.headers).get('Authorization')).toBe('Bearer new-test-token');
 });
+
+it('displays network boot and discovery reboot guidance when pending, plus real progress stage and latest report time/content from live events', async () => {
+  io.get.mockResolvedValue(task('pending'));
+  io.events.mockResolvedValueOnce({
+    items: [
+      {
+        at: 1_750_000_000,
+        fields: {},
+        key: 'created',
+        kind: 'task.created',
+        seq: 1,
+        taskID: 'task-1',
+      },
+    ],
+  });
+  const node = document.createElement('div');
+  document.body.append(node);
+  const app = createApp(Detail);
+  app.mount(node);
+  unmount = () => app.unmount();
+  await flushPage();
+
+  expect(node.textContent).toContain('从网络启动');
+  expect(node.textContent).toContain('采集界面');
+  expect(node.textContent).toContain('重启');
+
+  const source = Stream.instances[0]!;
+  io.get.mockResolvedValue(task('installing'));
+  source.send({
+    at: 1_750_000_120,
+    fields: { slot: '1', timing: 'post', instance: '1', rc: '0', log_base64: btoa('post script ok') },
+    key: 'hook-report-1-1',
+    kind: 'hook.report',
+    seq: 2,
+    taskID: 'task-1',
+  });
+  await vi.advanceTimersByTimeAsync(120);
+  await flushPage();
+
+  expect(node.textContent).toContain('当前阶段');
+  expect(node.textContent).toContain('装后脚本');
+  expect(node.textContent).toContain('最近回报');
+  expect(node.textContent).toContain('post script ok');
+});
