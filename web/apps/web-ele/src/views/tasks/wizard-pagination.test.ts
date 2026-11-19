@@ -25,7 +25,7 @@ vi.mock('@vben/common-ui', () => ({
 vi.mock('#/api/console/wizard', () => ({ wizardAPI: io }));
 vi.mock('#/api/console/discovery', () => ({
   getDiscoveryApi: vi.fn(),
-  getDiscoveryListApi: vi.fn().mockResolvedValue({ items: [] }),
+  getRegisteredDiscoveryApi: vi.fn().mockResolvedValue({ items: [] }),
 }));
 vi.mock('#/api/console/host', () => ({
   getHostApi: vi.fn(),

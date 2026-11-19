@@ -472,6 +472,26 @@ it('keeps receiving logs after retrying a failed task', async () => {
   expect(fetch).toHaveBeenCalledOnce();
 });
 
+it('shows a rejected boot as a failure in the latest report, activity and located log', async () => {
+  const { node, source } = await mountDetail();
+  io.get.mockResolvedValue(task('failed'));
+  source.send({
+    ...event(201),
+    fields: { arch: 'aarch64', firmware: 'uefi' },
+    key: 'attempt-1-boot-0-failed',
+    kind: 'machine.boot',
+  });
+  await vi.advanceTimersByTimeAsync(120);
+  await flushPage();
+  const recentReport = [...node.querySelectorAll('dt')]
+    .find((label) => label.textContent === '最近回报')?.nextElementSibling;
+  expect(recentReport?.textContent).toContain('主机引导失败');
+  expect(node.textContent).not.toContain('主机开始引导');
+  click(node, '定位日志');
+  await flushPage();
+  expect(node.querySelector('[aria-label="定位到的失败日志"]')?.textContent).toContain('主机引导失败');
+});
+
 it.each([
   ['cancel', '取消任务'],
   ['retry', '重试任务'],

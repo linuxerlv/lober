@@ -1,4 +1,6 @@
 /* eslint-disable vue/one-component-per-file -- Test adapters exercise the real page's async flow. */
+import type { Schemas } from '#/api/console/generated';
+
 import { createApp, nextTick } from 'vue';
 
 import { afterEach, expect, it, vi } from 'vitest';
@@ -130,7 +132,8 @@ vi.mock('#/api/console/host', () => ({
   getHostApi: flow.hostDetail,
 }));
 vi.mock('#/api/console/discovery', () => ({
-  getDiscoveryListApi: flow.discoveryList,
+  getRegisteredDiscoveryApi: flow.discoveryList,
+  getDiscoveryListApi: vi.fn().mockResolvedValue({ items: [] }),
   getDiscoveryApi: flow.discoveryDetail,
 }));
 vi.mock('#/api/console/wizard', () => ({
@@ -141,7 +144,7 @@ vi.mock('#/api/console/wizard', () => ({
       total: flow.checkedHosts.length,
     }),
     isos: async () => ({
-      items: [{ id: 'iso1', name: '选择测试 ISO', usable: true, problems: [] }],
+      items: [{ id: 'iso1', family: 'linux', name: '选择测试 ISO', usable: true, problems: [] }],
       next: '',
       total: 1,
     }),
@@ -199,8 +202,8 @@ afterEach(() => {
   flow.routeQuery = {};
   flow.checkedHosts = [{ sn: 'H1', attrs: {}, selectable: true }];
   flow.warning.mockReset();
-  flow.hostDetail.mockReset();
-  flow.discoveryList.mockReset();
+  flow.hostDetail.mockReset().mockImplementation(async (sn: string) => ({ sn, attrs: {} }));
+  flow.discoveryList.mockReset().mockResolvedValue({ items: [] });
   flow.discoveryDetail.mockReset();
 });
 async function settle() {
@@ -652,11 +655,10 @@ it('blocks confirmation and submission when disk report is loading or current di
     { sn: 'H2', attrs: {}, selectable: true },
   ];
   let resolveDiscoveryList!: (val: unknown) => void;
-  flow.discoveryList.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        resolveDiscoveryList = resolve;
-      }),
+  flow.discoveryList.mockImplementation((sn: string) =>
+    sn === 'H1' ? Promise.resolve({ items: [] }) : new Promise((resolve) => {
+      resolveDiscoveryList = resolve;
+    }),
   );
   flow.discoveryDetail.mockImplementation(async (mac: string) => {
     if (mac === '52:54:00:00:00:02') {
@@ -807,7 +809,7 @@ it('blocks confirmation and submission when disk report is loading or current di
   expect(mount.textContent).not.toContain('创建整批任务');
 });
 
-it('paginates discovery pages past 50 records until registered hosts are found, stops on repeated cursor, ignores spoofed unregistered sn, and reuses wizard host attrs', async () => {
+it('looks up only the selected registered host and reuses its wizard attributes', async () => {
   const h1Row = {
     sn: 'H1',
     attrs: { inv_collected_at: '1000', inv_disks: 'sda:240000000000:Old Disk' },
@@ -820,43 +822,15 @@ it('paginates discovery pages past 50 records until registered hosts are found, 
     total: 1,
   });
 
-  // Page 1 has 50 items including a spoofed unregistered record with sn: 'H1'
-  // Page 2 has the real registered_sn: 'H1' with a newer report_at: 2000
-  flow.discoveryList
-    .mockResolvedValueOnce({
-      items: [
-        {
-          mac: '52:54:00:aa:bb:01',
-          sn: 'H1',
-          report_at: 3000,
-          status: 'received',
-        },
-      ],
-      next_cursor: 'cursor-page-2',
-    })
-    .mockResolvedValueOnce({
-      items: [
-        {
-          mac: '52:54:00:aa:bb:02',
-          registered_sn: 'H1',
-          report_at: 1500,
-          status: 'received',
-        },
-        {
-          mac: '52:54:00:aa:bb:03',
-          registered_sn: 'H1',
-          report_at: 2500,
-          status: 'received',
-        },
-      ],
-      next_cursor: 'cursor-page-2', // repeated cursor safety
-    });
+  flow.discoveryList.mockResolvedValue({
+    items: [{ mac: '52:54:00:aa:bb:03', registered_sn: 'H1', report_at: 2500, status: 'received' }],
+  });
 
   flow.discoveryDetail.mockImplementation(async (mac: string) => ({
     mac,
-    registered_sn: mac === '52:54:00:aa:bb:01' ? undefined : 'H1',
+    registered_sn: 'H1',
     sn: 'H1',
-    report_at: mac === '52:54:00:aa:bb:03' ? 2500 : 1500,
+    report_at: 2500,
     status: 'received',
     report: {
       sections: [
@@ -866,11 +840,11 @@ it('paginates discovery pages past 50 records until registered hosts are found, 
           status: 'read',
           items: [
             {
-              name: mac === '52:54:00:aa:bb:03' ? 'nvme0n1' : 'spoofed0',
+              name: 'nvme0n1',
               fields: {
                 类型: '磁盘',
                 '容量（字节）': '960000000000',
-                序列号: mac === '52:54:00:aa:bb:03' ? 'REAL-NEWEST-SN' : 'WRONG-SN',
+                序列号: 'REAL-NEWEST-SN',
               },
             },
           ],
@@ -915,14 +889,98 @@ it('paginates discovery pages past 50 records until registered hosts are found, 
   await settle();
   await settle();
 
-  // Reused wizard host attrs without redundant N+1 getHostApi call when attrs already present
   expect(flow.hostDetail).not.toHaveBeenCalled();
-  // Fetched both page 1 and page 2
-  expect(flow.discoveryList).toHaveBeenCalledTimes(2);
-  // Only queried the newest registered discovery record (52:54:00:aa:bb:03), never the spoofed one
-  expect(flow.discoveryDetail).toHaveBeenCalledWith('52:54:00:aa:bb:03');
-  expect(flow.discoveryDetail).not.toHaveBeenCalledWith('52:54:00:aa:bb:01');
+  expect(flow.discoveryList).toHaveBeenCalledExactlyOnceWith('H1');
+  expect(flow.discoveryDetail).toHaveBeenCalledExactlyOnceWith('52:54:00:aa:bb:03');
   expect(mount.textContent).toContain('REAL-NEWEST-SN');
-  expect(mount.textContent).not.toContain('WRONG-SN');
   expect(mount.textContent).not.toContain('Old Disk');
+});
+
+const diskField: Schemas['ParamFieldDTO'] = {
+  key: 'partition/1/disk', label: '系统盘', type: 'word', prefill: 'sda',
+  locked: false, list: false, required: true, options: [],
+};
+
+async function openDiskForm(fields: Schemas['ParamFieldDTO'][], family: Schemas['CatalogFamily'] = 'linux') {
+  vi.spyOn(wizardAPI, 'isos').mockResolvedValue({
+    items: [{
+      id: 'iso1', family, name: '选择测试 ISO', usable: true, arch: 'x86_64',
+      artifacts: null, offers: null, problems: [], rev: 1, series: '', sha256: '',
+      state: 'ready', version: '1',
+    }],
+    total: 1, next: '',
+  });
+  vi.spyOn(wizardAPI, 'templates').mockResolvedValue({
+    items: [{
+      id: family === 'windows' ? 'builtin-unattend' : 'test-template',
+      name: '选择测试模板', usable: true, version: 1, family,
+      assembly: {
+        partition: [{
+          hookID: 'builtin-partition', hookVersion: 3, bindings: null, required: null, timeoutSec: null,
+        }],
+      },
+      approver: '', author: '', bindings: null, body: '', builtin: family === 'windows',
+      derivedFrom: null, params: null, problems: [], rev: 1, series: null, state: 'approved',
+    }],
+    total: 1, next: '',
+  });
+  vi.spyOn(wizardAPI, 'params').mockResolvedValue({ common: [], hosts: [{ sn: 'H1', fields, problems: [] }] });
+  const mount = document.createElement('div');
+  document.body.append(mount);
+  const app = createApp(Wizard);
+  app.mount(mount);
+  stop = () => app.unmount();
+  await settle();
+  for (const label of ['选择测试主机', '下一步', '选择测试 ISO', '选择测试模板', '下一步']) {
+    await click(label);
+  }
+  return mount;
+}
+
+it('shows the Windows installer disk number without offering Linux devices or submitting the unused parameter', async () => {
+  flow.checkedHosts[0]!.attrs = { inv_disks: 'sda:1000000000:A\nsdb:1000000000:B' };
+  const mount = await openDiskForm([diskField, {
+    ...diskField, key: 'partition/1/disk_index', label: '磁盘编号', type: 'int', prefill: '0', locked: true,
+  }], 'windows');
+  expect(document.getElementById('H1:partition/1/disk')).toBeNull();
+  expect(mount.textContent).not.toContain('可安装磁盘：');
+  expect(flow.discoveryList).not.toHaveBeenCalled();
+  await click('校验并确认');
+  expect(mount.textContent).toContain('目标盘：Windows 磁盘 0');
+  vi.mocked(wizardAPI.submit).mockResolvedValueOnce({ tasks: [] });
+  await click('创建整批任务');
+  expect(vi.mocked(wizardAPI.submit).mock.lastCall?.[0].hosts).toEqual([{ sn: 'H1', entered: {} }]);
+});
+
+it('preserves the ESXi firstdisk rule when Linux hardware inventory is available', async () => {
+  flow.checkedHosts[0]!.attrs = { inv_disks: 'sda:1000000000:A' };
+  const mount = await openDiskForm([{ ...diskField, prefill: 'local' }], 'esxi');
+  expect(mount.textContent).not.toContain('可安装磁盘：');
+  expect(flow.discoveryList).not.toHaveBeenCalled();
+  await click('校验并确认');
+  expect(mount.textContent).toContain('创建整批任务');
+  expect(mount.textContent).toContain('选盘规则：local');
+});
+
+it.each(['list', 'detail', 'host'])('blocks submission after a %s read failure and preserves manual input when retrying', async (source) => {
+  const summary = { mac: '52:54:00:11:22:33', registered_sn: 'H1', status: 'received', report_at: 100 };
+  if (source === 'list') flow.discoveryList.mockRejectedValueOnce(new Error('请求未完成'));
+  if (source === 'detail') {
+    flow.discoveryList.mockResolvedValue({ items: [summary] });
+    flow.discoveryDetail.mockRejectedValueOnce(new Error('请求未完成')).mockResolvedValue({
+      ...summary, report: { sections: [] },
+    });
+  }
+  if (source === 'host') flow.hostDetail.mockRejectedValueOnce(new Error('请求未完成'));
+  const mount = await openDiskForm([diskField]);
+  expect(mount.textContent).toContain('H1 的硬件报告读取失败');
+  const input = document.getElementById('H1:partition/1/disk') as HTMLInputElement;
+  input.value = 'vda';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  await click('校验并确认');
+  expect(mount.textContent).not.toContain('创建整批任务');
+  await click('重新读取硬件报告');
+  await click('校验并确认');
+  expect(mount.textContent).toContain('目标盘：vda');
+  expect(mount.textContent).toContain('创建整批任务');
 });

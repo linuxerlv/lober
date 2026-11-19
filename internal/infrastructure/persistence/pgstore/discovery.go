@@ -33,7 +33,7 @@ type discoveryRow struct {
 
 	SystemModel string `gorm:"not null;default:''"`
 
-	RegisteredSN   *string
+	RegisteredSN   *string  `gorm:"index:idx_discoveries_registered_sn"`
 	RegisteredHost *hostRow `gorm:"foreignKey:RegisteredSN;references:SN;constraint:OnDelete:SET NULL"`
 }
 
@@ -123,9 +123,16 @@ func systemModel(report discovery.Report) string {
 	return ""
 }
 
-func (s *Store) ListDiscoveries(ctx context.Context, after string, limit int, at int64) ([]discovery.Record, error) {
+func (s *Store) ListDiscoveries(ctx context.Context, after, registeredSN string, limit int, at int64) ([]discovery.Record, error) {
 	var rows []discoveryRow
-	if err := s.db.WithContext(ctx).Omit("Report").Where("mac > ?", after).Order("mac").Limit(limit).Find(&rows).Error; err != nil {
+	query := s.db.WithContext(ctx).Omit("Report")
+	if registeredSN != "" {
+		query = query.Where("registered_sn = ?", registeredSN).Order("report_at DESC, last_seen_at DESC")
+		limit = 1
+	} else {
+		query = query.Where("mac > ?", after)
+	}
+	if err := query.Order("mac").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	records := make([]discovery.Record, 0, len(rows))
@@ -172,19 +179,19 @@ func (row discoveryRow) summary(at int64) discovery.Record {
 	return record
 }
 
-func (s *Store) RegisteredDiscoverySN(ctx context.Context, mac string) (string, error) {
+func (s *Store) RegisteredDiscoverySN(ctx context.Context, mac string) (observed, registered string, err error) {
 	var row discoveryRow
-	err := s.db.WithContext(ctx).Select("registered_sn").Where("mac = ?", mac).Take(&row).Error
+	err = s.db.WithContext(ctx).Select("sn", "registered_sn").Where("mac = ?", mac).Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", nil
+		return "", "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if row.RegisteredSN == nil {
-		return "", nil
+		return "", "", nil
 	}
-	return *row.RegisteredSN, nil
+	return row.SN, *row.RegisteredSN, nil
 }
 
 func (s *Store) RegisterDiscovery(ctx context.Context, mac, sn string, a repository.Audit) (model.Host, error) {

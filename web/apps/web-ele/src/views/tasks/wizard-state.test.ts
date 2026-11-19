@@ -431,3 +431,16 @@ describe('wizard preserves server authority', () => {
     expect(spoofed.disks).toEqual([]);
   });
 });
+
+it('preserves stable Linux device paths and optional blanks while rejecting unknown short device names', () => {
+  const field = { key: 'partition/1/disk', label: '系统盘', type: 'diskpath' as const, required: false };
+  const disks = extractHostDiskReport({ sn: 'H1', attrs: { inv_disks: 'sda:1000000000:Disk' } }).disks;
+  for (const value of ['/dev/disk/by-id/wwn-ab12', '/dev/disk/by-path/pci-0000:00:1f.2-ata-1', '']) {
+    expect(matchesTargetDiskOption(field, value, disks), value).toBe(true);
+  }
+  expect(matchesTargetDiskOption({ ...field, required: true }, '', disks)).toBe(false);
+  expect(matchesTargetDiskOption(field, '/dev/sdb', disks)).toBe(false);
+  // 内置 Linux 模板会在裸设备名前加 /dev/，不能给它传完整持久路径。
+  expect(matchesTargetDiskOption({ ...field, type: 'word', prefill: 'sda' }, '/dev/disk/by-id/wwn-ab12', disks)).toBe(false);
+  expect(matchesTargetDiskOption({ ...field, type: 'word', prefill: '/dev/sda' }, '/dev/disk/by-id/wwn-ab12', disks)).toBe(true);
+});

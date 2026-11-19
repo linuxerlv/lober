@@ -21,9 +21,10 @@ var sectionKinds = []struct{ key, title string }{
 }
 
 var (
-	ErrDisabled = errors.New("自动发现未启用")
-	ErrReport   = errors.New("硬件报告格式无效")
-	ErrToken    = errors.New("采集凭据无效或已过期")
+	ErrIdentityConflict = errors.New("启动网口与本次报告的主机序列号不符")
+	ErrDisabled         = errors.New("自动发现未启用")
+	ErrReport           = errors.New("硬件报告格式无效")
+	ErrToken            = errors.New("采集凭据无效或已过期")
 )
 
 type Report struct {

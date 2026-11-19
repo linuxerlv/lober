@@ -58,7 +58,7 @@ const openTaskIndex = "idx_tasks_open"
 // tables 是本层全部表的期望结构，Open 与 schema_test 共用这一份，翻译数据库错误时也按它认约束名。计划「表结构」一节
 // 列的十张表都在这里。
 var tables = []table{
-	{name: "host_discoveries", primary: []string{"mac"}, foreign: []foreign{
+	{name: "host_discoveries", primary: []string{"mac"}, indexes: []index{{name: "idx_discoveries_registered_sn", columns: []string{"registered_sn"}}}, foreign: []foreign{
 		{name: "fk_host_discoveries_registered_host", columns: []string{"registered_sn"}, refTable: "hosts", refColumns: []string{"sn"}, onDelete: "SET NULL"},
 	}},
 	{

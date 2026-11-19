@@ -231,16 +231,28 @@ export function normalizeDiskDevice(raw?: string): string {
   return (raw ?? '').trim().replace(/^\/dev\//, '');
 }
 
+export function isPersistentDiskPath(
+  field: Pick<Schemas['ParamFieldDTO'], 'type'> & { prefill?: string },
+  value?: string,
+): boolean {
+  if (field.type !== 'diskpath' && !field.prefill?.startsWith('/dev/')) return false;
+  return /^\/dev\/(?:disk\/by-(?:id|path)|mapper)\/[^/]+$/.test((value ?? '').trim());
+}
+
 export function matchesTargetDiskOption(
   field: Pick<Schemas['ParamFieldDTO'], 'key' | 'label' | 'type'> & {
     list?: boolean;
+    required?: boolean;
+    prefill?: string;
   },
   value: string | undefined,
   disks: HostDiskOption[],
 ): boolean {
   if (!isTargetDiskField(field) || !disks.length) return true;
   const normalized = normalizeDiskDevice(value);
-  if (!normalized) return false;
+  if (!normalized) return field.required === false;
+  // 报告只记录内核设备名。持久路径由安装环境解析，具体格式交给服务端校验。
+  if (isPersistentDiskPath(field, value)) return true;
   return disks.some((disk) => disk.device === normalized);
 }
 

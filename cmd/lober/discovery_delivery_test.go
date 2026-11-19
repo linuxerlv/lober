@@ -100,6 +100,26 @@ func TestDiscoveryDelivery(t *testing.T) {
 	if w := call("GET", "/console/v1/hosts/PXE-NEW", "", viewer); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"arch":"x86_64"`) {
 		t.Fatalf("登记后主机不可读: %d %s", w.Code, w.Body)
 	}
+	for _, tc := range []struct {
+		sn    string
+		count int
+	}{{"PXE-NEW", 1}, {"OTHER-HOST", 0}} {
+		w := call("GET", list+"?registered_sn="+tc.sn, "", viewer)
+		var records struct{ Data discovery.Page }
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &records) != nil || len(records.Data.Items) != tc.count {
+			t.Errorf("按登记序列号查找 %s 返回 %s", tc.sn, w.Body)
+		}
+	}
+	for _, agent := range []string{"iPXE", "debian-installer"} {
+		r := httptest.NewRequest("GET", strings.Replace(boot, "sn=&", "sn=OTHER-HOST&", 1), nil)
+		r.Header.Set("User-Agent", agent)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusConflict {
+			t.Errorf("%s 遇到网卡和主机身份冲突应停止引导，得到 %d", agent, w.Code)
+		}
+	}
+
 	if w := call("GET", boot, "", ""); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "lober.discovery_token") {
 		t.Fatalf("已确认网口被再次发现: %d", w.Code)
 	}

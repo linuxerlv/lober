@@ -42,7 +42,7 @@ func artifactPath(s string) bool {
 
 // Console 是管理员查看与确认发现记录的入口。
 type Console interface {
-	List(context.Context, ports.Actor, string, int) (Page, error)
+	List(context.Context, ports.Actor, string, string, int) (Page, error)
 	Get(context.Context, ports.Actor, string) (data.Record, error)
 	Register(context.Context, ports.Actor, string, string) (model.Host, error)
 }
@@ -50,7 +50,7 @@ type Console interface {
 // Machine 是引导协议和采集上报的入口。
 type Machine interface {
 	Boot(ctx context.Context, sn, mac string, arch catalog.Arch, firmware catalog.Firmware) ([]byte, error)
-	RegisteredSerial(ctx context.Context, mac string) (string, error)
+	RegisteredSerial(ctx context.Context, mac, sn string) (string, error)
 	Submit(ctx context.Context, mac, token string, body []byte) error
 }
 
@@ -75,12 +75,21 @@ func New(store Store, clock ports.Clock, key []byte, gateway, artifacts string, 
 	return &Service{tokens: tokens, enabled: enabled, store: store, clock: clock, key: append([]byte(nil), key...), gateway: strings.TrimRight(gateway, "/"), artifacts: artifacts, images: maps.Clone(images)}
 }
 
-func (s *Service) RegisteredSerial(ctx context.Context, rawMAC string) (string, error) {
+func (s *Service) RegisteredSerial(ctx context.Context, rawMAC, rawSN string) (string, error) {
 	mac := data.MAC(rawMAC)
 	if mac == "" {
 		return "", nil
 	}
-	return s.store.RegisteredDiscoverySN(ctx, mac)
+	observed, registered, err := s.store.RegisteredDiscoverySN(ctx, mac)
+	if err != nil || registered == "" {
+		return "", err
+	}
+	sn, _ := model.NormalizeSN(rawSN)
+	// 管理员可更正出厂串号。只认可登记时的原串号或更正后的串号。
+	if sn != registered && sn != observed {
+		return "", data.ErrIdentityConflict
+	}
+	return registered, nil
 }
 
 func (s *Service) Boot(ctx context.Context, rawSN, rawMAC string, arch catalog.Arch, fw catalog.Firmware) ([]byte, error) {
@@ -156,7 +165,7 @@ type Page struct {
 	NextCursor string        `json:"next_cursor,omitempty"`
 }
 
-func (s *Service) List(ctx context.Context, a ports.Actor, cursor string, limit int) (Page, error) {
+func (s *Service) List(ctx context.Context, a ports.Actor, cursor, registeredSN string, limit int) (Page, error) {
 	if err := a.Authorize(access.PermHostRead); err != nil {
 		return Page{}, err
 	}
@@ -166,7 +175,14 @@ func (s *Service) List(ctx context.Context, a ports.Actor, cursor string, limit 
 	if limit < 1 || limit > 100 || (cursor != "" && data.MAC(cursor) != cursor) {
 		return Page{}, repository.ErrInvalid
 	}
-	records, err := s.store.ListDiscoveries(ctx, cursor, limit+1, s.clock())
+	if registeredSN != "" {
+		normalized, err := model.NormalizeSN(registeredSN)
+		if err != nil || cursor != "" {
+			return Page{}, repository.ErrInvalid
+		}
+		registeredSN = normalized
+	}
+	records, err := s.store.ListDiscoveries(ctx, cursor, registeredSN, limit+1, s.clock())
 	if err != nil {
 		return Page{}, err
 	}

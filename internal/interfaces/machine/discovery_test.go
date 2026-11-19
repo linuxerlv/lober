@@ -78,7 +78,7 @@ func TestDiscoveryHTTP(t *testing.T) {
 	}
 }
 
-func (f *discoveryFixture) RegisteredSerial(context.Context, string) (string, error) {
+func (f *discoveryFixture) RegisteredSerial(context.Context, string, string) (string, error) {
 	return "CONFIRMED", nil
 }
 

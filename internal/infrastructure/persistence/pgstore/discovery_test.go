@@ -38,7 +38,7 @@ func TestDiscoveryPersistence(t *testing.T) {
 	if err := st.SaveDiscoveryReport(ctx, mac, a.ID, 131, report); !errors.Is(err, discovery.ErrToken) {
 		t.Fatalf("旧报告不能覆盖: %v", err)
 	}
-	rows, err := st.ListDiscoveries(ctx, "", 10, 235)
+	rows, err := st.ListDiscoveries(ctx, "", "", 10, 235)
 	if err != nil || len(rows) != 1 || rows[0].FirstSeenAt != 100 || rows[0].LastSeenAt != 130 || rows[0].ReportAt != 120 || rows[0].Report != nil || rows[0].Status != "timed_out" {
 		t.Fatalf("发现与旧报告应保留: %+v %v", rows, err)
 	}
@@ -54,18 +54,18 @@ func TestDiscoveryPersistence(t *testing.T) {
 	if _, err = st.RegisterDiscovery(ctx, mac, "DIFFERENT", audit); !errors.Is(err, repository.ErrConflict) {
 		t.Fatalf("重复登记应冲突: %v", err)
 	}
-	rows, err = st.ListDiscoveries(ctx, "", 10, 240)
+	rows, err = st.ListDiscoveries(ctx, "", "", 10, 240)
 	if err != nil || len(rows) != 1 || rows[0].RegisteredSN != "CONFIRMED" {
 		t.Fatalf("登记结果应保存: %+v %v", rows, err)
 	}
-	if selected, err := st.RegisteredDiscoverySN(ctx, mac); err != nil || selected != "CONFIRMED" {
+	if observed, selected, err := st.RegisteredDiscoverySN(ctx, mac); err != nil || selected != "CONFIRMED" || observed != "SN-PXE" {
 		t.Fatalf("正式登记后的网口应可查到确认的序列号: %q %v", selected, err)
 	}
 	audit.Action = "host.delete"
 	if err := st.DeleteHost(ctx, host.SN, host.Rev, audit); err != nil {
 		t.Fatal(err)
 	}
-	if selected, err := st.RegisteredDiscoverySN(ctx, mac); err != nil || selected != "" {
+	if _, selected, err := st.RegisteredDiscoverySN(ctx, mac); err != nil || selected != "" {
 		t.Fatalf("删除主机后不能再按网口关联: %q %v", selected, err)
 	}
 

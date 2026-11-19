@@ -1,3 +1,7 @@
+import type { TaskEvent } from '#/api/console/task';
+
+type LabeledEvent = Pick<TaskEvent, 'fields' | 'kind'> & { key?: string };
+
 function logText(encoded: string): string {
   try {
     const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
@@ -19,9 +23,8 @@ export function eventDetails(fields?: null | Record<string, string>): string {
     )
     .join('；');
 }
-import type { TaskEvent } from '#/api/console/task';
 
-export const eventLabels: Record<string, string> = {
+const eventLabels: Record<string, string> = {
   'task.created': '任务已创建',
   'machine.boot': '主机开始引导',
   'machine.cancel': '任务已取消',
@@ -41,13 +44,34 @@ export const eventLabels: Record<string, string> = {
   'machine.slow': '安装耗时较长',
   'slot.start': '脚本插槽开始执行',
   'slot.end': '脚本插槽执行完成',
+  'machine.slot-end': '脚本插槽执行完成',
   'hook.start': '装机脚本开始执行',
   'hook.report': '装机脚本执行回报',
   'installer.syslog': '安装程序日志',
 };
 
-export function eventLabel(kind: string): string {
-  return eventLabels[kind] || kind;
+function bootFailed(event: LabeledEvent): boolean {
+  return (
+    event.kind === 'machine.boot' &&
+    (event.fields?.state === 'failed' ||
+      (typeof event.key === 'string' && event.key.endsWith('-failed')))
+  );
+}
+
+function hasExitError(event: LabeledEvent): boolean {
+  const rc = event.fields?.rc ?? '';
+  return /^-?\d+$/.test(rc) && Number(rc) !== 0;
+}
+
+export function eventLabel(event: LabeledEvent): string {
+  if (bootFailed(event)) return '主机引导失败';
+  if (
+    (event.kind === 'slot.end' || event.kind === 'machine.slot-end') &&
+    hasExitError(event)
+  ) {
+    return '脚本插槽执行失败';
+  }
+  return eventLabels[event.kind] || event.kind;
 }
 
 const timingStageLabels: Record<string, string> = {
@@ -135,11 +159,19 @@ export function taskProgressStage(
 
     if (state === 'installing') {
       if (
+        ev.kind === 'slot.end' ||
+        ev.kind === 'machine.slot-end' ||
+        (ev.kind === 'machine.slow' && ev.fields?.stage)
+      ) {
+        const stage = ev.fields?.stage;
+        if (stage === 'packages') return '安装中（安装软件包）';
+        if (stage === 'pre' || stage === 'post') return `安装中（${timingStageLabels[stage]}）`;
+        return base;
+      }
+      if (
         (ev.kind === 'slot.start' ||
-          ev.kind === 'slot.end' ||
           ev.kind === 'hook.start' ||
           ev.kind === 'hook.report' ||
-          ev.kind === 'machine.slot-end' ||
           ev.kind === 'machine.hook-report') &&
         timing &&
         timing !== 'firstboot'
@@ -186,7 +218,7 @@ export function taskProgressStage(
 }
 
 export function latestEventReport(
-  events: Pick<TaskEvent, 'at' | 'fields' | 'kind' | 'seq'>[],
+  events: (LabeledEvent & Pick<TaskEvent, 'at' | 'seq'>)[],
   state?: string,
 ):
   | undefined
@@ -218,13 +250,13 @@ export function latestEventReport(
     seq: last.seq,
     at: last.at,
     kind: last.kind,
-    title: eventLabel(last.kind),
+    title: eventLabel(last),
     content: rawContent || '无附加内容',
   };
 }
 
 export function findFailureEvent<
-  T extends Pick<TaskEvent, 'fields' | 'kind' | 'seq'>,
+  T extends LabeledEvent & Pick<TaskEvent, 'seq'>,
 >(events: T[], requiredHook: (event: T) => boolean = () => false) {
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index]!;
@@ -235,13 +267,7 @@ export function findFailureEvent<
       return { event, summary: reason || '任务报告失败，未提供具体原因。' };
     if (event.kind === 'machine.timeout')
       return { event, summary: reason || '任务在执行阶段超时。' };
-    if (
-      event.kind === 'machine.boot' &&
-      (event.fields?.state === 'failed' ||
-        ('key' in event &&
-          typeof event.key === 'string' &&
-          event.key.endsWith('-failed')))
-    ) {
+    if (bootFailed(event)) {
       return { event, summary: reason || '主机引导失败。' };
     }
     if (
@@ -249,8 +275,7 @@ export function findFailureEvent<
         event.kind === 'machine.slot-end' ||
         ((event.kind === 'hook.report' || event.kind === 'machine.hook-report') &&
           requiredHook(event))) &&
-      /^-?\d+$/.test(fields?.rc ?? '') &&
-      Number(fields?.rc) !== 0
+      hasExitError(event)
     ) {
       return {
         event,
