@@ -1,9 +1,5 @@
 <script setup lang="ts">
-import type { HostDiskOption, HostDiskReport } from './wizard-state';
-
-import type { DiscoveredHost } from '#/api/console/discovery';
 import type { Schemas } from '#/api/console/generated';
-import type { HostListItem } from '#/api/console/host';
 
 import {
   computed,
@@ -39,8 +35,7 @@ import {
 } from 'element-plus';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
-import { getDiscoveryApi, getDiscoveryListApi } from '#/api/console/discovery';
-import { getHostApi } from '#/api/console/host';
+import { getHostDisksApi } from '#/api/console/discovery';
 import { errorMessage, problemsOf } from '#/api/console/problem';
 import { wizardAPI } from '#/api/console/wizard';
 import ListPagination from '#/components/console/ListPagination.vue';
@@ -48,15 +43,20 @@ import ProblemList from '#/components/console/ProblemList.vue';
 import { NumberedPage } from '#/composables/numbered-page';
 
 import {
+  deviceField,
+  diskInputProblem,
+  diskLabel,
+  diskNotice,
+  isPersistentDiskPath,
+  matchesTargetDisk,
+  targetDiskSummary,
+  useHostDiskReports,
+} from './wizard-disks';
+import {
   collectEditable,
-  extractHostDiskReport,
-  findTargetDiskOption,
-  formatTargetDiskValue,
-  isTargetDiskField,
   latestOnly,
-  matchesTargetDiskOption,
   mergeHostSelection,
-  selectionChanged,
+  useWizardSelection,
 } from './wizard-state';
 
 defineOptions({ name: 'TasksNew' });
@@ -72,241 +72,102 @@ const gate = latestOnly();
 let validationTimer: ReturnType<typeof setTimeout> | undefined;
 const hostPage = reactive(new NumberedPage<Host>());
 const hosts = computed(() => hostPage.items);
-const selectedHosts = ref<Host[]>([]);
+
 const hostQuery = ref('');
 const attrKey = ref('');
 const attrValue = ref('');
 const hostFilters = reactive({ q: '', attr_key: '', attr_value: '' });
-const isoPage = reactive(new NumberedPage<Schemas['WizardISOItem']>());
+const {
+  reports: hostDiskReports,
+  errors: diskReportErrors,
+  loading: diskReportsLoading,
+  blocked: diskReportsBlocked,
+  reset: resetDiskReports,
+  load: loadDiskReports,
+  retry: retryDiskReports,
+} = useHostDiskReports(getHostDisksApi);
+const {
+  selectedHosts,
+  selectedISO,
+  selectedTemplate,
+  isoPage,
+  templatePage,
+  forms,
+  entered,
+  commonProblems,
+  paramsProblems,
+  activeHost,
+  batchKey,
+  batchValue,
+  preview,
+  previewOpen,
+  selectHosts,
+  selectISO,
+  selectTemplate,
+  selection,
+} = useWizardSelection(() => {
+  invalidate();
+  resetDiskReports();
+});
 const isos = computed(() => isoPage.items);
-const templatePage = reactive(
-  new NumberedPage<Schemas['WizardTemplateItem']>(),
-);
 const templates = computed(() => templatePage.items);
 const working = computed(
   () =>
     busy.value || hostPage.loading || isoPage.loading || templatePage.loading,
 );
-const selectedISO = ref<Schemas['WizardISOItem']>();
-const selectedTemplate = ref<Schemas['WizardTemplateItem']>();
 let restoringHosts = false;
 let hostRender = 0;
-const state = ref({
-  isoID: '',
-  templateID: '',
-  templateVersion: 0,
-  entered: {} as Record<string, Record<string, string>>,
-});
-const forms = ref<Schemas['WizardParamsHost'][]>([]);
-const activeHost = ref('');
 const restrictedHost = ref<Host>();
 const restrictionOpen = ref(false);
-const paramsProblems = ref<Schemas['ProblemJSON'][]>([]);
-const commonProblems = ref<Schemas['ProblemJSON'][]>([]);
-const preview = ref<Schemas['PreviewResponse']>();
-const previewOpen = ref(false);
 const created = ref<Schemas['TaskItem'][]>([]);
-const batchKey = ref('');
-const batchValue = ref('');
-const hostDiskReports = ref<Record<string, HostDiskReport>>({});
-const diskReportsLoading = ref(false);
-let diskReportTicket = 0;
 
-function hostFieldValue(hostSN: string, field: Schemas['ParamFieldDTO']): string {
-  return field.locked
-    ? field.prefill
-    : state.value.entered[hostSN]?.[field.key] ?? field.prefill;
+function hostFieldValue(
+  hostSN: string,
+  field: Schemas['ParamFieldDTO'],
+): string {
+  // 空输入按服务端参数规则回落到预填值。
+  return (!field.locked && entered.value[hostSN]?.[field.key]) || field.prefill;
 }
 
 function hostHasDiskMismatch(host: Schemas['WizardParamsHost']): boolean {
-  const disks = hostDiskReports.value[host.sn]?.disks ?? [];
-  if (!disks.length) return false;
-  return (host.fields ?? []).some(
-    (field) =>
-      isTargetDiskField(field) &&
-      !matchesTargetDiskOption(field, hostFieldValue(host.sn, field), disks),
+  const field = deviceField(host);
+  return (
+    !!field &&
+    !matchesTargetDisk(
+      host,
+      hostFieldValue(host.sn, field),
+      hostDiskReports.value[host.sn]?.disks,
+    )
   );
 }
 
 function hostNeedsAttention(host: Schemas['WizardParamsHost']): boolean {
-  return Boolean(host.problems?.length) || hostHasDiskMismatch(host);
+  return (
+    Boolean(host.problems?.length) ||
+    hostHasDiskMismatch(host) ||
+    Boolean(diskReportErrors.value[host.sn])
+  );
 }
 
 const invalidHosts = computed(
   () => forms.value.filter((host) => hostNeedsAttention(host)).length,
 );
 
-function firstDiskMismatchHost():
-  | undefined
-  | {
-      field: Schemas['ParamFieldDTO'];
-      host: Schemas['WizardParamsHost'];
-      value: string;
-    } {
-  for (const host of forms.value) {
-    const disks = hostDiskReports.value[host.sn]?.disks ?? [];
-    if (!disks.length) continue;
-    for (const field of host.fields ?? []) {
-      if (!isTargetDiskField(field)) continue;
-      const value = hostFieldValue(host.sn, field);
-      if (!matchesTargetDiskOption(field, value, disks)) {
-        return { host, field, value };
-      }
-    }
-  }
-  return undefined;
-}
-
-async function loadRegisteredDiscoveries(
-  targetSNs: Set<string>,
-  isCurrent: () => boolean,
-): Promise<Map<string, DiscoveredHost>> {
-  const bestBySN = new Map<string, DiscoveredHost>();
-  if (!targetSNs.size) return bestBySN;
-
-  const seenCursors = new Set<string>();
-  let cursor: string | undefined;
-
-  while (isCurrent()) {
-    let page: Awaited<ReturnType<typeof getDiscoveryListApi>> | undefined;
-    try {
-      page = await getDiscoveryListApi(cursor);
-    } catch {
-      break;
-    }
-    if (!isCurrent() || !page) break;
-
-    for (const item of page.items ?? []) {
-      const regSN = item.registered_sn;
-      if (!regSN || !targetSNs.has(regSN)) continue;
-      const prev = bestBySN.get(regSN);
-      const itemTime = (item.report_at ?? 0) || (item.last_seen_at ?? 0);
-      const prevTime = prev ? (prev.report_at ?? 0) || (prev.last_seen_at ?? 0) : -1;
-      if (!prev || itemTime > prevTime) {
-        bestBySN.set(regSN, item);
-      }
-    }
-
-    const next = page.next_cursor;
-    if (!next || seenCursors.has(next)) break;
-    // All target hosts have at least one matched registered discovery record and no further page needed if single-NIC
-    if (bestBySN.size >= targetSNs.size && (page.items?.length ?? 0) < 50) {
-      break;
-    }
-    seenCursors.add(next);
-    cursor = next;
-  }
-
-  return bestBySN;
-}
-
-async function loadHostDiskReports(hostsToLoad: Host[]) {
-  const ticket = ++diskReportTicket;
-  const sns = hostsToLoad.map((h) => h.sn);
-  if (!sns.length) {
-    hostDiskReports.value = {};
-    diskReportsLoading.value = false;
-    return;
-  }
-  diskReportsLoading.value = true;
-  const initial: Record<string, HostDiskReport> = {};
-  for (const h of hostsToLoad) {
-    initial[h.sn] = extractHostDiskReport(h);
-  }
-  hostDiskReports.value = initial;
-
-  try {
-    const isCurrent = () => ticket === diskReportTicket;
-    const matchedDiscoveries = await loadRegisteredDiscoveries(
-      new Set(sns),
-      isCurrent,
-    );
-    if (!isCurrent()) return;
-
-    await Promise.all(
-      hostsToLoad.map(async (host) => {
-        let hostRecord: Host | HostListItem = host;
-        if (!host.attrs || Object.keys(host.attrs).length === 0) {
-          try {
-            const fetched = await getHostApi(host.sn);
-            if (fetched && fetched.sn === host.sn) hostRecord = fetched;
-          } catch {
-            // fallback to wizard host item
-          }
-        }
-        if (!isCurrent()) return;
-
-        let discoveryRecord: DiscoveredHost | undefined;
-        const matched = matchedDiscoveries.get(host.sn);
-        if (matched?.mac && matched.registered_sn === host.sn) {
-          if (Array.isArray(matched.report?.sections)) {
-            discoveryRecord = matched;
-          } else {
-            try {
-              const detail = await getDiscoveryApi(matched.mac);
-              if (
-                detail &&
-                detail.registered_sn === host.sn &&
-                Array.isArray(detail.report?.sections)
-              ) {
-                discoveryRecord = detail;
-              }
-            } catch {
-              discoveryRecord = undefined;
-            }
-          }
-        }
-        if (!isCurrent()) return;
-        hostDiskReports.value = {
-          ...hostDiskReports.value,
-          [host.sn]: extractHostDiskReport(hostRecord, discoveryRecord),
-        };
-      }),
-    );
-
-    if (isCurrent()) {
-      const mismatch = firstDiskMismatchHost();
-      if (mismatch && step.value === 4) {
-        step.value = 3;
-        activeHost.value = mismatch.host.sn;
-      }
-    }
-  } finally {
-    if (ticket === diskReportTicket) {
-      diskReportsLoading.value = false;
-    }
-  }
-}
-
 function chooseTargetDisk(
-  hostSN: string,
-  field: Schemas['ParamFieldDTO'],
-  disk: HostDiskOption,
+  host: Schemas['WizardParamsHost'],
+  disk: Schemas['DiscoveryHostDisk'],
 ) {
-  if (working.value || field.locked) return;
-  const nextVal = formatTargetDiskValue(field, disk.device);
-  (state.value.entered[hostSN] ??= {})[field.key] = nextVal;
+  const field = deviceField(host);
+  if (working.value || !field || field.locked) return;
+  (entered.value[host.sn] ??= {})[field.key] = disk.device;
   scheduleParameterValidation();
 }
 
-function hostConfirmedDiskSummary(hostSN: string): string {
-  const hostForm = forms.value.find((h) => h.sn === hostSN);
-  if (!hostForm) return '';
-  const diskField = (hostForm.fields ?? []).find((f) => isTargetDiskField(f));
-  if (!diskField) return '';
-  const value =
-    (diskField.locked
-      ? diskField.prefill
-      : state.value.entered[hostSN]?.[diskField.key] ?? diskField.prefill) ||
-    '';
-  if (!value) return '';
-  const report = hostDiskReports.value[hostSN];
-  const matched = findTargetDiskOption(value, report?.disks ?? []);
-  if (!matched) return `目标盘：${value}`;
-  const details = [matched.capacity];
-  if (matched.serial) details.push(`序列号 ${matched.serial}`);
-  else if (matched.model) details.push(matched.model);
-  return `目标盘：${value}（${details.filter(Boolean).join(' · ')}）`;
+function hostConfirmedDiskSummary(sn: string) {
+  return targetDiskSummary(
+    forms.value.find((host) => host.sn === sn),
+    hostDiskReports.value[sn]?.disks,
+  );
 }
 const batchFields = computed(() => [
   ...new Map(
@@ -359,34 +220,15 @@ function invalidate() {
   error.value = '';
   problems.value = [];
 }
-function resetDownstream(kind: 'hosts' | 'iso', value = '') {
-  invalidate();
-  state.value = selectionChanged(state.value, kind, value);
-  forms.value = [];
-  paramsProblems.value = [];
-  templatePage.reset();
-  templatePage.items = [];
-  templatePage.total = 0;
-  selectedTemplate.value = undefined;
-  preview.value = undefined;
-  if (kind === 'hosts') {
-    diskReportTicket++;
-    diskReportsLoading.value = false;
-    hostDiskReports.value = {};
-    isoPage.reset();
-    isoPage.items = [];
-    isoPage.total = 0;
-    selectedISO.value = undefined;
-  }
-}
 function updateHosts() {
   if (restoringHosts || working.value) return;
-  selectedHosts.value = mergeHostSelection(
-    selectedHosts.value,
-    hosts.value,
-    hostGrid.grid.getCheckboxRecords(),
+  selectHosts(
+    mergeHostSelection(
+      selectedHosts.value,
+      hosts.value,
+      hostGrid.grid.getCheckboxRecords(),
+    ),
   );
-  resetDownstream('hosts');
 }
 async function restoreHostChecks() {
   const render = ++hostRender;
@@ -447,8 +289,7 @@ async function loadISOs() {
   );
 }
 function changeISO(value: unknown) {
-  resetDownstream('iso', String(value));
-  selectedISO.value = isos.value.find((iso) => iso.id === String(value));
+  selectISO(isos.value.find((iso) => iso.id === String(value)));
   void loadTemplates();
 }
 function changeISOPage(value: number) {
@@ -462,7 +303,7 @@ function changeISOPageSize(value: number) {
 async function loadTemplates() {
   error.value = '';
   problems.value = [];
-  const isoID = state.value.isoID;
+  const isoID = selection().isoID;
   await gate.run(
     templatePage.load((pagination) =>
       wizardAPI.templates({ isoID, ...pagination }),
@@ -482,58 +323,26 @@ function changeTemplatePageSize(value: number) {
   void loadTemplates();
 }
 function chooseTemplate(id: string) {
-  invalidate();
-  const tpl = templates.value.find((item) => item.id === id);
-  selectedTemplate.value = tpl;
-  state.value.templateVersion = tpl?.version ?? 0;
-  state.value.entered = {};
-  forms.value = [];
-  paramsProblems.value = [];
-  preview.value = undefined;
-}
-function selection() {
-  return {
-    isoID: state.value.isoID,
-    templateID: state.value.templateID,
-    templateVersion: state.value.templateVersion,
-  };
+  selectTemplate(templates.value.find((item) => item.id === id));
 }
 async function evaluate(mode: 'confirm' | 'edit' | 'initial' = 'initial') {
   clearTimeout(validationTimer);
-  const entered = collectEditable(forms.value, state.value.entered);
+  const values = collectEditable(forms.value, entered.value);
   await gate.run(
     wizardAPI.params({
       ...selection(),
       hostSNs: selectedHosts.value.map((host) => host.sn),
-      entered,
+      entered: values,
     }),
     (result) => {
       forms.value = result.hosts ?? [];
       commonProblems.value = result.common ?? [];
-      paramsProblems.value = [
-        ...(result.common ?? []),
-        ...(result.hosts ?? []).flatMap((host) => host.problems ?? []),
-      ];
-      state.value.entered = Object.fromEntries(
-        (result.hosts ?? []).map((host) => [
-          host.sn,
-          Object.fromEntries(
-            (host.fields ?? [])
-              .filter((field) => !field.locked)
-              .map((field) => [
-                field.key,
-                entered[host.sn]?.[field.key] ?? field.prefill,
-              ]),
-          ),
-        ]),
-      );
+      entered.value = collectEditable(forms.value, values);
       if (mode === 'initial') {
-        void loadHostDiskReports(selectedHosts.value);
+        void loadDiskReports(forms.value, selectedHosts.value);
       }
-      const mismatch = firstDiskMismatchHost();
-      const firstInvalid =
-        forms.value.find((host) => hostNeedsAttention(host))?.sn ??
-        mismatch?.host.sn;
+      const mismatch = forms.value.find(hostHasDiskMismatch);
+      const firstInvalid = forms.value.find(hostNeedsAttention)?.sn;
       activeHost.value =
         (mode === 'edit' ? undefined : firstInvalid) ??
         forms.value.find((host) => host.sn === activeHost.value)?.sn ??
@@ -543,11 +352,11 @@ async function evaluate(mode: 'confirm' | 'edit' | 'initial' = 'initial') {
       if (mode !== 'edit') {
         const canConfirm =
           mode === 'confirm' &&
-          !diskReportsLoading.value &&
+          !diskReportsBlocked.value &&
           paramsProblems.value.length === 0 &&
           !mismatch;
         if (mode === 'confirm' && mismatch) {
-          activeHost.value = mismatch.host.sn;
+          activeHost.value = mismatch.sn;
         }
         step.value = canConfirm ? 4 : 3;
       }
@@ -570,7 +379,7 @@ function fillColumn() {
         (field) => field.key === batchKey.value && !field.locked,
       )
     ) {
-      (state.value.entered[host.sn] ??= {})[batchKey.value] = batchValue.value;
+      (entered.value[host.sn] ??= {})[batchKey.value] = batchValue.value;
       count++;
     }
   if (count) {
@@ -584,13 +393,13 @@ async function showPreview(host: Host) {
   busy.value = true;
   try {
     preview.value = await wizardAPI.preview(
-      state.value.templateID,
-      state.value.templateVersion,
+      selection().templateID,
+      selection().templateVersion,
       {
-        isoID: state.value.isoID,
+        isoID: selection().isoID,
         hostSN: host.sn,
         firmware: host.firmware || undefined,
-        entered: collectEditable(forms.value, state.value.entered)[host.sn],
+        entered: collectEditable(forms.value, entered.value)[host.sn],
       },
     );
     previewOpen.value = true;
@@ -611,42 +420,48 @@ async function next() {
         return void ElMessage.warning('请先选择主机');
       await loadISOs();
     } else if (step.value === 1) {
-      if (!state.value.isoID) return void ElMessage.warning('请选择 ISO');
+      if (!selection().isoID) return void ElMessage.warning('请选择 ISO');
       await loadTemplates();
     } else if (step.value === 2) {
-      if (!state.value.templateID) return void ElMessage.warning('请选择模板');
+      if (!selection().templateID) return void ElMessage.warning('请选择模板');
       await evaluate();
     } else if (step.value === 3) {
-      if (diskReportsLoading.value) {
-        return void ElMessage.warning('正在读取主机硬件报告，请稍候再确认');
+      if (diskReportsBlocked.value) {
+        return void ElMessage.warning('请等硬件报告读取成功后再确认');
       }
       await evaluate('confirm');
     } else if (step.value === 4) {
       if (!access.accessCodes.includes('task:create')) return;
-      if (diskReportsLoading.value) {
+      if (diskReportsBlocked.value) {
         step.value = 3;
-        return void ElMessage.warning('正在读取主机硬件报告，请稍候再确认');
+        return void ElMessage.warning('请等硬件报告读取成功后再确认');
       }
-      const mismatch = firstDiskMismatchHost();
+      const mismatch = forms.value.find(hostHasDiskMismatch);
       if (mismatch) {
         step.value = 3;
-        activeHost.value = mismatch.host.sn;
+        activeHost.value = mismatch.sn;
         return void ElMessage.warning(
-          `主机 ${mismatch.host.sn} 的目标盘与可安装磁盘清单不匹配，请先选择可用目标盘`,
+          `主机 ${mismatch.sn} 的目标盘与可安装磁盘清单不匹配，请先选择可用目标盘`,
         );
       }
-      const entered = collectEditable(forms.value, state.value.entered);
+      const values = collectEditable(forms.value, entered.value);
+      const confirmed = new Map(forms.value.map(({ sn, targetDisk }) => [sn, targetDisk]));
       const result = await wizardAPI.submit({
         ...selection(),
         hosts: selectedHosts.value.map((host) => ({
           sn: host.sn,
-          entered: entered[host.sn] ?? {},
+          entered: values[host.sn] ?? {},
+          expectedTargetDisk: confirmed.get(host.sn),
         })),
       });
       created.value = result.tasks ?? [];
       step.value = 5;
     }
   } catch (reason) {
+    if (step.value === 4 && problemsOf(reason).some((p) => p.code === 'target_disk_changed')) {
+      step.value = 3;
+      await evaluate();
+    }
     fail(reason);
   } finally {
     busy.value = false;
@@ -668,7 +483,7 @@ onMounted(async () => {
   if (requested) {
     const matched = hosts.value.find((row) => row.sn === requested);
     if (matched && matched.selectable) {
-      selectedHosts.value = [matched];
+      selectHosts([matched]);
       void restoreHostChecks();
     } else if (matched && !matched.selectable) {
       selectedHosts.value = [];
@@ -703,7 +518,7 @@ watch(step, (value) => {
 onBeforeUnmount(() => {
   clearTimeout(validationTimer);
   gate.invalidate();
-  diskReportTicket++;
+  resetDiskReports();
   hostRender++;
   hostPage.reset();
   isoPage.reset();
@@ -783,7 +598,7 @@ onBeforeUnmount(() => {
         </ElCard>
         <ElCard v-if="step === 1 || step === 2" header="系统镜像">
           <ElRadioGroup
-            v-model="state.isoID"
+            :model-value="selectedISO?.id ?? ''"
             class="!block"
             @change="changeISO"
           >
@@ -819,7 +634,7 @@ onBeforeUnmount(() => {
         </ElCard>
         <ElCard v-if="step === 2" header="与镜像匹配的已审批模板">
           <ElRadioGroup
-            v-model="state.templateID"
+            :model-value="selectedTemplate?.id ?? ''"
             class="!block"
             @change="chooseTemplate(String($event))"
           >
@@ -888,6 +703,18 @@ onBeforeUnmount(() => {
             :closable="false"
             class="mb-4"
           />
+          <div v-if="Object.keys(diskReportErrors).length" class="mb-4 grid gap-2">
+            <ElAlert
+              v-for="(message, sn) in diskReportErrors"
+              :key="sn"
+              :title="`${sn} 的硬件报告读取失败：${message}`"
+              type="error"
+              :closable="false"
+            />
+            <ElButton :disabled="working || diskReportsLoading" @click="retryDiskReports">
+              重新读取硬件报告
+            </ElButton>
+          </div>
           <ProblemList :problems="commonProblems" />
           <div class="grid gap-3 md:grid-cols-[185px_minmax(0,1fr)]">
             <nav
@@ -946,7 +773,7 @@ onBeforeUnmount(() => {
                   <ElSelect
                     v-else-if="field.options?.length && !field.list"
                     :id="`${host.sn}:${field.key}`"
-                    v-model="state.entered[host.sn]![field.key]"
+                    v-model="entered[host.sn]![field.key]"
                     :disabled="working"
                     clearable
                     @update:model-value="scheduleParameterValidation"
@@ -961,32 +788,19 @@ onBeforeUnmount(() => {
                   <ElInput
                     v-else
                     :id="`${host.sn}:${field.key}`"
-                    v-model="state.entered[host.sn]![field.key]"
+                    v-model="entered[host.sn]![field.key]"
                     :disabled="working"
                     :type="field.list ? 'textarea' : 'text'"
                     :placeholder="field.list ? '每行一项' : '请输入'"
                     @update:model-value="scheduleParameterValidation"
                   />
                   <div
-                    v-if="isTargetDiskField(field)"
+                    v-if="deviceField(host)?.key === field.key"
                     class="mt-2 grid gap-2 text-xs"
                   >
                     <ElAlert
-                      v-if="
-                        hostDiskReports[host.sn]?.disks?.length &&
-                        !matchesTargetDiskOption(
-                          field,
-                          field.locked
-                            ? field.prefill
-                            : state.entered[host.sn]?.[field.key],
-                          hostDiskReports[host.sn]!.disks,
-                        )
-                      "
-                      :title="`默认目标盘或当前值（${
-                        (field.locked
-                          ? field.prefill
-                          : state.entered[host.sn]?.[field.key]) || '未填写'
-                      }）与这台主机的可靠可安装磁盘清单不匹配；系统不会默认改选其他磁盘，请明确选择下方可安装磁盘或核对手工值。`"
+                      v-if="hostHasDiskMismatch(host)"
+                      :title="diskInputProblem(host, hostFieldValue(host.sn, field), hostDiskReports[host.sn]?.disks)"
                       type="warning"
                       :closable="false"
                     />
@@ -1001,23 +815,23 @@ onBeforeUnmount(() => {
                         size="small"
                         :disabled="working"
                         :type="
-                          findTargetDiskOption(
-                            state.entered[host.sn]?.[field.key],
-                            [disk],
-                          )
+                          hostFieldValue(host.sn, field).trim().replace(/^\/dev\//, '') === disk.device
                             ? 'primary'
                             : undefined
                         "
-                        @click="chooseTargetDisk(host.sn, field, disk)"
+                        @click="chooseTargetDisk(host, disk)"
                       >
-                        {{ disk.label }}
+                        {{ diskLabel(disk) }}
                       </ElButton>
                     </div>
+                    <p v-if="isPersistentDiskPath(host.targetDisk?.mode, hostFieldValue(host.sn, field))" class="text-muted-foreground">
+                      安装程序会在目标主机解析此路径。请核对它指向的磁盘。
+                    </p>
                     <p
-                      v-if="hostDiskReports[host.sn]?.notice"
+                      v-if="diskNotice(hostDiskReports[host.sn])"
                       class="text-muted-foreground"
                     >
-                      {{ hostDiskReports[host.sn]!.notice }}
+                      {{ diskNotice(hostDiskReports[host.sn]) }}
                     </p>
                   </div>
                   <ProblemList
@@ -1037,7 +851,7 @@ onBeforeUnmount(() => {
             ISO：{{ selectedISO?.name }} · 模板：{{
               selectedTemplate?.name
             }}
-            v{{ state.templateVersion }}
+            v{{ selectedTemplate?.version }}
           </p>
           <ElAlert
             title="创建后任务立即等待机器引导；请让目标主机从网络启动，若已停在自动发现或硬件采集界面，须先重启再从网络启动。"
@@ -1055,7 +869,7 @@ onBeforeUnmount(() => {
               {{ host.arch || '未登记架构' }} /
               {{ host.firmware || '未登记固件' }}
             </span>
-            <span v-if="hostConfirmedDiskSummary(host.sn)">
+            <span>
               {{ hostConfirmedDiskSummary(host.sn) }}
             </span>
             <span>
@@ -1137,7 +951,7 @@ onBeforeUnmount(() => {
         </ElButton>
         <ElButton
           type="primary"
-          :disabled="(step === 3 || step === 4) && diskReportsLoading"
+          :disabled="(step === 3 || step === 4) && diskReportsBlocked"
           :loading="working"
           @click="next"
         >

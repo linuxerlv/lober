@@ -11,9 +11,10 @@ import (
 type Discoveries interface {
 	ObserveDiscovery(context.Context, discovery.Attempt) (discovery.Attempt, error)
 	SaveDiscoveryReport(ctx context.Context, mac, attempt string, at int64, report discovery.Report) error
-	ListDiscoveries(ctx context.Context, after string, limit int, at int64) ([]discovery.Record, error)
+	ListDiscoveries(ctx context.Context, after, registeredSN string, limit int, at int64) ([]discovery.Record, error)
 
+	LatestDiscoveryReport(ctx context.Context, registeredSN string) (*discovery.Report, int64, error)
 	GetDiscovery(ctx context.Context, mac string, at int64) (discovery.Record, error)
-	RegisteredDiscoverySN(ctx context.Context, mac string) (string, error)
+	RegisteredDiscoverySN(ctx context.Context, mac string) (observed, registered string, err error)
 	RegisterDiscovery(ctx context.Context, mac, sn string, a Audit) (model.Host, error)
 }

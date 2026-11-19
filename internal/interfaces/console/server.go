@@ -23,6 +23,7 @@ type Deps struct {
 	HostRegistry      hosts.Registry
 	Inventory         inventory.Requester
 	Discovery         discovery.Console
+	HostDisks         discovery.DiskReader
 	HookAuthoring     authoring.Hooks
 	TemplateAuthoring authoring.Templates
 	AuthoringEditor   authoring.Editor

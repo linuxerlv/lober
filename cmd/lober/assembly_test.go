@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/execution"
 	"github.com/lober/lober/internal/application/hosts"
 	appmedia "github.com/lober/lober/internal/application/media"
 	"github.com/lober/lober/internal/application/ports"
@@ -488,8 +489,8 @@ func Test身份接线共用会话与凭据协调(t *testing.T) {
 		t.Fatal("启动与网页创建了不同身份服务")
 	}
 	control := taskBackendOf(a.Machine)
-	for _, call := range []func(context.Context, model.Task, ports.AuditIntent) error{control.Cancel, control.Retry} {
-		if err := call(t.Context(), model.Task{ID: "missing"}, ports.AuditIntent{Actor: "admin", Action: "task.cancel", At: assemblyAt}); !errors.Is(err, repository.ErrNotFound) {
+	for _, call := range []func(context.Context, model.Task, ports.AuditIntent) (model.Task, error){control.Cancel, control.Retry} {
+		if _, err := call(t.Context(), model.Task{ID: "missing"}, ports.AuditIntent{Actor: "admin", Action: "task.cancel", At: assemblyAt}); !errors.Is(err, repository.ErrNotFound) {
 			t.Fatal("正式任务控制没有交给原执行服务", err)
 		}
 	}
@@ -647,57 +648,77 @@ func Test任务读取和预览显式组装(t *testing.T) {
 	}
 }
 
-// 后端已提交的提示仍保留，应用成功重读后还要补发。
 type taskControlAssemblyNotifier struct{ publishes []string }
 
-func (n *taskControlAssemblyNotifier) Publish(id string)                        { n.publishes = append(n.publishes, id) }
-func (*taskControlAssemblyNotifier) Subscribe(string) (<-chan struct{}, func()) { panic("不订阅") }
+func (n *taskControlAssemblyNotifier) Publish(id string) { n.publishes = append(n.publishes, id) }
 
-type taskControlAssemblyBackend struct {
-	taskReadAssemblyControl
-	notifier ports.Notifier
-	got      model.Task
-	audit    ports.AuditIntent
+type taskControlAssemblyStore struct {
+	taskReadAssemblyStore
+	audit   repository.Audit
+	events  []repository.NewEvent
+	saveErr error
 }
 
-func (b *taskControlAssemblyBackend) Cancel(_ context.Context, t model.Task, a ports.AuditIntent) error {
-	b.got = t
-	b.audit = a
-	b.notifier.Publish(t.ID)
-	return nil
+func (s *taskControlAssemblyStore) UpdateTaskExecution(_ context.Context, id string, expect repository.TaskExpect, state model.TaskState, execution *model.Execution, events []repository.NewEvent, audit repository.Audit) (model.Task, []repository.Appended, error) {
+	if s.saveErr != nil {
+		return model.Task{}, nil, s.saveErr
+	}
+	if id != s.task.ID || expect.Rev != s.task.Rev || expect.State != s.task.State {
+		return model.Task{}, nil, repository.ErrConflict
+	}
+	s.audit, s.events = audit, events
+	s.task.Rev++
+	s.task.State, s.task.Execution = state, execution
+	return s.task, nil, nil
 }
-func (b *taskControlAssemblyBackend) Retry(c context.Context, t model.Task, a ports.AuditIntent) error {
-	return b.Cancel(c, t, a)
-}
-func Test任务控制显式共用后端时钟和通知(t *testing.T) {
-	for _, retry := range []bool{false, true} {
-		st := &taskReadAssemblyStore{task: model.Task{ID: "stored", Rev: 9, State: model.TaskFailed}}
-		n := &taskControlAssemblyNotifier{}
-		b := &taskControlAssemblyBackend{notifier: n}
-		c := taskControllerOf(st, b, func() int64 { return 43 }, n)
-		op := c.Cancel
-		action := "task.cancel"
-		if retry {
-			op = c.Retry
-			action = "task.retry"
-		}
-		got, err := op(t.Context(), ports.Actor{Username: "operator", Role: model.RoleOperator}, "raw", 9)
-		if err != nil || got.Task.ID != "stored" || len(got.CanCancel) != 1 || !reflect.DeepEqual(b.got, st.task) || b.audit != (ports.AuditIntent{Actor: "operator", Action: action, At: 43}) || !reflect.DeepEqual(st.calls, []string{"get:raw", "get:stored"}) || !reflect.DeepEqual(b.calls, []string{"cancel:stored", "retry:stored"}) || !reflect.DeepEqual(n.publishes, []string{"stored", "stored"}) {
-			t.Fatal(got, err, b.audit, st.calls, b.calls, n.publishes)
-		}
+
+func Test任务控制返回本次提交并通知一次(t *testing.T) {
+	for _, action := range []string{"cancel", "retry"} {
+		t.Run(action, func(t *testing.T) {
+			st := &taskControlAssemblyStore{}
+			st.task = model.Task{ID: "stored", Rev: 9, State: model.TaskPending, Snapshot: model.Snapshot{Family: "linux", Series: "rocky", Format: "kickstart"}}
+			n := &taskControlAssemblyNotifier{}
+			clock := func() int64 { return 43 }
+			engine, err := execution.New(st, []byte(strings.Repeat("k", 32)), clock, n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := taskControllerOf(st, taskBackendOf(&machineBundle{Service: engine}), clock)
+			op, state, event := c.Cancel, model.TaskCancelled, "machine.cancelled"
+			if action == "retry" {
+				st.task.State = model.TaskFailed
+				op, state, event = c.Retry, model.TaskPending, "machine.retry"
+			}
+			actor := ports.Actor{Username: "operator", Role: model.RoleOperator}
+			saveErr := errors.New("保存失败")
+			st.saveErr = saveErr
+			if _, err := op(t.Context(), actor, "stored", 9); err != saveErr || len(n.publishes) != 0 {
+				t.Fatal(err, n.publishes)
+			}
+			st.saveErr, st.calls = nil, nil
+			got, err := op(t.Context(), actor, "stored", 9)
+			if err != nil || !reflect.DeepEqual(got.Task, st.task) || got.Task.Rev != 10 || got.Task.State != state || len(st.events) != 1 || st.events[0].Kind != event || st.audit != (repository.Audit{Actor: "operator", Action: "task." + action, At: 43}) {
+				t.Fatal(got, err, st.audit, st.events)
+			}
+			if !reflect.DeepEqual(st.calls, []string{"get:stored", "get:stored"}) || !reflect.DeepEqual(n.publishes, []string{"stored"}) {
+				t.Fatal(st.calls, n.publishes)
+			}
+			if _, err := op(t.Context(), actor, "stored", 9); err != repository.ErrConflict || len(n.publishes) != 1 {
+				t.Fatal(err, n.publishes)
+			}
+		})
 	}
 }
 func Test任务控制未启用明确不可用(t *testing.T) {
 	st := &taskReadAssemblyStore{task: model.Task{ID: "stored", Rev: 1}}
-	n := &taskControlAssemblyNotifier{}
-	c := taskControllerOf(st, taskBackendOf(&machineBundle{}), func() int64 { return 44 }, n)
+	c := taskControllerOf(st, taskBackendOf(&machineBundle{}), func() int64 { return 44 })
 	for _, op := range []func(context.Context, ports.Actor, string, int64) (tasks.TaskChoice, error){c.Cancel, c.Retry} {
 		if _, err := op(t.Context(), ports.Actor{Username: "admin", Role: model.RoleAdmin}, "raw", 1); !errors.Is(err, tasks.ErrControlUnavailable) {
 			t.Fatal(err)
 		}
 	}
-	if !reflect.DeepEqual(st.calls, []string{"get:raw", "get:raw"}) || len(n.publishes) != 0 {
-		t.Fatal(st.calls, n.publishes)
+	if !reflect.DeepEqual(st.calls, []string{"get:raw", "get:raw"}) {
+		t.Fatal(st.calls)
 	}
 }
 

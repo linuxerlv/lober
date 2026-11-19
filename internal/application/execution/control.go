@@ -27,23 +27,23 @@ func (*Control) CanRetry(t model.Task) []model.Problem {
 }
 
 // User controls use the exact revision the user reviewed. Conflicts require refresh.
-func (c *Control) control(ctx context.Context, task model.Task, audit repository.Audit, retry bool) error {
+func (c *Control) control(ctx context.Context, task model.Task, audit repository.Audit, retry bool) (model.Task, error) {
 	if err := repository.CheckAudit(audit); err != nil {
-		return err
+		return model.Task{}, err
 	}
 	latest, err := c.repo.GetTask(ctx, task.ID)
 	if err != nil {
-		return err
+		return model.Task{}, err
 	}
 	if latest.Rev != task.Rev || latest.State != task.State {
-		return repository.ErrConflict
+		return model.Task{}, repository.ErrConflict
 	}
 	problems := executionrules.CanCancel(latest)
 	if retry {
 		problems = c.CanRetry(latest)
 	}
 	if len(problems) > 0 {
-		return &repository.ProblemsError{Kind: repository.ErrRejected, Problems: problems}
+		return model.Task{}, &repository.ProblemsError{Kind: repository.ErrRejected, Problems: problems}
 	}
 	at := c.clock.Now()
 	var next model.Task
@@ -54,18 +54,17 @@ func (c *Control) control(ctx context.Context, task model.Task, audit repository
 	} else {
 		next, _ = executionrules.Cancel(latest, at)
 	}
-	_, err = c.commit(ctx, latest, next, repository.NewEvent{At: at, Kind: "machine." + kind, Key: attemptKey(next, kind)}, audit)
-	return err
+	return c.commit(ctx, latest, next, repository.NewEvent{At: at, Kind: "machine." + kind, Key: attemptKey(next, kind)}, audit)
 }
 
 // Cancel 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
 // 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (c *Control) Cancel(ctx context.Context, t model.Task, a repository.Audit) error {
+func (c *Control) Cancel(ctx context.Context, t model.Task, a repository.Audit) (model.Task, error) {
 	return c.control(ctx, t, a, false)
 }
 
 // Retry 的八项应用约定唯一连接 docs/contracts/machine-execution.md「控制与诊断」的本方法说明
 // 及「当前职责与共同保存边界」；不扩展权限、重试、审计或取消保证。
-func (c *Control) Retry(ctx context.Context, t model.Task, a repository.Audit) error {
+func (c *Control) Retry(ctx context.Context, t model.Task, a repository.Audit) (model.Task, error) {
 	return c.control(ctx, t, a, true)
 }

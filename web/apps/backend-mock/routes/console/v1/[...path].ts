@@ -23,6 +23,16 @@ import {
 } from '../../../utils/access-preview';
 
 const now = () => Math.floor(Date.now() / 1000);
+function sampleDisks(index: number) {
+  if (index % 3 !== 0) return [];
+  return index % 2 === 0 ? [
+    { device: 'sda', bytes: '480000000000', model: 'Intel SSD D3-S4510', serial: '' },
+    { device: 'sdb', bytes: '960000000000', model: 'Samsung PM893', serial: '' },
+  ] : [
+    { device: 'nvme0n1', bytes: '1920000000000', model: 'Samsung PM9A3', serial: '' },
+    { device: 'nvme1n1', bytes: '3840000000000', model: 'Micron 7450 PRO', serial: '' },
+  ];
+}
 const hosts = Array.from({ length: 34 }, (_, index) => ({
   sn: 'LAB-SRV-' + String(index + 1).padStart(3, '0'),
   arch: index >= 28 ? 'aarch64' : 'x86_64',
@@ -38,10 +48,8 @@ const hosts = Array.from({ length: 34 }, (_, index) => ({
           inv_mem_mib: '65536',
           inv_system_model: 'Lober Lab R240',
           inv_system_disk: '/dev/sda',
-          inv_disks:
-            index % 2 === 0
-              ? 'sda:480000000000:Intel SSD D3-S4510\nsdb:960000000000:Samsung PM893'
-              : 'nvme0n1:1920000000000:Samsung PM9A3\nnvme1n1:3840000000000:Micron 7450 PRO',
+          inv_disks: sampleDisks(index)
+            .map(({ device, bytes, model }) => [device, bytes, model].join(':')).join('\n'),
           ...(index < 12
             ? {
                 inv_nics: JSON.stringify([
@@ -493,6 +501,17 @@ export default defineEventHandler(async (event) => {
     !user.permissions.includes('task:' + path.split('/').at(-1))
   )
     return fail(403, '没有任务操作权限');
+  const diskPath = /^\/hosts\/([^/]+)\/disks$/.exec(path);
+  if (method === 'GET' && diskPath) {
+    if (!user.permissions.includes('host:read')) return fail(403, '没有查看主机权限');
+    const index = hosts.findIndex((host) => host.sn === decodeURIComponent(diskPath[1]!));
+    if (index < 0) return fail(404, '找不到主机');
+    const disks = sampleDisks(index);
+    return ok({
+      disks, status: disks.length ? 'partial' : 'none',
+      notice: disks.length ? '部分磁盘缺少序列号。' : '暂无磁盘报告，可手工输入目标盘。',
+    });
+  }
   if (method === 'GET' && /^\/hosts\/[^/]+$/.test(path)) {
     const host = hosts.find((row) => row.sn === path.slice('/hosts/'.length));
     return host ? ok(host) : fail(404, '找不到主机');

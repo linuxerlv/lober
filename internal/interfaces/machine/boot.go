@@ -1,12 +1,14 @@
 package machine
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/lober/lober/internal/application/execution"
 	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/discovery"
 )
 
 func (h *handler) boot(w http.ResponseWriter, r *http.Request) {
@@ -34,7 +36,11 @@ func (h *handler) boot(w http.ResponseWriter, r *http.Request) {
 	sn, mac := q.Get("sn"), q.Get("mac")
 	discover := mac != "" && h.allowDiscovery(r)
 	if discover {
-		registered, err := h.discovery.RegisteredSerial(r.Context(), mac)
+		registered, err := h.discovery.RegisteredSerial(r.Context(), mac, sn)
+		if errors.Is(err, discovery.ErrIdentityConflict) {
+			fail(w, http.StatusConflict)
+			return
+		}
 		if err != nil {
 			fail(w, http.StatusServiceUnavailable)
 			return

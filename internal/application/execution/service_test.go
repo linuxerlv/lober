@@ -162,7 +162,7 @@ func TestDurableLifecycleConcurrentDuplicatesAndPostRebootRetry(t *testing.T) {
 	if task.State != model.TaskDone || !task.Execution.ReachedReboot || task.Snapshot.Template.Body != created.Snapshot.Template.Body {
 		t.Fatal("lifecycle or immutable snapshot lost")
 	}
-	err = s.Retry(t.Context(), task, repository.Audit{Actor: "tester", Action: "task.retry", At: 1000})
+	_, err = s.Retry(t.Context(), task, repository.Audit{Actor: "tester", Action: "task.retry", At: 1000})
 	if !errors.Is(err, repository.ErrRejected) {
 		t.Fatal("rebooted task retry accepted", err)
 	}
@@ -221,7 +221,7 @@ func TestTimeoutRestartRetryRevokesOldCredentialAndAuditIsAtomic(t *testing.T) {
 	if task.State != model.TaskFailed {
 		t.Fatal("restart forgot timeout")
 	}
-	err = s.Retry(t.Context(), task, repository.Audit{Actor: pgtest.FaultActor, Action: "task.retry", At: 1600})
+	_, err = s.Retry(t.Context(), task, repository.Audit{Actor: pgtest.FaultActor, Action: "task.retry", At: 1600})
 	if err == nil {
 		t.Fatal("audit fault did not abort retry")
 	}
@@ -230,7 +230,8 @@ func TestTimeoutRestartRetryRevokesOldCredentialAndAuditIsAtomic(t *testing.T) {
 	if unchanged.Rev != task.Rev || unchanged.Execution.Attempt != 1 {
 		t.Fatal("failed audit altered attempt")
 	}
-	must(t, s.Retry(t.Context(), task, repository.Audit{Actor: "tester", Action: "task.retry", At: 1600}))
+	_, err = s.Retry(t.Context(), task, repository.Audit{Actor: "tester", Action: "task.retry", At: 1600})
+	must(t, err)
 	now.Store(10000)
 	task = boot(t, s)
 	if task.Execution.Attempt != 2 || s.Token(task, execution.Install) == old {
@@ -243,7 +244,8 @@ func TestTimeoutRestartRetryRevokesOldCredentialAndAuditIsAtomic(t *testing.T) {
 	must(t, err)
 	task, err = st.GetTask(t.Context(), task.ID)
 	must(t, err)
-	must(t, s.Cancel(t.Context(), task, repository.Audit{Actor: "tester", Action: "task.cancel", At: 10000}))
+	_, err = s.Cancel(t.Context(), task, repository.Audit{Actor: "tester", Action: "task.cancel", At: 10000})
+	must(t, err)
 	if _, err := s.Answer(t.Context(), task.ID, s.Token(task, execution.Install)); err == nil {
 		t.Fatal("cancelled task supplied answer")
 	}

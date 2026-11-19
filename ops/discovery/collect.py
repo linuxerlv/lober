@@ -356,11 +356,17 @@ class Collector:
 
     def network(self):
         items, seen, missing = [], set(), False
+        pci_cards = {dev.resolve(): dev for dev in self.pci if self.read(dev / "class").startswith("0x02")}
         for port in sorted((self.root / "sys/class/net").glob("*")):
             device = port / "device"
             if not device.exists():
                 continue
             device = device.resolve()
+            # virtio 网口挂在网卡的子设备上，向上找最近的 PCI 网卡。
+            for parent in (device, *device.parents):
+                if parent in pci_cards:
+                    device = pci_cards[parent]
+                    break
             seen.add(device)
             fields = self.pci_fields(device) if self.read(device / "class") else {}
             fields.update(select_fields(properties(self.run("ethtool", "-i", port.name)),
@@ -374,8 +380,8 @@ class Collector:
             missing |= not all((mac, fields.get("固件"), fields.get("设备"), fields.get("驱动"),
                                 carrier, speed.isdigit() or carrier == "0"))
             items.append(item(port.name, "Linux 和网卡驱动", fields))
-        for dev in self.pci:
-            if self.read(dev / "class").startswith("0x02") and dev.resolve() not in seen:
+        for dev in pci_cards.values():
+            if dev not in seen:
                 fields = self.pci_fields(dev)
                 fields["状态"] = "网口未读取"
                 items.append(item(f"未启用网卡 {dev.name}", "Linux PCI 设备列表", fields))

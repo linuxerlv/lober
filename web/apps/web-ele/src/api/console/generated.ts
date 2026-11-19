@@ -15,6 +15,9 @@ export interface Schemas {
   "CsvPlan": { "rows": (Array<Schemas["CsvRow"]>) | null; "total": number; };
   "CsvRow": { "action": string; "problems": (Array<Schemas["ProblemJSON"]>) | null; "row": number; "sn": string; };
   "DeriveRequest": { "from": number; "name": string; };
+  "DiscoveryDiskStatus": "none" | "partial" | "ready";
+  "DiscoveryHostDisk": { "bytes": string; "capacityText"?: string; "device": string; "model": string; "serial": string; };
+  "DiscoveryHostDiskReport": { "disks": (Array<Schemas["DiscoveryHostDisk"]>) | null; "notice"?: string; "status": Schemas["DiscoveryDiskStatus"]; };
   "DiscoveryItem": { "fields": ({ [key: string]: string; }) | null; "name": string; };
   "DiscoveryPage": { "items": (Array<Schemas["DiscoveryRecord"]>) | null; "next_cursor"?: string; };
   "DiscoveryRecord": { "arch": Schemas["CatalogArch"]; "firmware": Schemas["CatalogFirmware"]; "first_seen_at": number; "last_seen_at": number; "mac": string; "reason"?: string; "registered_sn"?: string; "report"?: Schemas["DiscoveryReport"] | null; "report_at"?: number; "sn"?: string; "status": string; "system_model"?: string; };
@@ -106,12 +109,13 @@ export interface Schemas {
   "WizardISOItem": { "arch": Schemas["CatalogArch"]; "artifacts": ({ [key: string]: string; }) | null; "family": Schemas["CatalogFamily"]; "id": string; "name": string; "offers": ({ [key: string]: (Array<Schemas["OptionResponse"]>) | null; }) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "rev": number; "series": string; "sha256": string; "state": Schemas["ModelISOState"]; "usable": boolean; "version": string; };
   "WizardISORequest": { "cursor"?: string | null; "hostSNs": Array<string>; "limit"?: number | null; "page"?: number | null; "page_size"?: number | null; };
   "WizardISOResult": { "items": (Array<Schemas["WizardISOItem"]>) | null; "next": string; "total"?: number | null; };
-  "WizardParamsHost": { "fields": (Array<Schemas["ParamFieldDTO"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "sn": string; };
+  "WizardParamsHost": { "fields": (Array<Schemas["ParamFieldDTO"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "sn": string; "targetDisk"?: Schemas["WizardTargetDisk"] | null; };
   "WizardParamsRequest": { "entered"?: ({ [key: string]: ({ [key: string]: string; }) | null; }) | null; "hostSNs": Array<string>; "isoID": string; "templateID": string; "templateVersion": number; };
   "WizardParamsResult": { "common": (Array<Schemas["ProblemJSON"]>) | null; "hosts": (Array<Schemas["WizardParamsHost"]>) | null; };
-  "WizardSubmitHost": { "entered"?: ({ [key: string]: string; }) | null; "sn": string; };
+  "WizardSubmitHost": { "entered"?: ({ [key: string]: string; }) | null; "expectedTargetDisk"?: Schemas["WizardTargetDisk"] | null; "sn": string; };
   "WizardSubmitRequest": { "hosts": Array<Schemas["WizardSubmitHost"]>; "isoID": string; "templateID": string; "templateVersion": number; };
   "WizardSubmitResult": { "tasks": (Array<Schemas["TaskItem"]>) | null; };
+  "WizardTargetDisk": { "key": Schemas["ParamsFieldKey"]; "mode": string; "value": string; };
   "WizardTemplateItem": { "approver": string; "assembly": ({ [key: string]: (Array<Schemas["InstanceDTO"]>) | null; }) | null; "author": string; "bindings": ({ [key: string]: Schemas["BindingDTO"]; }) | null; "body": string; "builtin": boolean; "derivedFrom": Schemas["TemplateKeyResponse"] | null; "family": Schemas["CatalogFamily"]; "id": string; "name": string; "params": (Array<Schemas["ParamDeclDTO"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "rev": number; "series": (Array<string>) | null; "state": Schemas["ModelVersionState"]; "usable": boolean; "version": number; };
   "WizardTemplateRequest": { "cursor"?: string | null; "isoID": string; "limit"?: number | null; "page"?: number | null; "page_size"?: number | null; };
   "WizardTemplateResult": { "items": (Array<Schemas["WizardTemplateItem"]>) | null; "next": string; "total"?: number | null; };
@@ -150,7 +154,7 @@ export interface Paths {
   };
   "/console/v1/discoveries": {
     "get": {
-      query: { "limit"?: number; "cursor"?: string; };
+      query: { "registered_sn"?: string; "limit"?: number; "cursor"?: string; };
       responses: { "200": { "application/json": { "code": 0; "data": Schemas["DiscoveryPage"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };
@@ -270,6 +274,12 @@ export interface Paths {
       path: { "sn": string; };
       requestBody: { "application/json": Schemas["HostRequest"]; };
       responses: { "200": { "application/json": { "code": 0; "data": Schemas["HostResponse"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "413": { "application/json": { "code": 413; "data": null; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+    };
+  };
+  "/console/v1/hosts/{sn}/disks": {
+    "get": {
+      path: { "sn": string; };
+      responses: { "200": { "application/json": { "code": 0; "data": Schemas["DiscoveryHostDiskReport"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };
   "/console/v1/hosts/{sn}/inventory/request": {

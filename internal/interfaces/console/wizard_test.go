@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 	"github.com/lober/lober/internal/application/audit"
 	selectionguard "github.com/lober/lober/internal/infrastructure/selection"
@@ -25,6 +26,7 @@ import (
 type wizardResultFixture struct {
 	tasks.Wizard
 	templates tasks.TemplatePage
+	params    tasks.ParamsResult
 	created   []tasks.TaskChoice
 	err       error
 }
@@ -32,8 +34,59 @@ type wizardResultFixture struct {
 func (f wizardResultFixture) Templates(context.Context, ports.Actor, tasks.TemplateRequest) (tasks.TemplatePage, error) {
 	return f.templates, f.err
 }
+func (f wizardResultFixture) Params(context.Context, ports.Actor, tasks.ParamsRequest) (tasks.ParamsResult, error) {
+	return f.params, f.err
+}
+
+func TestWizardParamsExposesTargetDiskOnlyWhenKnown(t *testing.T) {
+	engine := gin.New()
+	s := &server{deps: Deps{Wizard: wizardResultFixture{params: tasks.ParamsResult{Hosts: []tasks.HostParams{
+		{SN: "A", TargetDisk: &tasks.TargetDisk{Key: "partition/1/disk_index", Mode: "windows-index", Value: "0"}},
+		{SN: "B"},
+	}}}}}
+	engine.POST("/console/v1/wizard/params", s.wizardParams)
+	res := httpCall(&Server{Engine: engine}, "POST", "/console/v1/wizard/params", `{"isoID":"win","templateID":"setup","templateVersion":5,"hostSNs":["A","B"]}`, "")
+	data := responseData[struct {
+		Hosts []map[string]json.RawMessage `json:"hosts"`
+	}](t, res)
+	if len(data.Hosts) != 2 {
+		t.Fatal(data)
+	}
+	var disk wizardTargetDisk
+	if err := json.Unmarshal(data.Hosts[0]["targetDisk"], &disk); err != nil || disk.Key != "partition/1/disk_index" || disk.Mode != "windows-index" || disk.Value != "0" {
+		t.Fatalf("有明确分区步骤的主机：%s", res.Body.String())
+	}
+	if _, included := data.Hosts[1]["targetDisk"]; included {
+		t.Fatal("自定义模板应省略目标盘说明")
+	}
+}
+
 func (f wizardResultFixture) Submit(context.Context, ports.Actor, tasks.SubmitRequest) ([]tasks.TaskChoice, error) {
 	return f.created, f.err
+}
+
+type diskConflictFixture struct {
+	tasks.Wizard
+	request tasks.SubmitRequest
+}
+
+func (f *diskConflictFixture) Submit(_ context.Context, _ ports.Actor, req tasks.SubmitRequest) ([]tasks.TaskChoice, error) {
+	f.request = req
+	return nil, &tasks.ProblemsError{Problems: []model.Problem{model.NewProblem("target_disk_changed", model.Subject{Kind: model.KindHost, ID: "A"}, "A")}}
+}
+
+func TestWizardPassesConfirmedDiskAndReturnsConflict(t *testing.T) {
+	engine := gin.New()
+	f := &diskConflictFixture{}
+	s := &server{deps: Deps{Wizard: f}}
+	engine.POST("/console/v1/wizard/tasks", s.wizardSubmit)
+	res := httpCall(&Server{Engine: engine}, "POST", "/console/v1/wizard/tasks", `{"isoID":"lin","templateID":"install","templateVersion":3,"hosts":[{"sn":"A","expectedTargetDisk":{"key":"partition/1/disk","mode":"device","value":"sda"}},{"sn":"B"}]}`, "")
+	if len(f.request.Hosts) != 2 || f.request.Hosts[0].ExpectedTargetDisk == nil || *f.request.Hosts[0].ExpectedTargetDisk != (tasks.TargetDisk{Key: "partition/1/disk", Mode: "device", Value: "sda"}) || f.request.Hosts[1].ExpectedTargetDisk != nil {
+		t.Fatal("提交入口未保留用户确认的目标盘", f.request)
+	}
+	if res.Code != 409 || !strings.Contains(res.Body.String(), "target_disk_changed") {
+		t.Fatal(res.Code, res.Body.String())
+	}
 }
 
 func Test向导只转换应用给出的诊断和完整任务(t *testing.T) {

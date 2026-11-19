@@ -85,6 +85,31 @@ class CollectorTest(unittest.TestCase):
         )
         self.assertEqual(records, {4: [{"Version": "Processor A"}]})
 
+    def test_virtio_port_reports_its_pci_card_only_once(self):
+        pci = "sys/bus/pci/devices"
+        address = "0000:00:02.0"
+        unused = "0000:00:03.0"
+        self.file(f"{pci}/{address}/class", "0x020000\n")
+        self.file(f"{pci}/{unused}/class", "0x020000\n")
+        child = self.root / pci / address / "virtio0"
+        child.mkdir()
+        self.file("sys/class/net/eth0/address", "52:54:00:12:34:56\n")
+        try:
+            (self.root / "sys/class/net/eth0/device").symlink_to(child, target_is_directory=True)
+        except OSError as err:
+            if getattr(err, "winerror", None) == 1314:
+                self.skipTest("当前 Windows 账号不能创建模拟网口所需的符号链接")
+            raise
+        self.outputs[("lspci", "-Dnn")] = f"{address} Virtio network device\n"
+        self.outputs[("ethtool", "-i", "eth0")] = "driver: virtio_net\n"
+
+        ports = self.report()["network"]["items"]
+        self.assertEqual([p["name"] for p in ports], ["eth0", f"未启用网卡 {unused}"])
+        self.assertEqual(ports[0]["fields"]["插槽地址"], address)
+        self.assertEqual(ports[0]["fields"]["设备"], "Virtio network device")
+        self.assertEqual(ports[0]["fields"]["驱动"], "virtio_net")
+        self.assertEqual(ports[0]["fields"]["启动网口"], "是")
+
     def test_reads_raid_members_and_volume_groups_from_local_tool(self):
         root = self.root
         self.file("sys/bus/pci/devices/raid/class", "0x010400\n")

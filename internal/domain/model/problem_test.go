@@ -107,6 +107,7 @@ var extraCodes = map[Code]Category{
 
 	// hook 间依赖：sshkey 的用户名必须与 account 的用户名一致。
 	"param_hook_mismatch": CategoryInvalid,
+	"target_disk_changed": CategoryState, // 本次任务使用的目标盘与刚确认的盘不一致。
 }
 
 func TestCode表与附录总表逐项一致(t *testing.T) {
@@ -128,9 +129,9 @@ func TestCode表与附录总表逐项一致(t *testing.T) {
 		}
 		want[c] = cat
 	}
-	// 58 appendix + 1 acceptance + 10 fixups + 1 layer2 + 1 layer2 fixup + 10 layer3 + 11 layer4 + 2 layer5 + 3 execution + 7 inventory + 1 hook dependency.
-	if len(want) != 105 {
-		t.Fatalf("附录加上追加的代码应共 105 个，测试里有 %d 个", len(want))
+	// 58 appendix + 1 acceptance + 10 fixups + 1 layer2 + 1 layer2 fixup + 10 layer3 + 11 layer4 + 2 layer5 + 3 execution + 7 inventory + 1 hook dependency + 1 target disk confirmation.
+	if len(want) != 106 {
+		t.Fatalf("附录加上追加的代码应共 106 个，测试里有 %d 个", len(want))
 	}
 	for c, cat := range want {
 		if got := c.Category(); got != cat {

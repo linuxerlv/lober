@@ -10,9 +10,9 @@ import (
 // ControlBackend 保留原任务控制的四个方法和保存约定。
 type ControlBackend interface {
 	// Cancel 的八项约定唯一委托同包Control.Cancel，见 docs/contracts/machine-execution.md「控制与诊断」。
-	Cancel(context.Context, model.Task, repository.Audit) error
+	Cancel(context.Context, model.Task, repository.Audit) (model.Task, error)
 	// Retry 的八项约定唯一委托同包Control.Retry，见 docs/contracts/machine-execution.md「控制与诊断」。
-	Retry(context.Context, model.Task, repository.Audit) error
+	Retry(context.Context, model.Task, repository.Audit) (model.Task, error)
 	// CanCancel 的八项约定唯一委托同包Control.CanCancel，见 docs/contracts/machine-execution.md「控制与诊断」。
 	CanCancel(model.Task) []model.Problem
 	// CanRetry 的八项约定唯一委托同包Control.CanRetry，见 docs/contracts/machine-execution.md「控制与诊断」。
@@ -30,13 +30,13 @@ func NewAuditedControl(backend ControlBackend) *AuditedControl {
 
 // Cancel 原样传递任务、上下文和四项审计事实；保存、通知、取消及重复请求规则由原控制器处理，错误原样返回。
 // Cancel 的完整委托及八项不适用边界唯一连接 docs/contracts/machine-execution.md「控制与诊断」。
-func (c *AuditedControl) Cancel(ctx context.Context, t model.Task, a ports.AuditIntent) error {
+func (c *AuditedControl) Cancel(ctx context.Context, t model.Task, a ports.AuditIntent) (model.Task, error) {
 	return c.backend.Cancel(ctx, t, repository.Audit{Actor: a.Actor, Action: a.Action, Detail: a.Detail, At: a.At})
 }
 
 // Retry 原样传递任务、上下文和四项审计事实；保存、通知、取消及重复请求规则由原控制器处理，错误原样返回。
 // Retry 的完整委托及八项不适用边界唯一连接 docs/contracts/machine-execution.md「控制与诊断」。
-func (c *AuditedControl) Retry(ctx context.Context, t model.Task, a ports.AuditIntent) error {
+func (c *AuditedControl) Retry(ctx context.Context, t model.Task, a ports.AuditIntent) (model.Task, error) {
 	return c.backend.Retry(ctx, t, repository.Audit{Actor: a.Actor, Action: a.Action, Detail: a.Detail, At: a.At})
 }
 

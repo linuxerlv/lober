@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   eventDetails,
-  eventLabel,
   findFailureEvent,
   latestEventReport,
   taskProgressStage,
@@ -55,6 +54,27 @@ it('recognizes slot.end and required hook.report dot-event failures', () => {
 });
 
 describe('task event details', () => {
+  it('uses the stage reached after a pre-install slot ends', () => {
+    const end = { seq: 2, kind: 'slot.end', fields: { timing: 'pre', rc: '0' } };
+    const stageAfter = (stage: string) => ({ ...end, fields: { ...end.fields, stage } });
+    expect(taskProgressStage('installing', [stageAfter('pre')])).toContain('装前脚本');
+    expect(taskProgressStage('installing', [stageAfter('packages')])).toContain('安装软件包');
+    // 老事件未记录结束后的阶段，只能确认安装还在继续。
+    expect(taskProgressStage('installing', [end])).toBe('安装中');
+    const slow = { seq: 3, kind: 'machine.slow', fields: { stage: 'packages' } };
+    expect(taskProgressStage('installing', [end, slow])).toContain('安装软件包');
+  });
+
+  it('reports the result of the specific boot or slot even if the task later fails', () => {
+    const boot = { seq: 1, at: 1, kind: 'machine.boot', fields: { arch: 'x86_64' } };
+    const failedBoot = { ...boot, key: 'attempt-1-boot-0-failed' };
+    expect(latestEventReport([failedBoot], 'failed')?.title).toBe('主机引导失败');
+    expect(latestEventReport([boot], 'failed')?.title).toBe('主机开始引导');
+    const slot = { seq: 2, at: 2, kind: 'slot.end', fields: { rc: '1' } };
+    expect(latestEventReport([slot], 'failed')?.title).toContain('执行失败');
+    expect(latestEventReport([{ ...slot, fields: { rc: '0' } }])?.title).toContain('执行完成');
+  });
+
   it('shows decoded UTF-8 logs alongside phase diagnostics', () => {
     const body = new TextEncoder().encode('安装完成\n');
     const encoded = btoa(String.fromCharCode(...body));
@@ -112,7 +132,7 @@ describe('task event details', () => {
     expect(taskProgressStage('installing', events as never)).not.toMatch(/%/);
     const latest = latestEventReport(events as never);
     expect(latest?.at).toBe(1_750_000_040);
-    expect(latest?.title).toBe(eventLabel('hook.report'));
+    expect(latest?.title).toBe('装机脚本执行回报');
     expect(latest?.content).toContain('disk partition ok');
 
     // Legacy or empty events remain compatible

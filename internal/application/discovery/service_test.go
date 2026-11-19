@@ -77,3 +77,34 @@ func TestDiscoveryFlow(t *testing.T) {
 		t.Fatalf("只有管理员能确认: %v", err)
 	}
 }
+
+type bindingRepo struct {
+	testRepo
+	observed, registered string
+}
+
+func (r bindingRepo) RegisteredDiscoverySN(context.Context, string) (string, string, error) {
+	return r.observed, r.registered, nil
+}
+
+func TestBootIdentity(t *testing.T) {
+	const mac = "52:54:00:12:34:56"
+	for _, tc := range []struct {
+		observed, registered, presented, want string
+		conflict                              bool
+	}{
+		{"FACTORY-A", "HOST-A", "factory-a", "HOST-A", false},
+		{"FACTORY-A", "HOST-A", "host-a", "HOST-A", false},
+		{"FACTORY-A", "HOST-A", "HOST-B", "", true},
+		{"FACTORY-A", "HOST-A", "", "", true},
+		{"", "HOST-A", "None", "HOST-A", false},
+		{"", "HOST-A", "HOST-B", "", true},
+		{"", "", "HOST-B", "", false},
+	} {
+		s := New(&bindingRepo{observed: tc.observed, registered: tc.registered}, nil, nil, "", "", nil, true, nil)
+		got, err := s.RegisteredSerial(t.Context(), mac, tc.presented)
+		if got != tc.want || (err != nil) != tc.conflict || tc.conflict && !errors.Is(err, data.ErrIdentityConflict) {
+			t.Errorf("登记 %q 报告 %q 得到 %q, %v", tc.observed, tc.presented, got, err)
+		}
+	}
+}

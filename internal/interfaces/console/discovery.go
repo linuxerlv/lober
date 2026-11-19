@@ -10,8 +10,9 @@ import (
 )
 
 type discoveryQuery struct {
-	Limit  int    `form:"limit"`
-	Cursor string `form:"cursor"`
+	RegisteredSN string `form:"registered_sn"`
+	Limit        int    `form:"limit"`
+	Cursor       string `form:"cursor"`
 }
 
 type discoveryRegistration struct {
@@ -20,10 +21,24 @@ type discoveryRegistration struct {
 
 func (s *server) discoveryRoutes() []route {
 	return []route{
+		{method: "GET", path: "/console/v1/hosts/:sn/disks", perm: PermHostRead, tag: "hosts", summary: "Read host installation disks", resp: data.HostDiskReport{}, handle: s.hostDisks},
 		{method: "GET", path: "/console/v1/discoveries", perm: PermHostRead, tag: "hosts", summary: "List PXE discoveries", query: discoveryQuery{}, resp: discovery.Page{}, handle: s.listDiscoveries},
 		{method: "GET", path: "/console/v1/discoveries/:mac", perm: PermHostRead, tag: "hosts", summary: "Read discovered hardware", resp: data.Record{}, handle: s.getDiscovery},
 		{method: "POST", path: "/console/v1/discoveries/:mac/register", perm: PermHostWrite, audit: "host.create", tag: "hosts", summary: "Register a discovered host", req: discoveryRegistration{}, resp: hostResponse{}, handle: s.registerDiscovery},
 	}
+}
+
+func (s *server) hostDisks(c *gin.Context) {
+	if s.deps.HostDisks == nil {
+		Fail(c, 503, nil, "主机磁盘清单暂时不可用")
+		return
+	}
+	report, err := s.deps.HostDisks.Disks(c.Request.Context(), actorOf(c), c.Param("sn"))
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	Ok(c, report)
 }
 
 func (s *server) listDiscoveries(c *gin.Context) {
@@ -41,7 +56,7 @@ func (s *server) listDiscoveries(c *gin.Context) {
 		Ok(c, map[string]any{"items": []any{}})
 		return
 	}
-	page, err := svc.List(c.Request.Context(), actorOf(c), c.Query("cursor"), limit)
+	page, err := svc.List(c.Request.Context(), actorOf(c), c.Query("cursor"), c.Query("registered_sn"), limit)
 	if err != nil {
 		RespondError(c, err)
 		return
