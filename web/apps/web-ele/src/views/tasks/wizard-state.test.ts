@@ -5,7 +5,6 @@ import {
   matchesTargetDisk,
   targetDiskSummary,
 } from './wizard-disks';
-
 import {
   collectEditable,
   latestOnly,

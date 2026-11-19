@@ -578,7 +578,7 @@ it.each([
     vi.mocked(wizardAPI.submit).mockResolvedValueOnce({ tasks: [] });
     await click('创建整批任务');
     expect(vi.mocked(wizardAPI.submit).mock.lastCall?.[0].hosts).toEqual([
-      { sn: 'H1', entered: locked ? {} : { [diskField.key]: prefill } },
+      { sn: 'H1', entered: locked ? {} : { [diskField.key]: prefill }, expectedTargetDisk: {key:diskField.key, mode, value:prefill} },
     ]);
   },
 );
@@ -730,4 +730,24 @@ it('explains manual entry and an invalid template prefix without a report', asyn
   editDisk('H1', 'vdb');
   await click('校验并确认');
   expect(page.textContent).toContain('目标盘：vdb');
+});
+
+it('submits the confirmed target and asks for confirmation again if it changed', async () => {
+  let disk = 'sda';
+  mockForms((sn) => diskForm(sn, { ...diskField, locked: true, prefill: disk }));
+  const page = await openDiskForm();
+  await click('校验并确认');
+  expect(page.textContent).toContain('目标盘：sda');
+  disk = 'sdb';
+  vi.mocked(wizardAPI.submit).mockRejectedValueOnce({ response: { data: {
+    code: 409, data: { problems: [{ code: 'target_disk_changed', message: '目标盘已变化，请重新确认。' }] },
+  } } });
+  await click('创建整批任务');
+  expect(vi.mocked(wizardAPI.submit).mock.lastCall?.[0].hosts).toEqual([
+    { sn: 'H1', entered: {}, expectedTargetDisk: { key: diskField.key, mode: 'device', value: 'sda' } },
+  ]);
+  expect(page.textContent).toContain('目标盘已变化');
+  expect(page.textContent).toContain('校验并确认');
+  await click('校验并确认');
+  expect(page.textContent).toContain('目标盘：sdb');
 });

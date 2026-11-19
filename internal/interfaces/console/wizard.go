@@ -67,8 +67,9 @@ type wizardSelection struct {
 	TemplateVersion int    `json:"templateVersion" binding:"required,gt=0"`
 }
 type wizardSubmitHost struct {
-	SN      string            `json:"sn"`
-	Entered map[string]string `json:"entered,omitempty"`
+	ExpectedTargetDisk *wizardTargetDisk `json:"expectedTargetDisk,omitempty"`
+	SN                 string            `json:"sn"`
+	Entered            map[string]string `json:"entered,omitempty"`
 }
 type wizardSubmitRequest struct {
 	wizardSelection
@@ -246,7 +247,7 @@ func (s *server) wizardSubmit(c *gin.Context) {
 	}
 	hosts := make([]tasks.SubmitHost, len(req.Hosts))
 	for i, h := range req.Hosts {
-		hosts[i] = tasks.SubmitHost{SN: h.SN, Entered: h.Entered}
+		hosts[i] = tasks.SubmitHost{SN: h.SN, Entered: h.Entered, ExpectedTargetDisk: (*tasks.TargetDisk)(h.ExpectedTargetDisk)}
 	}
 	created, ok := Get(c, func() ([]tasks.TaskChoice, error) {
 		return s.deps.Wizard.Submit(c.Request.Context(), actorOf(c), tasks.SubmitRequest{Selection: req.applicationSelection(), Hosts: hosts})

@@ -493,6 +493,9 @@ var codeTable = map[Code]codeSpec{
 	"param_hook_mismatch": {CategoryInvalid, 2,
 		"SSH 密钥的用户名「%[1]v」与账号的用户名「%[2]v」不一致",
 		"把 sshkey hook 的 username 改成 account hook 里设置的用户名；这两个参数不会自动对齐"},
+	"target_disk_changed": {CategoryState, 1,
+		"主机「%[1]v」的目标盘已变化",
+		"请重新核对目标盘后再提交整批任务"},
 }
 
 // ISO 层选用的固定措辞集中在代码表文件；跨包调用需要导出。

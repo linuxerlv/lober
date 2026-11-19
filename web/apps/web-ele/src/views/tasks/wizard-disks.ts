@@ -61,7 +61,7 @@ export function useHostDiskReports(read: (sn: string) => Promise<Report>) {
 
 function isDeviceMode(mode?: string) {
   return (
-    mode === 'device' || mode === 'device-path' || mode === 'device-or-path'
+    mode === 'device' || mode === 'device-or-path'
   );
 }
 
@@ -79,7 +79,7 @@ export function isPersistentDiskPath(mode: string | undefined, value: string) {
   return /^(?:\/dev\/)?(?:disk\/by-(?:id|path)|mapper)\/[^/]+$/.test(value);
 }
 
-export function diskInputProblem(host: Form, raw: string, disks?: null | Disk[]) {
+export function diskInputProblem(host: Form, raw: string, disks?: Disk[] | null) {
   const field = deviceField(host);
   if (!field) return '';
   const value = raw.trim();
@@ -88,7 +88,7 @@ export function diskInputProblem(host: Form, raw: string, disks?: null | Disk[])
   if (mode === 'device' && value.startsWith('/')) {
     return '此模板会补上 /dev/。请输入设备名（如 vdb）或相对路径（如 disk/by-id/磁盘标识）。';
   }
-  if ((mode === 'device-path' || value.startsWith('/')) && !value.startsWith('/dev/')) {
+  if (value.startsWith('/') && !value.startsWith('/dev/')) {
     return '请输入 /dev/ 下的设备路径。';
   }
   const device = value.replace(/^\/dev\//, '');
@@ -99,17 +99,13 @@ export function diskInputProblem(host: Form, raw: string, disks?: null | Disk[])
   return `默认目标盘或当前值（${value}）与磁盘清单不匹配，请选择可用磁盘或核对手工值。`;
 }
 
-export function matchesTargetDisk(host: Form, value: string, disks?: null | Disk[]) {
+export function matchesTargetDisk(host: Form, value: string, disks?: Disk[] | null) {
   return !diskInputProblem(host, value, disks);
 }
 
 export function diskNotice(report?: Report) {
   if (report?.notice) return report.notice;
   return report?.status === 'none' ? '暂无磁盘报告，默认目标盘未经硬件核对。可按模板手工填写目标盘。' : '';
-}
-
-export function diskOptionValue(mode: string, disk: Disk) {
-  return mode === 'device-path' ? '/dev/' + disk.device : disk.device;
 }
 
 function diskDetails(disk: Disk) {
@@ -127,7 +123,7 @@ export function diskLabel(disk: Disk) {
 
 export function targetDiskSummary(
   host: Form | undefined,
-  disks?: null | Disk[],
+  disks?: Disk[] | null,
 ) {
   const target = host?.targetDisk;
   if (!target || !host?.fields?.some((field) => field.key === target.key))

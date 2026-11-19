@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ func TestWizardTargetDiskMatchesSubmittedAnswer(t *testing.T) {
 		{"builtin-unattend", "disk_index", "windows-index", "", "0", "<DiskID>0</DiskID>"},
 		{"builtin-kickstart", "disk", "device-or-path", "/dev/disk/by-id/wwn-123", "/dev/disk/by-id/wwn-123", "--ondisk=/dev/disk/by-id/wwn-123"},
 		{"builtin-esxi", "disk", "first-disk-rule", "", "local", "--firstdisk='local'"},
+		{"builtin-preseed-inventory", "disk", "device", "", "sda", "partman-auto/disk string /dev/sda"},
 		{"builtin-preseed", "disk", "device", "vdb", "vdb", "partman-auto/disk string /dev/vdb"},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
@@ -41,7 +43,7 @@ func TestWizardTargetDiskMatchesSubmittedAnswer(t *testing.T) {
 				f.iso.Artifacts[role] = "media/" + role
 			}
 			host := f.hosts["SN-1"]
-			host.Attrs = map[string]string{"inv_disks": "sda:1000000000:first\nsdb:2000000000:second"}
+			host.Attrs = map[string]string{"inv_system_disk": "sda", "inv_disks": "sda:1000000000:first\nsdb:2000000000:second"}
 			f.hosts[host.SN] = host
 			req := ParamsRequest{Selection: Selection{ISOID: f.iso.ID, TemplateID: f.template.ID, TemplateVersion: f.template.Version}, HostSNs: []string{host.SN}}
 			w := NewWizard(deps)
@@ -86,7 +88,7 @@ func TestWizardTargetDiskMatchesSubmittedAnswer(t *testing.T) {
 					}
 				}
 			}
-			created, err := w.Submit(t.Context(), operator, SubmitRequest{Selection: req.Selection, Hosts: []SubmitHost{{SN: host.SN, Entered: values}}})
+			created, err := w.Submit(t.Context(), operator, SubmitRequest{Selection: req.Selection, Hosts: []SubmitHost{{SN: host.SN, Entered: values, ExpectedTargetDisk: disk}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,6 +101,24 @@ func TestWizardTargetDiskMatchesSubmittedAnswer(t *testing.T) {
 			if err != nil || len(ps) > 0 || !strings.Contains(string(answer), tc.answer) {
 				t.Fatalf("安装应答缺少 %q: %v %v", tc.answer, ps, err)
 			}
+			if tc.id == "builtin-preseed-inventory" {
+				// 后一次采集改变了锁定的系统盘。第二批不能沿用上一批看到的确认结果。
+				host.Attrs["inv_system_disk"] = "sdb"
+				f.created = nil
+				submit := SubmitRequest{Selection: req.Selection, Hosts: []SubmitHost{{SN: host.SN, Entered: values, ExpectedTargetDisk: disk}}}
+				before := len(f.calls)
+				_, err := w.Submit(t.Context(), operator, submit)
+				var problems *ProblemsError
+				if !errors.As(err, &problems) || !hasProblem(problems.Problems, "target_disk_changed") || slices.Contains(f.calls[before:], "create-current") {
+					t.Fatalf("确认后换盘仍可创建任务: %v", err)
+				}
+				submit.Hosts[0].ExpectedTargetDisk = nil
+				oldClient, err := w.Submit(t.Context(), operator, submit)
+				if err != nil || oldClient[0].Task.Snapshot.Slots[slot].Instances[0].Params[tc.param].Join() != "sdb" {
+					t.Fatalf("旧请求应使用本次求值: %v", err)
+				}
+			}
+
 		})
 	}
 }

@@ -47,7 +47,6 @@ import {
   diskInputProblem,
   diskLabel,
   diskNotice,
-  diskOptionValue,
   isPersistentDiskPath,
   matchesTargetDisk,
   targetDiskSummary,
@@ -160,10 +159,7 @@ function chooseTargetDisk(
 ) {
   const field = deviceField(host);
   if (working.value || !field || field.locked) return;
-  (entered.value[host.sn] ??= {})[field.key] = diskOptionValue(
-    host.targetDisk!.mode,
-    disk,
-  );
+  (entered.value[host.sn] ??= {})[field.key] = disk.device;
   scheduleParameterValidation();
 }
 
@@ -449,17 +445,23 @@ async function next() {
         );
       }
       const values = collectEditable(forms.value, entered.value);
+      const confirmed = new Map(forms.value.map(({ sn, targetDisk }) => [sn, targetDisk]));
       const result = await wizardAPI.submit({
         ...selection(),
         hosts: selectedHosts.value.map((host) => ({
           sn: host.sn,
           entered: values[host.sn] ?? {},
+          expectedTargetDisk: confirmed.get(host.sn),
         })),
       });
       created.value = result.tasks ?? [];
       step.value = 5;
     }
   } catch (reason) {
+    if (step.value === 4 && problemsOf(reason).some((p) => p.code === 'target_disk_changed')) {
+      step.value = 3;
+      await evaluate();
+    }
     fail(reason);
   } finally {
     busy.value = false;
@@ -596,7 +598,7 @@ onBeforeUnmount(() => {
         </ElCard>
         <ElCard v-if="step === 1 || step === 2" header="系统镜像">
           <ElRadioGroup
-            :model-value="selectedISO?.id"
+            :model-value="selectedISO?.id ?? ''"
             class="!block"
             @change="changeISO"
           >
@@ -632,7 +634,7 @@ onBeforeUnmount(() => {
         </ElCard>
         <ElCard v-if="step === 2" header="与镜像匹配的已审批模板">
           <ElRadioGroup
-            :model-value="selectedTemplate?.id"
+            :model-value="selectedTemplate?.id ?? ''"
             class="!block"
             @change="chooseTemplate(String($event))"
           >

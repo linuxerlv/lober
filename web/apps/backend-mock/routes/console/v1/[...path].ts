@@ -418,7 +418,7 @@ function params(sn: string, entered: Entered = {}, validate = false) {
       problems.push(problem('请输入有效时区，例如 Asia/Shanghai', 'timezone'));
     }
   }
-  return { sn, fields, problems, targetDisk: { key: 'disk', mode: 'device-path', value: entered.disk || '/dev/sda' } };
+  return { sn, fields, problems };
 }
 const ok = (data: unknown) => ({ code: 0, data, message: '' });
 let sequence = 1049;

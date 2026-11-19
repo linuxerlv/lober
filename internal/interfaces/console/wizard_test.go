@@ -65,6 +65,30 @@ func (f wizardResultFixture) Submit(context.Context, ports.Actor, tasks.SubmitRe
 	return f.created, f.err
 }
 
+type diskConflictFixture struct {
+	tasks.Wizard
+	request tasks.SubmitRequest
+}
+
+func (f *diskConflictFixture) Submit(_ context.Context, _ ports.Actor, req tasks.SubmitRequest) ([]tasks.TaskChoice, error) {
+	f.request = req
+	return nil, &tasks.ProblemsError{Problems: []model.Problem{model.NewProblem("target_disk_changed", model.Subject{Kind: model.KindHost, ID: "A"}, "A")}}
+}
+
+func TestWizardPassesConfirmedDiskAndReturnsConflict(t *testing.T) {
+	engine := gin.New()
+	f := &diskConflictFixture{}
+	s := &server{deps: Deps{Wizard: f}}
+	engine.POST("/console/v1/wizard/tasks", s.wizardSubmit)
+	res := httpCall(&Server{Engine: engine}, "POST", "/console/v1/wizard/tasks", `{"isoID":"lin","templateID":"install","templateVersion":3,"hosts":[{"sn":"A","expectedTargetDisk":{"key":"partition/1/disk","mode":"device","value":"sda"}},{"sn":"B"}]}`, "")
+	if len(f.request.Hosts) != 2 || f.request.Hosts[0].ExpectedTargetDisk == nil || *f.request.Hosts[0].ExpectedTargetDisk != (tasks.TargetDisk{Key: "partition/1/disk", Mode: "device", Value: "sda"}) || f.request.Hosts[1].ExpectedTargetDisk != nil {
+		t.Fatal("提交入口未保留用户确认的目标盘", f.request)
+	}
+	if res.Code != 409 || !strings.Contains(res.Body.String(), "target_disk_changed") {
+		t.Fatal(res.Code, res.Body.String())
+	}
+}
+
 func Test向导只转换应用给出的诊断和完整任务(t *testing.T) {
 	s, st, token, iso, tpl := wizardFixture(t)
 	problem := model.NewProblem("host_has_open_task", model.Subject{Kind: model.KindHost, ID: "SN-1"})

@@ -15,8 +15,9 @@ export interface Schemas {
   "CsvPlan": { "rows": (Array<Schemas["CsvRow"]>) | null; "total": number; };
   "CsvRow": { "action": string; "problems": (Array<Schemas["ProblemJSON"]>) | null; "row": number; "sn": string; };
   "DeriveRequest": { "from": number; "name": string; };
+  "DiscoveryDiskStatus": "none" | "partial" | "ready";
   "DiscoveryHostDisk": { "bytes": string; "capacityText"?: string; "device": string; "model": string; "serial": string; };
-  "DiscoveryHostDiskReport": { "disks": (Array<Schemas["DiscoveryHostDisk"]>) | null; "notice"?: string; "status": string; };
+  "DiscoveryHostDiskReport": { "disks": (Array<Schemas["DiscoveryHostDisk"]>) | null; "notice"?: string; "status": Schemas["DiscoveryDiskStatus"]; };
   "DiscoveryItem": { "fields": ({ [key: string]: string; }) | null; "name": string; };
   "DiscoveryPage": { "items": (Array<Schemas["DiscoveryRecord"]>) | null; "next_cursor"?: string; };
   "DiscoveryRecord": { "arch": Schemas["CatalogArch"]; "firmware": Schemas["CatalogFirmware"]; "first_seen_at": number; "last_seen_at": number; "mac": string; "reason"?: string; "registered_sn"?: string; "report"?: Schemas["DiscoveryReport"] | null; "report_at"?: number; "sn"?: string; "status": string; "system_model"?: string; };
@@ -111,7 +112,7 @@ export interface Schemas {
   "WizardParamsHost": { "fields": (Array<Schemas["ParamFieldDTO"]>) | null; "problems": (Array<Schemas["ProblemJSON"]>) | null; "sn": string; "targetDisk"?: Schemas["WizardTargetDisk"] | null; };
   "WizardParamsRequest": { "entered"?: ({ [key: string]: ({ [key: string]: string; }) | null; }) | null; "hostSNs": Array<string>; "isoID": string; "templateID": string; "templateVersion": number; };
   "WizardParamsResult": { "common": (Array<Schemas["ProblemJSON"]>) | null; "hosts": (Array<Schemas["WizardParamsHost"]>) | null; };
-  "WizardSubmitHost": { "entered"?: ({ [key: string]: string; }) | null; "sn": string; };
+  "WizardSubmitHost": { "entered"?: ({ [key: string]: string; }) | null; "expectedTargetDisk"?: Schemas["WizardTargetDisk"] | null; "sn": string; };
   "WizardSubmitRequest": { "hosts": Array<Schemas["WizardSubmitHost"]>; "isoID": string; "templateID": string; "templateVersion": number; };
   "WizardSubmitResult": { "tasks": (Array<Schemas["TaskItem"]>) | null; };
   "WizardTargetDisk": { "key": Schemas["ParamsFieldKey"]; "mode": string; "value": string; };

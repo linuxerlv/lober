@@ -48,8 +48,9 @@ type ParamsRequest struct {
 	Entered map[string]map[string]string
 }
 type SubmitHost struct {
-	SN      string
-	Entered map[string]string
+	ExpectedTargetDisk *TargetDisk
+	SN                 string
+	Entered            map[string]string
 }
 type SubmitRequest struct {
 	Selection
