@@ -62,6 +62,9 @@ const canReadDiscovery = computed(() => can('host:read'));
 const canRegisterDiscovery = computed(
   () => auth.sessionUser?.role === 'admin' && can('host:write'),
 );
+const canCreateTask = computed(
+  () => access.accessCodes.includes('task:create') && hasMenu('tasks'),
+);
 const discoveryOpen = ref(false);
 const failure = ref<unknown>();
 const problems = computed(() => problemsOf(failure.value));
@@ -220,6 +223,12 @@ function changePageSize(value: number) {
 function discoveryRegistered(sn: string) {
   ElMessage.success(`已登记主机 ${sn}`);
   void gridApi.reload();
+}
+function createTaskForHost(sn: string) {
+  if (!canCreateTask.value || !sn) return;
+  discoveryOpen.value = false;
+  detailOpen.value = false;
+  void router.push({ name: 'TasksNew', query: { host: sn } });
 }
 const editorOpen = ref(false);
 const saving = ref(false);
@@ -512,7 +521,9 @@ async function commitCSV() {
     <HostDiscovery
       v-if="canReadDiscovery"
       v-model="discoveryOpen"
+      :can-create-task="canCreateTask"
       :can-write="canRegisterDiscovery"
+      @create-task="createTaskForHost"
       @registered="discoveryRegistered"
     />
     <ElDrawer
@@ -651,17 +662,10 @@ async function commitCSV() {
           </dl>
           <p v-else class="text-sm text-muted-foreground">暂无登记属性。</p>
         </section>
-        <div
-          v-if="access.accessCodes.includes('task:create') && hasMenu('tasks')"
-        >
-          <ElButton
-            @click="
-              detailOpen = false;
-              router.push({ name: 'TasksNew', query: { host: detail.sn } });
-            "
-            >
-为这台主机创建任务
-</ElButton>
+        <div v-if="canCreateTask">
+          <ElButton @click="createTaskForHost(detail.sn)">
+            为这台主机创建任务
+          </ElButton>
         </div>
       </div>
     </ElDrawer>

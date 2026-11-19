@@ -502,7 +502,7 @@ onBeforeUnmount(() => {
           v-if="summary.state === 'pending'"
           type="warning"
           :closable="false"
-          title="目标主机下次网络启动时可能开始安装。"
+          title="请让目标主机从网络启动；若已停在自动发现或硬件采集界面，须先重启再从网络启动以开始安装。"
         />
         <div>
           <ElButton
