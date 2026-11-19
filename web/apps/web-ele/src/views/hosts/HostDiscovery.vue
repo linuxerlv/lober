@@ -12,8 +12,8 @@ import {
 } from '#/api/console/discovery';
 import { errorMessage } from '#/api/console/problem';
 
-const props = defineProps<{ canWrite: boolean }>();
-const emit = defineEmits<{ registered: [sn: string] }>();
+const props = defineProps<{ canCreateTask?: boolean; canWrite: boolean }>();
+const emit = defineEmits<{ createTask: [sn: string]; registered: [sn: string] }>();
 const open = defineModel<boolean>({ required: true });
 
 const hostStatus = {
@@ -257,9 +257,16 @@ async function confirmRegistration() {
           :closable="false"
           type="error"
         />
-        <p v-if="selectedHost.registered_sn">
-          已登记为 {{ selectedHost.registered_sn }}
-        </p>
+        <div v-if="selectedHost.registered_sn" class="flex flex-wrap items-center gap-3">
+          <p>已登记为 {{ selectedHost.registered_sn }}</p>
+          <ElButton
+            v-if="canCreateTask"
+            type="primary"
+            @click="emit('createTask', selectedHost.registered_sn)"
+          >
+            为这台主机创建装机任务
+          </ElButton>
+        </div>
         <form
           v-else-if="canWrite"
           class="flex flex-wrap items-end gap-3"
