@@ -49,6 +49,14 @@ async function bootstrap(namespace: string) {
   // 配置 pinia-tore
   await initStores(app, { namespace });
 
+  if (import.meta.env.VITE_USE_MOCK === 'true') {
+    const { useAccessStore } = await import('@vben/stores');
+    const accessStore = useAccessStore();
+    if (!accessStore.accessToken) {
+      accessStore.setAccessToken('mock-user-admin');
+    }
+  }
+
   // 安装权限指令
   registerAccessDirective(app);
 

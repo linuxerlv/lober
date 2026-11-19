@@ -214,6 +214,8 @@ vi.mock('element-plus', async () => {
     ElTag: Container,
     ElTabs: Container,
     ElTabPane: Container,
+    ElStep: Container,
+    ElSteps: Container,
     ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
     ElMessageBox: { confirm: vi.fn() },
   };

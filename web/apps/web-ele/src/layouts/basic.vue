@@ -16,9 +16,11 @@ import {
 import { preferences, usePreferences } from '@vben/preferences';
 import { useAccessStore, useUserStore } from '@vben/stores';
 
-import { ElMessage, ElTag } from 'element-plus';
+import { ElMessage, ElOption, ElSelect, ElTag } from 'element-plus';
 
 import { roleLabels } from '#/api/console/accounts';
+import { requestClient } from '#/api/request';
+import { useConsoleAccess } from '#/composables/use-console-access';
 import { useAuthStore } from '#/store';
 import LoginForm from '#/views/_core/authentication/login.vue';
 
@@ -28,6 +30,23 @@ const router = useRouter();
 const userStore = useUserStore();
 const authStore = useAuthStore();
 const accessStore = useAccessStore();
+const consoleAccess = useConsoleAccess();
+const isMockMode = import.meta.env.VITE_USE_MOCK === 'true';
+
+async function switchMockRole(role: string) {
+  try {
+    const result = await requestClient.post<{
+      token: string;
+      user: NonNullable<typeof authStore.sessionUser>;
+    }>('/session/switch-role', { role });
+    accessStore.setAccessToken(result.token);
+    authStore.applySessionUser(result.user);
+    await consoleAccess.refresh();
+    ElMessage.success(`已切换演示视角：${roleLabels[result.user.role]}`);
+  } catch {
+    ElMessage.error('切换演示角色失败');
+  }
+}
 const { destroyWatermark, updateWatermark } = useWatermark();
 const { isDark } = usePreferences();
 const showDot = computed(() =>
@@ -157,6 +176,23 @@ watch(
     @logout="handleLogout"
   >
     <template #user-dropdown>
+      <div v-if="isMockMode && authStore.sessionUser" class="mr-2 hidden items-center gap-2 sm:flex">
+        <ElTag size="small" type="warning" effect="plain">Mock 演示</ElTag>
+        <ElSelect
+          :model-value="authStore.sessionUser.role"
+          size="small"
+          class="!w-36"
+          aria-label="切换演示角色"
+          @update:model-value="switchMockRole(String($event))"
+        >
+          <ElOption
+            v-for="(label, roleKey) in roleLabels"
+            :key="roleKey"
+            :label="label"
+            :value="roleKey"
+          />
+        </ElSelect>
+      </div>
       <UserDropdown
         :avatar
         :menus

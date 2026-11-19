@@ -98,6 +98,36 @@ const hardware = computed(() =>
     ([key, value]) => Object.hasOwn(hardwareNames, key) && value.trim(),
   ),
 );
+function cleanDisplayAttrs(rawAttrs?: null | Record<string, string>) {
+  return Object.entries(rawAttrs ?? {}).filter(
+    ([key]) =>
+      !isInventoryControlAttribute(key) &&
+      !Object.hasOwn(hardwareNames, key) &&
+      key !== 'inv_disks' &&
+      key !== 'inv_nics' &&
+      !key.startsWith('inv_'),
+  );
+}
+function formatHostHardwareSummary(rawAttrs?: null | Record<string, string>) {
+  if (!rawAttrs) return '';
+  const model = rawAttrs.inv_system_model || '';
+  const cores = rawAttrs.inv_cpu_cores ? `${rawAttrs.inv_cpu_cores} 核` : '';
+  const memMib = Number(rawAttrs.inv_mem_mib || 0);
+  const memGb = memMib >= 1024 ? `${Math.round(memMib / 1024)} GB` : '';
+  const disk = rawAttrs.inv_system_disk || '';
+  return [model, cores, memGb, disk].filter(Boolean).join(' · ');
+}
+const hostStats = computed(() => {
+  const list = page.items;
+  const collectedCount = list.filter(
+    (h) => Number(h.attrs?.inv_collected_at) > 0 || h.attrs?.inv_system_model,
+  ).length;
+  return {
+    total: page.total,
+    collected: collectedCount,
+    uncollected: Math.max(0, list.length - collectedCount),
+  };
+});
 const registered = computed(() =>
   Object.entries(detail.value?.attrs ?? {}).filter(
     ([key]) =>
@@ -166,16 +196,20 @@ const [Grid, gridApi] = useVbenVxeGrid<HostListItem>({
   gridOptions: {
     columns: [
       { width: 48, slots: { header: 'select-all', default: 'select-row' } },
-      { field: 'sn', title: 'SN', minWidth: 180 },
-      { field: 'arch', title: '架构', width: 100 },
-      { field: 'firmware', title: '固件', width: 100 },
+      { field: 'sn', title: 'SN', minWidth: 170 },
+      { field: 'arch', title: '架构', width: 95 },
+      { field: 'firmware', title: '固件', width: 90 },
+      {
+        title: '硬件配置概况',
+        minWidth: 240,
+        slots: { default: 'hardware' },
+      },
       {
         field: 'attrs',
-        title: '登记属性',
-        minWidth: 280,
+        title: '业务登记属性',
+        minWidth: 260,
         slots: { default: 'attrs' },
       },
-      { field: 'rev', title: '修订', width: 80 },
       { title: '操作', width: 310, slots: { default: 'action' } },
     ],
     maxHeight: 520,
@@ -423,6 +457,34 @@ async function commitCSV() {
       :problems="problems"
       :references="references"
     />
+    <div class="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div class="rounded-xl border border-border bg-card p-4">
+        <div class="text-xs text-muted-foreground">已登记主机总数</div>
+        <div class="mt-2 text-2xl font-bold tabular-nums">{{ hostStats.total }}</div>
+      </div>
+      <div class="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 text-emerald-600 dark:text-emerald-400">
+        <div class="text-xs opacity-80">本页已采集硬件</div>
+        <div class="mt-2 text-2xl font-bold tabular-nums">{{ hostStats.collected }}</div>
+      </div>
+      <div class="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-amber-600 dark:text-amber-400">
+        <div class="text-xs opacity-80">待采集硬件</div>
+        <div class="mt-2 text-2xl font-bold tabular-nums">{{ hostStats.uncollected }}</div>
+      </div>
+      <button
+        v-if="canReadDiscovery"
+        type="button"
+        class="flex flex-col justify-between rounded-xl border border-primary/40 bg-primary/5 p-4 text-left transition hover:bg-primary/10"
+        @click="discoveryOpen = true"
+      >
+        <div class="flex items-center justify-between text-xs font-medium text-primary">
+          <span>网络自动发现</span>
+          <span>点击查看 →</span>
+        </div>
+        <div class="mt-2 text-sm font-semibold text-foreground">
+          扫描 PXE 新上报物理机
+        </div>
+      </button>
+    </div>
     <section class="overflow-hidden rounded-lg border border-border bg-card">
       <form
         class="flex flex-wrap items-end gap-3 px-5 py-4"
@@ -478,14 +540,30 @@ async function commitCSV() {
             @change="selection.toggle(row, $event)"
           />
         </template>
+        <template #hardware="{ row }">
+          <div v-if="formatHostHardwareSummary(row.attrs)" class="py-1 text-xs">
+            <div class="font-medium text-foreground">
+              {{ formatHostHardwareSummary(row.attrs) }}
+            </div>
+          </div>
+          <span v-else class="text-xs text-muted-foreground">未采集硬件</span>
+        </template>
         <template #attrs="{ row }">
-          <span
-            v-for="(value, key) in row.attrs"
-            :key="key"
-            class="mr-4 inline-block"
-          >
-            {{ key }}：{{ value }}
-          </span>
+          <div class="flex flex-wrap gap-1.5 py-1">
+            <span
+              v-for="[key, value] in cleanDisplayAttrs(row.attrs)"
+              :key="key"
+              class="inline-flex items-center rounded bg-muted px-2 py-0.5 text-xs"
+            >
+              <span class="text-muted-foreground">{{ key }}：</span>{{ value }}
+            </span>
+            <span
+              v-if="!cleanDisplayAttrs(row.attrs).length"
+              class="text-xs text-muted-foreground"
+            >
+              —
+            </span>
+          </div>
         </template>
         <template #action="{ row }">
           <ElButton link type="primary" @click="viewHost(row)">

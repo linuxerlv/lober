@@ -31,6 +31,8 @@ const routes: RouteRecordRaw[] = [
     component: () => import('#/views/account/password.vue'),
     meta: {
       title: '修改密码',
+      hideInMenu: true,
+      hideInTab: true,
       order: 80,
       authority: [
         'viewer',

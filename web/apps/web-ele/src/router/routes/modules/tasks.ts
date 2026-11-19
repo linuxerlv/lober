@@ -6,9 +6,10 @@ import { List } from '@vben/icons';
 const routes: RouteRecordRaw[] = [
   {
     meta: {
+      hideChildrenInMenu: true,
       icon: List,
       order: 10,
-      title: '任务',
+      title: '装机任务',
     },
     name: 'Tasks',
     path: '/tasks',

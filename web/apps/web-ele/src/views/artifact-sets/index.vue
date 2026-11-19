@@ -26,6 +26,8 @@ import {
   ElOption,
   ElProgress,
   ElSelect,
+  ElStep,
+  ElSteps,
   ElTag,
 } from 'element-plus';
 
@@ -35,6 +37,7 @@ import {
   createdISOIDOf,
   deleteArtifactSetApi,
   deprecateISOApi,
+  enableISOApi,
   getArtifactSetListApi,
   getISOApi,
   getISOProgressApi,
@@ -66,7 +69,7 @@ const labels: Record<string, string> = {
   importing: '导入中',
   ready: '可用',
   failed: '失败',
-  deprecated: '已废弃',
+  deprecated: '已禁用',
 };
 const families: ISOCreateParams['family'][] = ['linux', 'windows', 'esxi'];
 // Display catalog choices only; the server owns media and compatibility checks.
@@ -165,6 +168,7 @@ function changePageSize(value: number) {
   void gridApi.reload();
 }
 const createOpen = ref(false);
+const createStep = ref(0);
 const busy = ref(false);
 const isoForm = reactive<ISOCreateParams>({
   name: '',
@@ -193,6 +197,7 @@ watch(
 );
 function openCreate() {
   failure.value = undefined;
+  createStep.value = 0;
   Object.assign(isoForm, {
     name: '',
     family: 'linux',
@@ -202,6 +207,18 @@ function openCreate() {
   main.value = newSource();
   extra.value = newSource('netboot');
   createOpen.value = true;
+}
+function nextCreateStep() {
+  if (createStep.value === 0) {
+    createStep.value = 1;
+  } else if (createStep.value === 1) {
+    if (!isoForm.name.trim()) {
+      const addr = (main.value.source.addr ?? '').trim();
+      const tail = addr.split('/').pop()?.replace(/\.iso$/i, '');
+      if (tail) isoForm.name = tail;
+    }
+    createStep.value = 2;
+  }
 }
 const detailOpen = ref(false);
 const selected = ref<ISOItem>();
@@ -402,13 +419,13 @@ async function resumeFile(source: SourceProgress, event: Event) {
 }
 async function operation(
   item: ISOItem,
-  action: 'cancel' | 'delete' | 'deprecate' | 'reimport' | 'retry',
+  action: 'cancel' | 'delete' | 'deprecate' | 'enable' | 'reimport' | 'retry',
 ) {
   if (!canWrite.value) return;
   if (['cancel', 'delete', 'deprecate'].includes(action)) {
     try {
       await ElMessageBox.confirm(
-        `确认${action === 'cancel' ? '取消获取' : action === 'delete' ? '删除' : '废弃'} ISO「${item.name}」？`,
+        `确认${action === 'cancel' ? '取消获取' : action === 'delete' ? '删除' : '禁用'} ISO「${item.name}」？`,
         '操作确认',
         { type: 'warning' },
       );
@@ -423,6 +440,7 @@ async function operation(
       await deleteArtifactSetApi(item.id, item.rev);
       if (selected.value?.id === item.id) detailOpen.value = false;
     } else if (action === 'deprecate') await deprecateISOApi(item.id, item.rev);
+    else if (action === 'enable') await enableISOApi(item.id, item.rev);
     else {
       if (action === 'cancel')
         uploadActive.forEach((key) => {
@@ -430,7 +448,13 @@ async function operation(
         });
       await operateISOApi(item.id, action);
     }
-    ElMessage.success('操作已提交');
+    ElMessage.success(
+      action === 'deprecate'
+        ? '镜像已禁用'
+        : action === 'enable'
+          ? '镜像已启用'
+          : '操作已提交',
+    );
     await gridApi.reload();
     if (detailOpen.value) await refreshProgress();
   } catch (error) {
@@ -616,14 +640,23 @@ function formatSize(bytes: number) {
         </template>
         <template #action="{ row }">
           <ElButton link type="primary" @click="openDetails(row)">
-查看详情
-</ElButton>
+            查看详情
+          </ElButton>
           <ElButton
             v-if="canWrite && row.state === 'ready'"
             link
+            type="warning"
             @click="operation(row, 'deprecate')"
           >
-            废弃
+            禁用
+          </ElButton>
+          <ElButton
+            v-if="canWrite && row.state === 'deprecated'"
+            link
+            type="success"
+            @click="operation(row, 'enable')"
+          >
+            启用
           </ElButton>
           <ElButton
             v-if="canWrite"
@@ -650,10 +683,34 @@ function formatSize(bytes: number) {
     </section>
     <ElDialog
       v-model="createOpen"
-      title="新建 ISO"
-      width="760px"
+      title="登记系统镜像（向导）"
+      width="min(800px, 95vw)"
       :close-on-click-modal="false"
     >
+      <ElSteps
+        :active="createStep"
+        finish-status="success"
+        class="mb-5 rounded-xl border border-border bg-muted/20 p-4"
+      >
+        <ElStep
+          title="1. 选系统类型"
+          description="选择操作系统与发行系列"
+          class="cursor-pointer"
+          @click="createStep = 0"
+        />
+        <ElStep
+          title="2. 配镜像来源"
+          description="远程下载、本地上传或服务器路径"
+          class="cursor-pointer"
+          @click="createStep = 1"
+        />
+        <ElStep
+          title="3. 确认并登记"
+          description="核对镜像信息并开始获取"
+          class="cursor-pointer"
+          @click="createStep = 2"
+        />
+      </ElSteps>
       <ElAlert
         v-if="failure"
         :title="errorMessage(failure)"
@@ -662,18 +719,48 @@ function formatSize(bytes: number) {
         class="mb-3"
       />
       <ProblemList :problems="problems" :references="references" />
-      <div class="grid gap-4">
-        <label>
-          名字
-          <ElInput
-            v-model="isoForm.name"
-            aria-label="ISO 名字"
-            :disabled="busy"
-          />
-        </label>
-        <div class="grid grid-cols-2 gap-4">
-          <label>
-            族
+
+      <!-- 第 1 步：选系统类型与名称 -->
+      <div
+        v-show="createStep === 0"
+        class="grid gap-4 rounded-xl border border-border bg-muted/20 p-5"
+      >
+        <div>
+          <span class="mb-2 block text-xs font-medium text-foreground">
+            快捷选择操作系统大类
+          </span>
+          <div class="grid grid-cols-3 gap-3">
+            <button
+              v-for="item in [
+                { key: 'linux', title: 'Linux 服务器', desc: 'Rocky / Ubuntu / RHEL / Debian' },
+                { key: 'esxi', title: 'VMware ESXi', desc: '虚拟化宿主机标准镜像' },
+                { key: 'windows', title: 'Windows Server', desc: 'Windows Server WIM 镜像' },
+              ]"
+              :key="item.key"
+              type="button"
+              :disabled="busy"
+              class="rounded-xl border p-3.5 text-left transition"
+              :class="
+                isoForm.family === item.key
+                  ? 'border-primary bg-primary/10 ring-1 ring-primary'
+                  : 'border-border bg-card hover:border-primary/40'
+              "
+              @click="isoForm.family = item.key as typeof isoForm.family"
+            >
+              <div class="text-sm font-semibold text-foreground">
+                {{ item.title }}
+              </div>
+              <div class="mt-1 text-xs text-muted-foreground">
+                {{ item.desc }}
+              </div>
+            </button>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <label class="text-xs">
+            <span class="mb-1.5 block font-medium text-foreground">
+              操作系统类型（族）
+            </span>
             <ElSelect
               v-model="isoForm.family"
               aria-label="ISO 族"
@@ -688,8 +775,10 @@ function formatSize(bytes: number) {
               />
             </ElSelect>
           </label>
-          <label>
-            系
+          <label class="text-xs">
+            <span class="mb-1.5 block font-medium text-foreground">
+              发行版系列（系）
+            </span>
             <ElSelect
               v-model="isoForm.series"
               aria-label="ISO 系"
@@ -705,19 +794,105 @@ function formatSize(bytes: number) {
             </ElSelect>
           </label>
         </div>
-        <SourceForm v-model="main" label="主 ISO" :disabled="busy" />
+        <label class="text-xs">
+          <span class="mb-1.5 block font-medium text-foreground">
+            镜像显示名称（可留到下一步选文件后自动生成）
+          </span>
+          <ElInput
+            v-model="isoForm.name"
+            placeholder="例如 Rocky Linux 9.4 Minimal x86_64"
+            aria-label="ISO 名字"
+            :disabled="busy"
+          />
+        </label>
+      </div>
+
+      <!-- 第 2 步：配置镜像来源 -->
+      <div v-show="createStep === 1" class="grid gap-4">
+        <SourceForm
+          v-model="main"
+          label="主镜像文件来源"
+          :disabled="busy"
+          @file-picked="(name) => { if (!isoForm.name.trim()) isoForm.name = name; }"
+        />
         <SourceForm
           v-if="isoForm.series === 'debian'"
           v-model="extra"
-          label="Debian netboot（同版本、同架构）"
+          label="Debian 网络引导包 netboot（同版本、同架构）"
           :disabled="busy"
         />
       </div>
+
+      <!-- 第 3 步：确认并登记 -->
+      <div
+        v-show="createStep === 2"
+        class="grid gap-4 rounded-xl border border-border bg-muted/20 p-5"
+      >
+        <label class="text-xs">
+          <span class="mb-1.5 block font-medium text-foreground">
+            核对镜像显示名称 <span class="text-red-500">*</span>
+          </span>
+          <ElInput
+            v-model="isoForm.name"
+            placeholder="请输入镜像名称"
+            :disabled="busy"
+          />
+        </label>
+        <dl class="grid grid-cols-2 gap-3 rounded-lg border border-border bg-card p-4 text-xs">
+          <div>
+            <dt class="text-muted-foreground">系统类型与发行系列</dt>
+            <dd class="mt-1 font-semibold uppercase text-foreground">
+              {{ isoForm.family }} / {{ isoForm.series }}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-muted-foreground">获取方式</dt>
+            <dd class="mt-1 font-semibold text-foreground">
+              {{ sourceNames[main.source.kind] }}
+            </dd>
+          </div>
+          <div class="col-span-2">
+            <dt class="text-muted-foreground">来源文件或地址</dt>
+            <dd class="mt-1 break-all font-mono text-foreground">
+              {{
+                main.source.kind === 'upload'
+                  ? main.file?.name || '未选择本地文件'
+                  : main.source.addr || '未填写地址'
+              }}
+            </dd>
+          </div>
+        </dl>
+      </div>
+
       <template #footer>
-        <ElButton :disabled="busy" @click="createOpen = false">取消</ElButton>
-        <ElButton type="primary" :loading="busy" @click="createISO">
-          登记并获取
-        </ElButton>
+        <div class="flex w-full items-center justify-between">
+          <ElButton :disabled="busy" @click="createOpen = false">取消</ElButton>
+          <div class="flex gap-2">
+            <ElButton
+              v-if="createStep > 0"
+              :disabled="busy"
+              @click="createStep--"
+            >
+              上一步
+            </ElButton>
+            <ElButton
+              v-if="createStep < 2"
+              type="primary"
+              :disabled="busy"
+              @click="nextCreateStep"
+            >
+              下一步
+            </ElButton>
+            <ElButton
+              v-else
+              type="primary"
+              :loading="busy"
+              @click="createISO"
+            >
+              登记并获取
+            </ElButton>
+          </div>
+        </div>
       </template>
     </ElDialog>
     <ElDrawer
@@ -754,6 +929,22 @@ function formatSize(bytes: number) {
         </div>
         <div class="mb-4 flex flex-wrap gap-2">
           <ElButton @click="refreshProgress()">刷新进度</ElButton>
+          <ElButton
+            v-if="canWrite && selected.state === 'ready'"
+            type="warning"
+            plain
+            @click="operation(selected, 'deprecate')"
+          >
+            禁用镜像
+          </ElButton>
+          <ElButton
+            v-if="canWrite && selected.state === 'deprecated'"
+            type="success"
+            plain
+            @click="operation(selected, 'enable')"
+          >
+            启用镜像
+          </ElButton>
           <ElButton v-if="canWrite" @click="operation(selected, 'cancel')">
             取消获取
           </ElButton>

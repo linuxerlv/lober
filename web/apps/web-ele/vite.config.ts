@@ -1,8 +1,13 @@
+import process from 'node:process';
+
 import { defineConfig, viteCssLayerPlugin } from '@vben/vite-config';
 
 import ElementPlus from 'unplugin-element-plus/vite';
 
+import { viteConsoleMockPlugin } from './src/mock/console-mock.ts';
+
 export default defineConfig(async () => {
+  const useMock = process.env.VITE_USE_MOCK !== 'false';
   return {
     application: {},
     vite: {
@@ -22,27 +27,31 @@ export default defineConfig(async () => {
         // element-plus 的 css 包进 @layer el，使 Tailwind 工具类可覆盖组件样式
         viteCssLayerPlugin({ layerName: 'el', packageName: 'element-plus' }),
         ElementPlus({ format: 'esm' }),
+        viteConsoleMockPlugin(useMock),
       ],
       resolve: {
         // 应用和布局必须共用一份路由，否则布局读不到应用安装的路由对象。
         dedupe: ['vue-router'],
       },
       server: {
-        proxy: {
-          '/console': {
-            target:
-              process.env.VITE_CONSOLE_PROXY_TARGET || 'http://127.0.0.1:8080',
-            changeOrigin: true,
-          },
-          '/openapi.json': {
-            target:
-              process.env.VITE_CONSOLE_PROXY_TARGET || 'http://127.0.0.1:8080',
-            changeOrigin: true,
-          },
-        },
+        proxy: useMock
+          ? undefined
+          : {
+              '/console': {
+                target:
+                  process.env.VITE_CONSOLE_PROXY_TARGET ||
+                  'http://127.0.0.1:8080',
+                changeOrigin: true,
+              },
+              '/openapi.json': {
+                target:
+                  process.env.VITE_CONSOLE_PROXY_TARGET ||
+                  'http://127.0.0.1:8080',
+                changeOrigin: true,
+              },
+            },
       },
     },
   };
 });
-import process from 'node:process';
 

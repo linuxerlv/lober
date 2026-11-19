@@ -46,6 +46,11 @@ export function deprecateISOApi(id: string, rev: number) {
     params: { rev },
   });
 }
+export function enableISOApi(id: string, rev: number) {
+  return requestClient.post<null>(`${isoPath(id)}/enable`, undefined, {
+    params: { rev },
+  });
+}
 export function operateISOApi(
   id: string,
   operation: 'cancel' | 'reimport' | 'retry',

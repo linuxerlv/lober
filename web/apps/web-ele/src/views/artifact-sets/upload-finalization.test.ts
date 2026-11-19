@@ -47,6 +47,8 @@ vi.mock('element-plus', async () => {
     ElOption: slot('option'),
     ElProgress: slot('meter'),
     ElSelect: slot('select'),
+    ElStep: slot('div'),
+    ElSteps: slot('div'),
     ElTag: slot('span'),
   };
 });
@@ -65,6 +67,7 @@ vi.mock('#/api/console/artifact', () => ({
   createdISOIDOf: vi.fn(),
   deleteArtifactSetApi: vi.fn(),
   deprecateISOApi: vi.fn(),
+  enableISOApi: vi.fn(),
   getArtifactSetListApi: vi.fn(),
   getISOApi: io.get,
   getISOProgressApi: io.progress,

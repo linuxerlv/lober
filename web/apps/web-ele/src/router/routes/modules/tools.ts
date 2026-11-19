@@ -6,6 +6,8 @@ import { Settings } from '@vben/icons';
 const routes: RouteRecordRaw[] = [
   {
     meta: {
+      hideChildrenInMenu: true,
+      hideInMenu: true,
       icon: Settings,
       order: 60,
       title: '工具',
