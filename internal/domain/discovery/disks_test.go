@@ -15,7 +15,7 @@ func TestHostDiskReport(t *testing.T) {
 		name   string
 		at     int64
 		want   []HostDisk
-		status string
+		status DiskStatus
 	}{
 		{"采用较新的采集", 10, []HostDisk{{Device: "sda", Bytes: "100", Model: "旧型号"}, {Device: "sdb", Bytes: "200", Model: "数据盘"}}, "partial"},
 		{"同时采集时按设备补全", 20, []HostDisk{{Device: "sda", Bytes: "101", Model: "新型号", Serial: "新序列"}, {Device: "sdb", Bytes: "200", Model: "数据盘"}}, "partial"},

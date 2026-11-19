@@ -19,21 +19,30 @@ type HostDisk struct {
 	CapacityText string `json:"capacityText,omitempty"`
 }
 
+type DiskStatus string
+
+const (
+	DisksNone    DiskStatus = "none"
+	DisksPartial DiskStatus = "partial"
+	DisksReady   DiskStatus = "ready"
+)
+
 type HostDiskReport struct {
 	Disks  []HostDisk `json:"disks"`
-	Status string     `json:"status"`
+	Status DiskStatus `json:"status"`
 	Notice string     `json:"notice,omitempty"`
 }
 
 var (
-	deviceName     = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-	excludedDevice = regexp.MustCompile(`^(loop|ram|sr|dm-)|^(zram|scd|cdrom|fd|md|nbd|zd)[0-9]*$|^(nvme[0-9]+n[0-9]+|mmcblk[0-9]+|nbd[0-9]+|md[0-9]+|zd[0-9]+)p[0-9]+$|^(sd|vd|hd|xvd)[a-z]+[0-9]+$`)
-	diskBytes      = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
+	deviceName      = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	virtualDevice   = regexp.MustCompile(`^(loop|ram|sr|dm-)|^(zram|scd|cdrom|fd|md|nbd|zd)[0-9]*$`)
+	partitionDevice = regexp.MustCompile(`^(nvme[0-9]+n[0-9]+|mmcblk[0-9]+|nbd[0-9]+|md[0-9]+|zd[0-9]+)p[0-9]+$|^(sd|vd|hd|xvd)[a-z]+[0-9]+$`)
+	diskBytes       = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
 )
 
 func installDevice(raw string) string {
 	name := strings.TrimPrefix(strings.TrimSpace(raw), "/dev/")
-	if !deviceName.MatchString(name) || excludedDevice.MatchString(name) {
+	if !deviceName.MatchString(name) || virtualDevice.MatchString(name) || partitionDevice.MatchString(name) {
 		return ""
 	}
 	return name
@@ -104,7 +113,7 @@ func HostDisks(attrs map[string]string, report *Report, reportAt int64) HostDisk
 			inv = nil
 		}
 	}
-	out := HostDiskReport{Disks: []HostDisk{}, Status: "none", Notice: notice}
+	out := HostDiskReport{Disks: []HostDisk{}, Status: DisksNone, Notice: notice}
 	index := map[string]int{}
 	for _, source := range [][]HostDisk{inv, found} {
 		for _, d := range source {
@@ -123,7 +132,7 @@ func HostDisks(attrs map[string]string, report *Report, reportAt int64) HostDisk
 	if len(out.Disks) == 0 {
 		return out
 	}
-	out.Status = "ready"
+	out.Status = DisksReady
 	for _, d := range out.Disks {
 		if d.Serial == "" {
 			out.Notice = cmp.Or(out.Notice, "部分磁盘缺少序列号，请按设备名、容量或型号核对。")
@@ -131,7 +140,7 @@ func HostDisks(attrs map[string]string, report *Report, reportAt int64) HostDisk
 		}
 	}
 	if out.Notice != "" {
-		out.Status = "partial"
+		out.Status = DisksPartial
 	}
 	return out
 }

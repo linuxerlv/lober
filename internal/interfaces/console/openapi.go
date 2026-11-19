@@ -6,6 +6,7 @@ import (
 	"github.com/lober/lober/internal/application/authoring"
 	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/discovery"
 	"github.com/lober/lober/internal/domain/model"
 
 	"reflect"
@@ -284,6 +285,8 @@ func (b *schemaBuilder) definition(t reflect.Type) map[string]any {
 			for _, v := range identity.PublicRoles() {
 				values = append(values, string(v))
 			}
+		case reflect.TypeOf(discovery.DiskStatus("")):
+			values = []string{string(discovery.DisksNone), string(discovery.DisksPartial), string(discovery.DisksReady)}
 		case reflect.TypeOf(SourceKind("")):
 			values = []string{"url", "upload", "path"}
 		case reflect.TypeOf(catalog.Family("")):
