@@ -190,22 +190,22 @@ func TestAnswerAndControlKeepClockAndRevisionBoundaries(t *testing.T) {
 	old := r.task
 	old.Rev--
 	calls = 0
-	if err := s.Cancel(t.Context(), old, audit); !errors.Is(err, repository.ErrConflict) || calls != 0 {
+	if _, err := s.Cancel(t.Context(), old, audit); !errors.Is(err, repository.ErrConflict) || calls != 0 {
 		t.Fatal(err, calls)
 	}
 	r.task.State = model.TaskDone
 	calls = 0
-	if err := s.Cancel(t.Context(), r.task, audit); !errors.Is(err, repository.ErrRejected) || calls != 0 {
+	if _, err := s.Cancel(t.Context(), r.task, audit); !errors.Is(err, repository.ErrRejected) || calls != 0 {
 		t.Fatal(err, calls)
 	}
 	r.task.State = model.TaskInstalling
 	calls = 0
 	latest := r.task
-	if err := s.Cancel(t.Context(), latest, audit); err != nil || calls != 1 || r.task.State != model.TaskCancelled || r.expects[len(r.expects)-1].Rev != latest.Rev {
+	if _, err := s.Cancel(t.Context(), latest, audit); err != nil || calls != 1 || r.task.State != model.TaskCancelled || r.expects[len(r.expects)-1].Rev != latest.Rev {
 		t.Fatal(err, calls, r.task)
 	}
 	calls = 0
-	if err := s.Cancel(t.Context(), latest, audit); !errors.Is(err, repository.ErrConflict) || calls != 0 {
+	if _, err := s.Cancel(t.Context(), latest, audit); !errors.Is(err, repository.ErrConflict) || calls != 0 {
 		t.Fatal("旧输入被自动刷新", err, calls)
 	}
 }

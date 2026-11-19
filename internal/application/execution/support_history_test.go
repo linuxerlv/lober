@@ -51,7 +51,7 @@ func TestHistoricalUnsupportedTaskSurvivesStoreReopenWithoutExecution(t *testing
 	must(t, err)
 	failed, err := st.GetTask(t.Context(), task.ID)
 	must(t, err)
-	if err = s.Retry(t.Context(), failed, repository.Audit{Actor: "operator", Action: "task.retry", At: 1100}); !errors.Is(err, repository.ErrRejected) {
+	if _, err = s.Retry(t.Context(), failed, repository.Audit{Actor: "operator", Action: "task.retry", At: 1100}); !errors.Is(err, repository.ErrRejected) {
 		t.Fatal("旧失败任务仍可重试", err)
 	}
 	if err = execution.CheckUnfinishedTasks(t.Context(), st); err != nil {

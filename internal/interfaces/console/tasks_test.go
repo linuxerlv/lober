@@ -102,10 +102,11 @@ func Test任务列表详情事件及查询边界(t *testing.T) {
 }
 
 type taskControlFixture struct {
-	st     repository.Tasks
-	calls  []ports.AuditIntent
-	reject error
-	block  []model.Problem
+	notifier ports.Notifier
+	st       repository.Tasks
+	calls    []ports.AuditIntent
+	reject   error
+	block    []model.Problem
 }
 
 // 通过通知契约观察订阅生命周期，不读取搬迁后的通知实现私有字段。
@@ -122,21 +123,22 @@ func (o *streamSubscriptionObserver) Subscribe(id string) (<-chan struct{}, func
 	return ch, func() { once.Do(func() { stop(); o.stopped.Add(1); o.active.Add(-1) }) }
 }
 
-func (f *taskControlFixture) Cancel(ctx context.Context, task model.Task, a ports.AuditIntent) error {
-	f.calls = append(f.calls, a)
-	if f.reject != nil {
-		return f.reject
-	}
-	_, _, err := f.st.TransitionTaskByUser(ctx, task.ID, repository.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskCancelled, nil, repository.Audit{Actor: a.Actor, Action: a.Action, Detail: a.Detail, At: a.At})
-	return err
+func (f *taskControlFixture) Cancel(ctx context.Context, task model.Task, a ports.AuditIntent) (model.Task, error) {
+	return f.control(ctx, task, a, model.TaskCancelled)
 }
-func (f *taskControlFixture) Retry(ctx context.Context, task model.Task, a ports.AuditIntent) error {
+func (f *taskControlFixture) Retry(ctx context.Context, task model.Task, a ports.AuditIntent) (model.Task, error) {
+	return f.control(ctx, task, a, model.TaskPending)
+}
+func (f *taskControlFixture) control(ctx context.Context, task model.Task, a ports.AuditIntent, state model.TaskState) (model.Task, error) {
 	f.calls = append(f.calls, a)
 	if f.reject != nil {
-		return f.reject
+		return model.Task{}, f.reject
 	}
-	_, _, err := f.st.TransitionTaskByUser(ctx, task.ID, repository.TaskExpect{State: task.State, Rev: task.Rev}, model.TaskPending, nil, repository.Audit{Actor: a.Actor, Action: a.Action, Detail: a.Detail, At: a.At})
-	return err
+	saved, _, err := f.st.TransitionTaskByUser(ctx, task.ID, repository.TaskExpect{State: task.State, Rev: task.Rev}, state, nil, repository.Audit{Actor: a.Actor, Action: a.Action, Detail: a.Detail, At: a.At})
+	if err == nil && f.notifier != nil {
+		f.notifier.Publish(saved.ID)
+	}
+	return saved, err
 }
 func (f *taskControlFixture) CanCancel(model.Task) []model.Problem { return f.block }
 func (f *taskControlFixture) CanRetry(model.Task) []model.Problem  { return f.block }
@@ -195,7 +197,7 @@ func Test任务控制要求正整数版本(t *testing.T) {
 
 func Test任务控制委托审计及错误隔离(t *testing.T) {
 	s, st, token, task, _ := taskFixture(t)
-	ctl := &taskControlFixture{st: st}
+	ctl := &taskControlFixture{st: st, notifier: testCaps(s).Notifier}
 	setTaskControl(s, ctl)
 	before, err := st.ListAudit(t.Context(), repository.AuditQuery{Limit: 500})
 	if err != nil {

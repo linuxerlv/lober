@@ -173,11 +173,11 @@ func taskReaderOf(st repository.Store, ctl tasksport.Control, renderer ports.Fro
 	return tasks.NewReader(tasks.ReaderDeps{Tasks: st, Diagnostics: ctl, Renderer: renderer})
 }
 
-func taskControllerOf(st repository.Store, backend tasksport.Control, clock ports.Clock, notifier ports.Notifier) tasks.Controller {
-	return tasks.NewController(tasks.ControllerDeps{Tasks: st, Backend: backend, Clock: clock, Notifier: notifier})
+func taskControllerOf(st repository.Store, backend tasksport.Control, clock ports.Clock) tasks.Controller {
+	return tasks.NewController(tasks.ControllerDeps{Tasks: st, Backend: backend, Clock: clock})
 }
 
-// taskEventsOf 与执行、向导和控制入口共用唯一通知实例。
+// taskEventsOf 订阅执行层和装机向导保存成功后的通知。
 func taskEventsOf(st repository.Store, notifier ports.Notifier) tasks.EventReader {
 	return tasks.NewEventReader(tasks.EventDeps{Tasks: st, Events: st, Notifier: notifier})
 }

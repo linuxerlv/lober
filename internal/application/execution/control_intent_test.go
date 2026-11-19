@@ -10,6 +10,7 @@ import (
 	"github.com/lober/lober/internal/infrastructure/persistence/pgstore/pgtest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -22,19 +23,19 @@ type intentBackend struct {
 	problems []model.Problem
 }
 
-func (b *intentBackend) Cancel(c context.Context, t model.Task, a repository.Audit) error {
+func (b *intentBackend) Cancel(c context.Context, t model.Task, a repository.Audit) (model.Task, error) {
 	b.ctx = c
 	b.task = t
 	b.audit = a
 	b.calls = append(b.calls, "cancel")
-	return b.err
+	return model.Task{}, b.err
 }
-func (b *intentBackend) Retry(c context.Context, t model.Task, a repository.Audit) error {
+func (b *intentBackend) Retry(c context.Context, t model.Task, a repository.Audit) (model.Task, error) {
 	b.ctx = c
 	b.task = t
 	b.audit = a
 	b.calls = append(b.calls, "retry")
-	return b.err
+	return model.Task{}, b.err
 }
 func (b *intentBackend) CanCancel(t model.Task) []model.Problem {
 	b.task = t
@@ -52,8 +53,8 @@ func Test审计意图桥接不改变任务控制(t *testing.T) {
 	task := model.Task{ID: "task-1", Rev: 7}
 	a := ports.AuditIntent{Actor: "admin", Action: "task.cancel", Detail: "原因", At: 99}
 	ctx := t.Context()
-	for _, call := range []func(context.Context, model.Task, ports.AuditIntent) error{ctl.Cancel, ctl.Retry} {
-		if err := call(ctx, task, a); err != b.err || b.ctx != ctx || !reflect.DeepEqual(b.task, task) || b.audit != (repository.Audit{Actor: a.Actor, Action: a.Action, Detail: a.Detail, At: a.At}) {
+	for _, call := range []func(context.Context, model.Task, ports.AuditIntent) (model.Task, error){ctl.Cancel, ctl.Retry} {
+		if _, err := call(ctx, task, a); err != b.err || b.ctx != ctx || !reflect.DeepEqual(b.task, task) || b.audit != (repository.Audit{Actor: a.Actor, Action: a.Action, Detail: a.Detail, At: a.At}) {
 			t.Fatal("委托改变了输入或错误", err)
 		}
 	}
@@ -69,22 +70,39 @@ func Test审计意图桥接保留真实保存与冲突(t *testing.T) {
 	must(t, err)
 	ctl := execution.NewAuditedControl(service)
 	intent := ports.AuditIntent{Actor: "operator", Action: "task.cancel", Detail: "人工取消", At: 1000}
-	must(t, ctl.Cancel(t.Context(), task, intent))
-	if err := ctl.Cancel(t.Context(), task, intent); !errors.Is(err, repository.ErrConflict) {
-		t.Fatal("旧版本未冲突", err)
+	var saved [2]model.Task
+	var results [2]error
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Go(func() { saved[i], results[i] = ctl.Cancel(t.Context(), task, intent) })
 	}
+	wg.Wait()
 	canceled, err := st.GetTask(t.Context(), task.ID)
 	must(t, err)
-	if canceled.State != model.TaskCancelled || len(ctl.CanCancel(canceled)) == 0 || len(ctl.CanRetry(canceled)) != 0 {
+	successes := 0
+	for i, err := range results {
+		if err == nil && reflect.DeepEqual(saved[i], canceled) {
+			successes++
+		} else if !errors.Is(err, repository.ErrConflict) {
+			t.Fatal("同一版本只能提交一次，另一次应收到版本冲突", saved[i], err)
+		}
+	}
+	if successes != 1 || canceled.State != model.TaskCancelled || len(ctl.CanCancel(canceled)) == 0 || len(ctl.CanRetry(canceled)) != 0 {
 		t.Fatal("原状态规则改变")
 	}
 	intent.Action = "task.retry"
 	intent.Detail = "人工重试"
-	must(t, ctl.Retry(t.Context(), canceled, intent))
+	retried, err := ctl.Retry(t.Context(), canceled, intent)
+	must(t, err)
 	latest, err := st.GetTask(t.Context(), task.ID)
 	must(t, err)
-	if latest.State != model.TaskPending || latest.Execution.Attempt != 2 {
+	if !reflect.DeepEqual(latest, retried) || latest.State != model.TaskPending || latest.Execution.Attempt != 2 {
 		t.Fatal("重试状态或次数改变")
+	}
+	events, err := st.ListEvents(t.Context(), task.ID, 0, 10)
+	must(t, err)
+	if len(events) != 2 || events[0].Kind != "machine.cancelled" || events[1].Kind != "machine.retry" {
+		t.Fatal("取消和重试各应保存一条事件", events)
 	}
 	page, err := st.ListAudit(t.Context(), repository.AuditQuery{TargetKind: "task", TargetID: task.ID})
 	must(t, err)
