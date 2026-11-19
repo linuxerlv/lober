@@ -54,7 +54,7 @@ func newApp(ctx context.Context, cfg config, clock ports.Clock, logger *slog.Log
 	templates := templateAuthoringOf(mainLoggingStore, clock, selectionGuard)
 	frozenPreview := previewRendererOf(cfg)
 	editor := authoringEditorOf(mainLoggingStore, frozenPreview)
-	controller := taskControllerOf(mainLoggingStore, control, clock, notifier)
+	controller := taskControllerOf(mainLoggingStore, control, clock)
 	hostsRegistry := hostRegistryOf(mainLoggingStore, clock)
 	diskReader := diskReaderOf(mainLoggingStore)
 	service := identityServiceOf(mainLoggingStore, cfg, clock)
