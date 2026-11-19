@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { Buffer } from 'node:buffer';
+
 const nowSec = () => Math.floor(Date.now() / 1000);
 const toB64 = (text: string) => Buffer.from(text, 'utf8').toString('base64');
 
@@ -30,7 +32,6 @@ const rolePermissions: Record<string, string[]> = {
     'host:read',
     'host:write',
     'iso:read',
-    'iso:write',
     'template:read',
     'hook:read',
   ],
@@ -51,7 +52,6 @@ const rolePermissions: Record<string, string[]> = {
     'template:approve',
     'hook:read',
     'hook:approve',
-    'audit:read',
   ],
   viewer: [
     'task:read',
@@ -62,24 +62,10 @@ const rolePermissions: Record<string, string[]> = {
   ],
 };
 
-const defaultRoleMenus: Record<string, string[]> = {
-  admin: [
-    'tasks',
-    'hosts',
-    'isos',
-    'templates',
-    'hooks',
-    'reports',
-    'users',
-    'role-menus',
-  ],
-  operator: ['tasks', 'hosts', 'isos', 'templates', 'hooks'],
-  'hook-author': ['tasks', 'templates', 'hooks', 'isos'],
-  'hook-approver': ['tasks', 'templates', 'hooks', 'reports'],
-  viewer: ['tasks', 'hosts', 'isos', 'templates', 'hooks'],
-};
-
 const menuCatalog = [
+  { id: 'overview', title: '概览', parentId: '', permission: '', required: false },
+  { id: 'overview-analytics', title: '分析页', parentId: 'overview', permission: 'task:read', required: false },
+  { id: 'overview-workspace', title: '工作台', parentId: 'overview', permission: 'task:read', required: false },
   { id: 'ops', title: '装机中心', parentId: '', permission: '', required: false },
   { id: 'assets', title: '资源与配置', parentId: '', permission: '', required: false },
   { id: 'gov', title: '审计与权限', parentId: '', permission: '', required: false },
@@ -88,6 +74,7 @@ const menuCatalog = [
   { id: 'isos', title: '系统镜像', parentId: 'assets', permission: 'iso:read', required: false },
   { id: 'templates', title: '装机模板', parentId: 'assets', permission: 'template:read', required: false },
   { id: 'hooks', title: '脚本组件', parentId: 'assets', permission: 'hook:read', required: false },
+  { id: 'tools', title: '磁盘策略试算', parentId: 'assets', permission: 'template:read', required: false },
   { id: 'reports', title: '审计与报表', parentId: 'gov', permission: 'audit:read', required: false },
   { id: 'users', title: '账号管理', parentId: 'gov', permission: 'user:manage', required: false },
   { id: 'role-menus', title: '角色管理', parentId: 'gov', permission: 'user:manage', required: true },
@@ -141,11 +128,13 @@ const users: Array<Record<string, any>> = [
   },
 ];
 
+function availableMenus(role: string) {
+  return menuCatalog.filter((menu) => menu.parentId && rolePermissions[role]?.includes(menu.permission));
+}
 const roleMenuState: Record<string, { menuIds: string[]; rev: number }> = Object.fromEntries(
-  Object.entries(defaultRoleMenus).map(([role, ids]) => [
-    role,
-    { menuIds: [...ids], rev: 1 },
-  ]),
+  Object.keys(rolePermissions).map((role) => [
+    role, { menuIds: availableMenus(role).map((menu) => menu.id), rev: 0 },
+  ] as const),
 );
 
 let activeUsername = 'admin';
@@ -154,7 +143,7 @@ function buildSessionUser(username: string) {
   const found = users.find((u) => u.username === username) ?? users[0]!;
   const role = found.role as string;
   const permissions = rolePermissions[role] ?? rolePermissions.viewer!;
-  const menuState = roleMenuState[role] ?? { menuIds: defaultRoleMenus[role] ?? [], rev: 1 };
+  const menuState = roleMenuState[role] ?? { menuIds: [], rev: 0 };
   return {
     username: found.username,
     displayName: found.displayName,
@@ -1748,7 +1737,7 @@ export async function handleConsoleMockRequest(
       id: batchId,
       total: batchTasks.length,
       pending: batchTasks.filter((t) => t.state === 'pending').length,
-      active: batchTasks.filter((t) => ['booting', 'installing', 'rebooting', 'initializing'].includes(t.state)).length,
+      active: batchTasks.filter((t) => ['booting', 'initializing', 'installing', 'rebooting'].includes(t.state)).length,
       done: batchTasks.filter((t) => t.state === 'done').length,
       failed: batchTasks.filter((t) => t.state === 'failed').length,
       cancelled: batchTasks.filter((t) => t.state === 'cancelled').length,
@@ -1768,7 +1757,7 @@ export async function handleConsoleMockRequest(
     const attrValue = (query.get('attr_value') || '').trim();
     const activeHostSNs = new Set(
       tasks
-        .filter((t) => ['pending', 'booting', 'installing', 'rebooting', 'initializing'].includes(t.state))
+        .filter((t) => ['booting', 'initializing', 'installing', 'pending', 'rebooting'].includes(t.state))
         .map((t) => t.hostSN),
     );
     let items = hosts.map((h) => {
@@ -1978,7 +1967,7 @@ export async function handleConsoleMockRequest(
   if (hostDisksMatch && method === 'GET') {
     const sn = decodeURIComponent(hostDisksMatch[1]!);
     const host = hosts.find((h) => h.sn === sn);
-    let disks: Array<Record<string, any>> = [];
+    let disks: Array<Record<string, any>>;
     try {
       disks = JSON.parse(host?.attrs?.inv_disks || '[]').map((d: any, i: number) => ({
         device: d.device,
@@ -2040,7 +2029,7 @@ export async function handleConsoleMockRequest(
     for (const r of rows) {
       const attrs: Record<string, string> = {};
       headers.forEach((h, idx) => {
-        if (!['sn', 'arch', 'firmware'].includes(h) && r.cols[idx]) {
+        if (!['arch', 'firmware', 'sn'].includes(h) && r.cols[idx]) {
           attrs[h] = r.cols[idx]!;
         }
       });
@@ -2698,13 +2687,22 @@ export async function handleConsoleMockRequest(
     return true;
   }
 
+  const roleMenuSaveMatch = /^\/roles\/([^/]+)\/menus$/.exec(path);
+  if ((path === '/roles/menus' && method === 'GET') || (roleMenuSaveMatch && method === 'PUT')) {
+    const actor = users.find((user) => authHeader === `Bearer mock-user-${user.username}`);
+    if (!actor || actor.disabled) {
+      sendError(res, 401, '请先登录');
+      return true;
+    }
+    if (actor.passwordChangeRequired || !rolePermissions[actor.role]?.includes('user:manage')) {
+      sendError(res, 403, '当前账号没有角色管理权限');
+      return true;
+    }
+  }
   if (path === '/roles/menus' && method === 'GET') {
     const roles = Object.keys(rolePermissions).map((role) => {
-      const perms = new Set(rolePermissions[role] ?? []);
-      const availableMenuIds = menuCatalog
-        .filter((m) => m.parentId && (!m.permission || perms.has(m.permission)))
-        .map((m) => m.id);
-      const state = roleMenuState[role] ?? { menuIds: availableMenuIds, rev: 1 };
+      const availableMenuIds = availableMenus(role).map((menu) => menu.id);
+      const state = roleMenuState[role]!;
       return {
         role,
         availableMenuIds,
@@ -2716,17 +2714,29 @@ export async function handleConsoleMockRequest(
     return true;
   }
 
-  const roleMenuSaveMatch = /^\/roles\/([^/]+)\/menus$/.exec(path);
   if (roleMenuSaveMatch && method === 'PUT') {
     const role = decodeURIComponent(roleMenuSaveMatch[1]!);
     const body = JSON.parse((await readBody(req)) || '{}');
-    const perms = new Set(rolePermissions[role] ?? []);
-    const availableMenuIds = menuCatalog
-      .filter((m) => m.parentId && (!m.permission || perms.has(m.permission)))
-      .map((m) => m.id);
-    const current = (roleMenuState[role] ??= { menuIds: availableMenuIds, rev: 1 });
-    current.menuIds = body.menuIds ?? [];
-    current.rev += 1;
+    if (!Object.hasOwn(roleMenuState, role)) {
+      sendError(res, 400, '未知角色');
+      return true;
+    }
+    const menus = availableMenus(role);
+    const availableMenuIds = menus.map((menu) => menu.id);
+    const ids: unknown = body?.menuIds;
+    if (!Array.isArray(ids) || !Number.isSafeInteger(body.rev) || body.rev < 0 ||
+        new Set(ids).size !== ids.length || ids.some((id) => !availableMenuIds.includes(id)) ||
+        menus.some((menu) => menu.required && !ids.includes(menu.id))) {
+      sendError(res, 400, '菜单配置无效');
+      return true;
+    }
+    const previous = roleMenuState[role]!;
+    if (body.rev !== previous.rev) {
+      sendError(res, 409, '配置已被其他管理员修改');
+      return true;
+    }
+    const current = { menuIds: availableMenuIds.filter((id) => ids.includes(id)), rev: previous.rev + 1 };
+    roleMenuState[role] = current;
     sendJSON(res, {
       role,
       availableMenuIds,

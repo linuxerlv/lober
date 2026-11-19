@@ -3,11 +3,12 @@ import process from 'node:process';
 import { defineConfig, viteCssLayerPlugin } from '@vben/vite-config';
 
 import ElementPlus from 'unplugin-element-plus/vite';
+import { loadEnv } from 'vite';
 
 import { viteConsoleMockPlugin } from './src/mock/console-mock.ts';
 
-export default defineConfig(async () => {
-  const useMock = process.env.VITE_USE_MOCK !== 'false';
+export default defineConfig(async ({ mode }) => {
+  const useMock = loadEnv(mode, process.cwd()).VITE_USE_MOCK === 'true';
   return {
     application: {},
     vite: {

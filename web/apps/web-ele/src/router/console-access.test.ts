@@ -8,6 +8,8 @@ import {
 
 import { describe, expect, it } from 'vitest';
 
+import { sessionHome } from '#/access/policy';
+
 import {
   consoleAccessKey,
   filterConsoleRoutes,
@@ -15,6 +17,7 @@ import {
   replaceConsoleRoutes,
 } from './console-access';
 import accessRoutes from './routes/modules/access';
+import overviewRoutes from './routes/modules/overview';
 const user: ConsoleSessionUser = {
   username: 'alice',
   displayName: 'Alice',
@@ -65,6 +68,16 @@ const routes: RouteRecordRaw[] = [
   },
 ];
 describe('current console routes', () => {
+  it('opens only the granted overview page, including the folder redirect and home', () => {
+    const workspace = { ...user, menuIds: ['overview-workspace'] };
+    const allowed = filterConsoleRoutes(overviewRoutes, workspace);
+    expect(allowed[0]?.children?.map((route) => route.name)).toEqual(['OverviewWorkspace']);
+    expect(allowed[0]?.redirect).toBe('/overview/workspace');
+    expect(sessionHome(workspace)).toBe('/overview/workspace');
+    expect(sessionHome({ ...user, menuIds: ['overview-analytics', 'tasks'] })).toBe('/overview/analytics');
+    expect(filterConsoleRoutes(overviewRoutes, user)).toEqual([]);
+    expect(filterConsoleRoutes(overviewRoutes, { ...workspace, permissions: [] })).toEqual([]);
+  });
   it('grants individual second-level pages without granting siblings or retaining empty folders', () => {
     const admin = {
       ...user,

@@ -28,3 +28,13 @@ func Test菜单读取过滤越权项并保留目录顺序(t *testing.T) {
 		}
 	}
 }
+
+func Test概览页面能单独授权(t *testing.T) {
+	for _, id := range []string{"overview-analytics", "overview-workspace"} {
+		want := []string{id}
+		got, ok := NormalizeMenuIDs(model.RoleViewer, want)
+		if !ok || !reflect.DeepEqual(got, want) || !reflect.DeepEqual(EffectiveMenuIDs(model.RoleViewer, got, true), want) {
+			t.Fatalf("只开放 %s，实际得到 %v", id, got)
+		}
+	}
+}

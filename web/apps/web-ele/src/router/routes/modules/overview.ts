@@ -11,7 +11,6 @@ const routes: RouteRecordRaw[] = [
     },
     name: 'Overview',
     path: '/overview',
-    redirect: '/overview/analytics',
     children: [
       {
         name: 'OverviewAnalytics',
@@ -20,7 +19,7 @@ const routes: RouteRecordRaw[] = [
         meta: {
           affixTab: true,
           icon: InspectionPanel,
-          menuId: 'tasks',
+          menuId: 'overview-analytics',
           title: '分析页',
         },
       },
@@ -30,7 +29,7 @@ const routes: RouteRecordRaw[] = [
         component: () => import('#/views/overview/workspace.vue'),
         meta: {
           icon: Grid,
-          menuId: 'tasks',
+          menuId: 'overview-workspace',
           title: '工作台',
         },
       },

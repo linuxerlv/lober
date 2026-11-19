@@ -1,12 +1,8 @@
 <script setup lang="ts">
-import type { AuditRecordItem } from '#/api/console/audit';
-import type { DiscoveredHost } from '#/api/console/discovery';
-import type { Task } from '#/api/console/task';
-
-import { computed, onMounted, ref } from 'vue';
+import { computed } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { useAccessStore, useUserStore } from '@vben/stores';
+import { useUserStore } from '@vben/stores';
 
 import { ElButton, ElTag } from 'element-plus';
 
@@ -16,33 +12,39 @@ import { getDiscoveryListApi } from '#/api/console/discovery';
 import { getHookListApi } from '#/api/console/hook';
 import { taskAPI } from '#/api/console/task';
 import { getTemplateListApi } from '#/api/console/template';
+import { useConsoleAccess } from '#/composables/use-console-access';
 import { useAuthStore } from '#/store';
 import { taskStateLabels } from '#/views/tasks/task-state';
+
+import { useOverviewData } from './use-overview-data';
 
 defineOptions({ name: 'OverviewWorkspace' });
 
 const router = useRouter();
 const userStore = useUserStore();
 const authStore = useAuthStore();
-const accessStore = useAccessStore();
-
-const tasks = ref<Task[]>([]);
-const discoveries = ref<DiscoveredHost[]>([]);
-const audits = ref<AuditRecordItem[]>([]);
-const pendingReviewCount = ref(0);
+const { can, hasMenu } = useConsoleAccess();
+const recentTasks = useOverviewData(() => can('task:read'), () => taskAPI.list({ page: 1, page_size: 20 }));
+const discoveries = useOverviewData(() => can('host:read'), () => getDiscoveryListApi());
+const audits = useOverviewData(() => hasMenu('reports'), () => listAudit({ page: 1, page_size: 6 }));
+const reviewQuery = { state: 'review', page: 1, page_size: 1 } as const;
+const templates = useOverviewData(() => can('template:read'), () => getTemplateListApi(reviewQuery));
+const hooks = useOverviewData(() => can('hook:read'), () => getHookListApi(reviewQuery));
+const pendingReviewCount = computed(() => (templates.value?.total ?? 0) + (hooks.value?.total ?? 0));
+const tasks = computed(() => recentTasks.value?.items ?? []);
 
 const failedTasks = computed(() =>
   tasks.value.filter((t) => t.state === 'failed'),
 );
 const activeTasks = computed(() =>
   tasks.value.filter((t) =>
-    ['pending', 'booting', 'installing', 'rebooting', 'initializing'].includes(
+    ['booting', 'initializing', 'installing', 'pending', 'rebooting'].includes(
       t.state,
     ),
   ),
 );
 const unregisteredDiscoveries = computed(() =>
-  discoveries.value.filter((d) => !d.registered_sn),
+  discoveries.value?.items.filter((d) => !d.registered_sn) ?? [],
 );
 
 const shortcuts = computed(() => [
@@ -51,65 +53,44 @@ const shortcuts = computed(() => [
     desc: '选主机、镜像与模板一键下发',
     path: '/tasks/new',
     color: 'text-blue-500 bg-blue-500/10',
-    show: accessStore.accessCodes.includes('task:create'),
+    show: hasMenu('tasks') && can('task:create'),
   },
   {
     title: '装机任务监控',
     desc: '查看实时流水线与排障日志',
     path: '/tasks',
     color: 'text-emerald-500 bg-emerald-500/10',
-    show: true,
+    show: hasMenu('tasks'),
   },
   {
     title: '主机资产与发现',
     desc: '管理已登记主机与硬件采集',
     path: '/hosts',
     color: 'text-amber-500 bg-amber-500/10',
-    show: true,
+    show: hasMenu('hosts'),
   },
   {
     title: '系统镜像库',
     desc: '导入 Linux / ESXi / Windows 镜像',
     path: '/artifact-sets',
     color: 'text-purple-500 bg-purple-500/10',
-    show: true,
+    show: hasMenu('isos'),
   },
   {
     title: '装机模板编排',
     desc: '编辑应答模板与插槽装配',
     path: '/templates',
     color: 'text-cyan-500 bg-cyan-500/10',
-    show: true,
+    show: hasMenu('templates'),
   },
   {
     title: '脚本组件管理',
     desc: '维护网络、磁盘与安全加固脚本',
     path: '/hooks',
     color: 'text-rose-500 bg-rose-500/10',
-    show: true,
+    show: hasMenu('hooks'),
   },
-]);
-
-onMounted(async () => {
-  const [taskRes, discRes, tplRes, hookRes, auditRes] =
-    await Promise.allSettled([
-      taskAPI.list({ page: 1, page_size: 20 }),
-      getDiscoveryListApi(),
-      getTemplateListApi({ state: 'review', page: 1, page_size: 20 }),
-      getHookListApi({ state: 'review', page: 1, page_size: 20 }),
-      listAudit({ page: 1, page_size: 6 }),
-    ]);
-
-  if (taskRes.status === 'fulfilled')
-    tasks.value = taskRes.value.items ?? [];
-  if (discRes.status === 'fulfilled')
-    discoveries.value = discRes.value.items ?? [];
-  if (auditRes.status === 'fulfilled')
-    audits.value = auditRes.value.items ?? [];
-  pendingReviewCount.value =
-    (tplRes.status === 'fulfilled' ? (tplRes.value.total ?? 0) : 0) +
-    (hookRes.status === 'fulfilled' ? (hookRes.value.total ?? 0) : 0);
-});
+].filter((item) => item.show));
 </script>
 
 <template>
@@ -141,7 +122,7 @@ onMounted(async () => {
             当前共有 {{ activeTasks.length }} 台机器正在执行装机流程，{{
               failedTasks.length
             }}
-            台异常待排障，{{ unregisteredDiscoveries.length }} 台新上报物理机待登记。
+            台异常待排障。<span v-if="can('host:read')">{{ unregisteredDiscoveries.length }} 台新上报物理机待登记。</span>
           </p>
         </div>
       </div>
@@ -152,13 +133,13 @@ onMounted(async () => {
             {{ activeTasks.length }}
           </div>
         </div>
-        <div>
+        <div v-if="can('host:read')">
           <div class="text-xs text-muted-foreground">待登记主机</div>
           <div class="mt-1 text-xl font-bold tabular-nums text-amber-500">
             {{ unregisteredDiscoveries.length }}
           </div>
         </div>
-        <div>
+        <div v-if="can('template:read') || can('hook:read')">
           <div class="text-xs text-muted-foreground">待审批组件</div>
           <div class="mt-1 text-xl font-bold tabular-nums text-blue-500">
             {{ pendingReviewCount }}
@@ -196,10 +177,11 @@ onMounted(async () => {
                   </span>
                 </div>
                 <p class="mt-1 text-xs text-muted-foreground">
-                  任务编号 {{ task.id }} · 点击可定位失败脚本日志或一键重试
+                  任务编号 {{ task.id }}
                 </p>
               </div>
               <ElButton
+                v-if="hasMenu('tasks')"
                 size="small"
                 type="danger"
                 plain
@@ -230,12 +212,13 @@ onMounted(async () => {
                 </p>
               </div>
               <ElButton
+                v-if="hasMenu('hosts')"
                 size="small"
                 type="warning"
                 plain
                 @click="router.push('/hosts')"
               >
-                去主机清单登记
+                {{ can('host:write') ? '去主机清单登记' : '查看主机清单' }}
               </ElButton>
             </div>
 
@@ -256,6 +239,7 @@ onMounted(async () => {
               </div>
               <div class="flex gap-2">
                 <ElButton
+                  v-if="hasMenu('templates')"
                   size="small"
                   type="primary"
                   plain
@@ -264,6 +248,7 @@ onMounted(async () => {
                   查看模板
                 </ElButton>
                 <ElButton
+                  v-if="hasMenu('hooks')"
                   size="small"
                   plain
                   @click="router.push('/hooks')"
@@ -281,7 +266,7 @@ onMounted(async () => {
             <h3 class="text-base font-semibold text-foreground">
               活跃装机任务
             </h3>
-            <ElButton link type="primary" @click="router.push('/tasks')">
+            <ElButton v-if="hasMenu('tasks')" link type="primary" @click="router.push('/tasks')">
               查看全部任务 →
             </ElButton>
           </div>
@@ -315,6 +300,7 @@ onMounted(async () => {
                 </div>
               </div>
               <ElButton
+                v-if="hasMenu('tasks')"
                 link
                 type="primary"
                 @click="router.push(`/tasks/${encodeURIComponent(task.id)}`)"
@@ -328,13 +314,13 @@ onMounted(async () => {
 
       <!-- 右侧一列：快捷导航 & 最近审计动态 -->
       <div class="grid content-start gap-4">
-        <div class="rounded-xl border border-border bg-card p-5">
+        <div v-if="shortcuts.length" class="rounded-xl border border-border bg-card p-5">
           <h3 class="mb-4 text-base font-semibold text-foreground">
             快捷导航
           </h3>
           <div class="grid grid-cols-2 gap-3">
             <button
-              v-for="nav in shortcuts.filter((item) => item.show)"
+              v-for="nav in shortcuts"
               :key="nav.title"
               type="button"
               class="rounded-xl border border-border p-3.5 text-left transition hover:border-primary/50 hover:bg-muted/40"
@@ -350,7 +336,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="rounded-xl border border-border bg-card p-5">
+        <div v-if="hasMenu('reports')" class="rounded-xl border border-border bg-card p-5">
           <div class="mb-4 flex items-center justify-between">
             <h3 class="text-base font-semibold text-foreground">
               最近操作动态
@@ -361,7 +347,7 @@ onMounted(async () => {
           </div>
           <div class="divide-y divide-border">
             <div
-              v-for="item in audits"
+              v-for="item in audits?.items"
               :key="item.id"
               class="py-2.5 text-xs"
             >

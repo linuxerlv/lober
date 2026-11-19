@@ -3,6 +3,8 @@ export const consoleMenus: Record<
   string,
   { path: string; permission: string }
 > = {
+  'overview-analytics': { path: '/overview/analytics', permission: 'task:read' },
+  'overview-workspace': { path: '/overview/workspace', permission: 'task:read' },
   tasks: { path: '/tasks', permission: 'task:read' },
   hosts: { path: '/hosts', permission: 'host:read' },
   templates: { path: '/templates', permission: 'template:read' },

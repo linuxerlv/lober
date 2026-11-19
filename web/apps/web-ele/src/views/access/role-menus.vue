@@ -64,8 +64,8 @@ function accountCount(target: ConsoleRole) {
     accounts.value?.filter((account) => account.role === target).length ?? '—'
   );
 }
-function roleLink(target?: ConsoleRole) {
-  return { path: '/access/role-menus', query: target ? { role: target } : {} };
+function roleLink(target?: ConsoleRole, tab?: 'menus') {
+  return { path: '/access/role-menus', query: { role: target, tab } };
 }
 const menus = computed(
   () =>
@@ -101,11 +101,11 @@ watch(
   () => tree.value?.setCheckedKeys(selectedIds.value),
   { flush: 'post' },
 );
-watch(role, () => {
+watch([role, () => route.query.tab], () => {
   notice.value = '';
   error.value = '';
-  section.value = 'permissions';
-});
+  section.value = route.query.tab === 'menus' ? 'menus' : 'permissions';
+}, { immediate: true });
 async function loadAccounts() {
   if (!can('user:manage') || accountsLoading.value) return;
   accountsLoading.value = true;
@@ -287,6 +287,35 @@ watch(
         <div class="px-5 py-3 text-sm text-muted-foreground">
           共 {{ state?.roles.length ?? 0 }} 个角色
         </div>
+        <section v-if="state" class="border-t border-border px-5 py-4">
+          <h2 class="mb-1 font-semibold">页面授权</h2>
+          <p class="mb-4 text-sm text-muted-foreground">点击角色名称，可调整该角色能打开的页面。</p>
+          <div class="overflow-x-auto">
+            <table aria-label="页面授权" class="w-full whitespace-nowrap text-center text-sm">
+              <thead class="bg-muted">
+                <tr>
+                  <th scope="col" class="px-3 py-3 text-left">页面</th>
+                  <th v-for="item in state.roles" :key="item.role" scope="col" class="px-3 py-3">
+                    <RouterLink class="text-primary hover:underline" :to="roleLink(item.role, 'menus')">
+                      {{ roleLabels[item.role] }}
+                    </RouterLink>
+                  </th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-border">
+                <tr v-for="menu in state.menus.filter((item) => item.parentId)" :key="menu.id">
+                  <th scope="row" class="px-3 py-2 text-left font-medium">{{ menu.title }}</th>
+                  <td v-for="item in state.roles" :key="item.role" class="px-3 py-2">
+                    <span v-if="!item.availableMenuIds.includes(menu.id)" class="text-muted-foreground">无权限</span>
+                    <span v-else-if="menu.required">必留</span>
+                    <span v-else-if="item.menuIds.includes(menu.id)" class="text-primary">已开放</span>
+                    <span v-else>已关闭</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </template>
       <ElEmpty
         v-else-if="!current"
@@ -352,7 +381,7 @@ watch(
           </ElTabPane>
           <ElTabPane label="菜单可见性" name="menus" lazy>
             <p class="mb-4 text-sm text-muted-foreground">
-              这些选项控制侧栏显示哪些入口。操作权限由内置角色规则决定。
+              勾选后，该角色可以从侧栏或网址打开对应页面。创建、修改和审批等操作由角色的操作权限决定。
             </p>
             <ElAlert
               v-if="notice"

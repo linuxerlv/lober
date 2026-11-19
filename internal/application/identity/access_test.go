@@ -220,10 +220,11 @@ func Test身份快照归属与菜单副本(t *testing.T) {
 	if err != nil || first.DisplayName != "" || len(first.Permissions) != 16 {
 		t.Fatal(first, err)
 	}
+	firstMenu := first.MenuIDs[0]
 	first.Permissions[0] = "bad"
 	first.MenuIDs[0] = "bad"
 	second, _ := s.CurrentUser(t.Context(), p)
-	if second.Permissions[0] != "host:read" || second.MenuIDs[0] != "tasks" {
+	if second.Permissions[0] != "host:read" || second.MenuIDs[0] != firstMenu {
 		t.Fatal("结果共享可变切片")
 	}
 	m.found = true

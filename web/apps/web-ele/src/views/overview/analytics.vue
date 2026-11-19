@@ -2,7 +2,6 @@
 import type { EchartsUIType } from '@vben/plugins/echarts';
 
 import { computed, onMounted, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
 
 import {
   SvgBellIcon,
@@ -17,15 +16,27 @@ import { getHookListApi } from '#/api/console/hook';
 import { getHostListApi } from '#/api/console/host';
 import { taskAPI } from '#/api/console/task';
 import { getTemplateListApi } from '#/api/console/template';
+import { useConsoleAccess } from '#/composables/use-console-access';
+
+import { useOverviewData } from './use-overview-data';
 
 defineOptions({ name: 'OverviewAnalytics' });
 
-const router = useRouter();
-
-const taskCount = ref(6);
-const hostCount = ref(8);
-const isoCount = ref(5);
-const componentCount = ref(8);
+const { can, hasMenu } = useConsoleAccess();
+const page = { page: 1, page_size: 1 };
+const taskCount = useOverviewData(() => can('task:read'), async () => (await taskAPI.list(page)).total);
+const hostCount = useOverviewData(() => can('host:read'), async () => (await getHostListApi(page)).total);
+const isoCount = useOverviewData(() => can('iso:read'), async () => (await getArtifactSetListApi(page)).total);
+const templateCount = useOverviewData(() => can('template:read'), async () => (await getTemplateListApi(page)).total);
+const hookCount = useOverviewData(() => can('hook:read'), async () => (await getHookListApi(page)).total);
+const componentCount = computed(() => {
+  const counts = [];
+  if (can('template:read')) counts.push(templateCount.value);
+  if (can('hook:read')) counts.push(hookCount.value);
+  return counts.every((n): n is number => typeof n === 'number')
+    ? counts.reduce((sum, n) => sum + n, 0)
+    : undefined;
+});
 
 const trendTab = ref<'monthly' | 'trends'>('trends');
 
@@ -42,37 +53,41 @@ const { renderEcharts: renderRose } = useEcharts(roseChartRef);
 const overviewCards = computed(() => [
   {
     title: '装机任务量',
-    value: taskCount.value.toLocaleString(),
+    visible: can('task:read'),
+    value: taskCount.value?.toLocaleString() ?? '—',
     totalTitle: '累计完成装机',
     totalValue: '1,280',
     icon: SvgCardIcon,
-    path: '/tasks',
+    path: hasMenu('tasks') ? '/tasks' : undefined,
   },
   {
     title: '纳管主机量',
-    value: hostCount.value.toLocaleString(),
+    visible: can('host:read'),
+    value: hostCount.value?.toLocaleString() ?? '—',
     totalTitle: '机房总物理机',
     totalValue: '320',
     icon: SvgCakeIcon,
-    path: '/hosts',
+    path: hasMenu('hosts') ? '/hosts' : undefined,
   },
   {
     title: '系统镜像库',
-    value: isoCount.value.toLocaleString(),
+    visible: can('iso:read'),
+    value: isoCount.value?.toLocaleString() ?? '—',
     totalTitle: '累计网络引导次数',
     totalValue: '4,620',
     icon: SvgDownloadIcon,
-    path: '/artifact-sets',
+    path: hasMenu('isos') ? '/artifact-sets' : undefined,
   },
   {
     title: '模板与脚本',
-    value: componentCount.value.toLocaleString(),
+    visible: can('template:read') || can('hook:read'),
+    value: componentCount.value?.toLocaleString() ?? '—',
     totalTitle: '累计自动化执行',
     totalValue: '9,850',
     icon: SvgBellIcon,
-    path: '/templates',
+    path: hasMenu('templates') ? '/templates' : hasMenu('hooks') ? '/hooks' : undefined,
   },
-]);
+].filter((item) => item.visible));
 
 function drawTrendChart() {
   if (trendTab.value === 'trends') {
@@ -303,29 +318,9 @@ watch(trendTab, () => {
   drawTrendChart();
 });
 
-onMounted(async () => {
+onMounted(() => {
   drawTrendChart();
   drawBottomCharts();
-
-  const [tasksRes, hostsRes, isosRes, tplRes, hooksRes] =
-    await Promise.allSettled([
-      taskAPI.list({ page: 1, page_size: 20 }),
-      getHostListApi({ page: 1, page_size: 20 }),
-      getArtifactSetListApi({ page: 1, page_size: 20 }),
-      getTemplateListApi({ page: 1, page_size: 20 }),
-      getHookListApi({ page: 1, page_size: 20 }),
-    ]);
-
-  if (tasksRes.status === 'fulfilled')
-    taskCount.value = tasksRes.value.total ?? 0;
-  if (hostsRes.status === 'fulfilled')
-    hostCount.value = hostsRes.value.total ?? 0;
-  if (isosRes.status === 'fulfilled')
-    isoCount.value = isosRes.value.total ?? 0;
-  if (tplRes.status === 'fulfilled' && hooksRes.status === 'fulfilled') {
-    componentCount.value =
-      (tplRes.value.total ?? 0) + (hooksRes.value.total ?? 0);
-  }
 });
 </script>
 
@@ -333,11 +328,13 @@ onMounted(async () => {
   <div class="p-5">
     <!-- 第一行：4 张 Vben 原生风格核心指标卡 -->
     <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-      <div
+      <component
+        :is="item.path ? 'RouterLink' : 'div'"
         v-for="item in overviewCards"
         :key="item.title"
-        class="cursor-pointer rounded-xl border border-border bg-card p-5 transition hover:border-primary/50 hover:shadow-md"
-        @click="router.push(item.path)"
+        :to="item.path"
+        class="rounded-xl border border-border bg-card p-5"
+        :class="{ 'transition hover:border-primary/50 hover:shadow-md': item.path }"
       >
         <div class="flex items-center justify-between">
           <h3 class="text-base font-semibold text-foreground">
@@ -356,7 +353,7 @@ onMounted(async () => {
           <span>{{ item.totalTitle }}</span>
           <span class="tabular-nums">{{ item.totalValue }}</span>
         </div>
-      </div>
+      </component>
     </div>
 
     <!-- 第二行：装机趋势 / 月装机量 大图表卡片 -->

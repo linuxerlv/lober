@@ -1,16 +1,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { Buffer } from 'node:buffer';
 import { EventEmitter } from 'node:events';
 
 import { describe, expect, it } from 'vitest';
 
 import { handleConsoleMockRequest } from './console-mock';
 
-async function callMock(method: string, url: string, body?: unknown) {
-  const req = new EventEmitter() as IncomingMessage & EventEmitter;
+async function callMock(method: string, url: string, body?: unknown, username = 'admin') {
+  const req = new EventEmitter() as EventEmitter & IncomingMessage;
   req.method = method;
   req.url = url;
-  req.headers = { authorization: 'Bearer mock-user-admin' };
+  req.headers = { authorization: `Bearer mock-user-${username}` };
 
   let statusCode = 200;
   let responseBody = '';
@@ -45,6 +46,24 @@ async function callMock(method: string, url: string, body?: unknown) {
 }
 
 describe('console mock server', () => {
+  it('applies role limits and revision checks to page grants', async () => {
+    const path = '/console/v1/roles/viewer/menus';
+    const roles = await callMock('GET', '/console/v1/roles/menus');
+    const viewer = roles.json.data.roles.find((item: { role: string }) => item.role === 'viewer');
+    expect(viewer.availableMenuIds).toContain('overview-workspace');
+    expect((await callMock('GET', '/console/v1/roles/menus', undefined, 'chenxun')).statusCode).toBe(403);
+    expect((await callMock('PUT', path, { menuIds: [], rev: viewer.rev }, 'chenxun')).statusCode).toBe(403);
+    expect((await callMock('PUT', path, { menuIds: ['reports'], rev: viewer.rev })).statusCode).toBe(400);
+    const saved = await callMock('PUT', path, { menuIds: ['overview-workspace'], rev: viewer.rev });
+    expect(saved.json.data.menuIds).toEqual(['overview-workspace']);
+    try {
+      expect((await callMock('PUT', path, { menuIds: [], rev: viewer.rev })).statusCode).toBe(409);
+      const session = await callMock('GET', '/console/v1/user/info', undefined, 'chenxun');
+      expect(session.json.data.menuIds).toEqual(['overview-workspace']);
+    } finally {
+      await callMock('PUT', path, { menuIds: viewer.menuIds, rev: saved.json.data.rev });
+    }
+  });
   it('returns session user and supports switching demo roles', async () => {
     const session = await callMock('GET', '/console/v1/session');
     expect(session.handled).toBe(true);
