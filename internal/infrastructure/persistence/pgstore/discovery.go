@@ -127,12 +127,12 @@ func (s *Store) ListDiscoveries(ctx context.Context, after, registeredSN string,
 	var rows []discoveryRow
 	query := s.db.WithContext(ctx).Omit("Report")
 	if registeredSN != "" {
-		query = query.Where("registered_sn = ?", registeredSN).Order("report_at DESC, last_seen_at DESC")
+		query = registeredReports(query, registeredSN)
 		limit = 1
 	} else {
-		query = query.Where("mac > ?", after)
+		query = query.Where("mac > ?", after).Order("mac")
 	}
-	if err := query.Order("mac").Limit(limit).Find(&rows).Error; err != nil {
+	if err := query.Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	records := make([]discovery.Record, 0, len(rows))
@@ -140,6 +140,28 @@ func (s *Store) ListDiscoveries(ctx context.Context, after, registeredSN string,
 		records = append(records, row.summary(at))
 	}
 	return records, nil
+}
+
+func registeredReports(q *gorm.DB, sn string) *gorm.DB {
+	return q.Where("registered_sn = ?", sn).Order("report_at DESC, last_seen_at DESC, mac")
+}
+
+// LatestDiscoveryReport 只取该主机最近一份原始报告，与发现列表使用同一排序。
+func (s *Store) LatestDiscoveryReport(ctx context.Context, sn string) (*discovery.Report, int64, error) {
+	var row discoveryRow
+	q := registeredReports(s.db.WithContext(ctx), sn).Where("report_at > 0")
+	err := q.Select("report", "report_at").Take(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	var report discovery.Report
+	if err := decodeJSON(row.Report, &report); err != nil {
+		return nil, 0, err
+	}
+	return &report, row.ReportAt, nil
 }
 
 func (s *Store) GetDiscovery(ctx context.Context, mac string, at int64) (discovery.Record, error) {

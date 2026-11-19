@@ -62,7 +62,7 @@ func migratedApplicationMethod(fn *types.Func) bool {
 		return symbol == "Requester.Request"
 	}
 	if target == pkgDiscoveryApp {
-		return symbol == "Console.List" || symbol == "Console.Get" || symbol == "Console.Register"
+		return symbol == "Console.List" || symbol == "Console.Get" || symbol == "Console.Register" || symbol == "DiskReader.Disks"
 	}
 	if target == pkgAuditApp {
 		return symbol == "Reader.List" || symbol == "Reader.ExportCSV"

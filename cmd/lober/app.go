@@ -123,11 +123,13 @@ func authoringEditorOf(st repository.Store, renderer ports.FrozenPreview) author
 func hostRegistryOf(st repository.Store, clock ports.Clock) hosts.Registry {
 	return hosts.NewRegistry(hosts.Deps{Hosts: st, Clock: clock})
 }
+func diskReaderOf(st repository.Store) discovery.DiskReader { return discovery.NewDiskReader(st) }
+
 func mediaRegistryOf(st repository.Store, src port.SourceControl, j *appmedia.Deletion, clock ports.Clock) appmedia.Registry {
 	return appmedia.NewRegistry(appmedia.Deps{ISOs: st, Sources: st, Control: src, Deletion: j, Clock: clock})
 }
-func consoleDepsOf(mediaRegistry appmedia.Registry, clock ports.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, controller tasks.Controller, hostRegistry hosts.Registry, identityService *identity.Service, auditReader audit.Reader, taskReader tasks.Reader, taskEvents tasks.EventReader, machine *machineBundle, cfg config) console.Deps {
-	deps := console.Deps{TaskReader: taskReader, TaskEvents: taskEvents, HostRegistry: hostRegistry, Inventory: machine.Inventory, MediaRegistry: mediaRegistry, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, AuditReader: auditReader, Identity: identityService, TaskController: controller, Clock: clock, Logger: logger, LoginBodyLimit: cfg.LoginMaxBytes}
+func consoleDepsOf(mediaRegistry appmedia.Registry, clock ports.Clock, logger *slog.Logger, wizard tasks.Wizard, hooks authoring.Hooks, templates authoring.Templates, editor authoring.Editor, controller tasks.Controller, hostRegistry hosts.Registry, disks discovery.DiskReader, identityService *identity.Service, auditReader audit.Reader, taskReader tasks.Reader, taskEvents tasks.EventReader, machine *machineBundle, cfg config) console.Deps {
+	deps := console.Deps{TaskReader: taskReader, TaskEvents: taskEvents, HostRegistry: hostRegistry, HostDisks: disks, Inventory: machine.Inventory, MediaRegistry: mediaRegistry, Wizard: wizard, HookAuthoring: hooks, TemplateAuthoring: templates, AuthoringEditor: editor, AuditReader: auditReader, Identity: identityService, TaskController: controller, Clock: clock, Logger: logger, LoginBodyLimit: cfg.LoginMaxBytes}
 	if machine.Discovery != nil {
 		deps.Discovery = machine.Discovery
 	}

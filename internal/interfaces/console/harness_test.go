@@ -3,6 +3,7 @@ package console
 import (
 	"github.com/lober/lober/internal/application/audit"
 	"github.com/lober/lober/internal/application/authoring"
+	"github.com/lober/lober/internal/application/discovery"
 	"github.com/lober/lober/internal/application/hosts"
 	"github.com/lober/lober/internal/application/identity"
 	"github.com/lober/lober/internal/application/media"
@@ -34,7 +35,9 @@ func newHTTPServer(t *testing.T) (*Server, *pgstore.Store, *atomic.Int64) {
 	st := pgtest.OpenStore(t)
 	now := new(atomic.Int64)
 	now.Store(fixedAt)
-	s := New(wizardDeps(testDeps{Tasks: st, Events: st, AuditReader: audit.NewReader(st), Clock: now.Load, Notifier: notification.NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, st))
+	deps := wizardDeps(testDeps{Tasks: st, Events: st, AuditReader: audit.NewReader(st), Clock: now.Load, Notifier: notification.NewHub(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, st)
+	deps.HostDisks = discovery.NewDiskReader(st)
+	s := New(deps)
 	return s, st, now
 }
 
