@@ -1,0 +1,22 @@
+#cloud-config
+# lober 正文扫描样例：autoinstall（Ubuntu）
+autoinstall:
+  version: 1
+  identity:
+    hostname: {{param:hostname}}
+  apt:
+    primary:
+      - arches: [default]
+        uri: {{sys:repo}}
+  storage:
+    {{slot:分区}}
+  packages:
+    - {{param:pkgs}}
+  early-commands:
+    - {{slot:装前@pre}}
+  late-commands:
+    - {{slot:装后@post-target}}
+    - {{lober:firstboot}}
+    - {{lober:cleanup}}
+  user-data:
+    fqdn: "{{ ds.meta_data.local_hostname }}"

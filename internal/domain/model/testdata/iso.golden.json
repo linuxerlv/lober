@@ -1,0 +1,27 @@
+{
+  "ID": "iso-ws2025",
+  "Name": "Windows Server 2025",
+  "Family": "windows",
+  "Series": "windows-server",
+  "Version": "2025",
+  "Arch": "x86_64",
+  "State": "ready",
+  "SHA256": "3f2b8c1d4e5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  "Artifacts": {
+    "bootwim": "windows-server/2025/x86_64/sources/boot.wim",
+    "installwim": "windows-server/2025/x86_64/sources/install.wim"
+  },
+  "Offers": {
+    "editions": [
+      {
+        "Value": "ServerStandard",
+        "Label": "Standard"
+      },
+      {
+        "Value": "ServerDatacenter",
+        "Label": "Datacenter"
+      }
+    ]
+  },
+  "Rev": 0
+}

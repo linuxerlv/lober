@@ -1,0 +1,2 @@
+username: '{{param:username}}'
+password: '{{param:pwhash}}'

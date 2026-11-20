@@ -1,0 +1,66 @@
+package tasks
+
+import (
+	"context"
+	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/application/tasks/port"
+	"github.com/lober/lober/internal/domain/access"
+	"github.com/lober/lober/internal/domain/model"
+	"github.com/lober/lober/internal/domain/repository"
+)
+
+type controller struct{ deps ControllerDeps }
+
+// NewController 要求显式提供所有能力，不在请求时寻找替代实现。
+func NewController(d ControllerDeps) Controller {
+	if d.Tasks == nil || d.Backend == nil || d.Clock == nil {
+		panic("任务控制缺少必要能力")
+	}
+	return &controller{deps: d}
+}
+func (c *controller) control(ctx context.Context, actor ports.Actor, id string, rev int64, retry bool) (TaskChoice, error) {
+	permission, action := access.PermTaskCancel, "task.cancel"
+	if retry {
+		permission, action = access.PermTaskRetry, "task.retry"
+	}
+	if err := actor.Authorize(permission); err != nil {
+		return TaskChoice{}, err
+	}
+	t, err := c.deps.Tasks.GetTask(ctx, id)
+	if err != nil {
+		return TaskChoice{}, err
+	}
+	if t.Rev != rev {
+		return TaskChoice{}, repository.ErrConflict
+	}
+	audit := ports.AuditIntent{Actor: actor.Username, Action: action, At: c.deps.Clock()}
+	var saved model.Task
+	if retry {
+		saved, err = c.deps.Backend.Retry(ctx, t, audit)
+	} else {
+		saved, err = c.deps.Backend.Cancel(ctx, t, audit)
+	}
+	if err != nil {
+		return TaskChoice{}, err
+	}
+	return taskChoice(saved, c.deps.Backend), nil
+}
+func (c *controller) Cancel(ctx context.Context, a ports.Actor, id string, rev int64) (TaskChoice, error) {
+	return c.control(ctx, a, id, rev, false)
+}
+func (c *controller) Retry(ctx context.Context, a ports.Actor, id string, rev int64) (TaskChoice, error) {
+	return c.control(ctx, a, id, rev, true)
+}
+
+type unavailableControl struct{}
+
+// NewUnavailableControl 用于没有启用机器服务的组装，不执行或伪造状态变化。
+func NewUnavailableControl() port.Control { return unavailableControl{} }
+func (unavailableControl) Cancel(context.Context, model.Task, ports.AuditIntent) (model.Task, error) {
+	return model.Task{}, ErrControlUnavailable
+}
+func (unavailableControl) Retry(context.Context, model.Task, ports.AuditIntent) (model.Task, error) {
+	return model.Task{}, ErrControlUnavailable
+}
+func (unavailableControl) CanCancel(model.Task) []model.Problem { return nil }
+func (unavailableControl) CanRetry(model.Task) []model.Problem  { return nil }

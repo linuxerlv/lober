@@ -1,0 +1,300 @@
+package console
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/lober/lober/internal/application/tasks"
+	"github.com/lober/lober/internal/domain/catalog"
+	"github.com/lober/lober/internal/domain/model"
+)
+
+type taskPage struct {
+	Items []taskItem `json:"items"`
+	Next  string     `json:"next"`
+	Total *int64     `json:"total,omitempty"`
+}
+type taskBatchSummary struct {
+	CreatedBy       string `json:"createdBy"`
+	CreatedAt       int64  `json:"createdAt"`
+	ISOName         string `json:"isoName"`
+	TemplateName    string `json:"templateName"`
+	TemplateVersion int    `json:"templateVersion"`
+	Total           int64  `json:"total"`
+	Pending         int64  `json:"pending"`
+	Active          int64  `json:"active"`
+	Done            int64  `json:"done"`
+	Failed          int64  `json:"failed"`
+	Cancelled       int64  `json:"cancelled"`
+}
+
+type eventItem struct {
+	TaskID string            `json:"taskID"`
+	Seq    int64             `json:"seq"`
+	At     int64             `json:"at"`
+	Kind   string            `json:"kind"`
+	Key    string            `json:"key"`
+	Fields map[string]string `json:"fields"`
+}
+type eventPage struct {
+	Items []eventItem `json:"items"`
+}
+type taskQuery struct {
+	Page        int    `form:"page"`
+	PageSize    int    `form:"page_size"`
+	HostSN      string `form:"host_sn"`
+	BatchID     string `form:"batch_id"`
+	State       string `form:"state"`
+	CreatedFrom int64  `form:"created_from"`
+	CreatedTo   int64  `form:"created_to"`
+	Cursor      string `form:"cursor"`
+	Limit       int    `form:"limit"`
+}
+type taskStatisticsQuery struct {
+	HostSN      string `form:"host_sn"`
+	CreatedFrom int64  `form:"created_from"`
+	CreatedTo   int64  `form:"created_to"`
+	Trends      bool   `form:"trends"`
+}
+type taskStatistics struct {
+	States map[string]int64 `json:"states"`
+	Images map[string]int64 `json:"images"`
+	Days   map[string]int64 `json:"days"`
+	Months map[string]int64 `json:"months"`
+}
+type eventQuery struct {
+	AfterSeq int64 `form:"after_seq"`
+	Limit    int   `form:"limit"`
+}
+type streamQuery struct {
+	AfterSeq int64 `form:"after_seq"`
+}
+type streamHeaders struct {
+	LastEventID int64 `form:"Last-Event-ID"`
+}
+type taskPreviewRequest struct {
+	Firmware catalog.Firmware `json:"firmware,omitempty"`
+}
+type taskControlRequest struct {
+	Rev int64 `json:"rev" binding:"required,gt=0"`
+}
+
+func (s *server) taskRoutes() []route {
+	return []route{
+		{method: "GET", path: "/console/v1/tasks", perm: PermTaskRead, tag: "tasks", summary: "List tasks and frozen snapshots", query: taskQuery{}, resp: taskPage{}, handle: s.listTasks},
+		{method: "GET", path: "/console/v1/task-statistics", perm: PermTaskRead, tag: "tasks", summary: "Count tasks by state and optionally by frozen image and UTC creation date", query: taskStatisticsQuery{}, resp: taskStatistics{}, handle: s.taskStatistics},
+		{method: "GET", path: "/console/v1/task-batches/:id", perm: PermTaskRead, tag: "tasks", summary: "Read submission details and current counts for the entire batch", resp: taskBatchSummary{}, handle: s.getTaskBatch},
+		{method: "GET", path: "/console/v1/tasks/:id", perm: PermTaskRead, tag: "tasks", summary: "Read frozen task and control diagnostics", resp: taskItem{}, handle: s.getTask},
+		{method: "GET", path: "/console/v1/tasks/:id/events", perm: PermTaskRead, tag: "tasks", summary: "Read committed events after a sequence", query: eventQuery{}, resp: eventPage{}, handle: s.listEvents},
+		{method: "GET", path: "/console/v1/tasks/:id/stream", perm: PermTaskRead, tag: "tasks", summary: "Stream committed events with resume and polling recovery", query: streamQuery{}, headers: streamHeaders{}, stream: true, handle: s.taskStream},
+		{method: "POST", path: "/console/v1/tasks/:id/cancel", perm: PermTaskCancel, audit: "task.cancel", tag: "tasks", summary: "Cancel a task at the supplied positive revision", req: taskControlRequest{}, resp: taskItem{}, handle: s.cancelTask},
+		{method: "POST", path: "/console/v1/tasks/:id/retry", perm: PermTaskRetry, audit: "task.retry", tag: "tasks", summary: "Retry a task at the supplied positive revision", req: taskControlRequest{}, resp: taskItem{}, handle: s.retryTask},
+		{method: "POST", path: "/console/v1/tasks/:id/preview", perm: PermTaskRead, tag: "tasks", summary: "Render frozen task snapshot with sample credentials", req: taskPreviewRequest{}, resp: previewResponse{}, handle: s.previewTask},
+	}
+}
+func queryNonnegative(c *gin.Context, key string) (int64, bool) {
+	raw := c.Query(key)
+	if raw == "" {
+		return 0, true
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
+		Fail(c, 400, nil, model.ConsoleBadRequest)
+		return 0, false
+	}
+	return value, true
+}
+func (s *server) listTasks(c *gin.Context) {
+	number, limit, ok := parseQueryPagination(c)
+	if !ok {
+		return
+	}
+	page, ok := Get(c, func() (tasks.TaskPage, error) {
+		return s.deps.TaskReader.List(c.Request.Context(), actorOf(c), tasks.ListRequest{PageRequest: tasks.PageRequest{Page: number, Limit: limit, Cursor: c.Query("cursor")}, HostSN: c.Query("host_sn"), BatchID: c.Query("batch_id"), State: c.Query("state"), CreatedFrom: c.Query("created_from"), CreatedTo: c.Query("created_to")})
+	})
+	if !ok {
+		return
+	}
+	items := make([]taskItem, len(page.Items))
+	for i, t := range page.Items {
+		items[i] = toTaskChoiceItem(t)
+	}
+	Ok(c, taskPage{items, page.Next, page.Total})
+}
+func (s *server) taskStatistics(c *gin.Context) {
+	var query taskStatisticsQuery
+	if err := c.ShouldBindQuery(&query); err != nil {
+		Fail(c, 400, nil, model.ConsoleBadRequest)
+		return
+	}
+	rows, ok := Get(c, func() ([]model.TaskMetric, error) {
+		return s.deps.TaskReader.Statistics(c.Request.Context(), actorOf(c), tasks.ListRequest{HostSN: query.HostSN, CreatedFrom: c.Query("created_from"), CreatedTo: c.Query("created_to")}, query.Trends)
+	})
+	if !ok {
+		return
+	}
+	result := taskStatistics{map[string]int64{}, map[string]int64{}, map[string]int64{}, map[string]int64{}}
+	for _, r := range rows {
+		switch r.Kind {
+		case "state":
+			result.States[r.Key] = r.Count
+		case "image":
+			result.Images[r.Key] = r.Count
+		case "day":
+			result.Days[r.Key] = r.Count
+		case "month":
+			result.Months[r.Key] = r.Count
+		}
+	}
+	Ok(c, result)
+}
+func (s *server) getTaskBatch(c *gin.Context) {
+	summary, ok := Get(c, func() (model.TaskBatchSummary, error) {
+		return s.deps.TaskReader.BatchSummary(c.Request.Context(), actorOf(c), c.Param("id"))
+	})
+	if ok {
+		Ok(c, taskBatchSummary(summary))
+	}
+}
+
+func (s *server) getTask(c *gin.Context) {
+	t, ok := Get(c, func() (tasks.TaskChoice, error) {
+		return s.deps.TaskReader.Get(c.Request.Context(), actorOf(c), c.Param("id"))
+	})
+	if ok {
+		Ok(c, toTaskChoiceItem(t))
+	}
+}
+func toEventItem(e tasks.Event) eventItem {
+	return eventItem{e.TaskID, e.Seq, e.At, e.Kind, e.Key, stringMap(e.Fields)}
+}
+func (s *server) listEvents(c *gin.Context) {
+	after, ok := queryNonnegative(c, "after_seq")
+	if !ok {
+		return
+	}
+	limit, ok := queryLimit(c)
+	if !ok {
+		return
+	}
+	events, ok := Get(c, func() ([]tasks.Event, error) {
+		return s.deps.TaskEvents.List(c.Request.Context(), actorOf(c), c.Param("id"), after, limit)
+	})
+	if !ok {
+		return
+	}
+	items := make([]eventItem, len(events))
+	for i, e := range events {
+		items[i] = toEventItem(e)
+	}
+	Ok(c, eventPage{items})
+}
+func (s *server) streamAuthorized(c *gin.Context, token string) bool {
+	return s.deps.Identity.StreamAuthorized(c.Request.Context(), token, PermTaskRead)
+}
+func (s *server) taskStream(c *gin.Context) {
+	last, ok := queryNonnegative(c, "after_seq")
+	if !ok {
+		return
+	}
+	if raw := c.GetHeader("Last-Event-ID"); raw != "" {
+		seq, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || seq < 0 {
+			Fail(c, 400, nil, model.ConsoleBadRequest)
+			return
+		}
+		last = seq
+	}
+	subscription, ok := Get(c, func() (tasks.EventSubscription, error) {
+		return s.deps.TaskEvents.Open(c.Request.Context(), actorOf(c), c.Param("id"), last)
+	})
+	if !ok {
+		return
+	}
+	defer subscription.Close()
+	events := subscription.Initial()
+	hints := subscription.Hints()
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("X-Accel-Buffering", "no")
+	token := bearerToken(c)
+	send := func(page []tasks.Event) bool {
+		for {
+			if c.Request.Context().Err() != nil || !s.streamAuthorized(c, token) {
+				return false
+			}
+			for _, e := range page {
+				data, err := json.Marshal(toEventItem(e))
+				if err != nil {
+					return false
+				}
+				if _, err = fmt.Fprintf(c.Writer, "id: %d\nevent: task\ndata: %s\n\n", e.Seq, data); err != nil {
+					return false
+				}
+				last = e.Seq
+			}
+			c.Writer.Flush()
+			if len(page) < 200 {
+				return true
+			}
+			var err error
+			page, err = subscription.Read(c.Request.Context(), last)
+			if err != nil {
+				return false
+			}
+		}
+	}
+	if !send(events) {
+		return
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case _, open := <-hints:
+			if !open {
+				return
+			}
+		case <-ticker.C:
+		case <-c.Request.Context().Done():
+			return
+		}
+		events, err := subscription.Read(c.Request.Context(), last)
+		if err != nil || !send(events) {
+			return
+		}
+	}
+}
+func (s *server) controlTask(c *gin.Context, retry bool) {
+	var req taskControlRequest
+	if !Bind(c, &req) {
+		return
+	}
+	result, ok := Get(c, func() (tasks.TaskChoice, error) {
+		if retry {
+			return s.deps.TaskController.Retry(c.Request.Context(), actorOf(c), c.Param("id"), req.Rev)
+		}
+		return s.deps.TaskController.Cancel(c.Request.Context(), actorOf(c), c.Param("id"), req.Rev)
+	})
+	if ok {
+		Ok(c, toTaskChoiceItem(result))
+	}
+}
+func (s *server) cancelTask(c *gin.Context) { s.controlTask(c, false) }
+func (s *server) retryTask(c *gin.Context)  { s.controlTask(c, true) }
+func (s *server) previewTask(c *gin.Context) {
+	var req taskPreviewRequest
+	if !Bind(c, &req) {
+		return
+	}
+	result, ok := Get(c, func() (tasks.PreviewResult, error) {
+		return s.deps.TaskReader.Preview(c.Request.Context(), actorOf(c), c.Param("id"), tasks.PreviewRequest{Firmware: req.Firmware})
+	})
+	if !ok || !Judge(c, result.Problems) {
+		return
+	}
+	Ok(c, previewResponse{Files: previewFiles(result.Files), Problems: jsonProblems(result.Problems), Sample: result.Sample})
+}

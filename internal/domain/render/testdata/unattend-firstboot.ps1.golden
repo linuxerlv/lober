@@ -1,0 +1,7 @@
+﻿$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'reports.ps1')
+Register-ReportReplay
+Write-Report '000-booted' 'booted'
+Write-Report '001-init-start' 'init-start'
+Send-Reports
+exit 0

@@ -1,0 +1,427 @@
+"""顶层 conftest：target 解析、session 级部署、层间闸门。
+
+只放三层共用的 fixture（settings/deployed/console/repo_root），层特有的
+fixture（L2 的 target、L3 的 build_web+playwright）留在各自目录下的
+conftest.py（任务 9/10 的事）。
+
+层间闸门（本文件的核心职责，任务 8）：L1（`needs_vm` marker）有任何失败
+时，L2/L3（`slow` marker）的用例在运行期被跳过而非等它们真的跑起来再
+失败——接口层断了，装机与 UI 必然跟着断，再跑一小时没有信息量。用
+`pytest_runtest_setup` 运行期钩子实现（`--ignore` 是启动时的静态路径
+过滤，做不到「等 L1 跑完看结果再决定」这种运行期条件；`pytest_
+collection_modifyitems` 也做不到——它只在收集阶段跑一次，发生在任何
+用例真正执行之前，见文件下方「层间闸门」一节的详细记录，那里记录了
+第一版实现为什么错、怎么发现、怎么改对）。
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+
+from lobertest.api import Console
+from lobertest.config import Settings, load
+from lobertest.deploy import (
+    build_test_users,
+    cross_compile,
+    create_schema,
+    deploy,
+    render_config,
+    teardown_schema,
+    wait_ready,
+)
+from lobertest.ssh import SSH
+
+
+@pytest.fixture(scope="session")
+def repo_root() -> Path:
+    """从本文件出发向上找到仓库根（`cmd/lober` + `go.mod` 存在的那一层）。
+
+    本文件与 test_users.py/test_deploy.py 各自的同名 fixture 逐字节一致
+    （向上找 cmd/lober 目录 + go.mod 文件），任务 6 的 test_users.py 已经
+    在注释里预留了这个收敛点（"两个测试文件目前没有共享的 conftest.py
+    承载会话级 fixture（那是任务 8 才建立的顶层 conftest.py 的职责）"）。
+    没有反过来改 test_users.py/test_deploy.py 去 import 本文件的
+    repo_root——那两个文件属于任务 5/6 已完成并 commit 的范围，本任务
+    只做「只做任务 8」这条边界要求的事，不去动前面任务已经绿灯的文件。
+    """
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        if (parent / "cmd" / "lober").is_dir() and (parent / "go.mod").is_file():
+            return parent
+    raise RuntimeError(f"从 {here} 向上找不到仓库根（cmd/lober + go.mod）")
+
+
+@pytest.fixture(scope="session")
+def settings() -> Settings:
+    return load()
+
+
+def _local_sha256(path: Path) -> str:
+    """算本地文件的 sha256 十六进制摘要。"""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _guest_deployed_sha256(ssh: SSH) -> str | None:
+    """取 guest 上已部署二进制的 sha256。二进制不存在时返回 None（不抛
+    异常）——「guest 上还没有任何东西」是一个合法状态（比如全新的 VM-S），
+    不是错误，调用方应该据此判定「不能跳过部署」而不是被异常打断。"""
+    result = ssh.run("sha256sum /opt/lober/bin/lober 2>/dev/null || echo MISSING")
+    line = result.stdout.strip()
+    if line == "MISSING" or not line:
+        return None
+    return line.split()[0]
+
+
+def _guest_deployed_config(ssh: SSH) -> str | None:
+    """读 guest 上当前生效的 /etc/lober/lober.yaml 正文；不存在时返回 None。
+
+    640 root:lober，debian 用户不在 lober 组，必须 sudo 读（与 wait_ready
+    判据 1 同一个原因）。
+    """
+    result = ssh.sudo("cat /etc/lober/lober.yaml")
+    if not result.ok:
+        return None
+    return result.stdout
+
+
+def _deployment_already_matches(
+    ssh: SSH, local_binary: Path, local_config: str, console: Console
+) -> bool:
+    """判定「当前 guest 上跑的服务」是否已经等于「即将要部署的这一份」，
+    即本轮 deploy() 是否可以跳过。
+
+    **本任务实测发现的问题**（团队协作过程中定位）：`deployed` 是
+    session 级 fixture，每次 `pytest` 进程启动都会无条件调一次
+    `deploy()`——deploy() 内部会 stop→推送→restart lober。TDD 迭代里
+    连续跑几轮 pytest，就是连续几次停服窗口；若某一轮的 Bash 调用超时
+    返回、但后台进程仍在跑，紧接着的下一轮 `deploy()` 会正好在上一轮的
+    某个 HTTP 请求还在等响应时把服务停掉——这解释了一次
+    `boot_menu` 的 30 秒读超时假失败（实测确认：`NRestarts`=0 说明是
+    显式 stop/start 不是崩溃重启，且宿主进程表当时只有一个 pytest，
+    时间点与 `deploy()` 的行为完全吻合）。
+
+    判定条件必须**同时满足**三条才能跳过，缺一不可：
+      1. 本地即将推送的二进制的 sha256 与 guest 上已部署的一致——只看
+         这一条不够：内容对但服务当前是挂的（比如被人手动 stop 过、
+         或配置在别处被改坏），跳过部署会让 session 后续全部用例都建立
+         在一个「看起来对但其实没在跑」的服务上，比多花一次重启的代价
+         高得多。
+      2. 本地即将推送的配置正文与 guest 上生效的一字不差。**这一条是补的
+         （第一版只比二进制）**：缓存键漏了配置，症状是「改了 render_config
+         但新配置永远不落地」——二进制没变，判定为已匹配而跳过部署，测试
+         对着旧配置跑却全绿。实际踩到过：把 gateway_base 从 127.0.0.1:8180
+         改成装机 VLAN 地址后，渲染出的 iPXE 菜单里仍然是旧地址。
+         这类错误极难定位，因为源码里看是对的、服务也确实健康。
+      3. `wait_ready` 的三条判据当下就全部通过——这是「服务真的健康」
+         的唯一判据来源（deploy.py 的 wait_ready 本身已经封装好，不重复
+         实现一套新的健康检查逻辑）。
+
+    二进制或配置不一致（或 guest 上还没有任何部署）时直接返回 False，不需要
+    走到判据 3——省一次远程健康检查往返，且语义上「内容都不一样」已经
+    足以判定必须重新部署，不需要再问「现在健康不健康」。
+    """
+    guest_sha = _guest_deployed_sha256(ssh)
+    if guest_sha is None:
+        return False
+    if guest_sha != _local_sha256(local_binary):
+        return False
+
+    guest_config = _guest_deployed_config(ssh)
+    if guest_config is None or guest_config != local_config:
+        return False
+
+    # 复用公开的 wait_ready，不重新实现一套判据逻辑，也不导入 deploy.py
+    # 的私有函数 _check_readiness（下划线前缀标记它是模块内部实现细节，
+    # 跨模块依赖私有函数会让本文件在 deploy.py 重构内部实现时莫名其妙
+    # 跟着坏）。`timeout=0` 让 wait_ready 的循环只跑一轮判据检查：deadline
+    # 在进入循环前就已经过去，第一轮检查不通过就立即超时，第一轮检查通过
+    # 就立即正常返回——效果等价于「问一次现在健康不健康」，不做任何轮询
+    # 等待（那是 deploy 之后才需要的语义，这里只是一次性探测）。
+    try:
+        wait_ready(ssh, console, timeout=0)
+        return True
+    except TimeoutError:
+        return False
+
+
+@pytest.fixture(scope="session")
+def deployed(settings: Settings, repo_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Settings:
+    """session 级部署闸门：交叉编译 + （必要时）建 schema/推二进制/配置/
+    重启 + 等就绪。
+
+    每轮 pytest 一次，不是每个用例一次——`deployed` 是 session scope。
+    返回值就是 settings 本身（`DeployInfo` 这个契约里提到的类型名在本次
+    实现里没有另建一个结构体：调用点唯一需要从"已部署"这件事上取到的
+    信息只有 `settings`——console_base_url、schema 名——而这些本来就是
+    settings 的字段，另建一个只转发同一批字段的 DeployInfo 类是没有实质
+    内容的包装，`console` fixture 直接依赖 settings 即可）。
+
+    `cross_compile` 失败时异常自然从本 fixture 抛出并向上传播——pytest
+    的 session 级 fixture 一旦抛异常，整个 session 立刻停止收集/执行后续
+    用例（这正是「session 立刻停止」这条要求在 pytest 里的落地方式，
+    不需要额外写终止逻辑）。
+
+    **条件部署**（`_deployment_already_matches` 的详细文档记录了这个
+    改动的完整背景）：先编译，再判断本地二进制是否与 guest 上当前跑着的
+    完全一致且服务健康——一致就跳过 stop/push/restart，直接复用；不一致
+    才走完整流程。这不只是性能优化：它顺带消灭了「连续几轮 pytest 互相
+    重启对方正在被请求的服务」这个真实发生过的自撞场景，且这本身正是
+    `deploy()` 该有的语义（provision.sh 的幂等设计是同一个道理——已经
+    是期望状态就不该重新做一遍）。schema 仍然每次都尝试建一次（`CREATE
+    SCHEMA IF NOT EXISTS` 幂等，代价接近零，不值得为了跳过它单独判断）。
+    """
+    binary = cross_compile(repo_root, tmp_path_factory.mktemp("deploy") / "lober-linux-amd64")
+    users = build_test_users(repo_root)
+
+    with SSH(settings) as ssh:
+        create_schema(ssh, settings.schema)
+
+        probe_console = Console(settings.console_base_url)
+        # 先渲染配置再判定：配置正文是「要不要跳过部署」这个判断的一部分
+        # （判据 2），不能等判定之后才渲染——那样就只能拿二进制做缓存键，
+        # 配置改了也发现不了。渲染本身是纯字符串拼装，没有副作用，提前做
+        # 不产生任何代价。
+        config_text = render_config(schema=settings.schema, users=users)
+        if _deployment_already_matches(ssh, binary, config_text, probe_console):
+            return settings
+
+        deploy(ssh, binary, config_text)
+        wait_ready(ssh, probe_console, timeout=60)
+
+    return settings
+
+
+# 旧客户端仅保留受支持介质入口；RHEL 路径可用 LOBERTEST_RHEL_ISO 指定。
+_HOST_ISO_PATHS = {
+    "rhel": Path(os.environ.get("LOBERTEST_RHEL_ISO", "D:/lober-isos/rhel.iso")),
+    "debian": Path("D:/lober-isos/debian-netinst.iso"),
+}
+
+# guest 上 ISO 落地的目录。用 /srv/lober/sources（root:root 755，
+# provision 阶段已存在，且已经放着 debian-13-netboot.tar.gz），不是
+# /tmp——ISO 上百 MB 到几 GB，/tmp 是 tmpfs（内存盘），guest 只有约 750M
+# 内存盘配额，塞不下；落到磁盘路径也让「重跑 session 不必重推」这件事
+# 有意义（推送前先检查目标文件是否已存在且大小一致，见 _ensure_iso_pushed）。
+_GUEST_ISO_DIR = "/srv/lober/sources"
+
+
+def _ensure_iso_pushed(ssh: SSH, local_path: Path, guest_filename: str) -> str:
+    """把本地 ISO 推到 guest 的 `_GUEST_ISO_DIR` 下，返回 guest 侧绝对路径。
+
+    **本任务第一次真跑 L1 才发现的事实**：`import_artifact` 的
+    `sourcePath` 由 lober 进程自己在 guest 内 `open()`（导入 job 跑在
+    guest 内的 lober 进程里，不是测试进程），Windows 宿主路径
+    （例如 `D:/lober-isos/rhel.iso`）对 guest 而言毫无意义——
+    实测直接报 `open D:/...: no such file or directory`。计划契约的
+    `import_artifact(source_path, name)` 签名本身没错，错的是调用方
+    （本文件）传入的 source_path 必须先是一个 guest 路径，这条约束在
+    计划任务 3/8 都没有写明，是本任务实测暴露的缺口。
+
+    推送前先检查 guest 上是否已有同名同大小的文件——避免每次 session
+    都重推几 GB（ISO 内容不会变，SFTP 传输本身要几十秒到几分钟，
+    session 级 fixture 不应该重复付出这个代价）。用文件大小而非哈希
+    判断「已经推过」：算 sha256 需要在 guest 上跑一次全文件读取，对
+    几 GB 文件同样不便宜，文件大小足够区分「同一个文件」与「推送
+    中断留下的半截文件」（后者大小几乎不可能恰好相等）。
+    """
+    guest_path = f"{_GUEST_ISO_DIR}/{guest_filename}"
+    local_size = local_path.stat().st_size
+
+    check = ssh.run(f"stat -c %s {guest_path} 2>/dev/null || echo MISSING")
+    remote_size_str = check.stdout.strip()
+    if remote_size_str == str(local_size):
+        return guest_path
+
+    # 实测订正：中转路径不能是 /tmp——那是 tmpfs（内存盘），本机只有约
+    # 736M 配额，装不下一整个 ISO（实测 OpenCloudOS 1.7G 推到一半后
+    # sftp.put 报 `SFTP_FAILURE`，`df -h /tmp` 确认写满到 100%）。改用
+    # `debian` 用户自己的 home 目录（`/home/debian`，落在真实磁盘
+    # /dev/vda1 上，20G 盘当前有 15G 空闲），推送权限与磁盘容量都够。
+    staging_path = f"/home/debian/lobertest-iso-upload-{guest_filename}"
+    try:
+        ssh.push(local_path, staging_path)
+    except Exception:
+        # 推送中断会在 guest 上留下半个文件——而推送失败最常见的原因恰好就是
+        # 磁盘满，留着那半个文件（实测见过 1.04G）等于让下一次更难成功。
+        # 清理本身失败就忽略：此刻要抛的是推送失败那个异常，它才是根因。
+        ssh.run(f"rm -f {staging_path}")
+        raise
+    ssh.sudo(f"mv {staging_path} {guest_path}").check(f"移动 ISO 到 {guest_path}")
+    ssh.sudo(f"chmod 644 {guest_path}").check("设置 ISO 可读权限")
+    return guest_path
+
+
+@pytest.fixture(scope="session")
+def artifact_reaper(deployed: Settings):
+    """收集本 session 导入的制品集 id，session 结束时回收它们占的磁盘。
+
+    **为什么不走 API：** 后端刻意只允许删 `state=deprecated` 且未被 active
+    template 引用的制品集（`internal/console/artifact.go` 的
+    handleDeleteArtifactSet，依据 SPEC §2.7），而测试建的制品是 `ready` 且被
+    模板引用，`DELETE /artifact-sets/:id` 一律 409。API 里也没有「ready →
+    deprecated」的端点，模板同样没有 DELETE。这条路走不通，不是权限问题。
+    所以只能在基础设施层删：rm 目录 + DELETE 库记录。
+
+    **为什么不做孤儿探测（「删掉库里查不到的目录」）：** 那正是踩过的坑——
+    这台 VM-S 上有三个库（postgres/lober/lober_test），只查其中一个会让另一个
+    库里活着的数据看起来像孤儿，差点误删 8 个旧 vmlab 时代真实导入成功的制品。
+    本 fixture 只删**自己登记过的 id**，不推断、不扫描，因此不可能误删别人的
+    数据。代价是崩溃的 session 仍会留下垃圾，那是可接受的——它有明确的上限
+    （一轮的量），而误删没有下限。
+
+    为什么需要它：不回收的话每跑一轮攒一份（rhel 约 1.6G、debian 约 958M），
+    跨 session 累积。实测攒到 13 个目录共 14G、`df` 100%，症状是下一轮推 ISO
+    时 SFTP 报 `Failure`——这个消息本身完全不提磁盘，极易误判。
+    """
+    collected: list[str] = []
+    yield collected.append
+
+    if not collected:
+        return
+    ids = " ".join(f"'{i}'" for i in collected)
+    dirs = " ".join(f"/srv/lober/artifacts/{i}" for i in collected)
+    try:
+        with SSH(deployed) as ssh:
+            ssh.sudo(f"rm -rf {dirs}")
+            ssh.run(
+                "sudo -u postgres psql -d lober_test -Atc "
+                f'"DELETE FROM {deployed.schema}.artifact_sets WHERE id IN ({ids});"'
+            )
+    except Exception as exc:  # noqa: BLE001 —— teardown 不该掩盖用例的真实结果
+        print(f"\n[警告] 回收 {len(collected)} 个制品集失败，guest 上会留下几 GB：{exc}")
+
+
+@pytest.fixture(scope="session")
+def family_iso_paths(deployed: Settings) -> dict[str, str]:
+    """把本机真实存在的 ISO 推到 guest 一次，返回 {家族名: guest 路径}。
+
+    只返回配置路径中实际存在的 RHEL/Debian 介质——没有 ISO 的家族
+    根本不会调用这个 fixture 的返回值（它们在参数化层面已经 skip），
+    这里也不应该为它们放一个不存在的路径进字典误导调用方。
+    """
+    guest_paths: dict[str, str] = {}
+    with SSH(deployed) as ssh:
+        for family, local_path in _HOST_ISO_PATHS.items():
+            if not local_path.is_file():
+                continue
+            guest_paths[family] = _ensure_iso_pushed(ssh, local_path, local_path.name)
+    return guest_paths
+
+
+@pytest.fixture(scope="session")
+def console(deployed: Settings) -> Console:
+    """人面 + 机器面两个 base_url 都要给（任务 3 的实现后订正：机器面用例
+    缺了 gateway_base_url 会抛 ValueError）。
+
+    机器面 base_url 现在是 `Settings.gateway_base_url`（任务 8 补的字段，
+    详见 config.py 该字段的文档：guest 内 nginx 的机器面 listener 绑的是
+    `10.10.10.10:80`，Windows 宿主最初没有到这个端口的 hostfwd，已协调
+    加了第三条转发 `127.0.0.1:8080 → 10.10.10.10:80`）。不再在本函数内
+    用字符串替换从 `console_base_url` 派生——那是发现这条环境缺口过程中
+    的过渡写法，字符串替换本身脆弱（依赖 "8090" 这个子串刚好只出现在
+    端口位置），现在有了专门的字段就该直接用它。
+    """
+    return Console(deployed.console_base_url, gateway_base_url=deployed.gateway_base_url)
+
+
+@pytest.fixture(scope="session")
+def ready_rhel_artifact_id(
+    console: Console, family_iso_paths: dict[str, str], artifact_reaper
+) -> str:
+    """导入一次 RHEL 家族制品集并等到 ready，session 内全程复用。
+
+    准入（test_admission.py）与 RBAC（test_rbac.py）两个文件里的多个
+    用例各自都需要「一个 active 模板」作前置，但它们真正要测的是准入
+    规则或权限边界，不是「制品集能不能导入成功」——那件事已经由
+    test_lifecycle.py 的家族参数化用例验证过。若每个用例各自重新
+    import_artifact 一次真实 RHEL ISO，guest 磁盘上会重复出现多份
+    ~1.6G 的抽取结果（本任务实测：单个 RHEL 家族抽取产物约 1.6G），
+    在这台只有个位数 GB 空闲空间的 VM-S 上不可持续。本 fixture 把这个
+    代价收敛到 session 内一次。
+
+    用 rhel 而非 debian：rhel 不需要 netboot_path 这个额外参数，作为
+    「随便找一个能 ready 的家族」的选择更简单。
+
+    session 内复用只解决了「同一次 pytest 里不重复导入」，跨 session 的累积
+    由 `artifact_reaper` 回收（见它的文档：为什么只能在基础设施层删、为什么
+    不做孤儿探测）。
+    """
+    if "rhel" not in family_iso_paths:
+        pytest.skip("没有受支持的 RHEL ISO；请配置 LOBERTEST_RHEL_ISO")
+    artifact_id = console.import_artifact(family_iso_paths["rhel"], "lobertest-shared-rhel-artifact")
+    artifact_reaper(artifact_id)
+    console.wait_artifact_ready(artifact_id, timeout=600)
+    return artifact_id
+
+
+# ---------------------------------------------------------------------------
+# 层间闸门：L1（needs_vm）失败 → L2/L3（slow）打 skip。
+# ---------------------------------------------------------------------------
+#
+# **实现方式在本任务的验证过程中订正过一次**：最初实现用
+# `pytest_collection_modifyitems` 在收集阶段读 `_l1_failed` 决定要不要
+# 打 skip 标记——这是错的，已用人为造的假 L1/L2 用例验证过并观察到失败
+# （见任务报告「层间闸门的验证过程」一节）。根因：
+# `pytest_collection_modifyitems` 只在**收集阶段**调用一次（`pytest` 自己
+# 的 hookspec 文档原文「Called after collection has been performed」，
+# 没有「之后还会再调用」这层含义），发生在任何用例真正开始跑之前——那时
+# `_l1_failed` 必然是空的，因为还没有任何 L1 用例执行过。原实现的注释
+# 断言"这个钩子在每个用例真正执行之前都会被 pytest 重新调用一次"是没有
+# 核实过就写下的错误假设。
+#
+# 正确的钩子是 `pytest_runtest_setup`：它在**每个** item 的 setup 阶段
+# 之前都会被调用一次（每个用例各自触发一次，不是只在会话开始时触发一次），
+# 因此能在运行期看到"目前为止 L1 是否已经失败过"这个随时间累积的事实，
+# 并在 L2/L3 用例真正进入 setup（意味着它马上要跑 fixture、马上要跑用例
+# 体）之前用 `pytest.skip()` 拦下来。
+
+# 用模块级列表记录本 session 内已失败的 L1（needs_vm）用例 nodeid。
+_l1_failed: list[str] = []
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """运行期钩子：一旦观察到某个 `needs_vm` 用例失败，记下它的 nodeid。
+
+    只在 `call` 阶段判定失败（不看 `setup`/`teardown` 阶段）：setup 阶段
+    失败（比如 fixture 本身抛异常）意味着 `deployed`/`console` 这类
+    session fixture 已经出错，那种情形下 session 会直接因为 fixture
+    异常向上传播而整体终止（见 `deployed` 的文档），根本不会跑到
+    L2/L3 的收集判断这一步；本钩子要处理的是「fixture 都正常、但某条
+    L1 用例的断言本身失败」这种更常见的情形。
+    """
+    if report.when != "call":
+        return
+    if not report.failed:
+        return
+    if "needs_vm" not in report.keywords:
+        return
+    _l1_failed.append(report.nodeid)
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """运行期钩子：在每个 item 的 setup 阶段之前调用（每个用例各触发
+    一次）。若本 session 目前已经观察到任一 L1（`needs_vm`）用例失败，
+    且当前 item 是 L2/L3（`slow`），直接 `pytest.skip()`——接口层断了，
+    装机与前端必然跟着断，再跑下去没有信息量。
+
+    用 `pytest.skip()` 而不是在收集阶段给 item 加 skip marker：后者
+    （`pytest_collection_modifyitems`）只在收集阶段跑一次，无法感知
+    "运行到这里时，前面已经有 L1 用例失败了"这个随时间累积的事实——
+    这正是本文件这段实现被订正过一次的原因，订正前的版本假设了一个
+    不存在的"重复调用"语义。
+    """
+    if not _l1_failed:
+        return
+    if "slow" not in item.keywords:
+        return
+    reason = f"L1 接口层已有用例失败（{_l1_failed[0]} 等），跳过装机/前端层——" "接口层断了，L2/L3 必然跟着断，跑下去没有信息量"
+    pytest.skip(reason)

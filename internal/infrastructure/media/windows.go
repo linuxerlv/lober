@@ -1,0 +1,53 @@
+package iso
+
+import (
+	"context"
+	"errors"
+	"github.com/lober/lober/internal/application/media/port"
+	"io/fs"
+	"os"
+	"path/filepath"
+)
+
+var windowsTools = []string{"wimboot", "winpe-busybox", "winpe-curl"}
+
+const winpeshlContent = "[LaunchApps]\r\n%SYSTEMDRIVE%\\lober\\startnet.cmd\r\n"
+
+func (s *ImportFiles) extractWindows(ctx context.Context, tree fs.FS, tmp string) (map[string]string, error) {
+	roles := map[string]string{}
+	for role, name := range map[string]string{"bcd": "boot/bcd", "boot-sdi": "boot/boot.sdi", "boot-wim": "sources/boot.wim"} {
+		if err := copyImportFile(ctx, tree, name, filepath.Join(tmp, filepath.FromSlash(name))); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, &port.ExtractionFault{Kind: "artifact", Name: role}
+			}
+			return nil, err
+		}
+		roles[role] = name
+	}
+	for _, tool := range windowsTools {
+		// Tools are deployment-owned regular files. A link may point outside the injected directory.
+		p := filepath.Join(s.dirs.Tools, tool)
+		st, err := os.Lstat(p)
+		if err != nil || !st.Mode().IsRegular() || st.Size() == 0 {
+			return nil, &port.ExtractionFault{Kind: "tool", Name: tool}
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			return nil, err
+		}
+		err = writeImportFile(ctx, f, filepath.Join(tmp, tool), 0755)
+		f.Close()
+		if err != nil {
+			return nil, err
+		}
+		roles[tool] = tool
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "winpeshl.ini"), []byte(winpeshlContent), 0644); err != nil {
+		return nil, err
+	}
+	roles["winpeshl"] = "winpeshl.ini"
+	if len(roles) != 7 {
+		return nil, fault(port.InvalidFile)
+	}
+	return roles, nil
+}

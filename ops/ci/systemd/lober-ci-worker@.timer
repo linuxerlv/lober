@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for Lober %i candidates
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+Unit=lober-ci-worker@%i.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,4 @@
+zerombr
+clearpart --all --initlabel --disklabel=gpt --drives=sda
+part /boot/efi --fstype=efi --size=600 --ondisk=sda
+part / --fstype=xfs --grow --ondisk=sda

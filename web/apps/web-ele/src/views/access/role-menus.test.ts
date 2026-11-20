@@ -1,0 +1,292 @@
+import { createApp, defineComponent, h, nextTick } from 'vue';
+import { createMemoryHistory, createRouter } from 'vue-router';
+
+import { useAccessStore } from '@vben/stores';
+
+import { createPinia } from 'pinia';
+import { afterEach, expect, it, vi } from 'vitest';
+const io = vi.hoisted(() => ({
+  getRoleMenusApi: vi.fn(),
+  saveRoleMenusApi: vi.fn(),
+  listAccounts: vi.fn(),
+}));
+vi.mock('#/api/console/role-menus', () => io);
+vi.mock('#/api/console/accounts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('#/api/console/accounts')>()),
+  accountsApi: { list: io.listAccounts },
+}));
+vi.mock('#/api', () => ({
+  loginApi: vi.fn(),
+  logoutApi: vi.fn(),
+  getUserInfoApi: vi.fn(),
+}));
+import { useAuthStore } from '#/store';
+
+import RoleMenus from './role-menus.vue';
+const roles = ['viewer', 'operator', 'hook-author', 'hook-approver', 'admin'];
+const fixture = {
+  menus: [
+    {
+      id: 'business',
+      title: '业务',
+      parentId: '',
+      permission: '',
+      required: false,
+    },
+    {
+      id: 'access',
+      title: '权限管理',
+      parentId: '',
+      permission: '',
+      required: false,
+    },
+    {
+      id: 'hosts',
+      parentId: 'business',
+      title: '主机清单',
+      permission: 'host:read',
+      required: false,
+    },
+    {
+      id: 'templates',
+      parentId: 'business',
+      title: '模板',
+      permission: 'template:read',
+      required: false,
+    },
+    {
+      id: 'reports',
+      parentId: 'business',
+      title: '报表与审计',
+      permission: 'audit:read',
+      required: false,
+    },
+    {
+      id: 'users',
+      parentId: 'access',
+      title: '账号管理',
+      permission: 'user:manage',
+      required: false,
+    },
+    {
+      id: 'role-menus',
+      parentId: 'access',
+      title: '角色与菜单',
+      permission: 'user:manage',
+      required: true,
+    },
+  ],
+  roles: roles.map((role) => ({
+    role,
+    availableMenuIds:
+      role === 'admin'
+        ? ['hosts', 'templates', 'reports', 'users', 'role-menus']
+        : ['hosts', 'templates'],
+    menuIds:
+      role === 'admin'
+        ? ['hosts', 'templates', 'reports', 'users', 'role-menus']
+        : ['hosts'],
+    rev: 0,
+  })),
+};
+const cleanup: Array<() => void> = [];
+let activeRouter: ReturnType<typeof createRouter>;
+afterEach(() => {
+  cleanup.splice(0).forEach((fn) => fn());
+  vi.resetAllMocks();
+});
+async function setup(role = 'viewer') {
+  io.getRoleMenusApi.mockResolvedValue(structuredClone(fixture));
+  io.listAccounts.mockResolvedValue({
+    items: [
+      {
+        username: 'alice',
+        displayName: 'Alice',
+        role: 'viewer',
+        disabled: false,
+      },
+    ],
+    total: 1,
+  });
+  const pinia = createPinia();
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/access/role-menus', component: { template: '<div />' } },
+      { path: '/access/users', component: { template: '<div />' } },
+    ],
+  });
+  activeRouter = router;
+  await router.push({ path: '/access/role-menus', query: role ? { role } : {} });
+  const app = createApp(
+    defineComponent({
+      setup() {
+        useAccessStore().setAccessToken('admin');
+        useAuthStore().applySessionUser({
+          username: 'admin',
+          displayName: '管理员',
+          role: 'admin',
+          permissions: ['user:manage'],
+          menuIds: ['role-menus', 'users'],
+          menuRev: 0,
+          rev: 1,
+          createdAt: 1,
+          disabled: false,
+          passwordChangeRequired: false,
+        });
+        return () => h(RoleMenus);
+      },
+    }),
+  );
+  const el = document.createElement('div');
+  document.body.append(el);
+  app.use(pinia);
+  app.use(router);
+  app.mount(el);
+  cleanup.push(() => {
+    app.unmount();
+    el.remove();
+  });
+  return el;
+}
+async function selectTab(el: HTMLElement, label: string) {
+  await vi.waitFor(() =>
+    expect(el.querySelector('[role="tab"]')).not.toBeNull(),
+  );
+  const tab = [...el.querySelectorAll<HTMLElement>('[role="tab"]')].find(
+    (item) => item.textContent?.trim() === label,
+  )!;
+  tab.click();
+  await nextTick();
+}
+it('compares page grants and opens the selected role directly in the menu editor', async () => {
+  const el = await setup('');
+  await vi.waitFor(() => expect(el.querySelector('table[aria-label="页面授权"]')).not.toBeNull());
+  const matrix = el.querySelector('table[aria-label="页面授权"]')!;
+  const row = [...matrix.querySelectorAll('tbody tr')].find((entry) => entry.textContent?.includes('报表与审计'))!;
+  expect([...row.querySelectorAll('td')].map((cell) => cell.textContent?.trim())).toEqual([
+    '无权限', '无权限', '无权限', '无权限', '已开放',
+  ]);
+  const link = matrix.querySelector<HTMLAnchorElement>('a[href*="role=viewer"]')!;
+  await activeRouter.push(link.getAttribute('href')!);
+  await vi.waitFor(() => expect(el.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('菜单可见性'));
+});
+async function check(el: HTMLElement, id: string, checked: boolean) {
+  const input = el.querySelector<HTMLInputElement>(
+    `[data-key="${id}"] input[type="checkbox"]`,
+  )!;
+  input.checked = checked;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  await nextTick();
+}
+it('offers only eligible menus and can save an explicit empty viewer menu', async () => {
+  const el = await setup();
+  await selectTab(el, '菜单可见性');
+  expect(el.querySelector('[data-key="reports"]')).toBeNull();
+  await check(el, 'hosts', false);
+  io.saveRoleMenusApi.mockResolvedValue({
+    ...fixture.roles[0],
+    menuIds: [],
+    rev: 1,
+  });
+  (el.querySelector('[data-action="save"]') as HTMLButtonElement).click();
+  await vi.waitFor(() =>
+    expect(io.saveRoleMenusApi).toHaveBeenCalledWith('viewer', {
+      menuIds: [],
+      rev: 0,
+    }),
+  );
+});
+it('preserves edits after a conflict and prevents duplicate submits', async () => {
+  const el = await setup();
+  await selectTab(el, '菜单可见性');
+  await check(el, 'templates', true);
+  let reject!: (error: unknown) => void;
+  io.saveRoleMenusApi.mockReturnValue(
+    new Promise((_, fail) => {
+      reject = fail;
+    }),
+  );
+  const save = el.querySelector<HTMLButtonElement>('[data-action="save"]')!;
+  save.click();
+  await nextTick();
+  expect(save.disabled).toBe(true);
+  save.click();
+  expect(io.saveRoleMenusApi).toHaveBeenCalledTimes(1);
+  reject({ response: { status: 409 } });
+  await vi.waitFor(() =>
+    expect(el.textContent).toContain('配置已被其他管理员修改'),
+  );
+  expect(
+    el.querySelector<HTMLInputElement>('[data-key="templates"] input')!.checked,
+  ).toBe(true);
+});
+it('keeps the administrator permission-management menu checked', async () => {
+  const el = await setup('admin');
+  await selectTab(el, '菜单可见性');
+  const required = el.querySelector<HTMLInputElement>(
+    '[data-key="role-menus"] input',
+  )!;
+  expect(required.checked).toBe(true);
+  expect(required.disabled).toBe(true);
+});
+it('opens role detail on permissions and links to an assigned account', async () => {
+  const el = await setup();
+  await vi.waitFor(() => {
+    expect(
+      el.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
+    ).toContain('操作权限');
+    expect(el.textContent).toContain('取消任务');
+  });
+  await selectTab(el, '关联账号');
+  await vi.waitFor(() => {
+    expect(el.textContent).toContain('Alice');
+    expect(
+      el.querySelector('a[href="/access/users?username=alice"]'),
+    ).not.toBeNull();
+  });
+});
+it('keeps each role draft separate when switching role details', async () => {
+  const el = await setup();
+  await selectTab(el, '菜单可见性');
+  await check(el, 'templates', true);
+  await activeRouter.push('/access/role-menus?role=operator');
+  await selectTab(el, '菜单可见性');
+  expect(
+    el.querySelector<HTMLInputElement>('[data-key="templates"] input')!.checked,
+  ).toBe(false);
+  await activeRouter.push('/access/role-menus?role=viewer');
+  await selectTab(el, '菜单可见性');
+  expect(
+    el.querySelector<HTMLInputElement>('[data-key="templates"] input')!.checked,
+  ).toBe(true);
+});
+it('saves only selected children and keeps required access when a parent is unchecked', async () => {
+  const el = await setup('admin');
+  await selectTab(el, '菜单可见性');
+  await check(el, 'access', false);
+  expect(
+    el.querySelector<HTMLInputElement>('[data-key="users"] input')!.checked,
+  ).toBe(false);
+  expect(
+    el.querySelector<HTMLInputElement>('[data-key="role-menus"] input')!
+      .checked,
+  ).toBe(true);
+  expect(
+    el.querySelector<HTMLInputElement>(
+      '[data-key="access"] > .el-tree-node__content input',
+    )!.indeterminate,
+  ).toBe(true);
+  io.saveRoleMenusApi.mockResolvedValue({
+    ...fixture.roles[4],
+    menuIds: ['hosts', 'templates', 'reports', 'role-menus'],
+    rev: 1,
+  });
+  (el.querySelector('[data-action="save"]') as HTMLButtonElement).click();
+  await vi.waitFor(() =>
+    expect(io.saveRoleMenusApi).toHaveBeenCalledWith('admin', {
+      menuIds: ['hosts', 'templates', 'reports', 'role-menus'],
+      rev: 0,
+    }),
+  );
+});

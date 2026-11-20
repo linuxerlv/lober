@@ -1,0 +1,6 @@
+storage:
+  layout:
+    name: direct
+    match:
+      path: '/dev/{{param:disk}}'
+    ptable: gpt

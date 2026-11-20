@@ -1,0 +1,33 @@
+#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  identity:
+    hostname: {{param:hostname}}
+    username: lober
+    password: '!'
+  storage:
+    config:
+      {{slot:partition}}
+  network:
+    version: 2
+    ethernets:
+      install-nic:
+        match:
+          name: en*
+        dhcp4: true
+  early-commands:
+    - {{slot:pre@pre}}
+  late-commands:
+    - {{slot:post-installer@post-installer}}
+    - {{slot:post-target@post-target}}
+    - {{slot:firstboot@firstboot}}
+    - {{lober:firstboot}}
+    - {{lober:cleanup}}
+  packages:
+    - curl
+  ssh:
+    install-server: true
+  shutdown: reboot

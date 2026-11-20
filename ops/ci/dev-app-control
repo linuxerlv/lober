@@ -1,0 +1,113 @@
+#!/usr/bin/python3 -I
+"""只操作开发服务及其候选文件。"""
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+
+
+UNIT = 'lober-ci-dev-app.service'
+STATE = Path('/var/lib/lober-ci-dev-app-release')
+CONFIG = Path('/etc/lober-ci-dev-app.json')
+URL = 'http://127.0.0.1:17831'
+
+
+def digest(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def smoke(expected):
+    with CONFIG.open() as stream:
+        seed = json.load(stream)['seedAdmin']
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    for _ in range(30):
+        try:
+            pid = int(subprocess.check_output(['/usr/bin/systemctl', 'show', UNIT,
+                                              '-p', 'MainPID', '--value']))
+            if pid <= 1 or digest(Path(f'/proc/{pid}/exe')) != expected:
+                raise RuntimeError('运行程序校验不符')
+            with opener.open(URL + '/', timeout=2) as response:
+                if response.headers.get_content_type() != 'text/html':
+                    raise RuntimeError('前端入口异常')
+            body = json.dumps({'username': 'admin', 'password': seed}).encode()
+            request = urllib.request.Request(URL + '/console/v1/auth/login', data=body,
+                                             headers={'Content-Type': 'application/json'})
+            with opener.open(request, timeout=2) as response:
+                login = json.load(response)
+            if login['code'] == 0 and login['data']['token']:
+                print('运行程序校验、前端入口、数据库登录通过', flush=True)
+                return
+        except (OSError, ValueError, RuntimeError, KeyError):
+            pass
+        time.sleep(0.5)
+    raise RuntimeError('开发服务未通过冒烟检查')
+
+
+def restart():
+    subprocess.run(['/usr/bin/systemctl', 'restart', UNIT], check=True, timeout=45)
+
+
+def switch(target):
+    with tempfile.TemporaryDirectory(dir=STATE) as directory:
+        link = Path(directory) / 'current'
+        link.symlink_to(target)
+        os.replace(link, STATE / 'current')
+
+
+def main():
+    if len(sys.argv) != 4 or os.geteuid() != 0 or os.environ.get('SUDO_USER') != 'lober-ci-dev':
+        return 2
+    action, path, sha = sys.argv[1:]
+    if (action not in ('deploy', 'smoke') or not re.fullmatch('[0-9a-f]{40}', sha)
+            or path != f'/var/lib/lober-ci-dev/{sha}/lober'):
+        return 2
+    STATE.mkdir(mode=0o755, exist_ok=True)
+    # 候选只以流水线账号读取，安装副本由管理员持有。
+    with tempfile.NamedTemporaryFile(dir=STATE) as copy:
+        limit = 128 * 1024 * 1024
+        subprocess.run(['/usr/sbin/runuser', '-u', 'lober-ci-dev', '--', '/usr/bin/head',
+                        '-c', str(limit + 1), '--', path],
+                       stdout=copy, check=True, timeout=20)
+        staged = Path(copy.name)
+        if not 0 < staged.stat().st_size <= limit:
+            raise RuntimeError('候选程序大小不合法')
+        expected = digest(staged)
+        if action == 'smoke':
+            smoke(expected)
+            return 0
+        name = f'{sha}-{expected}'
+        binary = STATE / name
+        if not binary.exists():
+            subprocess.run(['/usr/bin/install', '-m', '0755', staged, binary], check=True)
+        if digest(binary) != expected:
+            raise RuntimeError('安装副本校验不符')
+        current = STATE / 'current'
+        previous = os.readlink(current) if current.is_symlink() else None
+        switch(name)
+        try:
+            restart()
+            smoke(expected)
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            if previous is None:
+                current.unlink()
+                subprocess.run(['/usr/bin/systemctl', 'stop', UNIT], check=True, timeout=45)
+            else:
+                switch(previous)
+                restart()
+            raise
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f'开发环境操作失败（{type(error).__name__}）', file=sys.stderr)
+        sys.exit(1)

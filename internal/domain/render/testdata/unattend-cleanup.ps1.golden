@@ -1,0 +1,9 @@
+﻿param([switch]$Replay)
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'reports.ps1')
+if (-not $Replay) {
+    Write-Report '900-init-done' 'init-done'
+    Write-Report '901-ready' 'ready'
+}
+Send-Reports
+exit 0

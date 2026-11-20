@@ -1,0 +1,31 @@
+import type { Paths, Schemas } from './generated';
+
+import { requestClient } from '#/api/request';
+
+export type Task = Schemas['TaskItem'];
+export type TaskEvent = Schemas['EventItem'];
+export const taskAPI = {
+  list: (params: Record<string, number | string> = {}) =>
+    requestClient.get<Schemas['TaskPage']>('/tasks', { params }),
+  statistics: (params: Paths['/console/v1/task-statistics']['get']['query'] = {}) =>
+    requestClient.get<Schemas['TaskStatistics']>('/task-statistics', { params }),
+  batch: (id: string) =>
+    requestClient.get<Schemas['TaskBatchSummary']>(`/task-batches/${encodeURIComponent(id)}`),
+  get: (id: string) => requestClient.get<Task>(`/tasks/${encodeURIComponent(id)}`),
+  events: (id: string, after = 0) =>
+    requestClient.get<Schemas['EventPage']>(`/tasks/${encodeURIComponent(id)}/events`, {
+      params: { after_seq: after, limit: 200 },
+    }),
+  cancel: (id: string, rev: number) =>
+    requestClient.post<Task>(`/tasks/${encodeURIComponent(id)}/cancel`, { rev }),
+  retry: (id: string, rev: number) =>
+    requestClient.post<Task>(`/tasks/${encodeURIComponent(id)}/retry`, { rev }),
+  preview: (id: string, firmware?: string) =>
+    requestClient.post<Schemas['PreviewResponse']>(`/tasks/${encodeURIComponent(id)}/preview`, {
+      firmware,
+    }),
+};
+
+export function taskStreamURL(base: string, id: string) {
+  return `${base.replace(/\/$/, '')}/tasks/${encodeURIComponent(id)}/stream`;
+}
