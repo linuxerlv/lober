@@ -2,13 +2,18 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from collect import Collector, command, dmi_records, encode, section, uploaded
+from collect import Collector, QueryFailure, command, dmi_records, encode, section, uploaded
 from firmware import Firmware
 from hardware import MISSING, port_fields, secure_boot
+
+SEL = ("ipmitool", "-I", "open", "sel", "list", "last", "20")
+DMI = ("dmidecode", "--type", "0,1,2,3,4,7,17,39")
 
 
 class CollectorTest(unittest.TestCase):
@@ -162,6 +167,184 @@ class CollectorTest(unittest.TestCase):
         self.assertEqual((gpu["物理插槽"], gpu["当前通道数"]), ("3", "8"))
         self.assertEqual(amd["显存（字节）"], "16384")
         self.assertIn(MISSING + "序列号", amd)
+
+    def test_management_events_keep_latest_and_preserve_uncertain_time(self):
+        entries = [f"{index:x} | 11/20/2026 | 12:00:00 | Power Supply #0x02 | Input lost | Asserted"
+                   for index in range(1, 21)]
+        entries.append("  15 | Pre-Init | 0000000007 | Memory #0x01 | Correctable ECC | Deasserted")
+        self.outputs[SEL] = "\n".join(entries)
+        parts = self.report()["system"]["items"]
+        events = [part["fields"] for part in parts if part["name"] == "管理芯片事件"]
+        self.assertEqual(len(events), 20)
+        self.assertEqual(events[0]["事件编号"], "15")
+        self.assertEqual(events[0]["设备上报时间"], "Pre-Init 0000000007")
+        self.assertIn("无法确认", events[0]["时间说明"])
+        self.assertEqual(events[0]["部件"], "Memory #0x01")
+        self.assertIn("Correctable ECC", events[0]["事件"])
+        self.assertEqual(events[1]["设备上报时间"], "11/20/2026 12:00:00")
+        self.assertEqual(events[-1]["事件编号"], "2")
+
+    def test_management_events_distinguish_empty_failed_and_incomplete_queries(self):
+        for raw, label, expected in [
+            ("SEL has no entries\n", "近期事件", "无记录"),
+            (QueryFailure("ipmitool 本机管理接口不可用"), MISSING + "近期事件", "不可用"),
+            (QueryFailure("ipmitool 查询超时"), MISSING + "近期事件", "超时"),
+            ("Get SEL Entry failed\n", MISSING + "近期事件", "输出"),
+            ("", MISSING + "近期事件", "输出"),
+        ]:
+            with self.subTest(expected=expected):
+                self.outputs[SEL] = raw
+                report = self.report()
+                self.assertEqual(len(report), 8)
+                self.assertIn(expected, report["system"]["items"][1]["fields"].get(label, ""))
+                self.assertFalse(any(part["name"] == "管理芯片事件" for part in report["system"]["items"]))
+
+    def test_management_event_without_timestamp_omits_undecoded_bytes(self):
+        self.outputs[SEL] = "1 | OEM record e0 | 001122334455\n"
+        event = self.report()["system"]["items"][-1]["fields"]
+        self.assertIn("未提供", event[MISSING + "设备上报时间"])
+        self.assertIn("e0", event["事件"])
+        self.assertNotIn("001122334455", str(event))
+
+    def test_management_event_keeps_ipmitool_short_date_and_timezone(self):
+        self.outputs[SEL] = "1 | 11/20/26 | 12:00:00 UTC | Power Supply | Input lost | Asserted"
+        event = self.report()["system"]["items"][-1]["fields"]
+        self.assertEqual(event["设备上报时间"], "11/20/26 12:00:00 UTC")
+        self.assertNotIn("无法确认设备时间", event["时间说明"])
+        self.assertIn("时区", event["时间说明"])
+
+    def test_event_query_runs_after_basic_inventory(self):
+        queries = []
+
+        def run(*arguments, **options):
+            queries.append(arguments)
+            return self.command(*arguments, **options)
+
+        Collector(self.root, "", run).collect()
+        self.assertEqual(queries[-1], SEL)
+        self.assertIn(("ipmitool", "-I", "open", "sdr", "type", "Temperature"), queries[:-1])
+
+    def test_unresponsive_counter_does_not_delay_basic_report_past_deadline(self):
+        self.file("sys/class/net/eth0/device/class", "0x020000\n")
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        class SlowCounter(Collector):
+            def read(self, path):
+                if "statistics" in Path(path).parts:
+                    release.wait(2)
+                return super().read(path)
+
+        started = time.monotonic()
+        report = SlowCounter(self.root, "", self.command).collect(deadline=started + 0.1)
+        self.assertLess(time.monotonic() - started, 1)
+        network = report["sections"][4]
+        self.assertEqual(network["items"][0]["name"], "eth0")
+        self.assertIn("采集时限", network["reason"])
+
+    def test_network_counters_belong_to_each_physical_port(self):
+        for port, crc in [("eth0", "0"), ("eth1", "9")]:
+            self.file(f"sys/class/net/{port}/device/class", "0x020000\n")
+            for key, value in {"rx_crc_errors": crc, "rx_errors": "9", "tx_errors": "1",
+                               "rx_dropped": "12", "tx_dropped": "-1"}.items():
+                self.file(f"sys/class/net/{port}/statistics/{key}", value)
+        self.file("sys/class/net/lo/statistics/rx_errors", "99")
+        ports = {part["name"]: part["fields"] for part in self.report()["network"]["items"]}
+        self.assertEqual(set(ports), {"eth0", "eth1"})
+        self.assertEqual(ports["eth0"]["接收校验错误次数"], "0")
+        self.assertEqual(ports["eth1"]["接收校验错误次数"], "9")
+        self.assertEqual(ports["eth1"]["接收错误次数"], "9")
+        self.assertEqual(ports["eth1"]["发送错误次数"], "1")
+        self.assertEqual(ports["eth1"]["接收丢包数"], "12")
+        self.assertIn(MISSING + "发送丢包数", ports["eth1"])
+        self.assertIn("累计", ports["eth1"]["错误计数来源"])
+
+    def test_memory_counters_only_attach_to_unique_installed_slots(self):
+        records = [("A1", "32 GB"), ("A2", "No Module Installed"), ("B1", "32 GB"), ("B1", "32 GB")]
+        self.outputs[DMI] = "".join(f"Handle 0x{index:02x}, DMI type 17, 84 bytes\n"
+                                    f"\tLocator: {slot}\n\tSize: {size}\n"
+                                    for index, (slot, size) in enumerate(records))
+        for controller in ("mc0", "mc1"):
+            path = f"sys/devices/system/edac/mc/{controller}"
+            self.file(path + "/ce_count", "19")
+            self.file(path + "/ue_count", "3")
+            for index, label in enumerate(("a1", "A2", "B1", "C1") if controller == "mc0" else ("C1",)):
+                dimm = f"{path}/dimm{index}"
+                self.file(dimm + "/dimm_label", label)
+                self.file(dimm + "/dimm_ce_count", "0")
+                self.file(dimm + "/dimm_ue_count", "2")
+        parts = self.report()["memory"]["items"]
+        first = parts[0]["fields"]
+        self.assertEqual(first["可纠正错误次数"], "0")
+        self.assertEqual(first["不可纠正错误次数"], "2")
+        self.assertIn("内存纠错", first["错误计数来源"])
+        self.assertRegex(first["错误计数采集时间"], r"^\d{4}-\d\d-\d\dT.+Z$")
+        self.assertEqual(parts[1]["fields"]["状态"], "未安装")
+        for part in parts[1:4]:
+            self.assertNotIn("可纠正错误次数", part["fields"])
+        for controller in parts[4:]:
+            self.assertEqual(controller["fields"]["可纠正错误次数"], "19")
+            self.assertIn("内存控制器", controller["name"])
+
+    def test_memory_without_error_driver_reports_missing_counts(self):
+        self.file("proc/meminfo", "MemTotal: 2048 kB\n")
+        memory = self.report()["memory"]
+        self.assertIn("未提供内存错误计数", memory["reason"])
+        self.assertEqual(memory["items"][0]["fields"]["可用总量"], "2048 kB")
+
+    def test_expansion_counts_use_reported_totals_and_do_not_invent_zero(self):
+        for name in ("gpu0", "gpu1"):
+            self.file(f"sys/bus/pci/devices/{name}/class", "0x030200")
+        path = "sys/bus/pci/devices/gpu0"
+        self.file(path + "/aer_dev_correctable", "Receiver Error 9\nTOTAL_ERR_COR 0\n")
+        self.file(path + "/aer_dev_nonfatal", "TOTAL_ERR_NONFATAL 2\n")
+        gpu, other = [part["fields"] for part in self.report()["expansion"]["items"]]
+        self.assertEqual(gpu["可纠正链路错误次数"], "0")
+        self.assertIn(MISSING + "不可纠正链路错误次数", gpu)
+        self.assertIn(MISSING + "可纠正链路错误次数", other)
+        self.file(path + "/aer_dev_fatal", "TOTAL_ERR_FATAL 3\n")
+        gpu = self.report()["expansion"]["items"][0]["fields"]
+        self.assertEqual(gpu["不可纠正链路错误次数"], "5")
+        self.assertRegex(gpu["错误计数采集时间"], r"^\d{4}-\d\d-\d\dT.+Z$")
+
+    def test_report_size_drops_history_before_inventory_and_preserves_visible_disk(self):
+        self.outputs[SEL] = "1 | 11/20/2026 | 12:00:00 | Power Supply #0x02 | Input lost | Asserted"
+        report = {"sections": list(self.report().values())}
+        disk = {"name": "sda", "fields": {"类型": "系统可见磁盘", "容量（字节）": "1024"}}
+        members = [{"name": f"物理盘 0/1:{index}", "fields": {
+            "类型": "阵列成员盘", **{f"字段{n}": "读" * 80 for n in range(10)}}} for index in range(240)]
+        report["sections"][3] = section("storage", "磁盘与阵列", [disk, *members], "部分字段未读取")
+        payload = encode(report)
+        self.assertLessEqual(len(payload), 512 * 1024)
+        result = json.loads(payload)["sections"]
+        self.assertIn("大小上限", result[0]["items"][1]["fields"].get(MISSING + "近期事件", ""))
+        self.assertIn(disk, result[3]["items"])
+        self.assertNotIn("截断", result[3]["reason"])
+        self.assertTrue(any(part["fields"].get(MISSING + "附加部件") for part in result[3]["items"]))
+
+    def test_storage_item_limit_keeps_exactly_256_visible_disks(self):
+        controller = {"name": "存储控制器 0000:01:00.0", "fields": {"来源": "Linux"}}
+        for count in (255, 256):
+            with self.subTest(disks=count):
+                disks = [{"name": f"sd{index}", "fields": {"类型": "磁盘", "容量（字节）": "1024"}}
+                         for index in range(count)]
+                storage = section("storage", "磁盘", [controller, *disks, controller])
+                self.assertEqual([part["name"] for part in storage["items"] if part["fields"].get("类型") == "磁盘"],
+                                 [disk["name"] for disk in disks])
+                self.assertNotIn("截断", storage["reason"])
+                self.assertTrue(any(MISSING + "附加部件" in part["fields"] for part in storage["items"]))
+
+    def test_storage_counts_only_disks_toward_the_install_disk_limit(self):
+        self.outputs[("lsblk", "--json", "--bytes", "--nodeps", "--output",
+                      "NAME,TYPE,SIZE,MODEL,SERIAL,TRAN,ROTA,REV,HCTL")] = json.dumps({
+            "blockdevices": [{"name": "sr0", "type": "rom"}] + [
+                {"name": f"nvme{index}n1", "type": "disk", "size": 1024} for index in range(256)
+            ],
+        })
+        storage = Collector(self.root, "", self.command).storage()
+        self.assertEqual(len(storage["items"]), 256)
+        self.assertEqual(storage["items"][-1]["name"], "nvme255n1")
+        self.assertNotIn("截断", storage["reason"])
 
     def test_virtio_port_reports_its_pci_card_only_once(self):
         pci = "sys/bus/pci/devices"
