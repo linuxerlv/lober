@@ -67,6 +67,72 @@ const cancellable = computed(() =>
 );
 const batchBusy = ref(false);
 const batchResults = ref<string[]>([]);
+const stateStats = computed(() => {
+  const items = pagination.items;
+  return [
+    {
+      key: '',
+      label: '当前列表总数',
+      value: pagination.total,
+      desc: '点击查看全部任务',
+      tone: 'border-border bg-card',
+    },
+    {
+      key: 'installing',
+      label: '正在安装',
+      value: items.filter((t) =>
+        ['booting', 'initializing', 'installing', 'rebooting'].includes(t.state),
+      ).length,
+      desc: '本页活跃装机流',
+      tone: 'border-blue-500/30 bg-blue-500/5 text-blue-600 dark:text-blue-400',
+    },
+    {
+      key: 'pending',
+      label: '等待机器引导',
+      value: items.filter((t) => t.state === 'pending').length,
+      desc: '等待 PXE 网络启动',
+      tone: 'border-amber-500/30 bg-amber-500/5 text-amber-600 dark:text-amber-400',
+    },
+    {
+      key: 'done',
+      label: '安装完成',
+      value: items.filter((t) => t.state === 'done').length,
+      desc: '已交付业务就绪',
+      tone: 'border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400',
+    },
+    {
+      key: 'failed',
+      label: '异常需排障',
+      value: items.filter((t) => t.state === 'failed').length,
+      desc: '点击筛选失败任务',
+      tone: 'border-red-500/30 bg-red-500/5 text-red-600 dark:text-red-400',
+    },
+  ];
+});
+function filterByStateCard(targetState: string) {
+  state.value = state.value === targetState ? '' : targetState;
+  void load(true);
+}
+function taskProgressPercent(taskState: string): number {
+  switch (taskState) {
+    case 'pending':
+      return 12;
+    case 'booting':
+      return 30;
+    case 'installing':
+      return 65;
+    case 'rebooting':
+      return 80;
+    case 'initializing':
+      return 90;
+    case 'done':
+      return 100;
+    case 'failed':
+      return 65;
+    default:
+      return 0;
+  }
+}
 async function cancelSelected() {
   if (
     batchBusy.value ||
@@ -169,8 +235,8 @@ const [Grid, grid] = useVbenVxeGrid<Task>({
       },
       {
         field: 'state',
-        title: '状态',
-        width: 115,
+        title: '状态与进度',
+        minWidth: 185,
         slots: { default: 'state' },
       },
       { title: '安装方案', minWidth: 245, slots: { default: 'plan' } },
@@ -304,6 +370,27 @@ onBeforeUnmount(() => {
         ＋ 创建任务
       </ElButton>
     </template>
+    <div class="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+      <button
+        v-for="card in stateStats"
+        :key="card.label"
+        type="button"
+        class="flex flex-col justify-between rounded-xl border p-4 text-left transition hover:shadow-sm"
+        :class="[
+          card.tone,
+          state === card.key ? 'ring-2 ring-primary' : '',
+        ]"
+        @click="filterByStateCard(card.key)"
+      >
+        <div class="flex items-center justify-between text-xs text-muted-foreground">
+          <span>{{ card.label }}</span>
+          <span class="text-[11px] opacity-75">{{ card.desc }}</span>
+        </div>
+        <div class="mt-2 text-2xl font-bold tabular-nums">
+          {{ card.value }}
+        </div>
+      </button>
+    </div>
     <section class="overflow-hidden rounded-lg border border-border bg-card">
       <form
         class="flex flex-wrap items-end gap-3 px-5 py-4"
@@ -417,39 +504,73 @@ onBeforeUnmount(() => {
           />
         </template>
         <template #host="{ row }">
-          <ElButton
-            link
-            type="primary"
-            class="font-mono"
-            @click="openSummary(row)"
+          <div class="py-1">
+            <ElButton
+              link
+              type="primary"
+              class="font-mono !font-semibold"
+              @click="openSummary(row)"
             >
-{{ row.hostSN }}
-</ElButton>
+              {{ row.hostSN }}
+            </ElButton>
+            <div
+              v-if="row.snapshot?.host?.attrs?.rack || row.snapshot?.host?.attrs?.ip"
+              class="text-xs text-muted-foreground"
+            >
+              {{
+                [row.snapshot?.host?.attrs?.rack, row.snapshot?.host?.attrs?.ip]
+                  .filter(Boolean)
+                  .join(' · ')
+              }}
+            </div>
+          </div>
         </template>
         <template #plan="{ row }">
           <div class="py-1">
-            <div class="font-medium">{{ row.snapshot.iso.name }}</div>
+            <div class="font-medium">{{ row.snapshot?.iso?.name }}</div>
             <div class="text-xs text-muted-foreground">
-              {{ row.snapshot.template.name }} · v{{ row.templateVersion }}
+              {{ row.snapshot?.template?.name }} · v{{ row.templateVersion }}
             </div>
           </div>
         </template>
         <template #state="{ row }">
-          <ElTag
-            :type="
-              row.state === 'failed'
-                ? 'danger'
-                : row.state === 'done'
-                  ? 'success'
-                  : row.state === 'pending'
-                    ? 'warning'
-                    : row.state === 'cancelled'
-                      ? 'info'
-                      : 'primary'
-            "
-          >
-            {{ taskStateLabels[row.state as keyof typeof taskStateLabels] }}
-          </ElTag>
+          <div class="grid gap-1.5 py-1 pr-3">
+            <div class="flex items-center gap-2">
+              <ElTag
+                size="small"
+                :type="
+                  row.state === 'failed'
+                    ? 'danger'
+                    : row.state === 'done'
+                      ? 'success'
+                      : row.state === 'pending'
+                        ? 'warning'
+                        : row.state === 'cancelled'
+                          ? 'info'
+                          : 'primary'
+                "
+              >
+                {{ taskStateLabels[row.state as keyof typeof taskStateLabels] }}
+              </ElTag>
+            </div>
+            <div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              <div
+                class="h-full rounded-full transition-all"
+                :class="
+                  row.state === 'failed'
+                    ? 'bg-red-500'
+                    : row.state === 'done'
+                      ? 'bg-emerald-500'
+                      : row.state === 'pending'
+                        ? 'bg-amber-500'
+                        : row.state === 'cancelled'
+                          ? 'bg-gray-400'
+                          : 'bg-blue-500'
+                "
+                :style="{ width: `${taskProgressPercent(row.state)}%` }"
+              ></div>
+            </div>
+          </div>
         </template>
         <template #batch="{ row }">
           <RouterLink

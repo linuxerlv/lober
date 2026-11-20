@@ -25,7 +25,7 @@ func Test菜单目录与五角色默认配置(t *testing.T) {
 		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &env) != nil {
 			t.Fatal(w.Code, w.Body.String())
 		}
-		want := []string{"tasks", "hosts", "templates", "hooks", "isos", "tools"}
+		want := []string{"overview-analytics", "overview-workspace", "tasks", "hosts", "templates", "hooks", "isos", "tools"}
 		if role == model.RoleAdmin {
 			want = append(want, "reports", "users", "role-menus")
 		}

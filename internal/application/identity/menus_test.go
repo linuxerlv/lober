@@ -94,7 +94,7 @@ func Test菜单列表默认排序与显式空保存(t *testing.T) {
 		t.Fatal(err)
 	}
 	roles := []model.Role{model.RoleViewer, model.RoleOperator, model.RoleHookAuthor, model.RoleHookApprover, model.RoleAdmin}
-	if len(out.Roles) != 5 || len(out.Menus) != 17 {
+	if len(out.Roles) != 5 || len(out.Menus) != 20 {
 		t.Fatal("目录或角色数量错误")
 	}
 	for i, role := range roles {
@@ -102,16 +102,17 @@ func Test菜单列表默认排序与显式空保存(t *testing.T) {
 			t.Fatal("角色顺序或默认版本错误")
 		}
 	}
-	want := []string{"tasks", "hosts", "templates", "hooks", "isos", "tools"}
+	want := []string{"overview-analytics", "overview-workspace", "tasks", "hosts", "templates", "hooks", "isos", "tools"}
 	if !reflect.DeepEqual(out.Roles[0].MenuIDs, want) || !reflect.DeepEqual(out.Roles[0].AvailableMenuIDs, want) {
 		t.Fatal(out.Roles[0])
 	}
-	if out.Menus[0].ID != "tasks-group" || out.Menus[16].ID != "role-menus" || !out.Menus[16].Required {
+	last := out.Menus[len(out.Menus)-1]
+	if out.Menus[0].ID != "overview" || last.ID != "role-menus" || !last.Required {
 		t.Fatal("目录顺序错误")
 	}
 	out.Menus[0].ID = "changed"
 	next, err := s.ListRoleMenus(t.Context(), p)
-	if err != nil || next.Menus[0].ID != "tasks-group" {
+	if err != nil || next.Menus[0].ID != "overview" {
 		t.Fatal("结果共享目录", err)
 	}
 	saved, err := s.SaveRoleMenus(t.Context(), p, model.RoleViewer, SaveMenusCommand{MenuIDs: []string{}})

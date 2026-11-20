@@ -159,6 +159,18 @@ async function selectTab(el: HTMLElement, label: string) {
   tab.click();
   await nextTick();
 }
+it('compares page grants and opens the selected role directly in the menu editor', async () => {
+  const el = await setup('');
+  await vi.waitFor(() => expect(el.querySelector('table[aria-label="页面授权"]')).not.toBeNull());
+  const matrix = el.querySelector('table[aria-label="页面授权"]')!;
+  const row = [...matrix.querySelectorAll('tbody tr')].find((entry) => entry.textContent?.includes('报表与审计'))!;
+  expect([...row.querySelectorAll('td')].map((cell) => cell.textContent?.trim())).toEqual([
+    '无权限', '无权限', '无权限', '无权限', '已开放',
+  ]);
+  const link = matrix.querySelector<HTMLAnchorElement>('a[href*="role=viewer"]')!;
+  await activeRouter.push(link.getAttribute('href')!);
+  await vi.waitFor(() => expect(el.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('菜单可见性'));
+});
 async function check(el: HTMLElement, id: string, checked: boolean) {
   const input = el.querySelector<HTMLInputElement>(
     `[data-key="${id}"] input[type="checkbox"]`,

@@ -27,8 +27,8 @@ import {
   ElMessageBox,
   ElOption,
   ElSelect,
-  ElTabPane,
-  ElTabs,
+  ElStep,
+  ElSteps,
   ElTag,
 } from 'element-plus';
 
@@ -147,10 +147,15 @@ const [Grid, grid] = useVbenVxeGrid<Template>({
   gridOptions: {
     columns: [
       { width: 48, slots: { header: 'select-all', default: 'select-row' } },
-      { field: 'name', title: '名称', minWidth: 200 },
+      { field: 'name', title: '模板名称', minWidth: 220 },
       { field: 'version', title: '版本', width: 80 },
-      { field: 'family', title: '族', width: 110 },
-      { field: 'state', title: '状态', width: 110 },
+      { field: 'family', title: '系统类型', width: 110 },
+      {
+        field: 'state',
+        title: '审批状态',
+        width: 120,
+        slots: { default: 'state' },
+      },
       {
         field: 'builtin',
         title: '来源',
@@ -282,6 +287,14 @@ async function refreshDetails(token = editor.token) {
     hooks.filter((h): h is Hook => !!h).map((h) => [`${h.id}@${h.version}`, h]),
   );
 }
+const templateSteps = ['basic', 'content', 'params', 'assembly'] as const;
+const templateStepIndex = computed(() =>
+  Math.max(0, templateSteps.indexOf(editorSection.value as (typeof templateSteps)[number])),
+);
+function setTemplateStep(idx: number) {
+  const next = templateSteps[idx];
+  if (next) editorSection.value = next;
+}
 async function open(row: Template) {
   editorSection.value = 'content';
   const token = editor.invalidate();
@@ -299,7 +312,7 @@ async function open(row: Template) {
   });
 }
 function create() {
-  editorSection.value = 'content';
+  editorSection.value = 'basic';
   editor.invalidate();
   candidateDialog.value = false;
   previewDialog.value = false;
@@ -568,6 +581,83 @@ function comparison(row: null | Template) {
     : '';
 }
 const families: Schemas['CatalogFamily'][] = ['linux', 'windows', 'esxi'];
+const templateSkeletons: Record<string, string> = {
+  kickstart: `#version=RHEL9
+text
+reboot --eject
+lang zh_CN.UTF-8
+keyboard us
+timezone Asia/Shanghai --utc
+bootloader --location=mbr --boot-drive={{ .target_disk }}
+clearpart --all --initlabel --drives={{ .target_disk }}
+autopart --type=lvm
+
+# {{lober:slot packages}}
+%packages
+@^minimal-environment
+chrony
+%end
+
+# {{lober:slot post-target exec=post-target}}
+# {{lober:slot firstboot exec=firstboot}}
+`,
+  autoinstall: `#cloud-config
+autoinstall:
+  version: 1
+  locale: zh_CN.UTF-8
+  keyboard: { layout: us }
+  identity:
+    hostname: {{ .hostname }}
+    username: ops
+  storage:
+    layout:
+      name: lvm
+      match:
+        path: /dev/{{ .target_disk }}
+# {{lober:slot post-target exec=post-target}}
+`,
+  esxi: `vmaccepteula
+install --firstdisk=local --overwritevmfs
+network --bootproto=dhcp
+reboot
+`,
+};
+function applyTemplateSkeleton(kind: 'autoinstall' | 'esxi' | 'kickstart') {
+  if (!selected.value || !editable.value || busy.value) return;
+  selected.value.body = templateSkeletons[kind] ?? '';
+  if (kind === 'kickstart') {
+    selected.value.family = 'linux';
+    if (!selected.value.series.length) selected.value.series = ['rocky'];
+  } else if (kind === 'autoinstall') {
+    selected.value.family = 'linux';
+    selected.value.series = ['ubuntu'];
+  } else {
+    selected.value.family = 'esxi';
+    selected.value.series = ['esxi'];
+  }
+}
+function insertTemplateSnippet(snippet: string) {
+  if (!selected.value || !editable.value || busy.value) return;
+  const current = selected.value.body;
+  selected.value.body = current
+    ? `${current.replace(/\s*$/, '')}\n${snippet}\n`
+    : `${snippet}\n`;
+}
+const authoringStateLabels: Record<string, string> = {
+  draft: '草稿',
+  review: '待审批',
+  approved: '已批准',
+  deprecated: '已废弃',
+};
+const authoringStateTagType: Record<
+  string,
+  'danger' | 'info' | 'primary' | 'success' | 'warning'
+> = {
+  draft: 'info',
+  review: 'warning',
+  approved: 'success',
+  deprecated: 'danger',
+};
 onMounted(() => load());
 watch(
   visible,
@@ -663,7 +753,7 @@ onBeforeUnmount(() => {
           <ElOption
             v-for="s in ['draft', 'review', 'approved', 'deprecated']"
             :key="s"
-            :label="s"
+            :label="`${authoringStateLabels[s]} (${s})`"
             :value="s"
           />
         </ElSelect>
@@ -699,9 +789,16 @@ onBeforeUnmount(() => {
             @change="selection.toggle(row, $event)"
           />
         </template>
+        <template #state="{ row }">
+          <ElTag :type="authoringStateTagType[row.state] || 'info'">
+            {{ authoringStateLabels[row.state] || row.state }}
+          </ElTag>
+        </template>
         <template #builtin="{ row }">
-          <ElTag>{{ row.builtin ? '内置' : '自定义' }}</ElTag>
-</template><template #action="{ row }">
+          <ElTag :type="row.builtin ? 'info' : 'primary'" effect="plain">
+            {{ row.builtin ? '系统内置' : '自定义' }}
+          </ElTag>
+        </template><template #action="{ row }">
           <ElButton type="primary" link @click="open(row)">
             查看 / 编辑
           </ElButton>
@@ -782,20 +879,63 @@ onBeforeUnmount(() => {
           :closable="false"
         />
         <ProblemList :problems="errors" />
-        <ElTabs v-model="editorSection">
-          <ElTabPane label="模板正文" name="content" />
-          <ElTabPane label="基本信息" name="basic" />
-          <ElTabPane label="参数配置" name="params" />
-          <ElTabPane label="脚本装配" name="assembly" />
-        </ElTabs>
-        <div class="max-h-[55dvh] overflow-auto px-1">
-          <section v-show="editorSection === 'basic'">
-            <ElForm :disabled="!editable || busy" label-width="100px">
-              <ElFormItem label="名称">
-                <ElInput v-model="selected.name" :disabled="!!selected.id" />
-              </ElFormItem>
-              <ElFormItem label="族">
-                <ElSelect v-model="selected.family">
+        <!-- 4 步向导步骤条：支持点击任意步骤，也支持底部“上一步/下一步”引导 -->
+        <ElSteps
+          :active="templateStepIndex"
+          finish-status="success"
+          class="mb-4 rounded-xl border border-border bg-muted/20 p-4"
+        >
+          <ElStep
+            title="1. 基本属性与骨架"
+            description="名称、系统类型与起步模板"
+            class="cursor-pointer"
+            @click="setTemplateStep(0)"
+          />
+          <ElStep
+            title="2. 模板正文与插槽"
+            description="编写应答配置与插槽标记"
+            class="cursor-pointer"
+            @click="setTemplateStep(1)"
+          />
+          <ElStep
+            title="3. 参数声明与取值"
+            description="定义装机参数与默认绑定"
+            class="cursor-pointer"
+            @click="setTemplateStep(2)"
+          />
+          <ElStep
+            title="4. 插槽脚本装配"
+            description="挂载 hook 脚本并预览提交"
+            class="cursor-pointer"
+            @click="setTemplateStep(3)"
+          />
+        </ElSteps>
+        <div class="max-h-[56dvh] overflow-auto px-1">
+          <!-- 第 1 步：基本属性与起步骨架 -->
+          <section
+            v-show="editorSection === 'basic'"
+            class="grid gap-4 rounded-xl border border-border bg-muted/20 p-5"
+          >
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <label class="text-xs sm:col-span-3">
+                <span class="mb-1.5 block font-medium text-foreground">
+                  模板名称 <span class="text-red-500">*</span>
+                </span>
+                <ElInput
+                  v-model="selected.name"
+                  placeholder="例如 Rocky Linux 9 生产计算节点标准模板"
+                  :disabled="!editable || busy || !!selected.id"
+                />
+              </label>
+              <label class="text-xs">
+                <span class="mb-1.5 block font-medium text-foreground">
+                  操作系统类型（族）
+                </span>
+                <ElSelect
+                  v-model="selected.family"
+                  class="w-full"
+                  :disabled="!editable || busy"
+                >
                   <ElOption
                     v-for="f in families"
                     :key="f"
@@ -803,9 +943,18 @@ onBeforeUnmount(() => {
                     :label="f"
                   />
                 </ElSelect>
-              </ElFormItem>
-              <ElFormItem label="系">
-                <ElSelect v-model="selected.series" multiple>
+              </label>
+              <label class="text-xs sm:col-span-2">
+                <span class="mb-1.5 block font-medium text-foreground">
+                  适用发行系列（系，可多选）
+                </span>
+                <ElSelect
+                  v-model="selected.series"
+                  multiple
+                  placeholder="选择适用的发行版"
+                  class="w-full"
+                  :disabled="!editable || busy"
+                >
                   <ElOption
                     v-for="s in allSeries"
                     :key="s"
@@ -813,9 +962,54 @@ onBeforeUnmount(() => {
                     :label="s"
                   />
                 </ElSelect>
-              </ElFormItem>
-            </ElForm>
+              </label>
+            </div>
+            <div v-if="editable">
+              <span class="mb-2 block text-xs font-medium text-foreground">
+                选择起步模板骨架（点击后自动预填系统系列与应答正文，随后进入第 2 步微调）
+              </span>
+              <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <button
+                  v-for="preset in [
+                    {
+                      key: 'kickstart',
+                      title: 'Rocky / RHEL Kickstart 骨架',
+                      desc: '预置 LVM 分区、目标盘变量与软件包/装后/首次启动三个标准插槽',
+                    },
+                    {
+                      key: 'autoinstall',
+                      title: 'Ubuntu Autoinstall 骨架',
+                      desc: '预置 Cloud-Init Autoinstall 存储布局、主机名变量与装后脚本插槽',
+                    },
+                    {
+                      key: 'esxi',
+                      title: 'VMware ESXi 应答骨架',
+                      desc: '预置 ESXi 自动接受协议、首盘安装与网络引导重启配置',
+                    },
+                  ]"
+                  :key="preset.key"
+                  type="button"
+                  :disabled="busy"
+                  class="rounded-xl border border-border bg-card p-4 text-left transition hover:border-primary/50 hover:bg-primary/5"
+                  @click="
+                    applyTemplateSkeleton(
+                      preset.key as 'autoinstall' | 'esxi' | 'kickstart',
+                    );
+                    setTemplateStep(1);
+                  "
+                >
+                  <div class="text-sm font-semibold text-foreground">
+                    {{ preset.title }}
+                  </div>
+                  <div class="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {{ preset.desc }}
+                  </div>
+                </button>
+              </div>
+            </div>
           </section>
+
+          <!-- 第 3 步：参数声明与取值 -->
           <section v-show="editorSection === 'params'">
             <ParamEditor
               v-model="selected.params"
@@ -828,14 +1022,84 @@ onBeforeUnmount(() => {
               :disabled="!editable || busy"
             />
           </section>
+
+          <!-- 第 2 步：模板正文与插槽 -->
           <section v-show="editorSection === 'content'">
-            <h3 class="mb-2 font-semibold">模板正文</h3>
+            <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h3 class="font-semibold">模板正文</h3>
+              <div
+                v-if="editable"
+                class="flex flex-wrap items-center gap-1.5 text-xs"
+              >
+                <span class="text-muted-foreground">一键载入骨架：</span>
+                <ElButton
+                  size="small"
+                  :disabled="busy"
+                  @click="applyTemplateSkeleton('kickstart')"
+                >
+                  Rocky/RHEL Kickstart
+                </ElButton>
+                <ElButton
+                  size="small"
+                  :disabled="busy"
+                  @click="applyTemplateSkeleton('autoinstall')"
+                >
+                  Ubuntu Autoinstall
+                </ElButton>
+                <ElButton
+                  size="small"
+                  :disabled="busy"
+                  @click="applyTemplateSkeleton('esxi')"
+                >
+                  ESXi 应答骨架
+                </ElButton>
+              </div>
+            </div>
+            <div
+              v-if="editable"
+              class="mb-2 flex flex-wrap items-center gap-1.5 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs"
+            >
+              <span class="text-muted-foreground">快捷插入插槽与变量：</span>
+              <ElButton
+                size="small"
+                plain
+                :disabled="busy"
+                @click="insertTemplateSnippet('# {{lober:slot packages}}')"
+              >
+                ＋ 软件包片段插槽
+              </ElButton>
+              <ElButton
+                size="small"
+                plain
+                :disabled="busy"
+                @click="insertTemplateSnippet('# {{lober:slot post-target exec=post-target}}')"
+              >
+                ＋ 装后脚本插槽 (post-target)
+              </ElButton>
+              <ElButton
+                size="small"
+                plain
+                :disabled="busy"
+                @click="insertTemplateSnippet('# {{lober:slot firstboot exec=firstboot}}')"
+              >
+                ＋ 首次启动插槽 (firstboot)
+              </ElButton>
+              <ElButton
+                size="small"
+                plain
+                :disabled="busy"
+                @click="insertTemplateSnippet('{{ .target_disk }}')"
+              >
+                ＋ 目标盘变量
+              </ElButton>
+            </div>
             <ElInput
               v-if="editable"
               v-model="selected.body"
               type="textarea"
               :rows="14"
               :disabled="busy"
+              placeholder="在此编写 Kickstart / Autoinstall / Unattend 应答模板正文，或点击上方按钮一键载入标准骨架…"
               aria-label="模板正文"
               class="font-mono"
             />
@@ -1018,15 +1282,35 @@ onBeforeUnmount(() => {
         />
       </template>
       <template #footer>
-        <div class="flex flex-wrap justify-end gap-2">
-          <ElButton @click="visible = false">关闭</ElButton><ElButton
-            v-if="editable"
-            :loading="busy"
-            type="primary"
-            @click="run(save)"
-          >
-            保存草稿
-</ElButton><ElButton
+        <div class="flex w-full flex-wrap items-center justify-between gap-2">
+          <div class="flex gap-2">
+            <ElButton @click="visible = false">关闭</ElButton>
+            <ElButton
+              v-if="templateStepIndex > 0"
+              :disabled="busy"
+              @click="setTemplateStep(templateStepIndex - 1)"
+            >
+              上一步
+            </ElButton>
+            <ElButton
+              v-if="templateStepIndex < templateSteps.length - 1"
+              type="primary"
+              plain
+              :disabled="busy"
+              @click="setTemplateStep(templateStepIndex + 1)"
+            >
+              下一步
+            </ElButton>
+          </div>
+          <div class="flex flex-wrap justify-end gap-2">
+            <ElButton
+              v-if="editable"
+              :loading="busy"
+              type="primary"
+              @click="run(save)"
+            >
+              保存草稿
+            </ElButton><ElButton
             v-if="selected?.id && canWrite"
             :disabled="busy"
             @click="run(validate)"
@@ -1070,6 +1354,7 @@ onBeforeUnmount(() => {
           >
             删除草稿
           </ElButton>
+          </div>
         </div>
       </template>
     </ElDialog>

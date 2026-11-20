@@ -6,6 +6,7 @@ import { LayoutGrid } from '@vben/icons';
 const routes: RouteRecordRaw[] = [
   {
     meta: {
+      hideChildrenInMenu: true,
       icon: LayoutGrid,
       order: 20,
       title: '主机清单',

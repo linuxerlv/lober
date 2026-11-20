@@ -26,8 +26,8 @@ import {
   ElMessageBox,
   ElOption,
   ElSelect,
-  ElTabPane,
-  ElTabs,
+  ElStep,
+  ElSteps,
   ElTag,
 } from 'element-plus';
 
@@ -100,9 +100,14 @@ const [Grid, grid] = useVbenVxeGrid<Hook>({
   gridOptions: {
     columns: [
       { width: 48, slots: { header: 'select-all', default: 'select-row' } },
-      { field: 'name', title: '名称', minWidth: 190 },
+      { field: 'name', title: '脚本名称', minWidth: 210 },
       { field: 'version', title: '版本', width: 90 },
-      { field: 'state', title: '状态', width: 110 },
+      {
+        field: 'state',
+        title: '审批状态',
+        width: 120,
+        slots: { default: 'state' },
+      },
       {
         field: 'builtin',
         title: '来源',
@@ -179,6 +184,14 @@ function assign(row: Hook) {
   errors.value = row.problems ?? [];
   reason.value = '';
 }
+const hookSteps = ['basic', 'params', 'content'] as const;
+const hookStepIndex = computed(() =>
+  Math.max(0, hookSteps.indexOf(editorSection.value as (typeof hookSteps)[number])),
+);
+function setHookStep(idx: number) {
+  const next = hookSteps[idx];
+  if (next) editorSection.value = next;
+}
 async function open(row: Hook) {
   editorSection.value = 'content';
   const token = editor.invalidate();
@@ -195,7 +208,7 @@ async function open(row: Hook) {
   });
 }
 function create() {
-  editorSection.value = 'content';
+  editorSection.value = 'basic';
   editor.invalidate();
   assign({
     id: '',
@@ -208,7 +221,16 @@ function create() {
     builtin: false,
     state: 'draft',
     params: [],
-    impls: [],
+    impls: [
+      {
+        family: 'linux',
+        series: ['rocky', 'ubuntu'],
+        kind: 'script',
+        interpreter: 'bash',
+        timings: ['post-target'],
+        body: '#!/usr/bin/env bash\nset -euo pipefail\n\n# 在此编写装机阶段执行的自动化脚本\n',
+      },
+    ],
     problems: [],
     timeoutSec: 300,
     required: true,
@@ -277,14 +299,55 @@ async function remove() {
 function addImpl() {
   selected.value?.impls.push({
     family: 'linux',
-    series: [],
-    kind: 'fragment',
-    body: '',
-    interpreter: '',
-    timings: [],
+    series: ['rocky'],
+    kind: 'script',
+    body: '#!/usr/bin/env bash\nset -euo pipefail\n\n',
+    interpreter: 'bash',
+    timings: ['post-target'],
   });
 }
+const hookSamples: Record<string, string> = {
+  network: `#!/usr/bin/env bash
+set -euo pipefail
+echo "[Lober] 配置静态管理网 IP..."
+nmcli con mod "System eno1" ipv4.addresses "{{ .mgmt_ip }}" ipv4.gateway "{{ .gateway }}" ipv4.method manual
+nmcli con up "System eno1" || true
+`,
+  repo: `#!/usr/bin/env bash
+set -euo pipefail
+echo "[Lober] 写入内网镜像源与企业根证书..."
+update-ca-trust extract
+`,
+  security: `#!/usr/bin/env bash
+set -euo pipefail
+sed -i 's/^#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+systemctl restart sshd || true
+`,
+};
+function applyHookSample(index: number, kind: 'network' | 'repo' | 'security') {
+  const impl = selected.value?.impls[index];
+  if (!impl || !editable.value || busy.value) return;
+  impl.kind = 'script';
+  impl.interpreter = 'bash';
+  if (!impl.timings?.length) impl.timings = ['post-target'];
+  impl.body = hookSamples[kind] ?? '';
+}
 const families: Schemas['CatalogFamily'][] = ['linux', 'windows', 'esxi'];
+const authoringStateLabels: Record<string, string> = {
+  draft: '草稿',
+  review: '待审批',
+  approved: '已批准',
+  deprecated: '已废弃',
+};
+const authoringStateTagType: Record<
+  string,
+  'danger' | 'info' | 'primary' | 'success' | 'warning'
+> = {
+  draft: 'info',
+  review: 'warning',
+  approved: 'success',
+  deprecated: 'danger',
+};
 onMounted(() => load());
 watch(
   visible,
@@ -330,7 +393,7 @@ onBeforeUnmount(() => {
             v-for="s in ['draft', 'review', 'approved', 'deprecated']"
             :key="s"
             :value="s"
-            :label="s"
+            :label="`${authoringStateLabels[s]} (${s})`"
           />
         </ElSelect>
         <div class="ml-auto flex flex-wrap items-center justify-end gap-3">
@@ -365,9 +428,16 @@ onBeforeUnmount(() => {
             @change="selection.toggle(row, $event)"
           />
         </template>
+        <template #state="{ row }">
+          <ElTag :type="authoringStateTagType[row.state] || 'info'">
+            {{ authoringStateLabels[row.state] || row.state }}
+          </ElTag>
+        </template>
         <template #builtin="{ row }">
-          <ElTag>{{ row.builtin ? '内置' : '自定义' }}</ElTag>
-</template><template #action="{ row }">
+          <ElTag :type="row.builtin ? 'info' : 'primary'" effect="plain">
+            {{ row.builtin ? '系统内置' : '自定义' }}
+          </ElTag>
+        </template><template #action="{ row }">
           <ElButton link type="primary" @click="open(row)">
             查看 / 编辑
           </ElButton>
@@ -434,47 +504,137 @@ onBeforeUnmount(() => {
           :closable="false"
         />
         <ProblemList :problems="errors" />
-        <ElTabs v-model="editorSection">
-          <ElTabPane label="脚本实现" name="content" />
-          <ElTabPane label="基本信息" name="basic" />
-          <ElTabPane label="参数配置" name="params" />
-        </ElTabs>
-        <div class="max-h-[55dvh] overflow-auto px-1">
-          <section v-show="editorSection === 'basic'">
-            <ElForm :disabled="!editable || busy" label-width="100px">
-              <ElFormItem label="名称">
-                <ElInput v-model="selected.name" :disabled="!!selected.id" />
-              </ElFormItem>
-              <ElFormItem label="说明">
-                <ElInput v-model="selected.description" type="textarea" />
-              </ElFormItem>
-              <ElFormItem label="默认超时秒">
-                <ElInputNumber v-model="selected.timeoutSec" :min="1" />
-              </ElFormItem>
-              <ElFormItem label="失败处理">
-                <ElCheckbox v-model="selected.required">
-                  失败时终止任务
-                </ElCheckbox>
-              </ElFormItem>
-            </ElForm>
+        <!-- 3 步向导步骤条：支持点击步骤切换，也支持底部“上一步/下一步” -->
+        <ElSteps
+          :active="hookStepIndex"
+          finish-status="success"
+          class="mb-4 rounded-xl border border-border bg-muted/20 p-4"
+        >
+          <ElStep
+            title="1. 基本信息与策略"
+            description="脚本名称、超时时间与失败处理"
+            class="cursor-pointer"
+            @click="setHookStep(0)"
+          />
+          <ElStep
+            title="2. 参数声明"
+            description="定义脚本内引用的动态参数"
+            class="cursor-pointer"
+            @click="setHookStep(1)"
+          />
+          <ElStep
+            title="3. 脚本实现与提交"
+            description="编写各操作系统脚本代码"
+            class="cursor-pointer"
+            @click="setHookStep(2)"
+          />
+        </ElSteps>
+        <div class="max-h-[56dvh] overflow-auto px-1">
+          <!-- 第 1 步：基本信息与执行策略 -->
+          <section
+            v-show="editorSection === 'basic'"
+            class="grid grid-cols-1 gap-4 rounded-xl border border-border bg-muted/20 p-5 sm:grid-cols-2"
+          >
+            <label class="text-xs sm:col-span-2">
+              <span class="mb-1.5 block font-medium text-foreground">
+                脚本组件名称 <span class="text-red-500">*</span>
+              </span>
+              <ElInput
+                v-model="selected.name"
+                placeholder="例如 配置管理网静态 IP"
+                :disabled="!editable || busy || !!selected.id"
+              />
+            </label>
+            <label class="text-xs">
+              <span class="mb-1.5 block font-medium text-foreground">
+                默认超时时间（秒）
+              </span>
+              <ElInputNumber
+                v-model="selected.timeoutSec"
+                :min="1"
+                class="!w-full"
+                :disabled="!editable || busy"
+              />
+            </label>
+            <div class="flex flex-col justify-end pb-1 text-xs">
+              <span class="mb-1.5 block font-medium text-foreground">
+                默认失败处理策略
+              </span>
+              <ElCheckbox
+                v-model="selected.required"
+                :disabled="!editable || busy"
+              >
+                执行失败时立即终止装机任务
+              </ElCheckbox>
+            </div>
+            <label class="text-xs sm:col-span-2">
+              <span class="mb-1.5 block font-medium text-foreground">
+                脚本用途说明
+              </span>
+              <ElInput
+                v-model="selected.description"
+                type="textarea"
+                :rows="3"
+                placeholder="简要说明该脚本在装机流程中的作用、依赖环境与注意事项…"
+                :disabled="!editable || busy"
+              />
+            </label>
           </section>
+
+          <!-- 第 2 步：参数声明 -->
           <section v-show="editorSection === 'params'">
             <ParamEditor
               v-model="selected.params"
               :disabled="!editable || busy"
             />
           </section>
+
+          <!-- 第 3 步：各系统脚本实现 -->
           <section v-show="editorSection === 'content'">
-            <h3 class="my-4 text-lg font-semibold">脚本实现</h3>
+            <div class="my-3 flex flex-wrap items-center justify-between gap-2">
+              <h3 class="text-base font-semibold">各操作系统实现列表</h3>
+              <ElButton v-if="editable" size="small" type="primary" plain @click="addImpl">
+                ＋ 新增一套系统实现
+              </ElButton>
+            </div>
             <ElForm
               v-for="(impl, index) in selected.impls"
               :key="index"
               :disabled="!editable || busy"
-              label-width="110px"
-              class="mb-4 rounded border p-4"
+              label-width="100px"
+              class="mb-4 rounded-xl border border-border bg-card p-4"
             >
-              <div class="grid gap-3 md:grid-cols-2">
-                <ElFormItem label="族">
+              <div class="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2.5">
+                <div class="flex items-center gap-2">
+                  <ElTag size="small" type="primary">实现 #{{ index + 1 }}</ElTag>
+                  <span class="text-xs text-muted-foreground">
+                    配置适用的操作系统、执行时机与脚本代码
+                  </span>
+                </div>
+                <div v-if="editable" class="flex flex-wrap items-center gap-1.5 text-xs">
+                  <span class="text-muted-foreground">载入示例：</span>
+                  <ElButton size="small" @click="applyHookSample(index, 'network')">
+                    静态网络示例
+                  </ElButton>
+                  <ElButton size="small" @click="applyHookSample(index, 'repo')">
+                    内网软件源示例
+                  </ElButton>
+                  <ElButton size="small" @click="applyHookSample(index, 'security')">
+                    安全加固示例
+                  </ElButton>
+                  <ElButton
+                    v-if="selected.impls.length > 1"
+                    size="small"
+                    type="danger"
+                    plain
+                    @click="selected.impls.splice(index, 1)"
+                  >
+                    删除实现
+                  </ElButton>
+                </div>
+              </div>
+              <div class="grid gap-3 md:grid-cols-3">
+                <ElFormItem label="系统类型">
                   <ElSelect v-model="impl.family">
                     <ElOption
                       v-for="f in families"
@@ -483,8 +643,9 @@ onBeforeUnmount(() => {
                       :value="f"
                     />
                   </ElSelect>
-</ElFormItem><ElFormItem label="系">
-                  <ElSelect v-model="impl.series" multiple>
+                </ElFormItem>
+                <ElFormItem label="发行系列">
+                  <ElSelect v-model="impl.series" multiple placeholder="选择适用系列">
                     <ElOption
                       v-for="s in series"
                       :key="s"
@@ -492,17 +653,16 @@ onBeforeUnmount(() => {
                       :value="s"
                     />
                   </ElSelect>
-</ElFormItem><ElFormItem label="种类">
+                </ElFormItem>
+                <ElFormItem label="组件种类">
                   <ElSelect v-model="impl.kind">
-                    <ElOption label="片段" value="fragment" /><ElOption
-                      label="脚本"
-                      value="script"
-                    />
+                    <ElOption label="可执行脚本 (script)" value="script" />
+                    <ElOption label="配置片段 (fragment)" value="fragment" />
                   </ElSelect>
                 </ElFormItem>
               </div>
-              <template v-if="impl.kind === 'script'">
-                <ElFormItem label="解释器">
+              <div v-if="impl.kind === 'script'" class="grid gap-3 md:grid-cols-2">
+                <ElFormItem label="脚本解释器">
                   <ElSelect v-model="impl.interpreter">
                     <ElOption
                       v-for="i in ['sh', 'bash', 'cmd', 'powershell']"
@@ -511,8 +671,9 @@ onBeforeUnmount(() => {
                       :label="i"
                     />
                   </ElSelect>
-</ElFormItem><ElFormItem label="执行时机">
-                  <ElSelect v-model="impl.timings" multiple>
+                </ElFormItem>
+                <ElFormItem label="允许执行时机">
+                  <ElSelect v-model="impl.timings" multiple placeholder="如 post-target">
                     <ElOption
                       v-for="t in [
                         'pre',
@@ -526,8 +687,8 @@ onBeforeUnmount(() => {
                     />
                   </ElSelect>
                 </ElFormItem>
-              </template>
-              <ElFormItem label="正文">
+              </div>
+              <ElFormItem label="代码正文">
                 <pre
                   v-if="!editable"
                   class="w-full overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 text-sm"
@@ -536,17 +697,11 @@ onBeforeUnmount(() => {
                   v-else
                   v-model="impl.body"
                   type="textarea"
-                  :rows="12"
+                  :rows="11"
+                  placeholder="编写脚本代码，支持通过 {{ .参数名 }} 引用声明的参数…"
                   class="font-mono"
                 />
-</ElFormItem><ElButton
-                v-if="editable"
-                type="danger"
-                plain
-                @click="selected.impls.splice(index, 1)"
-              >
-                删除实现
-              </ElButton>
+              </ElFormItem>
             </ElForm>
             <ElButton v-if="editable" @click="addImpl">添加实现</ElButton>
           </section>
@@ -560,15 +715,35 @@ onBeforeUnmount(() => {
         </div>
       </template>
       <template #footer>
-        <div class="flex flex-wrap justify-end gap-2">
-          <ElButton @click="visible = false">关闭</ElButton><ElButton
-            v-if="editable"
-            :loading="busy"
-            type="primary"
-            @click="run(save)"
-          >
-            保存草稿
-</ElButton><ElButton
+        <div class="flex w-full flex-wrap items-center justify-between gap-2">
+          <div class="flex gap-2">
+            <ElButton @click="visible = false">关闭</ElButton>
+            <ElButton
+              v-if="hookStepIndex > 0"
+              :disabled="busy"
+              @click="setHookStep(hookStepIndex - 1)"
+            >
+              上一步
+            </ElButton>
+            <ElButton
+              v-if="hookStepIndex < hookSteps.length - 1"
+              type="primary"
+              plain
+              :disabled="busy"
+              @click="setHookStep(hookStepIndex + 1)"
+            >
+              下一步
+            </ElButton>
+          </div>
+          <div class="flex flex-wrap justify-end gap-2">
+            <ElButton
+              v-if="editable"
+              :loading="busy"
+              type="primary"
+              @click="run(save)"
+            >
+              保存草稿
+            </ElButton><ElButton
             v-if="selected?.id && canWrite"
             :disabled="busy"
             @click="run(validate)"
@@ -610,6 +785,7 @@ onBeforeUnmount(() => {
           >
             删除草稿
           </ElButton>
+          </div>
         </div>
       </template>
     </ElDialog>

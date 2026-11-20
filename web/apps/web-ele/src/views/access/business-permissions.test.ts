@@ -82,7 +82,7 @@ async function mount(
   });
   return el;
 }
-it('renders current paged read responses for a viewer without any write entry points', async () => {
+it('只读用户能查看主机清单，页面隐藏录入和删除入口', async () => {
   io.hosts.mockResolvedValue({
     items: [
       {
@@ -100,6 +100,9 @@ it('renders current paged read responses for a viewer without any write entry po
   await vi.waitFor(() => expect(host.textContent).toContain('SN-1'));
   expect(host.textContent).not.toContain('手工录入主机');
   expect(host.textContent).not.toContain('删除');
+});
+
+it('只读用户能查看任务，页面隐藏创建、取消和重试入口', async () => {
   io.tasks.mockResolvedValue({
     items: [
       {
@@ -122,6 +125,9 @@ it('renders current paged read responses for a viewer without any write entry po
   expect(tasks.textContent).not.toContain('建任务');
   expect(tasks.textContent).not.toContain('取消任务');
   expect(tasks.textContent).not.toContain('重试');
+});
+
+it('只读用户能查看系统镜像，页面隐藏登记和废弃入口', async () => {
   io.isos.mockResolvedValue({
     items: [
       {

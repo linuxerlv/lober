@@ -14,8 +14,8 @@ export const overridesPreferences = defineOverridesPreferences({
     name: import.meta.env.VITE_APP_TITLE,
     // 菜单写死在前端路由，省掉一个后端菜单接口（SPEC §12.5）
     accessMode: 'frontend',
-    // 任务列表是主战场
-    defaultHomePath: '/tasks',
+    // 概览分析页作为默认首页
+    defaultHomePath: '/overview/analytics',
     // 只发中文
     locale: 'zh-CN',
     // 离线控制台没必要按分钟轮询检查前端更新

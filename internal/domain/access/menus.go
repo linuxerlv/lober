@@ -11,16 +11,19 @@ type Menu struct {
 }
 
 var menuCatalog = []Menu{
+	{ID: "overview", Title: "概览"},
+	{ID: "overview-analytics", Title: "分析页", ParentID: "overview", Permission: PermTaskRead},
+	{ID: "overview-workspace", Title: "工作台", ParentID: "overview", Permission: PermTaskRead},
 	{ID: "tasks-group", Title: "任务"},
 	{ID: "tasks", Title: "任务列表", ParentID: "tasks-group", Permission: PermTaskRead},
 	{ID: "hosts-group", Title: "主机清单"},
 	{ID: "hosts", Title: "主机清单", ParentID: "hosts-group", Permission: PermHostRead},
 	{ID: "templates-group", Title: "模板"},
 	{ID: "templates", Title: "模板", ParentID: "templates-group", Permission: PermTemplateRead},
-	{ID: "hooks-group", Title: "hook"},
-	{ID: "hooks", Title: "hook 管理与审批", ParentID: "hooks-group", Permission: PermHookRead},
-	{ID: "isos-group", Title: "制品集"},
-	{ID: "isos", Title: "制品集导入", ParentID: "isos-group", Permission: PermISORead},
+	{ID: "hooks-group", Title: "脚本组件"},
+	{ID: "hooks", Title: "脚本组件", ParentID: "hooks-group", Permission: PermHookRead},
+	{ID: "isos-group", Title: "系统镜像"},
+	{ID: "isos", Title: "系统镜像", ParentID: "isos-group", Permission: PermISORead},
 	{ID: "tools-group", Title: "工具"},
 	{ID: "tools", Title: "磁盘策略 dry-run", ParentID: "tools-group", Permission: PermTemplateRead},
 	{ID: "reports-group", Title: "报表与审计"},
