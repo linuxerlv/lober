@@ -24,6 +24,8 @@ type TaskReader interface {
 	// ListTasks 的八项保存约定唯一委托 repository.Tasks.ListTasks
 	// （internal/domain/repository/tasks.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。
 	ListTasks(context.Context, repository.TaskQuery) (repository.Page[model.Task], error)
+	// TaskStatistics 按主机和创建时间统计任务，可同时返回按日期和镜像分组的数量。
+	TaskStatistics(context.Context, repository.TaskQuery, bool) ([]model.TaskMetric, error)
 	// GetTaskBatchSummary 沿用 repository.Tasks 的只读契约。
 	GetTaskBatchSummary(ctx context.Context, id string) (model.TaskBatchSummary, error)
 }

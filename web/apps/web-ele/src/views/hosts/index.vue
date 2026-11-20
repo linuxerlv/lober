@@ -46,6 +46,7 @@ import { useAuthStore } from '#/store';
 
 import { diskRows, networkRows } from './hardware-details';
 import HostDiscovery from './HostDiscovery.vue';
+import HostHardware from './HostHardware.vue';
 import HostTaskHistory from './HostTaskHistory.vue';
 import {
   attributesOf,
@@ -650,6 +651,7 @@ async function commitCSV() {
             </div>
           </dl>
         </section>
+        <HostHardware v-if="detailOpen && canReadDiscovery" :sn="detail.sn" />
         <HostTaskHistory
           v-if="detailOpen && hasMenu('tasks')"
           :sn="detail.sn"

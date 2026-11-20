@@ -11,7 +11,7 @@ import (
 	"github.com/lober/lober/internal/domain/repository"
 )
 
-// ISOs 只提供镜像模块使用的六项记录能力，写入和审计仍由仓储共同提交。
+// ISOs 只提供镜像模块使用的记录能力，写入和审计仍由仓储共同提交。
 type ISOs interface {
 	// CreateISO 的八项保存约定唯一委托 repository.ISOs.CreateISO
 	// （internal/domain/repository/isos.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。
@@ -22,6 +22,8 @@ type ISOs interface {
 	// DeprecateISO 的八项保存约定唯一委托 repository.ISOs.DeprecateISO
 	// （internal/domain/repository/isos.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。
 	DeprecateISO(context.Context, string, int64, repository.Audit) error
+	// EnableISO 在同一事务中检查版本、恢复已停用镜像并写审计。
+	EnableISO(context.Context, string, int64, repository.Audit) error
 	// DeleteISO 的八项保存约定唯一委托 repository.ISOs.DeleteISO
 	// （internal/domain/repository/isos.go 方法说明及 doc.go 共同约定）；本口只缩小方法集，不另加权限、重试或事务。
 	DeleteISO(context.Context, string, int64, repository.Audit) error

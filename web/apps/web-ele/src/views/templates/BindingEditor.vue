@@ -13,6 +13,7 @@ import {
 const props = defineProps<{
   params: Schemas['ParamDeclDTO'][];
   disabled?: boolean;
+  directInput?: boolean;
 }>();
 const bindings = defineModel<Record<string, Schemas['BindingDTO']>>({
   required: true,
@@ -24,6 +25,11 @@ const orphaned = computed(() =>
 );
 function set(name: string, source: string) {
   bindings.value[name] = { source, value: '', attr: '', editable: true };
+}
+function enterValue(name: string, value: string) {
+  const binding = bindings.value[name];
+  if (binding) binding.value = value;
+  else bindings.value[name] = { source: 'fixed', value, attr: '', editable: true };
 }
 </script>
 <template>
@@ -54,15 +60,16 @@ function set(name: string, source: string) {
             value="attr"
           />
         </ElSelect>
+        <ElInput
+          v-if="bindings[param.name]?.source === 'fixed' || (directInput && !bindings[param.name])"
+          :model-value="bindings[param.name]?.value ?? ''"
+          :placeholder="param.default || (param.list ? '每行填一项' : '输入参数值')"
+          :disabled="disabled"
+          type="textarea"
+          class="max-w-xl"
+          @update:model-value="enterValue(param.name, $event)"
+        />
         <template v-if="bindings[param.name]">
-          <ElInput
-            v-if="bindings[param.name]!.source === 'fixed'"
-            v-model="bindings[param.name]!.value"
-            :disabled="disabled"
-            type="textarea"
-            placeholder="参数值，列表每行一项"
-            class="max-w-xl"
-          />
           <ElInput
             v-if="bindings[param.name]!.source === 'attr'"
             v-model="bindings[param.name]!.attr"

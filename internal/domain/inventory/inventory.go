@@ -97,6 +97,38 @@ func Validate(r Report) (Result, []model.Problem) {
 		return Result{}, out
 	}
 
+	systemDisk := smallestDisk(disks)
+	return Result{Attrs: map[string]string{
+		InvCPUMode: r.CPUModel, InvCPUCores: strconv.Itoa(r.CPUCores),
+		InvMemMib: strconv.Itoa(r.MemoryMib), InvSystemMode: r.SystemModel,
+		InvDisks: joinDisks(disks), InvSystemDisk: systemDisk,
+	}, SystemDisk: systemDisk}, nil
+}
+
+// PartialSummary 用于详细报告。某类部件读不全时，其他部件的有效数据仍可用于概况。
+func PartialSummary(r Report) Result {
+	attrs := map[string]string{}
+	subject := model.Subject{Kind: model.KindHost}
+	if r.CPUModel != "" && checkText(r.CPUModel, "cpu_model") == nil {
+		attrs[InvCPUMode] = r.CPUModel
+	}
+	if r.SystemModel != "" && checkText(r.SystemModel, "system_model") == nil {
+		attrs[InvSystemMode] = r.SystemModel
+	}
+	if r.CPUCores > 0 && r.CPUCores <= maxCores {
+		attrs[InvCPUCores] = strconv.Itoa(r.CPUCores)
+	}
+	if r.MemoryMib > 0 && r.MemoryMib <= maxMemoryMib {
+		attrs[InvMemMib] = strconv.Itoa(r.MemoryMib)
+	}
+	if disks, problems := checkDisks(r.Disks, subject); len(problems) == 0 {
+		attrs[InvDisks] = joinDisks(disks)
+		attrs[InvSystemDisk] = smallestDisk(disks)
+	}
+	return Result{Attrs: attrs, SystemDisk: attrs[InvSystemDisk]}
+}
+
+func smallestDisk(disks []Disk) string {
 	smallest := disks[0]
 	for _, d := range disks[1:] {
 		// 容量相同时取名字字典序靠前的，保证同一台机器报两次得到同一个结果。
@@ -105,17 +137,7 @@ func Validate(r Report) (Result, []model.Problem) {
 		}
 	}
 
-	return Result{
-		Attrs: map[string]string{
-			InvCPUMode:    r.CPUModel,
-			InvCPUCores:   strconv.Itoa(r.CPUCores),
-			InvMemMib:     strconv.Itoa(r.MemoryMib),
-			InvSystemMode: r.SystemModel,
-			InvDisks:      joinDisks(disks),
-			InvSystemDisk: smallest.Name,
-		},
-		SystemDisk: smallest.Name,
-	}, nil
+	return smallest.Name
 }
 
 // 写进主机属性的键。集中在这里，改动一处就够。

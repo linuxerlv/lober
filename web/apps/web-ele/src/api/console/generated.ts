@@ -16,10 +16,11 @@ export interface Schemas {
   "CsvRow": { "action": string; "problems": (Array<Schemas["ProblemJSON"]>) | null; "row": number; "sn": string; };
   "DeriveRequest": { "from": number; "name": string; };
   "DiscoveryDiskStatus": "none" | "partial" | "ready";
+  "DiscoveryHardwareSnapshot": { "report"?: Schemas["DiscoveryReport"] | null; "report_at": number; };
   "DiscoveryHostDisk": { "bytes": string; "capacityText"?: string; "device": string; "model": string; "serial": string; };
   "DiscoveryHostDiskReport": { "disks": (Array<Schemas["DiscoveryHostDisk"]>) | null; "notice"?: string; "status": Schemas["DiscoveryDiskStatus"]; };
   "DiscoveryItem": { "fields": ({ [key: string]: string; }) | null; "name": string; };
-  "DiscoveryPage": { "items": (Array<Schemas["DiscoveryRecord"]>) | null; "next_cursor"?: string; };
+  "DiscoveryPage": { "items": (Array<Schemas["DiscoveryRecord"]>) | null; "next_cursor"?: string; "unavailable"?: boolean; };
   "DiscoveryRecord": { "arch": Schemas["CatalogArch"]; "firmware": Schemas["CatalogFirmware"]; "first_seen_at": number; "last_seen_at": number; "mac": string; "reason"?: string; "registered_sn"?: string; "report"?: Schemas["DiscoveryReport"] | null; "report_at"?: number; "sn"?: string; "status": string; "system_model"?: string; };
   "DiscoveryRegistration": { "sn": string; };
   "DiscoveryReport": { "sections": (Array<Schemas["DiscoverySection"]>) | null; };
@@ -92,6 +93,7 @@ export interface Schemas {
   "TaskItem": { "batchID"?: string; "canCancel": (Array<Schemas["ProblemJSON"]>) | null; "canRetry": (Array<Schemas["ProblemJSON"]>) | null; "createdAt": number; "createdBy": string; "hostSN": string; "id": string; "isoID": string; "rev": number; "snapshot": Schemas["SnapshotDTO"]; "state": Schemas["ModelTaskState"]; "templateID": string; "templateVersion": number; };
   "TaskPage": { "items": (Array<Schemas["TaskItem"]>) | null; "next": string; "total"?: number | null; };
   "TaskPreviewRequest": { "firmware"?: Schemas["CatalogFirmware"]; };
+  "TaskStatistics": { "days": ({ [key: string]: number; }) | null; "images": ({ [key: string]: number; }) | null; "months": ({ [key: string]: number; }) | null; "states": ({ [key: string]: number; }) | null; };
   "TemplateDraftRequest": { "assembly"?: ({ [key: string]: (Array<Schemas["InstanceDTO"]>) | null; }) | null; "bindings"?: ({ [key: string]: Schemas["BindingDTO"]; }) | null; "body"?: string; "family"?: Schemas["CatalogFamily"]; "name"?: string; "params"?: (Array<Schemas["ParamDeclDTO"]>) | null; "rev": number; "series"?: (Array<Schemas["CatalogSeries"]>) | null; };
   "TemplateKeyResponse": { "id": string; "version": number; };
   "TemplatePage": { "items": (Array<Schemas["TemplateResponse"]>) | null; "next": string; "total"?: number | null; };
@@ -282,6 +284,12 @@ export interface Paths {
       responses: { "200": { "application/json": { "code": 0; "data": Schemas["DiscoveryHostDiskReport"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };
+  "/console/v1/hosts/{sn}/hardware": {
+    "get": {
+      path: { "sn": string; };
+      responses: { "200": { "application/json": { "code": 0; "data": Schemas["DiscoveryHardwareSnapshot"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+    };
+  };
   "/console/v1/hosts/{sn}/inventory/request": {
     "post": {
       path: { "sn": string; };
@@ -338,6 +346,13 @@ export interface Paths {
       responses: { "200": { "application/json": { "code": 0; "data": (Record<string, unknown>) | null; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };
+  "/console/v1/isos/{id}/enable": {
+    "post": {
+      path: { "id": string; };
+      query: { "rev": number; };
+      responses: { "200": { "application/json": { "code": 0; "data": (Record<string, unknown>) | null; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+    };
+  };
   "/console/v1/isos/{id}/progress": {
     "get": {
       path: { "id": string; };
@@ -381,9 +396,15 @@ export interface Paths {
       responses: { "200": { "application/json": { "code": 0; "data": Schemas["TaskBatchSummary"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };
+  "/console/v1/task-statistics": {
+    "get": {
+      query: { "host_sn"?: string; "created_from"?: number; "created_to"?: number; "trends"?: boolean; };
+      responses: { "200": { "application/json": { "code": 0; "data": Schemas["TaskStatistics"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
+    };
+  };
   "/console/v1/tasks": {
     "get": {
-      query: { "page"?: number; "page_size"?: number; "host_sn"?: string; "batch_id"?: string; "state"?: Schemas["ModelTaskState"]; "created_from"?: number; "created_to"?: number; "cursor"?: string; "limit"?: number; };
+      query: { "page"?: number; "page_size"?: number; "host_sn"?: string; "batch_id"?: string; "state"?: string; "created_from"?: number; "created_to"?: number; "cursor"?: string; "limit"?: number; };
       responses: { "200": { "application/json": { "code": 0; "data": Schemas["TaskPage"]; "message": string; }; }; "400": { "application/json": { "code": 400; "data": null; "message": string; }; }; "401": { "application/json": { "code": 401; "data": null; "message": string; }; }; "403": { "application/json": { "code": 403; "data": null; "message": string; }; }; "404": { "application/json": { "code": 404; "data": null; "message": string; }; }; "409": { "application/json": { "code": 409; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null | Schemas["ReferenceDetail"]; "message": string; }; }; "422": { "application/json": { "code": 422; "data": Schemas["ProblemList"] | Schemas["BatchDetail"] | null; "message": string; }; }; "500": { "application/json": { "code": 500; "data": null; "message": string; }; }; };
     };
   };

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from collect import Collector, command, dmi_records, encode, section, uploaded
 from firmware import Firmware
+from hardware import MISSING, port_fields, secure_boot
 
 
 class CollectorTest(unittest.TestCase):
@@ -85,6 +86,83 @@ class CollectorTest(unittest.TestCase):
         )
         self.assertEqual(records, {4: [{"Version": "Processor A"}]})
 
+    def test_disk_endurance_and_bay_preserve_zero(self):
+        name = "nvme0n1"
+        self.file(f"sys/class/enclosure/cage/bay/device/block/{name}/present", "1")
+        self.file("sys/class/enclosure/cage/bay/slot", "0")
+        self.outputs[("lsblk", "--json", "--bytes", "--nodeps", "--output",
+                      "NAME,TYPE,SIZE,MODEL,SERIAL,TRAN,ROTA,REV,HCTL")] = json.dumps({
+            "blockdevices": [{"name": name, "type": "disk", "size": 1024, "rota": False}]})
+        cmd = ("smartctl", "-j", "-i", "-H", "-A", "/dev/" + name)
+        self.outputs[cmd] = json.dumps({"nvme_smart_health_information_log": {
+            "percentage_used": 0, "power_on_hours": 120, "temperature": 36, "media_errors": 0}})
+        disk = self.report()["storage"]["items"][0]["fields"]
+        for key, value in {"盘位": "0", "已用寿命（%）": "0", "通电小时": "120",
+                           "温度（°C）": "36", "介质错误次数": "0"}.items():
+            self.assertEqual(disk[key], value)
+        self.outputs[cmd] = "truncated {"
+        disk = self.report()["storage"]["items"][0]["fields"]
+        self.assertNotIn("介质错误次数", disk)
+        self.assertIn(MISSING + "介质错误次数", disk)
+        self.outputs[cmd] = json.dumps({"smart_status": [], "power_on_time": "unknown",
+                                       "endurance_used": {"current_percent": 6}})
+        disk = self.report()["storage"]["items"][0]["fields"]
+        self.assertEqual(disk["已用寿命（%）"], "6")
+        self.assertIn(MISSING + "通电小时", disk)
+
+    def test_optics_and_offline_fibre_port(self):
+        links = "Supported link modes: 1000baseT/Full\n       25000baseCR/Full\nAdvertised link modes: 100000baseCR4/Full"
+        fields = port_fields(links, "Vendor PN: OPT-1\nVendor SN: SN-2")
+        self.assertEqual(fields["最高支持速率"], "25000 Mb/s")
+        self.assertEqual(fields["模块型号（料号）"], "OPT-1")
+        self.assertEqual(fields["模块序列号"], "SN-2")
+        self.assertIn(MISSING + "最高支持速率", port_fields("Supported link modes:\nAdvertised link modes: 100000baseCR4/Full", ""))
+        self.file("sys/class/fc_host/host3/port_name", "0x2000000000000001")
+        self.file("sys/class/fc_host/host3/port_state", "Linkdown")
+        self.file("sys/class/fc_host/host3/speed", "16 Gbit")
+        fc = self.report()["storage"]["items"][0]["fields"]
+        self.assertEqual(fc["端口标识"], "0x2000000000000001")
+        self.assertIn("未接通", fc[MISSING + "当前速率"])
+
+    def test_disconnected_port_does_not_report_last_negotiated_speed(self):
+        self.file("sys/class/net/eth0/device/class", "0x020000")
+        self.file("sys/class/net/eth0/carrier", "0")
+        self.file("sys/class/net/eth0/speed", "25000")
+        port = self.report()["network"]["items"][0]["fields"]
+        self.assertNotIn("当前速率", port)
+        self.assertIn("未接通", port[MISSING + "当前速率"])
+
+    def test_management_tpm_and_secure_boot(self):
+        self.file("sys/class/tpm/tpm0/tpm_version_major", "2")
+        self.outputs[("ipmitool", "-I", "open", "mc", "info")] = (
+            "Product ID : 42 (board A)\nFirmware Revision : 7.1")
+        self.assertIn(MISSING + "安全启动", secure_boot(self.root))
+        efivar = "sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+        self.file(efivar, "")
+        self.assertIn("格式", secure_boot(self.root)[MISSING + "安全启动"])
+        for bit, expected in [(0, "已关闭"), (1, "已开启")]:
+            (self.root / efivar).write_bytes(bytes([7, 0, 0, 0, bit]))
+            system = {i["name"]: i["fields"] for i in self.report()["system"]["items"]}
+            self.assertEqual(system["整机"]["安全启动"], expected)
+            self.assertEqual(system["管理芯片"]["产品型号或编号"], "42 (board A)")
+            self.assertEqual(system["管理芯片"]["固件版本"], "7.1")
+            self.assertEqual(system["安全芯片 tpm0"]["规范版本"], "2.0")
+
+    def test_gpu_properties_stay_with_their_device(self):
+        for name, vendor in [("gpu0", "0x10de"), ("gpu1", "0x1002")]:
+            self.file(f"sys/bus/pci/devices/{name}/class", "0x030200")
+            self.file(f"sys/bus/pci/devices/{name}/vendor", vendor)
+        self.file("sys/bus/pci/devices/gpu0/physical_slot", "3")
+        self.file("sys/bus/pci/devices/gpu0/current_link_width", "8")
+        self.file("sys/bus/pci/devices/gpu1/mem_info_vram_total", "16384")
+        self.outputs[("nvidia-smi", "-i", "gpu0", "--query-gpu=name,memory.total,serial",
+                      "--format=csv,noheader,nounits")] = "Card A, 8192, SN-1"
+        gpu, amd = [i["fields"] for i in self.report()["expansion"]["items"]]
+        self.assertEqual((gpu["型号"], gpu["序列号"], gpu["显存（字节）"]), ("Card A", "SN-1", str(8192 << 20)))
+        self.assertEqual((gpu["物理插槽"], gpu["当前通道数"]), ("3", "8"))
+        self.assertEqual(amd["显存（字节）"], "16384")
+        self.assertIn(MISSING + "序列号", amd)
+
     def test_virtio_port_reports_its_pci_card_only_once(self):
         pci = "sys/bus/pci/devices"
         address = "0000:00:02.0"
@@ -117,18 +195,28 @@ class CollectorTest(unittest.TestCase):
         self.outputs[("storcli", "/call", "show", "all", "J")] = json.dumps({
             "Controllers": [{**controller, "Response Data": {
                 "Basics": {"Model": "Controller A"}, "Version": {"FW Package Build": "7"},
+                "HwCfg": {"On Board Memory Size": "2048 MB"},
+                "Cachevault_Info": [{"State": "Optimal"}],
                 "VD LIST": [{"DG/VD": "1/0", "TYPE": "RAID1", "State": "Optl"}],
             }}],
         })
-        self.outputs[("storcli", "/call", "/eall", "/sall", "show", "all", "J")] = json.dumps({
+        self.outputs[("storcli", "/call/eall/sall", "show", "all", "J")] = json.dumps({
             "Controllers": [{**controller, "Response Data": {
-                "Drive /c0/e1/s2": [{"EID:Slt": "1:2", "DG": 1, "State": "Onln"}],
+                "Drive /c0/e1/s2": [{"EID:Slt": "1:2", "DG": 1, "State": "Rbld"}],
+                "Drive /c0/e1/s3": [{"EID:Slt": "1:3", "DG": "-", "State": "GHS"}],
                 "Drive /c0/e1/s2 - Detailed Information": {
                     "Drive /c0/e1/s2 Device attributes": {"SN": "disk-2", "Firmware Revision": "8"},
                 },
             }}],
         })
+        self.outputs[("storcli", "/call/eall/sall", "show", "rebuild", "J")] = json.dumps({
+            "Controllers": [{**controller, "Response Data": {"Drive /c0/e1/s2": [
+                {"Drive-ID": "/c0/e1/s2", "Progress%": 0, "Status": "In progress"}]}}]})
         items = {entry["name"]: entry["fields"] for entry in Collector(root, "", self.command).storage()["items"]}
+        self.assertEqual(items["阵列控制器 0"]["缓存容量"], "2048 MB")
+        self.assertIn("Optimal", items["阵列控制器 0"]["缓存保护状态"])
+        self.assertEqual(items["物理盘 0/1:2"]["重建进度"], "0%")
+        self.assertEqual(items["物理盘 0/1:3"]["热备角色"], "全局热备")
         self.assertEqual(items["逻辑盘 0/1/0"]["阵列级别"], "RAID1")
         self.assertEqual(items["物理盘 0/1:2"]["序列号"], "disk-2")
         self.assertEqual(items["物理盘 0/1:2"]["阵列组"], "1")

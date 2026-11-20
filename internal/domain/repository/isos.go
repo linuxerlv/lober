@@ -21,6 +21,8 @@ type ISOs interface {
 	UpdateISO(ctx context.Context, iso model.ISO) (model.ISO, error)
 	// DeprecateISO 只能把 ready 改成 deprecated，其他状态报 ErrConflict。
 	DeprecateISO(ctx context.Context, id string, rev int64, a Audit) error
+	// EnableISO 在同一事务中检查版本、恢复已停用镜像并写审计。
+	EnableISO(ctx context.Context, id string, rev int64, a Audit) error
 	// DeleteISO 删除一个 ISO；有任务引用报 ErrReferenced。
 	DeleteISO(ctx context.Context, id string, rev int64, a Audit) error
 	GetISO(ctx context.Context, id string) (model.ISO, error)

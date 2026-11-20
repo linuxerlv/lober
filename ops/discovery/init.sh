@@ -5,6 +5,9 @@ export LC_ALL=C
 umask 077
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
+if [ -d /sys/firmware/efi/efivars ]; then
+    mount -t efivarfs -o ro efivarfs /sys/firmware/efi/efivars
+fi
 mount -t devtmpfs devtmpfs /dev
 mount -t tmpfs -o mode=0755 tmpfs /run
 exec </dev/console >/dev/console 2>&1

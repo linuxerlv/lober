@@ -37,7 +37,7 @@ import { downloadSelection } from '#/components/console/selection-export';
 import { NumberedPage } from '#/composables/numbered-page';
 import { useRowSelection } from '#/composables/use-row-selection';
 
-import { taskStateLabels } from './task-state';
+import { taskCount, taskStateLabels } from './task-state';
 
 defineOptions({ name: 'TasksIndex' });
 const router = useRouter();
@@ -67,43 +67,41 @@ const cancellable = computed(() =>
 );
 const batchBusy = ref(false);
 const batchResults = ref<string[]>([]);
+const counts = ref<Record<string, number> | null>();
 const stateStats = computed(() => {
-  const items = pagination.items;
   return [
     {
       key: '',
       label: '当前列表总数',
-      value: pagination.total,
+      value: taskCount(counts.value),
       desc: '点击查看全部任务',
       tone: 'border-border bg-card',
     },
     {
-      key: 'installing',
-      label: '正在安装',
-      value: items.filter((t) =>
-        ['booting', 'initializing', 'installing', 'rebooting'].includes(t.state),
-      ).length,
-      desc: '本页活跃装机流',
+      key: 'active',
+      label: '正在装机',
+      value: taskCount(counts.value, 'active'),
+      desc: '引导至初始化',
       tone: 'border-blue-500/30 bg-blue-500/5 text-blue-600 dark:text-blue-400',
     },
     {
       key: 'pending',
       label: '等待机器引导',
-      value: items.filter((t) => t.state === 'pending').length,
+      value: taskCount(counts.value, 'pending'),
       desc: '等待 PXE 网络启动',
       tone: 'border-amber-500/30 bg-amber-500/5 text-amber-600 dark:text-amber-400',
     },
     {
       key: 'done',
       label: '安装完成',
-      value: items.filter((t) => t.state === 'done').length,
+      value: taskCount(counts.value, 'done'),
       desc: '已交付业务就绪',
       tone: 'border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400',
     },
     {
       key: 'failed',
       label: '异常需排障',
-      value: items.filter((t) => t.state === 'failed').length,
+      value: taskCount(counts.value, 'failed'),
       desc: '点击筛选失败任务',
       tone: 'border-red-500/30 bg-red-500/5 text-red-600 dark:text-red-400',
     },
@@ -293,6 +291,16 @@ async function load(reset = false) {
   const run = ++generation;
   error.value = '';
   const filters = { ...appliedFilters };
+  counts.value = undefined;
+  void taskAPI.statistics({
+    host_sn: filters.host_sn || undefined,
+    created_from: Number(filters.created_from) || undefined,
+    created_to: Number(filters.created_to) || undefined,
+  }).then((stats) => {
+    if (run === generation) counts.value = stats.states;
+  }).catch((reason) => {
+    if (run === generation) error.value = errorMessage(reason);
+  });
   try {
     const page = await pagination.load((params) =>
       taskAPI.list({ ...filters, ...params }),
@@ -387,7 +395,7 @@ onBeforeUnmount(() => {
           <span class="text-[11px] opacity-75">{{ card.desc }}</span>
         </div>
         <div class="mt-2 text-2xl font-bold tabular-nums">
-          {{ card.value }}
+          {{ card.value ?? '—' }}
         </div>
       </button>
     </div>
@@ -413,6 +421,7 @@ onBeforeUnmount(() => {
             clearable
             class="!w-36"
           >
+            <ElOption label="正在装机（四个阶段）" value="active" />
             <ElOption
               v-for="(label, value) in taskStateLabels"
               :key="value"

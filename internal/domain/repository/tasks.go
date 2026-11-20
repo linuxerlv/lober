@@ -34,6 +34,8 @@ type Tasks interface {
 	// ListTasks 共用doc.go的可信调用、空值、错误、重复、原子保存、并发与取消边界；只读，不写审计或通知，无提交复查。
 	// 分页、筛选、顺序及Total遵守types.go对应Query与Page；先检查分页再解本对象游标。
 	ListTasks(ctx context.Context, q TaskQuery) (Page[model.Task], error)
+	// TaskStatistics 按主机和创建时间统计任务，可同时返回按日期和镜像分组的数量。
+	TaskStatistics(context.Context, TaskQuery, bool) ([]model.TaskMetric, error)
 	// GetTaskBatchSummary 读取同一批次的全部状态数量和首条任务的提交信息。编号非法返回 ErrInvalid，批次不存在返回 ErrNotFound。
 	GetTaskBatchSummary(ctx context.Context, id string) (model.TaskBatchSummary, error)
 	// TransitionTask 是系统发起的条件推进，不审计：当前的状态与 Rev 都等于 expect 才写入，否则报 ErrConflict；

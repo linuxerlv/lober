@@ -261,6 +261,19 @@ func TestISO读取过滤分页废弃和删除接线(t *testing.T) {
 	if err != nil || item.State != model.ISODeprecated {
 		t.Fatal(item, err)
 	}
+	for _, tc := range []struct {
+		rev    string
+		status int
+	}{{"bad", 400}, {fmt.Sprint(rocky.Rev), 409}, {fmt.Sprint(item.Rev), 200}, {fmt.Sprint(item.Rev + 1), 409}} {
+		w := httpCall(s, "POST", path+"/enable?rev="+tc.rev, "", token)
+		if w.Code != tc.status {
+			t.Fatal(tc, w.Code, w.Body.String())
+		}
+	}
+	item, err = st.GetISO(t.Context(), rocky.ID)
+	if err != nil || item.State != model.ISOReady || item.Rev != rocky.Rev+2 {
+		t.Fatal(item, err)
+	}
 	deletion.err = errors.New("journal failure")
 	if w := httpCall(s, "DELETE", fmt.Sprintf("%s?rev=%d", path, item.Rev), "", token); w.Code != 500 {
 		t.Fatal(w.Code, w.Body.String())
@@ -375,7 +388,7 @@ func TestISO所有接口五角色权限(t *testing.T) {
 				t.Fatal(role, rt, w.Code)
 			}
 		}
-		if count != 11 {
+		if count != 12 {
 			t.Fatal(count)
 		}
 	}

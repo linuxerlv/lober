@@ -146,16 +146,19 @@ func registeredReports(q *gorm.DB, sn string) *gorm.DB {
 	return q.Where("registered_sn = ?", sn).Order("report_at DESC, last_seen_at DESC, mac")
 }
 
-// LatestDiscoveryReport 只取该主机最近一份原始报告，与发现列表使用同一排序。
+// 同秒上报时优先采用已登记主机凭据提交的报告。
 func (s *Store) LatestDiscoveryReport(ctx context.Context, sn string) (*discovery.Report, int64, error) {
-	var row discoveryRow
-	q := registeredReports(s.db.WithContext(ctx), sn).Where("report_at > 0")
-	err := q.Select("report", "report_at").Take(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, 0, nil
+	var row struct {
+		Report   string
+		ReportAt int64
 	}
-	if err != nil {
-		return nil, 0, err
+	result := s.db.WithContext(ctx).Raw(`SELECT report, report_at FROM (
+		SELECT report, report_at, 1 AS priority, report_at AS seen, '' AS mac FROM host_hardware_reports WHERE sn = ?
+		UNION ALL
+		SELECT report, report_at, 0, last_seen_at, mac FROM host_discoveries WHERE registered_sn = ? AND report_at > 0
+	) AS snapshots ORDER BY report_at DESC, priority DESC, seen DESC, mac LIMIT 1`, sn, sn).Scan(&row)
+	if result.Error != nil || result.RowsAffected == 0 {
+		return nil, 0, result.Error
 	}
 	var report discovery.Report
 	if err := decodeJSON(row.Report, &report); err != nil {

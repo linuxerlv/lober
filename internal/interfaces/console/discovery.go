@@ -21,11 +21,25 @@ type discoveryRegistration struct {
 
 func (s *server) discoveryRoutes() []route {
 	return []route{
+		{method: "GET", path: "/console/v1/hosts/:sn/hardware", perm: PermHostRead, tag: "hosts", summary: "Read latest host hardware report", resp: discovery.HardwareSnapshot{}, handle: s.hostHardware},
 		{method: "GET", path: "/console/v1/hosts/:sn/disks", perm: PermHostRead, tag: "hosts", summary: "Read host installation disks", resp: data.HostDiskReport{}, handle: s.hostDisks},
 		{method: "GET", path: "/console/v1/discoveries", perm: PermHostRead, tag: "hosts", summary: "List PXE discoveries", query: discoveryQuery{}, resp: discovery.Page{}, handle: s.listDiscoveries},
 		{method: "GET", path: "/console/v1/discoveries/:mac", perm: PermHostRead, tag: "hosts", summary: "Read discovered hardware", resp: data.Record{}, handle: s.getDiscovery},
 		{method: "POST", path: "/console/v1/discoveries/:mac/register", perm: PermHostWrite, audit: "host.create", tag: "hosts", summary: "Register a discovered host", req: discoveryRegistration{}, resp: hostResponse{}, handle: s.registerDiscovery},
 	}
+}
+
+func (s *server) hostHardware(c *gin.Context) {
+	if s.deps.HostDisks == nil {
+		Fail(c, 503, nil, "主机部件报告暂时不可用")
+		return
+	}
+	report, err := s.deps.HostDisks.Hardware(c.Request.Context(), actorOf(c), c.Param("sn"))
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	Ok(c, report)
 }
 
 func (s *server) hostDisks(c *gin.Context) {
@@ -53,7 +67,7 @@ func (s *server) listDiscoveries(c *gin.Context) {
 	}
 	svc := s.deps.Discovery
 	if svc == nil {
-		Ok(c, map[string]any{"items": []any{}})
+		Ok(c, discovery.Page{Items: []data.Record{}, Unavailable: true})
 		return
 	}
 	page, err := svc.List(c.Request.Context(), actorOf(c), c.Query("cursor"), c.Query("registered_sn"), limit)

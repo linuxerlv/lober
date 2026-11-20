@@ -87,6 +87,15 @@ func (s *Store) UpdateISO(ctx context.Context, iso model.ISO) (model.ISO, error)
 
 // DeprecateISO 见 repository.ISOs。
 func (s *Store) DeprecateISO(ctx context.Context, id string, rev int64, a repository.Audit) error {
+	return s.changeISOState(ctx, id, rev, a, model.ISODeprecated)
+}
+
+// EnableISO 恢复手动停用的镜像。
+func (s *Store) EnableISO(ctx context.Context, id string, rev int64, a repository.Audit) error {
+	return s.changeISOState(ctx, id, rev, a, model.ISOReady)
+}
+
+func (s *Store) changeISOState(ctx context.Context, id string, rev int64, a repository.Audit, target model.ISOState) error {
 	if err := repository.CheckAudit(a); err != nil {
 		return err
 	}
@@ -98,10 +107,14 @@ func (s *Store) DeprecateISO(ctx context.Context, id string, rev int64, a reposi
 		if err != nil {
 			return err
 		}
-		if err := repository.CheckISODeprecation(id, model.ISOState(cur.State)); err != nil {
+		if target == model.ISOReady {
+			if model.ISOState(cur.State) != model.ISODeprecated {
+				return repository.ErrConflict
+			}
+		} else if err := repository.CheckISODeprecation(id, model.ISOState(cur.State)); err != nil {
 			return err
 		}
-		cur.State, cur.Rev = string(model.ISODeprecated), cur.Rev+1
+		cur.State, cur.Rev = string(target), cur.Rev+1
 		if err := tx.Model(&isoRow{ID: id}).Select("state", "rev").Updates(&cur).Error; err != nil {
 			return err
 		}

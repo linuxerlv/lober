@@ -87,7 +87,7 @@ var admin = ports.Actor{Username: "admin", Role: model.Role("admin")}
 func operations(r Registry, f *fixture) []func(ports.Actor) error {
 	return []func(ports.Actor) error{
 		func(a ports.Actor) error { _, e := r.List(context.Background(), a, ListRequest{}); return e }, func(a ports.Actor) error { _, e := r.Get(context.Background(), a, "image"); return e }, func(a ports.Actor) error { _, e := r.Progress(context.Background(), a, "image"); return e },
-		func(a ports.Actor) error { _, e := r.Create(context.Background(), a, CreateRequest{}); return e }, func(a ports.Actor) error { return r.RegisterSource(context.Background(), a, RegisterRequest{}) }, func(a ports.Actor) error { return r.Upload(context.Background(), a, UploadRequest{Body: f}) }, func(a ports.Actor) error { return r.Cancel(context.Background(), a, "image") }, func(a ports.Actor) error { return r.Retry(context.Background(), a, "image") }, func(a ports.Actor) error { return r.Reimport(context.Background(), a, "image") }, func(a ports.Actor) error { return r.Deprecate(context.Background(), a, RevisionRequest{}) }, func(a ports.Actor) error { return r.Delete(context.Background(), a, RevisionRequest{}) }}
+		func(a ports.Actor) error { _, e := r.Create(context.Background(), a, CreateRequest{}); return e }, func(a ports.Actor) error { return r.RegisterSource(context.Background(), a, RegisterRequest{}) }, func(a ports.Actor) error { return r.Upload(context.Background(), a, UploadRequest{Body: f}) }, func(a ports.Actor) error { return r.Cancel(context.Background(), a, "image") }, func(a ports.Actor) error { return r.Retry(context.Background(), a, "image") }, func(a ports.Actor) error { return r.Reimport(context.Background(), a, "image") }, func(a ports.Actor) error { return r.Deprecate(context.Background(), a, RevisionRequest{}) }, func(a ports.Actor) error { return r.Enable(context.Background(), a, RevisionRequest{}) }, func(a ports.Actor) error { return r.Delete(context.Background(), a, RevisionRequest{}) }}
 }
 func Test拒绝身份不读取任何能力(t *testing.T) {
 	for _, a := range []ports.Actor{{}, {Username: "bad", Role: "bad"}, {Username: "admin", Role: "admin", Disabled: true}, {Username: "admin", Role: "admin", MustChangePassword: true}} {
@@ -197,12 +197,15 @@ func (f *adminWriteFixture) Reimport(_ context.Context, id string, a repository.
 func (f *adminWriteFixture) DeprecateISO(_ context.Context, id string, rev int64, a repository.Audit) error {
 	return f.record("deprecate", id, rev, a)
 }
+func (f *adminWriteFixture) EnableISO(_ context.Context, id string, rev int64, a repository.Audit) error {
+	return f.record("enable", id, rev, a)
+}
 func (f *adminWriteFixture) Delete(_ context.Context, id string, rev int64, a repository.Audit) error {
 	return f.record("delete", id, rev, a)
 }
 
-func Test镜像管理员八个写入口传递有效输入(t *testing.T) {
-	for _, op := range []string{"create", "register", "upload", "cancel", "retry", "reimport", "deprecate", "delete"} {
+func Test镜像管理员写入口传递有效输入(t *testing.T) {
+	for _, op := range []string{"create", "register", "upload", "cancel", "retry", "reimport", "deprecate", "enable", "delete"} {
 		t.Run(op, func(t *testing.T) {
 			f := &adminWriteFixture{fixture: fixture{source: model.Source{ISOID: "image", Kind: model.SourceUpload, TotalSize: 4, Rev: 1}}}
 			r := NewRegistry(Deps{ISOs: f, Sources: f, Control: f, Deletion: f, Clock: func() int64 { return 123 }})
@@ -234,6 +237,8 @@ func Test镜像管理员八个写入口传递有效输入(t *testing.T) {
 				err = r.Retry(t.Context(), admin, "image")
 			case "reimport":
 				err = r.Reimport(t.Context(), admin, "image")
+			case "enable":
+				err = r.Enable(t.Context(), admin, RevisionRequest{ID: "image", Rev: 7})
 			case "deprecate":
 				err = r.Deprecate(t.Context(), admin, RevisionRequest{ID: "image", Rev: 7})
 			case "delete":
@@ -245,12 +250,12 @@ func Test镜像管理员八个写入口传递有效输入(t *testing.T) {
 			if op != "upload" && f.writeAudit != (repository.Audit{Actor: admin.Username, Action: action, At: 123}) {
 				t.Fatalf("审计丢失: %+v", f.writeAudit)
 			}
-			if op == "cancel" || op == "retry" || op == "reimport" || op == "deprecate" || op == "delete" {
+			if op == "cancel" || op == "retry" || op == "reimport" || op == "enable" || op == "deprecate" || op == "delete" {
 				if f.id != "image" {
 					t.Fatal(f.id)
 				}
 			}
-			if (op == "deprecate" || op == "delete") && f.rev != 7 {
+			if (op == "enable" || op == "deprecate" || op == "delete") && f.rev != 7 {
 				t.Fatal(f.rev)
 			}
 		})
