@@ -16,8 +16,8 @@ import { getHookListApi } from '#/api/console/hook';
 import { getHostListApi } from '#/api/console/host';
 import { taskAPI } from '#/api/console/task';
 import { getTemplateListApi } from '#/api/console/template';
-import { taskCount, taskStateLabels } from '#/views/tasks/task-state';
 import { useConsoleAccess } from '#/composables/use-console-access';
+import { taskCount, taskStateLabels } from '#/views/tasks/task-state';
 
 import { useOverviewData } from './use-overview-data';
 

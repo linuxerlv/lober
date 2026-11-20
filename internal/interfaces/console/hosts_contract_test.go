@@ -56,6 +56,7 @@ func Test主机入口契约(t *testing.T) {
 	want := map[string][2]string{
 		"GET /console/v1/hosts":                        {"host:read", ""},
 		"GET /console/v1/hosts/:sn/disks":              {"host:read", ""},
+		"GET /console/v1/hosts/:sn/hardware":           {"host:read", ""},
 		"GET /console/v1/hosts/:sn":                    {"host:read", ""},
 		"POST /console/v1/hosts":                       {"host:write", "host.create"},
 		"PUT /console/v1/hosts/:sn":                    {"host:write", "host.update"},

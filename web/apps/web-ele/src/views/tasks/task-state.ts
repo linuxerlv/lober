@@ -13,7 +13,7 @@ export const taskStateLabels: Record<Schemas['ModelTaskState'], string> = {
 
 export const activeTaskStates = ['booting', 'installing', 'rebooting', 'initializing'];
 
-export function taskCount(states: Record<string, number> | null | undefined, filter = '') {
+export function taskCount(states: null | Record<string, number> | undefined, filter = '') {
   if (!states) return undefined;
   if (filter === 'active') return activeTaskStates.reduce((sum, state) => sum + (states[state] ?? 0), 0);
   if (filter) return states[filter] ?? 0;

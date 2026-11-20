@@ -957,17 +957,30 @@ onBeforeUnmount(() => {
               <template v-if="newWizard">
                 <label class="text-xs">
                   <span class="mb-1.5 block font-medium">操作系统</span>
-                  <ElSelect :model-value="system" placeholder="选择系统" class="w-full"
-                    :disabled="busy || !editable || !!selected.id" @update:model-value="chooseSystem">
+                  <ElSelect
+                    :model-value="system"
+                    placeholder="选择系统"
+                    class="w-full"
+                    :disabled="busy || !editable || !!selected.id"
+                    @update:model-value="chooseSystem"
+                  >
                     <ElOption v-for="series in systems" :key="series" :value="series" :label="series" />
                   </ElSelect>
                 </label>
                 <label class="text-xs sm:col-span-2">
                   <span class="mb-1.5 block font-medium">后端骨架</span>
-                  <ElSelect v-model="skeletonID" placeholder="选择该系统的骨架" class="w-full"
-                    :disabled="busy || !system || !editable || !!selected.id">
-                    <ElOption v-for="item in matchingSkeletons" :key="item.id"
-                      :label="`${item.name} · v${item.version}`" :value="item.id" />
+                  <ElSelect
+                    v-model="skeletonID"
+                    placeholder="选择该系统的骨架"
+                    class="w-full"
+                    :disabled="busy || !system || !editable || !!selected.id"
+                  >
+                    <ElOption
+                      v-for="item in matchingSkeletons"
+                      :key="item.id"
+                      :label="`${item.name} · v${item.version}`"
+                      :value="item.id"
+                    />
                   </ElSelect>
                 </label>
                 <div v-if="!systems.length && !busy" class="sm:col-span-3">
@@ -1017,8 +1030,14 @@ onBeforeUnmount(() => {
             </div>
             <details v-if="newWizard && selected.id" class="rounded border p-3">
               <summary class="cursor-pointer">高级设置 · 编辑骨架正文</summary>
-              <ElInput v-model="selected.body" type="textarea" :rows="14" class="mt-3 font-mono"
-                aria-label="编辑骨架正文" :disabled="!editable || busy" />
+              <ElInput
+                v-model="selected.body"
+                type="textarea"
+                :rows="14"
+                class="mt-3 font-mono"
+                aria-label="编辑骨架正文"
+                :disabled="!editable || busy"
+              />
             </details>
             <div v-if="editable && !newWizard">
               <span class="mb-2 block text-xs font-medium text-foreground">
@@ -1083,8 +1102,13 @@ onBeforeUnmount(() => {
               <template v-for="(items, slot) in selected.assembly" :key="slot">
                 <section v-for="(instance, i) in items" :key="`${i}-${hookKey(instance)}`" class="my-3 rounded border p-3">
                   <h3 class="mb-2 font-semibold">{{ slot }} · {{ hookOf(instance)?.name || instance.hookID }} #{{ i + 1 }}</h3>
-                  <BindingEditor v-if="hookOf(instance)?.params?.length" v-model="instance.bindings"
-                    :params="hookOf(instance)?.params ?? []" direct-input :disabled="!editable || busy" />
+                  <BindingEditor
+                    v-if="hookOf(instance)?.params?.length"
+                    v-model="instance.bindings"
+                    :params="hookOf(instance)?.params ?? []"
+                    direct-input
+                    :disabled="!editable || busy"
+                  />
                   <p v-else>{{ hookOf(instance) ? '这个 Hook 没有参数。' : '未能读取这个 Hook 的参数定义。' }}</p>
                 </section>
               </template>

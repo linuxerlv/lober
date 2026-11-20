@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { DiscoveredHost } from '#/api/console/discovery';
+
 import { computed } from 'vue';
 import { useRouter } from 'vue-router';
 
@@ -8,7 +10,6 @@ import { ElButton, ElTag } from 'element-plus';
 
 import { roleLabels } from '#/api/console/accounts';
 import { listAudit } from '#/api/console/audit';
-import type { DiscoveredHost } from '#/api/console/discovery';
 import { getDiscoveryListApi } from '#/api/console/discovery';
 import { getHookListApi } from '#/api/console/hook';
 import { taskAPI } from '#/api/console/task';

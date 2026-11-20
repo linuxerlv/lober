@@ -1,6 +1,7 @@
 import type { Schemas } from '#/api/console/generated';
 
 import { createApp, defineComponent, h, nextTick } from 'vue';
+
 import { expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
@@ -34,6 +35,7 @@ vi.mock('#/adapter/vxe-table', () => ({
 }));
 
 import { getHookApi } from '#/api/console/hook';
+
 import Templates from './index.vue';
 
 function button(label: string) {

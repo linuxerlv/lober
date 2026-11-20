@@ -67,7 +67,7 @@ const cancellable = computed(() =>
 );
 const batchBusy = ref(false);
 const batchResults = ref<string[]>([]);
-const counts = ref<Record<string, number> | null>();
+const counts = ref<null | Record<string, number>>();
 const stateStats = computed(() => {
   return [
     {
