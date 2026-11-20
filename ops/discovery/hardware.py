@@ -2,9 +2,78 @@
 
 import csv
 import re
+from datetime import datetime
 
 
 MISSING = "未读取·"
+NETWORK_COUNTERS = {
+    "rx_crc_errors": "接收校验错误次数", "rx_errors": "接收错误次数", "tx_errors": "发送错误次数",
+    "rx_dropped": "接收丢包数", "tx_dropped": "发送丢包数",
+}
+MEMORY_COUNTERS = {"ce_count": "可纠正错误次数", "ue_count": "不可纠正错误次数"}
+PCIE_CORRECTABLE = "可纠正链路错误次数"
+PCIE_UNCORRECTABLE = "不可纠正链路错误次数"
+COUNTER_SOURCE = "错误计数来源"
+COUNTER_TIME = "错误计数采集时间"
+COUNTER_FIELDS = frozenset((*NETWORK_COUNTERS.values(), *MEMORY_COUNTERS.values(),
+                            PCIE_CORRECTABLE, PCIE_UNCORRECTABLE, COUNTER_SOURCE, COUNTER_TIME))
+
+
+def unsigned(value):
+    return value if re.fullmatch(r"[0-9]{1,20}", value) else ""
+
+
+def counter_fields(counts, source, timestamp, reason):
+    fields = {label: value for label, value in counts.items() if value}
+    if fields:
+        fields.update({COUNTER_SOURCE: source, COUNTER_TIME: timestamp})
+    explain(fields, counts, reason)
+    return fields
+
+
+def pcie_counters(collector, device):
+    totals = {}
+    for severity, label in (("correctable", "COR"), ("nonfatal", "NONFATAL"), ("fatal", "FATAL")):
+        for line in collector.lines(device / f"aer_dev_{severity}"):
+            columns = line.split()
+            if len(columns) == 2 and columns[0] == f"TOTAL_ERR_{label}":
+                totals[severity] = unsigned(columns[1])
+                break
+    nonfatal, fatal = totals.get("nonfatal"), totals.get("fatal")
+    return {PCIE_CORRECTABLE: totals.get("correctable"),
+            PCIE_UNCORRECTABLE: str(int(nonfatal) + int(fatal)) if nonfatal and fatal else ""}
+
+
+def event_fields(line):
+    columns = [column.strip() for column in line.split("|")]
+    if len(columns) < 2 or not re.fullmatch(r"[0-9a-fA-F]{1,4}", columns[0]):
+        return {}
+    number, *values = columns
+    fields = {"事件编号": number}
+    if values[0].startswith(("OEM record ", "Linux kernel panic:")):
+        fields[MISSING + "设备上报时间"] = "设备未提供事件时间"
+    elif len(values) >= 3:
+        date, clock, *values = values
+        fields["设备上报时间"] = f"{date} {clock}".strip()
+        fields["时间说明"] = "无法确认设备时间，已保留原值"
+        for pattern in ("%m/%d/%y %H:%M:%S", "%m/%d/%Y %H:%M:%S"):
+            try:
+                datetime.strptime(f"{date} {clock.partition(' ')[0]}", pattern)
+            except ValueError:
+                continue
+            fields["时间说明"] = "设备时钟读数，时区未确认"
+            break
+    else:
+        return {}
+    if values[0].startswith(("OEM record ", "Linux kernel panic:")):
+        # 厂商原始字节没有通用解释，只保留可识别的事件类型。
+        fields["事件"] = values[0]
+    elif len(values) >= 2 and values[0]:
+        fields.update({"部件": values[0], "事件": " | ".join(value for value in values[1:] if value)})
+    else:
+        return {}
+    explain(fields, ("部件", "事件"), "设备未提供可读内容")
+    return fields
 
 
 def explain(fields, labels, reason):

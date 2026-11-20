@@ -38,6 +38,11 @@ done
 for driver in af_packet virtio_net virtio_blk virtio_scsi sd_mod ses ipmi_si ipmi_devintf coretemp k10temp drivetemp; do
     timeout 6 modprobe "$driver" 2>/dev/null
 done
+if [ -r /opt/lober/edac-drivers ]; then
+    while read -r driver; do
+        timeout 6 modprobe "$driver" 2>/dev/null
+    done < /opt/lober/edac-drivers
+fi
 mdev -s
 
 preferred=

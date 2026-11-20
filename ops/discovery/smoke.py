@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 
-def smoke(image, direct=False, memory=768, registered=False):
+def smoke(image, direct=False, memory=768, registered=False, report_path=None):
     mac = "52:54:00:12:34:56"
     sections = {}
     checkins = []
@@ -51,8 +51,12 @@ def smoke(image, direct=False, memory=768, registered=False):
             if not 0 < length <= 512 * 1024:
                 self.send_error(413)
                 return
-            report = json.loads(self.rfile.read(length))
+            payload = self.rfile.read(length)
+            report = json.loads(payload)
             sections.update((section["key"], section) for section in report["sections"])
+            if report_path:
+                report_path.write_bytes(payload)
+            print(f"报告 {length} 字节，启动至收到上报 {time.monotonic() - started:.1f} 秒", flush=True)
             self.send_response(204)
             self.end_headers()
 
@@ -70,6 +74,7 @@ def smoke(image, direct=False, memory=768, registered=False):
                 "-append", f"{kernel_args} lober.discovery_mac={mac}",
             ]
         receiver = threading.Thread(target=server.serve_forever, daemon=True)
+        started = time.monotonic()
         receiver.start()
         with subprocess.Popen([
             "qemu-system-x86_64", "-machine", "q35", "-m", str(memory), "-nodefaults",
@@ -97,6 +102,12 @@ def smoke(image, direct=False, memory=768, registered=False):
                 assert sections["system"]["items"][0]["fields"]["整机序列号"] == "LOBER-DISCOVERY-QEMU"
                 assert any(part["fields"].get("硬件地址") == mac and part["fields"].get("启动网口") == "是"
                            for part in sections["network"]["items"]), "缺少识别到的启动网口"
+                port = next(part["fields"] for part in sections["network"]["items"]
+                            if part["fields"].get("启动网口") == "是")
+                assert all(port.get(key, "").isdigit() for key in ("接收校验错误次数", "接收错误次数",
+                                                                  "发送错误次数", "接收丢包数", "发送丢包数")), "网口计数未上报"
+                chip = next(part["fields"] for part in sections["system"]["items"] if part["name"] == "管理芯片")
+                assert "未读取·近期事件" in chip, "未标明虚拟机缺少管理芯片事件的原因"
                 assert sections["storage"]["status"] in {"unread", "partial"}, "无磁盘应该显示未读取"
             finally:
                 if vm.poll() is None:
@@ -111,5 +122,6 @@ if __name__ == "__main__":
     parser.add_argument("--direct", action="store_true", help="直接加载内核，单独排查 Alpine 镜像")
     parser.add_argument("--registered", action="store_true", help="验证已登记主机的上报入口")
     parser.add_argument("--memory", type=int, default=768, help="虚拟机内存，单位 MiB")
+    parser.add_argument("--report", type=Path, help="保存实际收到的测试报告")
     args = parser.parse_args()
-    smoke(args.image.resolve(), args.direct, args.memory, args.registered)
+    smoke(args.image.resolve(), args.direct, args.memory, args.registered, args.report)
