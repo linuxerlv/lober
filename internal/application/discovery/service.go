@@ -161,8 +161,9 @@ func (s *Service) Submit(ctx context.Context, rawMAC, token string, body []byte)
 }
 
 type Page struct {
-	Items      []data.Record `json:"items"`
-	NextCursor string        `json:"next_cursor,omitempty"`
+	Unavailable bool          `json:"unavailable,omitempty"`
+	Items       []data.Record `json:"items"`
+	NextCursor  string        `json:"next_cursor,omitempty"`
 }
 
 func (s *Service) List(ctx context.Context, a ports.Actor, cursor, registeredSN string, limit int) (Page, error) {

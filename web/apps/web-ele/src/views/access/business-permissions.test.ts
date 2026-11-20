@@ -9,12 +9,13 @@ import { afterEach, expect, it, vi } from 'vitest';
 const io = vi.hoisted(() => ({
   hosts: vi.fn(),
   tasks: vi.fn(),
+  statistics: vi.fn(),
   isos: vi.fn(),
   listAuthoring: vi.fn(),
 }));
 
 vi.mock('#/api/console/host',()=>({getHostListApi:io.hosts}));
-vi.mock('#/api/console/task',()=>({taskAPI:{list:io.tasks}}));
+vi.mock('#/api/console/task',()=>({taskAPI:{list:io.tasks,statistics:io.statistics}}));
 vi.mock('#/api/console/artifact',()=>({getArtifactSetListApi:io.isos}));
 vi.mock('#/adapter/vxe-table',async()=>{
  const {defineComponent,h,ref,onMounted}=await import('vue');
@@ -46,6 +47,7 @@ async function mount(
   props = {},
   location = '/',
 ) {
+  io.statistics.mockResolvedValue({ states: { booting: 8, installing: 12, initializing: 1, rebooting: 2, done: 40 } });
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/', component: { template: '<div />' } }],
@@ -82,7 +84,7 @@ async function mount(
   });
   return el;
 }
-it('renders current paged read responses for a viewer without any write entry points', async () => {
+it('只读用户能查看主机清单，页面隐藏录入和删除入口', async () => {
   io.hosts.mockResolvedValue({
     items: [
       {
@@ -100,6 +102,9 @@ it('renders current paged read responses for a viewer without any write entry po
   await vi.waitFor(() => expect(host.textContent).toContain('SN-1'));
   expect(host.textContent).not.toContain('手工录入主机');
   expect(host.textContent).not.toContain('删除');
+});
+
+it('只读用户能查看任务，页面隐藏创建、取消和重试入口', async () => {
   io.tasks.mockResolvedValue({
     items: [
       {
@@ -122,6 +127,9 @@ it('renders current paged read responses for a viewer without any write entry po
   expect(tasks.textContent).not.toContain('建任务');
   expect(tasks.textContent).not.toContain('取消任务');
   expect(tasks.textContent).not.toContain('重试');
+});
+
+it('只读用户能查看系统镜像，页面隐藏登记和废弃入口', async () => {
   io.isos.mockResolvedValue({
     items: [
       {
@@ -160,4 +168,13 @@ it('clears filters from the return URL and returns to the first page', async () 
   await vi.waitFor(() => expect(io.tasks).toHaveBeenLastCalledWith(
     expect.objectContaining({ state: '', page: 1 }),
   ));
+});
+
+it('counts running tasks across pages and applies the same four-stage filter', async () => {
+  io.tasks.mockResolvedValue({ items: [], total: 23, next: '' });
+  const el = await mount(Tasks, 'viewer', ['task:read']);
+  const active = [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('正在装机'));
+  await vi.waitFor(() => expect(active?.textContent).toContain('23'));
+  active!.click();
+  await vi.waitFor(() => expect(io.tasks).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'active', page: 1 })));
 });

@@ -39,7 +39,7 @@ func mediaTypedFixtureMode(t *testing.T, caller string, sources map[string]strin
 		"io/fs":             `package fs;var ErrNotExist error;var SkipAll error;type FS interface{Open()};func ReadFile(){};func WalkDir(){}`,
 		pkgStore:            `package repository; type ISOs interface{GetISO();UpdateISO()}; type ISOSources interface{SaveSource()}; type Tasks interface{GetTask()}; type Store interface{ISOs;ISOSources;Tasks}; func CheckID(){};func CheckSource(){};var ErrInvalid error`,
 		fixtureMediaPort:    `package port; type ISOs interface{GetISO();UpdateISO()}; type Sources interface{SaveSource()};type SourceControl interface{Register();Upload()};type Deletion interface{Delete()};type Transfer interface{BeginFetch()};type FetchSession interface{Open();Close()};type ImportSession interface{OpenSource();Publish()};type DeletionJournal interface{Persist();List();Discard()};type Entry struct{Size int64};type Fault struct{};func(*Fault)Error()string{return "file"}`,
-		fixtureMedia:        `package media;type Registry interface{List();Get();Create();RegisterSource();Progress();Upload();Cancel();Retry();Reimport();Deprecate();Delete();Extra()};type Sources struct{};func(*Sources)Recover(){};func(*Sources)Import(){};func NewSources()*Sources{return nil};type Supervisor struct{};func NewSupervisor()*Supervisor{return nil};func(*Supervisor)Start(){};func(*Supervisor)Close(){};func(*Supervisor)Wake(){}`,
+		fixtureMedia:        `package media;type Registry interface{List();Get();Create();RegisterSource();Progress();Upload();Cancel();Retry();Reimport();Deprecate();Enable();Delete();Extra()};type Sources struct{};func(*Sources)Recover(){};func(*Sources)Import(){};func NewSources()*Sources{return nil};type Supervisor struct{};func NewSupervisor()*Supervisor{return nil};func(*Supervisor)Start(){};func(*Supervisor)Close(){};func(*Supervisor)Wake(){}`,
 		pkgModel:            `package model;type ISOState string;type SourceState string;type TaskState string;type ISO struct{State ISOState};func(ISO)Validate(){};type Source struct{State SourceState};type Task struct{State TaskState};const ISOReady ISOState="ready"`,
 		layer1 + "/media":   `package media;type EditionFact struct{Name string};func CheckImport(){};func CheckDeletion(){}`,
 		layer1 + "/catalog": `package catalog;type Arch string;func(Arch)Valid()bool{return true}`,
@@ -98,7 +98,7 @@ func Test镜像网页入口追踪同包旧业务(t *testing.T) {
 		name, body string
 		allowed    bool
 	}{
-		{"正常十一方法", `s.registry.List();s.registry.Get();s.registry.Create();s.registry.RegisterSource();s.registry.Progress();s.registry.Upload();s.registry.Cancel();s.registry.Retry();s.registry.Reimport();s.registry.Deprecate();s.registry.Delete()`, true},
+		{"正常十二方法", `s.registry.List();s.registry.Get();s.registry.Create();s.registry.RegisterSource();s.registry.Progress();s.registry.Upload();s.registry.Cancel();s.registry.Retry();s.registry.Reimport();s.registry.Deprecate();s.registry.Enable();s.registry.Delete()`, true},
 		{"相同接口新增方法", `s.registry.Extra()`, false},
 		{"同包两层方法值", `fn:=s.bridge;fn()`, false},
 		{"包级函数值", `oldAlias(s)`, false},

@@ -5,6 +5,9 @@ export LC_ALL=C
 umask 077
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
+if [ -d /sys/firmware/efi/efivars ]; then
+    mount -t efivarfs -o ro efivarfs /sys/firmware/efi/efivars
+fi
 mount -t devtmpfs devtmpfs /dev
 mount -t tmpfs -o mode=0755 tmpfs /run
 exec </dev/console >/dev/console 2>&1
@@ -35,6 +38,11 @@ done
 for driver in af_packet virtio_net virtio_blk virtio_scsi sd_mod ses ipmi_si ipmi_devintf coretemp k10temp drivetemp; do
     timeout 6 modprobe "$driver" 2>/dev/null
 done
+if [ -r /opt/lober/edac-drivers ]; then
+    while read -r driver; do
+        timeout 6 modprobe "$driver" 2>/dev/null
+    done < /opt/lober/edac-drivers
+fi
 mdev -s
 
 preferred=

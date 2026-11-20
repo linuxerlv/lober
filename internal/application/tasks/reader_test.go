@@ -30,6 +30,10 @@ func (s *readStore) GetTask(_ context.Context, id string) (model.Task, error) {
 	return s.task, s.err
 }
 
+func (s *readStore) TaskStatistics(_ context.Context, q repository.TaskQuery, _ bool) ([]model.TaskMetric, error) {
+	s.query = q
+	return nil, s.err
+}
 func (s *readStore) GetTaskBatchSummary(_ context.Context, id string) (model.TaskBatchSummary, error) {
 	s.calls = append(s.calls, "batch:"+id)
 	return model.TaskBatchSummary{}, s.err
@@ -55,6 +59,13 @@ func readFixture() (*readStore, *readRenderer, ReaderDeps) {
 	s := &readStore{}
 	r := &readRenderer{}
 	return s, r, ReaderDeps{Tasks: s, Renderer: r}
+}
+func Test正在装机筛选四个阶段(t *testing.T) {
+	s, _, deps := readFixture()
+	_, err := NewReader(deps).List(t.Context(), operator, ListRequest{State: "active"})
+	if err != nil || !reflect.DeepEqual(s.query.States, []model.TaskState{model.TaskBooting, model.TaskInstalling, model.TaskRebooting, model.TaskInitializing}) {
+		t.Fatal(s.query, err)
+	}
 }
 func Test任务查询保留错误先后(t *testing.T) {
 	for _, tc := range []struct {

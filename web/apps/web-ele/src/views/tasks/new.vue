@@ -120,6 +120,48 @@ let hostRender = 0;
 const restrictedHost = ref<Host>();
 const restrictionOpen = ref(false);
 const created = ref<Schemas['TaskItem'][]>([]);
+const paramViewMode = ref<'matrix' | 'single'>('single');
+const hostnamePrefix = ref('node-');
+
+function autoNumberHostnames() {
+  if (working.value) return;
+  const prefix = hostnamePrefix.value.trim() || 'node-';
+  let count = 0;
+  forms.value.forEach((host, idx) => {
+    const field = (host.fields ?? []).find(
+      (f) => !f.locked && (f.type === 'hostname' || f.key.endsWith('/hostname') || f.key.endsWith('/name')),
+    );
+    if (field) {
+      const num = String(idx + 1).padStart(2, '0');
+      (entered.value[host.sn] ??= {})[field.key] = `${prefix}${num}.lober.local`;
+      count++;
+    }
+  });
+  if (count) {
+    scheduleParameterValidation();
+    ElMessage.success(`已为 ${count} 台主机按序号生成主机名`);
+  }
+}
+
+function removeSelectedHost(sn: string) {
+  if (working.value) return;
+  selectHosts(selectedHosts.value.filter((h) => h.sn !== sn));
+  void restoreHostChecks();
+}
+
+function jumpToStep(target: number) {
+  if (working.value || step.value >= 5) return;
+  if (target === 0 && step.value > 0) {
+    invalidate();
+    step.value = 0;
+  } else if (target === 1 && step.value > 2) {
+    invalidate();
+    step.value = 2;
+  } else if (target === 2 && step.value === 4) {
+    invalidate();
+    step.value = 3;
+  }
+}
 
 function hostFieldValue(
   hostSN: string,
@@ -539,10 +581,25 @@ onBeforeUnmount(() => {
       finish-status="success"
       class="mb-4 rounded-lg border border-border bg-card p-5"
     >
-      <ElStep title="选主机" />
-      <ElStep title="选安装方案" />
-      <ElStep title="填参数" />
-      <ElStep title="确认" />
+      <ElStep
+        title="1. 选目标主机"
+        description="支持跨页勾选与属性过滤"
+        class="cursor-pointer"
+        @click="jumpToStep(0)"
+      />
+      <ElStep
+        title="2. 选镜像与模板"
+        description="同屏选择系统镜像和装机模板"
+        class="cursor-pointer"
+        @click="jumpToStep(1)"
+      />
+      <ElStep
+        title="3. 配参数与目标盘"
+        description="支持单机精调与批量总表对比"
+        class="cursor-pointer"
+        @click="jumpToStep(2)"
+      />
+      <ElStep title="4. 核对并提交" description="预览下发配置后创建任务" />
     </ElSteps>
     <ElAlert
       v-if="error"
@@ -565,7 +622,23 @@ onBeforeUnmount(() => {
             <ElInput v-model="attrKey" placeholder="属性名" class="!w-36" />
             <ElInput v-model="attrValue" placeholder="属性值" class="!w-44" />
             <ElButton :loading="working" @click="searchHosts">搜索</ElButton>
-            <ElTag>已选 {{ selectedHosts.length }} 台</ElTag>
+            <ElTag type="primary">已选 {{ selectedHosts.length }} 台</ElTag>
+          </div>
+          <div
+            v-if="selectedHosts.length"
+            class="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs"
+          >
+            <span class="font-medium text-primary">已选主机清单：</span>
+            <ElTag
+              v-for="h in selectedHosts"
+              :key="h.sn"
+              closable
+              size="small"
+              class="font-mono"
+              @close="removeSelectedHost(h.sn)"
+            >
+              {{ h.sn }}
+            </ElTag>
           </div>
           <HostGrid>
             <template #problems="{ row }">
@@ -596,25 +669,49 @@ onBeforeUnmount(() => {
             @size-change="changeHostPageSize"
           />
         </ElCard>
-        <ElCard v-if="step === 1 || step === 2" header="系统镜像">
+        <ElCard v-if="step === 1 || step === 2" header="选择系统镜像">
           <ElRadioGroup
             :model-value="selectedISO?.id ?? ''"
-            class="!block"
+            class="!grid gap-3 sm:grid-cols-2"
             @change="changeISO"
           >
             <div
               v-for="iso in isos"
               :key="iso.id"
-              class="mb-3 rounded border p-3"
+              class="rounded-xl border p-4 transition"
+              :class="[
+                selectedISO?.id === iso.id
+                  ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                  : 'border-border hover:border-primary/40',
+                !iso.usable ? 'opacity-60' : '',
+              ]"
             >
-              <ElRadio :value="iso.id" :disabled="!iso.usable || working">
-                {{ iso.name }} · {{ iso.series }} {{ iso.version }} ·
-                {{ iso.arch }}
-              </ElRadio>
+              <div class="flex items-start justify-between gap-2">
+                <ElRadio :value="iso.id" :disabled="!iso.usable || working">
+                  <span class="font-medium">{{ iso.name }}</span>
+                </ElRadio>
+                <ElTag size="small" :type="iso.usable ? 'success' : 'warning'">
+                  {{ iso.usable ? '可用' : '不可用' }}
+                </ElTag>
+              </div>
+              <div class="mt-2 flex flex-wrap gap-1.5 pl-6 text-xs text-muted-foreground">
+                <span v-if="iso.family" class="rounded bg-muted px-2 py-0.5 uppercase">{{
+                  iso.family
+                }}</span>
+                <span v-if="iso.series" class="rounded bg-muted px-2 py-0.5">{{
+                  iso.series
+                }}</span>
+                <span v-if="iso.version" class="rounded bg-muted px-2 py-0.5">v{{
+                  iso.version
+                }}</span>
+                <span v-if="iso.arch" class="rounded bg-muted px-2 py-0.5 font-mono">{{
+                  iso.arch
+                }}</span>
+              </div>
               <ProblemList :problems="iso.problems" />
             </div>
           </ElRadioGroup>
-          <p v-if="selectedISO" class="mt-3">
+          <p v-if="selectedISO" class="mt-3 text-sm font-medium text-primary">
             已选 ISO：{{ selectedISO.name }}
           </p>
           <ElAlert
@@ -632,25 +729,36 @@ onBeforeUnmount(() => {
             @size-change="changeISOPageSize"
           />
         </ElCard>
-        <ElCard v-if="step === 2" header="与镜像匹配的已审批模板">
+        <ElCard v-if="step === 2" header="选择与镜像匹配的已审批模板">
           <ElRadioGroup
             :model-value="selectedTemplate?.id ?? ''"
-            class="!block"
+            class="!grid gap-3 sm:grid-cols-2"
             @change="chooseTemplate(String($event))"
           >
             <div
               v-for="tpl in templates"
               :key="`${tpl.id}/${tpl.version}`"
-              class="mb-3 rounded border p-3"
+              class="rounded-xl border p-4 transition"
+              :class="[
+                selectedTemplate?.id === tpl.id
+                  ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                  : 'border-border hover:border-primary/40',
+                !tpl.usable ? 'opacity-60' : '',
+              ]"
             >
-              <ElRadio :value="tpl.id" :disabled="!tpl.usable || working">
-                {{ tpl.name }} · v{{ tpl.version }}
-                <ElTag v-if="tpl.builtin" size="small" class="ml-2">内置</ElTag>
-              </ElRadio>
+              <div class="flex items-start justify-between gap-2">
+                <ElRadio :value="tpl.id" :disabled="!tpl.usable || working">
+                  <span class="font-medium">{{ tpl.name }} · v{{ tpl.version }}</span>
+                  <ElTag v-if="tpl.builtin" size="small" class="ml-2">内置</ElTag>
+                </ElRadio>
+                <ElTag size="small" :type="tpl.usable ? 'success' : 'warning'">
+                  {{ tpl.usable ? '已批准' : '未就绪' }}
+                </ElTag>
+              </div>
               <ProblemList :problems="tpl.problems" />
             </div>
           </ElRadioGroup>
-          <p v-if="selectedTemplate" class="mt-3">
+          <p v-if="selectedTemplate" class="mt-3 text-sm font-medium text-primary">
             已选模板：{{ selectedTemplate.name }} v{{
               selectedTemplate.version
             }}
@@ -670,31 +778,83 @@ onBeforeUnmount(() => {
             @size-change="changeTemplatePageSize"
           />
         </ElCard>
-        <ElCard v-if="step === 3" header="逐台参数">
-          <div class="mb-4 flex flex-wrap gap-2">
-            <ElSelect
-              v-model="batchKey"
-              :disabled="working"
-              placeholder="选择批量填写的字段"
-              class="!w-64"
-            >
-              <ElOption
-                v-for="field in batchFields"
-                :key="field.key"
-                :value="field.key"
-                :label="`${field.label} (${field.key})`"
+        <ElCard v-if="step === 3" header="逐台参数与目标盘配置">
+          <!-- 顶部视图切换与智能批量工具栏 -->
+          <div class="mb-4 grid gap-3 rounded-xl border border-border bg-muted/40 p-4">
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+              <div class="flex items-center gap-2 text-xs">
+                <span class="font-semibold text-foreground">编辑视图模式：</span>
+                <div class="inline-flex rounded-lg bg-card p-1 shadow-sm">
+                  <button
+                    type="button"
+                    class="rounded-md px-3 py-1 font-medium transition"
+                    :class="
+                      paramViewMode === 'single'
+                        ? 'bg-primary text-white'
+                        : 'text-muted-foreground hover:text-foreground'
+                    "
+                    @click="paramViewMode = 'single'"
+                  >
+                    单机精调视图
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-md px-3 py-1 font-medium transition"
+                    :class="
+                      paramViewMode === 'matrix'
+                        ? 'bg-primary text-white'
+                        : 'text-muted-foreground hover:text-foreground'
+                    "
+                    @click="paramViewMode = 'matrix'"
+                  >
+                    批量总表视图（同屏对比 {{ forms.length }} 台）
+                  </button>
+                </div>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-xs text-muted-foreground">主机名自动递增：</span>
+                <ElInput
+                  v-model="hostnamePrefix"
+                  :disabled="working"
+                  placeholder="前缀如 bj-node-"
+                  size="small"
+                  class="!w-36"
+                />
+                <ElButton
+                  size="small"
+                  :disabled="working"
+                  @click="autoNumberHostnames"
+                >
+                  按序号生成主机名
+                </ElButton>
+              </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-xs text-muted-foreground">统一批量赋值：</span>
+              <ElSelect
+                v-model="batchKey"
+                :disabled="working"
+                placeholder="选择批量填写的字段"
+                class="!w-64"
+              >
+                <ElOption
+                  v-for="field in batchFields"
+                  :key="field.key"
+                  :value="field.key"
+                  :label="`${field.label} (${field.key})`"
+                />
+              </ElSelect>
+              <ElInput
+                v-model="batchValue"
+                :disabled="working"
+                placeholder="整列值；列表每行一项"
+                type="textarea"
+                class="!w-72"
               />
-            </ElSelect>
-            <ElInput
-              v-model="batchValue"
-              :disabled="working"
-              placeholder="整列值；列表每行一项"
-              type="textarea"
-              class="!w-72"
-            />
-            <ElButton :disabled="working || !batchKey" @click="fillColumn">
-              填写整列
-            </ElButton>
+              <ElButton :disabled="working || !batchKey" @click="fillColumn">
+                填写整列
+              </ElButton>
+            </div>
           </div>
           <ElAlert
             v-if="invalidHosts"
@@ -716,7 +876,125 @@ onBeforeUnmount(() => {
             </ElButton>
           </div>
           <ProblemList :problems="commonProblems" />
-          <div class="grid gap-3 md:grid-cols-[185px_minmax(0,1fr)]">
+
+          <!-- 模式 A：批量总表矩阵视图（所有主机同屏对比编辑） -->
+          <div
+            v-if="paramViewMode === 'matrix'"
+            class="mb-4 overflow-x-auto rounded-xl border border-border"
+          >
+            <table class="w-full text-left text-sm">
+              <thead class="border-b border-border bg-muted text-xs text-muted-foreground">
+                <tr>
+                  <th class="whitespace-nowrap p-3">主机序列号</th>
+                  <th
+                    v-for="col in forms[0]?.fields ?? []"
+                    :key="col.key"
+                    class="min-w-[180px] p-3"
+                  >
+                    <div>
+                      {{ col.label }}
+                      <span v-if="col.required" class="text-red-500">*</span>
+                    </div>
+                    <div class="font-mono text-[11px] font-normal opacity-75">
+                      {{ col.key }}
+                    </div>
+                  </th>
+                  <th class="whitespace-nowrap p-3">状态与预览</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-border">
+                <tr v-for="host in forms" :key="host.sn" class="align-top">
+                  <td class="whitespace-nowrap p-3 font-mono font-semibold">
+                    <div>{{ host.sn }}</div>
+                    <ElTag
+                      size="small"
+                      class="mt-1"
+                      :type="hostNeedsAttention(host) ? 'warning' : 'success'"
+                    >
+                      {{ hostNeedsAttention(host) ? '待修正' : '校验通过' }}
+                    </ElTag>
+                  </td>
+                  <td
+                    v-for="field in host.fields"
+                    :key="field.key"
+                    class="p-3"
+                  >
+                    <ElInput
+                      v-if="field.locked"
+                      :model-value="field.prefill"
+                      size="small"
+                      disabled
+                    />
+                    <ElSelect
+                      v-else-if="field.options?.length && !field.list"
+                      v-model="entered[host.sn]![field.key]"
+                      :disabled="working"
+                      size="small"
+                      clearable
+                      @update:model-value="scheduleParameterValidation"
+                    >
+                      <ElOption
+                        v-for="option in field.options"
+                        :key="option.value"
+                        :label="option.label || option.value"
+                        :value="option.value"
+                      />
+                    </ElSelect>
+                    <ElInput
+                      v-else
+                      v-model="entered[host.sn]![field.key]"
+                      :disabled="working"
+                      size="small"
+                      :type="field.list ? 'textarea' : 'text'"
+                      @update:model-value="scheduleParameterValidation"
+                    />
+                    <div
+                      v-if="
+                        deviceField(host)?.key === field.key &&
+                        hostDiskReports[host.sn]?.disks?.length &&
+                        !field.locked
+                      "
+                      class="mt-1.5 flex flex-wrap gap-1"
+                    >
+                      <button
+                        v-for="disk in hostDiskReports[host.sn]!.disks"
+                        :key="disk.device"
+                        type="button"
+                        class="rounded border px-2 py-0.5 text-[11px] transition"
+                        :class="
+                          hostFieldValue(host.sn, field).trim().replace(/^\/dev\//, '') === disk.device
+                            ? 'border-primary bg-primary/10 font-medium text-primary'
+                            : 'border-border text-muted-foreground hover:border-primary/40'
+                        "
+                        @click="chooseTargetDisk(host, disk)"
+                      >
+                        {{ diskLabel(disk) }}
+                      </button>
+                    </div>
+                  </td>
+                  <td class="whitespace-nowrap p-3">
+                    <ElButton
+                      size="small"
+                      link
+                      type="primary"
+                      @click="
+                        activeHost = host.sn;
+                        paramViewMode = 'single';
+                      "
+                    >
+                      单机详情
+                    </ElButton>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 模式 B：单机精调视图 -->
+          <div
+            v-show="paramViewMode === 'single'"
+            class="grid gap-3 md:grid-cols-[185px_minmax(0,1fr)]"
+          >
             <nav
               class="flex max-h-80 flex-wrap content-start gap-2 overflow-auto md:flex-col"
               aria-label="参数主机"

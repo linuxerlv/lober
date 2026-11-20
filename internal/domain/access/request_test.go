@@ -43,7 +43,7 @@ func Test请求先检查身份再改密再权限(t *testing.T) {
 	}
 }
 func Test菜单默认显式空必需页面与副本(t *testing.T) {
-	if got := EffectiveMenuIDs(model.RoleViewer, nil, false); !reflect.DeepEqual(got, []string{"tasks", "hosts", "templates", "hooks", "isos", "tools"}) {
+	if got := EffectiveMenuIDs(model.RoleViewer, nil, false); !reflect.DeepEqual(got, []string{"overview-analytics", "overview-workspace", "tasks", "hosts", "templates", "hooks", "isos", "tools"}) {
 		t.Fatal(got)
 	}
 	if got := EffectiveMenuIDs(model.RoleViewer, []string{}, true); got == nil || len(got) != 0 {
@@ -65,12 +65,12 @@ func Test菜单默认显式空必需页面与副本(t *testing.T) {
 	}
 	catalog := MenuCatalog()
 	catalog[0].ID = "bad"
-	if MenuCatalog()[0].ID != "tasks-group" {
+	if MenuCatalog()[0].ID != "overview" {
 		t.Fatal("目录可被外部改写")
 	}
 	ids := AvailableMenuIDs(model.RoleViewer)
 	ids[0] = "bad"
-	if AvailableMenuIDs(model.RoleViewer)[0] != "tasks" {
+	if AvailableMenuIDs(model.RoleViewer)[0] != "overview-analytics" {
 		t.Fatal("可用菜单共享切片")
 	}
 	perms := AllPerms()

@@ -47,12 +47,13 @@ func RenderInventoryMenu(r InventoryMenuRequest) ([]byte, []model.Problem, error
 
 	var b strings.Builder
 	b.WriteString("#!ipxe\n")
-	b.WriteString("kernel " + kernel + " ip=dhcp \\\n")
+	b.WriteString("kernel " + kernel + " ip=dhcp initrd=inventory.img quiet loglevel=4 \\\n")
 	b.WriteString("  lober.gateway=" + r.Gateway + " \\\n")
 	b.WriteString("  lober.sn=" + sn + " \\\n")
+	b.WriteString("  lober.discovery_mac=${netX/mac:hexhyp} \\\n")
 	b.WriteString("  lober.inventory_token=" + r.Token + " \\\n")
 	b.WriteString("  " + console + "\n")
-	b.WriteString("initrd " + initrd + "\n")
+	b.WriteString("initrd --name inventory.img " + initrd + "\n")
 	b.WriteString("boot\n")
 	return []byte(b.String()), nil, nil
 }

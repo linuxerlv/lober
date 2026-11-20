@@ -1,0 +1,245 @@
+[
+  {
+    "id": "builtin-kickstart",
+    "version": 6,
+    "name": "lober:kickstart",
+    "state": "approved",
+    "author": "",
+    "approver": "",
+    "builtin": true,
+    "derivedFrom": null,
+    "family": "linux",
+    "series": [
+      "rhel",
+      "rocky",
+      "almalinux"
+    ],
+    "body": "cmdline\nlang en_US.UTF-8\nkeyboard us\ntimezone UTC\nurl --url='{{sys:repo}}'\n{{lober:syslog}}\n{{slot:network}}\nrootpw --lock\n{{slot:account}}\n{{slot:sshkey}}\n{{slot:partition}}\n%packages\n@core\n{{slot:packages}}\n%end\nservices --enabled=sshd\n%post --nochroot --interpreter=/bin/sh --erroronfail\nset -eu\n{{lober:firstboot}}\n{{lober:cleanup}}\n%end\nreboot\n",
+    "params": null,
+    "bindings": null,
+    "assembly": {
+      "account": [
+        {
+          "hookID": "builtin-account",
+          "hookVersion": 3,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": null
+        }
+      ],
+      "network": [
+        {
+          "hookID": "builtin-network",
+          "hookVersion": 4,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": null
+        }
+      ],
+      "packages": [
+        {
+          "hookID": "builtin-packages",
+          "hookVersion": 4,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": {
+            "packages": {
+              "source": "fixed",
+              "value": "curl\nsystemd\nopenssh-server",
+              "attr": "",
+              "editable": true
+            }
+          }
+        }
+      ],
+      "partition": [
+        {
+          "hookID": "builtin-partition",
+          "hookVersion": 3,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": null
+        }
+      ],
+      "sshkey": [
+        {
+          "hookID": "builtin-sshkey",
+          "hookVersion": 3,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": null
+        }
+      ]
+    },
+    "rev": 0
+  },
+  {
+    "id": "builtin-autoinstall",
+    "version": 5,
+    "name": "lober:autoinstall",
+    "state": "approved",
+    "author": "",
+    "approver": "",
+    "builtin": true,
+    "derivedFrom": null,
+    "family": "linux",
+    "series": [
+      "ubuntu"
+    ],
+    "body": "#cloud-config\n# RAM must exceed the full ISO size plus installer working memory: url= downloads the ISO into RAM.\n# Layer7 qualification must size the VM from the actual ISO, not a fixed universal minimum.\nautoinstall:\n  version: 1\n  locale: en_US.UTF-8\n  keyboard:\n    layout: us\n  timezone: UTC\n  {{slot:partition}}\n  {{slot:network}}\n  identity:\n    hostname: '{{param:hostname}}'\n    {{slot:account}}\n  {{slot:sshkey}}\n  packages:\n    {{slot:packages}}\n  late-commands:\n    - {{lober:firstboot}}\n    - {{lober:cleanup}}\n",
+    "params": [
+      {
+        "name": "hostname",
+        "label": "",
+        "type": "hostname",
+        "list": false,
+        "required": false,
+        "default": "lober-node",
+        "options": null,
+        "min": null,
+        "max": null,
+        "offer": ""
+      }
+    ],
+    "bindings": null,
+    "assembly": {
+      "account": [
+        {
+          "hookID": "builtin-account",
+          "hookVersion": 3,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": null
+        }
+      ],
+      "network": [
+        {
+          "hookID": "builtin-network",
+          "hookVersion": 4,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": null
+        }
+      ],
+      "packages": [
+        {
+          "hookID": "builtin-packages",
+          "hookVersion": 4,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": {
+            "packages": {
+              "source": "fixed",
+              "value": "curl\nsystemd\nopenssh-server",
+              "attr": "",
+              "editable": true
+            }
+          }
+        }
+      ],
+      "partition": [
+        {
+          "hookID": "builtin-partition",
+          "hookVersion": 3,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": null
+        }
+      ],
+      "sshkey": [
+        {
+          "hookID": "builtin-sshkey",
+          "hookVersion": 3,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": null
+        }
+      ]
+    },
+    "rev": 0
+  },
+  {
+    "id": "builtin-esxi",
+    "version": 5,
+    "name": "lober:esxi",
+    "state": "approved",
+    "author": "",
+    "approver": "",
+    "builtin": true,
+    "derivedFrom": null,
+    "family": "esxi",
+    "series": [
+      "esxi"
+    ],
+    "body": "vmaccepteula\n{{slot:account}}\n{{slot:partition}}\n{{slot:network}}\nreboot\n# Secure Boot disables native firstboot. Layer7 must reject it and qualify the ESXi 8/9 ABI.\n%firstboot --interpreter=busybox\nset -e\n{{lober:firstboot}}\n{{slot:configure@firstboot}}\n{{lober:cleanup}}\n",
+    "params": null,
+    "bindings": null,
+    "assembly": {
+      "account": [
+        {
+          "hookID": "builtin-account",
+          "hookVersion": 3,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": null
+        }
+      ],
+      "configure": [
+        {
+          "hookID": "builtin-packages",
+          "hookVersion": 4,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": null
+        },
+        {
+          "hookID": "builtin-sshkey",
+          "hookVersion": 3,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": {
+            "username": {
+              "source": "fixed",
+              "value": "root",
+              "attr": "",
+              "editable": false
+            }
+          }
+        }
+      ],
+      "network": [
+        {
+          "hookID": "builtin-network",
+          "hookVersion": 4,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": {
+            "interface": {
+              "source": "fixed",
+              "value": "vmnic0",
+              "attr": "",
+              "editable": true
+            }
+          }
+        }
+      ],
+      "partition": [
+        {
+          "hookID": "builtin-partition",
+          "hookVersion": 3,
+          "timeoutSec": null,
+          "required": null,
+          "bindings": {
+            "disk": {
+              "source": "fixed",
+              "value": "local",
+              "attr": "",
+              "editable": true
+            }
+          }
+        }
+      ]
+    },
+    "rev": 0
+  }
+]

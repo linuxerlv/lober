@@ -98,4 +98,30 @@ func TestConsoleInventoryRequestReachesMachineReport(t *testing.T) {
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &reply) != nil || reply.Data.Attrs["inv_system_disk"] != "sda" || reply.Data.Attrs["rack"] != "r3" {
 		t.Fatal("控制台未读到采集数据和人工属性", w.Code)
 	}
+	if w := call(http.MethodPost, requestPath, "", operator); w.Code != http.StatusOK {
+		t.Fatal("再次请求采集失败", w.Code)
+	}
+	boot = call(http.MethodGet, "/v1/boot?sn="+url.QueryEscape(sn)+"&arch=x86_64&firmware=bios", "", "")
+	match = regexp.MustCompile(`lober\.inventory_token=([0-9a-f]{64})`).FindStringSubmatch(boot.Body.String())
+	if len(match) != 2 {
+		t.Fatal("缺少本轮采集令牌")
+	}
+	hardware := "/v1/hardware/" + serial[1]
+	const rich = `{"sections":[{"key":"storage","title":"磁盘","status":"partial","reason":"缺少部分字段","items":[{"name":"nvme0n1","fields":{"类型":"磁盘","容量（字节）":"1000","已用寿命（%）":"0","未读取·盘位":"机箱未提供槽位映射"}}]}]}`
+	if w := call(http.MethodPost, hardware, rich, ""); w.Code != http.StatusUnauthorized {
+		t.Fatal("必须提供凭据", w.Code)
+	}
+	if w := call(http.MethodPost, hardware, "{}", match[1]); w.Code != http.StatusUnprocessableEntity {
+		t.Fatal("缺少部件必须拒收", w.Code)
+	}
+	if w := call(http.MethodPost, hardware, rich, match[1]); w.Code != http.StatusNoContent {
+		t.Fatal("详细报告未保存", w.Code)
+	}
+	if w := call(http.MethodPost, hardware, rich, match[1]); w.Code != http.StatusForbidden {
+		t.Fatal("凭据应只用一次", w.Code)
+	}
+	w = call(http.MethodGet, hostPath+"/hardware", "", viewer)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "机箱未提供槽位映射") || !strings.Contains(w.Body.String(), "nvme0n1") {
+		t.Fatal("主机详情应可读取本机的部分报告", w.Code)
+	}
 }

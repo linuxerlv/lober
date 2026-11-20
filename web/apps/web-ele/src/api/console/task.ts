@@ -1,4 +1,4 @@
-import type { Schemas } from './generated';
+import type { Paths, Schemas } from './generated';
 
 import { requestClient } from '#/api/request';
 
@@ -7,6 +7,8 @@ export type TaskEvent = Schemas['EventItem'];
 export const taskAPI = {
   list: (params: Record<string, number | string> = {}) =>
     requestClient.get<Schemas['TaskPage']>('/tasks', { params }),
+  statistics: (params: Paths['/console/v1/task-statistics']['get']['query'] = {}) =>
+    requestClient.get<Schemas['TaskStatistics']>('/task-statistics', { params }),
   batch: (id: string) =>
     requestClient.get<Schemas['TaskBatchSummary']>(`/task-batches/${encodeURIComponent(id)}`),
   get: (id: string) => requestClient.get<Task>(`/tasks/${encodeURIComponent(id)}`),

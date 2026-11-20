@@ -8,6 +8,7 @@ import {
   onMounted,
   reactive,
   ref,
+  shallowRef,
   watch,
 } from 'vue';
 
@@ -27,8 +28,8 @@ import {
   ElMessageBox,
   ElOption,
   ElSelect,
-  ElTabPane,
-  ElTabs,
+  ElStep,
+  ElSteps,
   ElTag,
 } from 'element-plus';
 
@@ -44,10 +45,11 @@ import { NumberedPage } from '#/composables/numbered-page';
 import { useAuthoringEditor } from '#/composables/use-authoring-editor';
 import { useRowSelection } from '#/composables/use-row-selection';
 
-import { authoringRights, replaceInSlot, templatePayload } from './authoring';
+import { authoringRights, newParam, replaceInSlot, templatePayload } from './authoring';
 import BindingEditor from './BindingEditor.vue';
 import ParamEditor from './ParamEditor.vue';
 import PreviewFields from './PreviewFields.vue';
+import { loadSkeletons, skeletonContent } from './skeleton';
 
 defineOptions({ name: 'TemplatesIndex' });
 type Template = Schemas['TemplateResponse'];
@@ -70,6 +72,18 @@ const canWrite = computed(() => access.accessCodes.includes('template:write'));
 const selected = ref<TemplateForm>();
 const visible = ref(false);
 const editorSection = ref('content');
+const newWizard = ref(false);
+const skeletons = shallowRef<Template[]>([]);
+const system = ref('');
+const skeletonID = ref('');
+const matchingSkeletons = computed(() =>
+  skeletons.value.filter((row) => row.series?.includes(system.value)),
+);
+const skeleton = computed(() => matchingSkeletons.value.find((row) => row.id === skeletonID.value));
+const systems = computed(() =>
+  allSeries.filter((series) => skeletons.value.some((row) => row.series?.includes(series))),
+);
+const demoMode = import.meta.env.VITE_USE_MOCK === 'true';
 const prefix = ref('');
 const state = ref('');
 const appliedFilters = { prefix: '', state: undefined as string | undefined };
@@ -93,6 +107,7 @@ function exportSelected() {
 const errors = ref<Schemas['ProblemJSON'][]>([]);
 const versions = ref<Template[]>([]);
 const slots = ref<Schemas['SlotInfo'][]>([]);
+const slotsLoaded = ref(false);
 const hookMap = ref<Record<string, Hook>>({});
 const deriveName = ref('');
 const sourceDiff = ref<Schemas['SourceDiffResponse']>();
@@ -147,10 +162,15 @@ const [Grid, grid] = useVbenVxeGrid<Template>({
   gridOptions: {
     columns: [
       { width: 48, slots: { header: 'select-all', default: 'select-row' } },
-      { field: 'name', title: '名称', minWidth: 200 },
+      { field: 'name', title: '模板名称', minWidth: 220 },
       { field: 'version', title: '版本', width: 80 },
-      { field: 'family', title: '族', width: 110 },
-      { field: 'state', title: '状态', width: 110 },
+      { field: 'family', title: '系统类型', width: 110 },
+      {
+        field: 'state',
+        title: '审批状态',
+        width: 120,
+        slots: { default: 'state' },
+      },
       {
         field: 'builtin',
         title: '来源',
@@ -242,6 +262,7 @@ function normalize(row: Template): TemplateForm {
   };
 }
 function assign(row: Template) {
+  slotsLoaded.value = false;
   selected.value = normalize(row);
   savedBody.value = row.body;
   errors.value = row.problems ?? [];
@@ -264,6 +285,7 @@ async function refreshDetails(token = editor.token) {
   if (!currentEditor(token, row)) return;
   versions.value = v.items ?? [];
   slots.value = s.slots ?? [];
+  slotsLoaded.value = true;
   sourceDiff.value = d;
   errors.value = [...(row.problems ?? []), ...(s.problems ?? [])];
   for (const slot of slots.value) selected.value!.assembly[slot.name] ??= [];
@@ -273,7 +295,7 @@ async function refreshDetails(token = editor.token) {
       try {
         return await getHookApi(instance.hookID, instance.hookVersion);
       } catch {
-        return undefined;
+        return hookMap.value[hookKey(instance)];
       }
     }),
   );
@@ -282,7 +304,42 @@ async function refreshDetails(token = editor.token) {
     hooks.filter((h): h is Hook => !!h).map((h) => [`${h.id}@${h.version}`, h]),
   );
 }
+const templateSteps = computed(() => newWizard.value
+  ? ['basic', 'assembly', 'params', 'preview']
+  : ['basic', 'content', 'params', 'assembly']);
+const templateStepIndex = computed(() =>
+  previewDialog.value && newWizard.value ? 3 : Math.max(0, templateSteps.value.indexOf(editorSection.value)),
+);
+function setTemplateStep(idx: number) {
+  const next = templateSteps.value[idx];
+  if (!next || busy.value) return;
+  if (!newWizard.value || next === 'basic') {
+    editorSection.value = next;
+    return;
+  }
+  void run(async () => {
+    const token = editor.token;
+    if (next === 'preview') {
+      await preview();
+      return;
+    }
+    if ((!selected.value?.id || staleSlots.value) && !(await save())) return;
+    if (!slotsLoaded.value) await refreshDetails(token);
+    if (token === editor.token) editorSection.value = next;
+  });
+}
+function chooseSystem(series: string) {
+  system.value = series;
+  skeletonID.value = matchingSkeletons.value.length === 1 ? matchingSkeletons.value[0]!.id : '';
+}
+async function fetchSkeletons() {
+  const token = editor.token;
+  const sources = await loadSkeletons(api.getTemplateListApi);
+  if (token === editor.token) skeletons.value = sources;
+}
 async function open(row: Template) {
+  newWizard.value = false;
+  hookMap.value = {};
   editorSection.value = 'content';
   const token = editor.invalidate();
   candidateDialog.value = false;
@@ -299,7 +356,12 @@ async function open(row: Template) {
   });
 }
 function create() {
-  editorSection.value = 'content';
+  newWizard.value = true;
+  hookMap.value = {};
+  skeletons.value = [];
+  system.value = '';
+  skeletonID.value = '';
+  editorSection.value = 'basic';
   editor.invalidate();
   candidateDialog.value = false;
   previewDialog.value = false;
@@ -325,11 +387,19 @@ function create() {
   versions.value = [];
   sourceDiff.value = undefined;
   visible.value = true;
+  void run(fetchSkeletons);
 }
 async function save() {
   const token = editor.token;
   const row = selected.value;
   if (!row || !editable.value) return false;
+  if (newWizard.value && !row.id) {
+    if (!row.name.trim() || !skeleton.value) {
+      ElMessage.warning('请填写模板名称并选择系统和骨架');
+      return false;
+    }
+    Object.assign(row, skeletonContent(skeleton.value, system.value));
+  }
   const data = templatePayload(row);
   const { rev: _rev, ...content } = data;
   const saved = row.id
@@ -466,8 +536,12 @@ function choose(candidate: Schemas['HookCandidateResponse']) {
     return;
   const items = (row.assembly[candidateSlot.value] ??= []);
   const hook = candidate.hook;
+  const initial = newWizard.value && candidateIndex.value === items.length
+    ? skeleton.value?.assembly?.[candidateSlot.value]?.find((item) =>
+        item.hookID === hook.id && item.hookVersion === hook.version)
+    : undefined;
   row.assembly[candidateSlot.value] = replaceInSlot(
-    items,
+    initial ? [...items, initial] : items,
     candidateIndex.value,
     {
       ...hook,
@@ -486,6 +560,9 @@ async function preview() {
   previewForm.value = { hostSN: '', isoID: '', entered: {} };
   previewDialog.value = true;
 }
+watch(() => previewForm.value.entered, () => {
+  previewResult.value = undefined;
+}, { deep: true, flush: 'sync' });
 async function renderPreview() {
   const token = editor.token;
   const context = previewToken;
@@ -568,6 +645,48 @@ function comparison(row: null | Template) {
     : '';
 }
 const families: Schemas['CatalogFamily'][] = ['linux', 'windows', 'esxi'];
+async function applyTemplateSkeleton(kind: 'autoinstall' | 'esxi' | 'kickstart') {
+  const row = selected.value;
+  const token = editor.token;
+  if (!row || !editable.value) return;
+  await run(async () => {
+    const id = 'builtin-' + kind;
+    const page = await api.getTemplateVersionsApi(id);
+    const latest = (page.items ?? [])
+      .filter((t) => t.id === id && t.builtin && t.state === 'approved')
+      .sort((a, b) => b.version - a.version)[0];
+    if (!currentEditor(token, row) || !editable.value) return;
+    if (!latest) throw new Error('找不到已批准的内置模板');
+    const { body, family, series, assembly, params, bindings } = normalize(latest);
+    Object.assign(row, { body, family, series, assembly, params, bindings });
+    editorSection.value = 'content';
+  });
+}
+function insertTemplateSnippet(snippet: string) {
+  if (!selected.value || !editable.value || busy.value) return;
+  if (snippet === '{{param:disk}}' && !selected.value.params.some((p) => p.name === 'disk')) {
+    selected.value.params.push({ ...newParam(), name: 'disk', label: '目标磁盘', type: 'diskpath', required: true });
+  }
+  const current = selected.value.body;
+  selected.value.body = current
+    ? `${current.replace(/\s*$/, '')}\n${snippet}\n`
+    : `${snippet}\n`;
+}
+const authoringStateLabels: Record<string, string> = {
+  draft: '草稿',
+  review: '待审批',
+  approved: '已批准',
+  deprecated: '已废弃',
+};
+const authoringStateTagType: Record<
+  string,
+  'danger' | 'info' | 'primary' | 'success' | 'warning'
+> = {
+  draft: 'info',
+  review: 'warning',
+  approved: 'success',
+  deprecated: 'danger',
+};
 onMounted(() => load());
 watch(
   visible,
@@ -639,7 +758,7 @@ onBeforeUnmount(() => {
 <template>
   <Page
     title="模板管理与审批"
-    description="编辑正文，使用服务端插槽装配 hook，预览完整文件后提交审批。内置模板可派生。"
+    description="选择系统骨架，添加 Hook 并填写参数，即可预览装机文件。"
   >
     <template #extra>
       <ElButton v-if="canWrite" type="primary" @click="create">
@@ -663,7 +782,7 @@ onBeforeUnmount(() => {
           <ElOption
             v-for="s in ['draft', 'review', 'approved', 'deprecated']"
             :key="s"
-            :label="s"
+            :label="`${authoringStateLabels[s]} (${s})`"
             :value="s"
           />
         </ElSelect>
@@ -699,9 +818,16 @@ onBeforeUnmount(() => {
             @change="selection.toggle(row, $event)"
           />
         </template>
+        <template #state="{ row }">
+          <ElTag :type="authoringStateTagType[row.state] || 'info'">
+            {{ authoringStateLabels[row.state] || row.state }}
+          </ElTag>
+        </template>
         <template #builtin="{ row }">
-          <ElTag>{{ row.builtin ? '内置' : '自定义' }}</ElTag>
-</template><template #action="{ row }">
+          <ElTag :type="row.builtin ? 'info' : 'primary'" effect="plain">
+            {{ row.builtin ? '系统内置' : '自定义' }}
+          </ElTag>
+        </template><template #action="{ row }">
           <ElButton type="primary" link @click="open(row)">
             查看 / 编辑
           </ElButton>
@@ -758,7 +884,7 @@ onBeforeUnmount(() => {
           </ElButton>
         </div>
         <div
-          v-if="rights?.derive && selected.id"
+          v-if="rights?.derive && selected.id && !newWizard"
           class="mb-4 flex gap-3 rounded border p-3"
         >
           <ElInput
@@ -782,20 +908,98 @@ onBeforeUnmount(() => {
           :closable="false"
         />
         <ProblemList :problems="errors" />
-        <ElTabs v-model="editorSection">
-          <ElTabPane label="模板正文" name="content" />
-          <ElTabPane label="基本信息" name="basic" />
-          <ElTabPane label="参数配置" name="params" />
-          <ElTabPane label="脚本装配" name="assembly" />
-        </ElTabs>
-        <div class="max-h-[55dvh] overflow-auto px-1">
-          <section v-show="editorSection === 'basic'">
-            <ElForm :disabled="!editable || busy" label-width="100px">
-              <ElFormItem label="名称">
-                <ElInput v-model="selected.name" :disabled="!!selected.id" />
-              </ElFormItem>
-              <ElFormItem label="族">
-                <ElSelect v-model="selected.family">
+        <ElSteps
+          :active="templateStepIndex"
+          finish-status="success"
+          class="mb-4 rounded-xl border border-border bg-muted/20 p-4"
+        >
+          <ElStep
+            :title="newWizard ? '选择系统' : '基本属性与骨架'"
+            class="cursor-pointer"
+            @click="setTemplateStep(0)"
+          />
+          <ElStep
+            :title="newWizard ? '添加 Hook' : '模板正文与插槽'"
+            class="cursor-pointer"
+            @click="setTemplateStep(1)"
+          />
+          <ElStep
+            title="填写参数"
+            class="cursor-pointer"
+            @click="setTemplateStep(2)"
+          />
+          <ElStep
+            :title="newWizard ? '预览装机文件' : '插槽脚本装配'"
+            class="cursor-pointer"
+            @click="setTemplateStep(3)"
+          />
+        </ElSteps>
+        <div class="max-h-[56dvh] overflow-auto px-1">
+          <!-- 第 1 步：基本属性与起步骨架 -->
+          <section
+            v-show="editorSection === 'basic'"
+            class="grid gap-4 rounded-xl border border-border bg-muted/20 p-5"
+          >
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <label class="text-xs sm:col-span-3">
+                <span class="mb-1.5 block font-medium text-foreground">
+                  模板名称 <span class="text-red-500">*</span>
+                </span>
+                <ElInput
+                  v-model="selected.name"
+                  placeholder="例如 Rocky-Base"
+                  :disabled="!editable || busy || !!selected.id"
+                />
+                <span v-if="newWizard && !selected.id" class="mt-1 block text-muted-foreground">
+                  使用 1–64 个英文字母、数字或半角可见符号。单词可用短横线连接，lober: 开头的名称留给内置模板。
+                </span>
+              </label>
+              <template v-if="newWizard">
+                <label class="text-xs">
+                  <span class="mb-1.5 block font-medium">操作系统</span>
+                  <ElSelect
+                    :model-value="system"
+                    placeholder="选择系统"
+                    class="w-full"
+                    :disabled="busy || !editable || !!selected.id"
+                    @update:model-value="chooseSystem"
+                  >
+                    <ElOption v-for="series in systems" :key="series" :value="series" :label="series" />
+                  </ElSelect>
+                </label>
+                <label class="text-xs sm:col-span-2">
+                  <span class="mb-1.5 block font-medium">后端骨架</span>
+                  <ElSelect
+                    v-model="skeletonID"
+                    placeholder="选择该系统的骨架"
+                    class="w-full"
+                    :disabled="busy || !system || !editable || !!selected.id"
+                  >
+                    <ElOption
+                      v-for="item in matchingSkeletons"
+                      :key="item.id"
+                      :label="`${item.name} · v${item.version}`"
+                      :value="item.id"
+                    />
+                  </ElSelect>
+                </label>
+                <div v-if="!systems.length && !busy" class="sm:col-span-3">
+                  <ElAlert :title="demoMode ? '演示模式没有真实骨架。请连接 Lober 后端后新建模板。' : '没有可用的已批准内置骨架。'" type="info" :closable="false" />
+                  <ElButton link type="primary" @click="run(fetchSkeletons)">重新加载骨架</ElButton>
+                </div>
+                <p v-else-if="!selected.id" class="text-sm text-muted-foreground sm:col-span-3">
+                  下一步会保存草稿，并列出这个系统可以添加 Hook 的位置。
+                </p>
+              </template>
+              <label v-if="!newWizard" class="text-xs">
+                <span class="mb-1.5 block font-medium text-foreground">
+                  操作系统类型（族）
+                </span>
+                <ElSelect
+                  v-model="selected.family"
+                  class="w-full"
+                  :disabled="!editable || busy"
+                >
                   <ElOption
                     v-for="f in families"
                     :key="f"
@@ -803,9 +1007,18 @@ onBeforeUnmount(() => {
                     :label="f"
                   />
                 </ElSelect>
-              </ElFormItem>
-              <ElFormItem label="系">
-                <ElSelect v-model="selected.series" multiple>
+              </label>
+              <label v-if="!newWizard" class="text-xs sm:col-span-2">
+                <span class="mb-1.5 block font-medium text-foreground">
+                  适用发行系列（系，可多选）
+                </span>
+                <ElSelect
+                  v-model="selected.series"
+                  multiple
+                  placeholder="选择适用的发行版"
+                  class="w-full"
+                  :disabled="!editable || busy"
+                >
                   <ElOption
                     v-for="s in allSeries"
                     :key="s"
@@ -813,29 +1026,175 @@ onBeforeUnmount(() => {
                     :label="s"
                   />
                 </ElSelect>
-              </ElFormItem>
-            </ElForm>
+              </label>
+            </div>
+            <details v-if="newWizard && selected.id" class="rounded border p-3">
+              <summary class="cursor-pointer">高级设置 · 编辑骨架正文</summary>
+              <ElInput
+                v-model="selected.body"
+                type="textarea"
+                :rows="14"
+                class="mt-3 font-mono"
+                aria-label="编辑骨架正文"
+                :disabled="!editable || busy"
+              />
+            </details>
+            <div v-if="editable && !newWizard">
+              <span class="mb-2 block text-xs font-medium text-foreground">
+                选择起步模板骨架（点击后自动预填系统系列与应答正文，随后进入第 2 步微调）
+              </span>
+              <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <button
+                  v-for="preset in [
+                    {
+                      key: 'kickstart',
+                      title: 'Rocky / RHEL Kickstart 骨架',
+                      desc: '使用内置分区、网络、账户和软件包配置',
+                    },
+                    {
+                      key: 'autoinstall',
+                      title: 'Ubuntu Autoinstall 骨架',
+                      desc: '预置 Cloud-Init Autoinstall 存储布局、主机名变量与装后脚本插槽',
+                    },
+                    {
+                      key: 'esxi',
+                      title: 'VMware ESXi 应答骨架',
+                      desc: '使用所选目标盘、内置网络配置和首次启动脚本',
+                    },
+                  ]"
+                  :key="preset.key"
+                  type="button"
+                  :disabled="busy"
+                  class="rounded-xl border border-border bg-card p-4 text-left transition hover:border-primary/50 hover:bg-primary/5"
+                  @click="
+                    applyTemplateSkeleton(
+                      preset.key as 'autoinstall' | 'esxi' | 'kickstart',
+                    );
+                  "
+                >
+                  <div class="text-sm font-semibold text-foreground">
+                    {{ preset.title }}
+                  </div>
+                  <div class="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {{ preset.desc }}
+                  </div>
+                </button>
+              </div>
+            </div>
           </section>
+
+          <!-- 第 3 步：参数声明与取值 -->
           <section v-show="editorSection === 'params'">
-            <ParamEditor
-              v-model="selected.params"
-              :disabled="!editable || busy"
-            />
-            <h3 class="my-4 text-lg font-semibold">模板参数取值</h3>
+            <details v-if="newWizard" class="my-3 rounded border p-3">
+              <summary class="cursor-pointer">高级设置 · 定义模板参数</summary>
+              <ParamEditor v-model="selected.params" :disabled="!editable || busy" />
+            </details>
+            <ParamEditor v-else v-model="selected.params" :disabled="!editable || busy" />
+            <h3 v-if="!newWizard || selected.params.length" class="my-4 text-lg font-semibold">模板参数取值</h3>
             <BindingEditor
+              v-if="!newWizard || selected.params.length"
               v-model="selected.bindings"
               :params="selected.params"
+              :direct-input="newWizard"
               :disabled="!editable || busy"
             />
+            <template v-if="newWizard">
+              <template v-for="(items, slot) in selected.assembly" :key="slot">
+                <section v-for="(instance, i) in items" :key="`${i}-${hookKey(instance)}`" class="my-3 rounded border p-3">
+                  <h3 class="mb-2 font-semibold">{{ slot }} · {{ hookOf(instance)?.name || instance.hookID }} #{{ i + 1 }}</h3>
+                  <BindingEditor
+                    v-if="hookOf(instance)?.params?.length"
+                    v-model="instance.bindings"
+                    :params="hookOf(instance)?.params ?? []"
+                    direct-input
+                    :disabled="!editable || busy"
+                  />
+                  <p v-else>{{ hookOf(instance) ? '这个 Hook 没有参数。' : '未能读取这个 Hook 的参数定义。' }}</p>
+                </section>
+              </template>
+              <p v-if="!selected.params.length && !Object.values(selected.assembly).some(items => items.length)">
+                当前模板没有需要填写的参数，可以直接预览。
+              </p>
+            </template>
           </section>
+
+          <!-- 第 2 步：模板正文与插槽 -->
           <section v-show="editorSection === 'content'">
-            <h3 class="mb-2 font-semibold">模板正文</h3>
+            <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h3 class="font-semibold">模板正文</h3>
+              <div
+                v-if="editable"
+                class="flex flex-wrap items-center gap-1.5 text-xs"
+              >
+                <span class="text-muted-foreground">一键载入骨架：</span>
+                <ElButton
+                  size="small"
+                  :disabled="busy"
+                  @click="applyTemplateSkeleton('kickstart')"
+                >
+                  Rocky/RHEL Kickstart
+                </ElButton>
+                <ElButton
+                  size="small"
+                  :disabled="busy"
+                  @click="applyTemplateSkeleton('autoinstall')"
+                >
+                  Ubuntu Autoinstall
+                </ElButton>
+                <ElButton
+                  size="small"
+                  :disabled="busy"
+                  @click="applyTemplateSkeleton('esxi')"
+                >
+                  ESXi 应答骨架
+                </ElButton>
+              </div>
+            </div>
+            <div
+              v-if="editable"
+              class="mb-2 flex flex-wrap items-center gap-1.5 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs"
+            >
+              <span class="text-muted-foreground">快捷插入插槽与变量：</span>
+              <ElButton
+                size="small"
+                plain
+                :disabled="busy"
+                @click="insertTemplateSnippet('{{slot:packages}}')"
+              >
+                ＋ 软件包片段插槽
+              </ElButton>
+              <ElButton
+                size="small"
+                plain
+                :disabled="busy"
+                @click="insertTemplateSnippet('{{slot:post_target@post-target}}')"
+              >
+                ＋ 装后脚本插槽 (post-target)
+              </ElButton>
+              <ElButton
+                size="small"
+                plain
+                :disabled="busy"
+                @click="insertTemplateSnippet('{{slot:firstboot@firstboot}}')"
+              >
+                ＋ 首次启动插槽 (firstboot)
+              </ElButton>
+              <ElButton
+                size="small"
+                plain
+                :disabled="busy"
+                @click="insertTemplateSnippet('{{param:disk}}')"
+              >
+                ＋ 目标盘变量
+              </ElButton>
+            </div>
             <ElInput
               v-if="editable"
               v-model="selected.body"
               type="textarea"
               :rows="14"
               :disabled="busy"
+              placeholder="在此编写 Kickstart / Autoinstall / Unattend 应答模板正文，或点击上方按钮一键载入标准骨架…"
               aria-label="模板正文"
               class="font-mono"
             />
@@ -943,6 +1302,7 @@ onBeforeUnmount(() => {
                   </ElSelect>
                 </div>
                 <BindingEditor
+                  v-if="!newWizard"
                   v-model="instance.bindings"
                   :params="hookOf(instance)?.params ?? []"
                   :disabled="!editable || busy"
@@ -1018,24 +1378,44 @@ onBeforeUnmount(() => {
         />
       </template>
       <template #footer>
-        <div class="flex flex-wrap justify-end gap-2">
-          <ElButton @click="visible = false">关闭</ElButton><ElButton
-            v-if="editable"
-            :loading="busy"
-            type="primary"
-            @click="run(save)"
-          >
-            保存草稿
-</ElButton><ElButton
+        <div class="flex w-full flex-wrap items-center justify-between gap-2">
+          <div class="flex gap-2">
+            <ElButton @click="visible = false">关闭</ElButton>
+            <ElButton
+              v-if="templateStepIndex > 0"
+              :disabled="busy"
+              @click="setTemplateStep(templateStepIndex - 1)"
+            >
+              上一步
+            </ElButton>
+            <ElButton
+              v-if="templateStepIndex < templateSteps.length - 1"
+              type="primary"
+              plain
+              :disabled="busy"
+              @click="setTemplateStep(templateStepIndex + 1)"
+            >
+              {{ newWizard && templateStepIndex === 2 ? '预览装机文件' : '下一步' }}
+            </ElButton>
+          </div>
+          <div class="flex flex-wrap justify-end gap-2">
+            <ElButton
+              v-if="editable"
+              :loading="busy"
+              type="primary"
+              @click="run(save)"
+            >
+              保存草稿
+            </ElButton><ElButton
             v-if="selected?.id && canWrite"
             :disabled="busy"
             @click="run(validate)"
           >
             校验
-</ElButton><ElButton v-if="selected?.id" :disabled="busy" @click="run(preview)">
+</ElButton><ElButton v-if="selected?.id && !newWizard" :disabled="busy" @click="run(preview)">
             预览全部文件
 </ElButton><ElButton
-            v-if="rights?.submit"
+            v-if="rights?.submit && selected?.id"
             :disabled="busy"
             @click="run(() => lifecycle('submit'))"
           >
@@ -1070,6 +1450,7 @@ onBeforeUnmount(() => {
           >
             删除草稿
           </ElButton>
+          </div>
         </div>
       </template>
     </ElDialog>
@@ -1123,11 +1504,12 @@ onBeforeUnmount(() => {
     </ElDialog>
     <ElDialog
       v-model="previewDialog"
-      title="预览全部文件"
+      title="预览装机文件"
       width="90%"
       top="4vh"
       append-to-body
     >
+      <ElAlert v-if="demoMode" title="演示模式显示模拟文件。连接 Lober 后端后可查看实际生成的装机文件。" type="info" :closable="false" class="mb-3" />
       <ElForm label-width="150px">
         <ElFormItem label="主机 SN（可选）">
           <ElInput

@@ -6,9 +6,10 @@ import { InspectionPanel } from '@vben/icons';
 const routes: RouteRecordRaw[] = [
   {
     meta: {
+      hideChildrenInMenu: true,
       icon: InspectionPanel,
-      order: 40,
-      title: 'hook',
+      order: 50,
+      title: '脚本组件',
     },
     name: 'Hooks',
     path: '/hooks',

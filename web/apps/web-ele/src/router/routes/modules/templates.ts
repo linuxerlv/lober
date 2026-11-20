@@ -6,9 +6,10 @@ import { SquareCode } from '@vben/icons';
 const routes: RouteRecordRaw[] = [
   {
     meta: {
+      hideChildrenInMenu: true,
       icon: SquareCode,
-      order: 30,
-      title: '模板',
+      order: 40,
+      title: '装机模板',
     },
     name: 'Templates',
     path: '/templates',

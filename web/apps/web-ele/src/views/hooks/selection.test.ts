@@ -31,6 +31,7 @@ vi.mock('vue-router', () => ({
 }));
 vi.mock('#/api/console/task', () => ({
   taskAPI: {
+    statistics: async () => ({ states: { done: 42 } }),
     list: async (query: Record<string, unknown>) => {
       fixtures.otherQueries.push(query);
       return { items: [{ id: `task-${query.page}`, state: 'done' }], total: 42 };
@@ -214,6 +215,8 @@ vi.mock('element-plus', async () => {
     ElTag: Container,
     ElTabs: Container,
     ElTabPane: Container,
+    ElStep: Container,
+    ElSteps: Container,
     ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
     ElMessageBox: { confirm: vi.fn() },
   };

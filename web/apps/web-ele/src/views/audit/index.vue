@@ -5,7 +5,7 @@ import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 
 import { Page } from '@vben/common-ui';
 
-import { ElAlert, ElButton, ElInput, ElInputNumber } from 'element-plus';
+import { ElAlert, ElButton, ElInput, ElInputNumber, ElTag } from 'element-plus';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { exportAudit, listAudit } from '#/api/console/audit';
@@ -27,24 +27,53 @@ const failure = ref<unknown>();
 const downloading = ref(false);
 const pagination = reactive(new NumberedPage<AuditRecordItem>());
 let generation = 0;
+const targetKindLabels: Record<string, string> = {
+  task: '装机任务',
+  host: '主机资产',
+  iso: '系统镜像',
+  template: '装机模板',
+  hook: '脚本组件',
+  user: '账号与权限',
+};
+function selectQuickKind(kind: string) {
+  filters.target_kind = filters.target_kind === kind ? '' : kind;
+  search();
+}
+function selectQuickTime(hours: number) {
+  if (hours <= 0) {
+    filters.from = 0;
+    filters.to = 0;
+  } else {
+    const now = Math.floor(Date.now() / 1000);
+    filters.from = now - hours * 3600;
+    filters.to = 0;
+  }
+  search();
+}
 const [Grid, grid] = useVbenVxeGrid<AuditRecordItem>({
   class: 'h-auto',
   gridOptions: {
     maxHeight: 520,
     columns: [
-      { field: 'id', title: 'ID', width: 80 },
+      { field: 'id', title: '编号', width: 80 },
       {
         field: 'at',
-        title: '时间',
-        minWidth: 170,
+        title: '操作时间',
+        minWidth: 175,
         formatter: ({ cellValue }: { cellValue: number }) =>
           new Date(cellValue * 1000).toLocaleString(),
       },
       { field: 'actor', title: '操作人', width: 130 },
-      { field: 'action', title: '动作', width: 150 },
-      { field: 'targetKind', title: '对象类型', width: 100 },
-      { field: 'targetID', title: '对象', minWidth: 180 },
-      { field: 'detail', title: '详情', minWidth: 260 },
+      { field: 'action', title: '动作标识', width: 165 },
+      {
+        field: 'targetKind',
+        title: '对象分类',
+        width: 115,
+        formatter: ({ cellValue }: { cellValue: string }) =>
+          targetKindLabels[cellValue] || cellValue,
+      },
+      { field: 'targetID', title: '对象标识', minWidth: 180 },
+      { field: 'detail', title: '操作详情', minWidth: 280 },
     ],
     pagerConfig: { enabled: false },
     rowConfig: { keyField: 'id' },
@@ -96,52 +125,96 @@ onBeforeUnmount(() => { ++generation; pagination.reset(); });
 </script>
 <template>
   <Page
-    title="审计"
-    description="按对象、操作人与时间筛选，导出全部匹配记录。时间范围使用 Unix 秒，0 表示不限制。"
+    title="审计与操作台账"
+    description="追踪控制台所有关键变更（建任务、审批模板、主机采集、权限调整），支持一键筛选与导出 CSV。"
   >
     <ElAlert
       v-if="failure"
       :title="errorMessage(failure)"
       type="error"
       :closable="false"
+      class="mb-3"
     /><ProblemList :problems="problemsOf(failure)" />
-    <div class="mb-3 flex flex-wrap gap-2">
-      <ElInput
-        v-model="filters.target_kind"
-        placeholder="对象类型"
-        class="!w-32"
-      /><ElInput
-        v-model="filters.target_id"
-        placeholder="对象 ID"
-        class="!w-48"
-      /><ElInput
-        v-model="filters.actor"
-        placeholder="操作人"
-        class="!w-32"
-      /><ElInput
-        v-model="filters.action"
-        placeholder="动作"
-        class="!w-40"
-      /><ElInputNumber
-        v-model="filters.from"
-        :min="0"
-        aria-label="起始时间（Unix 秒）"
-      /><ElInputNumber
-        v-model="filters.to"
-        :min="0"
-        aria-label="结束时间（Unix 秒）"
-      /><ElButton type="primary" :loading="pagination.loading" @click="search">查询</ElButton><ElButton :loading="downloading" @click="download">
-导出全部 CSV
-</ElButton>
-    </div>
-    <Grid />
-    <ListPagination
-      :current-page="pagination.page"
-      :page-size="pagination.pageSize"
-      :total="pagination.total"
-      :disabled="pagination.loading"
-      @page-change="changePage"
-      @size-change="changePageSize"
-    />
+    <section class="overflow-hidden rounded-lg border border-border bg-card">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-3 text-xs">
+        <div class="flex flex-wrap items-center gap-1.5">
+          <span class="mr-1 text-muted-foreground">按对象分类：</span>
+          <ElTag
+            v-for="(label, kindKey) in { '': '全部', ...targetKindLabels }"
+            :key="kindKey"
+            :type="filters.target_kind === kindKey ? 'primary' : 'info'"
+            :effect="filters.target_kind === kindKey ? 'dark' : 'plain'"
+            class="cursor-pointer"
+            @click="selectQuickKind(String(kindKey))"
+          >
+            {{ label }}
+          </ElTag>
+        </div>
+        <div class="flex flex-wrap items-center gap-1.5">
+          <span class="mr-1 text-muted-foreground">快捷时间：</span>
+          <ElTag
+            v-for="item in [
+              { label: '全部时间', hours: 0 },
+              { label: '近 1 小时', hours: 1 },
+              { label: '近 24 小时', hours: 24 },
+              { label: '近 7 天', hours: 168 },
+            ]"
+            :key="item.label"
+            type="info"
+            effect="plain"
+            class="cursor-pointer"
+            @click="selectQuickTime(item.hours)"
+          >
+            {{ item.label }}
+          </ElTag>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2 px-5 py-4">
+        <ElInput
+          v-model="filters.target_kind"
+          placeholder="对象类型"
+          class="!w-32"
+        /><ElInput
+          v-model="filters.target_id"
+          placeholder="对象 ID"
+          class="!w-48"
+        /><ElInput
+          v-model="filters.actor"
+          placeholder="操作人"
+          class="!w-32"
+        /><ElInput
+          v-model="filters.action"
+          placeholder="动作"
+          class="!w-40"
+        /><ElInputNumber
+          v-model="filters.from"
+          :min="0"
+          aria-label="起始时间（Unix 秒）"
+        /><ElInputNumber
+          v-model="filters.to"
+          :min="0"
+          aria-label="结束时间（Unix 秒）"
+        />
+        <div class="ml-auto flex flex-wrap gap-2">
+          <ElButton type="primary" :loading="pagination.loading" @click="search">
+            查询
+          </ElButton>
+          <ElButton :loading="downloading" @click="download">
+            导出全部 CSV
+          </ElButton>
+        </div>
+      </div>
+      <Grid />
+      <div class="px-4 pb-3">
+        <ListPagination
+          :current-page="pagination.page"
+          :page-size="pagination.pageSize"
+          :total="pagination.total"
+          :disabled="pagination.loading"
+          @page-change="changePage"
+          @size-change="changePageSize"
+        />
+      </div>
+    </section>
   </Page>
 </template>

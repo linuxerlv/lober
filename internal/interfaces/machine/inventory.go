@@ -3,8 +3,10 @@ package machine
 import (
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/lober/lober/internal/application/execution"
+	"github.com/lober/lober/internal/domain/discovery"
 	"github.com/lober/lober/internal/domain/model"
 )
 
@@ -13,6 +15,17 @@ const maxInventoryBytes = 64 << 10
 
 func (h *handler) inventory(w http.ResponseWriter, r *http.Request) {
 	sn, token := r.PathValue("sn"), r.PathValue("token")
+	detailed := r.Pattern == "/v1/hardware/{sn}"
+	limit := int64(maxInventoryBytes)
+	if detailed {
+		var ok bool
+		token, ok = strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || token == "" {
+			fail(w, http.StatusUnauthorized)
+			return
+		}
+		limit = discovery.MaxReportBytes
+	}
 	// 采集入口原来就对错方法回 404，不是 405；这里保持原样。
 	if r.Method != http.MethodPost || !model.IsSafeWord(token) {
 		fail(w, http.StatusNotFound)
@@ -22,14 +35,14 @@ func (h *handler) inventory(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxInventoryBytes+1))
-	if err != nil || len(body) > maxInventoryBytes {
+	body, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	if err != nil || int64(len(body)) > limit {
 		fail(w, http.StatusBadRequest)
 		return
 	}
 	// 交给网关：分类、错误映射都在执行模块里做，接口层不知道采集模块存在。
 	if err := h.gateway.InventoryReport(r.Context(), execution.InventoryInput{
-		SN: sn, Token: token, Body: body, RemoteAddr: r.RemoteAddr,
+		SN: sn, Token: token, Body: body, RemoteAddr: r.RemoteAddr, Detailed: detailed,
 	}); err != nil {
 		code := gatewayStatus(err, 503)
 		if code == http.StatusUnprocessableEntity {

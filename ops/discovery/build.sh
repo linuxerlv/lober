@@ -38,9 +38,14 @@ firmware=(linux-firmware-bnx2 linux-firmware-bnx2x linux-firmware-brcm linux-fir
           linux-firmware-isci linux-firmware-mellanox linux-firmware-rtl_nic linux-firmware-tigon)
 read -r -a extra_nic <<< "${EXTRA_NIC_MODULES:-}"
 read -r -a extra_firmware <<< "${EXTRA_FIRMWARE_PACKAGES:-}"
+read -r -a extra_edac <<< "${EXTRA_EDAC_MODULES:-}"
+edac=(ghes_edac)
+if [[ $arch == x86_64 ]]; then
+    edac+=(amd64_edac skx_edac i10nm_edac igen6_edac)
+fi
 nic+=("${extra_nic[@]}")
 firmware+=("${extra_firmware[@]}")
-for name in "${nic[@]}" "${firmware[@]}"; do
+for name in "${nic[@]}" "${firmware[@]}" "${extra_edac[@]}"; do
     [[ $name =~ ^[a-zA-Z0-9_.][a-zA-Z0-9_.-]*$ ]] || { echo "无效的驱动或固件包名：$name" >&2; exit 2; }
 done
 chroot "$root" apk add --no-cache --no-scripts \
@@ -73,9 +78,23 @@ select_module af_packet
 optional=(sd_mod sr_mod nvme nvme_core ahci ata_piix virtio_pci virtio_blk virtio_scsi
           megaraid_sas mpt3sas mpi3mr smartpqi hpsa arcmsr aacraid isci
           ses enclosure ipmi_si ipmi_ssif ipmi_devintf ipmi_msghandler acpi_ipmi
-          coretemp k10temp i2c_i801 jc42 drivetemp xhci_pci)
+          coretemp k10temp i2c_i801 jc42 drivetemp xhci_pci efivarfs
+          scsi_transport_fc qla2xxx lpfc tpm_tis tpm_crb tpm_tis_spi amdgpu nouveau)
 for name in "${optional[@]}"; do
     select_module "$name" 2>/dev/null || continue
+done
+: > "$work/edac-drivers.txt"
+for name in "${edac[@]}"; do
+    if select_module "$name" 2>/dev/null; then
+        printf '%s\n' "$name" >> "$work/edac-drivers.txt"
+    fi
+done
+# 选配的驱动必须存在于目标内核，避免输错后静默漏采。
+for name in "${extra_edac[@]}"; do
+    select_module "$name"
+    if ! grep -Fxq -- "$name" "$work/edac-drivers.txt"; then
+        printf '%s\n' "$name" >> "$work/edac-drivers.txt"
+    fi
 done
 while IFS= read -r -d '' path; do
     if [[ ! -v keep["$path"] ]]; then
@@ -98,6 +117,8 @@ rm -- "$root/firmware.py"
 install -m 0755 "$here/init.sh" "$root/init"
 mkdir -p "$root/opt/lober" "$root/run" "$root/proc" "$root/sys" "$root/dev"
 install -m 0644 "$here/collect.py" "$root/opt/lober/collect.py"
+install -m 0644 "$here/hardware.py" "$root/opt/lober/hardware.py"
+install -m 0644 "$work/edac-drivers.txt" "$root/opt/lober/edac-drivers"
 install -m 0755 "$here/dhcp.sh" "$root/opt/lober/dhcp"
 if [[ -n ${STORCLI_BINARY:-} ]]; then
     # 可选的厂商本机工具需事先校验并确认允许在本单位镜像中使用。
@@ -119,8 +140,8 @@ find "$root/boot" -mindepth 1 -delete
 )
 (
     cd "$work"
-    sha256sum vmlinuz initramfs.gz packages.txt nic-drivers.txt firmware-files.txt > SHA256SUMS
+    sha256sum vmlinuz initramfs.gz packages.txt nic-drivers.txt firmware-files.txt edac-drivers.txt > SHA256SUMS
 )
-for file in vmlinuz initramfs.gz packages.txt nic-drivers.txt firmware-files.txt SHA256SUMS; do
+for file in vmlinuz initramfs.gz packages.txt nic-drivers.txt firmware-files.txt edac-drivers.txt SHA256SUMS; do
     install -m 0644 "$work/$file" "$out/$file"
 done

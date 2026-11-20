@@ -191,3 +191,9 @@ func (v SnapshotValue) Join() string {
 func (v SnapshotValue) EnvValue() string {
 	return strings.Join(v.Items, "\n")
 }
+
+// TaskMetric 是同一组任务的数量。日期按世界标准时间统计。
+type TaskMetric struct {
+	Kind, Key string
+	Count     int64
+}

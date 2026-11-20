@@ -14,6 +14,7 @@ import (
 
 	"github.com/lober/lober/internal/application/inventory/port"
 	"github.com/lober/lober/internal/application/ports"
+	"github.com/lober/lober/internal/domain/discovery"
 	domaininv "github.com/lober/lober/internal/domain/inventory"
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/render"
@@ -102,6 +103,14 @@ func New(d Deps) *Service {
 //
 // 先查令牌，再解析正文。锁内复查批次与忙闲，并合并最新的主机属性。
 func (s *Service) Submit(ctx context.Context, rawSN, token string, body []byte) (model.Host, error) {
+	return s.submit(ctx, rawSN, token, body, false)
+}
+
+func (s *Service) SubmitHardware(ctx context.Context, rawSN, token string, body []byte) (model.Host, error) {
+	return s.submit(ctx, rawSN, token, body, true)
+}
+
+func (s *Service) submit(ctx context.Context, rawSN, token string, body []byte, detailed bool) (model.Host, error) {
 	sn, err := model.InventoryReportSN(rawSN)
 	if err != nil {
 		return model.Host{}, kinded(domaininv.KindUnauthorized, ErrNoToken)
@@ -119,12 +128,24 @@ func (s *Service) Submit(ctx context.Context, rawSN, token string, body []byte) 
 		return model.Host{}, kinded(domaininv.KindUnauthorized, ErrNoToken)
 	}
 
-	result, problems, err := domaininv.Parse(body)
-	if err != nil {
-		return model.Host{}, err
-	}
-	if len(problems) != 0 {
-		return model.Host{}, kinded(domaininv.KindRejected, &RejectedError{Problems: problems})
+	var result domaininv.Result
+	var hardware *discovery.Report
+	if detailed {
+		report, err := discovery.ParseReport(body)
+		if err != nil {
+			return model.Host{}, kinded(domaininv.KindRejected, err)
+		}
+		hardware = &report
+		result = report.InventorySummary()
+	} else {
+		var problems []model.Problem
+		result, problems, err = domaininv.Parse(body)
+		if err != nil {
+			return model.Host{}, err
+		}
+		if len(problems) != 0 {
+			return model.Host{}, kinded(domaininv.KindRejected, &RejectedError{Problems: problems})
+		}
 	}
 
 	updated, err := s.hosts.UpdateInventory(ctx, sn, func(current model.Host, busy bool) (repository.InventoryChange, error) {
@@ -139,12 +160,19 @@ func (s *Service) Submit(ctx context.Context, rawSN, token string, body []byte) 
 			return repository.InventoryChange{}, kinded(domaininv.KindBusy, ErrHostBusy)
 		}
 		attrs := cloneAttrs(current.Attrs)
+		if detailed {
+			for _, k := range domaininv.InvKeys() {
+				delete(attrs, k)
+			}
+		}
 		for k, v := range result.Attrs {
 			attrs[k] = v
 		}
 		attrs[AttrCollectedAt] = strconv.FormatInt(at, 10)
 		clearRequest(attrs)
-		return inventoryChange(attrs, "inventory", "host.inventory", "system_disk="+result.SystemDisk, at), nil
+		change := inventoryChange(attrs, "inventory", "host.inventory", "system_disk="+result.SystemDisk, at)
+		change.Hardware = hardware
+		return change, nil
 	})
 	if errors.Is(err, repository.ErrNotFound) {
 		return model.Host{}, kinded(domaininv.KindUnknownHost, ErrUnknownHost)

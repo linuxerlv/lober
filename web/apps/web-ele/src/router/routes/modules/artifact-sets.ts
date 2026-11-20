@@ -6,9 +6,10 @@ import { Inbox } from '@vben/icons';
 const routes: RouteRecordRaw[] = [
   {
     meta: {
+      hideChildrenInMenu: true,
       icon: Inbox,
-      order: 50,
-      title: '制品管理',
+      order: 30,
+      title: '系统镜像',
     },
     name: 'ArtifactSets',
     path: '/artifact-sets',

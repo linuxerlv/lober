@@ -6,7 +6,17 @@ import (
 	"github.com/lober/lober/internal/domain/model"
 	"github.com/lober/lober/internal/domain/repository"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+type hostHardwareRow struct {
+	HostSN   string   `gorm:"column:sn;primaryKey"`
+	Report   string   `gorm:"type:jsonb;not null"`
+	ReportAt int64    `gorm:"not null"`
+	Host     *hostRow `gorm:"foreignKey:HostSN;references:SN;constraint:OnDelete:CASCADE"`
+}
+
+func (hostHardwareRow) TableName() string { return "host_hardware_reports" }
 
 func (s *Store) UpdateInventory(ctx context.Context, sn string, decide func(model.Host, bool) (repository.InventoryChange, error)) (model.Host, error) {
 	if err := repository.CheckSN(sn); err != nil {
@@ -52,6 +62,17 @@ func (s *Store) UpdateInventory(ctx context.Context, sn string, decide func(mode
 		}
 		if err := tx.Model(&hostRow{SN: sn}).Select("attrs", "rev").Updates(&row).Error; err != nil {
 			return err
+		}
+		if change.Hardware != nil {
+			body, err := encodeJSON(change.Hardware)
+			if err != nil {
+				return err
+			}
+			snapshot := hostHardwareRow{HostSN: sn, Report: body, ReportAt: change.Audit.At}
+			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "sn"}},
+				DoUpdates: clause.AssignmentColumns([]string{"report", "report_at"})}).Create(&snapshot).Error; err != nil {
+				return err
+			}
 		}
 		return addAudits(tx, change.Audit, "host", sn)
 	})
