@@ -43,15 +43,27 @@ type eventPage struct {
 	Items []eventItem `json:"items"`
 }
 type taskQuery struct {
-	Page        int             `form:"page"`
-	PageSize    int             `form:"page_size"`
-	HostSN      string          `form:"host_sn"`
-	BatchID     string          `form:"batch_id"`
-	State       model.TaskState `form:"state"`
-	CreatedFrom int64           `form:"created_from"`
-	CreatedTo   int64           `form:"created_to"`
-	Cursor      string          `form:"cursor"`
-	Limit       int             `form:"limit"`
+	Page        int    `form:"page"`
+	PageSize    int    `form:"page_size"`
+	HostSN      string `form:"host_sn"`
+	BatchID     string `form:"batch_id"`
+	State       string `form:"state"`
+	CreatedFrom int64  `form:"created_from"`
+	CreatedTo   int64  `form:"created_to"`
+	Cursor      string `form:"cursor"`
+	Limit       int    `form:"limit"`
+}
+type taskStatisticsQuery struct {
+	HostSN      string `form:"host_sn"`
+	CreatedFrom int64  `form:"created_from"`
+	CreatedTo   int64  `form:"created_to"`
+	Trends      bool   `form:"trends"`
+}
+type taskStatistics struct {
+	States map[string]int64 `json:"states"`
+	Images map[string]int64 `json:"images"`
+	Days   map[string]int64 `json:"days"`
+	Months map[string]int64 `json:"months"`
 }
 type eventQuery struct {
 	AfterSeq int64 `form:"after_seq"`
@@ -73,6 +85,7 @@ type taskControlRequest struct {
 func (s *server) taskRoutes() []route {
 	return []route{
 		{method: "GET", path: "/console/v1/tasks", perm: PermTaskRead, tag: "tasks", summary: "List tasks and frozen snapshots", query: taskQuery{}, resp: taskPage{}, handle: s.listTasks},
+		{method: "GET", path: "/console/v1/task-statistics", perm: PermTaskRead, tag: "tasks", summary: "Count tasks by state and optionally by frozen image and UTC creation date", query: taskStatisticsQuery{}, resp: taskStatistics{}, handle: s.taskStatistics},
 		{method: "GET", path: "/console/v1/task-batches/:id", perm: PermTaskRead, tag: "tasks", summary: "Read submission details and current counts for the entire batch", resp: taskBatchSummary{}, handle: s.getTaskBatch},
 		{method: "GET", path: "/console/v1/tasks/:id", perm: PermTaskRead, tag: "tasks", summary: "Read frozen task and control diagnostics", resp: taskItem{}, handle: s.getTask},
 		{method: "GET", path: "/console/v1/tasks/:id/events", perm: PermTaskRead, tag: "tasks", summary: "Read committed events after a sequence", query: eventQuery{}, resp: eventPage{}, handle: s.listEvents},
@@ -110,6 +123,33 @@ func (s *server) listTasks(c *gin.Context) {
 		items[i] = toTaskChoiceItem(t)
 	}
 	Ok(c, taskPage{items, page.Next, page.Total})
+}
+func (s *server) taskStatistics(c *gin.Context) {
+	var query taskStatisticsQuery
+	if err := c.ShouldBindQuery(&query); err != nil {
+		Fail(c, 400, nil, model.ConsoleBadRequest)
+		return
+	}
+	rows, ok := Get(c, func() ([]model.TaskMetric, error) {
+		return s.deps.TaskReader.Statistics(c.Request.Context(), actorOf(c), tasks.ListRequest{HostSN: query.HostSN, CreatedFrom: c.Query("created_from"), CreatedTo: c.Query("created_to")}, query.Trends)
+	})
+	if !ok {
+		return
+	}
+	result := taskStatistics{map[string]int64{}, map[string]int64{}, map[string]int64{}, map[string]int64{}}
+	for _, r := range rows {
+		switch r.Kind {
+		case "state":
+			result.States[r.Key] = r.Count
+		case "image":
+			result.Images[r.Key] = r.Count
+		case "day":
+			result.Days[r.Key] = r.Count
+		case "month":
+			result.Months[r.Key] = r.Count
+		}
+	}
+	Ok(c, result)
 }
 func (s *server) getTaskBatch(c *gin.Context) {
 	summary, ok := Get(c, func() (model.TaskBatchSummary, error) {

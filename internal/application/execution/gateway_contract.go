@@ -43,6 +43,7 @@ type InventoryInput struct {
 	SN, Token  string
 	Body       []byte
 	RemoteAddr string
+	Detailed   bool
 }
 type Endpoints struct{ Gateway, Artifacts, SMB, SyslogAddr string }
 
@@ -58,7 +59,7 @@ type InventoryBoot interface {
 	// Menu 产出采集菜单的 iPXE 文本。
 	Menu(sn, token string) ([]byte, error)
 	// Submit 接收一份上报的正文，成功时返回零值错误。错误分类由采集模块定义。
-	Submit(context.Context, string, string, []byte) error
+	Submit(context.Context, InventoryInput) error
 }
 
 // MachineService 是网关真正用到的机器协议能力。

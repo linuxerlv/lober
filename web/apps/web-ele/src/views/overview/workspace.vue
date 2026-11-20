@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { DiscoveredHost } from '#/api/console/discovery';
+
 import { computed } from 'vue';
 import { useRouter } from 'vue-router';
 
@@ -24,28 +26,34 @@ const router = useRouter();
 const userStore = useUserStore();
 const authStore = useAuthStore();
 const { can, hasMenu } = useConsoleAccess();
-const recentTasks = useOverviewData(() => can('task:read'), () => taskAPI.list({ page: 1, page_size: 20 }));
-const discoveries = useOverviewData(() => can('host:read'), () => getDiscoveryListApi());
+const activeTasks = useOverviewData(() => can('task:read'), () => taskAPI.list({ state: 'active', page: 1, page_size: 5 }));
+const failedTasks = useOverviewData(() => can('task:read'), () => taskAPI.list({ state: 'failed', page: 1, page_size: 5 }));
+const discoveries = useOverviewData(() => can('host:read'), async (current) => {
+  const seen = new Set<string>();
+  const items: DiscoveredHost[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await getDiscoveryListApi(cursor);
+    if (page.unavailable) return { items, total: undefined, unavailable: true };
+    for (const host of page.items ?? []) {
+      if (host.registered_sn || seen.has(host.mac)) continue;
+      seen.add(host.mac);
+      if (items.length < 5) items.push(host);
+    }
+    cursor = page.next_cursor;
+  } while (cursor && current());
+  return { items, total: seen.size, unavailable: false };
+});
 const audits = useOverviewData(() => hasMenu('reports'), () => listAudit({ page: 1, page_size: 6 }));
 const reviewQuery = { state: 'review', page: 1, page_size: 1 } as const;
 const templates = useOverviewData(() => can('template:read'), () => getTemplateListApi(reviewQuery));
 const hooks = useOverviewData(() => can('hook:read'), () => getHookListApi(reviewQuery));
-const pendingReviewCount = computed(() => (templates.value?.total ?? 0) + (hooks.value?.total ?? 0));
-const tasks = computed(() => recentTasks.value?.items ?? []);
-
-const failedTasks = computed(() =>
-  tasks.value.filter((t) => t.state === 'failed'),
-);
-const activeTasks = computed(() =>
-  tasks.value.filter((t) =>
-    ['booting', 'initializing', 'installing', 'pending', 'rebooting'].includes(
-      t.state,
-    ),
-  ),
-);
-const unregisteredDiscoveries = computed(() =>
-  discoveries.value?.items.filter((d) => !d.registered_sn) ?? [],
-);
+const pendingReviewCount = computed(() => {
+  const counts = [];
+  if (can('template:read')) counts.push(templates.value?.total);
+  if (can('hook:read')) counts.push(hooks.value?.total);
+  return counts.every((n): n is number => typeof n === 'number') ? counts.reduce((a, b) => a + b, 0) : undefined;
+});
 
 const shortcuts = computed(() => [
   {
@@ -119,30 +127,30 @@ const shortcuts = computed(() => [
             </ElTag>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
-            当前共有 {{ activeTasks.length }} 台机器正在执行装机流程，{{
-              failedTasks.length
+            <span v-if="can('task:read')">有 {{ activeTasks?.total ?? '—' }} 个任务正在装机，{{
+              failedTasks?.total ?? '—'
             }}
-            台异常待排障。<span v-if="can('host:read')">{{ unregisteredDiscoveries.length }} 台新上报物理机待登记。</span>
+            个任务失败。</span><span v-if="can('host:read') && discoveries?.unavailable">主机发现服务未启用。</span><span v-else-if="can('host:read')">{{ discoveries?.total ?? '—' }} 台新上报物理机待登记。</span>
           </p>
         </div>
       </div>
       <div class="flex items-center gap-6 text-right">
-        <div>
+        <div v-if="can('task:read')">
           <div class="text-xs text-muted-foreground">活跃任务</div>
           <div class="mt-1 text-xl font-bold tabular-nums">
-            {{ activeTasks.length }}
+            {{ activeTasks?.total ?? '—' }}
           </div>
         </div>
         <div v-if="can('host:read')">
           <div class="text-xs text-muted-foreground">待登记主机</div>
           <div class="mt-1 text-xl font-bold tabular-nums text-amber-500">
-            {{ unregisteredDiscoveries.length }}
+            {{ discoveries?.unavailable ? '未启用' : (discoveries?.total ?? '—') }}
           </div>
         </div>
         <div v-if="can('template:read') || can('hook:read')">
           <div class="text-xs text-muted-foreground">待审批组件</div>
           <div class="mt-1 text-xl font-bold tabular-nums text-blue-500">
-            {{ pendingReviewCount }}
+            {{ pendingReviewCount ?? '—' }}
           </div>
         </div>
       </div>
@@ -163,7 +171,7 @@ const shortcuts = computed(() => [
           </div>
           <div class="grid gap-3">
             <div
-              v-for="task in failedTasks"
+              v-for="task in failedTasks?.items"
               :key="task.id"
               class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3"
             >
@@ -192,7 +200,7 @@ const shortcuts = computed(() => [
             </div>
 
             <div
-              v-for="disc in unregisteredDiscoveries"
+              v-for="disc in discoveries?.items"
               :key="disc.mac"
               class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3"
             >
@@ -223,14 +231,14 @@ const shortcuts = computed(() => [
             </div>
 
             <div
-              v-if="pendingReviewCount > 0"
+              v-if="(pendingReviewCount ?? 0) > 0"
               class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-500/30 bg-blue-500/5 px-4 py-3"
             >
               <div>
                 <div class="flex items-center gap-2">
                   <ElTag size="small" type="primary">待审批</ElTag>
                   <strong class="text-sm">
-                    有 {{ pendingReviewCount }} 个装机模板或脚本组件等待审批
+                    有 {{ pendingReviewCount ?? '—' }} 个装机模板或脚本组件等待审批
                   </strong>
                 </div>
                 <p class="mt-1 text-xs text-muted-foreground">
@@ -261,18 +269,18 @@ const shortcuts = computed(() => [
         </div>
 
         <!-- 最新装机任务进度 -->
-        <div class="rounded-xl border border-border bg-card p-5">
+        <div v-if="can('task:read')" class="rounded-xl border border-border bg-card p-5">
           <div class="mb-4 flex items-center justify-between">
             <h3 class="text-base font-semibold text-foreground">
               活跃装机任务
             </h3>
-            <ElButton v-if="hasMenu('tasks')" link type="primary" @click="router.push('/tasks')">
-              查看全部任务 →
+            <ElButton v-if="hasMenu('tasks')" link type="primary" @click="router.push({ path: '/tasks', query: { state: 'active' } })">
+              查看活跃任务 →
             </ElButton>
           </div>
           <div class="divide-y divide-border">
             <div
-              v-for="task in tasks.slice(0, 5)"
+              v-for="task in activeTasks?.items"
               :key="task.id"
               class="flex flex-wrap items-center justify-between gap-3 py-3"
             >

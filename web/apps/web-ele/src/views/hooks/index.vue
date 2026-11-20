@@ -42,7 +42,7 @@ import { NumberedPage } from '#/composables/numbered-page';
 import { useAuthoringEditor } from '#/composables/use-authoring-editor';
 import { useRowSelection } from '#/composables/use-row-selection';
 
-import { authoringRights, hookPayload } from '../templates/authoring';
+import { authoringRights, hookPayload, newParam } from '../templates/authoring';
 import ParamEditor from '../templates/ParamEditor.vue';
 
 defineOptions({ name: 'HooksIndex' });
@@ -306,31 +306,47 @@ function addImpl() {
     timings: ['post-target'],
   });
 }
-const hookSamples: Record<string, string> = {
-  network: `#!/usr/bin/env bash
+const hookSamples = {
+  network: {
+    params: [['connection', '网络连接名', 'word'], ['mgmt_ip', '管理地址及前缀', 'cidr'], ['gateway', '网关', 'ip']],
+    body: `#!/usr/bin/env bash
 set -euo pipefail
-echo "[Lober] 配置静态管理网 IP..."
-nmcli con mod "System eno1" ipv4.addresses "{{ .mgmt_ip }}" ipv4.gateway "{{ .gateway }}" ipv4.method manual
-nmcli con up "System eno1" || true
+nmcli connection modify id "$LOBER_PARAM_CONNECTION" ipv4.addresses "$LOBER_PARAM_MGMT_IP" ipv4.gateway "$LOBER_PARAM_GATEWAY" ipv4.method manual
+nmcli connection up id "$LOBER_PARAM_CONNECTION"
 `,
-  repo: `#!/usr/bin/env bash
+  },
+  repo: {
+    params: [['repo_url', '软件源 HTTPS 地址', 'word']],
+    body: `#!/usr/bin/env bash
 set -euo pipefail
-echo "[Lober] 写入内网镜像源与企业根证书..."
-update-ca-trust extract
+case "$LOBER_PARAM_REPO_URL" in https://*) ;; *) echo '需要 HTTPS 软件源地址' >&2; exit 1 ;; esac
+printf '%s\\n' '[lober-internal]' 'name=Lober Internal' "baseurl=$LOBER_PARAM_REPO_URL" 'enabled=1' 'gpgcheck=1' > /etc/yum.repos.d/lober-internal.repo
 `,
-  security: `#!/usr/bin/env bash
+  },
+  security: {
+    params: [],
+    body: `#!/usr/bin/env bash
 set -euo pipefail
-sed -i 's/^#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
-systemctl restart sshd || true
+install -d -m 0755 /etc/ssh/sshd_config.d
+printf '%s\\n' 'PermitRootLogin prohibit-password' > /etc/ssh/sshd_config.d/00-lober-root-login.conf
+sshd -t
+systemctl reload sshd
 `,
-};
-function applyHookSample(index: number, kind: 'network' | 'repo' | 'security') {
-  const impl = selected.value?.impls[index];
-  if (!impl || !editable.value || busy.value) return;
-  impl.kind = 'script';
-  impl.interpreter = 'bash';
-  if (!impl.timings?.length) impl.timings = ['post-target'];
-  impl.body = hookSamples[kind] ?? '';
+  },
+} as const;
+function applyHookSample(index: number, kind: keyof typeof hookSamples) {
+  const row = selected.value;
+  const impl = row?.impls[index];
+  if (!row || !impl || !editable.value || busy.value) return;
+  const sample = hookSamples[kind];
+  for (const [name, label, type] of sample.params) {
+    if (!row.params.some((param) => param.name === name))
+      row.params.push({ ...newParam(), name, label, type, required: true });
+  }
+  Object.assign(impl, {
+    family: 'linux', series: ['rocky'], kind: 'script', interpreter: 'bash',
+    timings: [kind === 'repo' ? 'post-target' : 'firstboot'], body: sample.body,
+  });
 }
 const families: Schemas['CatalogFamily'][] = ['linux', 'windows', 'esxi'];
 const authoringStateLabels: Record<string, string> = {
@@ -698,7 +714,7 @@ onBeforeUnmount(() => {
                   v-model="impl.body"
                   type="textarea"
                   :rows="11"
-                  placeholder="编写脚本代码，支持通过 {{ .参数名 }} 引用声明的参数…"
+                  placeholder="脚本从环境变量读取参数，例如 $LOBER_PARAM_GATEWAY。片段使用 {{param:gateway}}。"
                   class="font-mono"
                 />
               </ElFormItem>

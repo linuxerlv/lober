@@ -28,9 +28,11 @@ func Test采集菜单的引导行(t *testing.T) {
 		"http://192.168.201.10:18082/ecc4103-e2e-r02/inventory/inventory.cpio.gz",
 		"lober.gateway=http://192.168.201.10:18090",
 		"lober.sn=E2E32ALMA01",
+		"lober.discovery_mac=${netX/mac:hexhyp}",
 		"lober.inventory_token=" + strings.Repeat("a", 64),
 		"console=ttyS0,115200n8",
-		"initrd ",
+		"initrd=inventory.img",
+		"initrd --name inventory.img ",
 		"boot\n",
 	} {
 		if !strings.Contains(text, want) {

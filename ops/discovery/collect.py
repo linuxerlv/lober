@@ -8,6 +8,8 @@ import time
 import unicodedata
 from pathlib import Path
 
+from hardware import (MISSING, accelerator_fields, data_object, explain, port_fields, protection_state,
+                      rebuild_progress, secure_boot, smart_fields, valid)
 
 MAX_REPORT = 512 * 1024
 MAX_ITEMS = 256
@@ -33,13 +35,32 @@ def dmi_value(value):
     return value
 
 
+class QueryFailure(str):
+    def __new__(cls, reason):
+        output = super().__new__(cls, "")
+        output.reason = reason
+        return output
+
+
 def command(*arguments, timeout=4, output_on_failure=False):
     try:
         done = subprocess.run(arguments, check=not output_on_failure, capture_output=True,
                               encoding="utf-8", errors="replace", timeout=timeout)
         return done.stdout
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return ""
+    except FileNotFoundError:
+        return QueryFailure(f"采集镜像未安装 {arguments[0]}")
+    except PermissionError:
+        return QueryFailure(f"没有权限运行 {arguments[0]}")
+    except subprocess.TimeoutExpired:
+        return QueryFailure(f"{arguments[0]} 查询超时")
+    except subprocess.CalledProcessError as err:
+        message = (err.stderr or "").lower()
+        detail = ("驱动不支持此查询" if "not supported" in message else
+                  "系统拒绝读取" if "permitted" in message or "denied" in message else
+                  f"查询失败，退出码 {err.returncode}")
+        return QueryFailure(f"{arguments[0]} {detail}")
+    except OSError:
+        return QueryFailure(f"无法运行 {arguments[0]}")
 
 
 def object_output(value):
@@ -72,16 +93,21 @@ def dmi_records(value):
 
 
 def select_fields(values, names):
-    return {label: values[key] for key, label in names.items() if values.get(key)}
+    return {label: values.get(key) for key, label in names.items()}
 
 
 def item(name, source, fields):
+    for key, value in list(fields.items()):
+        if not key.startswith(MISSING) and not text(value):
+            fields.setdefault(MISSING + key, f"{source}未提供此字段")
     return {"name": text(name) or "未命名部件", "fields": {"来源": source, **{
         key: text(value) for key, value in fields.items() if text(value)
     }}}
 
 
 def section(key, title, items, reason=""):
+    if not reason and any(any(k.startswith(MISSING) for k in part["fields"]) for part in items):
+        reason = "部分字段未读取，原因见对应部件。"
     if len(items) > MAX_ITEMS:
         items = items[:MAX_ITEMS]
         reason = "部件数量超过报告上限，清单已截断"
@@ -90,7 +116,7 @@ def section(key, title, items, reason=""):
         status = "partial" if items else "unread"
     result = {"key": key, "title": title, "status": status, "items": items}
     if reason:
-        result["reason"] = reason
+        result["reason"] = reason.encode("utf-8")[:2048].decode("utf-8", errors="ignore")
     return result
 
 
@@ -151,11 +177,26 @@ class Collector:
         if not any(fields.values()):
             fields["型号"] = self.read("proc/device-tree/model").strip("\x00")
             fields["整机序列号"] = self.read("proc/device-tree/serial-number").strip("\x00")
+        fields.setdefault("机箱料号", "")
+        fields.update(secure_boot(self.root))
+        fields["采集格式"] = "2"
         fields["启动方式"] = "UEFI" if (self.root / "sys/firmware/efi").exists() else "非 UEFI"
         required = ("厂商", "型号", "整机序列号", "整机标识", "资产标签", "机箱料号",
                     "主板厂商", "主板型号", "主板序列号", "主板版本", "固件版本")
         missing = [label for label in required if not fields.get(label)]
-        return section("system", "整机、主板和固件", [item("整机", "Linux 固件信息", fields)],
+        info = self.run("ipmitool", "-I", "open", "mc", "info", timeout=6)
+        bmc = select_fields(properties(info), {"Product ID": "产品型号或编号", "Manufacturer Name": "厂商",
+                                             "Firmware Revision": "固件版本"})
+        explain(bmc, list(bmc), getattr(info, "reason", "") or "本机管理接口未返回此字段")
+        items = [item("整机", "Linux 固件信息", fields), item("管理芯片", "本机管理接口", bmc)]
+        chips = sorted((self.root / "sys/class/tpm").glob("tpm[0-9]*"))
+        for chip in chips:
+            version = self.read(chip / "tpm_version_major")
+            fields = {"规范版本": {"1": "1.x", "2": "2.0"}.get(version)}
+            items.append(item(f"安全芯片 {chip.name}", "Linux 安全芯片驱动", fields))
+        if not chips:
+            items.append(item("安全芯片", "Linux", {MISSING + "规范版本": "系统未列出安全芯片设备"}))
+        return section("system", "整机、主板和固件", items,
                        "固件未提供：" + "、".join(missing) if missing else "")
 
     def cpu(self):
@@ -172,21 +213,20 @@ class Collector:
             slot = record.get("Socket Designation", "处理器插槽")
             fields["架构"] = summary.get("Architecture")
             for level in ("L1d cache", "L1i cache", "L2 cache", "L3 cache"):
-                value = summary.get(level)
-                if value:
-                    fields[level] = value
+                fields[level] = summary.get(level)
             items.append(item(slot, "机器固件和 Linux", fields))
         if caches:
             items += [item(label or "缓存", "机器固件", {"容量": size})
                       for label, size in caches.items() if size]
-        if not items:
-            fields = select_fields(summary, {
-                "Architecture": "架构", "Model name": "型号", "CPU(s)": "线程数",
-                "Socket(s)": "插槽数", "Core(s) per socket": "每个插槽物理核数",
-                "CPU max MHz": "最大频率（MHz）", "L3 cache": "三级缓存",
-            })
-            if fields:
-                items.append(item("处理器概况", "Linux", fields))
+        has_slots = bool(self.dmi.get(4))
+        fields = select_fields(summary, {
+            "Architecture": "架构", "Model name": "型号", "CPU(s)": "线程数",
+            "Socket(s)": "插槽数", "Core(s) per socket": "每个插槽物理核数",
+            "CPU max MHz": "最大频率（MHz）", "L3 cache": "三级缓存",
+        })
+        if any(fields.values()):
+            items.append(item("处理器概况", "Linux", fields))
+        if not has_slots:
             return section("cpu", "处理器", items, "未读取逐插槽的处理器信息")
         populated = [record for record in self.dmi.get(4, [])
                      if "unpopulated" not in record.get("Status", "").lower()]
@@ -237,7 +277,9 @@ class Collector:
         return {
             "插槽地址": address, "设备": self.pci_descriptions.get(address),
             "厂商编号": self.read(dev / "vendor"), "设备编号": self.read(dev / "device"),
-            "物理插槽": self.read(dev / "physical_slot"),
+            "物理插槽": self.read(dev / "physical_slot") or next((
+                slot.name for slot in (self.root / "sys/bus/pci/slots").glob("*")
+                if self.read(slot / "address") == address.partition(".")[0]), ""),
             "固件": self.read(dev / "fw_version") or self.read(dev / "firmware_version"),
             "驱动": driver.resolve().name if driver.is_symlink() else "",
         }
@@ -255,8 +297,14 @@ class Collector:
         disks = object_output(self.run("lsblk", "--json", "--bytes", "--nodeps", "--output",
                                        "NAME,TYPE,SIZE,MODEL,SERIAL,TRAN,ROTA,REV,HCTL"))
         names = set()
-        for disk in (disks.get("blockdevices") or [])[:MAX_ITEMS]:
-            name = disk.get("name", "")
+        devices = disks.get("blockdevices")
+        if not isinstance(devices, list):
+            devices = []
+        if len(devices) > MAX_ITEMS:
+            reason.append("磁盘条目超过报告上限，清单已截断")
+        for disk in devices[:MAX_ITEMS]:
+            disk = data_object(disk)
+            name = disk.get("name") or ""
             if disk.get("type") != "disk" or not re.fullmatch(r"[a-zA-Z0-9_-]+", name):
                 continue
             names.add(name)
@@ -268,33 +316,56 @@ class Collector:
             if disk.get("rota") is not None:
                 fields["介质"] = "机械盘" if disk["rota"] else "非旋转介质"
             # smartctl 在磁盘健康异常时会返回非 0，但仍会返回完整报告。
-            smart = object_output(self.run("smartctl", "-j", "-i", "-H", f"/dev/{name}",
-                                           output_on_failure=True))
+            raw = self.run("smartctl", "-j", "-i", "-H", "-A", f"/dev/{name}", output_on_failure=True)
+            smart = object_output(raw)
+            stats = smart_fields(smart)
+            explain(stats, list(stats), getattr(raw, "reason", "") or
+                    ("磁盘自检未返回数据，系统可见盘可能由阵列提供" if raid else "磁盘自检未返回这项指标"))
+            fields.update(stats)
             for smart_key, report_key in {"model_name": "型号", "serial_number": "序列号",
                                           "firmware_version": "固件", "protocol": "接口"}.items():
                 if not fields.get(report_key) and smart.get(smart_key):
                     fields[report_key] = smart[smart_key]
-            status = (smart.get("smart_status") or {}).get("passed")
+            status = data_object(smart.get("smart_status")).get("passed")
             if isinstance(status, bool):
                 fields["自检健康状态"] = "正常" if status else "异常"
             elif not raid:
                 reason.append("部分磁盘健康状态未读取")
+            if not isinstance(status, bool):
+                fields[MISSING + "自检健康状态"] = getattr(raw, "reason", "") or "磁盘自检未返回健康状态"
             if not raid:
                 missing = [key for key in ("型号", "序列号", "容量（字节）", "接口", "固件")
                            if not fields.get(key)]
                 if missing:
                     reason.append("部分磁盘字段未读取：" + "、".join(missing))
             position = self.disk_bay(name)
-            if position:
-                fields["盘位"] = position
-            elif not raid and not name.startswith(("vd", "xvd")):
+            fields["盘位"] = position
+            explain(fields, ["盘位"], "系统未提供机箱槽位与该设备的对应关系")
+            if not position and not raid and not name.startswith(("vd", "xvd")):
                 reason.append("部分磁盘盘位未读取")
             items.append(item(name, "Linux 和磁盘自检", fields))
         if raid:
             matched, complete = self.storcli()
             items.extend(matched)
+            if not matched:
+                fields = {}
+                explain(fields, ["缓存容量", "缓存保护状态", "热备盘", "重建进度", "阵列组与盘位"],
+                        self.raid_query_reason)
+                items.append(item("阵列详细信息", "本机 StorCLI", fields))
             if not complete or len(raid) > 1:
                 reason.append("阵列控制器已识别，部分物理盘、盘位或阵列关系未读取")
+        fc_ports = sorted((self.root / "sys/class/fc_host").glob("host*"))
+        for port in fc_ports:
+            fields = {label: valid(self.read(port / key)) for key, label in {
+                "port_name": "端口标识", "node_name": "节点标识", "port_state": "端口状态",
+                "speed": "当前速率", "supported_speeds": "支持速率",
+            }.items()}
+            if str(fields["端口状态"]).lower() in ("offline", "linkdown"):
+                fields["当前速率"] = ""
+                explain(fields, ["当前速率"], "光纤端口未接通")
+            items.append(item(f"光纤通道 {port.name}", "Linux 光纤通道驱动", fields))
+        if not fc_ports and any(self.read(dev / "class").startswith("0x0c04") for dev in self.pci):
+            reason.append("已识别光纤通道控制器，驱动未列出可读端口")
         if not names:
             reason.append("Linux 未读到磁盘，可能没有磁盘或缺少存储驱动")
         return section("storage", "磁盘和阵列", items, "；".join(dict.fromkeys(reason)))
@@ -307,7 +378,9 @@ class Collector:
         return ""
 
     def storcli(self):
-        value = object_output(self.run("storcli", "/call", "show", "all", "J", timeout=8))
+        query = self.run("storcli", "/call", "show", "all", "J", timeout=8)
+        value = object_output(query)
+        self.raid_query_reason = getattr(query, "reason", "") or "StorCLI 未返回兼容控制器的数据"
         items = []
         controller_count = 0
         for result in value.get("Controllers") or []:
@@ -322,15 +395,19 @@ class Collector:
             items.append(item(f"阵列控制器 {controller}", "本机 StorCLI", {
                 "型号": basics.get("Model"), "序列号": basics.get("Serial Number"),
                 "固件": version.get("FW Package Build"),
+                "缓存容量": (data.get("HwCfg") or {}).get("On Board Memory Size"),
+                "缓存保护状态": protection_state(data),
             }))
             for row in data.get("VD LIST") or []:
                 items.append(item(f"逻辑盘 {controller}/{row.get('DG/VD', '?')}", "本机 StorCLI",
                                   select_fields(row, {"DG/VD": "阵列组/逻辑盘", "TYPE": "阵列级别",
                                                       "State": "状态", "Size": "容量", "Name": "名称"})))
-        detail = object_output(self.run("storcli", "/call", "/eall", "/sall", "show", "all", "J",
+        detail = object_output(self.run("storcli", "/call/eall/sall", "show", "all", "J",
                                         timeout=8)) if controller_count else {}
         disk_count = 0
         complete = True
+        progress = {}
+        progress_loaded = False
         for result in detail.get("Controllers") or []:
             status = result.get("Command Status") or {}
             if str(status.get("Status", "")).lower() != "success":
@@ -341,6 +418,8 @@ class Collector:
                     continue
                 data = result["Response Data"].get(key + " - Detailed Information") or {}
                 attributes = next((entry for name, entry in data.items() if name.endswith("Device attributes")), {})
+                health = next((entry for name, entry in data.items() if name.endswith("State") and
+                               isinstance(entry, dict)), {})
                 for row in rows:
                     disk_count += 1
                     fields = select_fields(row, {
@@ -348,6 +427,21 @@ class Collector:
                         "Med": "介质", "Size": "容量", "State": "状态",
                     })
                     fields.update(select_fields(attributes, {"SN": "序列号", "Firmware Revision": "固件"}))
+                    fields.update(select_fields(health, {"Media Error Count": "介质错误次数",
+                                                         "Drive Temperature": "温度"}))
+                    state = row.get("State")
+                    fields["热备角色"] = {"GHS": "全局热备", "DHS": "专用热备", "Onln": "在线成员",
+                                        "Rbld": "重建成员"}.get(state, state)
+                    if state == "Rbld":
+                        if not progress_loaded:
+                            raw = self.run("storcli", "/call/eall/sall", "show", "rebuild", "J", timeout=8)
+                            progress = rebuild_progress(object_output(raw))
+                            progress_loaded = True
+                        bay = str(row.get("EID:Slt", "")).split(":")
+                        fields["重建进度"] = progress.get((str(status.get("Controller")), *bay))
+                    elif state == "Onln":
+                        fields["重建进度"] = "未在重建"
+                    explain(fields, ["已用寿命（%）", "通电小时"], "控制器未透传物理盘的自检指标")
                     complete &= all(fields.get(field) for field in
                                     ("机箱:盘位", "型号", "序列号", "容量", "接口", "固件", "状态"))
                     items.append(item(f"物理盘 {status.get('Controller', '?')}/{row.get('EID:Slt', '?')}",
@@ -369,14 +463,19 @@ class Collector:
                     break
             seen.add(device)
             fields = self.pci_fields(device) if self.read(device / "class") else {}
-            fields.update(select_fields(properties(self.run("ethtool", "-i", port.name)),
-                                        {"driver": "驱动", "firmware-version": "固件"}))
+            settings = properties(self.run("ethtool", "-i", port.name))
+            for label, value in select_fields(settings, {"driver": "驱动", "firmware-version": "固件"}).items():
+                fields[label] = valid(value) or fields.get(label)
             mac = self.read(port / "address")
             carrier = self.read(port / "carrier")
             speed = self.read(port / "speed")
             fields.update({"硬件地址": mac, "连接": {"0": "未接通", "1": "接通"}.get(carrier),
-                           "当前速率": f"{speed} Mb/s" if speed.isdigit() else "",
-                           "启动网口": "是" if mac and mac.lower() == self.boot_mac else ""})
+                           "当前速率": f"{speed} Mb/s" if speed.isdigit() and int(speed) > 0 and carrier != "0" else "",
+                           "启动网口": ("是" if mac.lower() == self.boot_mac else "否")
+                           if mac and self.boot_mac else ""})
+            fields.update(port_fields(self.run("ethtool", port.name), self.run("ethtool", "-m", port.name)))
+            if carrier == "0":
+                explain(fields, ["当前速率"], "网口未接通，无法协商速率")
             missing |= not all((mac, fields.get("固件"), fields.get("设备"), fields.get("驱动"),
                                 carrier, speed.isdigit() or carrier == "0"))
             items.append(item(port.name, "Linux 和网卡驱动", fields))
@@ -389,7 +488,7 @@ class Collector:
         reason = ""
         if not items:
             reason = "未读到物理网卡"
-        elif missing or not any(port["fields"].get("启动网口") for port in items):
+        elif missing or not any(port["fields"].get("启动网口") == "是" for port in items):
             reason = "部分网口、固件、连接状态或启动网口未读取"
         return section("network", "网卡和网口", items, reason)
 
@@ -400,6 +499,8 @@ class Collector:
             if not device_class.startswith(("0x01", "0x02", "0x06")):
                 fields = self.pci_fields(dev)
                 fields["类别编号"] = device_class
+                if device_class.startswith(("0x03", "0x12")):
+                    fields.update(accelerator_fields(self, dev))
                 items.append(item(dev.name, "Linux PCI 设备列表", fields))
         reason = ""
         if not items:
@@ -511,6 +612,11 @@ def uploaded(url, token, report, work):
 def main():
     args = dict(part.split("=", 1) for part in Path("/proc/cmdline").read_text().split() if "=" in part)
     url, token = (args.get(f"lober.discovery_{name}", "") for name in ("url", "token"))
+    if not url and "lober.inventory_token" in args:
+        serial = args.get("lober.sn", "")
+        if re.fullmatch(r"[~a-zA-Z0-9_.-]+", serial):
+            url = args.get("lober.gateway", "").rstrip("/") + "/v1/hardware/" + serial
+            token = args["lober.inventory_token"]
     if not url.startswith(("http://", "https://")) or not re.fullmatch(r"[A-Za-z0-9_-]+", token):
         print("Lober: missing or invalid report destination or upload token", flush=True)
         return 1
@@ -518,7 +624,8 @@ def main():
 
     def local_command(*arguments, timeout=4, **options):
         remaining = deadline - time.monotonic()
-        return command(*arguments, timeout=min(remaining, timeout), **options) if remaining > 0 else ""
+        return (command(*arguments, timeout=min(remaining, timeout), **options) if remaining > 0
+                else QueryFailure("本次采集时限已到"))
 
     print("Lober: reading hardware inventory", flush=True)
     report = Collector(Path("/"), args.get("lober.discovery_mac", ""), local_command).collect()

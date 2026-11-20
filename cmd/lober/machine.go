@@ -103,8 +103,12 @@ func (a inventoryAdapter) ClaimToken(ctx context.Context, sn string) (string, er
 func (a inventoryAdapter) Menu(sn, token string) ([]byte, error) { return a.svc.Menu(sn, token) }
 
 // Submit 只把类别翻成执行模块的哨兵错误，不做别的判断。
-func (a inventoryAdapter) Submit(ctx context.Context, sn, token string, body []byte) error {
-	_, err := a.svc.Submit(ctx, sn, token, body)
+func (a inventoryAdapter) Submit(ctx context.Context, in execution.InventoryInput) error {
+	submit := a.svc.Submit
+	if in.Detailed {
+		submit = a.svc.SubmitHardware
+	}
+	_, err := submit(ctx, in.SN, in.Token, in.Body)
 	if err == nil {
 		return nil
 	}

@@ -3,13 +3,15 @@ package repository
 import (
 	"context"
 
+	"github.com/lober/lober/internal/domain/discovery"
 	"github.com/lober/lober/internal/domain/model"
 )
 
 // InventoryChange 是锁内判定的结果。Attrs 为 nil 时只读，非空时与审计一起保存。
 type InventoryChange struct {
-	Attrs map[string]string
-	Audit Audit
+	Attrs    map[string]string
+	Audit    Audit
+	Hardware *discovery.Report
 }
 
 // HostInventory 锁住主机，读取当前属性和忙闲状态，再由调用方决定是否写入。

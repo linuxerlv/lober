@@ -23,7 +23,7 @@ func mediaErrorEnvelope(t *testing.T, w *httptest.ResponseRecorder, status int, 
 	}
 }
 
-func Test镜像十一入口描述及审计契约(t *testing.T) {
+func Test镜像十二入口描述及审计契约(t *testing.T) {
 	s := &server{}
 	want := map[string][2]string{
 		"GET /console/v1/isos":                {PermISORead, ""},
@@ -36,6 +36,7 @@ func Test镜像十一入口描述及审计契约(t *testing.T) {
 		"POST /console/v1/isos/:id/retry":     {PermISOWrite, "iso.retry"},
 		"POST /console/v1/isos/:id/reimport":  {PermISOWrite, "iso.reimport"},
 		"POST /console/v1/isos/:id/deprecate": {PermISOWrite, "iso.deprecate"},
+		"POST /console/v1/isos/:id/enable":    {PermISOWrite, "iso.enable"},
 		"DELETE /console/v1/isos/:id":         {PermISOWrite, "iso.delete"},
 	}
 	got := map[string][2]string{}

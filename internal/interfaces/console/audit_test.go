@@ -236,6 +236,7 @@ func Test每条正式审计路由都写入正确操作者和目标(t *testing.T)
 	run("iso.source.register", "POST", "/console/v1/isos/"+missing.ID+"/sources", `{"kind":"upload","size":3}`, admin, "iso", missing.ID)
 	ready := readyISO(t, st, "audit-ready", "rocky")
 	run("iso.deprecate", "POST", fmt.Sprintf("/console/v1/isos/%s/deprecate?rev=%d", ready.ID, ready.Rev), "", admin, "iso", ready.ID)
+	run("iso.enable", "POST", fmt.Sprintf("/console/v1/isos/%s/enable?rev=%d", ready.ID, ready.Rev+1), "", admin, "iso", ready.ID)
 	ready, err = st.GetISO(t.Context(), ready.ID)
 	if err != nil {
 		t.Fatal(err)

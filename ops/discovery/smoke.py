@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 
-def smoke(image, direct=False, memory=768):
+def smoke(image, direct=False, memory=768, registered=False):
     mac = "52:54:00:12:34:56"
     sections = {}
     checkins = []
@@ -43,7 +43,8 @@ def smoke(image, direct=False, memory=768):
                 shutil.copyfileobj(blob, self.wfile)
 
         def do_POST(self):
-            if self.path != "/report" or self.headers.get("Authorization") != "Bearer smoke-only":
+            target = "/v1/hardware/LOBER-DISCOVERY-QEMU" if registered else "/report"
+            if self.path != target or self.headers.get("Authorization") != "Bearer smoke-only":
                 self.send_error(403)
                 return
             length = int(self.headers.get("Content-Length", "0"))
@@ -58,7 +59,9 @@ def smoke(image, direct=False, memory=768):
     with HTTPServer(("127.0.0.1", 0), Receiver) as server, tempfile.TemporaryDirectory() as tmp:
         logs = Path(tmp) / "serial.log"
         base = f"http://10.0.2.2:{server.server_port}"
-        kernel_args = f"console=ttyS0 quiet lober.discovery_url={base}/report lober.discovery_token=smoke-only"
+        endpoint = (f"lober.gateway={base} lober.sn=LOBER-DISCOVERY-QEMU lober.inventory_token=smoke-only"
+                    if registered else f"lober.discovery_url={base}/report lober.discovery_token=smoke-only")
+        kernel_args = f"console=ttyS0 quiet {endpoint}"
         options = ["-boot", "order=n"]
         network = f"user,id=discovery,bootfile={base}/boot.ipxe"
         if direct:
@@ -90,6 +93,7 @@ def smoke(image, direct=False, memory=768):
                 assert "hardware report uploaded" in serial, "虚拟机未确认成功上报"
                 assert "waiting at this screen" in serial and vm.poll() is None, "虚拟机未留在结果屏"
                 assert len(sections) == 8, "硬件类别不全"
+                assert sections["system"]["items"][0]["fields"]["采集格式"] == "2", "镜像没有新版字段"
                 assert sections["system"]["items"][0]["fields"]["整机序列号"] == "LOBER-DISCOVERY-QEMU"
                 assert any(part["fields"].get("硬件地址") == mac and part["fields"].get("启动网口") == "是"
                            for part in sections["network"]["items"]), "缺少识别到的启动网口"
@@ -105,6 +109,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", type=Path)
     parser.add_argument("--direct", action="store_true", help="直接加载内核，单独排查 Alpine 镜像")
+    parser.add_argument("--registered", action="store_true", help="验证已登记主机的上报入口")
     parser.add_argument("--memory", type=int, default=768, help="虚拟机内存，单位 MiB")
     args = parser.parse_args()
-    smoke(args.image.resolve(), args.direct, args.memory)
+    smoke(args.image.resolve(), args.direct, args.memory, args.registered)

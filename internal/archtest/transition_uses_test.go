@@ -207,7 +207,7 @@ func transitionRestricted(caller string, obj types.Object) bool {
 
 func mediaRepositoryMethod(name string) bool {
 	switch name {
-	case "CreateISO", "UpdateISO", "DeprecateISO", "DeleteISO", "GetISO", "ListISOs", "SaveSource", "SaveSourceAndAcquire", "GetSource", "SourcesOf", "ListUnfinishedSources", "SaveRange", "RangesOf", "DeleteSource":
+	case "CreateISO", "UpdateISO", "DeprecateISO", "EnableISO", "DeleteISO", "GetISO", "ListISOs", "SaveSource", "SaveSourceAndAcquire", "GetSource", "SourcesOf", "ListUnfinishedSources", "SaveRange", "RangesOf", "DeleteSource":
 		return true
 	}
 	return false

@@ -108,6 +108,7 @@ func (s *server) isoRoutes() []route {
 		{method: "POST", path: "/console/v1/isos/:id/sources", perm: PermISOWrite, audit: "iso.source.register", tag: "isos", summary: "Register a missing ISO source", req: isoSourceReq{}, handle: s.registerISOSource},
 		{method: "DELETE", path: "/console/v1/isos/:id", perm: PermISOWrite, audit: "iso.delete", tag: "isos", summary: "Delete ISO with durable cleanup", query: revisionQuery{}, handle: s.deleteISO},
 		{method: "POST", path: "/console/v1/isos/:id/deprecate", perm: PermISOWrite, audit: "iso.deprecate", tag: "isos", summary: "Deprecate ISO", query: revisionQuery{}, handle: s.deprecateISO},
+		{method: "POST", path: "/console/v1/isos/:id/enable", perm: PermISOWrite, audit: "iso.enable", tag: "isos", summary: "Enable ISO", query: revisionQuery{}, handle: s.enableISO},
 		{method: "POST", path: "/console/v1/isos/:id/cancel", perm: PermISOWrite, audit: "iso.cancel", tag: "isos", summary: "Cancel ISO acquisition", handle: s.cancelISO},
 		{method: "POST", path: "/console/v1/isos/:id/retry", perm: PermISOWrite, audit: "iso.retry", tag: "isos", summary: "Retry ISO acquisition", handle: s.retryISO},
 		{method: "POST", path: "/console/v1/isos/:id/reimport", perm: PermISOWrite, audit: "iso.reimport", tag: "isos", summary: "Reimport acquired ISO", handle: s.reimportISO},
@@ -183,12 +184,14 @@ func (s *server) deleteISO(c *gin.Context) {
 	}
 	Ok(c, nil)
 }
-func (s *server) deprecateISO(c *gin.Context) {
+func (s *server) enableISO(c *gin.Context)    { s.reviseISO(c, s.deps.MediaRegistry.Enable) }
+func (s *server) deprecateISO(c *gin.Context) { s.reviseISO(c, s.deps.MediaRegistry.Deprecate) }
+func (s *server) reviseISO(c *gin.Context, change func(context.Context, ports.Actor, media.RevisionRequest) error) {
 	rev, ok := queryRev(c)
 	if !ok {
 		return
 	}
-	if err := s.deps.MediaRegistry.Deprecate(c.Request.Context(), actorOf(c), media.RevisionRequest{ID: c.Param("id"), Rev: rev}); err != nil {
+	if err := change(c.Request.Context(), actorOf(c), media.RevisionRequest{ID: c.Param("id"), Rev: rev}); err != nil {
 		RespondError(c, err)
 		return
 	}

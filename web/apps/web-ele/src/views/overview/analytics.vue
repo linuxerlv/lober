@@ -17,6 +17,7 @@ import { getHostListApi } from '#/api/console/host';
 import { taskAPI } from '#/api/console/task';
 import { getTemplateListApi } from '#/api/console/template';
 import { useConsoleAccess } from '#/composables/use-console-access';
+import { taskCount, taskStateLabels } from '#/views/tasks/task-state';
 
 import { useOverviewData } from './use-overview-data';
 
@@ -24,9 +25,10 @@ defineOptions({ name: 'OverviewAnalytics' });
 
 const { can, hasMenu } = useConsoleAccess();
 const page = { page: 1, page_size: 1 };
-const taskCount = useOverviewData(() => can('task:read'), async () => (await taskAPI.list(page)).total);
+const stats = useOverviewData(() => can('task:read'), () => taskAPI.statistics({ trends: true }));
 const hostCount = useOverviewData(() => can('host:read'), async () => (await getHostListApi(page)).total);
 const isoCount = useOverviewData(() => can('iso:read'), async () => (await getArtifactSetListApi(page)).total);
+const readyCount = useOverviewData(() => can('iso:read'), async () => (await getArtifactSetListApi({ ...page, state: 'ready' })).total);
 const templateCount = useOverviewData(() => can('template:read'), async () => (await getTemplateListApi(page)).total);
 const hookCount = useOverviewData(() => can('hook:read'), async () => (await getHookListApi(page)).total);
 const componentCount = computed(() => {
@@ -41,12 +43,12 @@ const componentCount = computed(() => {
 const trendTab = ref<'monthly' | 'trends'>('trends');
 
 const trendChartRef = ref<EchartsUIType>();
-const radarChartRef = ref<EchartsUIType>();
+
 const donutChartRef = ref<EchartsUIType>();
 const roseChartRef = ref<EchartsUIType>();
 
 const { renderEcharts: renderTrend } = useEcharts(trendChartRef);
-const { renderEcharts: renderRadar } = useEcharts(radarChartRef);
+
 const { renderEcharts: renderDonut } = useEcharts(donutChartRef);
 const { renderEcharts: renderRose } = useEcharts(roseChartRef);
 
@@ -54,9 +56,9 @@ const overviewCards = computed(() => [
   {
     title: '装机任务量',
     visible: can('task:read'),
-    value: taskCount.value?.toLocaleString() ?? '—',
+    value: taskCount(stats.value?.states)?.toLocaleString() ?? '—',
     totalTitle: '累计完成装机',
-    totalValue: '1,280',
+    totalValue: taskCount(stats.value?.states, 'done') ?? '—',
     icon: SvgCardIcon,
     path: hasMenu('tasks') ? '/tasks' : undefined,
   },
@@ -64,8 +66,8 @@ const overviewCards = computed(() => [
     title: '纳管主机量',
     visible: can('host:read'),
     value: hostCount.value?.toLocaleString() ?? '—',
-    totalTitle: '机房总物理机',
-    totalValue: '320',
+    totalTitle: '统计范围',
+    totalValue: '已登记主机',
     icon: SvgCakeIcon,
     path: hasMenu('hosts') ? '/hosts' : undefined,
   },
@@ -73,8 +75,8 @@ const overviewCards = computed(() => [
     title: '系统镜像库',
     visible: can('iso:read'),
     value: isoCount.value?.toLocaleString() ?? '—',
-    totalTitle: '累计网络引导次数',
-    totalValue: '4,620',
+    totalTitle: '可用镜像',
+    totalValue: readyCount.value ?? '—',
     icon: SvgDownloadIcon,
     path: hasMenu('isos') ? '/artifact-sets' : undefined,
   },
@@ -82,246 +84,46 @@ const overviewCards = computed(() => [
     title: '模板与脚本',
     visible: can('template:read') || can('hook:read'),
     value: componentCount.value?.toLocaleString() ?? '—',
-    totalTitle: '累计自动化执行',
-    totalValue: '9,850',
+    totalTitle: can('hook:read') ? '脚本' : '模板',
+    totalValue: (can('hook:read') ? hookCount.value : templateCount.value) ?? '—',
     icon: SvgBellIcon,
     path: hasMenu('templates') ? '/templates' : hasMenu('hooks') ? '/hooks' : undefined,
   },
 ].filter((item) => item.visible));
 
-function drawTrendChart() {
-  if (trendTab.value === 'trends') {
-    void renderTrend({
-      grid: {
-        bottom: 0,
-        containLabel: true,
-        left: '1%',
-        right: '1%',
-        top: '4%',
-      },
-      tooltip: {
-        axisPointer: {
-          lineStyle: {
-            color: '#019680',
-            width: 1,
-          },
-        },
-        trigger: 'axis',
-      },
-      xAxis: {
-        axisTick: { show: false },
-        boundaryGap: false,
-        data: Array.from({ length: 18 }, (_, i) => `${i + 6}:00`),
-        splitLine: {
-          lineStyle: { type: 'solid', width: 1 },
-          show: true,
-        },
-        type: 'category',
-      },
-      yAxis: [
-        {
-          axisTick: { show: false },
-          max: 80,
-          splitArea: { show: true },
-          splitNumber: 4,
-          type: 'value',
-        },
-      ],
-      series: [
-        {
-          areaStyle: {},
-          data: [
-            1, 4, 12, 26, 42, 61, 68, 41, 22, 39, 72, 48, 29, 18, 12, 6, 3, 1,
-          ],
-          itemStyle: { color: '#5ab1ef' },
-          name: '并发网络引导流量 (Gbps)',
-          smooth: true,
-          type: 'line',
-        },
-        {
-          areaStyle: {},
-          data: [
-            0, 1, 3, 7, 12, 18, 24, 14, 6, 15, 25, 19, 11, 6, 4, 2, 1, 0,
-          ],
-          itemStyle: { color: '#019680' },
-          name: '当小时装机并发数 (台)',
-          smooth: true,
-          type: 'line',
-        },
-      ],
-    });
-  } else {
-    void renderTrend({
-      grid: {
-        bottom: 0,
-        containLabel: true,
-        left: '1%',
-        right: '1%',
-        top: '4%',
-      },
-      tooltip: {
-        axisPointer: {
-          lineStyle: {
-            color: '#4f69fd',
-            width: 1,
-          },
-        },
-        trigger: 'axis',
-      },
-      xAxis: {
-        data: Array.from({ length: 12 }, (_, i) => `${i + 1}月`),
-        type: 'category',
-      },
-      yAxis: {
-        max: 200,
-        splitNumber: 4,
-        type: 'value',
-      },
-      series: [
-        {
-          barMaxWidth: 48,
-          data: [68, 52, 95, 124, 140, 118, 156, 172, 148, 165, 184, 136],
-          itemStyle: {
-            borderRadius: [4, 4, 0, 0],
-            color: '#5ab1ef',
-          },
-          name: '月度交付物理机 (台)',
-          type: 'bar',
-        },
-      ],
-    });
-  }
-}
-
-function drawBottomCharts() {
-  void renderRadar({
-    legend: {
-      bottom: 0,
-      data: ['已交付节点', '规划容量'],
-    },
-    radar: {
-      indicator: [
-        { name: '生产计算', max: 100 },
-        { name: '容器集群', max: 100 },
-        { name: '虚拟化', max: 100 },
-        { name: '分布式存储', max: 100 },
-        { name: 'ARM 算力', max: 100 },
-        { name: '边缘节点', max: 100 },
-      ],
-      radius: '60%',
-      splitNumber: 5,
-    },
-    series: [
-      {
-        areaStyle: {
-          opacity: 0.7,
-          shadowBlur: 0,
-          shadowColor: 'rgba(0,0,0,.2)',
-          shadowOffsetX: 0,
-          shadowOffsetY: 10,
-        },
-        data: [
-          {
-            itemStyle: { color: '#b6a2de' },
-            name: '已交付节点',
-            value: [88, 76, 92, 68, 74, 62],
-          },
-          {
-            itemStyle: { color: '#5ab1ef' },
-            name: '规划容量',
-            value: [95, 90, 95, 85, 88, 80],
-          },
-        ],
-        symbolSize: 0,
-        type: 'radar',
-      },
-    ],
-    tooltip: {},
+function drawCharts() {
+  const data = stats.value;
+  if (!data) return;
+  const monthly = trendTab.value === 'monthly';
+  const today = new Date();
+  const keys = Array.from({ length: monthly ? 12 : 14 }, (_, index) => {
+    const d = new Date(today);
+    if (monthly) {
+      d.setUTCDate(1);
+      d.setUTCMonth(d.getUTCMonth() - 11 + index);
+    } else d.setUTCDate(d.getUTCDate() - 13 + index);
+    return d.toISOString().slice(0, monthly ? 7 : 10);
   });
-
+  const counts = monthly ? data.months : data.days;
+  void renderTrend({
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: keys },
+    yAxis: { type: 'value', minInterval: 1 },
+    series: [{ name: '新建任务', type: monthly ? 'bar' : 'line', data: keys.map((key) => counts?.[key] ?? 0) }],
+  });
+  if (!taskCount(data.states)) return;
   void renderDonut({
-    legend: {
-      bottom: '2%',
-      left: 'center',
-    },
-    series: [
-      {
-        animationDelay() {
-          return Math.random() * 100;
-        },
-        avoidLabelOverlap: false,
-        color: ['#5ab1ef', '#b6a2de', '#67e0e3', '#2ec7c9', '#ffb980'],
-        data: [
-          { name: 'Rocky Linux 9', value: 540 },
-          { name: 'Ubuntu 24.04', value: 360 },
-          { name: 'VMware ESXi 8', value: 210 },
-          { name: 'Debian 12 ARM', value: 110 },
-          { name: 'Windows 2022', value: 60 },
-        ],
-        emphasis: {
-          label: {
-            fontSize: '12',
-            fontWeight: 'bold',
-            show: true,
-          },
-        },
-        itemStyle: {
-          borderRadius: 10,
-          borderWidth: 2,
-        },
-        label: {
-          position: 'center',
-          show: false,
-        },
-        labelLine: {
-          show: false,
-        },
-        name: '系统镜像占比',
-        radius: ['40%', '65%'],
-        type: 'pie',
-      },
-    ],
-    tooltip: {
-      trigger: 'item',
-    },
+    tooltip: { trigger: 'item' },
+    series: [{ type: 'pie', radius: ['35%', '65%'], data: Object.entries(data.images ?? {}).map(([name, value]) => ({ name, value })) }],
   });
-
   void renderRose({
-    series: [
-      {
-        animationDelay() {
-          return Math.random() * 400;
-        },
-        animationType: 'scale',
-        center: ['50%', '50%'],
-        color: ['#5ab1ef', '#2ec7c9', '#67e0e3', '#b6a2de', '#f87171'],
-        data: [
-          { name: '安装完成', value: 480 },
-          { name: '正在安装', value: 310 },
-          { name: '初始化脚本', value: 240 },
-          { name: '等待引导', value: 185 },
-          { name: '异常排障', value: 95 },
-        ].sort((a, b) => a.value - b.value),
-        name: '装机阶段分布',
-        radius: '75%',
-        roseType: 'radius',
-        type: 'pie',
-      },
-    ],
-    tooltip: {
-      trigger: 'item',
-    },
+    tooltip: { trigger: 'item' },
+    series: [{ type: 'pie', radius: '65%', data: Object.entries(taskStateLabels).map(([state, name]) => ({ name, value: data.states?.[state] ?? 0 })).filter((row) => row.value > 0) }],
   });
 }
 
-watch(trendTab, () => {
-  drawTrendChart();
-});
-
-onMounted(() => {
-  drawTrendChart();
-  drawBottomCharts();
-});
+watch([stats, trendTab], drawCharts, { flush: 'post' });
+onMounted(drawCharts);
 </script>
 
 <template>
@@ -357,7 +159,7 @@ onMounted(() => {
     </div>
 
     <!-- 第二行：装机趋势 / 月装机量 大图表卡片 -->
-    <div class="mt-4 rounded-xl border border-border bg-card p-5">
+    <div v-if="can('task:read')" class="mt-4 rounded-xl border border-border bg-card p-5">
       <div class="mb-4 inline-flex rounded-lg bg-muted p-1 text-xs">
         <button
           type="button"
@@ -369,7 +171,7 @@ onMounted(() => {
           "
           @click="trendTab = 'trends'"
         >
-          装机趋势
+          近 14 天新建任务
         </button>
         <button
           type="button"
@@ -381,10 +183,12 @@ onMounted(() => {
           "
           @click="trendTab = 'monthly'"
         >
-          月装机量
+          近 12 个月新建任务
         </button>
       </div>
-      <EchartsUI ref="trendChartRef" height="320px" />
+      <p class="text-xs text-muted-foreground">按世界标准时间统计。网络引导流量尚未采集。</p>
+      <p v-if="!stats" class="py-5">暂无统计数据</p>
+      <EchartsUI v-if="stats" ref="trendChartRef" height="320px" />
     </div>
 
     <!-- 第三行：底部三联图表卡片（雷达图 / 环形图 / 玫瑰图） -->
@@ -393,19 +197,21 @@ onMounted(() => {
         <h3 class="mb-3 text-base font-semibold text-foreground">
           集群装机容量
         </h3>
-        <EchartsUI ref="radarChartRef" height="280px" />
+        <p class="text-sm text-muted-foreground">尚未采集机房的规划容量。</p>
       </div>
-      <div class="rounded-xl border border-border bg-card p-5">
+      <div v-if="can('task:read')" class="rounded-xl border border-border bg-card p-5">
         <h3 class="mb-3 text-base font-semibold text-foreground">
-          系统镜像占比
+          装机任务使用的镜像
         </h3>
-        <EchartsUI ref="donutChartRef" height="280px" />
+        <p v-if="!taskCount(stats?.states)" class="text-sm text-muted-foreground">暂无数据</p>
+        <EchartsUI v-if="stats && taskCount(stats.states)" ref="donutChartRef" height="280px" />
       </div>
-      <div class="rounded-xl border border-border bg-card p-5">
+      <div v-if="can('task:read')" class="rounded-xl border border-border bg-card p-5">
         <h3 class="mb-3 text-base font-semibold text-foreground">
           装机阶段分布
         </h3>
-        <EchartsUI ref="roseChartRef" height="280px" />
+        <p v-if="!taskCount(stats?.states)" class="text-sm text-muted-foreground">暂无数据</p>
+        <EchartsUI v-if="stats && taskCount(stats.states)" ref="roseChartRef" height="280px" />
       </div>
     </div>
   </div>

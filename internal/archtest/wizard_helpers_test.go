@@ -62,7 +62,8 @@ func migratedApplicationMethod(fn *types.Func) bool {
 		return symbol == "Requester.Request"
 	}
 	if target == pkgDiscoveryApp {
-		return symbol == "Console.List" || symbol == "Console.Get" || symbol == "Console.Register" || symbol == "DiskReader.Disks"
+		return symbol == "Console.List" || symbol == "Console.Get" || symbol == "Console.Register" ||
+			symbol == "DiskReader.Disks" || symbol == "DiskReader.Hardware"
 	}
 	if target == pkgAuditApp {
 		return symbol == "Reader.List" || symbol == "Reader.ExportCSV"
@@ -72,7 +73,7 @@ func migratedApplicationMethod(fn *types.Func) bool {
 	}
 	if target == modulePath+"/internal/application/media" {
 		switch symbol {
-		case "Registry.List", "Registry.Get", "Registry.Create", "Registry.RegisterSource", "Registry.Progress", "Registry.Upload", "Registry.Cancel", "Registry.Retry", "Registry.Reimport", "Registry.Deprecate", "Registry.Delete":
+		case "Registry.List", "Registry.Get", "Registry.Create", "Registry.RegisterSource", "Registry.Progress", "Registry.Upload", "Registry.Cancel", "Registry.Retry", "Registry.Reimport", "Registry.Deprecate", "Registry.Enable", "Registry.Delete":
 			return true
 		}
 	}
@@ -84,7 +85,7 @@ func migratedApplicationMethod(fn *types.Func) bool {
 	}
 	if target == pkgTasks {
 		switch symbol {
-		case "EventReader.List", "EventReader.Open", "EventSubscription.Initial", "EventSubscription.Hints", "EventSubscription.Read", "EventSubscription.Close", "Controller.Cancel", "Controller.Retry", "Reader.List", "Reader.Get", "Reader.BatchSummary", "Reader.Preview", "Wizard.Hosts", "Wizard.ISOs", "Wizard.Templates", "Wizard.Params", "Wizard.Submit":
+		case "EventReader.List", "EventReader.Open", "EventSubscription.Initial", "EventSubscription.Hints", "EventSubscription.Read", "EventSubscription.Close", "Controller.Cancel", "Controller.Retry", "Reader.List", "Reader.Get", "Reader.BatchSummary", "Reader.Statistics", "Reader.Preview", "Wizard.Hosts", "Wizard.ISOs", "Wizard.Templates", "Wizard.Params", "Wizard.Submit":
 			return true
 		}
 	}

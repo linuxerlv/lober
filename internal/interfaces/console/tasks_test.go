@@ -67,6 +67,14 @@ func Test任务列表详情事件及查询边界(t *testing.T) {
 	if len(page.Items) != 1 || page.Items[0].ID != task.ID {
 		t.Fatal(page)
 	}
+	stats := responseData[taskStatistics](t, httpCall(s, "GET", "/console/v1/task-statistics?trends=true", "", token))
+	if stats.States["pending"] != 2 || len(stats.Images) != 1 {
+		t.Fatal(stats)
+	}
+	filtered := responseData[taskStatistics](t, httpCall(s, "GET", "/console/v1/task-statistics?host_sn=sn-1", "", token))
+	if filtered.States["pending"] != 1 || len(filtered.Images) != 0 {
+		t.Fatal(filtered)
+	}
 	batch := responseData[taskPage](t, httpCall(s, "GET", "/console/v1/tasks?batch_id="+task.BatchID+"&page=1&page_size=1", "", token))
 	if batch.Total == nil || *batch.Total != 2 || len(batch.Items) != 1 || batch.Items[0].BatchID != task.BatchID {
 		t.Fatal(batch)
@@ -515,7 +523,7 @@ func Test任务接口五角色权限(t *testing.T) {
 				t.Fatal(role, r, w.Code)
 			}
 		}
-		if count != 8 {
+		if count != 9 {
 			t.Fatal(count)
 		}
 	}

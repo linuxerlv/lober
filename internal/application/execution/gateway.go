@@ -97,7 +97,7 @@ func (g *gateway) InventoryReport(ctx context.Context, in InventoryInput) error 
 	if boot == nil {
 		return gatewayFailure(NotSupported, ErrInventoryUnsupported)
 	}
-	err := boot.Submit(ctx, in.SN, in.Token, in.Body)
+	err := boot.Submit(ctx, in)
 	if err == nil {
 		return nil
 	}

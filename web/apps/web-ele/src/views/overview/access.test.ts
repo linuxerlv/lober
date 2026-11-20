@@ -14,6 +14,7 @@ const io = vi.hoisted(() => ({
   hosts: vi.fn(),
   isos: vi.fn(),
   tasks: vi.fn(),
+  statistics: vi.fn(),
   templates: vi.fn(),
 }));
 vi.mock('#/api/console/audit', () => ({ listAudit: io.audit }));
@@ -23,7 +24,7 @@ vi.mock('#/api/console/discovery', () => ({
 vi.mock('#/api/console/hook', () => ({ getHookListApi: io.hooks }));
 vi.mock('#/api/console/host', () => ({ getHostListApi: io.hosts }));
 vi.mock('#/api/console/artifact', () => ({ getArtifactSetListApi: io.isos }));
-vi.mock('#/api/console/task', () => ({ taskAPI: { list: io.tasks } }));
+vi.mock('#/api/console/task', () => ({ taskAPI: { list: io.tasks, statistics: io.statistics } }));
 vi.mock('#/api/console/template', () => ({ getTemplateListApi: io.templates }));
 vi.mock('#/store', () => ({
   useAuthStore: () => ({ sessionUser: { role: 'viewer' } }),
@@ -112,4 +113,13 @@ it('discards an audit response after the reports grant is revoked and restored',
   await nextTick();
   expect(io.audit).toHaveBeenCalledTimes(2);
   expect(el.textContent).not.toContain('上次授权的记录');
+});
+
+it('distinguishes a disabled discovery service from an empty inventory', async () => {
+  menus.value = ['overview-workspace'];
+  permissions.value = ['task:read', 'host:read'];
+  io.discoveries.mockResolvedValueOnce({ items: [], unavailable: true });
+  const el = await mount(Workspace);
+  await vi.waitFor(() => expect(el.textContent).toContain('主机发现服务未启用'));
+  expect(el.textContent).not.toContain('0 台新上报物理机');
 });

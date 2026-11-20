@@ -48,34 +48,9 @@ func (r *reader) List(ctx context.Context, actor ports.Actor, req ListRequest) (
 	if _, err := repository.CheckPageQuery(req.Cursor, req.Limit, req.Page); err != nil {
 		return TaskPage{}, err
 	}
-	from, err := readTime(req.CreatedFrom)
+	q, err := taskFilters(req)
 	if err != nil {
 		return TaskPage{}, err
-	}
-	to, err := readTime(req.CreatedTo)
-	if err != nil {
-		return TaskPage{}, err
-	}
-	if to != 0 && from > to {
-		return TaskPage{}, ErrBadRequest
-	}
-	q := repository.TaskQuery{HostSN: req.HostSN, BatchID: req.BatchID, CreatedFrom: from, CreatedTo: to, Cursor: req.Cursor, Limit: req.Limit, Page: req.Page}
-	if q.HostSN != "" {
-		sn, err := model.NormalizeSN(q.HostSN)
-		if err != nil {
-			return TaskPage{}, err
-		}
-		q.HostSN = sn
-	}
-	if q.BatchID != "" && !model.ValidID(q.BatchID) {
-		return TaskPage{}, ErrBadRequest
-	}
-	if req.State != "" {
-		state := model.TaskState(req.State)
-		if !state.Valid() {
-			return TaskPage{}, ErrBadRequest
-		}
-		q.States = []model.TaskState{state}
 	}
 	page, err := r.deps.Tasks.ListTasks(ctx, q)
 	if err != nil {
@@ -87,6 +62,52 @@ func (r *reader) List(ctx context.Context, actor ports.Actor, req ListRequest) (
 	}
 	return TaskPage{Items: items, Next: page.Next, Total: page.Total}, nil
 }
+func taskFilters(req ListRequest) (repository.TaskQuery, error) {
+	from, err := readTime(req.CreatedFrom)
+	if err != nil {
+		return repository.TaskQuery{}, err
+	}
+	to, err := readTime(req.CreatedTo)
+	if err != nil {
+		return repository.TaskQuery{}, err
+	}
+	if to != 0 && from > to {
+		return repository.TaskQuery{}, ErrBadRequest
+	}
+	q := repository.TaskQuery{HostSN: req.HostSN, BatchID: req.BatchID, CreatedFrom: from, CreatedTo: to, Cursor: req.Cursor, Limit: req.Limit, Page: req.Page}
+	if q.HostSN != "" {
+		sn, err := model.NormalizeSN(q.HostSN)
+		if err != nil {
+			return repository.TaskQuery{}, err
+		}
+		q.HostSN = sn
+	}
+	if q.BatchID != "" && !model.ValidID(q.BatchID) {
+		return repository.TaskQuery{}, ErrBadRequest
+	}
+	if req.State == "active" {
+		q.States = []model.TaskState{model.TaskBooting, model.TaskInstalling, model.TaskRebooting, model.TaskInitializing}
+	} else if req.State != "" {
+		state := model.TaskState(req.State)
+		if !state.Valid() {
+			return repository.TaskQuery{}, ErrBadRequest
+		}
+		q.States = []model.TaskState{state}
+	}
+	return q, nil
+}
+
+func (r *reader) Statistics(ctx context.Context, actor ports.Actor, req ListRequest, trends bool) ([]model.TaskMetric, error) {
+	if err := actor.Authorize(access.PermTaskRead); err != nil {
+		return nil, err
+	}
+	q, err := taskFilters(req)
+	if err != nil {
+		return nil, err
+	}
+	return r.deps.Tasks.TaskStatistics(ctx, q, trends)
+}
+
 func (r *reader) BatchSummary(ctx context.Context, actor ports.Actor, id string) (model.TaskBatchSummary, error) {
 	if err := actor.Authorize(access.PermTaskRead); err != nil {
 		return model.TaskBatchSummary{}, err

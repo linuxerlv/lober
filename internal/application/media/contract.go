@@ -42,6 +42,8 @@ type Registry interface {
 	// Deprecate 遵守 docs/contracts/media.md 第2节deprecate行及第7节；
 	// 正Rev先于存储审计/编号检查，锁内复查版本和ready状态，与审计一起提交。
 	Deprecate(context.Context, ports.Actor, RevisionRequest) error
+	// Enable 将停用的镜像恢复为可用，并记录操作人。
+	Enable(context.Context, ports.Actor, RevisionRequest) error
 	// Delete 遵守 docs/contracts/media.md 第2节DELETE行及第7节；
 	// 快照落盘先于数据库删除；引用与版本在事务内复查，已提交后清理失败交后台重试。
 	Delete(context.Context, ports.Actor, RevisionRequest) error

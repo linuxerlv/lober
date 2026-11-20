@@ -12,6 +12,8 @@ import {
 } from '#/api/console/discovery';
 import { errorMessage } from '#/api/console/problem';
 
+import HardwareSections from './HardwareSections.vue';
+
 const props = defineProps<{ canCreateTask?: boolean; canWrite: boolean }>();
 const emit = defineEmits<{ createTask: [sn: string]; registered: [sn: string] }>();
 const open = defineModel<boolean>({ required: true });
@@ -21,12 +23,6 @@ const hostStatus = {
   timed_out: '硬件报告未收到',
   unsupported: '没有可用的采集镜像',
   waiting: '等待硬件报告',
-};
-const sectionStatus = {
-  absent: '未安装',
-  partial: '部分读取',
-  read: '已读取',
-  unread: '未读取',
 };
 
 const items = ref<DiscoveredHost[]>([]);
@@ -301,38 +297,7 @@ async function confirmRegistration() {
           <p v-if="incompleteSections" class="mb-2 text-sm">
             {{ incompleteSections }} 类部件未完整读取。
           </p>
-          <div v-if="selectedHost.report" class="grid gap-2">
-            <details
-              v-for="section in selectedHost.report.sections"
-              :key="section.key"
-              class="rounded border border-border p-3"
-              open
-            >
-              <summary class="cursor-pointer">
-                {{ section.title }} · {{ sectionStatus[section.status] }}
-              </summary>
-              <p v-if="section.reason" class="mt-2 text-sm text-muted-foreground">
-                {{ section.reason }}
-              </p>
-              <div
-                v-for="(item, index) in section.items"
-                :key="index"
-                class="mt-3 border-t border-border pt-2 text-sm"
-              >
-                <h4 class="mb-1 font-medium">{{ item.name }}</h4>
-                <dl class="grid gap-1">
-                  <div
-                    v-for="(value, key) in item.fields"
-                    :key="key"
-                    class="grid grid-cols-[1fr_2fr] gap-3"
-                  >
-                    <dt class="break-all text-muted-foreground">{{ key }}</dt>
-                    <dd class="break-all">{{ value || '未读取' }}</dd>
-                  </div>
-                </dl>
-              </div>
-            </details>
-          </div>
+          <HardwareSections v-if="selectedHost.report" :sections="selectedHost.report.sections" />
           <p v-else-if="!detailLoading && !detailError" class="text-sm text-muted-foreground">
             暂无部件清单。
           </p>

@@ -211,6 +211,17 @@ func (s *registry) Deprecate(ctx context.Context, a ports.Actor, r RevisionReque
 	return s.deps.ISOs.DeprecateISO(ctx, r.ID, r.Rev, s.audit(a, "iso.deprecate"))
 }
 
+// Enable 需要镜像写权限和当前版本。
+func (s *registry) Enable(ctx context.Context, a ports.Actor, r RevisionRequest) error {
+	if err := a.Authorize(access.PermISOWrite); err != nil {
+		return err
+	}
+	if r.Rev < 1 {
+		return repository.ErrInvalid
+	}
+	return s.deps.ISOs.EnableISO(ctx, r.ID, r.Rev, s.audit(a, "iso.enable"))
+}
+
 // Delete 正版本先于时钟和审计；删除能力先查镜像及版本，再持久化完整来源快照。
 // 快照失败不删除，记录与审计一起提交；重复已删编号报缺失，提交后清理失败仍成功并由后台重试。
 func (s *registry) Delete(ctx context.Context, a ports.Actor, r RevisionRequest) error {

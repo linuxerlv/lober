@@ -32,6 +32,7 @@ export interface DiscoveredHost {
 }
 
 interface DiscoveryPage {
+  unavailable?: boolean;
   items: DiscoveredHost[];
   next_cursor?: string;
 }
@@ -64,5 +65,11 @@ export function registerDiscoveryApi(mac: string, sn: string) {
 export function getHostDisksApi(sn: string) {
   return requestClient.get<Schemas['DiscoveryHostDiskReport']>(
     `/hosts/${encodeURIComponent(sn)}/disks`,
+  );
+}
+
+export function getHostHardwareApi(sn: string) {
+  return requestClient.get<{ report?: { sections: DiscoverySection[] }; report_at: number }>(
+    `/hosts/${encodeURIComponent(sn)}/hardware`,
   );
 }

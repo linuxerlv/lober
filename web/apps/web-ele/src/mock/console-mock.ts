@@ -2,6 +2,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { Buffer } from 'node:buffer';
 
+import { activeTaskStates } from '../views/tasks/task-state';
+import templateExamples from './builtin-template-examples.json' with { type: 'json' };
+
 const nowSec = () => Math.floor(Date.now() / 1000);
 const toB64 = (text: string) => Buffer.from(text, 'utf8').toString('base64');
 
@@ -953,6 +956,7 @@ bootloader --location=mbr --boot-drive={{ .target_disk }}
     },
     problems: [],
   },
+  ...templateExamples,
 ];
 
 const tasks: Array<Record<string, any>> = [
@@ -1712,18 +1716,36 @@ export async function handleConsoleMockRequest(
     return true;
   }
 
-  if (path === '/tasks' && method === 'GET') {
+  if ((path === '/tasks' || path === '/task-statistics') && method === 'GET') {
     let filtered = [...tasks];
     const sn = (query.get('host_sn') || '').trim();
     const state = (query.get('state') || '').trim();
     const batchId = (query.get('batch_id') || '').trim();
     const from = Number(query.get('created_from') || 0);
     const to = Number(query.get('created_to') || 0);
-    if (sn) filtered = filtered.filter((t) => t.hostSN.toLowerCase().includes(sn.toLowerCase()));
-    if (state) filtered = filtered.filter((t) => t.state === state);
+    if (sn) filtered = filtered.filter((t) => t.hostSN.toLowerCase() === sn.toLowerCase());
+    if (state === 'active') filtered = filtered.filter((t) => activeTaskStates.includes(t.state));
+    else if (state) filtered = filtered.filter((t) => t.state === state);
     if (batchId) filtered = filtered.filter((t) => t.batchID === batchId);
     if (from > 0) filtered = filtered.filter((t) => t.createdAt >= from);
     if (to > 0) filtered = filtered.filter((t) => t.createdAt <= to);
+    if (path === '/task-statistics') {
+      const result = { states: {}, images: {}, days: {}, months: {} };
+      const add = (counts: Record<string, number>, key: string) => {
+        counts[key] = (counts[key] ?? 0) + 1;
+      };
+      for (const task of filtered) {
+        add(result.states, task.state);
+        if (query.get('trends') === 'true') {
+          const date = new Date(task.createdAt * 1000).toISOString();
+          add(result.images, task.snapshot.iso.name);
+          add(result.days, date.slice(0, 10));
+          add(result.months, date.slice(0, 7));
+        }
+      }
+      sendJSON(res, result);
+      return true;
+    }
     sendJSON(res, paginate(filtered, query));
     return true;
   }
@@ -1737,7 +1759,7 @@ export async function handleConsoleMockRequest(
       id: batchId,
       total: batchTasks.length,
       pending: batchTasks.filter((t) => t.state === 'pending').length,
-      active: batchTasks.filter((t) => ['booting', 'initializing', 'installing', 'rebooting'].includes(t.state)).length,
+      active: batchTasks.filter((t) => activeTaskStates.includes(t.state)).length,
       done: batchTasks.filter((t) => t.state === 'done').length,
       failed: batchTasks.filter((t) => t.state === 'failed').length,
       cancelled: batchTasks.filter((t) => t.state === 'cancelled').length,
@@ -1963,6 +1985,18 @@ export async function handleConsoleMockRequest(
   }
 
   // 4. Hosts & Discovery
+  const hostHardwareMatch = /^\/hosts\/([^/]+)\/hardware$/.exec(path);
+  if (hostHardwareMatch && method === 'GET') {
+    const sn = decodeURIComponent(hostHardwareMatch[1]!);
+    if (!hosts.some((host) => host.sn === sn)) {
+      sendError(res, 404, '未找到主机');
+      return true;
+    }
+    const latest = discoveries.filter((item) => item.registered_sn === sn && item.report)
+      .sort((a, b) => b.report_at - a.report_at)[0];
+    sendJSON(res, { report: latest?.report, report_at: latest?.report_at ?? 0 });
+    return true;
+  }
   const hostDisksMatch = /^\/hosts\/([^/]+)\/disks$/.exec(path);
   if (hostDisksMatch && method === 'GET') {
     const sn = decodeURIComponent(hostDisksMatch[1]!);
@@ -2204,13 +2238,25 @@ export async function handleConsoleMockRequest(
     const id = decodeURIComponent(isoOpMatch[1]!);
     const action = isoOpMatch[2]!;
     const iso = isos.find((i) => i.id === id);
-    if (iso) {
-      if (action === 'deprecate') iso.state = 'deprecated';
-      else if (action === 'enable' || action === 'retry' || action === 'reimport')
-        iso.state = 'ready';
-      else if (action === 'cancel') iso.state = 'failed';
-      iso.rev += 1;
+    if (!iso) {
+      sendError(res, 404, '镜像不存在');
+      return true;
     }
+    if (action === 'enable' || action === 'deprecate') {
+      const rev = Number(query.get('rev'));
+      if (!Number.isSafeInteger(rev) || rev < 1) {
+        sendError(res, 400, '需要正整数版本号');
+        return true;
+      }
+      if (rev !== iso.rev || iso.state !== (action === 'enable' ? 'deprecated' : 'ready')) {
+        sendError(res, 409, '镜像版本或状态已改变');
+        return true;
+      }
+    }
+    if (action === 'deprecate') iso.state = 'deprecated';
+    else if (action === 'enable' || action === 'retry' || action === 'reimport') iso.state = 'ready';
+    else if (action === 'cancel') iso.state = 'failed';
+    iso.rev += 1;
     sendJSON(res, null);
     return true;
   }

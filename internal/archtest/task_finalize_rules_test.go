@@ -469,7 +469,7 @@ func taskBoundaryObject(obj types.Object, console, assembly bool) bool {
 		return true
 	}
 	switch name {
-	case "GetTask", "GetTaskBatchSummary", "ListTasks", "ListEvents", "FindOpenTask", "CanCancel", "CanRetry", "Publish", "Subscribe", "RenderFrozen", "CreateTasks", "CreateCurrentTasks", "TransitionTask", "TransitionTaskByUser", "UpdateTaskExecution":
+	case "GetTask", "GetTaskBatchSummary", "TaskStatistics", "ListTasks", "ListEvents", "FindOpenTask", "CanCancel", "CanRetry", "Publish", "Subscribe", "RenderFrozen", "CreateTasks", "CreateCurrentTasks", "TransitionTask", "TransitionTaskByUser", "UpdateTaskExecution":
 		return true
 	case "NewHub":
 		return console

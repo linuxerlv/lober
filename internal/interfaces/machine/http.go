@@ -29,6 +29,7 @@ func NewWithDiscovery(gateway execution.Gateway, discoveries discovery.Machine, 
 	h.mux.HandleFunc("/v1/signal/{task}/{token}/{phase}", h.signal)
 	h.mux.HandleFunc("/v1/signal/{task}/{token}/{phase}/{rest...}", h.signalExtra)
 	h.mux.HandleFunc("/v1/inventory/{sn}/{token}", h.inventory)
+	h.mux.HandleFunc("/v1/hardware/{sn}", h.inventory)
 	h.mux.HandleFunc("/v1/discovery/{mac}", h.discoveryReport)
 	h.mux.HandleFunc("/", h.notFound)
 	return h
@@ -62,7 +63,7 @@ func routable(path string) bool {
 		return len(parts) == 2
 	case "answer", "signal":
 		return len(parts) >= 5
-	case "discovery":
+	case "discovery", "hardware":
 		return len(parts) == 3
 	case "inventory":
 		return len(parts) == 4

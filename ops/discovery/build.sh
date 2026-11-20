@@ -73,7 +73,8 @@ select_module af_packet
 optional=(sd_mod sr_mod nvme nvme_core ahci ata_piix virtio_pci virtio_blk virtio_scsi
           megaraid_sas mpt3sas mpi3mr smartpqi hpsa arcmsr aacraid isci
           ses enclosure ipmi_si ipmi_ssif ipmi_devintf ipmi_msghandler acpi_ipmi
-          coretemp k10temp i2c_i801 jc42 drivetemp xhci_pci)
+          coretemp k10temp i2c_i801 jc42 drivetemp xhci_pci efivarfs
+          scsi_transport_fc qla2xxx lpfc tpm_tis tpm_crb tpm_tis_spi amdgpu nouveau)
 for name in "${optional[@]}"; do
     select_module "$name" 2>/dev/null || continue
 done
@@ -98,6 +99,7 @@ rm -- "$root/firmware.py"
 install -m 0755 "$here/init.sh" "$root/init"
 mkdir -p "$root/opt/lober" "$root/run" "$root/proc" "$root/sys" "$root/dev"
 install -m 0644 "$here/collect.py" "$root/opt/lober/collect.py"
+install -m 0644 "$here/hardware.py" "$root/opt/lober/hardware.py"
 install -m 0755 "$here/dhcp.sh" "$root/opt/lober/dhcp"
 if [[ -n ${STORCLI_BINARY:-} ]]; then
     # 可选的厂商本机工具需事先校验并确认允许在本单位镜像中使用。

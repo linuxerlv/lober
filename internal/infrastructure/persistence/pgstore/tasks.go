@@ -321,20 +321,9 @@ func (s *Store) ListTasks(ctx context.Context, q repository.TaskQuery) (reposito
 	if q.Cursor != "" {
 		db = db.Where(`(created_at < ? OR (created_at = ? AND id COLLATE "C" > ?))`, afterAt, afterAt, afterID)
 	}
-	if q.HostSN != "" {
-		db = db.Where("host_sn = ?", q.HostSN)
-	}
-	if q.BatchID != "" {
-		db = db.Where("batch_id = ?", q.BatchID)
-	}
+	db = filterTaskRows(db, q)
 	if len(states) > 0 {
 		db = db.Where("state IN ?", states)
-	}
-	if q.CreatedFrom != 0 {
-		db = db.Where("created_at >= ?", q.CreatedFrom)
-	}
-	if q.CreatedTo != 0 {
-		db = db.Where("created_at <= ?", q.CreatedTo)
 	}
 	db, total, err := numberedQuery[taskRow](db, q.Page, limit)
 	if err != nil {
@@ -345,6 +334,46 @@ func (s *Store) ListTasks(ctx context.Context, q repository.TaskQuery) (reposito
 		return repository.Page[model.Task]{}, err
 	}
 	return page(rows, limit, taskRow.task, func(r taskRow) string { return repository.EncodeCursor("tasks", r.CreatedAt, r.ID) }, total)
+}
+
+func filterTaskRows(db *gorm.DB, q repository.TaskQuery) *gorm.DB {
+	if q.HostSN != "" {
+		db = db.Where("host_sn = ?", q.HostSN)
+	}
+	if q.BatchID != "" {
+		db = db.Where("batch_id = ?", q.BatchID)
+	}
+	if q.CreatedFrom != 0 {
+		db = db.Where("created_at >= ?", q.CreatedFrom)
+	}
+	if q.CreatedTo != 0 {
+		db = db.Where("created_at <= ?", q.CreatedTo)
+	}
+	return db
+}
+
+// TaskStatistics 只返回计数。趋势包含最近一年内的每日和每月任务数。
+func (s *Store) TaskStatistics(ctx context.Context, q repository.TaskQuery, trends bool) ([]model.TaskMetric, error) {
+	db := filterTaskRows(s.read(ctx).Model(&taskRow{}), q)
+	var rows []model.TaskMetric
+	if !trends {
+		err := db.Select("'state' AS kind, state AS key, count(*) AS count").Group("state").Scan(&rows).Error
+		return rows, translate(err, false, nil)
+	}
+	result := s.read(ctx).Raw(`WITH source AS (
+		SELECT state, snapshot #>> '{ISO,Name}' AS image,
+		    CASE WHEN created_at >= extract(epoch from CURRENT_TIMESTAMP - interval '1 year 1 month')
+		         THEN to_timestamp(created_at) AT TIME ZONE 'UTC' END AS created
+		FROM ( ?) AS filtered
+	), grouped AS (
+		SELECT state,image,to_char(created,'YYYY-MM-DD') AS day,to_char(created,'YYYY-MM') AS month FROM source
+	)
+	SELECT CASE WHEN grouping(state)=0 THEN 'state' WHEN grouping(image)=0 THEN 'image'
+	            WHEN grouping(day)=0 THEN 'day' ELSE 'month' END AS kind,
+	       coalesce(state,image,day,month) AS key,count(*) AS count
+	FROM grouped GROUP BY GROUPING SETS ((state),(image),(day),(month))
+	HAVING coalesce(state,image,day,month) IS NOT NULL`, db.Select("state,snapshot,created_at")).Scan(&rows)
+	return rows, translate(result.Error, false, nil)
 }
 
 // GetTaskBatchSummary 在一次查询里读取整批统计，只从首条快照取名称。
